@@ -1,0 +1,16 @@
+[package]
+name = "stitchd-sdk"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+stitchd-core = { path = "../stitchd-core" }
+stitchd-proto = { path = "../stitchd-proto" }
+tonic = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
