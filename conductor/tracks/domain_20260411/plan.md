@@ -38,7 +38,7 @@
   - Unit tests: all type match/mismatch combinations
   <!-- files: crates/stitchd-core/src/flag.rs -->
 
-- [ ] Task: Multi-tenancy types — `Organisation`, `Project`, `Environment`,
+- [x] Task: Multi-tenancy types — `Organisation`, `Project`, `Environment`,
   `SdkKey`
   - All structs: `created_at: DateTime<Utc>`, `updated_at: DateTime<Utc>`,
     `deleted_at: Option<DateTime<Utc>>`, `version: i64`
