@@ -74,7 +74,7 @@
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task: Set up `sqlx` migrations directory and configure `stitchd-db`
+- [x] Task: Set up `sqlx` migrations directory and configure `stitchd-db`
   - Create `crates/stitchd-db/migrations/` directory
   - Create `crates/stitchd-db/clickhouse-migrations/` directory
   - Add `DATABASE_URL` and `CLICKHOUSE_URL` to `.env.example`
@@ -145,12 +145,12 @@
   - `CREATE TABLE IF NOT EXISTS` (idempotent)
   <!-- files: crates/stitchd-db/clickhouse-migrations/0002_experiment_assignments.sql -->
 
-- [ ] Task: Run all PG migrations against local PostgreSQL and verify schema
+- [x] Task: Run all PG migrations against local PostgreSQL and verify schema
   - `cargo sqlx migrate run`
   - Verify all tables created: `psql $DATABASE_URL -c '\dt'`
   <!-- depends: task1, task2, task3, task4, task5, task6, task7 -->
 
-- [ ] Task: Run ClickHouse migrations against local ClickHouse and verify
+- [x] Task: Run ClickHouse migrations against local ClickHouse and verify
   - Execute both SQL files against ClickHouse instance
   - Verify tables: `SHOW TABLES` in ClickHouse
   <!-- depends: task1, task8, task9 -->

@@ -71,3 +71,14 @@ Patterns, gotchas, and context discovered during implementation.
 - **Learnings:**
   - Gotchas: **Always run `cargo fmt` before committing.** rustfmt reorders imports alphabetically and collapses multi-line `#[derive(...)]` — failing to do so causes CI fmt check to fail.
 ---
+
+## [2026-04-11] - Phase 2: Database Schemas
+- **Implemented:** 6 PG migrations + 2 CH migrations. sqlx-cli installed. All applied cleanly.
+- **Files changed:** `crates/stitchd-db/migrations/` (6 files), `crates/stitchd-db/clickhouse-migrations/` (2 files)
+- **Commit:** 5996faf
+- **Learnings:**
+  - Gotchas: `psql` not in PATH on this machine — use `sqlx migrate info` to verify migration status instead.
+  - Patterns: ClickHouse migrations applied via HTTP API: `curl -s "http://user:pass@localhost:8123/" --data-binary @file.sql`. No clickhouse-client required.
+  - Patterns: `CREATE TABLE IF NOT EXISTS` makes ClickHouse migrations idempotent — safe to re-run.
+  - Gotchas: `sqlx-cli` must be installed with `--no-default-features --features rustls,postgres` to avoid OpenSSL dependency.
+---
