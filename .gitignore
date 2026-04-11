@@ -3,3 +3,29 @@
 .dolt/
 *.db
 .beads-credential-key
+
+# Build artifacts
+target/
+
+# Environment — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage reports
+tarpaulin-report.html
+cobertura.xml
+lcov.info
+
+# Temporary files
+*.tmp
+*.bak
