@@ -63,7 +63,7 @@
   - Unit tests: wildcard matching (`*`, `payments-*`, exact, no match)
   <!-- files: crates/stitchd-core/src/user.rs -->
 
-- [ ] Task: Wire `lib.rs` re-exports and verify full unit test suite
+- [x] Task: Wire `lib.rs` re-exports and verify full unit test suite
   - `pub mod id; pub mod context; pub mod flag; pub mod tenant; pub mod user;`
   - `cargo test -p stitchd-core` must pass with ≥90% coverage
   - `cargo clippy -p stitchd-core -- -D warnings` must pass clean
