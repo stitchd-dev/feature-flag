@@ -1,0 +1,12 @@
+edition = "2024"
+max_width = 100
+use_small_heuristics = "Default"
+reorder_imports = true
+reorder_modules = true
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# The following options are nightly-only and intentionally omitted:
+#   imports_granularity, group_imports, wrap_comments, format_code_in_doc_comments,
+#   normalize_comments, normalize_doc_attributes, hex_literal_case
+# Add them back if the project switches to a nightly toolchain.

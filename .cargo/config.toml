@@ -1,0 +1,30 @@
+[build]
+# Treat all warnings as errors across the workspace during builds.
+# CI also passes -D warnings explicitly via clippy, but this catches rustc warnings too.
+rustflags = ["-D", "warnings"]
+
+# Faster linker for macOS (uses system lld via Xcode when available).
+# On Linux CI, consider installing mold: https://github.com/rui314/mold
+# Uncomment the target-specific block below if you install mold on Linux:
+#
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-D", "warnings", "-C", "link-arg=-fuse-ld=mold"]
+
+[profile.dev]
+# Faster incremental builds in development
+incremental = true
+# Slightly optimise dependencies even in dev builds for better perf during local testing
+opt-level = 0
+
+[profile.release]
+# Full optimisation for release builds
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.ci]
+# Inherits from dev but with incremental off for reproducible CI builds
+inherits = "dev"
+incremental = false

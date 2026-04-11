@@ -1,0 +1,13 @@
+msrv = "1.85"
+
+# Cognitive complexity threshold — lower than default to keep functions focused
+cognitive-complexity-threshold = 15
+
+# Allow up to 7 function arguments before clippy complains
+too-many-arguments-threshold = 7
+
+# Lines of code threshold for a function before flagging
+too-many-lines-threshold = 80
+
+# Enforce documentation on all public items (enforced via deny(missing_docs) too)
+doc-valid-idents = ["ClickHouse", "PostgreSQL", "gRPC", "OpenTelemetry", "OAuth2", "SAML", "RBAC", "SDK", "JSON", "OTLP", "CUPED"]
