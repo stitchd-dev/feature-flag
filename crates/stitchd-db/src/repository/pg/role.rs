@@ -152,7 +152,7 @@ impl RoleRepository for PgRoleRepository {
                 deleted_at,
                 version
             FROM roles
-            WHERE id = $1
+            WHERE id = $1 AND deleted_at IS NULL
             "#,
             id as RoleId
         )

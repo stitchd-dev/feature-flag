@@ -1,7 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <module type="EMPTY_MODULE" version="4">
   <component name="NewModuleRootManager">
-    <content url="file://$MODULE_DIR$" />
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-db/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-db/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-events/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-proto/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-sdk/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-server/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>

@@ -1,6 +1,7 @@
 //! Stitchd server binary entry point.
 use anyhow::{Context, Result};
-use stitchd_server::{build_router, telemetry};
+use sqlx::postgres::PgPoolOptions;
+use stitchd_server::{AppState, build_router, telemetry};
 use tracing::info;
 
 const SERVICE_NAME: &str = "stitchd-server";
@@ -10,8 +11,7 @@ const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 async fn main() -> Result<()> {
     // Metrics must be installed before tracing so the metrics layer can record
     // any spans emitted during subscriber setup.
-    let metrics_handle = telemetry::init_metrics()
-        .context("failed to initialise metrics")?;
+    let metrics_handle = telemetry::init_metrics().context("failed to initialise metrics")?;
 
     let tracer_provider = telemetry::init_tracing(SERVICE_NAME, SERVICE_VERSION)
         .context("failed to initialise tracing")?;
@@ -21,6 +21,20 @@ async fn main() -> Result<()> {
         version = SERVICE_VERSION,
         "stitchd-server starting"
     );
+
+    let database_url = std::env::var("DATABASE_URL")
+        .context("DATABASE_URL environment variable must be set")?;
+
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .context("failed to connect to PostgreSQL")?;
+
+    let state = AppState {
+        db: pool,
+        metrics_handle,
+    };
 
     let http_port: u16 = std::env::var("HTTP_PORT")
         .ok()
@@ -34,7 +48,7 @@ async fn main() -> Result<()> {
 
     info!(address = %addr, "HTTP server listening");
 
-    let app = build_router(metrics_handle);
+    let app = build_router(state);
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())

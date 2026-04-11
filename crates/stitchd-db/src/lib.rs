@@ -12,4 +12,9 @@ pub use error::RepositoryError;
 pub use repository::{
     AuditLogger, EnvironmentRepository, FlagRepository, OrganisationRepository, ProjectRepository,
     RoleRepository, SdkKeyRepository, SegmentRepository, UserRepository, VariantRepository,
+    pg::{
+        PgAuditLogger, PgEnvironmentRepository, PgFlagRepository, PgOrganisationRepository,
+        PgProjectRepository, PgRoleRepository, PgSdkKeyRepository, PgSegmentRepository,
+        PgUserRepository, PgVariantRepository,
+    },
 };

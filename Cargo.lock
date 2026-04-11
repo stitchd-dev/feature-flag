@@ -2415,7 +2415,9 @@ name = "stitchd-db"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
+ "serde_json",
  "sqlx",
  "stitchd-core",
  "thiserror 2.0.18",
@@ -2475,6 +2477,7 @@ dependencies = [
  "opentelemetry_sdk",
  "serde",
  "serde_json",
+ "sqlx",
  "stitchd-core",
  "stitchd-db",
  "stitchd-events",

@@ -4,57 +4,107 @@
 
 pub mod telemetry;
 
-use axum::{Router, extract::State, routing::get};
+use axum::{Json, Router, extract::State, routing::get};
 use metrics_exporter_prometheus::PrometheusHandle;
+use serde::Serialize;
+use sqlx::PgPool;
+
+/// Shared application state.
+#[derive(Clone)]
+pub struct AppState {
+    /// Postgres connection pool.
+    pub db: PgPool,
+    /// Prometheus metrics handle.
+    pub metrics_handle: PrometheusHandle,
+}
 
 /// Build the Axum router.
 ///
 /// Currently only exposes infrastructure endpoints (`/health`, `/metrics`).
 /// Feature routes will be added in subsequent tracks.
-pub fn build_router(metrics_handle: PrometheusHandle) -> Router {
+#[must_use]
+pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/metrics", get(metrics_handler))
-        .with_state(metrics_handle)
+        .with_state(state)
 }
 
-/// `GET /health` — liveness probe.
-async fn health_handler() -> &'static str {
-    "ok"
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    db: &'static str,
+}
+
+/// `GET /health` — liveness and readiness probe.
+async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
+    let db_status = if sqlx::query("SELECT 1").execute(&state.db).await.is_ok() {
+        "ok"
+    } else {
+        "error"
+    };
+
+    let status = if db_status == "ok" { "ok" } else { "degraded" };
+
+    Json(HealthResponse {
+        status,
+        db: db_status,
+    })
 }
 
 /// `GET /metrics` — Prometheus scrape endpoint.
-async fn metrics_handler(State(handle): State<PrometheusHandle>) -> String {
-    handle.render()
+async fn metrics_handler(State(state): State<AppState>) -> String {
+    state.metrics_handle.render()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::{Request, StatusCode}};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
     use tower::ServiceExt as _;
 
-    #[tokio::test]
-    async fn health_endpoint_returns_ok() {
-        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
+    async fn setup_test_state() -> AppState {
+        let db = PgPool::connect("postgres://stitchd:stitchd@localhost:5432/stitchd")
+            .await
+            .unwrap();
+        let metrics_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
             .build_recorder()
             .handle();
-        let app = build_router(handle);
+        AppState { db, metrics_handle }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires local DB"]
+    async fn health_endpoint_returns_ok() {
+        let state = setup_test_state().await;
+        let app = build_router(state);
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
+    #[ignore = "requires local DB"]
     async fn metrics_endpoint_returns_ok() {
-        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
-            .build_recorder()
-            .handle();
-        let app = build_router(handle);
+        let state = setup_test_state().await;
+        let app = build_router(state);
         let response = app
-            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);

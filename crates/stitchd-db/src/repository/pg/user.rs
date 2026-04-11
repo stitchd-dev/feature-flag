@@ -44,7 +44,7 @@ impl UserRepository for PgUserRepository {
                 deleted_at,
                 version
             FROM users
-            WHERE id = $1
+            WHERE id = $1 AND deleted_at IS NULL
             "#,
             id as UserId
         )

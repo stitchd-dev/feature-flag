@@ -28,6 +28,14 @@ supports rotation via create/revoke).
 Each evaluation context: `{_type, key, parameters: Map<String, int|double|semver|string|boolean>, privateParameters: List<String>}`
 `privateParameters` identifies fields that must be excluded from all logging.
 
+## Data Persistence & Integrity
+- **Optimistic Concurrency:** All mutable entities use version-based optimistic locking 
+  to prevent lost updates in highly concurrent environments.
+- **Audit Logging:** Every mutation (create, update, soft-delete) is automatically 
+  recorded in a central audit log, capturing the actor, resource, and specific changes.
+- **Soft Deletion:** Business-critical entities use soft-deletion to maintain data 
+  relationships and auditability.
+
 ## Context Intelligence Layer
 A dedicated layer that observes contexts flowing through the system and maintains 
 a registry of known context types, their properties, and observed value ranges/enums.

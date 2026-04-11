@@ -10,8 +10,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0        # Disable incremental compilation for reproducible CI builds
   RUST_BACKTRACE: short
-  # Disable sqlx compile-time query checks until a live DB is available in CI.
-  # Remove this once the sqlx offline cache (`.sqlx/`) is committed.
+  # Use sqlx offline cache for compile-time query checks in CI.
   SQLX_OFFLINE: true
 
 jobs:

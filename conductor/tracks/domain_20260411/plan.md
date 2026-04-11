@@ -194,29 +194,29 @@
   - `sqlx::query_as!` throughout; no string-formatted SQL
   - `PgAuditLogger` called inside every mutation
 
-- [ ] Task: `PgSdkKeyRepository`
+- [x] Task: `PgSdkKeyRepository`
   - `revoke`: sets `is_active = false`, `revoked_at = now()`
   - Returns `RepositoryError::UniqueViolation` if it would leave zero active
     keys (check count before revoking)
 
-- [ ] Task: `PgUserRepository` + permission resolution
+- [x] Task: `PgUserRepository` + permission resolution
   - `find_permissions_for_user(user_id, project_id)` → `Vec<Permission>`
     via JOIN: `user_project_roles → roles → permissions`
 
-- [ ] Task: `PgFlagRepository` + `PgVariantRepository`
+- [x] Task: `PgFlagRepository` + `PgVariantRepository`
   - `FlagRepository::find_by_key(key, project_id)` → unique lookup
   - `VariantRepository::find_by_flag(flag_id)` → `Vec<Variant>`
 
-- [ ] Task: `PgSegmentRepository`
+- [x] Task: `PgSegmentRepository`
   - `find_by_key(key, environment_id)` → unique lookup
 
-- [ ] Task: `AuditLogger` trait + `PgAuditLogger`
+- [x] Task: `AuditLogger` trait + `PgAuditLogger`
   - `async fn log(&self, actor_id: UserId, resource_type: &str,
     resource_id: Uuid, action: &str, diff: serde_json::Value)
     → Result<(), RepositoryError>`
   - Inserted into all `Pg*Repository` mutation methods
 
-- [ ] Task: Integration tests using `#[sqlx::test]`
+- [x] Task: Integration tests using `#[sqlx::test]`
   - One test module per repository in `crates/stitchd-db/tests/`
   - Per aggregate: create → find, update (correct version),
     update (stale → `VersionConflict`), soft_delete → absent from list,
@@ -224,7 +224,7 @@
   - `SdkKeyRepository`: revoke last active key → error
   - `UserRepository`: `find_permissions_for_user` returns correct permissions
 
-- [ ] Task: Wire `stitchd-db` `lib.rs` and verify full integration test suite
+- [x] Task: Wire `stitchd-db` `lib.rs` and verify full integration test suite
   - Re-export all public types, traits, and Pg implementations
   - `cargo test -p stitchd-db` must pass with ≥90% coverage
   - `cargo clippy -p stitchd-db -- -D warnings` must pass clean
@@ -233,21 +233,21 @@
 <!-- execution: sequential -->
 <!-- depends: phase3 -->
 
-- [ ] Task: Wire `DATABASE_URL` + `PgPool` into `AppState` in `stitchd-server`
+- [x] Task: Wire `DATABASE_URL` + `PgPool` into `AppState` in `stitchd-server`
   - Read at startup; `anyhow::bail!` with clear message if missing or
     unreachable
   - `AppState`: add `db: PgPool` field; pass to all Axum handlers via
     `State<AppState>`
 
-- [ ] Task: Extend `GET /health` to include database liveness
+- [x] Task: Extend `GET /health` to include database liveness
   - `SELECT 1` ping; response:
     `{"status":"ok","db":"ok"}` or `{"status":"degraded","db":"error"}`
 
-- [ ] Task: Generate sqlx offline cache
+- [x] Task: Generate sqlx offline cache
   - With local DB running: `cargo sqlx prepare --workspace`
   - Commit `.sqlx/` directory to repo
 
-- [ ] Task: Verify `SQLX_OFFLINE=true cargo build --workspace` passes clean
+- [x] Task: Verify `SQLX_OFFLINE=true cargo build --workspace` passes clean
 
-- [ ] Task: Update CI — add `SQLX_OFFLINE: true` env var; rely on `.sqlx/`
+- [x] Task: Update CI — add `SQLX_OFFLINE: true` env var; rely on `.sqlx/`
   cache; CI validates cache is up to date on every PR

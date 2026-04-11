@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_sdk::trace::{RandomIdGenerator, Sampler, SdkTracerProvider};
-use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 /// Initialise the Prometheus metrics recorder.
 ///
@@ -37,8 +37,7 @@ pub fn init_metrics() -> Result<PrometheusHandle> {
 /// # Errors
 /// Returns an error if subscriber initialisation fails.
 pub fn init_tracing(service_name: &str, _service_version: &str) -> Result<SdkTracerProvider> {
-    let env_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // TODO: attach Resource with service.name / service.version attributes once
     // opentelemetry_sdk 0.28 builder API is confirmed (Resource::new is private in 0.28).
@@ -49,8 +48,8 @@ pub fn init_tracing(service_name: &str, _service_version: &str) -> Result<SdkTra
         .with_id_generator(RandomIdGenerator::default())
         .build();
 
-    let otel_layer = tracing_opentelemetry::layer()
-        .with_tracer(tracer_provider.tracer(service_name.to_owned()));
+    let otel_layer =
+        tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer(service_name.to_owned()));
 
     let is_production = std::env::var("APP_ENV")
         .map(|v| v.eq_ignore_ascii_case("production"))

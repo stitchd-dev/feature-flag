@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE segments\n            SET deleted_at = NOW(), updated_at = NOW(), version = version + 1\n            WHERE id = $1 AND deleted_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "974ce26e792d7068ba27ab1b3b98836fd935c6f92727472434a8025c26925459"
+}

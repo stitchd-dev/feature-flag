@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE environments\n            SET deleted_at = NOW(), updated_at = NOW(), version = version + 1\n            WHERE id = $1 AND deleted_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fb2f7d1f8ef2078d85dca088edb27517085ce56f0afca9401a6456262e6700f7"
+}

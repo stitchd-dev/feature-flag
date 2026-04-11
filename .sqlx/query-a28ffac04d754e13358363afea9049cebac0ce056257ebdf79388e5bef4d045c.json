@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT environment_id AS \"environment_id: EnvironmentId\", is_active\n            FROM sdk_keys\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "environment_id: EnvironmentId",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_active",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a28ffac04d754e13358363afea9049cebac0ce056257ebdf79388e5bef4d045c"
+}

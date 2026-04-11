@@ -39,7 +39,7 @@ impl OrganisationRepository for PgOrganisationRepository {
                 deleted_at,
                 version
             FROM organisations
-            WHERE id = $1
+            WHERE id = $1 AND deleted_at IS NULL
             "#,
             id as OrganisationId
         )

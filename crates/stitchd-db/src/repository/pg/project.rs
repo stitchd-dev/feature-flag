@@ -43,7 +43,7 @@ impl ProjectRepository for PgProjectRepository {
                 deleted_at,
                 version
             FROM projects
-            WHERE id = $1
+            WHERE id = $1 AND deleted_at IS NULL
             "#,
             id as ProjectId
         )

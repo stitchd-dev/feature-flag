@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT resource_type, resource_pattern, action\n        FROM permissions\n        WHERE role_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "resource_pattern",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "action",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "dd949a3c8a092e6ab41a3dd444c6682794e9079e120c00e70e57411e1a408083"
+}

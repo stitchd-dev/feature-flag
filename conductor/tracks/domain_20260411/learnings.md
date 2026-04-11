@@ -82,3 +82,22 @@ Patterns, gotchas, and context discovered during implementation.
   - Patterns: `CREATE TABLE IF NOT EXISTS` makes ClickHouse migrations idempotent — safe to re-run.
   - Gotchas: `sqlx-cli` must be installed with `--no-default-features --features rustls,postgres` to avoid OpenSSL dependency.
 ---
+
+## [2026-04-11] - Phase 3: Repository Layer
+- **Implemented:** Repository traits and Postgres implementations for all aggregate roots. 8 integration tests using `#[sqlx::test]`.
+- **Files changed:** `crates/stitchd-db/src/repository/pg/*.rs`, `crates/stitchd-db/tests/*.rs`, `crates/stitchd-db/src/lib.rs`
+- **Learnings:**
+  - Patterns: `#[sqlx::test(migrations = "./migrations")]` is the magic for fast, isolated DB tests in sqlx 0.8.
+  - Gotchas: `find_by_id` MUST include `AND deleted_at IS NULL` to honor soft-deletion.
+  - Gotchas: `sqlx::query_as!` requires explicit type casts for custom types in the SQL query (e.g. `id AS "id: OrganisationId"`).
+  - Context: `sqlx` query macros require `DATABASE_URL` during compilation (or offline cache).
+
+---
+
+## [2026-04-11] - Phase 4: Server Wiring & sqlx Offline Mode
+- **Implemented:** AppState with PgPool, DB health check, sqlx offline cache generation.
+- **Files changed:** `crates/stitchd-server/src/*.rs`, `crates/stitchd-server/src/main.rs`, `.sqlx/`, `.github/workflows/ci.yml`
+- **Learnings:**
+  - Patterns: `cargo sqlx prepare --workspace` is essential for CI stability without live DB.
+  - Gotchas: Axum 0.8 `State` extraction requires the state type to be `Clone`.
+---
