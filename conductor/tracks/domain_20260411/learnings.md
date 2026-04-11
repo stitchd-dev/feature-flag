@@ -31,7 +31,7 @@ Patterns, gotchas, and context discovered during implementation.
 ## [2026-04-11 10:00] - Phase 1 Task 1: ID Newtypes
 - **Implemented:** 15 UUID-based ID newtypes and a string-based `FlagKey` with validation.
 - **Files changed:** `crates/stitchd-core/src/id.rs`, `crates/stitchd-core/src/lib.rs`, `crates/stitchd-core/Cargo.toml`
-- **Commit:** [TBD]
+- **Commit:** 92f4d97
 - **Learnings:**
   - Patterns: Used `macro_rules!` to define repetitive ID newtypes with `sqlx::Type` and `sqlx(transparent)`.
   - Gotchas: Ensure `sqlx` is added to crate-level `Cargo.toml` when using `sqlx::Type` derive, even if defined in workspace.

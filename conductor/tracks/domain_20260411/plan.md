@@ -4,7 +4,7 @@
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task: ID Newtypes — `OrganisationId`, `ProjectId`, `EnvironmentId`,
+- [x] Task: ID Newtypes — `OrganisationId`, `ProjectId`, `EnvironmentId`,
   `SdkKeyId`, `UserId`, `RoleId`, `FlagId`, `FlagKey` (string newtype),
   `VariantId`, `SegmentId`, `RuleId`, `EventId`, `ExperimentId`, `MetricId`,
   `AuditLogId`
