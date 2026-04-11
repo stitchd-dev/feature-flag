@@ -25,6 +25,14 @@
 - gRPC payloads: Protobuf via prost
 - REST payloads: JSON
 
+## Build Tools
+
+| Tool | Purpose |
+|---|---|
+| `protoc-bin-vendored` | Bundles `protoc` binary as a build dependency — no system install required |
+| `cargo-tarpaulin` | Code coverage (≥90% threshold enforced in CI) |
+| `Swatinem/rust-cache` | GitHub Actions dependency caching |
+
 ## Infrastructure (Self-Hosted)
 - PostgreSQL for configuration, tenants, RBAC, audit logs
 - ClickHouse for events, experiment data, metric aggregations
