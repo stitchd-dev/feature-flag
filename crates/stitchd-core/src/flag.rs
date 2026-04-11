@@ -4,10 +4,11 @@
 //! A flag declares a `FlagValueType`; every `Variant` belonging to that flag
 //! must carry a `VariantValue` whose discriminant matches the flag's type.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::id::VariantId;
+use crate::id::{FlagId, FlagKey, ProjectId, VariantId};
 
 /// The type of value a feature flag produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -80,6 +81,31 @@ pub struct Variant {
     pub key: String,
     /// The value returned when this variant is selected.
     pub value: VariantValue,
+}
+
+/// A feature flag definition stored in the database.
+///
+/// Variants belonging to this flag are fetched separately via `VariantRepository`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlagRecord {
+    /// Unique identifier.
+    pub id: FlagId,
+    /// The project this flag belongs to.
+    pub project_id: ProjectId,
+    /// URL-safe string key (unique within the project).
+    pub key: FlagKey,
+    /// The type every variant value must match.
+    pub value_type: FlagValueType,
+    /// Whether evaluation is active (`true`) or the flag always returns its default.
+    pub enabled: bool,
+    /// When this record was created.
+    pub created_at: DateTime<Utc>,
+    /// When this record was last modified.
+    pub updated_at: DateTime<Utc>,
+    /// Set when the flag is soft-deleted; `None` while active.
+    pub deleted_at: Option<DateTime<Utc>>,
+    /// Optimistic-concurrency version counter.
+    pub version: i64,
 }
 
 #[cfg(test)]

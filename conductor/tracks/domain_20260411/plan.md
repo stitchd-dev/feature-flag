@@ -159,7 +159,7 @@
 <!-- execution: sequential -->
 <!-- depends: phase1, phase2 -->
 
-- [ ] Task: `RepositoryError` enum
+- [x] Task: `RepositoryError` enum
   - Variants: `NotFound { id: String }`,
     `VersionConflict { expected: i64, actual: i64 }`,
     `UniqueViolation { field: String }`, `Database(#[from] sqlx::Error)`,

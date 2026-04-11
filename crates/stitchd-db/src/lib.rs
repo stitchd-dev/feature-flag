@@ -6,5 +6,10 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 
 pub mod error;
+pub mod repository;
 
 pub use error::RepositoryError;
+pub use repository::{
+    AuditLogger, EnvironmentRepository, FlagRepository, OrganisationRepository, ProjectRepository,
+    RoleRepository, SdkKeyRepository, SegmentRepository, UserRepository, VariantRepository,
+};
