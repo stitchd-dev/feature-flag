@@ -84,7 +84,7 @@
     crates/stitchd-db/clickhouse-migrations/.gitkeep,
     .env.example -->
 
-- [ ] Task: PG Migration 001 — `organisations`, `projects`, `environments`
+- [x] Task: PG Migration 001 — `organisations`, `projects`, `environments`
   - All tables: `id UUID PK DEFAULT gen_random_uuid()`, `created_at`,
     `updated_at`, `deleted_at TIMESTAMPTZ`, `version BIGINT NOT NULL DEFAULT 1`
   - `projects.organisation_id REFERENCES organisations(id)`
@@ -92,14 +92,14 @@
   - Index on all FK columns
   <!-- files: crates/stitchd-db/migrations/20260411000001_organisations_projects_environments.sql -->
 
-- [ ] Task: PG Migration 002 — `sdk_keys`
+- [x] Task: PG Migration 002 — `sdk_keys`
   - `environment_id FK`, `key_hash TEXT NOT NULL`,
     `is_active BOOL NOT NULL DEFAULT true`, `revoked_at TIMESTAMPTZ`,
     `created_at`
   - Index: `(environment_id, is_active)`
   <!-- files: crates/stitchd-db/migrations/20260411000002_sdk_keys.sql -->
 
-- [ ] Task: PG Migration 003 — `users`, `roles`, `permissions`,
+- [x] Task: PG Migration 003 — `users`, `roles`, `permissions`,
   `user_project_roles`
   - `users`: UNIQUE `(email, organisation_id)`; `password_hash TEXT NOT NULL`
   - `roles`: `project_id FK`, `name TEXT NOT NULL`
@@ -108,18 +108,18 @@
   - `user_project_roles`: UNIQUE `(user_id, project_id, role_id)`
   <!-- files: crates/stitchd-db/migrations/20260411000003_users_roles_permissions.sql -->
 
-- [ ] Task: PG Migration 004 — `feature_flags`, `variants`
+- [x] Task: PG Migration 004 — `feature_flags`, `variants`
   - `feature_flags`: UNIQUE `(key, project_id)`; `value_type TEXT NOT NULL`;
     `enabled BOOL NOT NULL DEFAULT false`
   - `variants`: UNIQUE `(key, flag_id)`; `value JSONB NOT NULL`
   <!-- files: crates/stitchd-db/migrations/20260411000004_feature_flags_variants.sql -->
 
-- [ ] Task: PG Migration 005 — `segments`
+- [x] Task: PG Migration 005 — `segments`
   - UNIQUE `(key, environment_id)`
   - `segment_type TEXT NOT NULL CHECK (segment_type IN ('rule', 'list'))`
   <!-- files: crates/stitchd-db/migrations/20260411000005_segments.sql -->
 
-- [ ] Task: PG Migration 006 — `audit_log`
+- [x] Task: PG Migration 006 — `audit_log`
   - `id UUID PK`, `actor_id UUID`, `resource_type TEXT NOT NULL`,
     `resource_id UUID NOT NULL`, `action TEXT NOT NULL`,
     `diff JSONB NOT NULL DEFAULT '{}'`,
@@ -128,7 +128,7 @@
   - No `updated_at`, `deleted_at`, or `version` — append-only
   <!-- files: crates/stitchd-db/migrations/20260411000006_audit_log.sql -->
 
-- [ ] Task: ClickHouse Migration 001 — `events`
+- [x] Task: ClickHouse Migration 001 — `events`
   - `events(event_id UUID, environment_id UUID, context_type String,
     context_key String, metric_key String,
     metric_value_bool Nullable(UInt8), metric_value_int Nullable(Int64),
@@ -138,7 +138,7 @@
   - `CREATE TABLE IF NOT EXISTS` (idempotent)
   <!-- files: crates/stitchd-db/clickhouse-migrations/0001_events.sql -->
 
-- [ ] Task: ClickHouse Migration 002 — `experiment_assignments`
+- [x] Task: ClickHouse Migration 002 — `experiment_assignments`
   - `experiment_assignments(experiment_id UUID, flag_id UUID,
     context_key String, variant_key String, assigned_at DateTime64(3))`
   - Engine: `ReplacingMergeTree()` ordered by `(experiment_id, context_key)`

@@ -193,20 +193,20 @@ auto-rollback):
 
 ## Acceptance Criteria
 
-- [ ] `cargo test --workspace` passes with ≥90% coverage on `stitchd-core`
+- [x] `cargo test --workspace` passes with ≥90% coverage on `stitchd-core`
   and `stitchd-db`
-- [ ] `cargo sqlx prepare --workspace` generates clean `.sqlx/` cache
-- [ ] All 6 Postgres migration files run cleanly against a fresh PostgreSQL
+- [x] `cargo sqlx prepare --workspace` generates clean `.sqlx/` cache
+- [x] All 6 Postgres migration files run cleanly against a fresh PostgreSQL
   instance
-- [ ] Both ClickHouse migration files run cleanly against a fresh ClickHouse
+- [x] Both ClickHouse migration files run cleanly against a fresh ClickHouse
   instance
-- [ ] `Context` debug output masks private parameter values as `[REDACTED]`
-- [ ] `VariantValue::matches_type` rejects mismatched types
-- [ ] `SdkKey::has_active_key` enforces min-1-active invariant
-- [ ] Optimistic concurrency returns `VersionConflict` on stale update
-- [ ] Audit log records all repository mutations
-- [ ] `GET /health` returns `db` status field
-- [ ] `cargo clippy -- -D warnings` passes
+- [x] `Context` debug output masks private parameter values as `[REDACTED]`
+- [x] `VariantValue::matches_type` rejects mismatched types
+- [x] `SdkKey::has_active_key` enforces min-1-active invariant
+- [x] Optimistic concurrency returns `VersionConflict` on stale update
+- [x] Audit log records all repository mutations
+- [x] `GET /health` returns `db` status field
+- [x] `cargo clippy -- -D warnings` passes
 
 ## Out of Scope
 
