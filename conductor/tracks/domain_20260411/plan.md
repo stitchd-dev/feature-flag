@@ -166,7 +166,7 @@
     `Unexpected(#[from] anyhow::Error)`
   - Implement `thiserror::Error`
 
-- [ ] Task: Repository traits — one per aggregate root
+- [x] Task: Repository traits — one per aggregate root <!-- commit: 4152855 -->
   - `OrganisationRepository`: `find_by_id`, `list_all`, `create`, `update`,
     `soft_delete`
   - `ProjectRepository`: `find_by_id`, `list_by_organisation`, `create`,
@@ -187,8 +187,8 @@
     → `Result<(), RepositoryError>`
   - All `#[async_trait]`, return `Result<T, RepositoryError>`
 
-- [ ] Task: `PgOrganisationRepository`, `PgProjectRepository`,
-  `PgEnvironmentRepository`
+- [x] Task: `PgOrganisationRepository`, `PgProjectRepository`,
+  `PgEnvironmentRepository` <!-- commit: 9e550ab -->
   - All `update` methods: increment `version`, check for conflicts
   - All `list_*`: filter `WHERE deleted_at IS NULL`
   - `sqlx::query_as!` throughout; no string-formatted SQL
