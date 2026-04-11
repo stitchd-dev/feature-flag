@@ -29,7 +29,7 @@
     non-private param access
   <!-- files: crates/stitchd-core/src/context.rs -->
 
-- [ ] Task: Flag types — `FlagValueType`, `VariantValue`, `Variant`
+- [x] Task: Flag types — `FlagValueType`, `VariantValue`, `Variant`
   - `FlagValueType`: enum `Bool | Int | Double | Str | Json`
   - `VariantValue`: enum `BoolValue(bool)`, `IntValue(i64)`, `DoubleValue(f64)`,
     `StrValue(String)`, `JsonValue(serde_json::Value)`
