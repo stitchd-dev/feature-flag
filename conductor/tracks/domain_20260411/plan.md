@@ -48,7 +48,7 @@
   - Unit tests: `has_active_key` with zero active, one active, mixed
   <!-- files: crates/stitchd-core/src/tenant.rs -->
 
-- [ ] Task: User identity types — `User`, `Role`, `Permission`,
+- [x] Task: User identity types — `User`, `Role`, `Permission`,
   `ResourceType`, `Action`
   - `ResourceType`: enum `Environment | Flag | Segment`
   - `Action`: enum `Read | Write | Publish | Admin`

@@ -1,7 +1,7 @@
+use semver::Version;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
-use serde::{Deserialize, Serialize};
-use semver::Version;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -103,7 +103,7 @@ mod tests {
         let val = ParameterValue::SemVer(Version::parse("1.2.3").unwrap());
         let json = serde_json::to_string(&val).unwrap();
         assert_eq!(json, "\"1.2.3\"");
-        
+
         let deserialized: ParameterValue = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, val);
     }

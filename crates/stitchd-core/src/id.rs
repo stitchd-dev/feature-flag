@@ -1,7 +1,7 @@
-use std::fmt;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use std::fmt;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum FlagKeyError {
@@ -13,17 +13,7 @@ pub enum FlagKeyError {
 
 macro_rules! define_id {
     ($name:ident) => {
-        #[derive(
-            Debug,
-            Clone,
-            Copy,
-            PartialEq,
-            Eq,
-            Hash,
-            Serialize,
-            Deserialize,
-            sqlx::Type,
-        )]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
         #[sqlx(transparent)]
         pub struct $name(Uuid);
 
