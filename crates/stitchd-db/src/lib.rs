@@ -5,11 +5,6 @@
 #![deny(warnings, missing_docs, clippy::all)]
 #![warn(clippy::pedantic, clippy::nursery)]
 
-// TODO: repository traits and implementations
-// TODO: connection pool setup
+pub mod error;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_compiles() {}
-}
+pub use error::RepositoryError;
