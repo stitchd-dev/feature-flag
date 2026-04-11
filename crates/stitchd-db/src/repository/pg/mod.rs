@@ -12,3 +12,4 @@ pub mod user;
 pub use environment::PgEnvironmentRepository;
 pub use organisation::PgOrganisationRepository;
 pub use project::PgProjectRepository;
+pub use sdk_key::PgSdkKeyRepository;
