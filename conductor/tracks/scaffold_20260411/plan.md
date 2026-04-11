@@ -4,7 +4,7 @@
 
 - [ ] Task: Create root `Cargo.toml` with workspace definition and shared `[workspace.dependencies]`
   - Include: `tokio`, `axum`, `tonic`, `prost`, `sqlx`, `serde`, `tracing`, `thiserror`, `anyhow`, `uuid`, `chrono`
-  - Pin versions; set `resolver = "2"`, `edition = "2024"`
+  - Pin versions; set `resolver = "3"`, `edition = "2024"`
 - [ ] Task: Create `stitchd-core` crate (`crates/stitchd-core/`)
   - `Cargo.toml`, `src/lib.rs` with deny/warn attributes and a `// TODO: domain types` comment
   - Stub test: `#[test] fn it_compiles() {}`
