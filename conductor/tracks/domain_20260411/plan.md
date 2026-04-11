@@ -17,7 +17,7 @@
   - Unit tests: `FlagKey` validation (empty, too long, valid)
   <!-- files: crates/stitchd-core/src/id.rs -->
 
-- [ ] Task: `ParameterValue` + `Context` model
+- [x] Task: `ParameterValue` + `Context` model
   - `ParameterValue`: enum `Int(i64)`, `Double(f64)`, `SemVer(semver::Version)`,
     `Str(String)`, `Bool(bool)` — all variants derive `Clone`, `PartialEq`,
     `Serialize`, `Deserialize`
