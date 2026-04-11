@@ -6,3 +6,8 @@ This file tracks all major tracks for the project.
 
 ## [x] Track: Workspace Scaffold & Project Foundation
 *Link: [./tracks/scaffold_20260411/](./tracks/scaffold_20260411/)*
+
+---
+
+## [~] Track: Core Domain Model & Database Schema
+*Link: [./conductor/tracks/domain_20260411/](./conductor/tracks/domain_20260411/)*
