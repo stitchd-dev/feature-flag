@@ -1,0 +1,98 @@
+syntax = "proto3";
+
+package stitchd.flags.v1;
+
+import "common/v1/context.proto";
+
+// --- Variant value types ---
+
+message VariantValue {
+  oneof value {
+    bool   bool_value   = 1;
+    int64  int_value    = 2;
+    double double_value = 3;
+    string string_value = 4;
+    string json_value   = 5; // JSON serialised as string
+  }
+}
+
+message Variant {
+  string       key   = 1;
+  VariantValue value = 2;
+}
+
+// --- Percentage allocation ---
+
+// A single bucket in a percentage rollout.
+message AllocationBucket {
+  // Variant key this bucket maps to.
+  string variant_key  = 1;
+  // Weight in units of 0.1% (e.g. 1000 = 100.0%, 500 = 50.0%).
+  uint32 weight_milli = 2;
+}
+
+// Percentage allocation: deterministic hash over context keys/params.
+// hash(targeted_keys, flag_key, project_id, environment_id) mod 100_000
+message PercentageAllocation {
+  // Context types and their parameter names to include in the hash.
+  // An empty parameter list means use the context key only.
+  map<string, ContextHashSpec> context_hash_specs = 1;
+  repeated AllocationBucket   buckets             = 2;
+}
+
+message ContextHashSpec {
+  // If empty, only the context `key` is hashed.
+  repeated string parameter_names = 1;
+}
+
+// --- Rules (skeleton; full rule types added in core track) ---
+
+message FlagRule {
+  // Opaque serialised rule payload — parsed by the client rule engine.
+  // Full typed rule messages will replace this in the rules track.
+  bytes rule_payload = 1;
+  // Output when this rule matches.
+  oneof output {
+    string               variant_key = 2;
+    PercentageAllocation allocation  = 3;
+  }
+}
+
+// --- Feature flag ---
+
+enum FlagValueType {
+  FLAG_VALUE_TYPE_UNSPECIFIED = 0;
+  FLAG_VALUE_TYPE_BOOL        = 1;
+  FLAG_VALUE_TYPE_INT         = 2;
+  FLAG_VALUE_TYPE_DOUBLE      = 3;
+  FLAG_VALUE_TYPE_STRING      = 4;
+  FLAG_VALUE_TYPE_JSON        = 5;
+}
+
+message FeatureFlag {
+  string         key        = 1;
+  bool           enabled    = 2;
+  FlagValueType  value_type = 3;
+  repeated Variant variants = 4;
+  // Evaluated in order; first match wins. Last rule is the default fallback.
+  repeated FlagRule rules   = 5;
+}
+
+// --- SDK sync service ---
+
+message SyncRequest {
+  // Contexts the client was initialised with.
+  repeated stitchd.common.v1.Context contexts = 1;
+}
+
+message SyncResponse {
+  repeated FeatureFlag flags = 1;
+  // Epoch millis — client uses this to detect stale payloads.
+  int64 server_timestamp_ms  = 2;
+}
+
+service FlagSyncService {
+  // Returns all feature flags and associated data for the calling environment.
+  // SDK key is supplied via gRPC metadata header `x-sdk-key`.
+  rpc Sync(SyncRequest) returns (SyncResponse);
+}

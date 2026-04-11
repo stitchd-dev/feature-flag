@@ -25,6 +25,7 @@ tonic = { version = "0.13" }
 tonic-build = { version = "0.13" }
 prost = { version = "0.13" }
 prost-build = { version = "0.13" }
+protoc-bin-vendored = { version = "3" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

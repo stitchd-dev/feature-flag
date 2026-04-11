@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package stitchd.segments.v1;
+
+// --- List-based segment ---
+
+// Targets a specific context type by explicit include/exclude key lists.
+message ListSegment {
+  string          key          = 1;
+  string          context_type = 2;
+  repeated string included_keys = 3;
+  repeated string excluded_keys = 4;
+}
+
+// --- Rule-based segment ---
+
+// A rule-based segment with its full rule payload for client-side evaluation.
+// (Full typed rule messages added in the rules track.)
+message RuleSegment {
+  string key          = 1;
+  string context_type = 2;
+  // Opaque serialised rule payload — parsed by the client rule engine.
+  bytes  rule_payload = 3;
+}
+
+// --- Sync payload ---
+
+// Segment data returned as part of the flag sync response (embedded via FlagSyncService).
+message SegmentBundle {
+  repeated ListSegment list_segments = 1;
+  repeated RuleSegment rule_segments = 2;
+}

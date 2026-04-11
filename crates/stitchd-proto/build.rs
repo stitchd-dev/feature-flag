@@ -1,0 +1,42 @@
+use std::path::PathBuf;
+
+fn main() {
+    // Use the vendored protoc binary — no system install required.
+    let protoc = protoc_bin_vendored::protoc_bin_path().expect("vendored protoc not found");
+    // SAFETY: build scripts are single-threaded; no concurrent env access.
+    unsafe {
+        std::env::set_var("PROTOC", protoc);
+    }
+
+    let proto_root = workspace_root().join("proto");
+
+    let proto_files = [
+        proto_root.join("common/v1/context.proto"),
+        proto_root.join("flags/v1/flag_sync.proto"),
+        proto_root.join("segments/v1/segment.proto"),
+        proto_root.join("events/v1/event.proto"),
+    ];
+
+    // Re-run build script if any proto file changes.
+    for path in &proto_files {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+
+    tonic_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile_protos(&proto_files, &[&proto_root])
+        .expect("failed to compile proto files");
+}
+
+/// Resolves the workspace root from the crate manifest directory.
+fn workspace_root() -> PathBuf {
+    // CARGO_MANIFEST_DIR is crates/stitchd-proto; go up two levels.
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    PathBuf::from(manifest_dir)
+        .parent()
+        .expect("crates/ dir")
+        .parent()
+        .expect("workspace root")
+        .to_path_buf()
+}

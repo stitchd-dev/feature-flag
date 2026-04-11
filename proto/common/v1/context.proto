@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package stitchd.common.v1;
+
+// A typed parameter value. Covers all supported context parameter types.
+message ParameterValue {
+  oneof value {
+    int64  int_value    = 1;
+    double double_value = 2;
+    string string_value = 3;
+    bool   bool_value   = 4;
+    // SemVer stored as string; parsed by the receiver.
+    string semver_value = 5;
+  }
+}
+
+// A single evaluation context supplied by the client SDK.
+//
+// - `context_type`: discriminator (e.g. "user", "organisation", "device")
+// - `key`:          stable identifier for this context instance
+// - `parameters`:   typed attributes used in rule evaluation
+// - `private_parameters`: names of parameters that must NOT appear in any log
+//                         or telemetry output
+message Context {
+  string                       context_type       = 1;
+  string                       key                = 2;
+  map<string, ParameterValue>  parameters         = 3;
+  repeated string              private_parameters = 4;
+}
