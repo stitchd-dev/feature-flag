@@ -104,12 +104,19 @@ pub struct User {
     pub id: UserId,
     /// Email address — unique within the organisation.
     pub email: String,
+    /// Bcrypt/Argon2 hash of the user's password. Never exposed via API.
+    #[serde(skip_serializing)]
+    pub password_hash: String,
     /// Parent organisation.
     pub organisation_id: OrganisationId,
     /// When this record was created.
     pub created_at: DateTime<Utc>,
     /// When this record was last modified.
     pub updated_at: DateTime<Utc>,
+    /// Set when the user is soft-deleted; `None` while active.
+    pub deleted_at: Option<DateTime<Utc>>,
+    /// Optimistic-concurrency version counter.
+    pub version: i64,
 }
 
 /// A project-scoped role bundling a set of permissions.
@@ -123,6 +130,14 @@ pub struct Role {
     pub name: String,
     /// Permissions granted to holders of this role.
     pub permissions: Vec<Permission>,
+    /// When this record was created.
+    pub created_at: DateTime<Utc>,
+    /// When this record was last modified.
+    pub updated_at: DateTime<Utc>,
+    /// Set when the role is soft-deleted; `None` while active.
+    pub deleted_at: Option<DateTime<Utc>>,
+    /// Optimistic-concurrency version counter.
+    pub version: i64,
 }
 
 #[cfg(test)]
@@ -219,6 +234,10 @@ mod tests {
                     action: Action::Write,
                 },
             ],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
         };
         let json = serde_json::to_string(&role).unwrap();
         let back: Role = serde_json::from_str(&json).unwrap();
