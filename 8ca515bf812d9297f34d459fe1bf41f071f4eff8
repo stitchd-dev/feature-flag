@@ -1,0 +1,4 @@
+Conductor Task: Endpoint integration tests
+Track: segmentation_20260412
+Summary: Added Axum integration tests for segment endpoints using tower::oneshot.
+Decisions: Execution pending DATABASE_URL with pg_partman extension support.
