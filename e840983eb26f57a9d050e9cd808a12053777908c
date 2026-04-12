@@ -1,0 +1,4 @@
+Conductor Task: Leaf condition evaluators
+Track: rule_engine_20260412
+Summary: Implemented evaluate_leaf() dispatching all 14 Condition variants. Used VersionReq::parse with prefix strings (>=, ~, ^) for SemVer semantics. All Phase 2 tasks in one file since they share eval_leaf.rs.
+Decisions: parse_semver_req maps parse errors to TypeMismatch rather than a new error variant; numeric_cmp uses a closure over Ordering so the 4 comparison operators share one helper.
