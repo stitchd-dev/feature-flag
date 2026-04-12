@@ -1,0 +1,4 @@
+Conductor Task: Wire pg_partman maintenance background task
+Track: segmentation_20260412
+Summary: Added a maintenance task for pg_partman that runs on startup and every hour in the background. This ensures partitions are pre-created for segment list entries.
+Decisions: Used a plain SQL query instead of macros for the maintenance call to avoid offline macro dependency on a database extension.
