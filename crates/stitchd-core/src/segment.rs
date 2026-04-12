@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::context::Context;
 use crate::id::{EnvironmentId, SegmentId};
+use crate::rule_engine::condition::Condition;
 use crate::rule_engine::error::RuleEngineError;
-use crate::rule_engine::types::Rule;
+use crate::rule_engine::eval_expr::evaluate_expr;
+use crate::rule_engine::types::{ConditionExpr, EvaluationInput, Rule};
 
 /// Whether a segment is rule-based or key-list-based.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
@@ -55,14 +57,43 @@ pub struct RuleBasedSegment {
 
 impl RuleBasedSegment {
     /// Evaluate the segment rules.
-    pub fn evaluate(&self, _contexts: &[Context]) -> Result<MatchResult, SegmentEvaluatorError> {
-        // TODO: Implement rule-based evaluation in Task 3
+    pub fn evaluate(&self, contexts: &[Context]) -> Result<MatchResult, SegmentEvaluatorError> {
+        let input = EvaluationInput::new(contexts);
+
+        for (i, rule) in self.rules.iter().enumerate() {
+            if contains_segment_condition(&rule.condition) {
+                return Err(SegmentEvaluatorError::InvalidSegmentRule);
+            }
+
+            if evaluate_expr(&rule.condition, &input)? {
+                return Ok(MatchResult {
+                    matched: true,
+                    trace: MatchTrace::RuleBased {
+                        matched_rule_index: Some(i),
+                    },
+                });
+            }
+        }
+
         Ok(MatchResult {
             matched: false,
             trace: MatchTrace::RuleBased {
                 matched_rule_index: None,
             },
         })
+    }
+}
+
+/// Helper to check if a condition expression contains segment-based conditions.
+fn contains_segment_condition(expr: &ConditionExpr) -> bool {
+    match expr {
+        ConditionExpr::Leaf(Condition::InSegment(_))
+        | ConditionExpr::Leaf(Condition::NotInSegment(_)) => true,
+        ConditionExpr::Leaf(_) => false,
+        ConditionExpr::And(exprs) | ConditionExpr::Or(exprs) => {
+            exprs.iter().any(contains_segment_condition)
+        }
+        ConditionExpr::Not(expr) => contains_segment_condition(expr),
     }
 }
 
