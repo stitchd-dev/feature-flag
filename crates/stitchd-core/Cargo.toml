@@ -15,4 +15,5 @@ chrono = { workspace = true }
 semver = { workspace = true }
 smallvec = { workspace = true }
 async-trait = { workspace = true }
+siphasher = { workspace = true }
 sqlx = { workspace = true }
