@@ -1,0 +1,4 @@
+Conductor Task: Define segment domain types
+Track: segmentation_20260412
+Summary: Defined the core domain types for segment evaluation, including RuleBasedSegment, ListBasedSegment, ContextList, and evaluation results/traces.
+Decisions: Used a tagged enum for SegmentDefinition and MatchTrace for better Serde compatibility and clarity.
