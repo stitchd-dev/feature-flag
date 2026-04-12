@@ -1,0 +1,4 @@
+Conductor Task: Implement all 5 segment handler functions
+Track: segmentation_20260412
+Summary: Implemented the Axum handler functions for listing, creating, getting, updating, and deleting segments. Added error mapping from repository errors to HTTP status codes.
+Decisions: Handlers assume SegmentRepository is available in AppState. Used optimistic locking check in update_segment.
