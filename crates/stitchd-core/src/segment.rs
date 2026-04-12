@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::context::Context;
 use crate::id::{EnvironmentId, SegmentId};
 use crate::rule_engine::error::RuleEngineError;
 use crate::rule_engine::types::Rule;
@@ -21,6 +22,16 @@ pub enum SegmentType {
     Rule,
     /// Evaluated by checking whether a context key appears in an explicit list.
     List,
+}
+
+impl SegmentDefinition {
+    /// Evaluate the segment against the provided contexts.
+    pub fn evaluate(&self, contexts: &[Context]) -> Result<MatchResult, SegmentEvaluatorError> {
+        match self {
+            Self::RuleBased(s) => s.evaluate(contexts),
+            Self::ListBased(s) => Ok(s.evaluate(contexts)),
+        }
+    }
 }
 
 /// A segment definition used for evaluation.
@@ -42,6 +53,19 @@ pub struct RuleBasedSegment {
     pub rules: Vec<Rule>,
 }
 
+impl RuleBasedSegment {
+    /// Evaluate the segment rules.
+    pub fn evaluate(&self, _contexts: &[Context]) -> Result<MatchResult, SegmentEvaluatorError> {
+        // TODO: Implement rule-based evaluation in Task 3
+        Ok(MatchResult {
+            matched: false,
+            trace: MatchTrace::RuleBased {
+                matched_rule_index: None,
+            },
+        })
+    }
+}
+
 /// A list-based segment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListBasedSegment {
@@ -49,6 +73,62 @@ pub struct ListBasedSegment {
     pub id: SegmentId,
     /// Per-context-type include/exclude lists.
     pub lists: HashMap<String, ContextList>,
+}
+
+impl ListBasedSegment {
+    /// Evaluate the segment against the provided contexts.
+    pub fn evaluate(&self, contexts: &[Context]) -> MatchResult {
+        let mut included_type = None;
+        let mut found_any_context = false;
+
+        for (context_type, list) in &self.lists {
+            if let Some(ctx) = contexts.iter().find(|c| &c.context_type == context_type) {
+                found_any_context = true;
+
+                // Exclude takes precedence
+                if list.exclude.contains(&ctx.key) {
+                    return MatchResult {
+                        matched: false,
+                        trace: MatchTrace::ListBased {
+                            context_type: Some(context_type.clone()),
+                            reason: ListMatchReason::Excluded,
+                        },
+                    };
+                }
+
+                // If not excluded, check for inclusion
+                if included_type.is_none() && list.include.contains(&ctx.key) {
+                    included_type = Some(context_type.clone());
+                }
+            }
+        }
+
+        if let Some(ctx_type) = included_type {
+            MatchResult {
+                matched: true,
+                trace: MatchTrace::ListBased {
+                    context_type: Some(ctx_type),
+                    reason: ListMatchReason::Included,
+                },
+            }
+        } else if found_any_context {
+            MatchResult {
+                matched: false,
+                trace: MatchTrace::ListBased {
+                    context_type: None,
+                    reason: ListMatchReason::NoMatch,
+                },
+            }
+        } else {
+            MatchResult {
+                matched: false,
+                trace: MatchTrace::ListBased {
+                    context_type: None,
+                    reason: ListMatchReason::NoContext,
+                },
+            }
+        }
+    }
 }
 
 /// Include and exclude lists for a specific context type.
@@ -131,4 +211,33 @@ pub struct Segment {
     pub deleted_at: Option<DateTime<Utc>>,
     /// Optimistic-concurrency version counter.
     pub version: i64,
+}
+
+/// Global evaluator for segments.
+pub struct SegmentEvaluator;
+
+impl SegmentEvaluator {
+    /// Evaluate a single segment.
+    pub fn evaluate_one(
+        contexts: &[Context],
+        segment: &SegmentDefinition,
+    ) -> Result<MatchResult, SegmentEvaluatorError> {
+        segment.evaluate(contexts)
+    }
+
+    /// Evaluate all segments independently.
+    pub fn evaluate_all(
+        contexts: &[Context],
+        segments: &[SegmentDefinition],
+    ) -> Result<HashMap<SegmentId, MatchResult>, SegmentEvaluatorError> {
+        let mut results = HashMap::with_capacity(segments.len());
+        for segment in segments {
+            let id = match segment {
+                SegmentDefinition::RuleBased(s) => s.id,
+                SegmentDefinition::ListBased(s) => s.id,
+            };
+            results.insert(id, segment.evaluate(contexts)?);
+        }
+        Ok(results)
+    }
 }
