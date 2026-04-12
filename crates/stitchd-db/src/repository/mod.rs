@@ -278,6 +278,34 @@ pub trait SegmentRepository: Send + Sync {
         segment: &stitchd_core::segment::Segment,
     ) -> Result<stitchd_core::segment::Segment, RepositoryError>;
 
+    /// Fetch a rule-based segment definition.
+    async fn find_with_rules(
+        &self,
+        id: SegmentId,
+    ) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError>;
+
+    /// Fetch a list-based segment definition.
+    async fn find_with_list(
+        &self,
+        id: SegmentId,
+    ) -> Result<stitchd_core::segment::ListBasedSegment, RepositoryError>;
+
+    /// Upsert rule definitions for a segment (replaces all existing rules).
+    async fn upsert_rules(
+        &self,
+        id: SegmentId,
+        rules: &[stitchd_core::rule_engine::types::Rule],
+    ) -> Result<(), RepositoryError>;
+
+    /// Replace list entries for a specific context type within a segment.
+    async fn set_list_entries(
+        &self,
+        id: SegmentId,
+        context_type: &str,
+        include: &[String],
+        exclude: &[String],
+    ) -> Result<(), RepositoryError>;
+
     /// Soft-delete a segment.
     async fn soft_delete(&self, id: SegmentId) -> Result<(), RepositoryError>;
 }

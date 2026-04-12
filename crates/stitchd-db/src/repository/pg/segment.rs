@@ -1,13 +1,15 @@
 //! Postgres implementation for the `segment` repository.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sqlx::PgPool;
+use sqlx::{PgPool, types::Json};
 
 use stitchd_core::{
     id::{EnvironmentId, SegmentId},
-    segment::{Segment, SegmentType},
+    rule_engine::types::Rule,
+    segment::{ContextList, ListBasedSegment, RuleBasedSegment, Segment, SegmentType},
 };
 
 use crate::{
@@ -249,6 +251,203 @@ impl SegmentRepository for PgSegmentRepository {
                 id.as_uuid(),
                 "soft_delete",
                 serde_json::json!({}),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn find_with_rules(&self, id: SegmentId) -> Result<RuleBasedSegment, RepositoryError> {
+        let segment = self.find_by_id(id).await?;
+        if segment.segment_type != SegmentType::Rule {
+            return Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            });
+        }
+
+        let rules = sqlx::query!(
+            r#"
+            SELECT rule_def as "rule_def: Json<Rule>"
+            FROM segment_rules
+            WHERE segment_id = $1
+            ORDER BY rule_index ASC
+            "#,
+            id as SegmentId
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?
+        .into_iter()
+        .map(|r| r.rule_def.0)
+        .collect();
+
+        Ok(RuleBasedSegment { id, rules })
+    }
+
+    async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
+        let segment = self.find_by_id(id).await?;
+        if segment.segment_type != SegmentType::List {
+            return Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            });
+        }
+
+        let entries = sqlx::query!(
+            r#"
+            SELECT context_type, entry_key, list_type
+            FROM segment_list_entries
+            WHERE segment_id = $1
+            "#,
+            id as SegmentId
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let mut lists = HashMap::new();
+        for row in entries {
+            let list = lists
+                .entry(row.context_type)
+                .or_insert_with(ContextList::default);
+            match row.list_type.as_str() {
+                "include" => {
+                    list.include.insert(row.entry_key);
+                }
+                "exclude" => {
+                    list.exclude.insert(row.entry_key);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(ListBasedSegment { id, lists })
+    }
+
+    async fn upsert_rules(&self, id: SegmentId, rules: &[Rule]) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
+
+        // Delete existing rules for this segment
+        sqlx::query!(
+            r#"DELETE FROM segment_rules WHERE segment_id = $1"#,
+            id as SegmentId
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        // Insert new rules
+        for (i, rule) in rules.iter().enumerate() {
+            sqlx::query!(
+                r#"
+                INSERT INTO segment_rules (segment_id, rule_index, rule_def)
+                VALUES ($1, $2, $3)
+                "#,
+                id as SegmentId,
+                i as i32,
+                Json(rule) as _
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+        }
+
+        // Update segment updated_at and version
+        sqlx::query!(
+            r#"UPDATE segments SET updated_at = NOW(), version = version + 1 WHERE id = $1"#,
+            id as SegmentId
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        tx.commit().await.map_err(RepositoryError::Database)?;
+
+        self.audit
+            .log(
+                None,
+                "segment",
+                id.as_uuid(),
+                "upsert_rules",
+                serde_json::json!({ "rule_count": rules.len() }),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn set_list_entries(
+        &self,
+        id: SegmentId,
+        context_type: &str,
+        include: &[String],
+        exclude: &[String],
+    ) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
+
+        // Delete existing for this context_type
+        sqlx::query!(
+            r#"DELETE FROM segment_list_entries WHERE segment_id = $1 AND context_type = $2"#,
+            id as SegmentId,
+            context_type
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        // Insert include
+        for key in include {
+            sqlx::query!(
+                r#"
+                INSERT INTO segment_list_entries (segment_id, context_type, entry_key, list_type)
+                VALUES ($1, $2, $3, 'include')
+                "#,
+                id as SegmentId,
+                context_type,
+                key
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+        }
+
+        // Insert exclude
+        for key in exclude {
+            sqlx::query!(
+                r#"
+                INSERT INTO segment_list_entries (segment_id, context_type, entry_key, list_type)
+                VALUES ($1, $2, $3, 'exclude')
+                "#,
+                id as SegmentId,
+                context_type,
+                key
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+        }
+
+        // Update segment updated_at and version
+        sqlx::query!(
+            r#"UPDATE segments SET updated_at = NOW(), version = version + 1 WHERE id = $1"#,
+            id as SegmentId
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        tx.commit().await.map_err(RepositoryError::Database)?;
+
+        self.audit
+            .log(
+                None,
+                "segment",
+                id.as_uuid(),
+                "set_list_entries",
+                serde_json::json!({
+                    "context_type": context_type,
+                    "include_count": include.len(),
+                    "exclude_count": exclude.len(),
+                }),
             )
             .await?;
 
