@@ -223,4 +223,61 @@ mod tests {
             Err(RuleEngineError::CyclicFlagDependency { .. })
         ));
     }
+
+    // ── Transitive dep not in flag_rules (orchestrator line 43) ──────────────
+
+    #[test]
+    fn transitive_dep_not_in_evaluation_set_is_skipped() {
+        // flag_b references flag_ext (external), but flag_ext has no rules in our set.
+        // flag_ext should appear in topo order but be skipped (continue branch).
+        let flag_ext = FlagId::new();
+        let flag_b = FlagId::new();
+        let v_b = VariantId::new();
+
+        // flag_b fires if flag_ext evaluated as v_ext — but flag_ext is not in flags.
+        // So flag_ext resolves to None, flag_b condition is false → None.
+        let v_ext = VariantId::new();
+        let rules_b = vec![variant_rule(
+            ConditionExpr::Leaf(Condition::FlagEvaluatedAs {
+                flag_id: flag_ext,
+                variant_id: v_ext,
+            }),
+            v_b,
+        )];
+
+        let flags = [(flag_b, rules_b)];
+        let ctx: [Context; 0] = [];
+        let results = evaluate_flags(&flags, &EvaluationInput::new(&ctx)).unwrap();
+        // flag_b has no match because flag_ext was never evaluated
+        assert_eq!(results[&flag_b], None);
+    }
+
+    // ── Percentage arm in orchestrator (orchestrator line 68) ─────────────────
+
+    #[test]
+    fn percentage_rule_output_returns_none_in_orchestrator() {
+        use crate::rule_engine::types::RuleOutput;
+
+        let f = FlagId::new();
+        let v1 = VariantId::new();
+        let v2 = VariantId::new();
+
+        // A rule with Percentage output — orchestrator maps this to None.
+        let rule = Rule {
+            id: crate::id::RuleId::new(),
+            condition: ConditionExpr::And(vec![]), // always true
+            output: RuleOutput::Percentage {
+                targets: vec![crate::rule_engine::types::PercentageTarget {
+                    context_type: "user".into(),
+                    field: crate::rule_engine::types::TargetField::Key,
+                }],
+                weights: vec![(v1, 500), (v2, 500)],
+            },
+        };
+
+        let flags = [(f, vec![rule])];
+        let ctx: [Context; 1] = [Context::new("user", "u-1")];
+        let results = evaluate_flags(&flags, &EvaluationInput::new(&ctx)).unwrap();
+        assert_eq!(results[&f], None);
+    }
 }

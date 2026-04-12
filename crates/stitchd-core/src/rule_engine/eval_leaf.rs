@@ -703,4 +703,88 @@ mod tests {
         };
         assert_eq!(evaluate_leaf(&cond, &input), Ok(false));
     }
+
+    // ── SemVer direct numeric comparison (Lt/Gt via numeric_cmp) ─────────────
+
+    #[test]
+    fn lt_semver_true() {
+        let ctx = semver_ctx("1.1.0");
+        let cond = Condition::Lt {
+            context_type: "user".into(),
+            param: "version".into(),
+            value: ParameterValue::SemVer(semver::Version::parse("1.2.0").unwrap()),
+        };
+        assert_eq!(evaluate_leaf(&cond, &input_with(&ctx)), Ok(true));
+    }
+
+    #[test]
+    fn gt_semver_false() {
+        let ctx = semver_ctx("1.1.0");
+        let cond = Condition::Gt {
+            context_type: "user".into(),
+            param: "version".into(),
+            value: ParameterValue::SemVer(semver::Version::parse("1.2.0").unwrap()),
+        };
+        assert_eq!(evaluate_leaf(&cond, &input_with(&ctx)), Ok(false));
+    }
+
+    // ── parse_semver_req error path (bad version string) ─────────────────────
+
+    #[test]
+    fn semver_gte_invalid_version_returns_type_mismatch() {
+        let ctx = semver_ctx("1.0.0");
+        let cond = Condition::SemverGte {
+            context_type: "user".into(),
+            param: "version".into(),
+            version: "not-a-version".into(),
+        };
+        assert!(matches!(
+            evaluate_leaf(&cond, &input_with(&ctx)),
+            Err(RuleEngineError::TypeMismatch { .. })
+        ));
+    }
+
+    // ── param_value_type_name: Bool and Double mismatch paths ─────────────────
+
+    #[test]
+    fn numeric_cmp_type_mismatch_bool() {
+        let ctx = [user_ctx(&[("flag", ParameterValue::Bool(true))])];
+        let cond = Condition::Lt {
+            context_type: "user".into(),
+            param: "flag".into(),
+            value: ParameterValue::Int(1),
+        };
+        let result = evaluate_leaf(&cond, &input_with(&ctx));
+        assert!(
+            matches!(result, Err(RuleEngineError::TypeMismatch { actual, .. }) if actual == "Bool")
+        );
+    }
+
+    #[test]
+    fn string_op_type_mismatch_double() {
+        let ctx = [user_ctx(&[("score", ParameterValue::Double(3.14))])];
+        let cond = Condition::Contains {
+            context_type: "user".into(),
+            param: "score".into(),
+            substr: "3".into(),
+        };
+        let result = evaluate_leaf(&cond, &input_with(&ctx));
+        assert!(
+            matches!(result, Err(RuleEngineError::TypeMismatch { actual, .. }) if actual == "Double")
+        );
+    }
+
+    #[test]
+    fn string_op_type_mismatch_semver() {
+        let ctx = semver_ctx("1.0.0");
+        let cond = Condition::Contains {
+            context_type: "user".into(),
+            param: "version".into(),
+            substr: "1".into(),
+        };
+        let result = evaluate_leaf(&cond, &input_with(&ctx));
+        assert!(
+            matches!(result, Err(RuleEngineError::TypeMismatch { actual, .. }) if actual == "SemVer")
+        );
+    }
 }
