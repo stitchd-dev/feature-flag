@@ -3,6 +3,7 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 
 pub mod telemetry;
+pub mod api;
 
 use axum::{Json, Router, extract::State, routing::get};
 use metrics_exporter_prometheus::PrometheusHandle;
