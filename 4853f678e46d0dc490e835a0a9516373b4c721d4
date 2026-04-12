@@ -1,0 +1,4 @@
+Conductor Task: Implement list-based segment evaluation
+Track: segmentation_20260412
+Summary: Implemented the evaluation logic for list-based segments, including include/exclude list checks, precedence rules (exclude wins), and tracing.
+Decisions: Added SegmentEvaluator with evaluate_one and evaluate_all methods for a clean API.
