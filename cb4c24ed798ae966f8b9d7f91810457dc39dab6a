@@ -1,0 +1,4 @@
+Conductor Task: Wire segment routes into Axum router
+Track: segmentation_20260412
+Summary: Registered all segment CRUD routes under /v1/environments/:env_id/segments. Updated AppState to include SegmentRepository and initialized it in main.rs.
+Decisions: Moved router logic to a separate api::router module for better organization.
