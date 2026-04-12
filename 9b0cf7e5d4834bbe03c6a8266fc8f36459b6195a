@@ -1,0 +1,4 @@
+Conductor Task: Extend SegmentRepository trait + implement PgSegmentRepository
+Track: segmentation_20260412
+Summary: Extended the SegmentRepository trait and Pg implementation to support rule-based and list-based segment definitions.
+Decisions: Used sqlx::types::Json for rule definitions. Implemented upsert/replace semantics for both rules and list entries.
