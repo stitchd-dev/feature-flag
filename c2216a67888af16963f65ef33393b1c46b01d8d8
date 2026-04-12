@@ -1,0 +1,4 @@
+Conductor Task: Write segment_list_entries migration
+Track: segmentation_20260412
+Summary: Created migration for segment_list_entries table with monthly range partitioning via pg_partman.
+Decisions: Enabled pg_partman extension and configured infinite retention as per spec.
