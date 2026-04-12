@@ -1,0 +1,4 @@
+Conductor Task: Implement rule-based segment evaluation
+Track: segmentation_20260412
+Summary: Implemented rule-based segment evaluation by delegating to the rule engine. Added validation to reject InSegment/NotInSegment conditions within segment rules to ensure independence.
+Decisions: Implemented a helper function contains_segment_condition for validation since segments must not depend on other segments.
