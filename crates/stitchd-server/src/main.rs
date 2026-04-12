@@ -22,8 +22,8 @@ async fn main() -> Result<()> {
         "stitchd-server starting"
     );
 
-    let database_url = std::env::var("DATABASE_URL")
-        .context("DATABASE_URL environment variable must be set")?;
+    let database_url =
+        std::env::var("DATABASE_URL").context("DATABASE_URL environment variable must be set")?;
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
         metrics_handle,
         segment_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(
             pool.clone(),
-            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(pool)),
+            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(pool.clone())),
         )),
     };
 
@@ -64,7 +64,7 @@ async fn main() -> Result<()> {
         .context("HTTP server error")?;
 
     info!("shutting down");
-    telemetry::shutdown_tracing(tracer_provider);
+    telemetry::shutdown_tracing(&tracer_provider);
 
     Ok(())
 }

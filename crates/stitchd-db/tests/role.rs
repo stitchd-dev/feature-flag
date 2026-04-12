@@ -1,8 +1,14 @@
 use std::sync::Arc;
-use stitchd_core::{id::{OrganisationId, ProjectId, RoleId}, tenant::{Organisation, Project}, user::{Role, Permission, ResourceType, Action}};
+use stitchd_core::{
+    id::{OrganisationId, ProjectId, RoleId},
+    tenant::{Organisation, Project},
+    user::{Action, Permission, ResourceType, Role},
+};
 use stitchd_db::{
-    RoleRepository, ProjectRepository, OrganisationRepository,
-    repository::pg::{PgAuditLogger, PgOrganisationRepository, PgProjectRepository, PgRoleRepository},
+    OrganisationRepository, ProjectRepository, RoleRepository,
+    repository::pg::{
+        PgAuditLogger, PgOrganisationRepository, PgProjectRepository, PgRoleRepository,
+    },
 };
 
 #[sqlx::test(migrations = "./migrations")]
@@ -13,9 +19,24 @@ async fn test_role_lifecycle(pool: sqlx::PgPool) {
     let repo = PgRoleRepository::new(pool.clone(), audit);
 
     // 0. Setup
-    let org = Organisation { id: OrganisationId::new(), name: "Org".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let org = Organisation {
+        id: OrganisationId::new(),
+        name: "Org".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     org_repo.create(&org).await.unwrap();
-    let project = Project { id: ProjectId::new(), organisation_id: org.id, name: "Proj".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let project = Project {
+        id: ProjectId::new(),
+        organisation_id: org.id,
+        name: "Proj".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     proj_repo.create(&project).await.unwrap();
 
     // 1. Create Role
@@ -47,11 +68,19 @@ async fn test_role_lifecycle(pool: sqlx::PgPool) {
         resource_pattern: "*".to_string(),
         action: Action::Read,
     });
-    let updated = repo.update(&to_update).await.expect("Failed to update role");
+    let updated = repo
+        .update(&to_update)
+        .await
+        .expect("Failed to update role");
     assert_eq!(updated.permissions.len(), 2);
 
     // 4. Soft Delete
-    repo.soft_delete(role.id).await.expect("Failed to soft delete");
+    repo.soft_delete(role.id)
+        .await
+        .expect("Failed to soft delete");
     let not_found = repo.find_by_id(role.id).await.unwrap_err();
-    assert!(matches!(not_found, stitchd_db::RepositoryError::NotFound { .. }));
+    assert!(matches!(
+        not_found,
+        stitchd_db::RepositoryError::NotFound { .. }
+    ));
 }

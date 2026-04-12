@@ -1,14 +1,16 @@
 use std::sync::Arc;
 use stitchd_core::{
-    id::{OrganisationId, ProjectId, EnvironmentId, SegmentId, RuleId, VariantId},
-    tenant::{Organisation, Project, Environment},
-    segment::{Segment, SegmentType, SegmentDefinition, RuleBasedSegment, ListBasedSegment},
-    rule_engine::types::{Rule, RuleOutput, ConditionExpr},
-    rule_engine::condition::Condition,
+    id::{EnvironmentId, OrganisationId, ProjectId, RuleId, SegmentId, VariantId},
+    rule_engine::types::{ConditionExpr, Rule, RuleOutput},
+    segment::{Segment, SegmentType},
+    tenant::{Environment, Organisation, Project},
 };
 use stitchd_db::{
-    SegmentRepository, EnvironmentRepository, ProjectRepository, OrganisationRepository,
-    repository::pg::{PgAuditLogger, PgOrganisationRepository, PgProjectRepository, PgEnvironmentRepository, PgSegmentRepository},
+    EnvironmentRepository, OrganisationRepository, ProjectRepository, SegmentRepository,
+    repository::pg::{
+        PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository,
+        PgSegmentRepository,
+    },
 };
 
 async fn setup(pool: &sqlx::PgPool) -> (PgSegmentRepository, EnvironmentId) {
@@ -70,13 +72,11 @@ async fn test_rule_based_segment_repository(pool: sqlx::PgPool) {
     };
     repo.create(&segment).await.unwrap();
 
-    let rules = vec![
-        Rule {
-            id: RuleId::new(),
-            condition: ConditionExpr::And(vec![]),
-            output: RuleOutput::Variant(VariantId::new()),
-        }
-    ];
+    let rules = vec![Rule {
+        id: RuleId::new(),
+        condition: ConditionExpr::And(vec![]),
+        output: RuleOutput::Variant(VariantId::new()),
+    }];
 
     // 1. Upsert rules
     repo.upsert_rules(segment_id, &rules).await.unwrap();
@@ -87,13 +87,11 @@ async fn test_rule_based_segment_repository(pool: sqlx::PgPool) {
     assert_eq!(found.rules[0].id, rules[0].id);
 
     // 3. Second upsert replaces
-    let new_rules = vec![
-        Rule {
-            id: RuleId::new(),
-            condition: ConditionExpr::Or(vec![]),
-            output: RuleOutput::Variant(VariantId::new()),
-        }
-    ];
+    let new_rules = vec![Rule {
+        id: RuleId::new(),
+        condition: ConditionExpr::Or(vec![]),
+        output: RuleOutput::Variant(VariantId::new()),
+    }];
     repo.upsert_rules(segment_id, &new_rules).await.unwrap();
     let found2 = repo.find_with_rules(segment_id).await.unwrap();
     assert_eq!(found2.rules.len(), 1);
@@ -118,7 +116,9 @@ async fn test_list_based_segment_repository(pool: sqlx::PgPool) {
     repo.create(&segment).await.unwrap();
 
     // 1. Set list entries
-    repo.set_list_entries(segment_id, "user", &["u1".to_string()], &["u2".to_string()]).await.unwrap();
+    repo.set_list_entries(segment_id, "user", &["u1".to_string()], &["u2".to_string()])
+        .await
+        .unwrap();
 
     // 2. Find with list
     let found = repo.find_with_list(segment_id).await.unwrap();
@@ -127,7 +127,9 @@ async fn test_list_based_segment_repository(pool: sqlx::PgPool) {
     assert!(user_list.exclude.contains("u2"));
 
     // 3. Set replaces for context_type
-    repo.set_list_entries(segment_id, "user", &["u3".to_string()], &[]).await.unwrap();
+    repo.set_list_entries(segment_id, "user", &["u3".to_string()], &[])
+        .await
+        .unwrap();
     let found2 = repo.find_with_list(segment_id).await.unwrap();
     let user_list2 = found2.lists.get("user").unwrap();
     assert!(user_list2.include.contains("u3"));

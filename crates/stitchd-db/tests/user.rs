@@ -1,8 +1,15 @@
 use std::sync::Arc;
-use stitchd_core::{id::{OrganisationId, ProjectId, UserId, RoleId}, tenant::{Organisation, Project}, user::{User, Role, Permission, ResourceType, Action}};
+use stitchd_core::{
+    id::{OrganisationId, ProjectId, RoleId, UserId},
+    tenant::{Organisation, Project},
+    user::{Action, Permission, ResourceType, Role, User},
+};
 use stitchd_db::{
-    UserRepository, RoleRepository, ProjectRepository, OrganisationRepository,
-    repository::pg::{PgAuditLogger, PgOrganisationRepository, PgProjectRepository, PgUserRepository, PgRoleRepository},
+    OrganisationRepository, ProjectRepository, RoleRepository, UserRepository,
+    repository::pg::{
+        PgAuditLogger, PgOrganisationRepository, PgProjectRepository, PgRoleRepository,
+        PgUserRepository,
+    },
 };
 
 #[sqlx::test(migrations = "./migrations")]
@@ -14,9 +21,24 @@ async fn test_user_lifecycle(pool: sqlx::PgPool) {
     let repo = PgUserRepository::new(pool.clone(), audit);
 
     // 0. Setup
-    let org = Organisation { id: OrganisationId::new(), name: "Org".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let org = Organisation {
+        id: OrganisationId::new(),
+        name: "Org".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     org_repo.create(&org).await.unwrap();
-    let project = Project { id: ProjectId::new(), organisation_id: org.id, name: "Proj".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let project = Project {
+        id: ProjectId::new(),
+        organisation_id: org.id,
+        name: "Proj".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     proj_repo.create(&project).await.unwrap();
 
     // 1. Create User
@@ -33,7 +55,10 @@ async fn test_user_lifecycle(pool: sqlx::PgPool) {
     repo.create(&user).await.expect("Failed to create user");
 
     // 2. Find by Email
-    let found = repo.find_by_email("test@example.com", org.id).await.expect("Failed to find by email");
+    let found = repo
+        .find_by_email("test@example.com", org.id)
+        .await
+        .expect("Failed to find by email");
     assert_eq!(found.id, user.id);
 
     // 3. Setup Role & Permissions
@@ -65,7 +90,10 @@ async fn test_user_lifecycle(pool: sqlx::PgPool) {
     .unwrap();
 
     // 5. Find Permissions
-    let permissions = repo.find_permissions_for_user(user.id, project.id).await.expect("Failed to find permissions");
+    let permissions = repo
+        .find_permissions_for_user(user.id, project.id)
+        .await
+        .expect("Failed to find permissions");
     assert_eq!(permissions.len(), 1);
     assert_eq!(permissions[0].action, Action::Admin);
 }

@@ -2,15 +2,18 @@
 #![deny(warnings, missing_docs, clippy::all)]
 #![warn(clippy::pedantic, clippy::nursery)]
 
-pub mod telemetry;
+/// API routes and handlers.
 pub mod api;
+/// Server startup and maintenance tasks.
 pub mod startup;
+/// Telemetry and observability setup.
+pub mod telemetry;
 
-use std::sync::Arc;
 use axum::{Json, Router, extract::State, routing::get};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use sqlx::PgPool;
+use std::sync::Arc;
 use stitchd_db::SegmentRepository;
 
 /// Shared application state.
@@ -28,7 +31,6 @@ pub struct AppState {
 ///
 /// Currently only exposes infrastructure endpoints (`/health`, `/metrics`).
 /// Feature routes will be added in subsequent tracks.
-#[must_use]
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -81,8 +83,14 @@ mod tests {
             .build_recorder()
             .handle();
         let audit = std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
-        let segment_repo = std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(db.clone(), audit));
-        AppState { db, metrics_handle, segment_repo }
+        let segment_repo = std::sync::Arc::new(
+            stitchd_db::repository::pg::PgSegmentRepository::new(db.clone(), audit),
+        );
+        AppState {
+            db,
+            metrics_handle,
+            segment_repo,
+        }
     }
 
     #[tokio::test]

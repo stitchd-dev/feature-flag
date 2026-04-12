@@ -2,14 +2,20 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::Utc;
 use serde_json::json;
 use std::sync::Arc;
 use stitchd_core::{
-    id::{EnvironmentId, SegmentId, OrganisationId, ProjectId},
-    tenant::{Organisation, Project, Environment},
-    segment::SegmentType,
+    id::{EnvironmentId, OrganisationId, ProjectId, SegmentId},
+    tenant::{Environment, Organisation, Project},
 };
-use stitchd_db::repository::pg::{PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository, PgSegmentRepository};
+use stitchd_db::{
+    EnvironmentRepository, OrganisationRepository, ProjectRepository,
+    repository::pg::{
+        PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository,
+        PgSegmentRepository,
+    },
+};
 use stitchd_server::{AppState, build_router};
 use tower::ServiceExt as _;
 
@@ -24,8 +30,8 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
     let org = Organisation {
         id: OrganisationId::new(),
         name: "Test Org".into(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
         deleted_at: None,
         version: 1,
     };
@@ -35,8 +41,8 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         id: ProjectId::new(),
         organisation_id: org.id,
         name: "Test Project".into(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
         deleted_at: None,
         version: 1,
     };
@@ -46,8 +52,8 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         id: EnvironmentId::new(),
         project_id: project.id,
         name: "Test Env".into(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
         deleted_at: None,
         version: 1,
     };
@@ -117,8 +123,8 @@ async fn test_create_rule_segment_invalid_condition(pool: sqlx::PgPool) {
         ]
     });
 
-    // Note: Condition serialization might be different depending on how 
-    // it was implemented in rule-engine track. 
+    // Note: Condition serialization might be different depending on how
+    // it was implemented in rule-engine track.
     // Assuming the above JSON shape for now.
 
     let response = app

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT context_type, entry_key, list_type\n            FROM segment_list_entries\n            WHERE segment_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "context_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "entry_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "list_type",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d65e3a8ab91f6832227a83d30c4538865396d177f453af9e49daf56f8bffa09e"
+}

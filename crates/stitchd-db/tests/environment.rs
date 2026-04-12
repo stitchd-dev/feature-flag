@@ -1,8 +1,13 @@
 use std::sync::Arc;
-use stitchd_core::{id::{OrganisationId, ProjectId, EnvironmentId}, tenant::{Organisation, Project, Environment}};
+use stitchd_core::{
+    id::{EnvironmentId, OrganisationId, ProjectId},
+    tenant::{Environment, Organisation, Project},
+};
 use stitchd_db::{
-    EnvironmentRepository, ProjectRepository, OrganisationRepository,
-    repository::pg::{PgAuditLogger, PgOrganisationRepository, PgProjectRepository, PgEnvironmentRepository},
+    EnvironmentRepository, OrganisationRepository, ProjectRepository,
+    repository::pg::{
+        PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository,
+    },
 };
 
 #[sqlx::test(migrations = "./migrations")]
@@ -45,26 +50,42 @@ async fn test_environment_lifecycle(pool: sqlx::PgPool) {
         version: 1,
     };
 
-    repo.create(&env).await.expect("Failed to create environment");
+    repo.create(&env)
+        .await
+        .expect("Failed to create environment");
 
     // 2. Find
-    let found = repo.find_by_id(env.id).await.expect("Failed to find environment");
+    let found = repo
+        .find_by_id(env.id)
+        .await
+        .expect("Failed to find environment");
     assert_eq!(found.name, "Production");
 
     // 3. Update
     let mut to_update = found.clone();
     to_update.name = "Staging".to_string();
-    let updated = repo.update(&to_update).await.expect("Failed to update environment");
+    let updated = repo
+        .update(&to_update)
+        .await
+        .expect("Failed to update environment");
     assert_eq!(updated.name, "Staging");
 
     // 4. List by Project
-    let all = repo.list_by_project(project.id).await.expect("Failed to list environments");
+    let all = repo
+        .list_by_project(project.id)
+        .await
+        .expect("Failed to list environments");
     assert!(all.iter().any(|e| e.id == env.id));
 
     // 5. Soft Delete
-    repo.soft_delete(env.id).await.expect("Failed to soft delete");
-    
+    repo.soft_delete(env.id)
+        .await
+        .expect("Failed to soft delete");
+
     // 6. Find (Should be NotFound)
     let not_found = repo.find_by_id(env.id).await.unwrap_err();
-    assert!(matches!(not_found, stitchd_db::RepositoryError::NotFound { .. }));
+    assert!(matches!(
+        not_found,
+        stitchd_db::RepositoryError::NotFound { .. }
+    ));
 }

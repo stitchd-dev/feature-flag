@@ -260,9 +260,7 @@ impl SegmentRepository for PgSegmentRepository {
     async fn find_with_rules(&self, id: SegmentId) -> Result<RuleBasedSegment, RepositoryError> {
         let segment = self.find_by_id(id).await?;
         if segment.segment_type != SegmentType::Rule {
-            return Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            });
+            return Err(RepositoryError::NotFound { id: id.to_string() });
         }
 
         let rules = sqlx::query!(
@@ -287,9 +285,7 @@ impl SegmentRepository for PgSegmentRepository {
     async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
         let segment = self.find_by_id(id).await?;
         if segment.segment_type != SegmentType::List {
-            return Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            });
+            return Err(RepositoryError::NotFound { id: id.to_string() });
         }
 
         let entries = sqlx::query!(
@@ -343,7 +339,7 @@ impl SegmentRepository for PgSegmentRepository {
                 VALUES ($1, $2, $3)
                 "#,
                 id as SegmentId,
-                i as i32,
+                i32::try_from(i).unwrap_or(i32::MAX),
                 Json(rule) as _
             )
             .execute(&mut *tx)

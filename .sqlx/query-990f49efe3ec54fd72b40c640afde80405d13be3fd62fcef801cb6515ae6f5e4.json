@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO segment_list_entries (segment_id, context_type, entry_key, list_type)\n                VALUES ($1, $2, $3, 'include')\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "990f49efe3ec54fd72b40c640afde80405d13be3fd62fcef801cb6515ae6f5e4"
+}

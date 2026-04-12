@@ -1,8 +1,15 @@
 use std::sync::Arc;
-use stitchd_core::{id::{OrganisationId, ProjectId, EnvironmentId, SegmentId}, tenant::{Organisation, Project, Environment}, segment::{Segment, SegmentType}};
+use stitchd_core::{
+    id::{EnvironmentId, OrganisationId, ProjectId, SegmentId},
+    segment::{Segment, SegmentType},
+    tenant::{Environment, Organisation, Project},
+};
 use stitchd_db::{
-    SegmentRepository, EnvironmentRepository, ProjectRepository, OrganisationRepository,
-    repository::pg::{PgAuditLogger, PgOrganisationRepository, PgProjectRepository, PgEnvironmentRepository, PgSegmentRepository},
+    EnvironmentRepository, OrganisationRepository, ProjectRepository, SegmentRepository,
+    repository::pg::{
+        PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository,
+        PgSegmentRepository,
+    },
 };
 
 #[sqlx::test(migrations = "./migrations")]
@@ -14,11 +21,34 @@ async fn test_segment_lifecycle(pool: sqlx::PgPool) {
     let repo = PgSegmentRepository::new(pool.clone(), audit);
 
     // 0. Setup
-    let org = Organisation { id: OrganisationId::new(), name: "Org".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let org = Organisation {
+        id: OrganisationId::new(),
+        name: "Org".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     org_repo.create(&org).await.unwrap();
-    let project = Project { id: ProjectId::new(), organisation_id: org.id, name: "Proj".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let project = Project {
+        id: ProjectId::new(),
+        organisation_id: org.id,
+        name: "Proj".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     proj_repo.create(&project).await.unwrap();
-    let env = Environment { id: EnvironmentId::new(), project_id: project.id, name: "Env".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let env = Environment {
+        id: EnvironmentId::new(),
+        project_id: project.id,
+        name: "Env".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     env_repo.create(&env).await.unwrap();
 
     // 1. Create Segment
@@ -32,20 +62,33 @@ async fn test_segment_lifecycle(pool: sqlx::PgPool) {
         deleted_at: None,
         version: 1,
     };
-    repo.create(&segment).await.expect("Failed to create segment");
+    repo.create(&segment)
+        .await
+        .expect("Failed to create segment");
 
     // 2. Find by Key
-    let found = repo.find_by_key("beta-testers", env.id).await.expect("Failed to find segment");
+    let found = repo
+        .find_by_key("beta-testers", env.id)
+        .await
+        .expect("Failed to find segment");
     assert_eq!(found.id, segment.id);
 
     // 3. Update
     let mut to_update = found.clone();
     to_update.segment_type = SegmentType::List;
-    let updated = repo.update(&to_update).await.expect("Failed to update segment");
+    let updated = repo
+        .update(&to_update)
+        .await
+        .expect("Failed to update segment");
     assert_eq!(updated.segment_type, SegmentType::List);
 
     // 4. Soft Delete
-    repo.soft_delete(segment.id).await.expect("Failed to soft delete");
+    repo.soft_delete(segment.id)
+        .await
+        .expect("Failed to soft delete");
     let not_found = repo.find_by_id(segment.id).await.unwrap_err();
-    assert!(matches!(not_found, stitchd_db::RepositoryError::NotFound { .. }));
+    assert!(matches!(
+        not_found,
+        stitchd_db::RepositoryError::NotFound { .. }
+    ));
 }

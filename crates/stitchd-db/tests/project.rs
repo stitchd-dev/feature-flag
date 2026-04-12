@@ -1,7 +1,10 @@
 use std::sync::Arc;
-use stitchd_core::{id::{OrganisationId, ProjectId}, tenant::{Organisation, Project}};
+use stitchd_core::{
+    id::{OrganisationId, ProjectId},
+    tenant::{Organisation, Project},
+};
 use stitchd_db::{
-    ProjectRepository, OrganisationRepository,
+    OrganisationRepository, ProjectRepository,
     repository::pg::{PgAuditLogger, PgOrganisationRepository, PgProjectRepository},
 };
 
@@ -33,27 +36,43 @@ async fn test_project_lifecycle(pool: sqlx::PgPool) {
         version: 1,
     };
 
-    repo.create(&project).await.expect("Failed to create project");
+    repo.create(&project)
+        .await
+        .expect("Failed to create project");
 
     // 2. Find
-    let found = repo.find_by_id(project.id).await.expect("Failed to find project");
+    let found = repo
+        .find_by_id(project.id)
+        .await
+        .expect("Failed to find project");
     assert_eq!(found.name, "Test Project");
 
     // 3. Update
     let mut to_update = found.clone();
     to_update.name = "Updated Project".to_string();
-    let updated = repo.update(&to_update).await.expect("Failed to update project");
+    let updated = repo
+        .update(&to_update)
+        .await
+        .expect("Failed to update project");
     assert_eq!(updated.name, "Updated Project");
     assert_eq!(updated.version, 2);
 
     // 4. List by Org
-    let all = repo.list_by_organisation(org.id).await.expect("Failed to list projects");
+    let all = repo
+        .list_by_organisation(org.id)
+        .await
+        .expect("Failed to list projects");
     assert!(all.iter().any(|p| p.id == project.id));
 
     // 5. Soft Delete
-    repo.soft_delete(project.id).await.expect("Failed to soft delete");
-    
+    repo.soft_delete(project.id)
+        .await
+        .expect("Failed to soft delete");
+
     // 6. Find (Should be NotFound)
     let not_found = repo.find_by_id(project.id).await.unwrap_err();
-    assert!(matches!(not_found, stitchd_db::RepositoryError::NotFound { .. }));
+    assert!(matches!(
+        not_found,
+        stitchd_db::RepositoryError::NotFound { .. }
+    ));
 }

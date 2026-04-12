@@ -1,23 +1,29 @@
-use std::sync::Arc;
+use crate::AppState;
+use crate::api::segments::types::{
+    CreateSegmentRequest, SegmentResponse, UpdateSegmentRequest, ValidationError, validate_rules,
+};
 use axum::{
     Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
+use chrono::Utc;
 use stitchd_core::{
     id::{EnvironmentId, SegmentId},
-    segment::{Segment, SegmentType, SegmentDefinition, RuleBasedSegment, ListBasedSegment},
+    segment::{Segment, SegmentDefinition, SegmentType},
 };
-use crate::AppState;
-use crate::api::segments::types::{CreateSegmentRequest, UpdateSegmentRequest, SegmentResponse, ValidationError, validate_rules};
-use stitchd_db::{SegmentRepository, RepositoryError};
+use stitchd_db::RepositoryError;
 
 /// API error type for mapping internal errors to HTTP responses.
 pub enum ApiError {
+    /// Resource not found.
     NotFound(String),
+    /// Optimistic concurrency or unique constraint conflict.
     Conflict(String),
+    /// Invalid input or business rule violation.
     BadRequest(String),
+    /// Internal database error.
     Database(String),
 }
 
@@ -37,10 +43,12 @@ impl From<RepositoryError> for ApiError {
     fn from(e: RepositoryError) -> Self {
         match e {
             RepositoryError::NotFound { id } => Self::NotFound(format!("not found: {id}")),
-            RepositoryError::VersionConflict { expected, actual } => 
-                Self::Conflict(format!("version conflict: expected {expected}, actual {actual}")),
-            RepositoryError::UniqueViolation { field } => 
-                Self::Conflict(format!("unique violation on: {field}")),
+            RepositoryError::VersionConflict { expected, actual } => Self::Conflict(format!(
+                "version conflict: expected {expected}, actual {actual}"
+            )),
+            RepositoryError::UniqueViolation { field } => {
+                Self::Conflict(format!("unique violation on: {field}"))
+            }
             RepositoryError::Database(e) => Self::Database(e.to_string()),
             RepositoryError::Unexpected(e) => Self::Database(e.to_string()),
         }
@@ -53,8 +61,12 @@ impl From<ValidationError> for ApiError {
     }
 }
 
-/// `GET /v1/environments/:env_id/segments` — List active segments.
+/// `GET /v1/environments/{env_id}/segments` — List active segments.
+///
+/// # Errors
+/// Returns [`ApiError::Database`] if the repository fails to list segments.
 pub async fn list_segments(
+
     Path(env_id): Path<EnvironmentId>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Segment>>, ApiError> {
@@ -62,8 +74,12 @@ pub async fn list_segments(
     Ok(Json(segments))
 }
 
-/// `POST /v1/environments/:env_id/segments` — Create segment.
+/// `POST /v1/environments/{env_id}/segments` — Create segment.
+///
+/// # Errors
+/// Returns [`ApiError::BadRequest`] if validation fails or [`ApiError::Conflict`] if the key exists.
 pub async fn create_segment(
+
     Path(env_id): Path<EnvironmentId>,
     State(state): State<AppState>,
     Json(req): Json<CreateSegmentRequest>,
@@ -73,8 +89,8 @@ pub async fn create_segment(
         environment_id: env_id,
         key: req.key,
         segment_type: req.segment_type,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
         deleted_at: None,
         version: 1,
     };
@@ -83,19 +99,26 @@ pub async fn create_segment(
 
     match segment.segment_type {
         SegmentType::Rule => {
-            let rules = req.rules.ok_or(ValidationError::MissingDefinition(SegmentType::Rule))?;
+            let rules = req
+                .rules
+                .ok_or(ValidationError::MissingDefinition(SegmentType::Rule))?;
             validate_rules(&rules)?;
             state.segment_repo.upsert_rules(segment.id, &rules).await?;
         }
         SegmentType::List => {
-            let lists = req.lists.ok_or(ValidationError::MissingDefinition(SegmentType::List))?;
+            let lists = req
+                .lists
+                .ok_or(ValidationError::MissingDefinition(SegmentType::List))?;
             for (context_type, list) in lists {
-                state.segment_repo.set_list_entries(
-                    segment.id,
-                    &context_type,
-                    &list.include.into_iter().collect::<Vec<_>>(),
-                    &list.exclude.into_iter().collect::<Vec<_>>(),
-                ).await?;
+                state
+                    .segment_repo
+                    .set_list_entries(
+                        segment.id,
+                        &context_type,
+                        &list.include.into_iter().collect::<Vec<_>>(),
+                        &list.exclude.into_iter().collect::<Vec<_>>(),
+                    )
+                    .await?;
             }
         }
     }
@@ -103,16 +126,24 @@ pub async fn create_segment(
     Ok((StatusCode::CREATED, Json(segment)))
 }
 
-/// `GET /v1/environments/:env_id/segments/:seg_id` — Get segment + definition.
+/// `GET /v1/environments/{env_id}/segments/{seg_id}` — Get segment + definition.
+///
+/// # Errors
+/// Returns [`ApiError::NotFound`] if the segment does not exist.
 pub async fn get_segment(
+
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
 ) -> Result<Json<SegmentResponse>, ApiError> {
     let segment = state.segment_repo.find_by_id(seg_id).await?;
-    
+
     let definition = match segment.segment_type {
-        SegmentType::Rule => SegmentDefinition::RuleBased(state.segment_repo.find_with_rules(seg_id).await?),
-        SegmentType::List => SegmentDefinition::ListBased(state.segment_repo.find_with_list(seg_id).await?),
+        SegmentType::Rule => {
+            SegmentDefinition::RuleBased(state.segment_repo.find_with_rules(seg_id).await?)
+        }
+        SegmentType::List => {
+            SegmentDefinition::ListBased(state.segment_repo.find_with_list(seg_id).await?)
+        }
     };
 
     Ok(Json(SegmentResponse {
@@ -124,33 +155,47 @@ pub async fn get_segment(
     }))
 }
 
-/// `PUT /v1/environments/:env_id/segments/:seg_id` — Replace definition.
+/// `PUT /v1/environments/{env_id}/segments/{seg_id}` — Replace definition.
+///
+/// # Errors
+/// Returns [`ApiError::Conflict`] if the version mismatch or [`ApiError::NotFound`] if missing.
 pub async fn update_segment(
+
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
     Json(req): Json<UpdateSegmentRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut segment = state.segment_repo.find_by_id(seg_id).await?;
-    
+
     if segment.version != req.version {
-        return Err(ApiError::Conflict(format!("version conflict: expected {}, actual {}", req.version, segment.version)));
+        return Err(ApiError::Conflict(format!(
+            "version conflict: expected {}, actual {}",
+            req.version, segment.version
+        )));
     }
 
     match segment.segment_type {
         SegmentType::Rule => {
-            let rules = req.rules.ok_or(ValidationError::MissingDefinition(SegmentType::Rule))?;
+            let rules = req
+                .rules
+                .ok_or(ValidationError::MissingDefinition(SegmentType::Rule))?;
             validate_rules(&rules)?;
             state.segment_repo.upsert_rules(seg_id, &rules).await?;
         }
         SegmentType::List => {
-            let lists = req.lists.ok_or(ValidationError::MissingDefinition(SegmentType::List))?;
+            let lists = req
+                .lists
+                .ok_or(ValidationError::MissingDefinition(SegmentType::List))?;
             for (context_type, list) in lists {
-                state.segment_repo.set_list_entries(
-                    seg_id,
-                    &context_type,
-                    &list.include.into_iter().collect::<Vec<_>>(),
-                    &list.exclude.into_iter().collect::<Vec<_>>(),
-                ).await?;
+                state
+                    .segment_repo
+                    .set_list_entries(
+                        seg_id,
+                        &context_type,
+                        &list.include.into_iter().collect::<Vec<_>>(),
+                        &list.exclude.into_iter().collect::<Vec<_>>(),
+                    )
+                    .await?;
             }
         }
     }
@@ -161,8 +206,12 @@ pub async fn update_segment(
     Ok(Json(segment))
 }
 
-/// `DELETE /v1/environments/:env_id/segments/:seg_id` — Soft-delete.
+/// `DELETE /v1/environments/{env_id}/segments/{seg_id}` — Soft-delete.
+///
+/// # Errors
+/// Returns [`ApiError::NotFound`] if the segment does not exist.
 pub async fn delete_segment(
+
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {

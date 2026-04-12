@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use stitchd_core::{
     id::SegmentId,
     rule_engine::condition::Condition,
     rule_engine::types::{ConditionExpr, Rule},
-    segment::{SegmentType, SegmentDefinition, RuleBasedSegment, ListBasedSegment, ContextList},
+    segment::{ContextList, SegmentDefinition, SegmentType},
 };
-use std::collections::{HashMap, HashSet};
 
 /// Request to create a new segment.
 #[derive(Debug, Clone, Deserialize)]
@@ -49,7 +49,7 @@ pub struct SegmentResponse {
 /// Validation error for segment rules.
 #[derive(Debug, thiserror::Error)]
 pub enum ValidationError {
-    /// A segment rule contains an invalid condition (e.g. InSegment).
+    /// A segment rule contains an invalid condition (e.g. `InSegment`).
     #[error("Segments cannot depend on other segments (InSegment/NotInSegment found in rule)")]
     InvalidSegmentRule,
     /// Required fields for the segment type are missing.
@@ -58,6 +58,9 @@ pub enum ValidationError {
 }
 
 /// Validate that a set of rules does not contain segment-based conditions.
+///
+/// # Errors
+/// Returns [`ValidationError::InvalidSegmentRule`] if any rule contains a segment-based condition.
 pub fn validate_rules(rules: &[Rule]) -> Result<(), ValidationError> {
     for rule in rules {
         if contains_segment_condition(&rule.condition) {
@@ -69,8 +72,7 @@ pub fn validate_rules(rules: &[Rule]) -> Result<(), ValidationError> {
 
 fn contains_segment_condition(expr: &ConditionExpr) -> bool {
     match expr {
-        ConditionExpr::Leaf(Condition::InSegment(_))
-        | ConditionExpr::Leaf(Condition::NotInSegment(_)) => true,
+        ConditionExpr::Leaf(Condition::InSegment(_) | Condition::NotInSegment(_)) => true,
         ConditionExpr::Leaf(_) => false,
         ConditionExpr::And(exprs) | ConditionExpr::Or(exprs) => {
             exprs.iter().any(contains_segment_condition)

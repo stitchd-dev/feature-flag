@@ -11,8 +11,8 @@ use stitchd_core::{
 };
 
 use crate::{
-    repository::{AuditLogger, FlagRepository, VariantRepository},
     RepositoryError,
+    repository::{AuditLogger, FlagRepository, VariantRepository},
 };
 
 // ---------------------------------------------------------------------------
@@ -126,8 +126,15 @@ impl FlagRepository for PgFlagRepository {
         })?;
 
         assemble_flag(
-            row.id, row.project_id, row.key, &row.value_type,
-            row.enabled, row.created_at, row.updated_at, row.deleted_at, row.version,
+            row.id,
+            row.project_id,
+            row.key,
+            &row.value_type,
+            row.enabled,
+            row.created_at,
+            row.updated_at,
+            row.deleted_at,
+            row.version,
         )
     }
 
@@ -156,8 +163,15 @@ impl FlagRepository for PgFlagRepository {
         })?;
 
         assemble_flag(
-            row.id, row.project_id, row.key, &row.value_type,
-            row.enabled, row.created_at, row.updated_at, row.deleted_at, row.version,
+            row.id,
+            row.project_id,
+            row.key,
+            &row.value_type,
+            row.enabled,
+            row.created_at,
+            row.updated_at,
+            row.deleted_at,
+            row.version,
         )
     }
 
@@ -182,8 +196,15 @@ impl FlagRepository for PgFlagRepository {
         rows.into_iter()
             .map(|row| {
                 assemble_flag(
-                    row.id, row.project_id, row.key, &row.value_type,
-                    row.enabled, row.created_at, row.updated_at, row.deleted_at, row.version,
+                    row.id,
+                    row.project_id,
+                    row.key,
+                    &row.value_type,
+                    row.enabled,
+                    row.created_at,
+                    row.updated_at,
+                    row.deleted_at,
+                    row.version,
                 )
             })
             .collect()
@@ -263,8 +284,15 @@ impl FlagRepository for PgFlagRepository {
 
         if let Some(row) = result {
             let updated = assemble_flag(
-                row.id, row.project_id, row.key, &row.value_type,
-                row.enabled, row.created_at, row.updated_at, row.deleted_at, row.version,
+                row.id,
+                row.project_id,
+                row.key,
+                &row.value_type,
+                row.enabled,
+                row.created_at,
+                row.updated_at,
+                row.deleted_at,
+                row.version,
             )?;
             self.audit
                 .log(
@@ -452,13 +480,10 @@ impl VariantRepository for PgVariantRepository {
     }
 
     async fn delete(&self, id: VariantId) -> Result<(), RepositoryError> {
-        let result = sqlx::query!(
-            "DELETE FROM variants WHERE id = $1",
-            id.as_uuid()
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
+        let result = sqlx::query!("DELETE FROM variants WHERE id = $1", id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(RepositoryError::Database)?;
 
         if result.rows_affected() == 0 {
             return Err(RepositoryError::NotFound { id: id.to_string() });

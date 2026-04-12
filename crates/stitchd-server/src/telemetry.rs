@@ -77,7 +77,7 @@ pub fn init_tracing(service_name: &str, _service_version: &str) -> Result<SdkTra
 /// Flush and shut down the OpenTelemetry tracer provider.
 ///
 /// Call this before the process exits to ensure all in-flight spans are flushed.
-pub fn shutdown_tracing(provider: SdkTracerProvider) {
+pub fn shutdown_tracing(provider: &SdkTracerProvider) {
     if let Err(e) = provider.shutdown() {
         // Shutdown errors are non-fatal — log and continue.
         eprintln!("OTEL tracer shutdown error: {e}");

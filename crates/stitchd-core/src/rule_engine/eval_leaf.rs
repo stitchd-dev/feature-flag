@@ -762,7 +762,7 @@ mod tests {
 
     #[test]
     fn string_op_type_mismatch_double() {
-        let ctx = [user_ctx(&[("score", ParameterValue::Double(3.14))])];
+        let ctx = [user_ctx(&[("score", ParameterValue::Double(3.1))])];
         let cond = Condition::Contains {
             context_type: "user".into(),
             param: "score".into(),

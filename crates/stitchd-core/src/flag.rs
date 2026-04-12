@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn double_value_matches_double_type() {
-        assert!(VariantValue::DoubleValue(3.14).matches_type(&FlagValueType::Double));
+        assert!(VariantValue::DoubleValue(3.1).matches_type(&FlagValueType::Double));
     }
 
     #[test]

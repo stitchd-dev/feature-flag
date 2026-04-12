@@ -1,8 +1,14 @@
 use std::sync::Arc;
-use stitchd_core::{id::{OrganisationId, ProjectId, EnvironmentId, SdkKeyId}, tenant::{Organisation, Project, Environment, SdkKey}};
+use stitchd_core::{
+    id::{EnvironmentId, OrganisationId, ProjectId, SdkKeyId},
+    tenant::{Environment, Organisation, Project, SdkKey},
+};
 use stitchd_db::{
-    SdkKeyRepository, EnvironmentRepository, ProjectRepository, OrganisationRepository,
-    repository::pg::{PgAuditLogger, PgOrganisationRepository, PgProjectRepository, PgEnvironmentRepository, PgSdkKeyRepository},
+    EnvironmentRepository, OrganisationRepository, ProjectRepository, SdkKeyRepository,
+    repository::pg::{
+        PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository,
+        PgSdkKeyRepository,
+    },
 };
 
 #[sqlx::test(migrations = "./migrations")]
@@ -14,11 +20,34 @@ async fn test_sdk_key_lifecycle(pool: sqlx::PgPool) {
     let repo = PgSdkKeyRepository::new(pool.clone(), audit);
 
     // 0. Setup
-    let org = Organisation { id: OrganisationId::new(), name: "Org".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let org = Organisation {
+        id: OrganisationId::new(),
+        name: "Org".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     org_repo.create(&org).await.unwrap();
-    let project = Project { id: ProjectId::new(), organisation_id: org.id, name: "Proj".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let project = Project {
+        id: ProjectId::new(),
+        organisation_id: org.id,
+        name: "Proj".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     proj_repo.create(&project).await.unwrap();
-    let env = Environment { id: EnvironmentId::new(), project_id: project.id, name: "Env".into(), created_at: chrono::Utc::now(), updated_at: chrono::Utc::now(), deleted_at: None, version: 1 };
+    let env = Environment {
+        id: EnvironmentId::new(),
+        project_id: project.id,
+        name: "Env".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
     env_repo.create(&env).await.unwrap();
 
     // 1. Create first key
@@ -44,7 +73,10 @@ async fn test_sdk_key_lifecycle(pool: sqlx::PgPool) {
     repo.create(&key2).await.expect("Failed to create key2");
 
     // 3. List
-    let all = repo.list_by_environment(env.id).await.expect("Failed to list keys");
+    let all = repo
+        .list_by_environment(env.id)
+        .await
+        .expect("Failed to list keys");
     assert_eq!(all.len(), 2);
 
     // 4. Revoke key1 (should work because key2 is active)
@@ -55,5 +87,8 @@ async fn test_sdk_key_lifecycle(pool: sqlx::PgPool) {
 
     // 5. Revoke key2 (should FAIL because it's the last active key)
     let err = repo.revoke(key2.id).await.unwrap_err();
-    assert!(matches!(err, stitchd_db::RepositoryError::UniqueViolation { .. }));
+    assert!(matches!(
+        err,
+        stitchd_db::RepositoryError::UniqueViolation { .. }
+    ));
 }

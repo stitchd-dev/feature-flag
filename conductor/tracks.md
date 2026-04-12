@@ -21,3 +21,4 @@ This file tracks all major tracks for the project.
 
 ## [x] Track: Segmentation
 *Link: [./conductor/tracks/segmentation_20260412/](./conductor/tracks/segmentation_20260412/)*
+\n---\n\n## [x] Track: fix the errors across workspaces\n*Link: [./conductor/tracks/fix_errors_20260412/](./conductor/tracks/fix_errors_20260412/)*
