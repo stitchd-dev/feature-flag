@@ -52,6 +52,10 @@ async fn main() -> Result<()> {
 
     info!(address = %addr, "HTTP server listening");
 
+    // Run initial maintenance and spawn background task
+    stitchd_server::startup::run_partman_maintenance(&pool).await;
+    stitchd_server::startup::spawn_maintenance_task(pool);
+
     let app = build_router(state);
 
     axum::serve(listener, app)
