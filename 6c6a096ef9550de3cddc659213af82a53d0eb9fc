@@ -1,0 +1,4 @@
+Conductor Task: Define request/response Serde types + validation
+Track: segmentation_20260412
+Summary: Defined the REST API request and response types for segments, including validation logic to reject segment-based conditions in rules.
+Decisions: Added a custom ValidationError and validation function to enforce segment independence at the API layer.
