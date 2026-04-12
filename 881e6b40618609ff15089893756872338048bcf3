@@ -1,0 +1,4 @@
+Conductor Task: Unit tests
+Track: segmentation_20260412
+Summary: Added comprehensive unit tests for both list-based and rule-based segment evaluation, covering include/exclude logic, rule matching, and independent evaluation.
+Decisions: Added tests directly to the segment module for better proximity to the implementation.
