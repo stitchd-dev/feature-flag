@@ -14,6 +14,11 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Graceful shutdown:** Use `tokio::select!` over `ctrl_c()` + `SIGTERM` (gated `#[cfg(unix)]`) as the shutdown signal. Pass to `axum::serve(...).with_graceful_shutdown(...)`. (from: scaffold_20260411, 2026-04-11)
 - **Vendored protoc:** Add `protoc-bin-vendored` as a build dependency in `stitchd-proto` and set `PROTOC` env var in `build.rs`. Eliminates system `protoc` requirement for all contributors and CI. (from: scaffold_20260411, 2026-04-11)
 
+## Rust 2024 Edition Patterns
+
+- When iterating a `HashMap` and only needing keys or values, use `.keys()` / `.values()` — `for (k, _) in map` triggers `clippy::for_kv_map` as a warning-level error with `-D warnings`. (from: rule_engine_20260412, 2026-04-12)
+- In filter closures over iterator references (e.g. `.filter(|(_, d)| ...)`), the value `d` is `&&T` — dereference with `**d` or use `.filter(|&(_, d)| ...)`. Pattern-binding `&d` inside a non-reference outer pattern fails in Rust 2024. (from: rule_engine_20260412, 2026-04-12)
+
 ## Gotchas
 
 - `clickhouse` crate v0.13 has no `derive` feature — use `uuid`, `time`, `lz4` features instead. (from: scaffold_20260411, 2026-04-11)
