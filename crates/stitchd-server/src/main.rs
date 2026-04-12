@@ -32,8 +32,12 @@ async fn main() -> Result<()> {
         .context("failed to connect to PostgreSQL")?;
 
     let state = AppState {
-        db: pool,
+        db: pool.clone(),
         metrics_handle,
+        segment_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(
+            pool.clone(),
+            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(pool)),
+        )),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")

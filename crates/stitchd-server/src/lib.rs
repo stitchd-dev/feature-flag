@@ -5,10 +5,12 @@
 pub mod telemetry;
 pub mod api;
 
+use std::sync::Arc;
 use axum::{Json, Router, extract::State, routing::get};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use sqlx::PgPool;
+use stitchd_db::SegmentRepository;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -17,6 +19,8 @@ pub struct AppState {
     pub db: PgPool,
     /// Prometheus metrics handle.
     pub metrics_handle: PrometheusHandle,
+    /// Repository for segment management.
+    pub segment_repo: Arc<dyn SegmentRepository>,
 }
 
 /// Build the Axum router.
@@ -28,6 +32,7 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/metrics", get(metrics_handler))
+        .merge(api::router::build_api_router())
         .with_state(state)
 }
 
@@ -74,7 +79,9 @@ mod tests {
         let metrics_handle = metrics_exporter_prometheus::PrometheusBuilder::new()
             .build_recorder()
             .handle();
-        AppState { db, metrics_handle }
+        let audit = std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
+        let segment_repo = std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(db.clone(), audit));
+        AppState { db, metrics_handle, segment_repo }
     }
 
     #[tokio::test]
