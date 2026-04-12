@@ -1,0 +1,4 @@
+Conductor Task: Define core types and error model
+Track: rule_engine_20260412
+Summary: Created RuleEngineError (6 variants with thiserror), Condition leaf enum (14 variants covering eq/ne/lt/lte/gt/gte/contains/startswith/endswith/semver-gte/tilde/caret/in-segment/not-in-segment/flag-evaluated-as), ConditionExpr recursive enum (Leaf/And/Or/Not), Rule/RuleOutput/PercentageTarget/TargetField/EvaluationInput types. Wired rule_engine mod into lib.rs.
+Decisions: EvaluationInput borrows contexts as &'a [Context] per spec to avoid cloning; find_context() helper added for ergonomic context lookup.
