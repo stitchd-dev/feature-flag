@@ -272,3 +272,247 @@ impl SegmentEvaluator {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::ParameterValue;
+    use crate::id::{RuleId, SegmentId};
+    use crate::rule_engine::condition::Condition;
+    use crate::rule_engine::types::{ConditionExpr, RuleOutput};
+
+    fn user_ctx(key: &str) -> Context {
+        Context::new("user", key)
+    }
+
+    fn org_ctx(key: &str) -> Context {
+        Context::new("org", key)
+    }
+
+    // ── List-based Tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn list_based_exclude_wins_over_include() {
+        let mut lists = HashMap::new();
+        lists.insert(
+            "user".to_string(),
+            ContextList {
+                include: ["u1".to_string()].into_iter().collect(),
+                exclude: ["u1".to_string()].into_iter().collect(),
+            },
+        );
+
+        let segment = ListBasedSegment {
+            id: SegmentId::new(),
+            lists,
+        };
+
+        let result = segment.evaluate(&[user_ctx("u1")]);
+        assert!(!result.matched);
+        assert!(matches!(
+            result.trace,
+            MatchTrace::ListBased {
+                reason: ListMatchReason::Excluded,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn list_based_key_in_neither_list_is_no_match() {
+        let mut lists = HashMap::new();
+        lists.insert(
+            "user".to_string(),
+            ContextList {
+                include: ["u1".to_string()].into_iter().collect(),
+                exclude: ["u2".to_string()].into_iter().collect(),
+            },
+        );
+
+        let segment = ListBasedSegment {
+            id: SegmentId::new(),
+            lists,
+        };
+
+        let result = segment.evaluate(&[user_ctx("u3")]);
+        assert!(!result.matched);
+        assert!(matches!(
+            result.trace,
+            MatchTrace::ListBased {
+                reason: ListMatchReason::NoMatch,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn list_based_no_matching_context_is_no_context() {
+        let mut lists = HashMap::new();
+        lists.insert(
+            "user".to_string(),
+            ContextList {
+                include: ["u1".to_string()].into_iter().collect(),
+                exclude: HashSet::new(),
+            },
+        );
+
+        let segment = ListBasedSegment {
+            id: SegmentId::new(),
+            lists,
+        };
+
+        let result = segment.evaluate(&[org_ctx("o1")]);
+        assert!(!result.matched);
+        assert!(matches!(
+            result.trace,
+            MatchTrace::ListBased {
+                reason: ListMatchReason::NoContext,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn list_based_any_context_match_wins() {
+        let mut lists = HashMap::new();
+        lists.insert(
+            "user".to_string(),
+            ContextList {
+                include: ["u1".to_string()].into_iter().collect(),
+                exclude: HashSet::new(),
+            },
+        );
+        lists.insert(
+            "org".to_string(),
+            ContextList {
+                include: ["o1".to_string()].into_iter().collect(),
+                exclude: HashSet::new(),
+            },
+        );
+
+        let segment = ListBasedSegment {
+            id: SegmentId::new(),
+            lists,
+        };
+
+        // Matches via org
+        let result = segment.evaluate(&[user_ctx("u2"), org_ctx("o1")]);
+        assert!(result.matched);
+        assert!(matches!(
+            result.trace,
+            MatchTrace::ListBased {
+                reason: ListMatchReason::Included,
+                context_type: Some(ref t),
+            } if t == "org"
+        ));
+    }
+
+    // ── Rule-based Tests ─────────────────────────────────────────────────────
+
+    fn eq_rule(context_type: &str, param: &str, value: &str) -> Rule {
+        Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::Leaf(Condition::Eq {
+                context_type: context_type.to_string(),
+                param: param.to_string(),
+                value: ParameterValue::Str(value.to_string()),
+            }),
+            output: RuleOutput::Variant(crate::id::VariantId::new()),
+        }
+    }
+
+    #[test]
+    fn rule_based_first_matching_rule_wins() {
+        let rules = vec![
+            eq_rule("user", "plan", "pro"),
+            eq_rule("user", "role", "admin"),
+        ];
+        let segment = RuleBasedSegment {
+            id: SegmentId::new(),
+            rules,
+        };
+
+        let ctx = user_ctx("u1")
+            .with_parameter("plan", ParameterValue::Str("pro".into()))
+            .with_parameter("role", ParameterValue::Str("admin".into()));
+
+        let result = segment.evaluate(&[ctx]).unwrap();
+        assert!(result.matched);
+        assert!(matches!(
+            result.trace,
+            MatchTrace::RuleBased {
+                matched_rule_index: Some(0)
+            }
+        ));
+    }
+
+    #[test]
+    fn rule_based_no_match_returns_none() {
+        let rules = vec![eq_rule("user", "plan", "pro")];
+        let segment = RuleBasedSegment {
+            id: SegmentId::new(),
+            rules,
+        };
+
+        let ctx = user_ctx("u1").with_parameter("plan", ParameterValue::Str("free".into()));
+
+        let result = segment.evaluate(&[ctx]).unwrap();
+        assert!(!result.matched);
+        assert!(matches!(
+            result.trace,
+            MatchTrace::RuleBased {
+                matched_rule_index: None
+            }
+        ));
+    }
+
+    #[test]
+    fn rule_based_in_segment_is_invalid() {
+        let rule = Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::Leaf(Condition::InSegment(SegmentId::new())),
+            output: RuleOutput::Variant(crate::id::VariantId::new()),
+        };
+        let segment = RuleBasedSegment {
+            id: SegmentId::new(),
+            rules: vec![rule],
+        };
+
+        let result = segment.evaluate(&[]);
+        assert!(matches!(
+            result,
+            Err(SegmentEvaluatorError::InvalidSegmentRule)
+        ));
+    }
+
+    // ── Global Evaluator Tests ───────────────────────────────────────────────
+
+    #[test]
+    fn evaluate_all_evaluates_independently() {
+        let s1_id = SegmentId::new();
+        let s2_id = SegmentId::new();
+
+        let s1 = SegmentDefinition::ListBased(ListBasedSegment {
+            id: s1_id,
+            lists: HashMap::from([(
+                "user".to_string(),
+                ContextList {
+                    include: ["u1".to_string()].into_iter().collect(),
+                    exclude: HashSet::new(),
+                },
+            )]),
+        });
+
+        let s2 = SegmentDefinition::RuleBased(RuleBasedSegment {
+            id: s2_id,
+            rules: vec![eq_rule("user", "plan", "pro")],
+        });
+
+        let ctx = user_ctx("u1").with_parameter("plan", ParameterValue::Str("free".into()));
+
+        let results = SegmentEvaluator::evaluate_all(&[ctx], &[s1, s2]).unwrap();
+
+        assert!(results[&s1_id].matched); // Matched via list
+        assert!(!results[&s2_id].matched); // No match via rule (plan is free)
+    }
+}
