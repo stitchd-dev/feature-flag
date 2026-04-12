@@ -1,0 +1,4 @@
+Conductor Task: Write segment_rules migration
+Track: segmentation_20260412
+Summary: Created migration for segment_rules table to store ordered rule definitions for rule-based segments.
+Decisions: Added ON DELETE CASCADE to segment_id FK for easier cleanup.
