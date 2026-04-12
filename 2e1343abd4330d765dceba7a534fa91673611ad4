@@ -1,0 +1,4 @@
+Conductor Task: Integration tests
+Track: segmentation_20260412
+Summary: Added integration tests for segment repository extended methods.
+Decisions: Compilation and execution pending DATABASE_URL with pg_partman extension support.
