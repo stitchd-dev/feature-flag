@@ -1,0 +1,4 @@
+Conductor Task: Finalize track and sync documentation
+Track: segmentation_20260412
+Summary: Marked segmentation track as complete, elevated new patterns/gotchas to patterns.md, and updated product.md and tech-stack.md to reflect partitioning requirements.
+Decisions: Retained track folder in tracks file as per user preference.
