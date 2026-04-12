@@ -8,6 +8,7 @@
 | Admin API | REST (Axum) |
 | SDK Protocol | gRPC (tonic + prost) |
 | Config / Flag Store | PostgreSQL (sqlx) — offline cache (`.sqlx/`) for compile-time safety in CI |
+| DB Extensions | pg_partman (for segment list partitioning) |
 | Events / Experiments Store | ClickHouse |
 | Human Auth | JWT / OAuth2 |
 | SDK Auth | SDK Key — scoped to project + environment; min 1 active enforced; Project Admin manages create/revoke |

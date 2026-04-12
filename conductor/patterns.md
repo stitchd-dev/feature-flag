@@ -22,6 +22,8 @@ Reusable patterns discovered during development. Read this before starting new w
 ## Gotchas
 
 - `clickhouse` crate v0.13 has no `derive` feature — use `uuid`, `time`, `lz4` features instead. (from: scaffold_20260411, 2026-04-11)
+- **SQLx Offline Compilation:** `sqlx::query!` macros require a live DB or up-to-date `.sqlx` cache. New queries will break compilation in offline mode until `cargo sqlx prepare` is executed. (from: segmentation_20260412, 2026-04-12)
+- **Database Extension Dependencies:** Call functions from extensions (like `pg_partman`) using plain `sqlx::query` to avoid macro-based compilation errors when extensions aren't available in the local build environment. (from: segmentation_20260412, 2026-04-12)
 - **OpenTelemetry version alignment:** `tracing-opentelemetry 0.29` requires `opentelemetry ^0.28`. `opentelemetry-otlp 0.27` requires `opentelemetry ^0.27`. These produce **incompatible types** — pin all OTel crates to the same minor version. (from: scaffold_20260411, 2026-04-11)
 - `opentelemetry_sdk 0.28` made `Resource::new()` private. Use `Resource::builder()` — confirm exact builder API before wiring OTLP in the observability track. (from: scaffold_20260411, 2026-04-11)
 

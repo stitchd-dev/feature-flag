@@ -47,6 +47,7 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 ### 1. Segmentation
 - Rule-Based Segments: rules evaluated against client Contexts
 - List-Based Segments: per context-type include/exclude key lists
+  - Persistence: monthly range-partitioned storage for list entries via pg_partman
 
 ### 2. Feature Flags
 - Typed flags: `int | double | bool | string | json`; variants must match flag type
