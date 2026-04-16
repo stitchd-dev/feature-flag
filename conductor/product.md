@@ -74,7 +74,7 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 
 ## Client SDK (Rust — initial)
 - Init with Contexts → server returns all flag rules/variants + segment data
-- All evaluation runs client-side
+- Supports both client-side evaluation (polling for updates) and server-side evaluation via API.
 - Fixed-interval polling for updates
 - Future: streaming layer for server-pushed evaluated flags
 - Direct event submission via SDK key (scoped to project/environment)
