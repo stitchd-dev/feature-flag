@@ -135,6 +135,35 @@ pub struct FlagRule {
     pub rule: Rule,
 }
 
+/// A complete feature flag aggregate, including its rules, hashing config, and variants.
+///
+/// This is the primary domain model used for evaluation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Flag {
+    /// Core flag metadata.
+    pub record: FlagRecord,
+    /// Context parameters used for consistent hashing.
+    pub hashing_config: Vec<FlagHashingConfig>,
+    /// Ordered evaluation rules.
+    pub rules: Vec<FlagRule>,
+    /// All possible variants for this flag.
+    pub variants: Vec<Variant>,
+}
+
+impl Flag {
+    /// Returns the variant with the given ID, if it belongs to this flag.
+    pub fn get_variant(&self, id: VariantId) -> Option<&Variant> {
+        self.variants.iter().find(|v| v.id == id)
+    }
+
+    /// Returns the default variant for this flag, if configured and exists.
+    pub fn get_default_variant(&self) -> Option<&Variant> {
+        self.record
+            .default_variant_id
+            .and_then(|id| self.get_variant(id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

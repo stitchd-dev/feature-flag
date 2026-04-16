@@ -78,6 +78,29 @@ impl fmt::Debug for Context {
     }
 }
 
+/// A collection of contexts used for a single evaluation.
+///
+/// Typical contexts include 'user', 'session', 'application', etc.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EvaluationContext {
+    pub contexts: Vec<Context>,
+}
+
+impl EvaluationContext {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_context(mut self, context: Context) -> Self {
+        self.contexts.push(context);
+        self
+    }
+
+    pub fn get_context(&self, context_type: &str) -> Option<&Context> {
+        self.contexts.iter().find(|c| c.context_type == context_type)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,5 +129,16 @@ mod tests {
 
         let deserialized: ParameterValue = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, val);
+    }
+
+    #[test]
+    fn test_evaluation_context() {
+        let ctx1 = Context::new("user", "u1");
+        let ctx2 = Context::new("session", "s1");
+        let eval_ctx = EvaluationContext::new().with_context(ctx1).with_context(ctx2);
+
+        assert!(eval_ctx.get_context("user").is_some());
+        assert!(eval_ctx.get_context("session").is_some());
+        assert!(eval_ctx.get_context("other").is_none());
     }
 }

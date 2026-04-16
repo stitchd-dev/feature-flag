@@ -12,7 +12,7 @@ Implement the relational schema for flags, variants, and hashing configurations 
 ## Phase 2: Core Domain & Hashing Logic <!-- execution: parallel --> <!-- depends: Phase 1 -->
 Implement the consistent hashing algorithm and core domain models for flag evaluation.
 
-- [ ] Task: Define `Flag`, `Variant`, and `EvaluationContext` domain models in `stitchd-core`. <!-- files: crates/stitchd-core/src/models/flag.rs, crates/stitchd-core/src/models/context.rs -->
+- [~] Task: Define `Flag`, `Variant`, and `EvaluationContext` domain models in `stitchd-core`. <!-- files: crates/stitchd-core/src/models/flag.rs, crates/stitchd-core/src/models/context.rs -->
 - [ ] Task: Implement the consistent hashing algorithm (0.1% granularity) using `context_type + parameter_key + parameter_value`. <!-- files: crates/stitchd-core/src/hashing.rs --> <!-- depends: Task 1 -->
 - [ ] Task: Implement type-safe variant value handling (Boolean, Integer, Double, String, JSON). <!-- files: crates/stitchd-core/src/variants.rs --> <!-- depends: Task 1 -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Core Domain & Hashing Logic' (Protocol in workflow.md)
