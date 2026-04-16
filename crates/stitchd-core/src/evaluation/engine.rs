@@ -1,10 +1,11 @@
 use crate::context::EvaluationContext;
 use crate::flag::{Flag, Variant};
 use crate::rule_engine::eval_rules::evaluate_rules;
-use crate::rule_engine::types::{EvaluationInput, Rule, RuleOutput};
+use crate::rule_engine::types::{EvaluationInput, Rule, RuleOutput, TargetField};
 use crate::rule_engine::error::RuleEngineError;
 use std::collections::{HashMap, HashSet};
-use crate::id::SegmentId;
+use crate::id::{SegmentId, EnvironmentId};
+use crate::hashing::calculate_allocation;
 
 /// A high-level evaluator for feature flags.
 pub struct FlagEvaluator;
@@ -15,6 +16,7 @@ impl FlagEvaluator {
         flag: &'a Flag,
         context: &EvaluationContext,
         resolved_segments: &HashSet<SegmentId>,
+        environment_id: EnvironmentId,
     ) -> Result<&'a Variant, RuleEngineError> {
         // 1. If flag is disabled, return default variant immediately
         if !flag.record.enabled {
@@ -41,9 +43,45 @@ impl FlagEvaluator {
                         RuleEngineError::Internal(format!("Rule matched variant ID {} but it does not exist in the flag", variant_id))
                     });
                 }
-                RuleOutput::Percentage { targets: _, weights: _ } => {
-                    // TODO: Implement percentage rollout logic using hashing
-                    return Err(RuleEngineError::Internal("Percentage rollout not yet implemented in FlagEvaluator".to_string()));
+                RuleOutput::Percentage { targets, weights } => {
+                    // Implement percentage rollout logic using hashing
+                    let mut target_values = Vec::with_capacity(targets.len());
+                    for t in targets {
+                        let ctx = context.get_context(&t.context_type).ok_or_else(|| {
+                            RuleEngineError::MissingContext { context_type: t.context_type.clone() }
+                        })?;
+                        
+                        let val = match &t.field {
+                            TargetField::Key => ctx.key.clone(),
+                            TargetField::Parameter(name) => {
+                                ctx.parameters.get(name).map(|v| v.to_string()).ok_or_else(|| {
+                                    RuleEngineError::MissingParameter { param: name.clone() }
+                                })?
+                            }
+                        };
+                        target_values.push(val);
+                    }
+
+                    let percentage = calculate_allocation(
+                        flag.record.key.as_str(),
+                        &environment_id.to_string(),
+                        &target_values
+                    );
+
+                    // Map 0.0-100.0 to 0-999 bucket
+                    let bucket = ((percentage * 10.0).floor() as u32).min(999);
+                    
+                    let mut cumulative_weight = 0;
+                    for (variant_id, weight) in weights {
+                        cumulative_weight += weight;
+                        if bucket < cumulative_weight {
+                            return flag.get_variant(*variant_id).ok_or_else(|| {
+                                RuleEngineError::Internal(format!("Rollout matched variant ID {} but it does not exist in the flag", variant_id))
+                            });
+                        }
+                    }
+
+                    return Err(RuleEngineError::Internal("Rollout weights did not cover the bucket".to_string()));
                 }
             }
         }
@@ -61,9 +99,10 @@ mod tests {
     use crate::flag::{FlagRecord, FlagValueType, VariantValue, FlagRule};
     use crate::id::{FlagId, FlagKey, ProjectId, VariantId, RuleId};
     use crate::context::{Context, ParameterValue};
-    use crate::rule_engine::types::ConditionExpr;
+    use crate::rule_engine::types::{ConditionExpr, PercentageTarget};
     use crate::rule_engine::condition::Condition;
     use chrono::Utc;
+    use uuid::Uuid;
 
     fn setup_flag() -> Flag {
         let flag_id = FlagId::new();
@@ -128,8 +167,9 @@ mod tests {
             Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true))
         );
         let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
 
-        let result = FlagEvaluator::evaluate(&flag, &context, &segments).unwrap();
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
         assert_eq!(result.key, "on");
     }
 
@@ -140,8 +180,9 @@ mod tests {
             Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false))
         );
         let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
 
-        let result = FlagEvaluator::evaluate(&flag, &context, &segments).unwrap();
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
         assert_eq!(result.key, "off");
     }
 
@@ -153,8 +194,9 @@ mod tests {
             Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true))
         );
         let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
 
-        let result = FlagEvaluator::evaluate(&flag, &context, &segments).unwrap();
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
         assert_eq!(result.key, "off");
     }
 
@@ -178,8 +220,44 @@ mod tests {
         let context = EvaluationContext::new();
         let mut segments = HashSet::new();
         segments.insert(segment_id);
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
 
-        let result = FlagEvaluator::evaluate(&flag, &context, &segments).unwrap();
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
         assert_eq!(result.key, "on");
+    }
+
+    #[test]
+    fn test_evaluate_percentage_rollout() {
+        let mut flag = setup_flag();
+        let v1_id = flag.variants[0].id;
+        let v2_id = flag.variants[1].id;
+
+        // Set rule with 50/50 rollout
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "user".to_string(),
+                field: TargetField::Key,
+            }],
+            weights: vec![(v1_id, 500), (v2_id, 500)],
+        };
+
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        // Evaluate for many users and check distribution
+        let mut on_count = 0;
+        let iterations = 1000;
+        for i in 0..iterations {
+            let context = EvaluationContext::new().with_context(
+                Context::new("user", format!("u{}", i)).with_parameter("beta", ParameterValue::Bool(true))
+            );
+            let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
+            if result.key == "on" {
+                on_count += 1;
+            }
+        }
+
+        // 50% rollout should be around 500 (+/- 50 for variance)
+        assert!(on_count > 450 && on_count < 550, "Rollout distribution skewed: {}", on_count);
     }
 }

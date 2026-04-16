@@ -321,7 +321,7 @@ pub async fn evaluate_all_flags(
         };
 
         // Evaluate
-        let variant = FlagEvaluator::evaluate(&flag, &req.context, &resolved_segments)
+        let variant = FlagEvaluator::evaluate(&flag, &req.context, &resolved_segments, env_id)
             .map_err(|e| ApiError::Database(e.to_string()))?;
 
         let variant_value = serde_json::to_value(&variant.value).map_err(|e| ApiError::Database(e.to_string()))?;
