@@ -1,13 +1,13 @@
 # Implementation Plan: Feature Flags Module
 
-## Phase 1: Database Schema & Persistence [checkpoint: ]
+## Phase 1: Database Schema & Persistence [checkpoint: 4e9caca]
 Implement the relational schema for flags, variants, and hashing configurations with optimistic locking and audit support.
 
 - [x] Task: Create PostgreSQL migrations for `flags`, `variants`, and `flag_hashing_config` tables. <!-- files: crates/stitchd-db/migrations/ --> [fdaa14d]
-- [~] Task: Implement Rust entities and SQLx repositories in `stitchd-db`. <!-- files: crates/stitchd-db/src/repositories/flag.rs -->
-- [ ] Task: Implement version-based optimistic locking logic for flag updates. <!-- files: crates/stitchd-db/src/repositories/flag.rs -->
-- [ ] Task: Ensure audit logging triggers are active for new tables. <!-- files: crates/stitchd-db/migrations/ -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Database Schema & Persistence' (Protocol in workflow.md)
+- [x] Task: Implement Rust entities and SQLx repositories in `stitchd-db`. <!-- files: crates/stitchd-db/src/repositories/flag.rs --> [c869612]
+- [x] Task: Implement version-based optimistic locking logic for flag updates. <!-- files: crates/stitchd-db/src/repositories/flag.rs --> [c869612]
+- [x] Task: Ensure audit logging triggers are active for new tables. <!-- files: crates/stitchd-db/migrations/ --> [c869612]
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Database Schema & Persistence' (Protocol in workflow.md) [4e9caca]
 
 ## Phase 2: Core Domain & Hashing Logic <!-- execution: parallel --> <!-- depends: Phase 1 -->
 Implement the consistent hashing algorithm and core domain models for flag evaluation.
