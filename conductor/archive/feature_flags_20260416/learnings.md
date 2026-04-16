@@ -46,4 +46,4 @@
 - **Fixed:** Performance test compilation error (missing `EnvironmentId` argument).
 - **Verified:** All E2E and performance tests passed against live DB.
 - **Files changed:** `crates/stitchd-server/tests/performance.rs`
-- **Commit:** [pending]
+- **Commit:** a0c13cb

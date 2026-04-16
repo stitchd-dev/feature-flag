@@ -4,26 +4,11 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [x] Track: Workspace Scaffold & Project Foundation
-*Link: [./tracks/scaffold_20260411/](./tracks/scaffold_20260411/)*
-
----
-
-## [x] Track: Core Domain Model & Database Schema
-*Link: [./tracks/domain_20260411/](./tracks/domain_20260411/)*
-
----
-
-## [x] Track: Rule Engine
-*Link: [./tracks/rule_engine_20260412/](./tracks/rule_engine_20260412/)*
-
----
-
-## [x] Track: Segmentation
-*Link: [./tracks/segmentation_20260412/](./tracks/segmentation_20260412/)*
-
----
-
-## [x] Track: fix the errors across workspaces
-*Link: [./tracks/fix_errors_20260412/](./tracks/fix_errors_20260412/)*
-\n---\n\n## [~] Track: Implement the core Feature Flags module, enabling typed flags, variants, and rule-based evaluation with percentage-based allocations.\n*Link: [./tracks/feature_flags_20260416/](./tracks/feature_flags_20260416/)*
+<!-- Archived Tracks:
+- scaffold_20260411 (Workspace Scaffold & Project Foundation)
+- domain_20260411 (Core Domain Model & Database Schema)
+- rule_engine_20260412 (Rule Engine)
+- segmentation_20260412 (Segmentation)
+- fix_errors_20260412 (fix the errors across workspaces)
+- feature_flags_20260416 (Implement the core Feature Flags module)
+-->
