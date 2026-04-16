@@ -29,5 +29,4 @@ lcov.info
 # Temporary files
 *.tmp
 *.bak
-# bd worktree
 .worktrees/feature_flags_20260416/

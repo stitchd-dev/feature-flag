@@ -2,7 +2,7 @@ use crate::id::FlagId;
 use thiserror::Error;
 
 /// Errors that can occur during rule engine evaluation.
-#[derive(Debug, Clone, PartialEq, Error)]
+#[derive(Debug, Clone, Error, PartialEq)]
 pub enum RuleEngineError {
     /// A condition was applied to a parameter value of the wrong type.
     #[error("type mismatch for parameter '{param}': expected {expected}, got {actual}")]
@@ -31,6 +31,10 @@ pub enum RuleEngineError {
     /// A percentage rule has no targets to hash on.
     #[error("percentage allocation requires at least one target")]
     EmptyPercentageTargets,
+
+    /// An internal or unexpected error occurred.
+    #[error("internal error: {0}")]
+    Internal(String),
 }
 
 #[cfg(test)]

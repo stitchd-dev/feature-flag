@@ -20,7 +20,7 @@ Implement the consistent hashing algorithm and core domain models for flag evalu
 ## Phase 3: Evaluation Engine <!-- execution: parallel --> <!-- depends: Phase 2 -->
 Integrate with the Rule Engine and Segmentation to perform full flag evaluations.
 
-- [ ] Task: Implement the `FlagEvaluator` that processes ordered rules. <!-- files: crates/stitchd-core/src/evaluation/engine.rs -->
+- [~] Task: Implement the `FlagEvaluator` that processes ordered rules. <!-- files: crates/stitchd-core/src/evaluation/engine.rs -->
 - [ ] Task: Integrate "Is in Segment" rule condition into flag evaluation. <!-- files: crates/stitchd-core/src/evaluation/rules.rs --> <!-- depends: Task 1 -->
 - [ ] Task: Implement default variant fallback logic for disabled flags or no-match scenarios. <!-- files: crates/stitchd-core/src/evaluation/fallback.rs --> <!-- depends: Task 1 -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Evaluation Engine' (Protocol in workflow.md)

@@ -22,3 +22,8 @@
 - **Implemented:** Audit logging for new tables (hashing config, rules) and updated flag records was implemented in the repository layer, following the project's established pattern.
 - **Commit:** c869612
 ---
+## [2026-04-17 11:45] - Phase 2 Task 1: Define Flag, Variant, and EvaluationContext domain models
+- **Implemented:** Defined rich `Flag` aggregate struct and `EvaluationContext` in `stitchd-core`. `EvaluationContext` wraps multiple `Context` instances.
+- **Files changed:** `crates/stitchd-core/src/flag.rs`, `crates/stitchd-core/src/context.rs`
+- **Commit:** 0049913
+---
