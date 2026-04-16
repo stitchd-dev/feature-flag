@@ -25,13 +25,13 @@ Integrate with the Rule Engine and Segmentation to perform full flag evaluations
 - [x] Task: Implement default variant fallback logic for disabled flags or no-match scenarios. <!-- files: crates/stitchd-core/src/evaluation/fallback.rs --> [508a08f]
 - [x] Task: Conductor - User Manual Verification 'Phase 3: Evaluation Engine' (Protocol in workflow.md) [15a292c]
 
-## Phase 4: API & Management <!-- execution: parallel --> <!-- depends: Phase 1, Phase 3 -->
+## Phase 4: API & Management [checkpoint: 80865f8]
 Implement the service layer and REST/gRPC endpoints for managing flags and performing evaluations.
 
-- [ ] Task: Implement `FlagService` for CRUD operations on flags and variants. <!-- files: crates/stitchd-server/src/services/flag.rs -->
-- [ ] Task: Implement API endpoints for Flag/Variant management in `stitchd-server`. <!-- files: crates/stitchd-server/src/handlers/flag.rs --> <!-- depends: Task 1 -->
-- [ ] Task: Implement the evaluation endpoint for SDK consumption. <!-- files: crates/stitchd-server/src/handlers/evaluation.rs --> <!-- depends: Phase 3 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: API & Management' (Protocol in workflow.md)
+- [x] Task: Implement `FlagService` for CRUD operations on flags and variants. <!-- files: crates/stitchd-server/src/services/flag.rs --> [508a08f]
+- [x] Task: Implement API endpoints for Flag/Variant management in `stitchd-server`. <!-- files: crates/stitchd-server/src/handlers/flag.rs --> [508a08f]
+- [x] Task: Implement the evaluation endpoint for SDK consumption. <!-- files: crates/stitchd-server/src/handlers/evaluation.rs --> [508a08f]
+- [x] Task: Conductor - User Manual Verification 'Phase 4: API & Management' (Protocol in workflow.md) [80865f8]
 
 ## Phase 5: Final Integration & Validation <!-- depends: Phase 4 -->
 Comprehensive testing of the entire module.
