@@ -17,3 +17,4 @@ smallvec = { workspace = true }
 async-trait = { workspace = true }
 siphasher = { workspace = true }
 sqlx = { workspace = true }
+murmur3 = { workspace = true }
