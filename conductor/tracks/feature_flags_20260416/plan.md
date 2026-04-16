@@ -9,13 +9,13 @@ Implement the relational schema for flags, variants, and hashing configurations 
 - [x] Task: Ensure audit logging triggers are active for new tables. <!-- files: crates/stitchd-db/migrations/ --> [c869612]
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Database Schema & Persistence' (Protocol in workflow.md) [4e9caca]
 
-## Phase 2: Core Domain & Hashing Logic <!-- execution: parallel --> <!-- depends: Phase 1 -->
+## Phase 2: Core Domain & Hashing Logic [checkpoint: e32359f]
 Implement the consistent hashing algorithm and core domain models for flag evaluation.
 
 - [x] Task: Define `Flag`, `Variant`, and `EvaluationContext` domain models in `stitchd-core`. <!-- files: crates/stitchd-core/src/models/flag.rs, crates/stitchd-core/src/models/context.rs --> [0049913]
-- [x] Task: Implement the consistent hashing algorithm (0.1% granularity) using `context_type + parameter_key + parameter_value`. <!-- files: crates/stitchd-core/src/hashing.rs --> <!-- depends: Task 1 -->
-- [ ] Task: Implement type-safe variant value handling (Boolean, Integer, Double, String, JSON). <!-- files: crates/stitchd-core/src/variants.rs --> <!-- depends: Task 1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Core Domain & Hashing Logic' (Protocol in workflow.md)
+- [x] Task: Implement the consistent hashing algorithm (0.1% granularity) using `context_type + parameter_key + parameter_value`. <!-- files: crates/stitchd-core/src/hashing.rs --> [f289416]
+- [x] Task: Implement type-safe variant value handling (Boolean, Integer, Double, String, JSON). <!-- files: crates/stitchd-core/src/variants.rs --> [2a2486a]
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Core Domain & Hashing Logic' (Protocol in workflow.md) [e32359f]
 
 ## Phase 3: Evaluation Engine <!-- execution: parallel --> <!-- depends: Phase 2 -->
 Integrate with the Rule Engine and Segmentation to perform full flag evaluations.
