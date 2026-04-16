@@ -26,7 +26,6 @@ CREATE TABLE feature_flag_rules (
     flag_id     UUID        NOT NULL REFERENCES feature_flags(id) ON DELETE CASCADE,
     rule_index  INT         NOT NULL,
     rule_def    JSONB       NOT NULL, -- The Rule Engine's rule definition
-    variant_id  UUID        NOT NULL REFERENCES variants(id), -- The variant to return if rule matches
     UNIQUE (flag_id, rule_index)
 );
 

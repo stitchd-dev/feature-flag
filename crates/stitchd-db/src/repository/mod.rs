@@ -220,6 +220,32 @@ pub trait FlagRepository: Send + Sync {
 
     /// Soft-delete a flag.
     async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError>;
+
+    /// Fetch the hashing configuration for a flag.
+    async fn find_hashing_config(
+        &self,
+        flag_id: FlagId,
+    ) -> Result<Vec<stitchd_core::flag::FlagHashingConfig>, RepositoryError>;
+
+    /// Upsert the hashing configuration for a flag (replaces existing).
+    async fn upsert_hashing_config(
+        &self,
+        flag_id: FlagId,
+        config: &[stitchd_core::flag::FlagHashingConfig],
+    ) -> Result<(), RepositoryError>;
+
+    /// Fetch all rules for a flag, ordered by `rule_index`.
+    async fn find_rules(
+        &self,
+        flag_id: FlagId,
+    ) -> Result<Vec<stitchd_core::flag::FlagRule>, RepositoryError>;
+
+    /// Upsert rules for a flag (replaces existing).
+    async fn upsert_rules(
+        &self,
+        flag_id: FlagId,
+        rules: &[stitchd_core::flag::FlagRule],
+    ) -> Result<(), RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

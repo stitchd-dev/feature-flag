@@ -58,6 +58,7 @@ define_id!(FlagId);
 define_id!(VariantId);
 define_id!(SegmentId);
 define_id!(RuleId);
+define_id!(HashingConfigId);
 define_id!(EventId);
 define_id!(ExperimentId);
 define_id!(MetricId);

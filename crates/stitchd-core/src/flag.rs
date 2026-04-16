@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::id::{FlagId, FlagKey, ProjectId, VariantId};
+use crate::rule_engine::types::Rule;
 
 /// The type of value a feature flag produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -98,6 +99,8 @@ pub struct FlagRecord {
     pub value_type: FlagValueType,
     /// Whether evaluation is active (`true`) or the flag always returns its default.
     pub enabled: bool,
+    /// The variant to return if no rules match.
+    pub default_variant_id: Option<VariantId>,
     /// When this record was created.
     pub created_at: DateTime<Utc>,
     /// When this record was last modified.
@@ -106,6 +109,30 @@ pub struct FlagRecord {
     pub deleted_at: Option<DateTime<Utc>>,
     /// Optimistic-concurrency version counter.
     pub version: i64,
+}
+
+/// Configures which context parameters are used for hashing a specific flag.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlagHashingConfig {
+    /// The flag this config belongs to.
+    pub flag_id: FlagId,
+    /// The parameter key to hash.
+    pub parameter_key: String,
+    /// The context type (e.g. 'user', 'session').
+    pub parameter_type: String,
+    /// The order in which parameters are combined for hashing.
+    pub order: i32,
+}
+
+/// A rule associated with a feature flag.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FlagRule {
+    /// The flag this rule belongs to.
+    pub flag_id: FlagId,
+    /// Evaluation priority (lower is higher priority).
+    pub rule_index: i32,
+    /// The rule definition (condition and output).
+    pub rule: Rule,
 }
 
 #[cfg(test)]

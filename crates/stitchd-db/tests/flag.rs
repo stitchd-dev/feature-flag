@@ -48,6 +48,7 @@ async fn test_flag_lifecycle(pool: sqlx::PgPool) {
         key: FlagKey::new("test-flag").unwrap(),
         value_type: FlagValueType::Bool,
         enabled: true,
+        default_variant_id: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
         deleted_at: None,
