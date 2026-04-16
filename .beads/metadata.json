@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "stitchd_feature_flag",
+  "project_id": "757c39d5-5a6f-4850-94a0-5fcd9e9bd363"
+}
