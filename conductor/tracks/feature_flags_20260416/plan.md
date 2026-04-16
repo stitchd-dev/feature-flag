@@ -17,13 +17,13 @@ Implement the consistent hashing algorithm and core domain models for flag evalu
 - [x] Task: Implement type-safe variant value handling (Boolean, Integer, Double, String, JSON). <!-- files: crates/stitchd-core/src/variants.rs --> [2a2486a]
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Core Domain & Hashing Logic' (Protocol in workflow.md) [e32359f]
 
-## Phase 3: Evaluation Engine <!-- execution: parallel --> <!-- depends: Phase 2 -->
+## Phase 3: Evaluation Engine [checkpoint: 15a292c]
 Integrate with the Rule Engine and Segmentation to perform full flag evaluations.
 
-- [~] Task: Implement the `FlagEvaluator` that processes ordered rules. <!-- files: crates/stitchd-core/src/evaluation/engine.rs -->
-- [ ] Task: Integrate "Is in Segment" rule condition into flag evaluation. <!-- files: crates/stitchd-core/src/evaluation/rules.rs --> <!-- depends: Task 1 -->
-- [ ] Task: Implement default variant fallback logic for disabled flags or no-match scenarios. <!-- files: crates/stitchd-core/src/evaluation/fallback.rs --> <!-- depends: Task 1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Evaluation Engine' (Protocol in workflow.md)
+- [x] Task: Implement the `FlagEvaluator` that processes ordered rules. <!-- files: crates/stitchd-core/src/evaluation/engine.rs --> [508a08f]
+- [x] Task: Integrate "Is in Segment" rule condition into flag evaluation. <!-- files: crates/stitchd-core/src/evaluation/rules.rs --> [508a08f]
+- [x] Task: Implement default variant fallback logic for disabled flags or no-match scenarios. <!-- files: crates/stitchd-core/src/evaluation/fallback.rs --> [508a08f]
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Evaluation Engine' (Protocol in workflow.md) [15a292c]
 
 ## Phase 4: API & Management <!-- execution: parallel --> <!-- depends: Phase 1, Phase 3 -->
 Implement the service layer and REST/gRPC endpoints for managing flags and performing evaluations.
