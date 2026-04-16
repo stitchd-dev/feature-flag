@@ -5,3 +5,4 @@ pub mod rule_engine;
 pub mod segment;
 pub mod tenant;
 pub mod user;
+pub mod variants;
