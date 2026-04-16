@@ -14,7 +14,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use sqlx::PgPool;
 use std::sync::Arc;
-use stitchd_db::SegmentRepository;
+use stitchd_db::{FlagRepository, SegmentRepository, VariantRepository};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -25,6 +25,10 @@ pub struct AppState {
     pub metrics_handle: PrometheusHandle,
     /// Repository for segment management.
     pub segment_repo: Arc<dyn SegmentRepository>,
+    /// Repository for feature flag management.
+    pub flag_repo: Arc<dyn FlagRepository>,
+    /// Repository for flag variant management.
+    pub variant_repo: Arc<dyn VariantRepository>,
 }
 
 /// Build the Axum router.

@@ -31,12 +31,22 @@ async fn main() -> Result<()> {
         .await
         .context("failed to connect to PostgreSQL")?;
 
+    let audit_logger = std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(pool.clone()));
+
     let state = AppState {
         db: pool.clone(),
         metrics_handle,
         segment_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(
             pool.clone(),
-            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(pool.clone())),
+            audit_logger.clone(),
+        )),
+        flag_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgFlagRepository::new(
+            pool.clone(),
+            audit_logger.clone(),
+        )),
+        variant_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgVariantRepository::new(
+            pool.clone(),
+            audit_logger,
         )),
     };
 

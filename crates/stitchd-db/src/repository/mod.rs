@@ -209,6 +209,12 @@ pub trait FlagRepository: Send + Sync {
         project_id: ProjectId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
 
+    /// List all non-deleted flags in an environment.
+    async fn list_by_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
+
     /// Persist a new flag.
     async fn create(&self, flag: &stitchd_core::flag::FlagRecord) -> Result<(), RepositoryError>;
 

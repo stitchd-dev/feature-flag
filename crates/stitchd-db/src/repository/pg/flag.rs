@@ -7,7 +7,7 @@ use sqlx::{PgPool, Row};
 
 use stitchd_core::{
     flag::{FlagHashingConfig, FlagRecord, FlagRule, FlagValueType, Variant, VariantValue},
-    id::{FlagId, FlagKey, ProjectId, VariantId},
+    id::{EnvironmentId, FlagId, FlagKey, ProjectId, VariantId},
 };
 
 use crate::{
@@ -192,6 +192,43 @@ impl FlagRepository for PgFlagRepository {
             "#,
         )
         .bind(project_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        rows.into_iter()
+            .map(|row| {
+                assemble_flag(
+                    row.get("id"),
+                    row.get("project_id"),
+                    row.get("key"),
+                    row.get::<String, _>("value_type").as_str(),
+                    row.get("enabled"),
+                    row.get("default_variant_id"),
+                    row.get("created_at"),
+                    row.get("updated_at"),
+                    row.get("deleted_at"),
+                    row.get("version"),
+                )
+            })
+            .collect()
+    }
+
+    async fn list_by_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<FlagRecord>, RepositoryError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT ff.id, ff.project_id, ff.key, ff.value_type, ff.enabled, ff.default_variant_id,
+                   ff.created_at, ff.updated_at, ff.deleted_at, ff.version
+            FROM feature_flags ff
+            JOIN environments env ON ff.project_id = env.project_id
+            WHERE env.id = $1 AND ff.deleted_at IS NULL AND env.deleted_at IS NULL
+            ORDER BY ff.created_at
+            "#,
+        )
+        .bind(environment_id.as_uuid())
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
