@@ -33,9 +33,9 @@ Implement the service layer and REST/gRPC endpoints for managing flags and perfo
 - [x] Task: Implement the evaluation endpoint for SDK consumption. <!-- files: crates/stitchd-server/src/handlers/evaluation.rs --> [508a08f]
 - [x] Task: Conductor - User Manual Verification 'Phase 4: API & Management' (Protocol in workflow.md) [80865f8]
 
-## Phase 5: Final Integration & Validation <!-- depends: Phase 4 -->
+## Phase 5: Final Integration & Validation [checkpoint: a1ea299]
 Comprehensive testing of the entire module.
 
-- [x] Task: Implementation of end-to-end integration tests for complex targeting scenarios. <!-- files: crates/stitchd-server/tests/flag_evaluation.rs --> [508a08f]
-- [~] Task: Load testing of the evaluation engine to ensure performance requirements are met. <!-- files: crates/stitchd-server/tests/performance.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Final Integration & Validation' (Protocol in workflow.md)
+- [x] Task: Implementation of end-to-end integration tests for complex targeting scenarios. <!-- files: crates/stitchd-server/tests/flag_evaluation.rs --> [645bd64]
+- [x] Task: Load testing of the evaluation engine to ensure performance requirements are met. <!-- files: crates/stitchd-server/tests/performance.rs --> [645bd64]
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Final Integration & Validation' (Protocol in workflow.md) [a1ea299]
