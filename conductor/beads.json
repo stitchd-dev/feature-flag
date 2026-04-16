@@ -1,9 +1,13 @@
 {
   "enabled": true,
   "mode": "normal",
-  "sync": "bidirectional",
+  "memoryStrategy": "beads-primary",
   "epicPrefix": "conductor",
   "autoCreateTasks": true,
-  "autoSyncOnComplete": true,
-  "compactOnArchive": true
+  "compactOnPhaseComplete": true,
+  "pushOnTaskComplete": false,
+  "pushOnPhaseComplete": true,
+  "pushOnTrackComplete": true,
+  "worktreePerTrack": true,
+  "worktreePerWorker": true
 }

@@ -1,81 +1,61 @@
+# Initial Concept
+Stitchd Feature Flag is a high-performance Feature Flagging & Experimentation platform focused on self-hosted deployment and statistical rigor.
+
 # Product Guide
 
 ## Vision
-
-Stitchd Feature Flag is a Feature Flagging & Experimentation platform focused on 
-self-hosted deployment. It targets internal engineering teams, SaaS product teams, 
-and data/growth teams who need reliable flag evaluation and statistically rigorous 
-A/B experimentation. Admin UI is coming later as a separate project.
+Stitchd Feature Flag targets internal engineering teams, SaaS product teams, and data/growth teams who need reliable flag evaluation and statistically rigorous A/B experimentation. The platform is designed for high-concurrency, self-hosted environments with a future path toward a Cloud SaaS offering. *Note: Admin UI is a separate, upcoming project.*
 
 ## Target Users
-- Internal engineering teams (self-hosted deployments)
-- SaaS product teams (multi-tenant)
-- Data / growth teams running A/B and multivariate experiments
+- **Internal Engineering Teams:** Focus on self-hosted deployments and infrastructure control.
+- **SaaS Product Teams:** Multi-tenant support for managing features across diverse customer bases.
+- **Data / Growth Teams:** Running A/B and multivariate experiments with rigorous statistical models.
 
-## Deployment Model
-- **Current:** Self-hosted (primary focus)
-- **Future:** Cloud SaaS offering
-
-## Multi-Tenancy
-Each tenant → multiple environments → each environment has SDK keys (min 1 active; 
-supports rotation via create/revoke).
+## Deployment & Multi-Tenancy
+- **Deployment Model:** Self-hosted (primary focus), with a future Cloud SaaS offering.
+- **Tenancy Structure:** Each Tenant → Multiple Environments → SDK Keys (min 1 active; supports rotation via create/revoke).
 
 ## Scoping Model
-- **Project level:** Feature Flag definitions, Variant configurations
-- **Environment level:** Rules, Segments, Experiments, Events
+- **Project Level:** Feature Flag definitions, Variant configurations.
+- **Environment Level:** Rules, Segments, Experiments, Events.
 
-## Core Context Model
-Each evaluation context: `{_type, key, parameters: Map<String, int|double|semver|string|boolean>, privateParameters: List<String>}`
-`privateParameters` identifies fields that must be excluded from all logging.
+## Core Context & Intelligence
+- **Evaluation Context:** `{_type, key, parameters: Map<String, int|double|semver|string|boolean>, privateParameters: List<String>}`.
+- **Privacy:** `privateParameters` identifies fields excluded from all logging.
+- **Context Intelligence Layer:** Observes contexts to maintain a registry of known types, properties, and value ranges/enums. Powers Admin UI autocomplete/dropdowns.
 
 ## Data Persistence & Integrity
-- **Optimistic Concurrency:** All mutable entities use version-based optimistic locking 
-  to prevent lost updates in highly concurrent environments.
-- **Audit Logging:** Every mutation (create, update, soft-delete) is automatically 
-  recorded in a central audit log, capturing the actor, resource, and specific changes.
-- **Soft Deletion:** Business-critical entities use soft-deletion to maintain data 
-  relationships and auditability.
-
-## Context Intelligence Layer
-A dedicated layer that observes contexts flowing through the system and maintains 
-a registry of known context types, their properties, and observed value ranges/enums.
-Exposed as an API for the Admin UI (coming later) to power dropdown/autocomplete 
-behaviour (e.g. when building segment rules or flag targeting conditions).
+- **Optimistic Concurrency:** All mutable entities use version-based optimistic locking to prevent lost updates.
+- **Audit Logging:** Every mutation (create, update, soft-delete) records the actor, resource, and specific changes.
+- **Soft Deletion:** Business-critical entities use soft-deletion to maintain data relationships and auditability.
 
 ## Modules
 
 ### 1. Segmentation
-- Rule-Based Segments: rules evaluated against client Contexts
-- List-Based Segments: per context-type include/exclude key lists
-  - Persistence: monthly range-partitioned storage for list entries via pg_partman
+- **Rule-Based Segments:** Evaluated against client Contexts.
+- **List-Based Segments:** Include/exclude key lists per context-type.
+- **Persistence:** Monthly range-partitioned storage via `pg_partman`.
 
 ### 2. Feature Flags
-- Typed flags: `int | double | bool | string | json`; variants must match flag type
-- States: enabled (default rule + custom rules) / disabled
-- Output: specific variant OR percentage allocation (0.1% granularity)
-  hash(targeted context keys/params, flag key, project id, environment)
+- **Typed Flags:** `int | double | bool | string | json`; variants must match flag type.
+- **States:** Enabled (default rule + custom rules) / Disabled.
+- **Output:** Specific variant OR percentage allocation (0.1% granularity) based on deterministic hashing.
 
 ### 3. Experimentation
-- Events: pre-registered only; each event has a known key and typed metric value 
-  (bool/int/double) — unknown events are rejected at ingestion
-- Event payload: `{_type, key}` context + metric key + typed value + timestamp
-- Experiments: bound to a flag rule, duration-locked (flag frozen while active)
-- Models: Frequentist or Bayesian (with/without CUPED)
-- Metrics: event count, numeric aggregation (sum/avg/percentile), funnel/conversion
-- Future: warehouse-backed event ingestion
+- **Strict Events:** Pre-registered only; unknown events are rejected. Payload includes context, metric key, and typed value.
+- **Experiments:** Bound to a flag rule; duration-locked (flag frozen while active).
+- **Statistical Models:** Frequentist or Bayesian (with/without CUPED).
+- **Metrics:** Event count, numeric aggregation (sum/avg/percentile), and funnel/conversion.
 
 ### 4. Rule Engine
-- Core: ordered rule list (first true = exit); AND combinator; per-rule NOT
-- Segmentation rules: inherit core
-- Feature flag rules: inherit core + "Is in Segment" + "Flag evaluated with variant X"
+- **Core Logic:** Ordered rule list (first true = exit); AND combinator; per-rule NOT.
+- **Capabilities:** Inherits core logic + "Is in Segment" + "Flag evaluated with variant X".
 
-## Client SDK (Rust — initial)
-- Init with Contexts → server returns all flag rules/variants + segment data
-- All evaluation runs client-side
-- Fixed-interval polling for updates
-- Future: streaming layer for server-pushed evaluated flags
-- Direct event submission via SDK key (scoped to project/environment)
+## Client SDK (Rust Initial)
+- **Local Evaluation:** Server returns all rules/variants/segments; evaluation runs client-side.
+- **Updates:** Fixed-interval polling (Future: server-pushed streaming layer).
+- **Ingestion:** Direct event submission via SDK key scoped to project/environment.
 
 ## Data Stores
-- PostgreSQL: flag/segment configuration, tenants, environments, SDK keys
-- ClickHouse: events, experiment results, metric aggregations
+- **PostgreSQL:** Configuration (flags, segments, tenants, environments, SDK keys, audit logs).
+- **ClickHouse:** High-volume events, experiment results, and metric aggregations.
