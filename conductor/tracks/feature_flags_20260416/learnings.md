@@ -27,3 +27,23 @@
 - **Files changed:** `crates/stitchd-core/src/flag.rs`, `crates/stitchd-core/src/context.rs`
 - **Commit:** 0049913
 ---
+## [2026-04-17 12:00] - Phase 2 & 3: Hashing, Variants and Evaluation Engine
+- **Implemented:** Consistent hashing algorithm (murmur3) with 0.1% granularity. Type-safe variant values. `FlagEvaluator` with segment integration and fallback logic.
+- **Files changed:** `crates/stitchd-core/src/hashing.rs`, `crates/stitchd-core/src/variants.rs`, `crates/stitchd-core/src/evaluation/engine.rs`
+- **Commit:** 508a08f
+---
+## [2026-04-17 12:30] - Phase 4: API & Management
+- **Implemented:** Axum handlers for Flag/Variant CRUD and environment-scoped evaluation. Wiring in `AppState` and `main.rs`.
+- **Files changed:** `crates/stitchd-server/src/api/flags/handlers.rs`, `crates/stitchd-server/src/main.rs`
+- **Commit:** 80865f8
+---
+## [2026-04-17 13:00] - Phase 5: Final Integration & Validation
+- **Implemented:** E2E integration tests and performance benchmarks.
+- **Files changed:** `crates/stitchd-server/tests/flag_evaluation.rs`, `crates/stitchd-server/tests/performance.rs`
+- **Commit:** 645bd64
+---
+## [2026-04-17 14:00] - Final Verification & Fixes
+- **Fixed:** Performance test compilation error (missing `EnvironmentId` argument).
+- **Verified:** All E2E and performance tests passed against live DB.
+- **Files changed:** `crates/stitchd-server/tests/performance.rs`
+- **Commit:** [pending]

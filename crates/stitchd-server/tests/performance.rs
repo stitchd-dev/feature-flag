@@ -74,12 +74,13 @@ fn benchmark_evaluation_throughput() {
         Context::new("user", "u1").with_parameter("tier", ParameterValue::Str("gold".to_string()))
     );
     let segments = HashSet::new();
+    let env_id = stitchd_core::id::EnvironmentId::from_uuid(uuid::Uuid::nil());
 
     let iterations = 100_000;
     let start = Instant::now();
 
     for _ in 0..iterations {
-        let _ = FlagEvaluator::evaluate(&flag, &context, &segments).unwrap();
+        let _ = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
     }
 
     let duration = start.elapsed();

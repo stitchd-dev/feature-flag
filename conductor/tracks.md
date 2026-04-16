@@ -26,3 +26,4 @@ This file tracks all major tracks for the project.
 
 ## [x] Track: fix the errors across workspaces
 *Link: [./tracks/fix_errors_20260412/](./tracks/fix_errors_20260412/)*
+\n---\n\n## [~] Track: Implement the core Feature Flags module, enabling typed flags, variants, and rule-based evaluation with percentage-based allocations.\n*Link: [./tracks/feature_flags_20260416/](./tracks/feature_flags_20260416/)*
