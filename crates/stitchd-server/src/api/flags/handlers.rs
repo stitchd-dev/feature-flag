@@ -255,7 +255,7 @@ pub struct EvaluationRequest {
 }
 
 /// The result of a single flag evaluation.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct EvaluationResult {
     /// Flag key.
     pub flag_key: String,
@@ -266,7 +266,7 @@ pub struct EvaluationResult {
 }
 
 /// Response containing all evaluated flags for the requested context.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 pub struct BatchEvaluationResponse {
     /// Map of flag keys to results.
     pub results: Vec<EvaluationResult>,
@@ -1285,5 +1285,175 @@ mod tests {
         use axum::response::IntoResponse as _;
         let resp = api_err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: update_flag with valid variant ID
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn update_flag_sets_default_variant_when_variant_exists() {
+        let project_id = ProjectId::new();
+        let flag = make_flag_record(project_id);
+        let flag_id = flag.id;
+        let variant_id = VariantId::new();
+        let variant = stitchd_core::flag::Variant {
+            id: variant_id,
+            key: "on".to_string(),
+            value: stitchd_core::variants::VariantValue::BoolValue(true),
+        };
+        let flag_repo = MockFlagRepo::with_flags(vec![flag]);
+        let variant_repo = Arc::new(MockVariantRepo {
+            variants: std::sync::Mutex::new(
+                std::collections::HashMap::from([(flag_id, vec![variant])]),
+            ),
+        });
+        let state = make_test_state(flag_repo, variant_repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "default_variant_id": variant_id,
+            "version": 1
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/v1/projects/{project_id}/flags/{flag_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: FlagRecord = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(updated.default_variant_id, Some(variant_id));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: evaluate_all_flags
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn evaluate_all_flags_processes_flag_with_default_variant() {
+        let env_id = EnvironmentId::new();
+        let project_id = ProjectId::new();
+
+        // Create a flag with a default variant
+        let variant_id = VariantId::new();
+        let flag_id = FlagId::new();
+        let flag = FlagRecord {
+            id: flag_id,
+            project_id,
+            key: FlagKey::new("my-feature").unwrap(),
+            value_type: stitchd_core::flag::FlagValueType::Bool,
+            enabled: false, // disabled -> falls back to default variant
+            default_variant_id: Some(variant_id),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+
+        let variant = stitchd_core::flag::Variant {
+            id: variant_id,
+            key: "off".to_string(),
+            value: stitchd_core::variants::VariantValue::BoolValue(false),
+        };
+
+        let flag_repo = MockFlagRepo::with_flags(vec![flag]);
+        let variant_repo = Arc::new(MockVariantRepo {
+            variants: std::sync::Mutex::new(
+                std::collections::HashMap::from([(flag_id, vec![variant])]),
+            ),
+        });
+        let state = AppState {
+            db: sqlx::PgPool::connect_lazy(
+                "postgres://stitchd:stitchd@localhost:5432/stitchd_test",
+            )
+            .expect("lazy pool"),
+            metrics_handle: make_metrics_handle(),
+            segment_repo: Arc::new(MockSegmentRepo),
+            flag_repo,
+            variant_repo,
+            sdk_key_repo: Arc::new(MockSdkKeyRepo),
+        };
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "context": {
+                "contexts": []
+            }
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/evaluate"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: BatchEvaluationResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(resp.results.len(), 1);
+        assert_eq!(resp.results[0].flag_key, "my-feature");
+        assert_eq!(resp.results[0].variant_key, "off");
+    }
+
+    #[tokio::test]
+    async fn evaluate_all_flags_returns_ok_for_empty_environment() {
+        let env_id = EnvironmentId::new();
+        let flag_repo = MockFlagRepo::with_flags(vec![]);
+        let state = AppState {
+            db: sqlx::PgPool::connect_lazy(
+                "postgres://stitchd:stitchd@localhost:5432/stitchd_test",
+            )
+            .expect("lazy pool"),
+            metrics_handle: make_metrics_handle(),
+            segment_repo: Arc::new(MockSegmentRepo),
+            flag_repo,
+            variant_repo: MockVariantRepo::new(),
+            sdk_key_repo: Arc::new(MockSdkKeyRepo),
+        };
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "context": {
+                "contexts": []
+            }
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/evaluate"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: BatchEvaluationResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(resp.results.is_empty());
     }
 }

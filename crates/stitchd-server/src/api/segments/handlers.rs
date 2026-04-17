@@ -1402,4 +1402,100 @@ mod tests {
         use axum::response::IntoResponse as _;
         assert_eq!(err.into_response().status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
+
+    // RepositoryError::Database and RepositoryError::Unexpected map to 500
+    #[test]
+    fn repository_database_error_converts_to_500() {
+        let err: ApiError = RepositoryError::Database(
+            sqlx::Error::Protocol("db connection error".to_string())
+        )
+        .into();
+        use axum::response::IntoResponse as _;
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn repository_unexpected_error_converts_to_500() {
+        let err: ApiError =
+            RepositoryError::Unexpected(anyhow::anyhow!("unexpected error")).into();
+        use axum::response::IntoResponse as _;
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    // ValidationError::MissingDefinition converts to bad request
+    #[test]
+    fn missing_definition_validation_error_converts_to_bad_request() {
+        use crate::api::segments::types::ValidationError;
+        let err: ApiError = ValidationError::MissingDefinition(SegmentType::List).into();
+        use axum::response::IntoResponse as _;
+        assert_eq!(err.into_response().status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: update_segment (list-based)
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn update_list_segment_returns_ok() {
+        let env_id = EnvironmentId::new();
+        let seg = make_list_segment(env_id);
+        let seg_id = seg.id;
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "lists": {},
+            "version": 1
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn update_list_segment_missing_lists_returns_bad_request() {
+        let env_id = EnvironmentId::new();
+        let seg = make_list_segment(env_id);
+        let seg_id = seg.id;
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "version": 1
+            // no "lists" for a list-based segment
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
 }
