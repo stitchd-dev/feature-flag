@@ -52,8 +52,7 @@ pub fn init_tracing(service_name: &str, _service_version: &str) -> Result<SdkTra
         tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer(service_name.to_owned()));
 
     let is_production = std::env::var("APP_ENV")
-        .map(|v| v.eq_ignore_ascii_case("production"))
-        .unwrap_or(false);
+        .is_ok_and(|v| v.eq_ignore_ascii_case("production"));
 
     if is_production {
         tracing_subscriber::registry()
