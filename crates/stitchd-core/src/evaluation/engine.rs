@@ -277,4 +277,220 @@ mod tests {
             on_count
         );
     }
+
+    // ── Error path: disabled flag with no default variant ────────────────────
+
+    #[test]
+    fn test_evaluate_disabled_flag_no_default_variant_returns_error() {
+        let mut flag = setup_flag();
+        flag.record.enabled = false;
+        flag.record.default_variant_id = None;
+
+        let context = EvaluationContext::new();
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
+        assert!(matches!(result, Err(RuleEngineError::Internal(_))));
+    }
+
+    // ── Error path: rule matches variant ID that does not exist ─────────────
+
+    #[test]
+    fn test_evaluate_rule_matches_nonexistent_variant_returns_error() {
+        let mut flag = setup_flag();
+        let nonexistent_variant_id = VariantId::new();
+
+        // Replace the rule output with a variant ID not in flag.variants
+        flag.rules[0].rule.output = RuleOutput::Variant(nonexistent_variant_id);
+
+        let context = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
+        assert!(matches!(result, Err(RuleEngineError::Internal(_))));
+    }
+
+    // ── Error path: no rules match and no default variant ───────────────────
+
+    #[test]
+    fn test_evaluate_no_match_no_default_variant_returns_error() {
+        let mut flag = setup_flag();
+        flag.record.default_variant_id = None;
+
+        let context = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false)),
+        );
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
+        assert!(matches!(result, Err(RuleEngineError::Internal(_))));
+    }
+
+    // ── Error path: percentage rollout — missing context ────────────────────
+
+    #[test]
+    fn test_evaluate_percentage_missing_context_returns_error() {
+        let mut flag = setup_flag();
+        let v1_id = flag.variants[0].id;
+        let v2_id = flag.variants[1].id;
+
+        // Rule always matches (Eq with beta=true), then percentage rollout on "org" context
+        flag.rules[0].rule.condition = ConditionExpr::Leaf(Condition::Eq {
+            context_type: "user".to_string(),
+            param: "beta".to_string(),
+            value: ParameterValue::Bool(true),
+        });
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "org".to_string(), // missing context
+                field: TargetField::Key,
+            }],
+            weights: vec![(v1_id, 500), (v2_id, 500)],
+        };
+
+        // Provide user context but NOT org context
+        let context = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
+        assert!(matches!(result, Err(RuleEngineError::MissingContext { .. })));
+    }
+
+    // ── Error path: percentage rollout — missing parameter ──────────────────
+
+    #[test]
+    fn test_evaluate_percentage_missing_parameter_returns_error() {
+        let mut flag = setup_flag();
+        let v1_id = flag.variants[0].id;
+        let v2_id = flag.variants[1].id;
+
+        flag.rules[0].rule.condition = ConditionExpr::Leaf(Condition::Eq {
+            context_type: "user".to_string(),
+            param: "beta".to_string(),
+            value: ParameterValue::Bool(true),
+        });
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "user".to_string(),
+                field: TargetField::Parameter("nonexistent_param".to_string()),
+            }],
+            weights: vec![(v1_id, 500), (v2_id, 500)],
+        };
+
+        let context = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+            // NOTE: no "nonexistent_param"
+        );
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
+        assert!(matches!(result, Err(RuleEngineError::MissingParameter { .. })));
+    }
+
+    // ── Error path: percentage rollout — weights don't cover bucket ──────────
+
+    #[test]
+    fn test_evaluate_percentage_weights_not_covering_bucket_returns_error() {
+        let mut flag = setup_flag();
+        let v1_id = flag.variants[0].id;
+
+        flag.rules[0].rule.condition = ConditionExpr::Leaf(Condition::Eq {
+            context_type: "user".to_string(),
+            param: "beta".to_string(),
+            value: ParameterValue::Bool(true),
+        });
+        // Only 1 weight covering bucket 0..500; bucket 500..999 uncovered
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "user".to_string(),
+                field: TargetField::Key,
+            }],
+            weights: vec![(v1_id, 1)], // only covers bucket 0
+        };
+
+        // Iterate users until we find one that doesn't land in bucket 0
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+        let mut found_error = false;
+
+        for i in 0..200 {
+            let context = EvaluationContext::new().with_context(
+                Context::new("user", format!("user-{}", i))
+                    .with_parameter("beta", ParameterValue::Bool(true)),
+            );
+            let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
+            if matches!(result, Err(RuleEngineError::Internal(_))) {
+                found_error = true;
+                break;
+            }
+        }
+        assert!(found_error, "Expected an Internal error from uncovered bucket");
+    }
+
+    // ── Error path: percentage rollout — rollout matched nonexistent variant ──
+
+    #[test]
+    fn test_evaluate_percentage_nonexistent_variant_in_weights_returns_error() {
+        let mut flag = setup_flag();
+        let nonexistent = VariantId::new();
+
+        flag.rules[0].rule.condition = ConditionExpr::Leaf(Condition::Eq {
+            context_type: "user".to_string(),
+            param: "beta".to_string(),
+            value: ParameterValue::Bool(true),
+        });
+        // Weights point to a variant_id not in flag.variants
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "user".to_string(),
+                field: TargetField::Key,
+            }],
+            weights: vec![(nonexistent, 1000)],
+        };
+
+        let context = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
+        assert!(matches!(result, Err(RuleEngineError::Internal(_))));
+    }
+
+    // ── Percentage rollout using Parameter field ─────────────────────────────
+
+    #[test]
+    fn test_evaluate_percentage_rollout_parameter_field() {
+        let mut flag = setup_flag();
+        let v1_id = flag.variants[0].id;
+        let v2_id = flag.variants[1].id;
+
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "user".to_string(),
+                field: TargetField::Parameter("beta".to_string()),
+            }],
+            weights: vec![(v1_id, 500), (v2_id, 500)],
+        };
+
+        let context = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        // Just verify it doesn't panic and returns a valid variant
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
+        assert!(result.is_ok());
+    }
 }

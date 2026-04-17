@@ -485,6 +485,113 @@ mod tests {
         ));
     }
 
+    // ── contains_segment_condition with And/Or nesting ───────────────────────
+
+    #[test]
+    fn rule_based_and_with_nested_in_segment_is_invalid() {
+        // And([Eq(...), InSegment(...)]) — the And arm must detect nested InSegment
+        let rule = Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::And(vec![
+                ConditionExpr::Leaf(Condition::Eq {
+                    context_type: "user".into(),
+                    param: "plan".into(),
+                    value: ParameterValue::Str("pro".into()),
+                }),
+                ConditionExpr::Leaf(Condition::InSegment(SegmentId::new())),
+            ]),
+            output: RuleOutput::Variant(crate::id::VariantId::new()),
+        };
+        let segment = RuleBasedSegment {
+            id: SegmentId::new(),
+            rules: vec![rule],
+        };
+        let result = segment.evaluate(&[]);
+        assert!(matches!(
+            result,
+            Err(SegmentEvaluatorError::InvalidSegmentRule)
+        ));
+    }
+
+    #[test]
+    fn rule_based_or_with_nested_not_in_segment_is_invalid() {
+        // Or([Eq(...), NotInSegment(...)]) — the Or arm must detect nested NotInSegment
+        let rule = Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::Or(vec![
+                ConditionExpr::Leaf(Condition::Eq {
+                    context_type: "user".into(),
+                    param: "plan".into(),
+                    value: ParameterValue::Str("pro".into()),
+                }),
+                ConditionExpr::Leaf(Condition::NotInSegment(SegmentId::new())),
+            ]),
+            output: RuleOutput::Variant(crate::id::VariantId::new()),
+        };
+        let segment = RuleBasedSegment {
+            id: SegmentId::new(),
+            rules: vec![rule],
+        };
+        let result = segment.evaluate(&[]);
+        assert!(matches!(
+            result,
+            Err(SegmentEvaluatorError::InvalidSegmentRule)
+        ));
+    }
+
+    #[test]
+    fn rule_based_not_wrapping_in_segment_is_invalid() {
+        // Not(InSegment(...)) — the Not arm in contains_segment_condition must detect it
+        let rule = Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::Not(Box::new(ConditionExpr::Leaf(Condition::InSegment(
+                SegmentId::new(),
+            )))),
+            output: RuleOutput::Variant(crate::id::VariantId::new()),
+        };
+        let segment = RuleBasedSegment {
+            id: SegmentId::new(),
+            rules: vec![rule],
+        };
+        let result = segment.evaluate(&[]);
+        assert!(matches!(
+            result,
+            Err(SegmentEvaluatorError::InvalidSegmentRule)
+        ));
+    }
+
+    // ── SegmentEvaluator::evaluate_one ───────────────────────────────────────
+
+    #[test]
+    fn evaluate_one_list_based_matches() {
+        let seg_id = SegmentId::new();
+        let segment = SegmentDefinition::ListBased(ListBasedSegment {
+            id: seg_id,
+            lists: HashMap::from([(
+                "user".to_string(),
+                ContextList {
+                    include: ["u1".to_string()].into_iter().collect(),
+                    exclude: HashSet::new(),
+                },
+            )]),
+        });
+        let ctx = user_ctx("u1");
+        let result = SegmentEvaluator::evaluate_one(&[ctx], &segment).unwrap();
+        assert!(result.matched);
+    }
+
+    #[test]
+    fn evaluate_one_rule_based_no_match() {
+        let seg_id = SegmentId::new();
+        let segment = SegmentDefinition::RuleBased(RuleBasedSegment {
+            id: seg_id,
+            rules: vec![eq_rule("user", "plan", "pro")],
+        });
+        let ctx = user_ctx("u1").with_parameter("plan", ParameterValue::Str("free".into()));
+        let result = SegmentEvaluator::evaluate_one(&[ctx], &segment).unwrap();
+        assert!(!result.matched);
+    }
+
     // ── Global Evaluator Tests ───────────────────────────────────────────────
 
     #[test]
