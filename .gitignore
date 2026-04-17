@@ -42,3 +42,5 @@ lcov.info
 .worktrees/sdk_20260417/
 # bd worktree
 .worktrees/fix_ci_clippy_20260417/
+# bd worktree
+.worktrees/coverage_20260417/
