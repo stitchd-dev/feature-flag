@@ -286,3 +286,44 @@ fn parse_action(s: &str) -> Result<Action, RepositoryError> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn parse_resource_type_all_variants() {
+        assert!(matches!(
+            parse_resource_type("environment").unwrap(),
+            ResourceType::Environment
+        ));
+        assert!(matches!(
+            parse_resource_type("flag").unwrap(),
+            ResourceType::Flag
+        ));
+        assert!(matches!(
+            parse_resource_type("segment").unwrap(),
+            ResourceType::Segment
+        ));
+    }
+
+    #[test]
+    fn parse_resource_type_unknown_returns_error() {
+        let err = parse_resource_type("other").unwrap_err();
+        assert!(err.to_string().contains("unknown resource_type: other"));
+    }
+
+    #[test]
+    fn parse_action_all_variants() {
+        assert!(matches!(parse_action("read").unwrap(), Action::Read));
+        assert!(matches!(parse_action("write").unwrap(), Action::Write));
+        assert!(matches!(parse_action("publish").unwrap(), Action::Publish));
+        assert!(matches!(parse_action("admin").unwrap(), Action::Admin));
+    }
+
+    #[test]
+    fn parse_action_unknown_returns_error() {
+        let err = parse_action("delete").unwrap_err();
+        assert!(err.to_string().contains("unknown action: delete"));
+    }
+}
