@@ -38,3 +38,5 @@ lcov.info
 .worktrees/fix_lint_errors_20260417/worker_3_rule_engine/
 # bd worktree
 .worktrees/fix_lint_errors_20260417/worker_4_others/
+# bd worktree
+.worktrees/sdk_20260417/
