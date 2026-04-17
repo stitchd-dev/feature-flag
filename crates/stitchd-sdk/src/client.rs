@@ -53,9 +53,10 @@ impl SdkClient {
         let cache = Arc::new(RwLock::new(initial));
         let cancel = CancellationToken::new();
 
-        let lfu: Option<Arc<Mutex<LfuState>>> = config.lfu.as_ref().map(|cfg| {
-            Arc::new(Mutex::new(LfuState::new(cfg.capacity, cfg.window)))
-        });
+        let lfu: Option<Arc<Mutex<LfuState>>> = config
+            .lfu
+            .as_ref()
+            .map(|cfg| Arc::new(Mutex::new(LfuState::new(cfg.capacity, cfg.window))));
 
         // Spawn background polling task.
         {
@@ -85,7 +86,12 @@ impl SdkClient {
             });
         }
 
-        Ok(Arc::new(Self { cache, http_client: http, cancel, lfu }))
+        Ok(Arc::new(Self {
+            cache,
+            http_client: http,
+            cancel,
+            lfu,
+        }))
     }
 
     /// Evaluate a feature flag for the given context.
@@ -119,8 +125,10 @@ impl SdkClient {
                 .filter_map(|id| cache.list_segments.get(id).map(|s| (*id, s.clone())))
                 .collect();
 
-            let env_id_str =
-                cache.environment_id.map(|id| id.to_string()).unwrap_or_default();
+            let env_id_str = cache
+                .environment_id
+                .map(|id| id.to_string())
+                .unwrap_or_default();
 
             (flag_def, rule_segs, list_metas, env_id_str)
         }; // cache read lock released
@@ -150,11 +158,10 @@ impl SdkClient {
 
                 // Check LFU cache first.
                 let lfu_result = if let Some(lfu) = &self.lfu {
-                    lfu.lock().await.cache.get(
-                        &list_meta.context_type,
-                        ctx_key,
-                        &list_meta.key,
-                    )
+                    lfu.lock()
+                        .await
+                        .cache
+                        .get(&list_meta.context_type, ctx_key, &list_meta.key)
                 } else {
                     None
                 };
@@ -168,7 +175,7 @@ impl SdkClient {
                             &env_id_str,
                             &list_meta.context_type,
                             ctx_key,
-                            &[list_meta.key.clone()],
+                            std::slice::from_ref(&list_meta.key),
                         )
                         .await?;
                     m.get(&list_meta.key).copied().unwrap_or(false)
@@ -181,7 +188,13 @@ impl SdkClient {
         }
 
         // ── Phase 4: Evaluate flag rules ─────────────────────────────────────
-        apply_rules(&flag_def, &eval_ctx.contexts, resolved, flag_key, &env_id_str)
+        apply_rules(
+            &flag_def,
+            &eval_ctx.contexts,
+            resolved,
+            flag_key,
+            &env_id_str,
+        )
     }
 }
 
@@ -237,7 +250,10 @@ async fn poll_once(
         return;
     }
 
-    if let Ok(new_entries) = http.list_check_batch(&env_id_str, &hot_set, &seg_keys).await {
+    if let Ok(new_entries) = http
+        .list_check_batch(&env_id_str, &hot_set, &seg_keys)
+        .await
+    {
         lfu.lock().await.cache.replace(new_entries);
     }
 }
@@ -258,14 +274,13 @@ pub(crate) fn apply_rules(
 
     match evaluate_rules(&flag_def.rules, &input)? {
         None => Ok(None),
-        Some(RuleOutput::Variant(vid)) => {
-            Ok(flag_def.variant_map.get(vid).map(|(_, v)| v.clone()))
-        }
+        Some(RuleOutput::Variant(vid)) => Ok(flag_def.variant_map.get(vid).map(|(_, v)| v.clone())),
         Some(RuleOutput::Percentage { targets, weights }) => {
             let mut target_values: Vec<String> = Vec::new();
             for target in targets {
-                if let Some(ctx) =
-                    contexts.iter().find(|c| c.context_type == target.context_type)
+                if let Some(ctx) = contexts
+                    .iter()
+                    .find(|c| c.context_type == target.context_type)
                 {
                     let val = match &target.field {
                         TargetField::Key => ctx.key.clone(),
@@ -321,7 +336,10 @@ mod tests {
     fn bool_flag_def(key: &str, variant_key: &str, value: bool) -> SdkFlagDef {
         let vid = VariantId::new();
         let mut variant_map = HashMap::new();
-        variant_map.insert(vid, (variant_key.to_owned(), VariantValue::BoolValue(value)));
+        variant_map.insert(
+            vid,
+            (variant_key.to_owned(), VariantValue::BoolValue(value)),
+        );
         SdkFlagDef {
             key: key.to_owned(),
             enabled: true,
@@ -358,8 +376,7 @@ mod tests {
             variant_map,
         };
         let ctx = EvaluationContext::new().with_context(
-            Context::new("user", "u1")
-                .with_parameter("plan", ParameterValue::Str("free".into())),
+            Context::new("user", "u1").with_parameter("plan", ParameterValue::Str("free".into())),
         );
         let result = apply_rules(&def, &ctx.contexts, HashSet::new(), "flag", "env-1");
         assert_eq!(result.unwrap(), None);

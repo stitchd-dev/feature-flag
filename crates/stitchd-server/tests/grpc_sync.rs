@@ -107,10 +107,9 @@ async fn sync_with_valid_key_returns_ok(pool: sqlx::PgPool) {
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
     );
 
-    let mut client =
-        FlagSyncServiceClient::connect(format!("http://{addr}"))
-            .await
-            .unwrap();
+    let mut client = FlagSyncServiceClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap();
 
     let mut request = tonic::Request::new(SyncRequest { contexts: vec![] });
     request
@@ -144,10 +143,9 @@ async fn sync_with_invalid_key_returns_unauthenticated(pool: sqlx::PgPool) {
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
     );
 
-    let mut client =
-        FlagSyncServiceClient::connect(format!("http://{addr}"))
-            .await
-            .unwrap();
+    let mut client = FlagSyncServiceClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap();
 
     let mut request = tonic::Request::new(SyncRequest { contexts: vec![] });
     request
@@ -177,10 +175,9 @@ async fn sync_with_missing_key_returns_unauthenticated(pool: sqlx::PgPool) {
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener)),
     );
 
-    let mut client =
-        FlagSyncServiceClient::connect(format!("http://{addr}"))
-            .await
-            .unwrap();
+    let mut client = FlagSyncServiceClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap();
 
     // No x-sdk-key header
     let request = tonic::Request::new(SyncRequest { contexts: vec![] });

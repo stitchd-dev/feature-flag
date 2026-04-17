@@ -13,7 +13,10 @@ pub struct SdkGrpcClient {
 
 impl SdkGrpcClient {
     pub fn new(grpc_url: impl Into<String>, sdk_key: impl Into<String>) -> Self {
-        Self { grpc_url: grpc_url.into(), sdk_key: sdk_key.into() }
+        Self {
+            grpc_url: grpc_url.into(),
+            sdk_key: sdk_key.into(),
+        }
     }
 
     pub async fn fetch_definitions(&self) -> Result<SyncResponse, SdkError> {
@@ -22,9 +25,10 @@ impl SdkGrpcClient {
             .map_err(|e| SdkError::GrpcTransport(e.to_string()))?;
 
         let mut request = tonic::Request::new(SyncRequest { contexts: vec![] });
-        request
-            .metadata_mut()
-            .insert("x-sdk-key", self.sdk_key.parse().expect("sdk_key must be valid ASCII"));
+        request.metadata_mut().insert(
+            "x-sdk-key",
+            self.sdk_key.parse().expect("sdk_key must be valid ASCII"),
+        );
 
         let response = client.sync(request).await?;
         Ok(response.into_inner())

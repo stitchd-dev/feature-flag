@@ -9,9 +9,9 @@ pub mod cache;
 pub mod client;
 pub mod config;
 pub mod error;
-pub mod lfu;
 mod grpc_client;
 mod http_client;
+pub mod lfu;
 
 pub use client::SdkClient;
 pub use config::{LfuConfig, SdkConfig};

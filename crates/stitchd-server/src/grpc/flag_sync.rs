@@ -33,7 +33,8 @@ pub struct FlagSyncServiceImpl {
 
 impl FlagSyncServiceImpl {
     /// Create a new instance backed by the given app state.
-    pub fn new(state: AppState) -> Self {
+    #[must_use]
+    pub const fn new(state: AppState) -> Self {
         Self { state }
     }
 
@@ -64,10 +65,8 @@ impl FlagSyncServiceImpl {
 
 #[tonic::async_trait]
 impl FlagSyncService for FlagSyncServiceImpl {
-    async fn sync(
-        &self,
-        request: Request<SyncRequest>,
-    ) -> Result<Response<SyncResponse>, Status> {
+    #[allow(clippy::too_many_lines)]
+    async fn sync(&self, request: Request<SyncRequest>) -> Result<Response<SyncResponse>, Status> {
         let env_id = self.authenticate(request.metadata()).await?;
 
         // ── Load flags ──────────────────────────────────────────────────────
@@ -95,10 +94,8 @@ impl FlagSyncService for FlagSyncServiceImpl {
                 .map_err(|e| Status::internal(e.to_string()))?;
 
             // Build a variant_id → variant_key lookup for percentage outputs.
-            let variant_key_map: HashMap<_, _> = variants
-                .iter()
-                .map(|v| (v.id, v.key.clone()))
-                .collect();
+            let variant_key_map: HashMap<_, _> =
+                variants.iter().map(|v| (v.id, v.key.clone())).collect();
 
             let proto_variants = variants
                 .into_iter()
@@ -146,7 +143,7 @@ impl FlagSyncService for FlagSyncServiceImpl {
                     rule_segments.push(RuleSegment {
                         key: seg.key.clone(),
                         context_type: String::new(),
-                        rule_payload: rule_payload.into(),
+                        rule_payload,
                         id: seg.id.to_string(),
                     });
                 }
@@ -203,7 +200,7 @@ fn domain_variant_to_proto(v: stitchd_core::flag::Variant) -> ProtoVariant {
     ProtoVariant { key: v.key, value }
 }
 
-fn domain_value_type_to_proto(vt: stitchd_core::variants::FlagValueType) -> FlagValueType {
+const fn domain_value_type_to_proto(vt: stitchd_core::variants::FlagValueType) -> FlagValueType {
     use stitchd_core::variants::FlagValueType as DomainFVT;
     match vt {
         DomainFVT::Bool => FlagValueType::Bool,
@@ -221,16 +218,11 @@ fn domain_flag_rule_to_proto(
     use stitchd_proto::flags::v1::flag_rule::Output;
 
     // Serialise the condition expression as opaque JSON bytes.
-    let rule_payload = serde_json::to_vec(&fr.rule.condition)
-        .unwrap_or_default()
-        .into();
+    let rule_payload = serde_json::to_vec(&fr.rule.condition).unwrap_or_default();
 
     let output = match &fr.rule.output {
         RuleOutput::Variant(variant_id) => {
-            let key = variant_key_map
-                .get(variant_id)
-                .cloned()
-                .unwrap_or_default();
+            let key = variant_key_map.get(variant_id).cloned().unwrap_or_default();
             Some(Output::VariantKey(key))
         }
         RuleOutput::Percentage { targets, weights } => {
@@ -284,11 +276,26 @@ mod tests {
 
     #[test]
     fn domain_value_type_maps_all_variants() {
-        assert_eq!(domain_value_type_to_proto(DomainFVT::Bool), FlagValueType::Bool);
-        assert_eq!(domain_value_type_to_proto(DomainFVT::Int), FlagValueType::Int);
-        assert_eq!(domain_value_type_to_proto(DomainFVT::Double), FlagValueType::Double);
-        assert_eq!(domain_value_type_to_proto(DomainFVT::Str), FlagValueType::String);
-        assert_eq!(domain_value_type_to_proto(DomainFVT::Json), FlagValueType::Json);
+        assert_eq!(
+            domain_value_type_to_proto(DomainFVT::Bool),
+            FlagValueType::Bool
+        );
+        assert_eq!(
+            domain_value_type_to_proto(DomainFVT::Int),
+            FlagValueType::Int
+        );
+        assert_eq!(
+            domain_value_type_to_proto(DomainFVT::Double),
+            FlagValueType::Double
+        );
+        assert_eq!(
+            domain_value_type_to_proto(DomainFVT::Str),
+            FlagValueType::String
+        );
+        assert_eq!(
+            domain_value_type_to_proto(DomainFVT::Json),
+            FlagValueType::Json
+        );
     }
 
     #[test]
@@ -300,12 +307,10 @@ mod tests {
         };
         let proto = domain_variant_to_proto(v);
         assert_eq!(proto.key, "on");
-        assert!(
-            matches!(
-                proto.value.unwrap().value,
-                Some(ProtoVariantValueInner::BoolValue(true))
-            )
-        );
+        assert!(matches!(
+            proto.value.unwrap().value,
+            Some(ProtoVariantValueInner::BoolValue(true))
+        ));
     }
 
     #[test]

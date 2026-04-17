@@ -64,7 +64,12 @@ impl DefinitionCache {
         let list_segments = build_list_segments(&resp.list_segments)?;
         let flags = build_flags(resp.flags)?;
 
-        Ok(Self { flags, rule_segments, list_segments, environment_id })
+        Ok(Self {
+            flags,
+            rule_segments,
+            list_segments,
+            environment_id,
+        })
     }
 }
 
@@ -76,8 +81,9 @@ fn build_rule_segments(
         if rs.id.is_empty() {
             continue;
         }
-        let uuid = Uuid::parse_str(&rs.id)
-            .map_err(|e| SdkError::Deserialization(format!("invalid segment id '{}': {e}", rs.id)))?;
+        let uuid = Uuid::parse_str(&rs.id).map_err(|e| {
+            SdkError::Deserialization(format!("invalid segment id '{}': {e}", rs.id))
+        })?;
         let seg_id = SegmentId::from_uuid(uuid);
         let rules: Vec<Rule> = serde_json::from_slice(&rs.rule_payload)
             .map_err(|e| SdkError::Deserialization(format!("segment rule_payload: {e}")))?;
@@ -94,14 +100,18 @@ fn build_list_segments(
         if ls.id.is_empty() {
             continue;
         }
-        let uuid = Uuid::parse_str(&ls.id)
-            .map_err(|e| SdkError::Deserialization(format!("invalid segment id '{}': {e}", ls.id)))?;
+        let uuid = Uuid::parse_str(&ls.id).map_err(|e| {
+            SdkError::Deserialization(format!("invalid segment id '{}': {e}", ls.id))
+        })?;
         let seg_id = SegmentId::from_uuid(uuid);
-        map.insert(seg_id, SdkListSegmentMeta {
-            key: ls.key.clone(),
-            id: seg_id,
-            context_type: ls.context_type.clone(),
-        });
+        map.insert(
+            seg_id,
+            SdkListSegmentMeta {
+                key: ls.key.clone(),
+                id: seg_id,
+                context_type: ls.context_type.clone(),
+            },
+        );
     }
     Ok(map)
 }
@@ -145,7 +155,10 @@ fn build_flag_def(flag: FeatureFlag) -> Result<SdkFlagDef, SdkError> {
                     .iter()
                     .flat_map(|(ctx_type, spec)| {
                         if spec.parameter_names.is_empty() {
-                            vec![PercentageTarget { context_type: ctx_type.clone(), field: TargetField::Key }]
+                            vec![PercentageTarget {
+                                context_type: ctx_type.clone(),
+                                field: TargetField::Key,
+                            }]
                         } else {
                             spec.parameter_names
                                 .iter()
@@ -162,7 +175,9 @@ fn build_flag_def(flag: FeatureFlag) -> Result<SdkFlagDef, SdkError> {
                     .buckets
                     .iter()
                     .filter_map(|b| {
-                        key_to_vid.get(&b.variant_key).map(|&vid| (vid, b.weight_milli))
+                        key_to_vid
+                            .get(&b.variant_key)
+                            .map(|&vid| (vid, b.weight_milli))
                     })
                     .collect();
 
@@ -171,10 +186,19 @@ fn build_flag_def(flag: FeatureFlag) -> Result<SdkFlagDef, SdkError> {
             None => continue,
         };
 
-        rules.push(Rule { id: RuleId::new(), condition, output });
+        rules.push(Rule {
+            id: RuleId::new(),
+            condition,
+            output,
+        });
     }
 
-    Ok(SdkFlagDef { key: flag.key, enabled: flag.enabled, rules, variant_map })
+    Ok(SdkFlagDef {
+        key: flag.key,
+        enabled: flag.enabled,
+        rules,
+        variant_map,
+    })
 }
 
 fn proto_variant_value_to_domain(
@@ -232,7 +256,9 @@ mod tests {
         stitchd_proto::flags::v1::Variant {
             key: key.to_string(),
             value: Some(stitchd_proto::flags::v1::VariantValue {
-                value: Some(stitchd_proto::flags::v1::variant_value::Value::BoolValue(val)),
+                value: Some(stitchd_proto::flags::v1::variant_value::Value::BoolValue(
+                    val,
+                )),
             }),
         }
     }
@@ -258,9 +284,7 @@ mod tests {
         let sid = SegmentId::new();
         let rule = Rule {
             id: RuleId::new(),
-            condition: ConditionExpr::And(vec![
-                ConditionExpr::Leaf(Condition::InSegment(sid)),
-            ]),
+            condition: ConditionExpr::And(vec![ConditionExpr::Leaf(Condition::InSegment(sid))]),
             output: RuleOutput::Variant(VariantId::new()),
         };
         let ids = collect_segment_ids(&[rule]);
@@ -273,10 +297,15 @@ mod tests {
             key: "my-flag".to_string(),
             enabled: true,
             value_type: 1,
-            variants: vec![bool_variant_proto("on", true), bool_variant_proto("off", false)],
+            variants: vec![
+                bool_variant_proto("on", true),
+                bool_variant_proto("off", false),
+            ],
             rules: vec![stitchd_proto::flags::v1::FlagRule {
                 rule_payload: serde_json::to_vec(&always_true_condition()).unwrap(),
-                output: Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey("on".to_string())),
+                output: Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey(
+                    "on".to_string(),
+                )),
             }],
         };
 
@@ -307,9 +336,6 @@ mod tests {
             environment_id: env_uuid.to_string(),
         };
         let cache = DefinitionCache::from_sync_response(resp).unwrap();
-        assert_eq!(
-            cache.environment_id.unwrap().as_uuid(),
-            env_uuid
-        );
+        assert_eq!(cache.environment_id.unwrap().as_uuid(), env_uuid);
     }
 }

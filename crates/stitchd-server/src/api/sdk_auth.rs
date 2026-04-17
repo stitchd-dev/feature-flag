@@ -46,6 +46,7 @@ impl IntoResponse for SdkAuthError {
 }
 
 /// Hash a raw SDK key with SHA-256, returning a lowercase hex string.
+#[must_use]
 pub fn hash_sdk_key(raw: &str) -> String {
     let digest = Sha256::digest(raw.as_bytes());
     format!("{digest:x}")
@@ -82,9 +83,7 @@ impl FromRequestParts<AppState> for SdkAuth {
 
         // SHA-256 hash the presented key and compare against stored hashes.
         let presented_hash = hash_sdk_key(&raw_key);
-        let authenticated = active_keys
-            .iter()
-            .any(|k| k.key_hash == presented_hash);
+        let authenticated = active_keys.iter().any(|k| k.key_hash == presented_hash);
 
         if authenticated {
             Ok(Self {

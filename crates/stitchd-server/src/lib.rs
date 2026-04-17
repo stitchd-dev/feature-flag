@@ -16,7 +16,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use sqlx::PgPool;
 use std::sync::Arc;
-use stitchd_db::{FlagRepository, SegmentRepository, SdkKeyRepository, VariantRepository};
+use stitchd_db::{FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository};
 
 /// Shared application state.
 #[derive(Clone)]

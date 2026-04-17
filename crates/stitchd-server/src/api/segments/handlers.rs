@@ -237,7 +237,12 @@ pub async fn list_check_membership(
 
     let memberships = state
         .segment_repo
-        .check_list_membership(env_id, &req.context_type, &req.context_key, &req.segment_keys)
+        .check_list_membership(
+            env_id,
+            &req.context_type,
+            &req.context_key,
+            &req.segment_keys,
+        )
         .await?;
 
     Ok(Json(ListCheckResponse { memberships }))
@@ -256,7 +261,9 @@ pub async fn batch_list_check_membership(
     Json(req): Json<BatchListCheckRequest>,
 ) -> Result<Json<BatchListCheckResponse>, ApiError> {
     if req.segment_keys.is_empty() || req.contexts.is_empty() {
-        return Ok(Json(BatchListCheckResponse { results: Vec::new() }));
+        return Ok(Json(BatchListCheckResponse {
+            results: Vec::new(),
+        }));
     }
 
     let ctx_pairs: Vec<(String, String)> = req

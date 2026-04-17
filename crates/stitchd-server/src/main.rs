@@ -2,11 +2,7 @@
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
 use stitchd_proto::flags::v1::flag_sync_service_server::FlagSyncServiceServer;
-use stitchd_server::{
-    AppState, build_router,
-    grpc::flag_sync::FlagSyncServiceImpl,
-    telemetry,
-};
+use stitchd_server::{AppState, build_router, grpc::flag_sync::FlagSyncServiceImpl, telemetry};
 use tracing::info;
 
 const SERVICE_NAME: &str = "stitchd-server";
@@ -54,9 +50,10 @@ async fn main() -> Result<()> {
             pool.clone(),
             audit_logger.clone(),
         )),
-        sdk_key_repo: std::sync::Arc::new(
-            stitchd_db::repository::pg::PgSdkKeyRepository::new(pool.clone(), audit_logger),
-        ),
+        sdk_key_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgSdkKeyRepository::new(
+            pool.clone(),
+            audit_logger,
+        )),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")

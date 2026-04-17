@@ -15,7 +15,11 @@ pub struct SdkConfig {
 }
 
 impl SdkConfig {
-    pub fn new(grpc_url: impl Into<String>, http_url: impl Into<String>, sdk_key: impl Into<String>) -> Self {
+    pub fn new(
+        grpc_url: impl Into<String>,
+        http_url: impl Into<String>,
+        sdk_key: impl Into<String>,
+    ) -> Self {
         Self {
             grpc_url: grpc_url.into(),
             http_url: http_url.into(),

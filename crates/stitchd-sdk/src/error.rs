@@ -9,7 +9,7 @@ pub enum SdkError {
     GrpcTransport(String),
 
     #[error("gRPC status: {0}")]
-    GrpcStatus(#[from] tonic::Status),
+    GrpcStatus(Box<tonic::Status>),
 
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
@@ -25,4 +25,10 @@ pub enum SdkError {
 
     #[error("rule engine error: {0}")]
     RuleEngine(#[from] stitchd_core::rule_engine::RuleEngineError),
+}
+
+impl From<tonic::Status> for SdkError {
+    fn from(s: tonic::Status) -> Self {
+        SdkError::GrpcStatus(Box::new(s))
+    }
 }

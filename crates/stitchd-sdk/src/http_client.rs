@@ -76,7 +76,11 @@ impl SdkHttpClient {
             self.http_url, environment_id
         );
 
-        let body = ListCheckRequest { context_type, context_key, segment_keys };
+        let body = ListCheckRequest {
+            context_type,
+            context_key,
+            segment_keys,
+        };
         let resp = self
             .inner
             .post(&url)
@@ -111,10 +115,16 @@ impl SdkHttpClient {
 
         let ctx_refs: Vec<BatchCtx<'_>> = contexts
             .iter()
-            .map(|(ct, ck)| BatchCtx { context_type: ct.as_str(), context_key: ck.as_str() })
+            .map(|(ct, ck)| BatchCtx {
+                context_type: ct.as_str(),
+                context_key: ck.as_str(),
+            })
             .collect();
 
-        let body = BatchListCheckRequest { contexts: ctx_refs, segment_keys };
+        let body = BatchListCheckRequest {
+            contexts: ctx_refs,
+            segment_keys,
+        };
 
         let resp = self
             .inner
@@ -131,7 +141,11 @@ impl SdkHttpClient {
         for entry in resp.results {
             for (seg_key, is_member) in entry.memberships {
                 out.insert(
-                    (entry.context_type.clone(), entry.context_key.clone(), seg_key),
+                    (
+                        entry.context_type.clone(),
+                        entry.context_key.clone(),
+                        seg_key,
+                    ),
                     is_member,
                 );
             }

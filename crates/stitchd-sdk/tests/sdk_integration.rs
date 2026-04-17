@@ -10,7 +10,10 @@ use chrono::Utc;
 use stitchd_core::{
     context::Context,
     flag::{FlagRecord, FlagRule, FlagValueType},
-    id::{EnvironmentId, FlagId, FlagKey, OrganisationId, ProjectId, RuleId, SdkKeyId, SegmentId, VariantId},
+    id::{
+        EnvironmentId, FlagId, FlagKey, OrganisationId, ProjectId, RuleId, SdkKeyId, SegmentId,
+        VariantId,
+    },
     rule_engine::{
         condition::Condition,
         types::{ConditionExpr, Rule, RuleOutput},
@@ -115,7 +118,11 @@ async fn setup(pool: sqlx::PgPool) -> (SdkConfig, EnvironmentId) {
     variant_repo
         .create(
             bool_flag_id,
-            &Variant { id: on_vid, key: "on".into(), value: VariantValue::BoolValue(true) },
+            &Variant {
+                id: on_vid,
+                key: "on".into(),
+                value: VariantValue::BoolValue(true),
+            },
         )
         .await
         .unwrap();
@@ -220,7 +227,9 @@ async fn setup(pool: sqlx::PgPool) -> (SdkConfig, EnvironmentId) {
     tokio::spawn(
         tonic::transport::Server::builder()
             .add_service(grpc_svc)
-            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(grpc_listener)),
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(
+                grpc_listener,
+            )),
     );
 
     // ── Spin up HTTP server ─────────────────────────────────────────────────
@@ -322,8 +331,10 @@ async fn list_eval_errors_when_http_unreachable(pool: sqlx::PgPool) {
 #[sqlx::test(migrations = "../stitchd-db/migrations")]
 async fn lfu_warm_context_returns_correct_result(pool: sqlx::PgPool) {
     let (mut config, _) = setup(pool).await;
-    config.lfu =
-        Some(stitchd_sdk::LfuConfig { capacity: 10, window: Duration::from_secs(60) });
+    config.lfu = Some(stitchd_sdk::LfuConfig {
+        capacity: 10,
+        window: Duration::from_secs(60),
+    });
     config.poll_interval = Duration::from_millis(200);
 
     let client = SdkClient::init(config).await.unwrap();
