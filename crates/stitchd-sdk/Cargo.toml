@@ -11,6 +11,11 @@ stitchd-core = { path = "../stitchd-core" }
 stitchd-proto = { path = "../stitchd-proto" }
 tonic = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
+uuid = { workspace = true }

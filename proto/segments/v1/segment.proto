@@ -21,6 +21,8 @@ message RuleSegment {
   string context_type = 2;
   // Opaque serialised rule payload — parsed by the client rule engine.
   bytes  rule_payload = 3;
+  // UUID of the segment — used by the SDK to correlate ConditionExpr references.
+  string id           = 4;
 }
 
 // --- List segment metadata (sync payload) ---
@@ -35,6 +37,8 @@ message ListSegmentMeta {
   string key          = 1;
   // The context type this segment applies to (e.g. "user", "org").
   string context_type = 2;
+  // UUID of the segment — used by the SDK to correlate ConditionExpr references.
+  string id           = 3;
 }
 
 // --- Sync payload ---

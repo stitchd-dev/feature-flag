@@ -41,19 +41,19 @@
 
 ## Phase 3: SDK Client Core (Definitions + Rule-Based Evaluation)
 
-- [ ] Task 1: Define SDK config and cache types
+- [x] Task 1: Define SDK config and cache types
   - `SdkConfig`, `LfuConfig`
   - `DefinitionCache { flags, rule_segments, list_segments_meta }`
 
-- [ ] Task 2: gRPC client + `fetch_definitions()`
+- [x] Task 2: gRPC client + `fetch_definitions()`
   - Tonic channel, inject `x-sdk-key` metadata
   - Deserialize proto → DefinitionCache
 
-- [ ] Task 3: `SdkClient::init()` + background polling task
+- [x] Task 3: `SdkClient::init()` + background polling task
   - Block on first `fetch_definitions()`, spawn polling loop
   - `CancellationToken` drops polling task on `SdkClient` drop
 
-- [ ] Task 4: `evaluate()` core — rule-based segments + list-check fallback
+- [x] Task 4: `evaluate()` core — rule-based segments + list-check fallback
   - Local rule evaluation via `stitchd-core`
   - For list segments: single `list-check` API call (no LFU yet)
 

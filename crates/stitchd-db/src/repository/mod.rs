@@ -125,6 +125,11 @@ pub trait SdkKeyRepository: Send + Sync {
         &self,
         environment_id: EnvironmentId,
     ) -> Result<Vec<SdkKey>, RepositoryError>;
+
+    /// Find an active SDK key by its stored hash (for gRPC auth where env_id is unknown).
+    ///
+    /// Returns [`RepositoryError::NotFound`] if no active key with that hash exists.
+    async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

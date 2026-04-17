@@ -1,7 +1,12 @@
 //! Stitchd server binary entry point.
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
-use stitchd_server::{AppState, build_router, telemetry};
+use stitchd_proto::flags::v1::flag_sync_service_server::FlagSyncServiceServer;
+use stitchd_server::{
+    AppState, build_router,
+    grpc::flag_sync::FlagSyncServiceImpl,
+    telemetry,
+};
 use tracing::info;
 
 const SERVICE_NAME: &str = "stitchd-server";
@@ -59,23 +64,39 @@ async fn main() -> Result<()> {
         .and_then(|p| p.parse().ok())
         .unwrap_or(8080);
 
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], http_port));
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to bind to {addr}"))?;
+    let grpc_port: u16 = std::env::var("GRPC_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(9090);
 
-    info!(address = %addr, "HTTP server listening");
+    let http_addr = std::net::SocketAddr::from(([0, 0, 0, 0], http_port));
+    let grpc_addr = std::net::SocketAddr::from(([0, 0, 0, 0], grpc_port));
+
+    let listener = tokio::net::TcpListener::bind(http_addr)
+        .await
+        .with_context(|| format!("failed to bind HTTP to {http_addr}"))?;
+
+    info!(address = %http_addr, "HTTP server listening");
+    info!(address = %grpc_addr, "gRPC server listening");
 
     // Run initial maintenance and spawn background task
     stitchd_server::startup::run_partman_maintenance(&pool).await;
     stitchd_server::startup::spawn_maintenance_task(pool);
 
-    let app = build_router(state);
+    let app = build_router(state.clone());
+    let grpc_svc = FlagSyncServiceServer::new(FlagSyncServiceImpl::new(state));
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("HTTP server error")?;
+    // Run HTTP and gRPC servers concurrently; stop both when either receives shutdown.
+    tokio::select! {
+        result = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()) => {
+            result.context("HTTP server error")?;
+        }
+        result = tonic::transport::Server::builder()
+            .add_service(grpc_svc)
+            .serve_with_shutdown(grpc_addr, shutdown_signal()) => {
+            result.context("gRPC server error")?;
+        }
+    }
 
     info!("shutting down");
     telemetry::shutdown_tracing(&tracer_provider);

@@ -4,6 +4,8 @@
 
 /// API routes and handlers.
 pub mod api;
+/// gRPC service implementations.
+pub mod grpc;
 /// Server startup and maintenance tasks.
 pub mod startup;
 /// Telemetry and observability setup.

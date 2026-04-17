@@ -147,6 +147,7 @@ impl FlagSyncService for FlagSyncServiceImpl {
                         key: seg.key.clone(),
                         context_type: String::new(),
                         rule_payload: rule_payload.into(),
+                        id: seg.id.to_string(),
                     });
                 }
                 SegmentType::List => {
@@ -162,6 +163,7 @@ impl FlagSyncService for FlagSyncServiceImpl {
                         list_segments.push(ListSegmentMeta {
                             key: seg.key.clone(),
                             context_type: context_type.clone(),
+                            id: seg.id.to_string(),
                         });
                     }
                 }
@@ -173,6 +175,7 @@ impl FlagSyncService for FlagSyncServiceImpl {
             server_timestamp_ms: chrono::Utc::now().timestamp_millis(),
             rule_segments,
             list_segments,
+            environment_id: env_id.to_string(),
         }))
     }
 }

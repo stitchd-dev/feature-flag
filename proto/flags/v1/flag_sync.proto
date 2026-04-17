@@ -95,6 +95,8 @@ message SyncResponse {
   // List-based segment metadata (key + context_type only, no list entries).
   // The SDK uses these to identify which segments require a list-check API call.
   repeated stitchd.segments.v1.ListSegmentMeta list_segments = 4;
+  // UUID of the resolved environment — SDK uses this in REST list-check URLs.
+  string environment_id = 5;
 }
 
 service FlagSyncService {

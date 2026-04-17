@@ -154,6 +154,34 @@ impl SdkKeyRepository for PgSdkKeyRepository {
             .collect()
     }
 
+    async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
+        use sqlx::Row as _;
+        let row = sqlx::query(
+            r"
+            SELECT id, environment_id, key_hash, is_active, created_at, revoked_at
+            FROM sdk_keys
+            WHERE key_hash = $1 AND is_active = TRUE
+            LIMIT 1
+            ",
+        )
+        .bind(key_hash)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?
+        .ok_or_else(|| RepositoryError::NotFound {
+            id: "<sdk_key_by_hash>".to_string(),
+        })?;
+
+        Ok(SdkKey {
+            id: SdkKeyId::from_uuid(row.get("id")),
+            environment_id: EnvironmentId::from_uuid(row.get("environment_id")),
+            key_hash: row.get("key_hash"),
+            is_active: row.get("is_active"),
+            created_at: row.get("created_at"),
+            revoked_at: row.get("revoked_at"),
+        })
+    }
+
     async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {
         // Fetch the key's environment so we can count remaining active keys.
         let key = sqlx::query!(
