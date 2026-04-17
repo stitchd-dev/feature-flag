@@ -34,3 +34,36 @@ impl SdkGrpcClient {
         Ok(response.into_inner())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_sets_fields() {
+        let client = SdkGrpcClient::new("http://grpc:9090", "my-sdk-key");
+        assert_eq!(client.grpc_url, "http://grpc:9090");
+        assert_eq!(client.sdk_key, "my-sdk-key");
+    }
+
+    #[test]
+    fn new_accepts_owned_strings() {
+        let url = String::from("http://localhost:9090");
+        let key = String::from("abc123");
+        let client = SdkGrpcClient::new(url, key);
+        assert_eq!(client.grpc_url, "http://localhost:9090");
+        assert_eq!(client.sdk_key, "abc123");
+    }
+
+    #[tokio::test]
+    async fn fetch_definitions_fails_when_server_unreachable() {
+        // Nothing listening on this port, so gRPC connect should fail.
+        let client = SdkGrpcClient::new("http://127.0.0.1:19999", "key");
+        let result = client.fetch_definitions().await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            SdkError::GrpcTransport(_) => {}
+            other => panic!("expected GrpcTransport, got {other:?}"),
+        }
+    }
+}
