@@ -61,15 +61,15 @@
 
 ## Phase 4: LFU Segment Membership Cache
 
-- [ ] Task 1: LFU frequency tracker
+- [x] Task 1: LFU frequency tracker
   - Track evaluation frequency per `context_key` within `window`
   - Identify hot set (top `capacity` contexts)
 
-- [ ] Task 2: Proactive batch refresh
+- [x] Task 2: Proactive batch refresh
   - On each poll cycle, call `list-check/batch` for hot contexts × all list segments
   - Store results in `HashMap<(ContextKey, SegmentKey), bool>`
 
-- [ ] Task 3: Wire LFU into `evaluate()`
+- [x] Task 3: Wire LFU into `evaluate()`
   - Check LFU cache before calling `list-check` API
   - Update frequency counter on each `evaluate()` call
   - Invalidate entries for segments whose definition changed in last poll

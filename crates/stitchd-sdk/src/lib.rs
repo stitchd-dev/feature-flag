@@ -9,6 +9,7 @@ pub mod cache;
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod lfu;
 mod grpc_client;
 mod http_client;
 
