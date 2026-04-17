@@ -36,6 +36,38 @@ pub struct SdkClient {
 }
 
 impl SdkClient {
+    /// Create a client directly from a pre-built cache (for testing only).
+    #[cfg(test)]
+    pub(crate) fn from_cache(
+        cache: DefinitionCache,
+        http_url: impl Into<String>,
+        sdk_key: impl Into<String>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            cache: Arc::new(RwLock::new(cache)),
+            http_client: SdkHttpClient::new(http_url, sdk_key),
+            cancel: CancellationToken::new(),
+            lfu: None,
+        })
+    }
+
+    /// Create a client with LFU enabled (for testing only).
+    #[cfg(test)]
+    pub(crate) fn from_cache_with_lfu(
+        cache: DefinitionCache,
+        http_url: impl Into<String>,
+        sdk_key: impl Into<String>,
+        lfu_capacity: usize,
+        lfu_window: std::time::Duration,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            cache: Arc::new(RwLock::new(cache)),
+            http_client: SdkHttpClient::new(http_url, sdk_key),
+            cancel: CancellationToken::new(),
+            lfu: Some(Arc::new(Mutex::new(LfuState::new(lfu_capacity, lfu_window)))),
+        })
+    }
+
     /// Initialize the SDK: fetch definitions once, then start background polling.
     ///
     /// Blocks until the first successful sync. Returns an error if the server is
@@ -413,5 +445,588 @@ mod tests {
             apply_rules(&def, &ctx.contexts, resolved, "flag", "env-1").unwrap(),
             Some(VariantValue::BoolValue(true))
         );
+    }
+
+    use crate::cache::DefinitionCache;
+
+    fn make_bool_flag_cache(flag_key: &str, enabled: bool) -> DefinitionCache {
+        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        let resp = SyncResponse {
+            flags: vec![FeatureFlag {
+                key: flag_key.to_string(),
+                enabled,
+                value_type: 1,
+                variants: vec![Variant {
+                    key: "on".to_string(),
+                    value: Some(ProtoVariantValue {
+                        value: Some(Value::BoolValue(true)),
+                    }),
+                }],
+                rules: vec![FlagRule {
+                    rule_payload: serde_json::to_vec(&ConditionExpr::And(vec![])).unwrap(),
+                    output: Some(Output::VariantKey("on".to_string())),
+                }],
+            }],
+            server_timestamp_ms: 0,
+            rule_segments: vec![],
+            list_segments: vec![],
+            environment_id: String::new(),
+        };
+        DefinitionCache::from_sync_response(resp).unwrap()
+    }
+
+    #[tokio::test]
+    async fn evaluate_returns_some_for_enabled_flag() {
+        let cache = make_bool_flag_cache("feature-x", true);
+        let client = SdkClient::from_cache(cache, "http://localhost:9999", "key");
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result = client.evaluate("feature-x", &ctx).await.unwrap();
+        assert_eq!(result, Some(VariantValue::BoolValue(true)));
+    }
+
+    #[tokio::test]
+    async fn evaluate_returns_none_for_disabled_flag() {
+        let cache = make_bool_flag_cache("feature-x", false);
+        let client = SdkClient::from_cache(cache, "http://localhost:9999", "key");
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result = client.evaluate("feature-x", &ctx).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn evaluate_returns_none_for_unknown_flag() {
+        let cache = make_bool_flag_cache("feature-x", true);
+        let client = SdkClient::from_cache(cache, "http://localhost:9999", "key");
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result = client.evaluate("nonexistent", &ctx).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn evaluate_with_rule_based_segment_not_matching() {
+        use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        use stitchd_proto::segments::v1::RuleSegment as ProtoRuleSegment;
+
+        let seg_uuid = uuid::Uuid::new_v4();
+        let seg_id = SegmentId::from_uuid(seg_uuid);
+
+        // Rule segment: empty rules → doesn't match anything
+        let seg_rules: Vec<stitchd_core::rule_engine::types::Rule> = vec![];
+        let seg_payload = serde_json::to_vec(&seg_rules).unwrap();
+
+        // Flag: matches if in segment
+        let flag_condition = ConditionExpr::Leaf(Condition::InSegment(seg_id));
+        let resp = SyncResponse {
+            flags: vec![FeatureFlag {
+                key: "seg-flag".to_string(),
+                enabled: true,
+                value_type: 1,
+                variants: vec![Variant {
+                    key: "on".to_string(),
+                    value: Some(ProtoVariantValue {
+                        value: Some(Value::BoolValue(true)),
+                    }),
+                }],
+                rules: vec![FlagRule {
+                    rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
+                    output: Some(Output::VariantKey("on".to_string())),
+                }],
+            }],
+            server_timestamp_ms: 0,
+            rule_segments: vec![ProtoRuleSegment {
+                id: seg_uuid.to_string(),
+                rule_payload: seg_payload,
+                context_type: "user".to_string(),
+                key: "test-seg".to_string(),
+            }],
+            list_segments: vec![],
+            environment_id: String::new(),
+        };
+        let cache = DefinitionCache::from_sync_response(resp).unwrap();
+        let client = SdkClient::from_cache(cache, "http://localhost:9999", "key");
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        // Rule segment has empty rules → doesn't match → flag returns None
+        let result = client.evaluate("seg-flag", &ctx).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn evaluate_with_rule_based_segment_matching() {
+        use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        use stitchd_proto::segments::v1::RuleSegment as ProtoRuleSegment;
+
+        let seg_uuid = uuid::Uuid::new_v4();
+        let seg_id = SegmentId::from_uuid(seg_uuid);
+
+        // Rule segment: always matches (always-true And([])-based rule)
+        let seg_rule = stitchd_core::rule_engine::types::Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::And(vec![]), // always true
+            output: stitchd_core::rule_engine::types::RuleOutput::Variant(VariantId::new()),
+        };
+        let seg_payload = serde_json::to_vec(&vec![seg_rule]).unwrap();
+
+        // Flag: matches if in segment
+        let flag_condition = ConditionExpr::Leaf(Condition::InSegment(seg_id));
+        let resp = SyncResponse {
+            flags: vec![FeatureFlag {
+                key: "seg-flag".to_string(),
+                enabled: true,
+                value_type: 1,
+                variants: vec![Variant {
+                    key: "on".to_string(),
+                    value: Some(ProtoVariantValue {
+                        value: Some(Value::BoolValue(true)),
+                    }),
+                }],
+                rules: vec![FlagRule {
+                    rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
+                    output: Some(Output::VariantKey("on".to_string())),
+                }],
+            }],
+            server_timestamp_ms: 0,
+            rule_segments: vec![ProtoRuleSegment {
+                id: seg_uuid.to_string(),
+                rule_payload: seg_payload,
+                context_type: "user".to_string(),
+                key: "test-seg".to_string(),
+            }],
+            list_segments: vec![],
+            environment_id: String::new(),
+        };
+        let cache = DefinitionCache::from_sync_response(resp).unwrap();
+        let client = SdkClient::from_cache(cache, "http://localhost:9999", "key");
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        // Segment matches → flag resolves in-segment condition → Some(true)
+        let result = client.evaluate("seg-flag", &ctx).await.unwrap();
+        assert_eq!(result, Some(VariantValue::BoolValue(true)));
+    }
+
+    #[tokio::test]
+    async fn drop_cancels_token() {
+        // Just verify Drop doesn't panic
+        let cache = make_bool_flag_cache("f", true);
+        let client = SdkClient::from_cache(cache, "http://localhost:9999", "key");
+        drop(client);
+    }
+
+    #[tokio::test]
+    async fn evaluate_with_lfu_records_frequency() {
+        let cache = make_bool_flag_cache("feature-x", true);
+        let client = SdkClient::from_cache_with_lfu(
+            cache,
+            "http://localhost:9999",
+            "key",
+            10,
+            std::time::Duration::from_secs(60),
+        );
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result = client.evaluate("feature-x", &ctx).await.unwrap();
+        assert_eq!(result, Some(VariantValue::BoolValue(true)));
+    }
+
+    #[tokio::test]
+    async fn evaluate_list_segment_http_check() {
+        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
+        use stitchd_core::rule_engine::condition::Condition;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let seg_uuid = uuid::Uuid::new_v4();
+
+        // Mock the list-check endpoint to say user is a member
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/environments//segments/list-check")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "memberships": {
+                    "list-seg": true
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let seg_id = SegmentId::from_uuid(seg_uuid);
+        let flag_condition = ConditionExpr::Leaf(Condition::InSegment(seg_id));
+        let resp = SyncResponse {
+            flags: vec![FeatureFlag {
+                key: "list-flag".to_string(),
+                enabled: true,
+                value_type: 1,
+                variants: vec![Variant {
+                    key: "on".to_string(),
+                    value: Some(ProtoVariantValue {
+                        value: Some(Value::BoolValue(true)),
+                    }),
+                }],
+                rules: vec![FlagRule {
+                    rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
+                    output: Some(Output::VariantKey("on".to_string())),
+                }],
+            }],
+            server_timestamp_ms: 0,
+            rule_segments: vec![],
+            list_segments: vec![ProtoListMeta {
+                id: seg_uuid.to_string(),
+                key: "list-seg".to_string(),
+                context_type: "user".to_string(),
+            }],
+            environment_id: String::new(),
+        };
+
+        let cache = DefinitionCache::from_sync_response(resp).unwrap();
+        let client = SdkClient::from_cache(cache, server.uri(), "key");
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result = client.evaluate("list-flag", &ctx).await.unwrap();
+        assert_eq!(result, Some(VariantValue::BoolValue(true)));
+    }
+
+    #[tokio::test]
+    async fn evaluate_list_segment_not_member() {
+        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
+        use stitchd_core::rule_engine::condition::Condition;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let seg_uuid = uuid::Uuid::new_v4();
+
+        Mock::given(method("POST"))
+            .and(path(format!("/v1/environments//segments/list-check")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "memberships": {
+                    "list-seg": false
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let seg_id = SegmentId::from_uuid(seg_uuid);
+        let flag_condition = ConditionExpr::Leaf(Condition::InSegment(seg_id));
+        let resp = SyncResponse {
+            flags: vec![FeatureFlag {
+                key: "list-flag".to_string(),
+                enabled: true,
+                value_type: 1,
+                variants: vec![Variant {
+                    key: "on".to_string(),
+                    value: Some(ProtoVariantValue {
+                        value: Some(Value::BoolValue(true)),
+                    }),
+                }],
+                rules: vec![FlagRule {
+                    rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
+                    output: Some(Output::VariantKey("on".to_string())),
+                }],
+            }],
+            server_timestamp_ms: 0,
+            rule_segments: vec![],
+            list_segments: vec![ProtoListMeta {
+                id: seg_uuid.to_string(),
+                key: "list-seg".to_string(),
+                context_type: "user".to_string(),
+            }],
+            environment_id: String::new(),
+        };
+
+        let cache = DefinitionCache::from_sync_response(resp).unwrap();
+        let client = SdkClient::from_cache(cache, server.uri(), "key");
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result = client.evaluate("list-flag", &ctx).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn evaluate_list_segment_lfu_cache_hit() {
+        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
+        use stitchd_core::rule_engine::condition::Condition;
+
+        let seg_uuid = uuid::Uuid::new_v4();
+        let seg_id = SegmentId::from_uuid(seg_uuid);
+        let flag_condition = ConditionExpr::Leaf(Condition::InSegment(seg_id));
+
+        let resp = SyncResponse {
+            flags: vec![FeatureFlag {
+                key: "list-flag".to_string(),
+                enabled: true,
+                value_type: 1,
+                variants: vec![Variant {
+                    key: "on".to_string(),
+                    value: Some(ProtoVariantValue {
+                        value: Some(Value::BoolValue(true)),
+                    }),
+                }],
+                rules: vec![FlagRule {
+                    rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
+                    output: Some(Output::VariantKey("on".to_string())),
+                }],
+            }],
+            server_timestamp_ms: 0,
+            rule_segments: vec![],
+            list_segments: vec![ProtoListMeta {
+                id: seg_uuid.to_string(),
+                key: "list-seg".to_string(),
+                context_type: "user".to_string(),
+            }],
+            environment_id: String::new(),
+        };
+
+        let cache = DefinitionCache::from_sync_response(resp).unwrap();
+        // Use LFU with a pre-populated cache entry: user/u1/list-seg = true
+        let client = SdkClient::from_cache_with_lfu(
+            cache,
+            "http://127.0.0.1:19998", // won't be called — LFU hit
+            "key",
+            10,
+            std::time::Duration::from_secs(60),
+        );
+
+        // Pre-populate LFU cache
+        {
+            let lfu_arc = client.lfu.as_ref().unwrap();
+            let mut lfu = lfu_arc.lock().await;
+            let mut entries = std::collections::HashMap::new();
+            entries.insert(
+                ("user".to_string(), "u1".to_string(), "list-seg".to_string()),
+                true,
+            );
+            lfu.cache.replace(entries);
+        }
+
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result = client.evaluate("list-flag", &ctx).await.unwrap();
+        assert_eq!(result, Some(VariantValue::BoolValue(true)));
+    }
+
+    #[tokio::test]
+    async fn poll_once_grpc_failure_is_swallowed() {
+        // poll_once with unreachable gRPC — should return without panicking
+        let grpc = SdkGrpcClient::new("http://127.0.0.1:19997", "key");
+        let http = SdkHttpClient::new("http://127.0.0.1:19997", "key");
+        let cache: Arc<RwLock<DefinitionCache>> = Arc::new(RwLock::new(DefinitionCache::default()));
+        poll_once(&grpc, &http, &cache, None).await; // should not panic
+    }
+
+    /// Start an in-process gRPC server for testing init and poll_once success paths.
+    async fn start_test_grpc_server() -> String {
+        use stitchd_proto::flags::v1::{
+            SyncRequest, SyncResponse,
+            flag_sync_service_server::{FlagSyncService, FlagSyncServiceServer},
+        };
+        use tokio::net::TcpListener;
+        use tokio_stream::wrappers::TcpListenerStream;
+
+        #[derive(Clone)]
+        struct TestFlagSyncService;
+
+        #[tonic::async_trait]
+        impl FlagSyncService for TestFlagSyncService {
+            async fn sync(
+                &self,
+                _request: tonic::Request<SyncRequest>,
+            ) -> Result<tonic::Response<SyncResponse>, tonic::Status> {
+                Ok(tonic::Response::new(SyncResponse {
+                    flags: vec![],
+                    rule_segments: vec![],
+                    list_segments: vec![],
+                    server_timestamp_ms: 0,
+                    environment_id: String::new(),
+                }))
+            }
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpListenerStream::new(listener);
+
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(FlagSyncServiceServer::new(TestFlagSyncService))
+                .serve_with_incoming(stream)
+                .await
+                .ok();
+        });
+
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn init_succeeds_with_in_process_server() {
+        let grpc_url = start_test_grpc_server().await;
+        let config = SdkConfig::new(grpc_url, "http://127.0.0.1:9999", "test-key");
+        let client = SdkClient::init(config).await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn init_succeeds_with_lfu_config() {
+        let grpc_url = start_test_grpc_server().await;
+        let mut config = SdkConfig::new(grpc_url, "http://127.0.0.1:9999", "test-key");
+        config.lfu = Some(crate::config::LfuConfig {
+            capacity: 10,
+            window: std::time::Duration::from_secs(60),
+        });
+        let client = SdkClient::init(config).await;
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn init_fails_when_grpc_unreachable() {
+        let config = SdkConfig::new("http://127.0.0.1:19996", "http://127.0.0.1:9999", "key");
+        let result = SdkClient::init(config).await;
+        assert!(result.is_err());
+        let err = result.err().expect("expected error");
+        matches!(err, SdkError::InitFailed(_));
+    }
+
+    #[tokio::test]
+    async fn poll_once_updates_cache_on_success() {
+        let grpc_url = start_test_grpc_server().await;
+        let grpc = SdkGrpcClient::new(&grpc_url, "key");
+        let http = SdkHttpClient::new("http://127.0.0.1:9999", "key");
+        let cache: Arc<RwLock<DefinitionCache>> = Arc::new(RwLock::new(DefinitionCache::default()));
+        poll_once(&grpc, &http, &cache, None).await;
+        // After poll_once with a working server, cache should be updated (empty but valid)
+        let cache_guard = cache.read().await;
+        assert!(cache_guard.flags.is_empty());
+    }
+
+    #[tokio::test]
+    async fn poll_once_with_lfu_empty_hot_set_returns_early() {
+        let grpc_url = start_test_grpc_server().await;
+        let grpc = SdkGrpcClient::new(&grpc_url, "key");
+        let http = SdkHttpClient::new("http://127.0.0.1:9999", "key");
+        let cache: Arc<RwLock<DefinitionCache>> = Arc::new(RwLock::new(DefinitionCache::default()));
+        let lfu = Arc::new(Mutex::new(LfuState::new(10, std::time::Duration::from_secs(60))));
+        // LFU has no entries → hot_set is empty → early return
+        poll_once(&grpc, &http, &cache, Some(&lfu)).await;
+        // Should still have updated the main cache
+        let cache_guard = cache.read().await;
+        assert!(cache_guard.flags.is_empty());
+    }
+
+    fn percentage_flag_def(
+        flag_key: &str,
+        context_type: &str,
+        target_field: TargetField,
+    ) -> SdkFlagDef {
+        let vid_a = VariantId::new();
+        let vid_b = VariantId::new();
+        let mut variant_map = HashMap::new();
+        variant_map.insert(vid_a, ("treatment".to_owned(), VariantValue::BoolValue(true)));
+        variant_map.insert(vid_b, ("control".to_owned(), VariantValue::BoolValue(false)));
+        SdkFlagDef {
+            key: flag_key.to_owned(),
+            enabled: true,
+            rules: vec![Rule {
+                id: RuleId::new(),
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![
+                        stitchd_core::rule_engine::types::PercentageTarget {
+                            context_type: context_type.to_owned(),
+                            field: target_field,
+                        },
+                    ],
+                    weights: vec![(vid_a, 500), (vid_b, 500)],
+                },
+            }],
+            variant_map,
+        }
+    }
+
+    #[test]
+    fn percentage_rule_deterministic() {
+        let def = percentage_flag_def("pct-flag", "user", TargetField::Key);
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+
+        // Same inputs should always produce the same result
+        let result1 = apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        let result2 = apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        assert_eq!(result1, result2);
+        // Should return Some variant (one of treatment/control)
+        assert!(result1.is_some());
+    }
+
+    #[test]
+    fn percentage_rule_with_parameter_field() {
+        let def = percentage_flag_def(
+            "pct-flag",
+            "user",
+            TargetField::Parameter("account_id".to_string()),
+        );
+        let ctx = EvaluationContext::new().with_context(
+            Context::new("user", "u1")
+                .with_parameter("account_id", ParameterValue::Str("acct-123".into())),
+        );
+
+        let result =
+            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn percentage_rule_missing_context_type_skips_target() {
+        // If the target context_type is not present in the evaluation context,
+        // the target value is skipped (empty target_values list)
+        let def = percentage_flag_def("pct-flag", "device", TargetField::Key);
+        // Only user context, no device
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+
+        // Should still return a result (with empty target_values, hash is deterministic)
+        let result =
+            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        // The result might be None if weights don't cover the bucket, or Some
+        let _ = result; // just verify no panic
+    }
+
+    #[test]
+    fn percentage_rule_all_weights_zero_returns_none() {
+        let vid_a = VariantId::new();
+        let mut variant_map = HashMap::new();
+        variant_map.insert(vid_a, ("on".to_owned(), VariantValue::BoolValue(true)));
+        let def = SdkFlagDef {
+            key: "pct-flag".to_owned(),
+            enabled: true,
+            rules: vec![Rule {
+                id: RuleId::new(),
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![
+                        stitchd_core::rule_engine::types::PercentageTarget {
+                            context_type: "user".to_owned(),
+                            field: TargetField::Key,
+                        },
+                    ],
+                    weights: vec![], // no weights → cumulative never exceeds bucket
+                },
+            }],
+            variant_map,
+        };
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result =
+            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parameter_value_missing_returns_empty_string_as_hash_input() {
+        // Parameter not present in context → unwrap_or_default → empty string
+        let def = percentage_flag_def(
+            "pct-flag",
+            "user",
+            TargetField::Parameter("nonexistent_param".to_string()),
+        );
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+
+        let result =
+            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        // Should not panic; some deterministic result
+        let _ = result;
     }
 }

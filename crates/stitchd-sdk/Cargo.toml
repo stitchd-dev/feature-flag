@@ -15,6 +15,7 @@ metrics-exporter-prometheus = { workspace = true }
 axum = { workspace = true }
 tokio-stream = { version = "0.1", features = ["net"] }
 tower = { version = "0.5", features = ["util"] }
+wiremock = { version = "0.6" }
 
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }

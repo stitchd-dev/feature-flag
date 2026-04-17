@@ -153,3 +153,166 @@ impl SdkHttpClient {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn list_check_empty_keys_returns_empty_map() {
+        let client = SdkHttpClient::new("http://localhost:9999", "test-key");
+        let result = client
+            .list_check("env-1", "user", "u1", &[])
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_check_batch_empty_contexts_returns_empty_map() {
+        let client = SdkHttpClient::new("http://localhost:9999", "test-key");
+        let result = client
+            .list_check_batch("env-1", &[], &["seg-a".to_string()])
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_check_batch_empty_keys_returns_empty_map() {
+        let client = SdkHttpClient::new("http://localhost:9999", "test-key");
+        let result = client
+            .list_check_batch(
+                "env-1",
+                &[("user".to_string(), "u1".to_string())],
+                &[],
+            )
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_check_returns_membership_map() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/environments/env-123/segments/list-check"))
+            .and(header("x-sdk-key", "sdk-key-abc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "memberships": {
+                    "beta-users": true,
+                    "premium": false
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = SdkHttpClient::new(server.uri(), "sdk-key-abc");
+        let keys = vec!["beta-users".to_string(), "premium".to_string()];
+        let result = client
+            .list_check("env-123", "user", "u1", &keys)
+            .await
+            .unwrap();
+
+        assert_eq!(result.get("beta-users"), Some(&true));
+        assert_eq!(result.get("premium"), Some(&false));
+    }
+
+    #[tokio::test]
+    async fn list_check_http_error_returns_sdk_error() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/environments/env-123/segments/list-check"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let client = SdkHttpClient::new(server.uri(), "invalid-key");
+        let keys = vec!["beta-users".to_string()];
+        let result = client
+            .list_check("env-123", "user", "u1", &keys)
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_check_batch_returns_flattened_map() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/environments/env-123/segments/list-check/batch"))
+            .and(header("x-sdk-key", "sdk-key-abc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "results": [
+                    {
+                        "context_type": "user",
+                        "context_key": "u1",
+                        "memberships": {
+                            "beta-users": true
+                        }
+                    },
+                    {
+                        "context_type": "user",
+                        "context_key": "u2",
+                        "memberships": {
+                            "beta-users": false
+                        }
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = SdkHttpClient::new(server.uri(), "sdk-key-abc");
+        let contexts = vec![
+            ("user".to_string(), "u1".to_string()),
+            ("user".to_string(), "u2".to_string()),
+        ];
+        let keys = vec!["beta-users".to_string()];
+        let result = client
+            .list_check_batch("env-123", &contexts, &keys)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.get(&("user".to_string(), "u1".to_string(), "beta-users".to_string())),
+            Some(&true)
+        );
+        assert_eq!(
+            result.get(&("user".to_string(), "u2".to_string(), "beta-users".to_string())),
+            Some(&false)
+        );
+    }
+
+    #[tokio::test]
+    async fn list_check_batch_http_error_returns_sdk_error() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/environments/env-123/segments/list-check/batch"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let client = SdkHttpClient::new(server.uri(), "sdk-key-abc");
+        let contexts = vec![("user".to_string(), "u1".to_string())];
+        let keys = vec!["beta-users".to_string()];
+        let result = client
+            .list_check_batch("env-123", &contexts, &keys)
+            .await;
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sdk_http_client_constructor_sets_fields() {
+        let client = SdkHttpClient::new("http://api:8080", "my-key");
+        assert_eq!(client.http_url, "http://api:8080");
+        assert_eq!(client.sdk_key, "my-key");
+    }
+}

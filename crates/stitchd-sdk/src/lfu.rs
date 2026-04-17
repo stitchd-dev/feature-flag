@@ -133,6 +133,15 @@ mod tests {
     }
 
     #[test]
+    fn lfu_state_new_creates_empty_state() {
+        let state = LfuState::new(10, Duration::from_secs(60));
+        // Tracker starts empty — hot_set should be empty
+        assert!(state.tracker.hot_set().is_empty());
+        // Cache starts empty
+        assert_eq!(state.cache.get("user", "u1", "seg"), None);
+    }
+
+    #[test]
     fn lfu_cache_get_and_replace() {
         let mut cache = LfuCache::default();
         let mut entries = HashMap::new();
