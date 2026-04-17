@@ -1,6 +1,6 @@
 # Plan: Fix CI Clippy Failure — telemetry.rs map_unwrap_or
 
-## Phase 1: Fix Clippy Lint Error
+## Phase 1: Fix Clippy Lint Error [checkpoint: 21d0436]
 
 - [x] Task 1: Confirm CI failure reproduces locally
   - Run `cargo clippy --workspace` and confirm the `map_unwrap_or` error at `crates/stitchd-server/src/telemetry.rs:54`
