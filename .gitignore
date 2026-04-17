@@ -30,3 +30,11 @@ lcov.info
 *.tmp
 *.bak
 .worktrees/feature_flags_20260416/
+# bd worktree
+.worktrees/fix_lint_errors_20260417/worker_1_flag/
+# bd worktree
+.worktrees/fix_lint_errors_20260417/worker_2_segment/
+# bd worktree
+.worktrees/fix_lint_errors_20260417/worker_3_rule_engine/
+# bd worktree
+.worktrees/fix_lint_errors_20260417/worker_4_others/
