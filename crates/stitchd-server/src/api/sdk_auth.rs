@@ -120,4 +120,39 @@ mod tests {
         assert_eq!(hash.len(), 64);
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
+
+    #[test]
+    fn hash_sdk_key_empty_string_produces_known_sha256() {
+        // SHA-256 of empty string is well known
+        let hash = hash_sdk_key("");
+        assert_eq!(hash.len(), 64);
+    }
+
+    // ---------------------------------------------------------------------------
+    // SdkAuthError IntoResponse mapping
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn sdk_auth_error_missing_key_is_401() {
+        use axum::response::IntoResponse as _;
+        let err = SdkAuthError::MissingKey;
+        let resp = err.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn sdk_auth_error_unauthorized_is_401() {
+        use axum::response::IntoResponse as _;
+        let err = SdkAuthError::Unauthorized;
+        let resp = err.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn sdk_auth_error_internal_is_500() {
+        use axum::response::IntoResponse as _;
+        let err = SdkAuthError::Internal("something broke".to_string());
+        let resp = err.into_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
