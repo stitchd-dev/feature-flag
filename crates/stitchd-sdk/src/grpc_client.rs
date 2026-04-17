@@ -66,4 +66,54 @@ mod tests {
             other => panic!("expected GrpcTransport, got {other:?}"),
         }
     }
+
+    /// Minimal in-process gRPC server for testing fetch_definitions.
+    #[tokio::test]
+    async fn fetch_definitions_succeeds_with_in_process_server() {
+        use stitchd_proto::flags::v1::{
+            SyncResponse,
+            flag_sync_service_server::{FlagSyncService, FlagSyncServiceServer},
+        };
+        use tokio::net::TcpListener;
+        use tokio_stream::wrappers::TcpListenerStream;
+
+        #[derive(Clone)]
+        struct TestFlagSyncService;
+
+        #[tonic::async_trait]
+        impl FlagSyncService for TestFlagSyncService {
+            async fn sync(
+                &self,
+                _request: tonic::Request<SyncRequest>,
+            ) -> Result<tonic::Response<SyncResponse>, tonic::Status> {
+                Ok(tonic::Response::new(SyncResponse {
+                    flags: vec![],
+                    rule_segments: vec![],
+                    list_segments: vec![],
+                    server_timestamp_ms: 0,
+                    environment_id: String::new(),
+                }))
+            }
+        }
+
+        // Bind to a random free port.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stream = TcpListenerStream::new(listener);
+
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(FlagSyncServiceServer::new(TestFlagSyncService))
+                .serve_with_incoming(stream)
+                .await
+                .ok();
+        });
+
+        let url = format!("http://{addr}");
+        let client = SdkGrpcClient::new(url, "test-key");
+        let result = client.fetch_definitions().await;
+        assert!(result.is_ok());
+        let resp = result.unwrap();
+        assert!(resp.flags.is_empty());
+    }
 }
