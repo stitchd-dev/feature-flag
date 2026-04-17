@@ -12,4 +12,10 @@ This file tracks all major tracks for the project.
 - fix_errors_20260412 (fix the errors across workspaces)
 - feature_flags_20260416 (Implement the core Feature Flags module)
 - fix_lint_errors_20260417 (fix the lint errors.)
+- sdk_20260417 (Rust Server-Side SDK)
 -->
+
+---
+
+## [ ] Track: Rust Server-Side SDK
+*Link: [./conductor/tracks/sdk_20260417/](./conductor/tracks/sdk_20260417/)*
