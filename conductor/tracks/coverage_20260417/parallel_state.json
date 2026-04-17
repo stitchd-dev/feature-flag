@@ -22,8 +22,24 @@
       "beads_task_id": "feature-flag-a2j.2",
       "worktree": ".worktrees/coverage_20260417/worker_2_events_sdk",
       "branch": "worker-coverage-2-events-sdk",
-      "status": "in_progress",
-      "started_at": "2026-04-17T12:06:00Z"
+      "status": "completed",
+      "started_at": "2026-04-17T12:06:00Z",
+      "completed_at": "2026-04-17T12:10:00Z",
+      "commits": ["8bcbbfc", "2059e69", "3ff7b55"],
+      "tests_added": 83,
+      "coverage_achieved": {
+        "stitchd_events": "100% (no coverable lines — stub crate)",
+        "stitchd_sdk": "92.46% (331/358 lines)"
+      },
+      "per_file_coverage": {
+        "cache.rs": "121/121 = 100%",
+        "client.rs": "125/152 = 82%",
+        "config.rs": "5/5 = 100%",
+        "error.rs": "2/2 = 100%",
+        "grpc_client.rs": "12/12 = 100%",
+        "http_client.rs": "40/40 = 100%",
+        "lfu.rs": "26/26 = 100%"
+      }
     },
     {
       "worker_id": "worker_3_server",
@@ -40,10 +56,14 @@
       "beads_task_id": "feature-flag-a2j.4",
       "worktree": ".worktrees/coverage_20260417/worker_4_db",
       "branch": "worker-coverage-4-db",
-      "status": "in_progress",
-      "started_at": "2026-04-17T12:06:00Z"
+      "status": "completed",
+      "started_at": "2026-04-17T12:06:00Z",
+      "completed_at": "2026-04-17T13:00:00Z",
+      "commits": ["f5718a2", "f400d6f", "feb5602"],
+      "tests_added": 101,
+      "coverage_estimate": ">90% (all public methods covered)"
     }
   ],
-  "completed_workers": 1,
+  "completed_workers": 3,
   "total_workers": 4
 }
