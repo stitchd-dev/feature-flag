@@ -13,13 +13,10 @@ This file tracks all major tracks for the project.
 - feature_flags_20260416 (Implement the core Feature Flags module)
 - fix_lint_errors_20260417 (fix the lint errors.)
 - sdk_20260417 (Rust Server-Side SDK)
+- fix_ci_clippy_20260417 (Fix CI Clippy Failure — telemetry.rs map_unwrap_or)
 -->
 
 ---
 
 <!-- Archived: sdk_20260417 (Rust Server-Side SDK) -->
-
----
-
-## [x] Track: Fix CI Clippy Failure — telemetry.rs map_unwrap_or
-*Link: [./conductor/tracks/fix_ci_clippy_20260417/](./conductor/tracks/fix_ci_clippy_20260417/)*
+<!-- Archived: fix_ci_clippy_20260417 (Fix CI Clippy Failure — telemetry.rs map_unwrap_or) -->
