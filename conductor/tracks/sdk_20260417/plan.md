@@ -57,7 +57,7 @@
   - Local rule evaluation via `stitchd-core`
   - For list segments: single `list-check` API call (no LFU yet)
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: SDK Client Core' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: SDK Client Core' (Protocol in workflow.md)
 
 ## Phase 4: LFU Segment Membership Cache
 
