@@ -1,0 +1,20 @@
+{
+  "track_id": "fix_ci_clippy_20260417",
+  "type": "bug",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-04-17T11:30:00Z",
+  "updated_at": "2026-04-17T11:30:00Z",
+  "description": "CI is failing on every push due to Clippy map_unwrap_or lint error in crates/stitchd-server/src/telemetry.rs blocking all merges",
+  "git_branch": "track/fix_ci_clippy_20260417",
+  "worktree_path": ".worktrees/fix_ci_clippy_20260417",
+  "beads_epic": "feature-flag-53j",
+  "beads_tasks": {
+    "phase1": "feature-flag-53j.1",
+    "phase1_task1": "feature-flag-53j.1.1",
+    "phase1_task2": "feature-flag-53j.1.2",
+    "phase1_task3": "feature-flag-53j.1.3"
+  }
+}
