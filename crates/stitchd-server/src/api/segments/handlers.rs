@@ -288,3 +288,1118 @@ pub async fn batch_list_check_membership(
 
     Ok(Json(BatchListCheckResponse { results }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AppState;
+    use async_trait::async_trait;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use metrics_exporter_prometheus::PrometheusBuilder;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+    use stitchd_core::{
+        flag::Variant,
+        id::{EnvironmentId, FlagId, ProjectId, SegmentId, SdkKeyId, VariantId},
+        rule_engine::types::Rule,
+        segment::{ListBasedSegment, RuleBasedSegment, Segment, SegmentType},
+        tenant::SdkKey,
+    };
+    use stitchd_db::{
+        ContextMembership, FlagRepository, RepositoryError, SdkKeyRepository, SegmentRepository,
+        VariantRepository,
+    };
+    use tower::ServiceExt as _;
+
+    // ---------------------------------------------------------------------------
+    // Minimal mock repositories — only segment operations are exercised here
+    // ---------------------------------------------------------------------------
+
+    struct MockSegmentRepo {
+        segments: Mutex<Vec<Segment>>,
+        fail_create: bool,
+    }
+
+    impl MockSegmentRepo {
+        fn with_segments(segments: Vec<Segment>) -> Arc<Self> {
+            Arc::new(Self {
+                segments: Mutex::new(segments),
+                fail_create: false,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SegmentRepository for MockSegmentRepo {
+        async fn find_by_id(&self, id: SegmentId) -> Result<Segment, RepositoryError> {
+            self.segments
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|s| s.id == id)
+                .cloned()
+                .ok_or(RepositoryError::NotFound {
+                    id: id.to_string(),
+                })
+        }
+
+        async fn find_by_key(
+            &self,
+            key: &str,
+            _environment_id: EnvironmentId,
+        ) -> Result<Segment, RepositoryError> {
+            self.segments
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|s| s.key == key)
+                .cloned()
+                .ok_or(RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
+        }
+
+        async fn list_by_environment(
+            &self,
+            env_id: EnvironmentId,
+        ) -> Result<Vec<Segment>, RepositoryError> {
+            Ok(self
+                .segments
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|s| s.environment_id == env_id)
+                .cloned()
+                .collect())
+        }
+
+        async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {
+            if self.fail_create {
+                return Err(RepositoryError::UniqueViolation {
+                    field: "key".to_string(),
+                });
+            }
+            self.segments.lock().unwrap().push(segment.clone());
+            Ok(())
+        }
+
+        async fn update(&self, segment: &Segment) -> Result<Segment, RepositoryError> {
+            Ok(segment.clone())
+        }
+
+        async fn find_with_rules(
+            &self,
+            id: SegmentId,
+        ) -> Result<RuleBasedSegment, RepositoryError> {
+            Ok(RuleBasedSegment {
+                id,
+                rules: Vec::new(),
+            })
+        }
+
+        async fn find_with_list(
+            &self,
+            id: SegmentId,
+        ) -> Result<ListBasedSegment, RepositoryError> {
+            Ok(ListBasedSegment {
+                id,
+                lists: HashMap::new(),
+            })
+        }
+
+        async fn upsert_rules(
+            &self,
+            _id: SegmentId,
+            _rules: &[Rule],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn set_list_entries(
+            &self,
+            _id: SegmentId,
+            _context_type: &str,
+            _include: &[String],
+            _exclude: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn soft_delete(&self, id: SegmentId) -> Result<(), RepositoryError> {
+            let segs = self.segments.lock().unwrap();
+            if segs.iter().any(|s| s.id == id) {
+                Ok(())
+            } else {
+                Err(RepositoryError::NotFound {
+                    id: id.to_string(),
+                })
+            }
+        }
+
+        async fn check_list_membership(
+            &self,
+            _environment_id: EnvironmentId,
+            _context_type: &str,
+            _context_key: &str,
+            segment_keys: &[String],
+        ) -> Result<HashMap<String, bool>, RepositoryError> {
+            Ok(segment_keys.iter().map(|k| (k.clone(), true)).collect())
+        }
+
+        async fn batch_check_list_membership(
+            &self,
+            _environment_id: EnvironmentId,
+            contexts: &[(String, String)],
+            segment_keys: &[String],
+        ) -> Result<Vec<ContextMembership>, RepositoryError> {
+            Ok(contexts
+                .iter()
+                .map(|(ct, ck)| ContextMembership {
+                    context_type: ct.clone(),
+                    context_key: ck.clone(),
+                    memberships: segment_keys
+                        .iter()
+                        .map(|k| (k.clone(), true))
+                        .collect(),
+                })
+                .collect())
+        }
+    }
+
+    struct MockFlagRepo;
+
+    #[async_trait]
+    impl FlagRepository for MockFlagRepo {
+        async fn find_by_id(
+            &self,
+            id: FlagId,
+        ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn find_by_key(
+            &self,
+            key: &stitchd_core::id::FlagKey,
+            _project_id: ProjectId,
+        ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: key.to_string(),
+            })
+        }
+
+        async fn list_by_project(
+            &self,
+            _project_id: ProjectId,
+        ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn create(
+            &self,
+            _flag: &stitchd_core::flag::FlagRecord,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(
+            &self,
+            flag: &stitchd_core::flag::FlagRecord,
+        ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
+            Ok(flag.clone())
+        }
+
+        async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn find_hashing_config(
+            &self,
+            _flag_id: FlagId,
+        ) -> Result<Vec<stitchd_core::flag::FlagHashingConfig>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn upsert_hashing_config(
+            &self,
+            _flag_id: FlagId,
+            _config: &[stitchd_core::flag::FlagHashingConfig],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn find_rules(
+            &self,
+            _flag_id: FlagId,
+        ) -> Result<Vec<stitchd_core::flag::FlagRule>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn upsert_rules(
+            &self,
+            _flag_id: FlagId,
+            _rules: &[stitchd_core::flag::FlagRule],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+    }
+
+    struct MockVariantRepo;
+
+    #[async_trait]
+    impl VariantRepository for MockVariantRepo {
+        async fn find_by_flag(&self, _flag_id: FlagId) -> Result<Vec<Variant>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn create(
+            &self,
+            _flag_id: FlagId,
+            _variant: &Variant,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(&self, variant: &Variant) -> Result<Variant, RepositoryError> {
+            Ok(variant.clone())
+        }
+
+        async fn delete(&self, _id: VariantId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+    }
+
+    struct MockSdkKeyRepo {
+        active_keys: Vec<SdkKey>,
+    }
+
+    impl MockSdkKeyRepo {
+        fn empty() -> Arc<Self> {
+            Arc::new(Self {
+                active_keys: Vec::new(),
+            })
+        }
+
+        fn with_active_key(key_hash: String, env_id: EnvironmentId) -> Arc<Self> {
+            let key = SdkKey {
+                id: SdkKeyId::new(),
+                environment_id: env_id,
+                key_hash,
+                is_active: true,
+                created_at: chrono::Utc::now(),
+                revoked_at: None,
+            };
+            Arc::new(Self {
+                active_keys: vec![key],
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SdkKeyRepository for MockSdkKeyRepo {
+        async fn find_by_id(&self, id: SdkKeyId) -> Result<SdkKey, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<SdkKey>, RepositoryError> {
+            Ok(self.active_keys.clone())
+        }
+
+        async fn create(&self, _key: &SdkKey) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn find_active_by_environment(
+            &self,
+            env_id: EnvironmentId,
+        ) -> Result<Vec<SdkKey>, RepositoryError> {
+            Ok(self
+                .active_keys
+                .iter()
+                .filter(|k| k.environment_id == env_id && k.is_active)
+                .cloned()
+                .collect())
+        }
+
+        async fn find_active_by_hash(
+            &self,
+            key_hash: &str,
+        ) -> Result<SdkKey, RepositoryError> {
+            self.active_keys
+                .iter()
+                .find(|k| k.key_hash == key_hash)
+                .cloned()
+                .ok_or(RepositoryError::NotFound {
+                    id: key_hash.to_string(),
+                })
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Test helpers
+    // ---------------------------------------------------------------------------
+
+    fn make_test_state_with_sdk_key(
+        segment_repo: Arc<dyn SegmentRepository>,
+        sdk_key_repo: Arc<dyn SdkKeyRepository>,
+    ) -> AppState {
+        let db =
+            sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
+                .expect("lazy pool creation should never fail");
+        AppState {
+            db,
+            metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
+            segment_repo,
+            flag_repo: Arc::new(MockFlagRepo),
+            variant_repo: Arc::new(MockVariantRepo),
+            sdk_key_repo,
+        }
+    }
+
+    fn make_test_state(segment_repo: Arc<dyn SegmentRepository>) -> AppState {
+        make_test_state_with_sdk_key(segment_repo, MockSdkKeyRepo::empty())
+    }
+
+    fn make_rule_segment(env_id: EnvironmentId) -> Segment {
+        Segment {
+            id: SegmentId::new(),
+            environment_id: env_id,
+            key: "test-segment".to_string(),
+            segment_type: SegmentType::Rule,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        }
+    }
+
+    fn make_list_segment(env_id: EnvironmentId) -> Segment {
+        Segment {
+            id: SegmentId::new(),
+            environment_id: env_id,
+            key: "list-segment".to_string(),
+            segment_type: SegmentType::List,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        }
+    }
+
+    fn build_router(state: AppState) -> axum::Router {
+        crate::api::router::build_api_router().with_state(state)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: list_segments
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_segments_returns_ok_with_segments() {
+        let env_id = EnvironmentId::new();
+        let seg = make_rule_segment(env_id);
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/environments/{env_id}/segments"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let segs: Vec<Segment> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(segs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_segments_returns_empty_when_none_exist() {
+        let env_id = EnvironmentId::new();
+        let repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/environments/{env_id}/segments"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let segs: Vec<Segment> = serde_json::from_slice(&body).unwrap();
+        assert!(segs.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: create_segment (rule-based)
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn create_rule_segment_returns_created() {
+        let env_id = EnvironmentId::new();
+        let repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "key": "beta-users",
+            "segment_type": "rule",
+            "rules": []
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/segments"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_rule_segment_missing_rules_returns_bad_request() {
+        let env_id = EnvironmentId::new();
+        let repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "key": "beta-users",
+            "segment_type": "rule"
+            // no "rules" field
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/segments"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: create_segment (list-based)
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn create_list_segment_returns_created() {
+        let env_id = EnvironmentId::new();
+        let repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "key": "allowed-users",
+            "segment_type": "list",
+            "lists": {}
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/segments"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_list_segment_missing_lists_returns_bad_request() {
+        let env_id = EnvironmentId::new();
+        let repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "key": "allowed-users",
+            "segment_type": "list"
+            // no "lists" field
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/segments"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: get_segment
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn get_rule_segment_returns_ok_with_definition() {
+        let env_id = EnvironmentId::new();
+        let seg = make_rule_segment(env_id);
+        let seg_id = seg.id;
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: SegmentResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resp.id, seg_id);
+        assert_eq!(resp.segment_type, SegmentType::Rule);
+    }
+
+    #[tokio::test]
+    async fn get_list_segment_returns_ok_with_definition() {
+        let env_id = EnvironmentId::new();
+        let seg = make_list_segment(env_id);
+        let seg_id = seg.id;
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: SegmentResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(resp.id, seg_id);
+        assert_eq!(resp.segment_type, SegmentType::List);
+    }
+
+    #[tokio::test]
+    async fn get_segment_returns_not_found_for_unknown_id() {
+        let env_id = EnvironmentId::new();
+        let repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let missing_id = SegmentId::new();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/v1/environments/{env_id}/segments/{missing_id}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: update_segment
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn update_rule_segment_returns_ok() {
+        let env_id = EnvironmentId::new();
+        let seg = make_rule_segment(env_id);
+        let seg_id = seg.id;
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "rules": [],
+            "version": 1
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn update_segment_returns_conflict_on_version_mismatch() {
+        let env_id = EnvironmentId::new();
+        let seg = make_rule_segment(env_id);
+        let seg_id = seg.id;
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "rules": [],
+            "version": 99
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn update_rule_segment_missing_rules_returns_bad_request() {
+        let env_id = EnvironmentId::new();
+        let seg = make_rule_segment(env_id);
+        let seg_id = seg.id;
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "version": 1
+            // no rules for a rule-based segment
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: delete_segment
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn delete_segment_returns_no_content() {
+        let env_id = EnvironmentId::new();
+        let seg = make_rule_segment(env_id);
+        let seg_id = seg.id;
+        let repo = MockSegmentRepo::with_segments(vec![seg]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn delete_segment_returns_not_found_for_unknown_id() {
+        let env_id = EnvironmentId::new();
+        let repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let missing_id = SegmentId::new();
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!(
+                        "/v1/environments/{env_id}/segments/{missing_id}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: list_check_membership (SDK-authenticated)
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn list_check_with_valid_sdk_key_returns_memberships() {
+        let env_id = EnvironmentId::new();
+        let raw_key = "test-sdk-key-12345";
+        let key_hash = crate::api::sdk_auth::hash_sdk_key(raw_key);
+        let sdk_key_repo = MockSdkKeyRepo::with_active_key(key_hash, env_id);
+        let seg_repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state_with_sdk_key(seg_repo, sdk_key_repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "context_type": "user",
+            "context_key": "user-abc",
+            "segment_keys": ["beta-users"]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/segments/list-check"))
+                    .header("content-type", "application/json")
+                    .header("x-sdk-key", raw_key)
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn list_check_without_sdk_key_returns_401() {
+        let env_id = EnvironmentId::new();
+        let repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state(repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "context_type": "user",
+            "context_key": "user-abc",
+            "segment_keys": ["beta-users"]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/segments/list-check"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_check_with_invalid_sdk_key_returns_401() {
+        let env_id = EnvironmentId::new();
+        let sdk_key_repo = MockSdkKeyRepo::empty();
+        let seg_repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state_with_sdk_key(seg_repo, sdk_key_repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "context_type": "user",
+            "context_key": "user-abc",
+            "segment_keys": ["beta-users"]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/segments/list-check"))
+                    .header("content-type", "application/json")
+                    .header("x-sdk-key", "wrong-key")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_check_empty_segment_keys_returns_empty_memberships() {
+        let env_id = EnvironmentId::new();
+        let raw_key = "test-sdk-key-empty";
+        let key_hash = crate::api::sdk_auth::hash_sdk_key(raw_key);
+        let sdk_key_repo = MockSdkKeyRepo::with_active_key(key_hash, env_id);
+        let seg_repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state_with_sdk_key(seg_repo, sdk_key_repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "context_type": "user",
+            "context_key": "user-abc",
+            "segment_keys": []
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/environments/{env_id}/segments/list-check"))
+                    .header("content-type", "application/json")
+                    .header("x-sdk-key", raw_key)
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: ListCheckResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(resp.memberships.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: batch_list_check_membership
+    // ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn batch_list_check_with_valid_sdk_key_returns_ok() {
+        let env_id = EnvironmentId::new();
+        let raw_key = "test-sdk-key-batch";
+        let key_hash = crate::api::sdk_auth::hash_sdk_key(raw_key);
+        let sdk_key_repo = MockSdkKeyRepo::with_active_key(key_hash, env_id);
+        let seg_repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state_with_sdk_key(seg_repo, sdk_key_repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "contexts": [
+                { "context_type": "user", "context_key": "user-a" }
+            ],
+            "segment_keys": ["beta-users"]
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/environments/{env_id}/segments/list-check/batch"
+                    ))
+                    .header("content-type", "application/json")
+                    .header("x-sdk-key", raw_key)
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn batch_list_check_empty_inputs_returns_empty_results() {
+        let env_id = EnvironmentId::new();
+        let raw_key = "test-sdk-key-batch-empty";
+        let key_hash = crate::api::sdk_auth::hash_sdk_key(raw_key);
+        let sdk_key_repo = MockSdkKeyRepo::with_active_key(key_hash, env_id);
+        let seg_repo = MockSegmentRepo::with_segments(vec![]);
+        let state = make_test_state_with_sdk_key(seg_repo, sdk_key_repo);
+        let app = build_router(state);
+
+        let body = serde_json::json!({
+            "contexts": [],
+            "segment_keys": []
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/environments/{env_id}/segments/list-check/batch"
+                    ))
+                    .header("content-type", "application/json")
+                    .header("x-sdk-key", raw_key)
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let resp: BatchListCheckResponse = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(resp.results.is_empty());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Tests: ApiError IntoResponse
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn api_error_not_found_is_404() {
+        use axum::response::IntoResponse as _;
+        let err = ApiError::NotFound("segment not found".to_string());
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn api_error_conflict_is_409() {
+        use axum::response::IntoResponse as _;
+        let err = ApiError::Conflict("version mismatch".to_string());
+        assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn api_error_bad_request_is_422() {
+        use axum::response::IntoResponse as _;
+        let err = ApiError::BadRequest("bad input".to_string());
+        assert_eq!(err.into_response().status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn api_error_database_is_500() {
+        use axum::response::IntoResponse as _;
+        let err = ApiError::Database("db error".to_string());
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn repository_not_found_converts_correctly() {
+        let err: ApiError = RepositoryError::NotFound {
+            id: "seg-id".to_string(),
+        }
+        .into();
+        use axum::response::IntoResponse as _;
+        assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn repository_version_conflict_converts_correctly() {
+        let err: ApiError = RepositoryError::VersionConflict {
+            expected: 1,
+            actual: 2,
+        }
+        .into();
+        use axum::response::IntoResponse as _;
+        assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn repository_unique_violation_converts_correctly() {
+        let err: ApiError = RepositoryError::UniqueViolation {
+            field: "key".to_string(),
+        }
+        .into();
+        use axum::response::IntoResponse as _;
+        assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn validation_error_converts_to_bad_request() {
+        use crate::api::segments::types::ValidationError;
+        let err: ApiError = ValidationError::InvalidSegmentRule.into();
+        use axum::response::IntoResponse as _;
+        assert_eq!(err.into_response().status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+}
