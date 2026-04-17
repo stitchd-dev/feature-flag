@@ -20,3 +20,8 @@ This file tracks all major tracks for the project.
 
 <!-- Archived: sdk_20260417 (Rust Server-Side SDK) -->
 <!-- Archived: fix_ci_clippy_20260417 (Fix CI Clippy Failure — telemetry.rs map_unwrap_or) -->
+
+---
+
+## [ ] Track: Increase Test Coverage to >90% Across All Crates
+*Link: [./conductor/tracks/coverage_20260417/](./conductor/tracks/coverage_20260417/)*
