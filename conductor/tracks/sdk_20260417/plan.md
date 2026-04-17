@@ -37,7 +37,7 @@
   - Valid key → correct payload
   - Invalid/revoked key → UNAUTHENTICATED
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Server-Side gRPC Sync Endpoint' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Server-Side gRPC Sync Endpoint' (Protocol in workflow.md)
 
 ## Phase 3: SDK Client Core (Definitions + Rule-Based Evaluation)
 
