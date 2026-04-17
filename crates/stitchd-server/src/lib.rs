@@ -14,7 +14,7 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use sqlx::PgPool;
 use std::sync::Arc;
-use stitchd_db::{FlagRepository, SegmentRepository, VariantRepository};
+use stitchd_db::{FlagRepository, SegmentRepository, SdkKeyRepository, VariantRepository};
 
 /// Shared application state.
 #[derive(Clone)]
@@ -29,6 +29,8 @@ pub struct AppState {
     pub flag_repo: Arc<dyn FlagRepository>,
     /// Repository for flag variant management.
     pub variant_repo: Arc<dyn VariantRepository>,
+    /// Repository for SDK key authentication.
+    pub sdk_key_repo: Arc<dyn SdkKeyRepository>,
 }
 
 /// Build the Axum router.
@@ -91,6 +93,8 @@ mod tests {
             std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
         let audit3 =
             std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
+        let audit4 =
+            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
         let segment_repo = std::sync::Arc::new(
             stitchd_db::repository::pg::PgSegmentRepository::new(db.clone(), audit),
         );
@@ -101,12 +105,16 @@ mod tests {
         let variant_repo = std::sync::Arc::new(
             stitchd_db::repository::pg::PgVariantRepository::new(db.clone(), audit3),
         );
+        let sdk_key_repo = std::sync::Arc::new(
+            stitchd_db::repository::pg::PgSdkKeyRepository::new(db.clone(), audit4),
+        );
         AppState {
             db,
             metrics_handle,
             segment_repo,
             flag_repo,
             variant_repo,
+            sdk_key_repo,
         }
     }
 

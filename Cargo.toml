@@ -60,3 +60,4 @@ bytes = { version = "1" }
 async-trait = { version = "0.1" }
 siphasher = { version = "1" }
 murmur3 = { version = "0.5" }
+sha2 = { version = "0.10" }

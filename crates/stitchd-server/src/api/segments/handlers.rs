@@ -1,6 +1,9 @@
 use crate::AppState;
+use crate::api::sdk_auth::SdkAuth;
 use crate::api::segments::types::{
-    CreateSegmentRequest, SegmentResponse, UpdateSegmentRequest, ValidationError, validate_rules,
+    BatchContextMembership, BatchListCheckRequest, BatchListCheckResponse, CreateSegmentRequest,
+    ListCheckRequest, ListCheckResponse, SegmentResponse, UpdateSegmentRequest, ValidationError,
+    validate_rules,
 };
 use axum::{
     Json,
@@ -212,4 +215,69 @@ pub async fn delete_segment(
 ) -> Result<impl IntoResponse, ApiError> {
     state.segment_repo.soft_delete(seg_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/environments/{env_id}/segments/list-check` — Check list-segment membership.
+///
+/// Requires a valid `x-sdk-key` header for the target environment.
+///
+/// # Errors
+/// Returns [`ApiError::BadRequest`] for empty segment keys, [`ApiError::Database`] on failure.
+pub async fn list_check_membership(
+    _auth: SdkAuth,
+    Path(env_id): Path<EnvironmentId>,
+    State(state): State<AppState>,
+    Json(req): Json<ListCheckRequest>,
+) -> Result<Json<ListCheckResponse>, ApiError> {
+    if req.segment_keys.is_empty() {
+        return Ok(Json(ListCheckResponse {
+            memberships: std::collections::HashMap::new(),
+        }));
+    }
+
+    let memberships = state
+        .segment_repo
+        .check_list_membership(env_id, &req.context_type, &req.context_key, &req.segment_keys)
+        .await?;
+
+    Ok(Json(ListCheckResponse { memberships }))
+}
+
+/// `POST /v1/environments/{env_id}/segments/list-check/batch` — Batch list-segment membership.
+///
+/// Requires a valid `x-sdk-key` header for the target environment.
+///
+/// # Errors
+/// Returns [`ApiError::Database`] on failure.
+pub async fn batch_list_check_membership(
+    _auth: SdkAuth,
+    Path(env_id): Path<EnvironmentId>,
+    State(state): State<AppState>,
+    Json(req): Json<BatchListCheckRequest>,
+) -> Result<Json<BatchListCheckResponse>, ApiError> {
+    if req.segment_keys.is_empty() || req.contexts.is_empty() {
+        return Ok(Json(BatchListCheckResponse { results: Vec::new() }));
+    }
+
+    let ctx_pairs: Vec<(String, String)> = req
+        .contexts
+        .iter()
+        .map(|c| (c.context_type.clone(), c.context_key.clone()))
+        .collect();
+
+    let raw = state
+        .segment_repo
+        .batch_check_list_membership(env_id, &ctx_pairs, &req.segment_keys)
+        .await?;
+
+    let results = raw
+        .into_iter()
+        .map(|cm| BatchContextMembership {
+            context_type: cm.context_type,
+            context_key: cm.context_key,
+            memberships: cm.memberships,
+        })
+        .collect();
+
+    Ok(Json(BatchListCheckResponse { results }))
 }

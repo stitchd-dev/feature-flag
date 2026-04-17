@@ -119,6 +119,12 @@ pub trait SdkKeyRepository: Send + Sync {
     /// Returns [`RepositoryError::UniqueViolation`] if revoking this key
     /// would leave the environment with zero active keys.
     async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError>;
+
+    /// List only active (non-revoked) SDK keys for an environment.
+    async fn find_active_by_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<SdkKey>, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +346,29 @@ pub trait SegmentRepository: Send + Sync {
 
     /// Soft-delete a segment.
     async fn soft_delete(&self, id: SegmentId) -> Result<(), RepositoryError>;
+
+    /// Check list-segment membership for one context across multiple segment keys.
+    ///
+    /// Returns a map from `segment_key → is_member`. Segments that do not exist
+    /// or are not of type `list` are omitted from the result.
+    /// Exclude entries take precedence over include entries.
+    async fn check_list_membership(
+        &self,
+        environment_id: EnvironmentId,
+        context_type: &str,
+        context_key: &str,
+        segment_keys: &[String],
+    ) -> Result<std::collections::HashMap<String, bool>, RepositoryError>;
+
+    /// Batch check list-segment membership for multiple contexts across multiple segment keys.
+    ///
+    /// Returns one entry per context, each with a map of `segment_key → is_member`.
+    async fn batch_check_list_membership(
+        &self,
+        environment_id: EnvironmentId,
+        contexts: &[(String, String)],
+        segment_keys: &[String],
+    ) -> Result<Vec<crate::ContextMembership>, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

@@ -80,3 +80,61 @@ fn contains_segment_condition(expr: &ConditionExpr) -> bool {
         ConditionExpr::Not(expr) => contains_segment_condition(expr),
     }
 }
+
+// ---------------------------------------------------------------------------
+// List-check request/response types
+// ---------------------------------------------------------------------------
+
+/// `POST /v1/environments/{env_id}/segments/list-check` request body.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListCheckRequest {
+    /// Context type (e.g. `"user"`, `"org"`).
+    pub context_type: String,
+    /// Context key to check membership for.
+    pub context_key: String,
+    /// Segment keys to check membership against.
+    pub segment_keys: Vec<String>,
+}
+
+/// `POST /v1/environments/{env_id}/segments/list-check` response body.
+#[derive(Debug, Clone, Serialize)]
+pub struct ListCheckResponse {
+    /// Map from segment key to membership boolean.
+    pub memberships: HashMap<String, bool>,
+}
+
+/// A single context entry for a batch list-check request.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchContext {
+    /// Context type (e.g. `"user"`, `"org"`).
+    pub context_type: String,
+    /// Context key.
+    pub context_key: String,
+}
+
+/// `POST /v1/environments/{env_id}/segments/list-check/batch` request body.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BatchListCheckRequest {
+    /// Contexts to check membership for.
+    pub contexts: Vec<BatchContext>,
+    /// Segment keys to check membership against.
+    pub segment_keys: Vec<String>,
+}
+
+/// Membership result for a single context in a batch response.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchContextMembership {
+    /// Context type.
+    pub context_type: String,
+    /// Context key.
+    pub context_key: String,
+    /// Map from segment key to membership boolean.
+    pub memberships: HashMap<String, bool>,
+}
+
+/// `POST /v1/environments/{env_id}/segments/list-check/batch` response body.
+#[derive(Debug, Clone, Serialize)]
+pub struct BatchListCheckResponse {
+    /// One entry per requested context.
+    pub results: Vec<BatchContextMembership>,
+}

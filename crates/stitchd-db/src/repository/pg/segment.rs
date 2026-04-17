@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sqlx::{PgPool, types::Json};
+use sqlx::{PgPool, Row as _, types::Json};
 
 use stitchd_core::{
     id::{EnvironmentId, SegmentId},
@@ -13,7 +13,7 @@ use stitchd_core::{
 };
 
 use crate::{
-    RepositoryError,
+    ContextMembership, RepositoryError,
     repository::{AuditLogger, SegmentRepository},
 };
 
@@ -448,5 +448,86 @@ impl SegmentRepository for PgSegmentRepository {
             .await?;
 
         Ok(())
+    }
+
+    async fn check_list_membership(
+        &self,
+        environment_id: EnvironmentId,
+        context_type: &str,
+        context_key: &str,
+        segment_keys: &[String],
+    ) -> Result<HashMap<String, bool>, RepositoryError> {
+        if segment_keys.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // sqlx::query (non-macro) used here to avoid breaking offline mode.
+        // Exclude takes precedence: member iff included AND NOT excluded.
+        let rows = sqlx::query(
+            r"
+            SELECT
+                s.key AS segment_key,
+                (
+                    EXISTS (
+                        SELECT 1 FROM segment_list_entries e1
+                        WHERE e1.segment_id = s.id
+                          AND e1.context_type = $2
+                          AND e1.entry_key    = $3
+                          AND e1.list_type    = 'include'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM segment_list_entries e2
+                        WHERE e2.segment_id = s.id
+                          AND e2.context_type = $2
+                          AND e2.entry_key    = $3
+                          AND e2.list_type    = 'exclude'
+                    )
+                ) AS is_member
+            FROM segments s
+            WHERE s.environment_id = $1
+              AND s.key = ANY($4)
+              AND s.deleted_at IS NULL
+              AND s.segment_type = 'list'
+            ",
+        )
+        .bind(environment_id.as_uuid())
+        .bind(context_type)
+        .bind(context_key)
+        .bind(segment_keys)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let mut result = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let key: String = row.get("segment_key");
+            let is_member: bool = row.get("is_member");
+            result.insert(key, is_member);
+        }
+        Ok(result)
+    }
+
+    async fn batch_check_list_membership(
+        &self,
+        environment_id: EnvironmentId,
+        contexts: &[(String, String)],
+        segment_keys: &[String],
+    ) -> Result<Vec<ContextMembership>, RepositoryError> {
+        if segment_keys.is_empty() || contexts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut results = Vec::with_capacity(contexts.len());
+        for (context_type, context_key) in contexts {
+            let memberships = self
+                .check_list_membership(environment_id, context_type, context_key, segment_keys)
+                .await?;
+            results.push(ContextMembership {
+                context_type: context_type.clone(),
+                context_key: context_key.clone(),
+                memberships,
+            });
+        }
+        Ok(results)
     }
 }

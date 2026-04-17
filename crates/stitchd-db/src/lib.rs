@@ -18,3 +18,14 @@ pub use repository::{
         PgUserRepository, PgVariantRepository,
     },
 };
+
+/// Membership result for a single evaluation context (batch list-check responses).
+#[derive(Debug, Clone)]
+pub struct ContextMembership {
+    /// Context type (e.g. `"user"`, `"org"`).
+    pub context_type: String,
+    /// Context key.
+    pub context_key: String,
+    /// Map from segment key to membership boolean.
+    pub memberships: std::collections::HashMap<String, bool>,
+}

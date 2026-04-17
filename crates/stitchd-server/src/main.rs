@@ -47,8 +47,11 @@ async fn main() -> Result<()> {
         )),
         variant_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgVariantRepository::new(
             pool.clone(),
-            audit_logger,
+            audit_logger.clone(),
         )),
+        sdk_key_repo: std::sync::Arc::new(
+            stitchd_db::repository::pg::PgSdkKeyRepository::new(pool.clone(), audit_logger),
+        ),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")

@@ -23,6 +23,20 @@ message RuleSegment {
   bytes  rule_payload = 3;
 }
 
+// --- List segment metadata (sync payload) ---
+
+// Lightweight metadata for a list-based segment.
+// The SDK receives this during definition sync so it knows which segments
+// require a server lookup for membership resolution. The list entries
+// themselves are NOT included here — they are fetched on demand via the
+// list-check REST API.
+message ListSegmentMeta {
+  // Segment key, used in flag rules and as the segment_key in list-check requests.
+  string key          = 1;
+  // The context type this segment applies to (e.g. "user", "org").
+  string context_type = 2;
+}
+
 // --- Sync payload ---
 
 // Segment data returned as part of the flag sync response (embedded via FlagSyncService).

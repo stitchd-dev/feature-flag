@@ -24,6 +24,15 @@ pub fn build_api_router() -> Router<AppState> {
                             get(segments::handlers::get_segment)
                                 .put(segments::handlers::update_segment)
                                 .delete(segments::handlers::delete_segment),
+                        )
+                        // SDK-authenticated list-check endpoints
+                        .route(
+                            "/list-check",
+                            post(segments::handlers::list_check_membership),
+                        )
+                        .route(
+                            "/list-check/batch",
+                            post(segments::handlers::batch_list_check_membership),
                         ),
                 )
                 .route("/evaluate", post(flags::handlers::evaluate_all_flags)),
