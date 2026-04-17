@@ -47,8 +47,20 @@
       "beads_task_id": "feature-flag-a2j.3",
       "worktree": ".worktrees/coverage_20260417/worker_3_server",
       "branch": "worker-coverage-3-server",
-      "status": "in_progress",
-      "started_at": "2026-04-17T12:06:00Z"
+      "status": "completed",
+      "started_at": "2026-04-17T12:06:00Z",
+      "completed_at": "2026-04-17T14:00:00Z",
+      "commits": ["a842d5f", "619ba33", "f7f8c28", "adfcabd"],
+      "tests_added": 92,
+      "coverage_achieved": "92.2% (318/345 lines)",
+      "per_file_coverage": {
+        "api/flags/handlers.rs": "86/90 = 95.6%",
+        "api/router.rs": "36/36 = 100%",
+        "api/sdk_auth.rs": "28/28 = 100%",
+        "api/segments/handlers.rs": "100/114 = 87.7%",
+        "api/segments/types.rs": "12/12 = 100%",
+        "grpc/flag_sync.rs": "56/65 = 86.2%"
+      }
     },
     {
       "worker_id": "worker_4_db",
@@ -64,6 +76,6 @@
       "coverage_estimate": ">90% (all public methods covered)"
     }
   ],
-  "completed_workers": 3,
+  "completed_workers": 4,
   "total_workers": 4
 }
