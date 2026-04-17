@@ -18,9 +18,10 @@
 
 | Layer | Technology |
 |---|---|
-| Initial SDK | Rust |
-| Protocol | gRPC (tonic + prost) |
-| Auth | SDK Key per environment |
+| Initial SDK | Rust (server-side, in-process evaluation) |
+| Definition Sync | gRPC (tonic + prost) — periodic polling |
+| List Membership | REST (reqwest) — per-call fallback; optional LFU in-memory cache |
+| Auth | SDK Key per environment (`x-sdk-key` on both gRPC metadata and REST header) |
 
 ## Serialization
 - gRPC payloads: Protobuf via prost

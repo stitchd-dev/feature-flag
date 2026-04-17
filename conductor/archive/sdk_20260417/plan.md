@@ -21,7 +21,7 @@
   - Extract `x-sdk-key` header, validate + resolve environment
   - Apply to list-check routes only
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: gRPC Proto & REST API Extensions' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: gRPC Proto & REST API Extensions' (Protocol in workflow.md)
 
 ## Phase 2: Server-Side gRPC Sync Endpoint
 

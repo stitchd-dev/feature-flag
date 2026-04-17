@@ -72,12 +72,12 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 - Segmentation rules: inherit core
 - Feature flag rules: inherit core + "Is in Segment" + "Flag evaluated with variant X"
 
-## Client SDK (Rust — initial)
-- Init with Contexts → server returns all flag rules/variants + segment data
-- Supports both client-side evaluation (polling for updates) and server-side evaluation via API.
-- Fixed-interval polling for updates
-- Future: streaming layer for server-pushed evaluated flags
-- Direct event submission via SDK key (scoped to project/environment)
+## Server-Side SDK (Rust — initial)
+- `SdkClient::init(config)` blocks until first definition sync via gRPC, then polls at a configurable interval.
+- Flag evaluation (`evaluate()`) is in-process: rule-based segments evaluated locally; list-based segments resolved via REST lookup or optional LFU cache.
+- Optional LFU membership cache pre-warms list-segment lookups for frequently-evaluated contexts (batch REST refresh on each poll cycle).
+- Client-side SDKs (browser/mobile) and server-sent events are out of scope for the initial implementation.
+- Future: streaming layer for server-pushed flag updates; direct event submission via SDK key.
 
 ## Data Stores
 - PostgreSQL: flag/segment configuration, tenants, environments, SDK keys

@@ -17,5 +17,4 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [x] Track: Rust Server-Side SDK
-*Link: [./conductor/tracks/sdk_20260417/](./conductor/tracks/sdk_20260417/)*
+<!-- Archived: sdk_20260417 (Rust Server-Side SDK) -->
