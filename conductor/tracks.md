@@ -21,5 +21,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [~] Track: Fix CI Clippy Failure — telemetry.rs map_unwrap_or
+## [x] Track: Fix CI Clippy Failure — telemetry.rs map_unwrap_or
 *Link: [./conductor/tracks/fix_ci_clippy_20260417/](./conductor/tracks/fix_ci_clippy_20260417/)*
