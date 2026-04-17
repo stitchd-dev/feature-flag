@@ -149,5 +149,8 @@ mod tests {
         let j = VariantValue::JsonValue(json!({"foo": "bar"}));
         assert_eq!(j.as_json(), Some(&json!({"foo": "bar"})));
         assert_eq!(j.as_str(), None);
+
+        // as_json returns None for non-JSON variants
+        assert_eq!(VariantValue::BoolValue(true).as_json(), None);
     }
 }

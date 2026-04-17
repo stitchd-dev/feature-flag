@@ -118,4 +118,33 @@ mod tests {
         );
         assert!(FlagKey::new("valid-key").is_ok());
     }
+
+    #[test]
+    fn test_id_default() {
+        let a = FlagId::default();
+        let b = FlagId::default();
+        // Two defaults should be different (both new v4 UUIDs)
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_flag_key_display() {
+        let key = FlagKey::new("my-flag").unwrap();
+        assert_eq!(key.to_string(), "my-flag");
+    }
+
+    #[test]
+    fn test_flag_key_as_ref() {
+        let key = FlagKey::new("feature-x").unwrap();
+        let s: &str = key.as_ref();
+        assert_eq!(s, "feature-x");
+    }
+
+    #[test]
+    fn test_id_display() {
+        let id = SegmentId::new();
+        let s = id.to_string();
+        // UUID display format: 8-4-4-4-12 hex chars
+        assert_eq!(s.len(), 36);
+    }
 }
