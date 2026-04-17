@@ -74,7 +74,7 @@
   - Update frequency counter on each `evaluate()` call
   - Invalidate entries for segments whose definition changed in last poll
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: LFU Segment Membership Cache' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: LFU Segment Membership Cache' (Protocol in workflow.md)
 
 ## Phase 5: Testing & Validation
 
