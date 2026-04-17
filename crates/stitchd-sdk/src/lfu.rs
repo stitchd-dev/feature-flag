@@ -113,6 +113,20 @@ mod tests {
     }
 
     #[test]
+    fn hot_set_capacity_excludes_cold_contexts() {
+        let mut t = LfuTracker::new(2, Duration::from_secs(60));
+        for _ in 0..10 { t.record("user", "u1"); }
+        for _ in 0..5  { t.record("user", "u2"); }
+        for _ in 0..1  { t.record("user", "u3"); } // cold
+
+        let hot = t.hot_set();
+        assert_eq!(hot.len(), 2);
+        assert!(hot.iter().any(|(_, k)| k == "u1"));
+        assert!(hot.iter().any(|(_, k)| k == "u2"));
+        assert!(!hot.iter().any(|(_, k)| k == "u3")); // evicted
+    }
+
+    #[test]
     fn lfu_cache_get_and_replace() {
         let mut cache = LfuCache::default();
         let mut entries = HashMap::new();

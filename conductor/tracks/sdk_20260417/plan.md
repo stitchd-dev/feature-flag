@@ -78,13 +78,13 @@
 
 ## Phase 5: Testing & Validation
 
-- [ ] Task 1: Unit tests
+- [x] Task 1: Unit tests
   - Rule-based: correct variant, no network calls
   - List-based (no LFU): 1 API call per evaluation
   - List-based (LFU warm): 0 API calls
   - LFU eviction: cold context removed when capacity exceeded
 
-- [ ] Task 2: Integration tests (SDK against live server)
+- [x] Task 2: Integration tests (SDK against live server)
   - Full flow: init → evaluate with rule-based and list-based segments
   - LFU: warm context → no network; cold → API call
   - Server down after init: rule eval succeeds, list eval surfaces error

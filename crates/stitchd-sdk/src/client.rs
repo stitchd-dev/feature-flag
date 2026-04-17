@@ -243,7 +243,7 @@ async fn poll_once(
 }
 
 /// Pure evaluation of flag rules against pre-resolved segments.
-fn apply_rules(
+pub(crate) fn apply_rules(
     flag_def: &SdkFlagDef,
     contexts: &[stitchd_core::context::Context],
     resolved: HashSet<SegmentId>,
@@ -291,5 +291,110 @@ fn apply_rules(
             }
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use stitchd_core::{
+        context::{Context, EvaluationContext, ParameterValue},
+        id::{RuleId, SegmentId, VariantId},
+        rule_engine::{
+            condition::Condition,
+            types::{ConditionExpr, Rule, RuleOutput},
+        },
+        variants::VariantValue,
+    };
+
+    use crate::cache::SdkFlagDef;
+
+    fn always_true_rule(vid: VariantId) -> Rule {
+        Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::And(vec![]),
+            output: RuleOutput::Variant(vid),
+        }
+    }
+
+    fn bool_flag_def(key: &str, variant_key: &str, value: bool) -> SdkFlagDef {
+        let vid = VariantId::new();
+        let mut variant_map = HashMap::new();
+        variant_map.insert(vid, (variant_key.to_owned(), VariantValue::BoolValue(value)));
+        SdkFlagDef {
+            key: key.to_owned(),
+            enabled: true,
+            rules: vec![always_true_rule(vid)],
+            variant_map,
+        }
+    }
+
+    #[test]
+    fn rule_based_returns_correct_variant() {
+        let def = bool_flag_def("my-flag", "on", true);
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let result = apply_rules(&def, &ctx.contexts, HashSet::new(), "my-flag", "env-1");
+        assert_eq!(result.unwrap(), Some(VariantValue::BoolValue(true)));
+    }
+
+    #[test]
+    fn rule_based_no_matching_rule_returns_none() {
+        let vid = VariantId::new();
+        let mut variant_map = HashMap::new();
+        variant_map.insert(vid, ("on".to_owned(), VariantValue::BoolValue(true)));
+        let def = SdkFlagDef {
+            key: "flag".to_owned(),
+            enabled: true,
+            rules: vec![Rule {
+                id: RuleId::new(),
+                condition: ConditionExpr::Leaf(Condition::Eq {
+                    context_type: "user".into(),
+                    param: "plan".into(),
+                    value: ParameterValue::Str("pro".into()),
+                }),
+                output: RuleOutput::Variant(vid),
+            }],
+            variant_map,
+        };
+        let ctx = EvaluationContext::new().with_context(
+            Context::new("user", "u1")
+                .with_parameter("plan", ParameterValue::Str("free".into())),
+        );
+        let result = apply_rules(&def, &ctx.contexts, HashSet::new(), "flag", "env-1");
+        assert_eq!(result.unwrap(), None);
+    }
+
+    #[test]
+    fn in_segment_condition_uses_resolved_set() {
+        let vid = VariantId::new();
+        let seg_id = SegmentId::new();
+        let mut variant_map = HashMap::new();
+        variant_map.insert(vid, ("treatment".to_owned(), VariantValue::BoolValue(true)));
+        let def = SdkFlagDef {
+            key: "flag".to_owned(),
+            enabled: true,
+            rules: vec![Rule {
+                id: RuleId::new(),
+                condition: ConditionExpr::Leaf(Condition::InSegment(seg_id)),
+                output: RuleOutput::Variant(vid),
+            }],
+            variant_map,
+        };
+        let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
+
+        // Not in segment → None
+        assert_eq!(
+            apply_rules(&def, &ctx.contexts, HashSet::new(), "flag", "env-1").unwrap(),
+            None
+        );
+
+        // In segment → Some(treatment)
+        let mut resolved = HashSet::new();
+        resolved.insert(seg_id);
+        assert_eq!(
+            apply_rules(&def, &ctx.contexts, resolved, "flag", "env-1").unwrap(),
+            Some(VariantValue::BoolValue(true))
+        );
     }
 }
