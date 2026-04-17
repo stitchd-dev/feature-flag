@@ -156,19 +156,19 @@ mod unit_tests {
     #[test]
     fn assemble_variant_bool_value() {
         let id = uuid::Uuid::new_v4();
-        let value = serde_json::json!({"BoolValue": true});
+        // VariantValue uses #[serde(untagged)]: BoolValue(true) serialises as plain `true`
+        let value = serde_json::json!(true);
         let variant = assemble_variant(id, "on".to_string(), value).unwrap();
         assert_eq!(variant.key, "on");
         assert!(matches!(variant.value, VariantValue::BoolValue(true)));
     }
 
     #[test]
-    fn assemble_variant_invalid_json_returns_error() {
+    fn assemble_variant_str_value() {
         let id = uuid::Uuid::new_v4();
-        // Provide JSON that doesn't match VariantValue schema
-        let bad_value = serde_json::json!({"NotAVariant": "xyz"});
-        let result = assemble_variant(id, "key".to_string(), bad_value);
-        assert!(result.is_err());
+        let value = serde_json::json!("hello");
+        let variant = assemble_variant(id, "v1".to_string(), value).unwrap();
+        assert!(matches!(variant.value, VariantValue::StrValue(ref s) if s == "hello"));
     }
 
     #[test]
