@@ -1,6 +1,6 @@
 # Implementation Plan: Rust Server-Side SDK
 
-## Phase 1: gRPC Proto & REST API Extensions
+## Phase 1: gRPC Proto & REST API Extensions [checkpoint: ac6afb2]
 
 - [x] Task 1: Define `FlagSyncService` proto <!-- 802e1e1 -->
   - `proto/flag_sync/v1/service.proto`
