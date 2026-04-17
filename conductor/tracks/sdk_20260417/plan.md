@@ -25,15 +25,15 @@
 
 ## Phase 2: Server-Side gRPC Sync Endpoint
 
-- [ ] Task 1: Implement `FlagSyncServiceImpl` gRPC handler
+- [x] Task 1: Implement `FlagSyncServiceImpl` gRPC handler
   - `crates/stitchd-server/src/grpc/flag_sync.rs`
   - Auth SDK key from `x-sdk-key` metadata, resolve environment
   - Load flags (variants, rules, hashing) + segments (rules + list meta)
   - Map domain → proto response
 
-- [ ] Task 2: Wire into tonic server in `main.rs`
+- [x] Task 2: Wire into tonic server in `main.rs`
 
-- [ ] Task 3: Integration tests for gRPC sync
+- [x] Task 3: Integration tests for gRPC sync
   - Valid key → correct payload
   - Invalid/revoked key → UNAUTHENTICATED
 
