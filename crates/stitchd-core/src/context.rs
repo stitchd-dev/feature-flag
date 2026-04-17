@@ -97,7 +97,9 @@ impl EvaluationContext {
     }
 
     pub fn get_context(&self, context_type: &str) -> Option<&Context> {
-        self.contexts.iter().find(|c| c.context_type == context_type)
+        self.contexts
+            .iter()
+            .find(|c| c.context_type == context_type)
     }
 }
 
@@ -135,7 +137,9 @@ mod tests {
     fn test_evaluation_context() {
         let ctx1 = Context::new("user", "u1");
         let ctx2 = Context::new("session", "s1");
-        let eval_ctx = EvaluationContext::new().with_context(ctx1).with_context(ctx2);
+        let eval_ctx = EvaluationContext::new()
+            .with_context(ctx1)
+            .with_context(ctx2);
 
         assert!(eval_ctx.get_context("user").is_some());
         assert!(eval_ctx.get_context("session").is_some());

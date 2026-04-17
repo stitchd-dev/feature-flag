@@ -12,3 +12,8 @@ This file tracks all major tracks for the project.
 - fix_errors_20260412 (fix the errors across workspaces)
 - feature_flags_20260416 (Implement the core Feature Flags module)
 -->
+
+---
+
+## [x] Track: fix the lint errors.
+*Link: [./conductor/tracks/fix_lint_errors_20260417/](./conductor/tracks/fix_lint_errors_20260417/)*

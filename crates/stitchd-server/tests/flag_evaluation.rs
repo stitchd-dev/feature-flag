@@ -6,15 +6,15 @@ use chrono::Utc;
 use serde_json::json;
 use std::sync::Arc;
 use stitchd_core::{
+    flag::Variant,
     id::{EnvironmentId, OrganisationId, ProjectId},
     tenant::{Environment, Organisation, Project},
-    flag::Variant,
 };
 use stitchd_db::{
     EnvironmentRepository, OrganisationRepository, ProjectRepository,
     repository::pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository,
-        PgSegmentRepository, PgFlagRepository, PgVariantRepository,
+        PgAuditLogger, PgEnvironmentRepository, PgFlagRepository, PgOrganisationRepository,
+        PgProjectRepository, PgSegmentRepository, PgVariantRepository,
     },
 };
 use stitchd_server::{AppState, build_router};
@@ -88,7 +88,8 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
         "enabled": true
     });
 
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -101,18 +102,23 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let flag_record: stitchd_core::flag::FlagRecord = serde_json::from_slice(&body).unwrap();
     let flag_id = flag_record.id;
 
     // 2. Create variants via API
     let create_v1_req = json!({ "key": "on", "value": true });
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v1/projects/{project_id}/flags/{flag_id}/variants"))
+                .uri(format!(
+                    "/v1/projects/{project_id}/flags/{flag_id}/variants"
+                ))
                 .header("Content-Type", "application/json")
                 .body(Body::from(serde_json::to_vec(&create_v1_req).unwrap()))
                 .unwrap(),
@@ -120,15 +126,20 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v1: Variant = serde_json::from_slice(&body).unwrap();
 
     let create_v2_req = json!({ "key": "off", "value": false });
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/v1/projects/{project_id}/flags/{flag_id}/variants"))
+                .uri(format!(
+                    "/v1/projects/{project_id}/flags/{flag_id}/variants"
+                ))
                 .header("Content-Type", "application/json")
                 .body(Body::from(serde_json::to_vec(&create_v2_req).unwrap()))
                 .unwrap(),
@@ -136,7 +147,9 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let v2: Variant = serde_json::from_slice(&body).unwrap();
 
     // 3. Set default variant
@@ -144,7 +157,8 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
         "default_variant_id": v2.id,
         "version": flag_record.version
     });
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("PUT")
@@ -177,7 +191,8 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
             }
         }
     ]);
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("PUT")
@@ -203,7 +218,8 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
             ]
         }
     });
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -215,7 +231,9 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let eval_res: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(eval_res["results"][0]["variant_key"], "on");
 
@@ -232,7 +250,8 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
             ]
         }
     });
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -244,7 +263,9 @@ async fn test_flag_evaluation_flow(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let eval_res: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(eval_res["results"][0]["variant_key"], "off");
 }

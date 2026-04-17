@@ -7,7 +7,9 @@ use stitchd_core::{
 };
 use stitchd_db::{
     FlagRepository, OrganisationRepository, ProjectRepository,
-    repository::pg::{PgAuditLogger, PgFlagRepository, PgOrganisationRepository, PgProjectRepository},
+    repository::pg::{
+        PgAuditLogger, PgFlagRepository, PgOrganisationRepository, PgProjectRepository,
+    },
 };
 
 #[sqlx::test(migrations = "./migrations")]
@@ -75,17 +77,15 @@ async fn test_flag_hashing_and_rules(pool: sqlx::PgPool) {
     assert_eq!(found_config[1].parameter_key, "session_id");
 
     // 2. Test Rules
-    let rules = vec![
-        FlagRule {
-            flag_id: flag.id,
-            rule_index: 0,
-            rule: Rule {
-                id: RuleId::new(),
-                condition: ConditionExpr::And(vec![]),
-                output: RuleOutput::Variant(stitchd_core::id::VariantId::new()),
-            },
+    let rules = vec![FlagRule {
+        flag_id: flag.id,
+        rule_index: 0,
+        rule: Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::And(vec![]),
+            output: RuleOutput::Variant(stitchd_core::id::VariantId::new()),
         },
-    ];
+    }];
 
     repo.upsert_rules(flag.id, &rules).await.unwrap();
     let found_rules = repo.find_rules(flag.id).await.unwrap();

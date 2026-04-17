@@ -66,7 +66,6 @@ impl From<ValidationError> for ApiError {
 /// # Errors
 /// Returns [`ApiError::Database`] if the repository fails to list segments.
 pub async fn list_segments(
-
     Path(env_id): Path<EnvironmentId>,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<Segment>>, ApiError> {
@@ -79,7 +78,6 @@ pub async fn list_segments(
 /// # Errors
 /// Returns [`ApiError::BadRequest`] if validation fails or [`ApiError::Conflict`] if the key exists.
 pub async fn create_segment(
-
     Path(env_id): Path<EnvironmentId>,
     State(state): State<AppState>,
     Json(req): Json<CreateSegmentRequest>,
@@ -131,7 +129,6 @@ pub async fn create_segment(
 /// # Errors
 /// Returns [`ApiError::NotFound`] if the segment does not exist.
 pub async fn get_segment(
-
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
 ) -> Result<Json<SegmentResponse>, ApiError> {
@@ -160,7 +157,6 @@ pub async fn get_segment(
 /// # Errors
 /// Returns [`ApiError::Conflict`] if the version mismatch or [`ApiError::NotFound`] if missing.
 pub async fn update_segment(
-
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
     Json(req): Json<UpdateSegmentRequest>,
@@ -211,7 +207,6 @@ pub async fn update_segment(
 /// # Errors
 /// Returns [`ApiError::NotFound`] if the segment does not exist.
 pub async fn delete_segment(
-
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ApiError> {

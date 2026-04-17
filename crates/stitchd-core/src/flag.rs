@@ -6,9 +6,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub use crate::variants::{FlagValueType, Variant, VariantValue};
 use crate::id::{FlagId, FlagKey, ProjectId, VariantId};
 use crate::rule_engine::types::Rule;
+pub use crate::variants::{FlagValueType, Variant, VariantValue};
 
 /// A feature flag definition stored in the database.
 ///

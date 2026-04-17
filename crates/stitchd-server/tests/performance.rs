@@ -1,14 +1,14 @@
-use stitchd_core::{
-    flag::{Flag, FlagRecord, FlagValueType, Variant, VariantValue, FlagRule},
-    id::{FlagId, FlagKey, ProjectId, VariantId, RuleId},
-    context::{EvaluationContext, Context, ParameterValue},
-    rule_engine::types::{ConditionExpr, Rule, RuleOutput},
-    rule_engine::condition::Condition,
-    evaluation::FlagEvaluator,
-};
 use chrono::Utc;
 use std::collections::HashSet;
 use std::time::Instant;
+use stitchd_core::{
+    context::{Context, EvaluationContext, ParameterValue},
+    evaluation::FlagEvaluator,
+    flag::{Flag, FlagRecord, FlagRule, FlagValueType, Variant, VariantValue},
+    id::{FlagId, FlagKey, ProjectId, RuleId, VariantId},
+    rule_engine::condition::Condition,
+    rule_engine::types::{ConditionExpr, Rule, RuleOutput},
+};
 
 fn setup_benchmark_flag() -> Flag {
     let flag_id = FlagId::new();
@@ -43,21 +43,19 @@ fn setup_benchmark_flag() -> Flag {
     ];
 
     // Simple rule that matches
-    let rules = vec![
-        FlagRule {
-            flag_id,
-            rule_index: 0,
-            rule: Rule {
-                id: RuleId::new(),
-                condition: ConditionExpr::Leaf(Condition::Eq {
-                    context_type: "user".to_string(),
-                    param: "tier".to_string(),
-                    value: ParameterValue::Str("gold".to_string()),
-                }),
-                output: RuleOutput::Variant(v1_id),
-            },
+    let rules = vec![FlagRule {
+        flag_id,
+        rule_index: 0,
+        rule: Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::Leaf(Condition::Eq {
+                context_type: "user".to_string(),
+                param: "tier".to_string(),
+                value: ParameterValue::Str("gold".to_string()),
+            }),
+            output: RuleOutput::Variant(v1_id),
         },
-    ];
+    }];
 
     Flag {
         record,
@@ -71,7 +69,7 @@ fn setup_benchmark_flag() -> Flag {
 fn benchmark_evaluation_throughput() {
     let flag = setup_benchmark_flag();
     let context = EvaluationContext::new().with_context(
-        Context::new("user", "u1").with_parameter("tier", ParameterValue::Str("gold".to_string()))
+        Context::new("user", "u1").with_parameter("tier", ParameterValue::Str("gold".to_string())),
     );
     let segments = HashSet::new();
     let env_id = stitchd_core::id::EnvironmentId::from_uuid(uuid::Uuid::nil());
@@ -92,7 +90,11 @@ fn benchmark_evaluation_throughput() {
     println!("Total Time: {:?}", duration);
     println!("Average time per evaluation: {:.2}ns", nanos_per_eval);
     println!("Throughput: {:.2} evals/sec", evals_per_sec);
-    
+
     // Goal: < 10,000ns (10us) per evaluation for simple rules
-    assert!(nanos_per_eval < 50_000.0, "Evaluation is too slow: {:.2}ns", nanos_per_eval);
+    assert!(
+        nanos_per_eval < 50_000.0,
+        "Evaluation is too slow: {:.2}ns",
+        nanos_per_eval
+    );
 }
