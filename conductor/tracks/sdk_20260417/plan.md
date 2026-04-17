@@ -2,13 +2,13 @@
 
 ## Phase 1: gRPC Proto & REST API Extensions
 
-- [x] Task 1: Define `FlagSyncService` proto
+- [x] Task 1: Define `FlagSyncService` proto <!-- 802e1e1 -->
   - `proto/flag_sync/v1/service.proto`
   - `SyncResponse`: flags (rules, variants, hashing), rule-based segment defs,
     list-based segment metadata (key + id only)
   - Export from `stitchd-proto/src/lib.rs`
 
-- [~] Task 2: Add list-check REST endpoints to stitchd-server
+- [x] Task 2: Add list-check REST endpoints to stitchd-server <!-- 802e1e1 -->
   - `POST /v1/environments/{env_id}/segments/list-check`
     - Body: `{ context_type, context_key, segment_keys }`
     - Auth: `x-sdk-key` header
@@ -17,7 +17,7 @@
     - Body: `{ contexts: [{type,key}], segment_keys }`
     - Returns membership matrix
 
-- [~] Task 3: Add SDK key auth middleware for REST (list-check routes)
+- [x] Task 3: Add SDK key auth middleware for REST (list-check routes) <!-- 802e1e1 -->
   - Extract `x-sdk-key` header, validate + resolve environment
   - Apply to list-check routes only
 
