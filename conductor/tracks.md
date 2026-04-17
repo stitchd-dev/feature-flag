@@ -23,5 +23,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Increase Test Coverage to >90% Across All Crates
+## [x] Track: Increase Test Coverage to >90% Across All Crates
 *Link: [./conductor/tracks/coverage_20260417/](./conductor/tracks/coverage_20260417/)*
