@@ -4,21 +4,22 @@
 <!-- execution: sequential -->
 <!-- depends: -->
 
-- [ ] Task 1: Audit current coverage in stitchd-core
+- [x] Task 1: Audit current coverage in stitchd-core
   <!-- files: crates/stitchd-core/src/ -->
   - Run `cargo tarpaulin -p stitchd-core` and identify uncovered lines
   - Focus on: `condition.rs` (0 tests), `flag.rs`, `evaluation/engine.rs`
 
-- [ ] Task 2: Write tests for condition.rs
+- [x] Task 2: Write tests for condition.rs
   <!-- files: crates/stitchd-core/src/rule_engine/condition.rs -->
   - Add `#[cfg(test)]` module covering all condition matching paths
 
-- [ ] Task 3: Fill coverage gaps in flag.rs and evaluation/engine.rs
+- [x] Task 3: Fill coverage gaps in flag.rs and evaluation/engine.rs
   <!-- files: crates/stitchd-core/src/flag.rs, crates/stitchd-core/src/evaluation/engine.rs -->
   - Add tests for any uncovered branches in flag lifecycle and engine evaluation
 
-- [ ] Task 4: Verify stitchd-core reaches ≥90%
+- [x] Task 4: Verify stitchd-core reaches ≥90%
   - Run `cargo tarpaulin -p stitchd-core --fail-under 90`
+  - Result: 97.42% (454/466 lines), commit f1bc615
 
 - [ ] Task: Conductor - User Manual Verification 'stitchd-core Coverage' (Protocol in workflow.md)
 
