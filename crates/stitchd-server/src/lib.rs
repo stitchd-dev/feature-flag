@@ -87,13 +87,26 @@ mod tests {
             .build_recorder()
             .handle();
         let audit = std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
+        let audit2 =
+            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
+        let audit3 =
+            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
         let segment_repo = std::sync::Arc::new(
             stitchd_db::repository::pg::PgSegmentRepository::new(db.clone(), audit),
+        );
+        let flag_repo = std::sync::Arc::new(stitchd_db::repository::pg::PgFlagRepository::new(
+            db.clone(),
+            audit2,
+        ));
+        let variant_repo = std::sync::Arc::new(
+            stitchd_db::repository::pg::PgVariantRepository::new(db.clone(), audit3),
         );
         AppState {
             db,
             metrics_handle,
             segment_repo,
+            flag_repo,
+            variant_repo,
         }
     }
 

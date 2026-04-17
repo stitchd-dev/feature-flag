@@ -121,7 +121,7 @@ mod tests {
     fn test_matches_type() {
         assert!(VariantValue::BoolValue(true).matches_type(&FlagValueType::Bool));
         assert!(VariantValue::IntValue(42).matches_type(&FlagValueType::Int));
-        assert!(VariantValue::DoubleValue(3.14).matches_type(&FlagValueType::Double));
+        assert!(VariantValue::DoubleValue(2.5).matches_type(&FlagValueType::Double));
         assert!(VariantValue::StrValue("hi".into()).matches_type(&FlagValueType::Str));
         assert!(VariantValue::JsonValue(json!({})).matches_type(&FlagValueType::Json));
 
@@ -138,8 +138,8 @@ mod tests {
         assert_eq!(i.as_int(), Some(42));
         assert_eq!(i.as_bool(), None);
 
-        let d = VariantValue::DoubleValue(3.14);
-        assert_eq!(d.as_double(), Some(3.14));
+        let d = VariantValue::DoubleValue(2.5);
+        assert_eq!(d.as_double(), Some(2.5));
         assert_eq!(d.as_int(), None);
 
         let s = VariantValue::StrValue("hello".into());

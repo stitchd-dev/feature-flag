@@ -1,6 +1,7 @@
 //! Feature flag management handlers.
 
 use crate::AppState;
+use crate::api::segments::handlers::ApiError;
 use axum::{
     Json,
     extract::{Path, State},
@@ -11,10 +12,12 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use stitchd_core::{
     context::EvaluationContext,
+    evaluation::FlagEvaluator,
     flag::{FlagHashingConfig, FlagRecord, FlagRule, FlagValueType, Variant},
     id::{EnvironmentId, FlagId, FlagKey, ProjectId, VariantId},
+    segment::SegmentEvaluator,
+    variants::VariantValue,
 };
-use crate::api::segments::handlers::ApiError;
 
 /// Request to create a new feature flag.
 #[derive(Deserialize)]
@@ -73,7 +76,7 @@ pub async fn create_flag(
     Json(req): Json<CreateFlagRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let flag_key = FlagKey::new(req.key).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    
+
     let flag = FlagRecord {
         id: FlagId::new(),
         project_id,
@@ -133,12 +136,14 @@ pub async fn update_flag(
     if let Some(enabled) = req.enabled {
         flag.enabled = enabled;
     }
-    
+
     if let Some(variant_id) = req.default_variant_id {
         // Verify variant exists
         let variants = state.variant_repo.find_by_flag(flag_id).await?;
         if !variants.iter().any(|v| v.id == variant_id) {
-            return Err(ApiError::BadRequest(format!("variant {} not found for flag", variant_id)));
+            return Err(ApiError::BadRequest(format!(
+                "variant {variant_id} not found for flag"
+            )));
         }
         flag.default_variant_id = Some(variant_id);
     }
@@ -182,14 +187,16 @@ pub async fn create_variant(
     Json(req): Json<CreateVariantRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let flag = state.flag_repo.find_by_id(flag_id).await?;
-    
-    let variant_value = serde_json::from_value(req.value).map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    
-    // Core check for type compatibility
-    use stitchd_core::variants::VariantValue;
+
+    let variant_value =
+        serde_json::from_value(req.value).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
     let vv: VariantValue = variant_value;
     if !vv.matches_type(&flag.value_type) {
-         return Err(ApiError::BadRequest(format!("Variant value does not match flag type {:?}", flag.value_type)));
+        return Err(ApiError::BadRequest(format!(
+            "Variant value does not match flag type {:?}",
+            flag.value_type
+        )));
     }
 
     let variant = Variant {
@@ -280,17 +287,20 @@ pub async fn evaluate_all_flags(
     for sr in segment_records {
         let def = match sr.segment_type {
             stitchd_core::segment::SegmentType::Rule => {
-                stitchd_core::segment::SegmentDefinition::RuleBased(state.segment_repo.find_with_rules(sr.id).await?)
+                stitchd_core::segment::SegmentDefinition::RuleBased(
+                    state.segment_repo.find_with_rules(sr.id).await?,
+                )
             }
             stitchd_core::segment::SegmentType::List => {
-                stitchd_core::segment::SegmentDefinition::ListBased(state.segment_repo.find_with_list(sr.id).await?)
+                stitchd_core::segment::SegmentDefinition::ListBased(
+                    state.segment_repo.find_with_list(sr.id).await?,
+                )
             }
         };
         segment_definitions.push(def);
     }
 
     // 2. Resolve segments
-    use stitchd_core::segment::SegmentEvaluator;
     let match_results = SegmentEvaluator::evaluate_all(&req.context.contexts, &segment_definitions)
         .map_err(|e| ApiError::Database(e.to_string()))?;
 
@@ -304,7 +314,6 @@ pub async fn evaluate_all_flags(
     let flag_records = state.flag_repo.list_by_environment(env_id).await?;
 
     // 4. Evaluate each flag
-    use stitchd_core::evaluation::FlagEvaluator;
     let mut evaluation_results = Vec::with_capacity(flag_records.len());
 
     for record in flag_records {
@@ -324,7 +333,8 @@ pub async fn evaluate_all_flags(
         let variant = FlagEvaluator::evaluate(&flag, &req.context, &resolved_segments, env_id)
             .map_err(|e| ApiError::Database(e.to_string()))?;
 
-        let variant_value = serde_json::to_value(&variant.value).map_err(|e| ApiError::Database(e.to_string()))?;
+        let variant_value =
+            serde_json::to_value(&variant.value).map_err(|e| ApiError::Database(e.to_string()))?;
 
         evaluation_results.push(EvaluationResult {
             flag_key: record.key.to_string(),

@@ -12,8 +12,8 @@ use stitchd_core::{
 use stitchd_db::{
     EnvironmentRepository, OrganisationRepository, ProjectRepository,
     repository::pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository,
-        PgSegmentRepository,
+        PgAuditLogger, PgEnvironmentRepository, PgFlagRepository, PgOrganisationRepository,
+        PgProjectRepository, PgSegmentRepository, PgVariantRepository,
     },
 };
 use stitchd_server::{AppState, build_router};
@@ -25,6 +25,8 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
     let env_repo = PgEnvironmentRepository::new(pool.clone(), audit.clone());
     let segment_repo = Arc::new(PgSegmentRepository::new(pool.clone(), audit.clone()));
+    let flag_repo = Arc::new(PgFlagRepository::new(pool.clone(), audit.clone()));
+    let variant_repo = Arc::new(PgVariantRepository::new(pool.clone(), audit.clone()));
 
     // Setup hierarchy
     let org = Organisation {
@@ -67,6 +69,8 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         db: pool,
         metrics_handle,
         segment_repo,
+        flag_repo,
+        variant_repo,
     };
 
     (build_router(state), env.id)

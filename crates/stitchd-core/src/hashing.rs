@@ -1,6 +1,6 @@
 use crate::context::ParameterValue;
-use std::io::Cursor;
 use murmur3::murmur3_x64_128;
+use std::io::Cursor;
 
 /// Computes a consistent hash for a given context parameter and maps it to a percentage.
 ///
@@ -25,11 +25,7 @@ fn compute_raw_percentage(input: &str) -> f64 {
 /// Calculates the allocation percentage for a flag based on multiple targets.
 ///
 /// Hash input: `flag_key` + `env_id` + sum of (target values).
-pub fn calculate_allocation(
-    flag_key: &str,
-    env_id: &str,
-    targets: &[String],
-) -> f64 {
+pub fn calculate_allocation(flag_key: &str, env_id: &str, targets: &[String]) -> f64 {
     let mut input = format!("{}{}", flag_key, env_id);
     for t in targets {
         input.push_str(t);
@@ -56,7 +52,7 @@ mod tests {
         for i in 0..1000 {
             let val = ParameterValue::Int(i);
             let h = compute_hash_percentage("user", "id", &val);
-            assert!(h >= 0.0 && h < 100.0);
+            assert!((0.0..100.0).contains(&h));
             results.push(h);
         }
 
@@ -71,14 +67,14 @@ mod tests {
     fn test_different_inputs_produce_different_hashes() {
         let val1 = ParameterValue::Str("user-1".to_string());
         let val2 = ParameterValue::Str("user-2".to_string());
-        
+
         let h1 = compute_hash_percentage("user", "id", &val1);
         let h2 = compute_hash_percentage("user", "id", &val2);
         assert_ne!(h1, h2);
-        
+
         let h3 = compute_hash_percentage("user", "other", &val1);
         assert_ne!(h1, h3);
-        
+
         let h4 = compute_hash_percentage("other", "id", &val1);
         assert_ne!(h1, h4);
     }
