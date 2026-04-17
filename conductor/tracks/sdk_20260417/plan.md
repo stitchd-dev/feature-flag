@@ -89,4 +89,4 @@
   - LFU: warm context → no network; cold → API call
   - Server down after init: rule eval succeeds, list eval surfaces error
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Testing & Validation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Testing & Validation' (Protocol in workflow.md)
