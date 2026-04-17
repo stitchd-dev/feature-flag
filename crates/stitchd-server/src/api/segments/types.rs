@@ -32,7 +32,7 @@ pub struct UpdateSegmentRequest {
 }
 
 /// Full segment details returned by the API.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SegmentResponse {
     /// Unique identifier.
     pub id: SegmentId,
@@ -97,7 +97,7 @@ pub struct ListCheckRequest {
 }
 
 /// `POST /v1/environments/{env_id}/segments/list-check` response body.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListCheckResponse {
     /// Map from segment key to membership boolean.
     pub memberships: HashMap<String, bool>,
@@ -122,7 +122,7 @@ pub struct BatchListCheckRequest {
 }
 
 /// Membership result for a single context in a batch response.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchContextMembership {
     /// Context type.
     pub context_type: String,
@@ -133,8 +133,137 @@ pub struct BatchContextMembership {
 }
 
 /// `POST /v1/environments/{env_id}/segments/list-check/batch` response body.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchListCheckResponse {
     /// One entry per requested context.
     pub results: Vec<BatchContextMembership>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use stitchd_core::{
+        id::{RuleId, VariantId},
+        rule_engine::{
+            condition::Condition,
+            types::{ConditionExpr, Rule, RuleOutput},
+        },
+    };
+
+    fn make_leaf_rule(condition: Condition) -> Rule {
+        Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::Leaf(condition),
+            output: RuleOutput::Variant(VariantId::new()),
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // validate_rules
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn validate_rules_accepts_empty_rules() {
+        assert!(validate_rules(&[]).is_ok());
+    }
+
+    #[test]
+    fn validate_rules_accepts_non_segment_conditions() {
+        use stitchd_core::context::ParameterValue;
+        let rule = make_leaf_rule(Condition::Eq {
+            context_type: "user".to_string(),
+            param: "email".to_string(),
+            value: ParameterValue::Str("test@example.com".to_string()),
+        });
+        assert!(validate_rules(&[rule]).is_ok());
+    }
+
+    #[test]
+    fn validate_rules_rejects_in_segment_condition() {
+        use stitchd_core::id::SegmentId;
+        let rule = make_leaf_rule(Condition::InSegment(SegmentId::new()));
+        let result = validate_rules(&[rule]);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ValidationError::InvalidSegmentRule)));
+    }
+
+    #[test]
+    fn validate_rules_rejects_not_in_segment_condition() {
+        use stitchd_core::id::SegmentId;
+        let rule = make_leaf_rule(Condition::NotInSegment(SegmentId::new()));
+        let result = validate_rules(&[rule]);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(ValidationError::InvalidSegmentRule)));
+    }
+
+    #[test]
+    fn validate_rules_rejects_in_segment_nested_in_and() {
+        use stitchd_core::{context::ParameterValue, id::SegmentId};
+        let seg_rule = make_leaf_rule(Condition::InSegment(SegmentId::new()));
+        let rule = Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::And(vec![
+                ConditionExpr::Leaf(Condition::Eq {
+                    context_type: "user".to_string(),
+                    param: "plan".to_string(),
+                    value: ParameterValue::Str("pro".to_string()),
+                }),
+                seg_rule.condition,
+            ]),
+            output: RuleOutput::Variant(VariantId::new()),
+        };
+        let result = validate_rules(&[rule]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_rules_rejects_in_segment_nested_in_or() {
+        use stitchd_core::{context::ParameterValue, id::SegmentId};
+        let seg_rule = make_leaf_rule(Condition::InSegment(SegmentId::new()));
+        let rule = Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::Or(vec![
+                ConditionExpr::Leaf(Condition::Eq {
+                    context_type: "user".to_string(),
+                    param: "plan".to_string(),
+                    value: ParameterValue::Str("pro".to_string()),
+                }),
+                seg_rule.condition,
+            ]),
+            output: RuleOutput::Variant(VariantId::new()),
+        };
+        let result = validate_rules(&[rule]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_rules_rejects_in_segment_nested_in_not() {
+        use stitchd_core::id::SegmentId;
+        let seg_rule = make_leaf_rule(Condition::InSegment(SegmentId::new()));
+        let rule = Rule {
+            id: RuleId::new(),
+            condition: ConditionExpr::Not(Box::new(seg_rule.condition)),
+            output: RuleOutput::Variant(VariantId::new()),
+        };
+        let result = validate_rules(&[rule]);
+        assert!(result.is_err());
+    }
+
+    // ---------------------------------------------------------------------------
+    // ValidationError messages
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn validation_error_invalid_segment_rule_has_message() {
+        let err = ValidationError::InvalidSegmentRule;
+        let msg = err.to_string();
+        assert!(msg.contains("InSegment"));
+    }
+
+    #[test]
+    fn validation_error_missing_definition_includes_type() {
+        let err = ValidationError::MissingDefinition(SegmentType::Rule);
+        let msg = err.to_string();
+        assert!(msg.contains("Rule") || msg.to_lowercase().contains("missing"));
+    }
 }

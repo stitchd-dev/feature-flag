@@ -37,3 +37,5 @@ sha2 = { workspace = true }
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio-stream = { version = "0.1", features = ["net"] }
+async-trait = { workspace = true }
+anyhow = { workspace = true }

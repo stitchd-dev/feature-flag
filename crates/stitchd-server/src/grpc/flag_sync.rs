@@ -264,14 +264,400 @@ fn domain_flag_rule_to_proto(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use metrics_exporter_prometheus::PrometheusBuilder;
+    use std::sync::{Arc, Mutex};
     use stitchd_core::{
-        id::{RuleId, VariantId},
-        rule_engine::types::{ConditionExpr, PercentageTarget, RuleOutput, TargetField},
+        flag::Variant,
+        id::{EnvironmentId, FlagId, ProjectId, RuleId, SegmentId, SdkKeyId, VariantId},
+        rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField},
+        segment::{ListBasedSegment, RuleBasedSegment, Segment},
+        tenant::SdkKey,
         variants::{FlagValueType as DomainFVT, VariantValue},
+    };
+    use stitchd_db::{
+        ContextMembership, FlagRepository, RepositoryError, SdkKeyRepository, SegmentRepository,
+        VariantRepository,
     };
 
     fn make_variant_id() -> VariantId {
         VariantId::new()
+    }
+
+    // ── Minimal stubs for gRPC sync tests ────────────────────────────────────
+
+    struct StubFlagRepo {
+        flags: Mutex<Vec<stitchd_core::flag::FlagRecord>>,
+    }
+
+    impl StubFlagRepo {
+        fn empty() -> Arc<Self> {
+            Arc::new(Self {
+                flags: Mutex::new(Vec::new()),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl FlagRepository for StubFlagRepo {
+        async fn find_by_id(
+            &self,
+            id: FlagId,
+        ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn find_by_key(
+            &self,
+            key: &stitchd_core::id::FlagKey,
+            _project_id: ProjectId,
+        ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: key.to_string(),
+            })
+        }
+
+        async fn list_by_project(
+            &self,
+            _project_id: ProjectId,
+        ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError> {
+            Ok(self.flags.lock().unwrap().clone())
+        }
+
+        async fn create(
+            &self,
+            _flag: &stitchd_core::flag::FlagRecord,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(
+            &self,
+            flag: &stitchd_core::flag::FlagRecord,
+        ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
+            Ok(flag.clone())
+        }
+
+        async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn find_hashing_config(
+            &self,
+            _flag_id: FlagId,
+        ) -> Result<Vec<stitchd_core::flag::FlagHashingConfig>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn upsert_hashing_config(
+            &self,
+            _flag_id: FlagId,
+            _config: &[stitchd_core::flag::FlagHashingConfig],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn find_rules(
+            &self,
+            _flag_id: FlagId,
+        ) -> Result<Vec<stitchd_core::flag::FlagRule>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn upsert_rules(
+            &self,
+            _flag_id: FlagId,
+            _rules: &[stitchd_core::flag::FlagRule],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+    }
+
+    struct StubVariantRepo;
+
+    #[async_trait]
+    impl VariantRepository for StubVariantRepo {
+        async fn find_by_flag(&self, _flag_id: FlagId) -> Result<Vec<Variant>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn create(
+            &self,
+            _flag_id: FlagId,
+            _variant: &Variant,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(&self, variant: &Variant) -> Result<Variant, RepositoryError> {
+            Ok(variant.clone())
+        }
+
+        async fn delete(&self, _id: VariantId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+    }
+
+    struct StubSegmentRepo;
+
+    #[async_trait]
+    impl SegmentRepository for StubSegmentRepo {
+        async fn find_by_id(&self, id: SegmentId) -> Result<Segment, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn find_by_key(
+            &self,
+            key: &str,
+            _environment_id: EnvironmentId,
+        ) -> Result<Segment, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: key.to_string(),
+            })
+        }
+
+        async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<Segment>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn create(&self, _segment: &Segment) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(&self, segment: &Segment) -> Result<Segment, RepositoryError> {
+            Ok(segment.clone())
+        }
+
+        async fn find_with_rules(
+            &self,
+            id: SegmentId,
+        ) -> Result<RuleBasedSegment, RepositoryError> {
+            Ok(RuleBasedSegment {
+                id,
+                rules: Vec::new(),
+            })
+        }
+
+        async fn find_with_list(
+            &self,
+            id: SegmentId,
+        ) -> Result<ListBasedSegment, RepositoryError> {
+            Ok(ListBasedSegment {
+                id,
+                lists: std::collections::HashMap::new(),
+            })
+        }
+
+        async fn upsert_rules(
+            &self,
+            _id: SegmentId,
+            _rules: &[Rule],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn set_list_entries(
+            &self,
+            _id: SegmentId,
+            _context_type: &str,
+            _include: &[String],
+            _exclude: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn soft_delete(&self, _id: SegmentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn check_list_membership(
+            &self,
+            _environment_id: EnvironmentId,
+            _context_type: &str,
+            _context_key: &str,
+            segment_keys: &[String],
+        ) -> Result<std::collections::HashMap<String, bool>, RepositoryError> {
+            Ok(segment_keys.iter().map(|k| (k.clone(), false)).collect())
+        }
+
+        async fn batch_check_list_membership(
+            &self,
+            _environment_id: EnvironmentId,
+            _contexts: &[(String, String)],
+            _segment_keys: &[String],
+        ) -> Result<Vec<ContextMembership>, RepositoryError> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct StubSdkKeyRepo {
+        active_keys: Vec<SdkKey>,
+    }
+
+    impl StubSdkKeyRepo {
+        fn empty() -> Arc<Self> {
+            Arc::new(Self {
+                active_keys: Vec::new(),
+            })
+        }
+
+        fn with_hash(key_hash: String, env_id: EnvironmentId) -> Arc<Self> {
+            let key = SdkKey {
+                id: SdkKeyId::new(),
+                environment_id: env_id,
+                key_hash,
+                is_active: true,
+                created_at: chrono::Utc::now(),
+                revoked_at: None,
+            };
+            Arc::new(Self {
+                active_keys: vec![key],
+            })
+        }
+    }
+
+    #[async_trait]
+    impl SdkKeyRepository for StubSdkKeyRepo {
+        async fn find_by_id(&self, id: SdkKeyId) -> Result<SdkKey, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<SdkKey>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn create(&self, _key: &SdkKey) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: id.to_string(),
+            })
+        }
+
+        async fn find_active_by_environment(
+            &self,
+            env_id: EnvironmentId,
+        ) -> Result<Vec<SdkKey>, RepositoryError> {
+            Ok(self
+                .active_keys
+                .iter()
+                .filter(|k| k.environment_id == env_id && k.is_active)
+                .cloned()
+                .collect())
+        }
+
+        async fn find_active_by_hash(
+            &self,
+            key_hash: &str,
+        ) -> Result<SdkKey, RepositoryError> {
+            self.active_keys
+                .iter()
+                .find(|k| k.key_hash == key_hash)
+                .cloned()
+                .ok_or(RepositoryError::NotFound {
+                    id: key_hash.to_string(),
+                })
+        }
+    }
+
+    fn make_state(
+        flag_repo: Arc<dyn FlagRepository>,
+        sdk_key_repo: Arc<dyn SdkKeyRepository>,
+    ) -> crate::AppState {
+        let db =
+            sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
+                .expect("lazy pool");
+        crate::AppState {
+            db,
+            metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
+            segment_repo: Arc::new(StubSegmentRepo),
+            flag_repo,
+            variant_repo: Arc::new(StubVariantRepo),
+            sdk_key_repo,
+        }
+    }
+
+    // ── FlagSyncServiceImpl integration tests ─────────────────────────────────
+
+    #[tokio::test]
+    async fn sync_returns_unauthenticated_when_no_sdk_key() {
+        let state = make_state(StubFlagRepo::empty(), StubSdkKeyRepo::empty());
+        let svc = FlagSyncServiceImpl::new(state);
+
+        let request = Request::new(SyncRequest { contexts: vec![] });
+        let result = svc.sync(request).await;
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn sync_returns_unauthenticated_when_key_not_found() {
+        let state = make_state(StubFlagRepo::empty(), StubSdkKeyRepo::empty());
+        let svc = FlagSyncServiceImpl::new(state);
+
+        let mut request = Request::new(SyncRequest { contexts: vec![] });
+        request
+            .metadata_mut()
+            .insert("x-sdk-key", "wrong-key".parse().unwrap());
+        let result = svc.sync(request).await;
+        assert!(result.is_err());
+        let status = result.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn sync_returns_ok_for_empty_environment() {
+        let env_id = EnvironmentId::new();
+        let raw_key = "test-grpc-key";
+        let key_hash = crate::api::sdk_auth::hash_sdk_key(raw_key);
+        let state = make_state(
+            StubFlagRepo::empty(),
+            StubSdkKeyRepo::with_hash(key_hash, env_id),
+        );
+        let svc = FlagSyncServiceImpl::new(state);
+
+        let mut request = Request::new(SyncRequest { contexts: vec![] });
+        request
+            .metadata_mut()
+            .insert("x-sdk-key", raw_key.parse().unwrap());
+        let result = svc.sync(request).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().into_inner();
+        assert!(response.flags.is_empty());
+        assert!(response.rule_segments.is_empty());
+        assert!(response.list_segments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn flag_sync_service_impl_new_creates_instance() {
+        let state = make_state(StubFlagRepo::empty(), StubSdkKeyRepo::empty());
+        let svc = FlagSyncServiceImpl::new(state);
+        // Just verify the instance is created (tests the const fn new)
+        let _ = svc;
     }
 
     #[test]
@@ -367,5 +753,116 @@ mod tests {
         } else {
             panic!("expected Allocation output");
         }
+    }
+
+    // ── Additional domain_variant_to_proto coverage ──────────────────────────
+
+    #[test]
+    fn variant_int_maps_correctly() {
+        let v = stitchd_core::flag::Variant {
+            id: make_variant_id(),
+            key: "large".to_string(),
+            value: VariantValue::IntValue(42),
+        };
+        let proto = domain_variant_to_proto(v);
+        assert!(matches!(
+            proto.value.unwrap().value,
+            Some(ProtoVariantValueInner::IntValue(42))
+        ));
+    }
+
+    #[test]
+    fn variant_double_maps_correctly() {
+        let v = stitchd_core::flag::Variant {
+            id: make_variant_id(),
+            key: "rate".to_string(),
+            value: VariantValue::DoubleValue(3.14),
+        };
+        let proto = domain_variant_to_proto(v);
+        assert!(matches!(
+            proto.value.unwrap().value,
+            Some(ProtoVariantValueInner::DoubleValue(d)) if (d - 3.14).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn variant_str_maps_correctly() {
+        let v = stitchd_core::flag::Variant {
+            id: make_variant_id(),
+            key: "colour".to_string(),
+            value: VariantValue::StrValue("blue".to_string()),
+        };
+        let proto = domain_variant_to_proto(v);
+        assert!(matches!(
+            proto.value.unwrap().value,
+            Some(ProtoVariantValueInner::StringValue(ref s)) if s == "blue"
+        ));
+    }
+
+    #[test]
+    fn variant_json_maps_correctly() {
+        let v = stitchd_core::flag::Variant {
+            id: make_variant_id(),
+            key: "cfg".to_string(),
+            value: VariantValue::JsonValue(serde_json::json!({"key": "val"})),
+        };
+        let proto = domain_variant_to_proto(v);
+        assert!(matches!(
+            proto.value.unwrap().value,
+            Some(ProtoVariantValueInner::JsonValue(_))
+        ));
+    }
+
+    #[test]
+    fn flag_rule_percentage_with_parameter_field_adds_param_name() {
+        let vid = make_variant_id();
+        let mut key_map = HashMap::new();
+        key_map.insert(vid, "t".to_string());
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: stitchd_core::id::FlagId::new(),
+            rule_index: 0,
+            rule: stitchd_core::rule_engine::types::Rule {
+                id: RuleId::new(),
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![PercentageTarget {
+                        context_type: "user".to_string(),
+                        field: TargetField::Parameter("user_id".to_string()),
+                    }],
+                    weights: vec![(vid, 500)],
+                },
+            },
+        };
+
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = proto.output {
+            let spec = alloc.context_hash_specs.get("user").unwrap();
+            assert!(spec.parameter_names.contains(&"user_id".to_string()));
+        } else {
+            panic!("expected Allocation output");
+        }
+    }
+
+    #[test]
+    fn flag_rule_variant_output_missing_in_map_returns_empty_key() {
+        let vid = make_variant_id();
+        let key_map: HashMap<_, String> = HashMap::new(); // no entry for vid
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: stitchd_core::id::FlagId::new(),
+            rule_index: 0,
+            rule: stitchd_core::rule_engine::types::Rule {
+                id: RuleId::new(),
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Variant(vid),
+            },
+        };
+
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        assert!(matches!(
+            proto.output,
+            Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey(ref k)) if k.is_empty()
+        ));
     }
 }
