@@ -14,6 +14,7 @@ pub use crate::variants::{FlagValueType, Variant, VariantValue};
 ///
 /// Variants belonging to this flag are fetched separately via `VariantRepository`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FlagRecord {
     /// Unique identifier.
     pub id: FlagId,
@@ -39,6 +40,7 @@ pub struct FlagRecord {
 
 /// Configures which context parameters are used for hashing a specific flag.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FlagHashingConfig {
     /// The flag this config belongs to.
     pub flag_id: FlagId,
@@ -52,6 +54,7 @@ pub struct FlagHashingConfig {
 
 /// A rule associated with a feature flag.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct FlagRule {
     /// The flag this rule belongs to.
     pub flag_id: FlagId,
@@ -65,6 +68,7 @@ pub struct FlagRule {
 ///
 /// This is the primary domain model used for evaluation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Flag {
     /// Core flag metadata.
     pub record: FlagRecord,

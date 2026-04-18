@@ -21,6 +21,7 @@ use stitchd_core::{
 
 /// Request to create a new feature flag.
 #[derive(Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct CreateFlagRequest {
     /// URL-safe key.
     pub key: String,
@@ -32,6 +33,7 @@ pub struct CreateFlagRequest {
 
 /// Request to update an existing flag's metadata.
 #[derive(Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct UpdateFlagRequest {
     /// New enabled status.
     pub enabled: Option<bool>,
@@ -43,6 +45,7 @@ pub struct UpdateFlagRequest {
 
 /// Full response for a single flag, including its rules and variants.
 #[derive(Serialize, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct FlagResponse {
     /// Core record.
     pub record: FlagRecord,
@@ -58,6 +61,16 @@ pub struct FlagResponse {
 ///
 /// # Errors
 /// Returns [`ApiError::Database`] if the repository fails.
+#[utoipa::path(
+    get,
+    path = "/v1/projects/{project_id}/flags",
+    params(("project_id" = String, Path, description = "Project UUID")),
+    responses(
+        (status = 200, description = "List of flags", body = Vec<stitchd_core::flag::FlagRecord>),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "flags"
+)]
 pub async fn list_flags(
     Path(project_id): Path<ProjectId>,
     State(state): State<AppState>,
@@ -70,6 +83,18 @@ pub async fn list_flags(
 ///
 /// # Errors
 /// Returns [`ApiError::BadRequest`] if validation fails or [`ApiError::Conflict`] if the key exists.
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{project_id}/flags",
+    params(("project_id" = String, Path, description = "Project UUID")),
+    request_body = CreateFlagRequest,
+    responses(
+        (status = 201, description = "Flag created", body = stitchd_core::flag::FlagRecord),
+        (status = 422, description = "Validation error"),
+        (status = 409, description = "Key conflict"),
+    ),
+    tag = "flags"
+)]
 pub async fn create_flag(
     Path(project_id): Path<ProjectId>,
     State(state): State<AppState>,
@@ -98,6 +123,19 @@ pub async fn create_flag(
 ///
 /// # Errors
 /// Returns [`ApiError::NotFound`] if the flag is missing.
+#[utoipa::path(
+    get,
+    path = "/v1/projects/{project_id}/flags/{flag_id}",
+    params(
+        ("project_id" = String, Path, description = "Project UUID"),
+        ("flag_id" = String, Path, description = "Flag UUID"),
+    ),
+    responses(
+        (status = 200, description = "Flag details", body = FlagResponse),
+        (status = 404, description = "Flag not found"),
+    ),
+    tag = "flags"
+)]
 pub async fn get_flag(
     Path((_project_id, flag_id)): Path<(ProjectId, FlagId)>,
     State(state): State<AppState>,
@@ -119,6 +157,21 @@ pub async fn get_flag(
 ///
 /// # Errors
 /// Returns [`ApiError::Conflict`] if the version mismatch or [`ApiError::NotFound`] if missing.
+#[utoipa::path(
+    put,
+    path = "/v1/projects/{project_id}/flags/{flag_id}",
+    params(
+        ("project_id" = String, Path, description = "Project UUID"),
+        ("flag_id" = String, Path, description = "Flag UUID"),
+    ),
+    request_body = UpdateFlagRequest,
+    responses(
+        (status = 200, description = "Updated flag", body = stitchd_core::flag::FlagRecord),
+        (status = 404, description = "Flag not found"),
+        (status = 409, description = "Version conflict"),
+    ),
+    tag = "flags"
+)]
 pub async fn update_flag(
     Path((_project_id, flag_id)): Path<(ProjectId, FlagId)>,
     State(state): State<AppState>,
@@ -156,6 +209,19 @@ pub async fn update_flag(
 ///
 /// # Errors
 /// Returns [`ApiError::NotFound`] if the flag does not exist.
+#[utoipa::path(
+    delete,
+    path = "/v1/projects/{project_id}/flags/{flag_id}",
+    params(
+        ("project_id" = String, Path, description = "Project UUID"),
+        ("flag_id" = String, Path, description = "Flag UUID"),
+    ),
+    responses(
+        (status = 204, description = "Flag deleted"),
+        (status = 404, description = "Flag not found"),
+    ),
+    tag = "flags"
+)]
 pub async fn delete_flag(
     Path((_project_id, flag_id)): Path<(ProjectId, FlagId)>,
     State(state): State<AppState>,
@@ -170,6 +236,7 @@ pub async fn delete_flag(
 
 /// Request to create a new flag variant.
 #[derive(Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct CreateVariantRequest {
     /// Unique key within the flag.
     pub key: String,
@@ -181,6 +248,20 @@ pub struct CreateVariantRequest {
 ///
 /// # Errors
 /// Returns [`ApiError::BadRequest`] if type mismatch.
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/variants",
+    params(
+        ("project_id" = String, Path, description = "Project UUID"),
+        ("flag_id" = String, Path, description = "Flag UUID"),
+    ),
+    request_body = CreateVariantRequest,
+    responses(
+        (status = 201, description = "Variant created", body = stitchd_core::flag::Variant),
+        (status = 422, description = "Type mismatch"),
+    ),
+    tag = "flags"
+)]
 pub async fn create_variant(
     Path((_project_id, flag_id)): Path<(ProjectId, FlagId)>,
     State(state): State<AppState>,
@@ -217,6 +298,20 @@ pub async fn create_variant(
 ///
 /// # Errors
 /// Returns [`ApiError::Database`] if upsert fails.
+#[utoipa::path(
+    put,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/hashing",
+    params(
+        ("project_id" = String, Path, description = "Project UUID"),
+        ("flag_id" = String, Path, description = "Flag UUID"),
+    ),
+    request_body = Vec<stitchd_core::flag::FlagHashingConfig>,
+    responses(
+        (status = 204, description = "Hashing config updated"),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "flags"
+)]
 pub async fn update_hashing_config(
     Path((_project_id, flag_id)): Path<(ProjectId, FlagId)>,
     State(state): State<AppState>,
@@ -234,6 +329,20 @@ pub async fn update_hashing_config(
 ///
 /// # Errors
 /// Returns [`ApiError::Database`] if upsert fails.
+#[utoipa::path(
+    put,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/rules",
+    params(
+        ("project_id" = String, Path, description = "Project UUID"),
+        ("flag_id" = String, Path, description = "Flag UUID"),
+    ),
+    request_body = Vec<stitchd_core::flag::FlagRule>,
+    responses(
+        (status = 204, description = "Rules updated"),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "flags"
+)]
 pub async fn update_rules(
     Path((_project_id, flag_id)): Path<(ProjectId, FlagId)>,
     State(state): State<AppState>,
@@ -249,6 +358,7 @@ pub async fn update_rules(
 
 /// Request for context-based flag evaluation.
 #[derive(Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct EvaluationRequest {
     /// Context parameters for evaluation.
     pub context: EvaluationContext,
@@ -256,6 +366,7 @@ pub struct EvaluationRequest {
 
 /// The result of a single flag evaluation.
 #[derive(Serialize, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct EvaluationResult {
     /// Flag key.
     pub flag_key: String,
@@ -267,6 +378,7 @@ pub struct EvaluationResult {
 
 /// Response containing all evaluated flags for the requested context.
 #[derive(Serialize, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct BatchEvaluationResponse {
     /// Map of flag keys to results.
     pub results: Vec<EvaluationResult>,
@@ -276,6 +388,17 @@ pub struct BatchEvaluationResponse {
 ///
 /// # Errors
 /// Returns [`ApiError::Database`] if evaluation logic fails.
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/evaluate",
+    params(("env_id" = String, Path, description = "Environment UUID")),
+    request_body = EvaluationRequest,
+    responses(
+        (status = 200, description = "Evaluation results", body = BatchEvaluationResponse),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "flags"
+)]
 pub async fn evaluate_all_flags(
     Path(env_id): Path<EnvironmentId>,
     State(state): State<AppState>,

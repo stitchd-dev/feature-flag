@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// A single leaf condition that tests one value from an evaluation context.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum Condition {
     // ── Equality / Inequality ─────────────────────────────────────────────
     /// Exact match: `context[context_type].parameters[param] == value`.

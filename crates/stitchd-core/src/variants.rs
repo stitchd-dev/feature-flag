@@ -10,6 +10,7 @@ use crate::id::VariantId;
 
 /// The type of value a feature flag produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum FlagValueType {
     /// Boolean flag — `true` / `false`.
@@ -29,6 +30,7 @@ pub enum FlagValueType {
 /// The discriminant must match the parent flag's [`FlagValueType`].
 /// Use [`VariantValue::matches_type`] to enforce this invariant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(untagged)]
 pub enum VariantValue {
     /// Boolean value.
@@ -103,6 +105,7 @@ impl VariantValue {
 /// Each variant belongs to exactly one flag and carries a value whose type
 /// must match the parent flag's [`FlagValueType`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Variant {
     /// Unique identifier for this variant.
     pub id: VariantId,

@@ -4,11 +4,13 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(untagged)]
 pub enum ParameterValue {
     Bool(bool),
     Int(i64),
     Double(f64),
+    #[cfg_attr(feature = "openapi", schema(value_type = String))]
     SemVer(Version),
     Str(String),
 }
@@ -26,6 +28,7 @@ impl fmt::Display for ParameterValue {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Context {
     pub context_type: String,
     pub key: String,
@@ -82,6 +85,7 @@ impl fmt::Debug for Context {
 ///
 /// Typical contexts include 'user', 'session', 'application', etc.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct EvaluationContext {
     pub contexts: Vec<Context>,
 }

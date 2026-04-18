@@ -68,6 +68,16 @@ impl From<ValidationError> for ApiError {
 ///
 /// # Errors
 /// Returns [`ApiError::Database`] if the repository fails to list segments.
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/segments",
+    params(("env_id" = String, Path, description = "Environment UUID")),
+    responses(
+        (status = 200, description = "List of segments", body = Vec<stitchd_core::segment::Segment>),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "segments"
+)]
 pub async fn list_segments(
     Path(env_id): Path<EnvironmentId>,
     State(state): State<AppState>,
@@ -80,6 +90,18 @@ pub async fn list_segments(
 ///
 /// # Errors
 /// Returns [`ApiError::BadRequest`] if validation fails or [`ApiError::Conflict`] if the key exists.
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/segments",
+    params(("env_id" = String, Path, description = "Environment UUID")),
+    request_body = CreateSegmentRequest,
+    responses(
+        (status = 201, description = "Segment created", body = stitchd_core::segment::Segment),
+        (status = 422, description = "Validation error"),
+        (status = 409, description = "Key conflict"),
+    ),
+    tag = "segments"
+)]
 pub async fn create_segment(
     Path(env_id): Path<EnvironmentId>,
     State(state): State<AppState>,
@@ -131,6 +153,19 @@ pub async fn create_segment(
 ///
 /// # Errors
 /// Returns [`ApiError::NotFound`] if the segment does not exist.
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/segments/{seg_id}",
+    params(
+        ("env_id" = String, Path, description = "Environment UUID"),
+        ("seg_id" = String, Path, description = "Segment UUID"),
+    ),
+    responses(
+        (status = 200, description = "Segment details", body = SegmentResponse),
+        (status = 404, description = "Segment not found"),
+    ),
+    tag = "segments"
+)]
 pub async fn get_segment(
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
@@ -159,6 +194,21 @@ pub async fn get_segment(
 ///
 /// # Errors
 /// Returns [`ApiError::Conflict`] if the version mismatch or [`ApiError::NotFound`] if missing.
+#[utoipa::path(
+    put,
+    path = "/v1/environments/{env_id}/segments/{seg_id}",
+    params(
+        ("env_id" = String, Path, description = "Environment UUID"),
+        ("seg_id" = String, Path, description = "Segment UUID"),
+    ),
+    request_body = UpdateSegmentRequest,
+    responses(
+        (status = 200, description = "Updated segment"),
+        (status = 404, description = "Segment not found"),
+        (status = 409, description = "Version conflict"),
+    ),
+    tag = "segments"
+)]
 pub async fn update_segment(
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
@@ -209,6 +259,19 @@ pub async fn update_segment(
 ///
 /// # Errors
 /// Returns [`ApiError::NotFound`] if the segment does not exist.
+#[utoipa::path(
+    delete,
+    path = "/v1/environments/{env_id}/segments/{seg_id}",
+    params(
+        ("env_id" = String, Path, description = "Environment UUID"),
+        ("seg_id" = String, Path, description = "Segment UUID"),
+    ),
+    responses(
+        (status = 204, description = "Segment deleted"),
+        (status = 404, description = "Segment not found"),
+    ),
+    tag = "segments"
+)]
 pub async fn delete_segment(
     Path((_env_id, seg_id)): Path<(EnvironmentId, SegmentId)>,
     State(state): State<AppState>,
@@ -223,6 +286,18 @@ pub async fn delete_segment(
 ///
 /// # Errors
 /// Returns [`ApiError::BadRequest`] for empty segment keys, [`ApiError::Database`] on failure.
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/segments/list-check",
+    params(("env_id" = String, Path, description = "Environment UUID")),
+    request_body = ListCheckRequest,
+    responses(
+        (status = 200, description = "Membership results", body = ListCheckResponse),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "segments",
+    security(("sdk_key" = []))
+)]
 pub async fn list_check_membership(
     _auth: SdkAuth,
     Path(env_id): Path<EnvironmentId>,
@@ -254,6 +329,18 @@ pub async fn list_check_membership(
 ///
 /// # Errors
 /// Returns [`ApiError::Database`] on failure.
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/segments/list-check/batch",
+    params(("env_id" = String, Path, description = "Environment UUID")),
+    request_body = BatchListCheckRequest,
+    responses(
+        (status = 200, description = "Batch membership results", body = BatchListCheckResponse),
+        (status = 500, description = "Internal error"),
+    ),
+    tag = "segments",
+    security(("sdk_key" = []))
+)]
 pub async fn batch_list_check_membership(
     _auth: SdkAuth,
     Path(env_id): Path<EnvironmentId>,

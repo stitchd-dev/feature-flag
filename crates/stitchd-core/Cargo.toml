@@ -6,6 +6,9 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+openapi = ["dep:utoipa"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -18,3 +21,4 @@ async-trait = { workspace = true }
 siphasher = { workspace = true }
 sqlx = { workspace = true }
 murmur3 = { workspace = true }
+utoipa = { workspace = true, optional = true }

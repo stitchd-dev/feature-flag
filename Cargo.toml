@@ -32,6 +32,10 @@ protoc-bin-vendored = { version = "3" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 
+# OpenAPI
+utoipa = { version = "5", features = ["uuid", "chrono"] }
+utoipa-axum = { version = "0.2" }
+
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 clickhouse = { version = "0.13", features = ["uuid", "time", "lz4"] }

@@ -17,7 +17,7 @@
 ## Phase 2: REST API Reference (utoipa)
 <!-- depends: phase1 -->
 
-- [ ] Task 2.1: Add `utoipa` + `utoipa-axum` to `stitchd-server`
+- [x] Task 2.1: Add `utoipa` + `utoipa-axum` to `stitchd-server`
   <!-- files: crates/stitchd-server/Cargo.toml, Cargo.toml, crates/stitchd-server/src/api/ -->
   - Add to workspace dependencies and server `Cargo.toml`
   - Annotate all existing route handlers with `#[utoipa::path]`

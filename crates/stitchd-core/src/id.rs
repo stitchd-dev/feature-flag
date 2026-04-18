@@ -14,6 +14,8 @@ pub enum FlagKeyError {
 macro_rules! define_id {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+        #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+        #[cfg_attr(feature = "openapi", schema(value_type = String, format = Uuid))]
         #[sqlx(transparent)]
         pub struct $name(Uuid);
 
@@ -65,6 +67,8 @@ define_id!(MetricId);
 define_id!(AuditLogId);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(value_type = String))]
 #[sqlx(transparent)]
 pub struct FlagKey(String);
 

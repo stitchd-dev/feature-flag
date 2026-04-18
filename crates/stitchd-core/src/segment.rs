@@ -17,6 +17,7 @@ use crate::rule_engine::types::{ConditionExpr, EvaluationInput, Rule};
 
 /// Whether a segment is rule-based or key-list-based.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum SegmentType {
@@ -38,6 +39,7 @@ impl SegmentDefinition {
 
 /// A segment definition used for evaluation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SegmentDefinition {
     /// Evaluated by matching a rule tree.
@@ -48,6 +50,7 @@ pub enum SegmentDefinition {
 
 /// A rule-based segment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct RuleBasedSegment {
     /// Unique identifier.
     pub id: SegmentId,
@@ -99,6 +102,7 @@ fn contains_segment_condition(expr: &ConditionExpr) -> bool {
 
 /// A list-based segment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ListBasedSegment {
     /// Unique identifier.
     pub id: SegmentId,
@@ -164,6 +168,7 @@ impl ListBasedSegment {
 
 /// Include and exclude lists for a specific context type.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct ContextList {
     /// Keys to include in the segment.
     pub include: HashSet<String>,
@@ -173,6 +178,7 @@ pub struct ContextList {
 
 /// The result of evaluating a segment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct MatchResult {
     /// Whether the context matched the segment.
     pub matched: bool,
@@ -182,6 +188,7 @@ pub struct MatchResult {
 
 /// Debugging trace for a segment match.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MatchTrace {
     /// Trace for a rule-based segment.
@@ -200,6 +207,7 @@ pub enum MatchTrace {
 
 /// Reason for a list-based segment match result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ListMatchReason {
     /// The key was found in the include list.
@@ -225,6 +233,7 @@ pub enum SegmentEvaluatorError {
 
 /// A segment record stored in the database.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Segment {
     /// Unique identifier.
     pub id: SegmentId,

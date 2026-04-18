@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 /// - `And` short-circuits on the first `false` child
 /// - `Or` short-circuits on the first `true` child
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum ConditionExpr {
     /// A single leaf condition test.
     Leaf(Condition),
@@ -29,6 +30,7 @@ pub enum ConditionExpr {
 
 /// Identifies which field on which context to hash for percentage allocation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum TargetField {
     /// Use `Context::key`.
     Key,
@@ -38,6 +40,7 @@ pub enum TargetField {
 
 /// One contributor to the percentage hash input.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct PercentageTarget {
     /// Which context type to look up.
     pub context_type: String,
@@ -49,6 +52,7 @@ pub struct PercentageTarget {
 
 /// The outcome produced when a rule matches.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub enum RuleOutput {
     /// Assign the evaluation directly to this variant.
     Variant(VariantId),
@@ -65,6 +69,7 @@ pub enum RuleOutput {
 
 /// A single rule: a condition expression paired with an output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Rule {
     pub id: RuleId,
     pub condition: ConditionExpr,

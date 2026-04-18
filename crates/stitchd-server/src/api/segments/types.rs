@@ -9,6 +9,7 @@ use stitchd_core::{
 
 /// Request to create a new segment.
 #[derive(Debug, Clone, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct CreateSegmentRequest {
     /// URL-safe string key (unique within the environment).
     pub key: String,
@@ -22,6 +23,7 @@ pub struct CreateSegmentRequest {
 
 /// Request to update a segment definition.
 #[derive(Debug, Clone, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct UpdateSegmentRequest {
     /// Ordered rules for rule-based segments.
     pub rules: Option<Vec<Rule>>,
@@ -33,6 +35,7 @@ pub struct UpdateSegmentRequest {
 
 /// Full segment details returned by the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct SegmentResponse {
     /// Unique identifier.
     pub id: SegmentId,
@@ -87,6 +90,7 @@ fn contains_segment_condition(expr: &ConditionExpr) -> bool {
 
 /// `POST /v1/environments/{env_id}/segments/list-check` request body.
 #[derive(Debug, Clone, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct ListCheckRequest {
     /// Context type (e.g. `"user"`, `"org"`).
     pub context_type: String,
@@ -98,6 +102,7 @@ pub struct ListCheckRequest {
 
 /// `POST /v1/environments/{env_id}/segments/list-check` response body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct ListCheckResponse {
     /// Map from segment key to membership boolean.
     pub memberships: HashMap<String, bool>,
@@ -105,6 +110,7 @@ pub struct ListCheckResponse {
 
 /// A single context entry for a batch list-check request.
 #[derive(Debug, Clone, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct BatchContext {
     /// Context type (e.g. `"user"`, `"org"`).
     pub context_type: String,
@@ -114,6 +120,7 @@ pub struct BatchContext {
 
 /// `POST /v1/environments/{env_id}/segments/list-check/batch` request body.
 #[derive(Debug, Clone, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct BatchListCheckRequest {
     /// Contexts to check membership for.
     pub contexts: Vec<BatchContext>,
@@ -123,6 +130,7 @@ pub struct BatchListCheckRequest {
 
 /// Membership result for a single context in a batch response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct BatchContextMembership {
     /// Context type.
     pub context_type: String,
@@ -134,6 +142,7 @@ pub struct BatchContextMembership {
 
 /// `POST /v1/environments/{env_id}/segments/list-check/batch` response body.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(utoipa::ToSchema)]
 pub struct BatchListCheckResponse {
     /// One entry per requested context.
     pub results: Vec<BatchContextMembership>,
