@@ -95,8 +95,8 @@ fn generate_grpc_docs(root: &Path) -> Result<()> {
 /// one entry per generated chapter file so each appears in the sidebar.
 fn patch_summary_grpc(root: &Path, chapters: &[(String, String)]) -> Result<()> {
     let summary_path = root.join("docs/src/SUMMARY.md");
-    let content = std::fs::read_to_string(&summary_path)
-        .context("failed to read docs/src/SUMMARY.md")?;
+    let content =
+        std::fs::read_to_string(&summary_path).context("failed to read docs/src/SUMMARY.md")?;
 
     // Build the replacement gRPC section
     let mut new_section = String::from("# gRPC / Protobuf Reference\n\n");
@@ -116,7 +116,12 @@ fn patch_summary_grpc(root: &Path, chapters: &[(String, String)]) -> Result<()> 
             .map(|p| start + grpc_heading.len() + p + 1) // keep the newline before next `#`
             .unwrap_or(content.len());
 
-        let new_content = format!("{}{}{}", &content[..start], new_section, &content[end_offset..]);
+        let new_content = format!(
+            "{}{}{}",
+            &content[..start],
+            new_section,
+            &content[end_offset..]
+        );
         std::fs::write(&summary_path, new_content)
             .context("failed to write docs/src/SUMMARY.md")?;
     }
@@ -125,8 +130,8 @@ fn patch_summary_grpc(root: &Path, chapters: &[(String, String)]) -> Result<()> 
 }
 
 fn collect_proto_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("failed to read dir {}", dir.display()))?
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("failed to read dir {}", dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -179,7 +184,9 @@ fn proto_to_markdown(source: &str, path: &Path) -> String {
 
     // Extract package
     if let Some(pkg_line) = source.lines().find(|l| l.starts_with("package ")) {
-        let pkg = pkg_line.trim_start_matches("package ").trim_end_matches(';');
+        let pkg = pkg_line
+            .trim_start_matches("package ")
+            .trim_end_matches(';');
         md.push_str(&format!("**Package:** `{pkg}`\n\n"));
     }
 
@@ -385,7 +392,11 @@ fn parse_rpc(line: &str) -> RpcInfo {
         .unwrap_or("?")
         .trim()
         .to_string();
-    RpcInfo { name, request, response }
+    RpcInfo {
+        name,
+        request,
+        response,
+    }
 }
 
 struct FieldInfo {
@@ -463,7 +474,10 @@ fn export_openapi(root: &Path) -> Result<()> {
         .current_dir(root)
         .status()
         .context("failed to run `cargo build -p stitchd-server`")?;
-    anyhow::ensure!(build_status.success(), "`cargo build` exited with {build_status}");
+    anyhow::ensure!(
+        build_status.success(),
+        "`cargo build` exited with {build_status}"
+    );
 
     // Run the binary with --export-openapi <path>.
     let binary = root.join("target/debug/stitchd-server");
@@ -512,8 +526,8 @@ fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
 /// and write it to `docs/src/sdk/quickstart.md`.
 fn extract_quickstart(root: &Path) -> Result<()> {
     let lib_rs = root.join("crates/stitchd-sdk/src/lib.rs");
-    let source = std::fs::read_to_string(&lib_rs)
-        .context("failed to read stitchd-sdk/src/lib.rs")?;
+    let source =
+        std::fs::read_to_string(&lib_rs).context("failed to read stitchd-sdk/src/lib.rs")?;
 
     // Collect `//!` lines and strip the prefix
     let doc_lines: Vec<&str> = source
@@ -521,7 +535,11 @@ fn extract_quickstart(root: &Path) -> Result<()> {
         .filter(|l| l.starts_with("//!"))
         .map(|l| {
             let stripped = l.trim_start_matches("//!");
-            if stripped.starts_with(' ') { &stripped[1..] } else { stripped }
+            if stripped.starts_with(' ') {
+                &stripped[1..]
+            } else {
+                stripped
+            }
         })
         .collect();
 
@@ -541,8 +559,7 @@ fn extract_quickstart(root: &Path) -> Result<()> {
         );
 
         let out_path = root.join("docs/src/sdk/quickstart.md");
-        std::fs::write(&out_path, out)
-            .context("failed to write docs/src/sdk/quickstart.md")?;
+        std::fs::write(&out_path, out).context("failed to write docs/src/sdk/quickstart.md")?;
     }
 
     Ok(())

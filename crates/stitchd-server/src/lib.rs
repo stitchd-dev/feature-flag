@@ -134,48 +134,244 @@ mod tests {
         struct StubRepo;
         #[async_trait::async_trait]
         impl stitchd_db::FlagRepository for StubRepo {
-            async fn find_by_id(&self, id: stitchd_core::id::FlagId) -> Result<stitchd_core::flag::FlagRecord, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
-            async fn find_by_key(&self, key: &stitchd_core::id::FlagKey, _: stitchd_core::id::ProjectId) -> Result<stitchd_core::flag::FlagRecord, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: key.to_string() }) }
-            async fn list_by_project(&self, _: stitchd_core::id::ProjectId) -> Result<Vec<stitchd_core::flag::FlagRecord>, stitchd_db::RepositoryError> { Ok(vec![]) }
-            async fn list_by_environment(&self, _: stitchd_core::id::EnvironmentId) -> Result<Vec<stitchd_core::flag::FlagRecord>, stitchd_db::RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: &stitchd_core::flag::FlagRecord) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
-            async fn update(&self, f: &stitchd_core::flag::FlagRecord) -> Result<stitchd_core::flag::FlagRecord, stitchd_db::RepositoryError> { Ok(f.clone()) }
-            async fn soft_delete(&self, id: stitchd_core::id::FlagId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
-            async fn find_hashing_config(&self, _: stitchd_core::id::FlagId) -> Result<Vec<stitchd_core::flag::FlagHashingConfig>, stitchd_db::RepositoryError> { Ok(vec![]) }
-            async fn upsert_hashing_config(&self, _: stitchd_core::id::FlagId, _: &[stitchd_core::flag::FlagHashingConfig]) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
-            async fn find_rules(&self, _: stitchd_core::id::FlagId) -> Result<Vec<stitchd_core::flag::FlagRule>, stitchd_db::RepositoryError> { Ok(vec![]) }
-            async fn upsert_rules(&self, _: stitchd_core::id::FlagId, _: &[stitchd_core::flag::FlagRule]) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::FlagId,
+            ) -> Result<stitchd_core::flag::FlagRecord, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_by_key(
+                &self,
+                key: &stitchd_core::id::FlagKey,
+                _: stitchd_core::id::ProjectId,
+            ) -> Result<stitchd_core::flag::FlagRecord, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
+            }
+            async fn list_by_project(
+                &self,
+                _: stitchd_core::id::ProjectId,
+            ) -> Result<Vec<stitchd_core::flag::FlagRecord>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn list_by_environment(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<Vec<stitchd_core::flag::FlagRecord>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::flag::FlagRecord,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                f: &stitchd_core::flag::FlagRecord,
+            ) -> Result<stitchd_core::flag::FlagRecord, stitchd_db::RepositoryError> {
+                Ok(f.clone())
+            }
+            async fn soft_delete(
+                &self,
+                id: stitchd_core::id::FlagId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_hashing_config(
+                &self,
+                _: stitchd_core::id::FlagId,
+            ) -> Result<Vec<stitchd_core::flag::FlagHashingConfig>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn upsert_hashing_config(
+                &self,
+                _: stitchd_core::id::FlagId,
+                _: &[stitchd_core::flag::FlagHashingConfig],
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn find_rules(
+                &self,
+                _: stitchd_core::id::FlagId,
+            ) -> Result<Vec<stitchd_core::flag::FlagRule>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn upsert_rules(
+                &self,
+                _: stitchd_core::id::FlagId,
+                _: &[stitchd_core::flag::FlagRule],
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
         }
         #[async_trait::async_trait]
         impl stitchd_db::VariantRepository for StubRepo {
-            async fn find_by_flag(&self, _: stitchd_core::id::FlagId) -> Result<Vec<stitchd_core::flag::Variant>, stitchd_db::RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: stitchd_core::id::FlagId, _: &stitchd_core::flag::Variant) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
-            async fn update(&self, v: &stitchd_core::flag::Variant) -> Result<stitchd_core::flag::Variant, stitchd_db::RepositoryError> { Ok(v.clone()) }
-            async fn delete(&self, _: stitchd_core::id::VariantId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+            async fn find_by_flag(
+                &self,
+                _: stitchd_core::id::FlagId,
+            ) -> Result<Vec<stitchd_core::flag::Variant>, stitchd_db::RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: stitchd_core::id::FlagId,
+                _: &stitchd_core::flag::Variant,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                v: &stitchd_core::flag::Variant,
+            ) -> Result<stitchd_core::flag::Variant, stitchd_db::RepositoryError> {
+                Ok(v.clone())
+            }
+            async fn delete(
+                &self,
+                _: stitchd_core::id::VariantId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
         }
         #[async_trait::async_trait]
         impl stitchd_db::SegmentRepository for StubRepo {
-            async fn find_by_id(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::Segment, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
-            async fn find_by_key(&self, key: &str, _: stitchd_core::id::EnvironmentId) -> Result<stitchd_core::segment::Segment, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: key.to_string() }) }
-            async fn list_by_environment(&self, _: stitchd_core::id::EnvironmentId) -> Result<Vec<stitchd_core::segment::Segment>, stitchd_db::RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: &stitchd_core::segment::Segment) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
-            async fn update(&self, s: &stitchd_core::segment::Segment) -> Result<stitchd_core::segment::Segment, stitchd_db::RepositoryError> { Ok(s.clone()) }
-            async fn find_with_rules(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::RuleBasedSegment, stitchd_db::RepositoryError> { Ok(stitchd_core::segment::RuleBasedSegment { id, rules: vec![] }) }
-            async fn find_with_list(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::ListBasedSegment, stitchd_db::RepositoryError> { Ok(stitchd_core::segment::ListBasedSegment { id, lists: HashMap::new() }) }
-            async fn upsert_rules(&self, _: stitchd_core::id::SegmentId, _: &[stitchd_core::rule_engine::types::Rule]) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
-            async fn set_list_entries(&self, _: stitchd_core::id::SegmentId, _: &str, _: &[String], _: &[String]) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
-            async fn soft_delete(&self, _: stitchd_core::id::SegmentId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
-            async fn check_list_membership(&self, _: stitchd_core::id::EnvironmentId, _: &str, _: &str, keys: &[String]) -> Result<HashMap<String, bool>, stitchd_db::RepositoryError> { Ok(keys.iter().map(|k| (k.clone(), false)).collect()) }
-            async fn batch_check_list_membership(&self, _: stitchd_core::id::EnvironmentId, _: &[(String, String)], _: &[String]) -> Result<Vec<stitchd_db::ContextMembership>, stitchd_db::RepositoryError> { Ok(vec![]) }
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::SegmentId,
+            ) -> Result<stitchd_core::segment::Segment, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_by_key(
+                &self,
+                key: &str,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<stitchd_core::segment::Segment, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
+            }
+            async fn list_by_environment(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<Vec<stitchd_core::segment::Segment>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::segment::Segment,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                s: &stitchd_core::segment::Segment,
+            ) -> Result<stitchd_core::segment::Segment, stitchd_db::RepositoryError> {
+                Ok(s.clone())
+            }
+            async fn find_with_rules(
+                &self,
+                id: stitchd_core::id::SegmentId,
+            ) -> Result<stitchd_core::segment::RuleBasedSegment, stitchd_db::RepositoryError>
+            {
+                Ok(stitchd_core::segment::RuleBasedSegment { id, rules: vec![] })
+            }
+            async fn find_with_list(
+                &self,
+                id: stitchd_core::id::SegmentId,
+            ) -> Result<stitchd_core::segment::ListBasedSegment, stitchd_db::RepositoryError>
+            {
+                Ok(stitchd_core::segment::ListBasedSegment {
+                    id,
+                    lists: HashMap::new(),
+                })
+            }
+            async fn upsert_rules(
+                &self,
+                _: stitchd_core::id::SegmentId,
+                _: &[stitchd_core::rule_engine::types::Rule],
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn set_list_entries(
+                &self,
+                _: stitchd_core::id::SegmentId,
+                _: &str,
+                _: &[String],
+                _: &[String],
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn soft_delete(
+                &self,
+                _: stitchd_core::id::SegmentId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn check_list_membership(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+                _: &str,
+                _: &str,
+                keys: &[String],
+            ) -> Result<HashMap<String, bool>, stitchd_db::RepositoryError> {
+                Ok(keys.iter().map(|k| (k.clone(), false)).collect())
+            }
+            async fn batch_check_list_membership(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+                _: &[(String, String)],
+                _: &[String],
+            ) -> Result<Vec<stitchd_db::ContextMembership>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
         }
         #[async_trait::async_trait]
         impl stitchd_db::SdkKeyRepository for StubRepo {
-            async fn find_by_id(&self, id: stitchd_core::id::SdkKeyId) -> Result<stitchd_core::tenant::SdkKey, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
-            async fn list_by_environment(&self, _: stitchd_core::id::EnvironmentId) -> Result<Vec<stitchd_core::tenant::SdkKey>, stitchd_db::RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: &stitchd_core::tenant::SdkKey) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
-            async fn revoke(&self, id: stitchd_core::id::SdkKeyId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
-            async fn find_active_by_environment(&self, _: stitchd_core::id::EnvironmentId) -> Result<Vec<stitchd_core::tenant::SdkKey>, stitchd_db::RepositoryError> { Ok(vec![]) }
-            async fn find_active_by_hash(&self, h: &str) -> Result<stitchd_core::tenant::SdkKey, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: h.to_string() }) }
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::SdkKeyId,
+            ) -> Result<stitchd_core::tenant::SdkKey, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn list_by_environment(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<Vec<stitchd_core::tenant::SdkKey>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::tenant::SdkKey,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn revoke(
+                &self,
+                id: stitchd_core::id::SdkKeyId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_active_by_environment(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<Vec<stitchd_core::tenant::SdkKey>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn find_active_by_hash(
+                &self,
+                h: &str,
+            ) -> Result<stitchd_core::tenant::SdkKey, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: h.to_string() })
+            }
         }
 
         let stub = Arc::new(StubRepo);

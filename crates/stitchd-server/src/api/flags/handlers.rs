@@ -20,8 +20,7 @@ use stitchd_core::{
 };
 
 /// Request to create a new feature flag.
-#[derive(Deserialize)]
-#[derive(utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateFlagRequest {
     /// URL-safe key.
     pub key: String,
@@ -32,8 +31,7 @@ pub struct CreateFlagRequest {
 }
 
 /// Request to update an existing flag's metadata.
-#[derive(Deserialize)]
-#[derive(utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct UpdateFlagRequest {
     /// New enabled status.
     pub enabled: Option<bool>,
@@ -44,8 +42,7 @@ pub struct UpdateFlagRequest {
 }
 
 /// Full response for a single flag, including its rules and variants.
-#[derive(Serialize, Deserialize)]
-#[derive(utoipa::ToSchema)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct FlagResponse {
     /// Core record.
     pub record: FlagRecord,
@@ -235,8 +232,7 @@ pub async fn delete_flag(
 // ---------------------------------------------------------------------------
 
 /// Request to create a new flag variant.
-#[derive(Deserialize)]
-#[derive(utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateVariantRequest {
     /// Unique key within the flag.
     pub key: String,
@@ -357,16 +353,14 @@ pub async fn update_rules(
 // ---------------------------------------------------------------------------
 
 /// Request for context-based flag evaluation.
-#[derive(Deserialize)]
-#[derive(utoipa::ToSchema)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct EvaluationRequest {
     /// Context parameters for evaluation.
     pub context: EvaluationContext,
 }
 
 /// The result of a single flag evaluation.
-#[derive(Serialize, Deserialize)]
-#[derive(utoipa::ToSchema)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EvaluationResult {
     /// Flag key.
     pub flag_key: String,
@@ -377,8 +371,7 @@ pub struct EvaluationResult {
 }
 
 /// Response containing all evaluated flags for the requested context.
-#[derive(Serialize, Deserialize)]
-#[derive(utoipa::ToSchema)]
+#[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BatchEvaluationResponse {
     /// Map of flag keys to results.
     pub results: Vec<EvaluationResult>,
