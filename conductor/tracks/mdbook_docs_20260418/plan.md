@@ -57,16 +57,16 @@
 ## Phase 4: Rust SDK Docs
 <!-- depends: phase1 -->
 
-- [ ] Task 4.1: Add `#![deny(missing_docs)]` to `stitchd-sdk`
+- [x] Task 4.1: Add `#![deny(missing_docs)]` to `stitchd-sdk`
   <!-- files: crates/stitchd-sdk/src/ -->
   - Audit all public types, traits, and functions for missing doc comments
   - Add doc comments with usage examples (`# Examples` blocks with `cargo test` doc tests)
-- [ ] Task 4.2: Wire `cargo doc` into xtask
+- [x] Task 4.2: Wire `cargo doc` into xtask
   <!-- files: crates/xtask/src/main.rs, docs/book/rustdoc/ -->
   <!-- depends: task4.1 -->
   - xtask runs `cargo doc --no-deps -p stitchd-sdk`
   - Copies `target/doc/stitchd_sdk/` into `docs/book/rustdoc/`
-- [ ] Task 4.3: Add SDK chapter to mdBook
+- [x] Task 4.3: Add SDK chapter to mdBook
   <!-- files: docs/src/sdk/, docs/src/SUMMARY.md -->
   <!-- depends: task4.2 -->
   - `docs/src/sdk/README.md` with narrative intro and link to rustdoc

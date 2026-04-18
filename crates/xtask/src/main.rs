@@ -26,7 +26,8 @@ fn docs() -> Result<()> {
     generate_grpc_docs(&root)?;
     // Step 2: Export OpenAPI JSON from the server binary
     export_openapi(&root)?;
-    // Step 3: rustdoc copy (Phase 4 will wire this up)
+    // Step 3: Build rustdoc for stitchd-sdk and copy into docs/
+    generate_sdk_rustdoc(&root)?;
 
     // Step 4: build the mdBook site
     mdbook_build(&root)?;
@@ -476,6 +477,89 @@ fn export_openapi(root: &Path) -> Result<()> {
         "`stitchd-server --export-openapi` exited with {export_status}"
     );
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Step 3: SDK rustdoc
+// ---------------------------------------------------------------------------
+
+fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
+    let out_dir = root.join("docs/book/rustdoc");
+    println!("Generating SDK rustdoc → {}", out_dir.display());
+
+    let status = Command::new("cargo")
+        .args(["doc", "--no-deps", "-p", "stitchd-sdk"])
+        .current_dir(root)
+        .status()
+        .context("failed to run `cargo doc`")?;
+    anyhow::ensure!(status.success(), "`cargo doc` exited with {status}");
+
+    // Copy target/doc/stitchd_sdk → docs/book/rustdoc/
+    let src = root.join("target/doc/stitchd_sdk");
+    if src.exists() {
+        copy_dir_all(&src, &out_dir)
+            .with_context(|| format!("failed to copy rustdoc from {}", src.display()))?;
+    }
+
+    // Extract the # Quickstart section from lib.rs module doc → quickstart.md
+    extract_quickstart(root)?;
+
+    Ok(())
+}
+
+/// Extract the `# Quickstart` section from `stitchd-sdk/src/lib.rs` module docs
+/// and write it to `docs/src/sdk/quickstart.md`.
+fn extract_quickstart(root: &Path) -> Result<()> {
+    let lib_rs = root.join("crates/stitchd-sdk/src/lib.rs");
+    let source = std::fs::read_to_string(&lib_rs)
+        .context("failed to read stitchd-sdk/src/lib.rs")?;
+
+    // Collect `//!` lines and strip the prefix
+    let doc_lines: Vec<&str> = source
+        .lines()
+        .filter(|l| l.starts_with("//!"))
+        .map(|l| {
+            let stripped = l.trim_start_matches("//!");
+            if stripped.starts_with(' ') { &stripped[1..] } else { stripped }
+        })
+        .collect();
+
+    // Find `# Quickstart` heading and collect until next `# ` heading or end
+    let start = doc_lines.iter().position(|l| *l == "# Quickstart");
+    if let Some(start) = start {
+        let end = doc_lines[start + 1..]
+            .iter()
+            .position(|l| l.starts_with("# "))
+            .map(|p| start + 1 + p)
+            .unwrap_or(doc_lines.len());
+
+        let quickstart_body = doc_lines[start..end].join("\n");
+        let out = format!(
+            "# SDK Quickstart\n\n> Auto-extracted from `stitchd-sdk/src/lib.rs` module docs.\n> Run `cargo xtask docs` to regenerate.\n\n{}\n",
+            &quickstart_body["# Quickstart".len()..].trim_start()
+        );
+
+        let out_path = root.join("docs/src/sdk/quickstart.md");
+        std::fs::write(&out_path, out)
+            .context("failed to write docs/src/sdk/quickstart.md")?;
+    }
+
+    Ok(())
+}
+
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_all(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
     Ok(())
 }
 

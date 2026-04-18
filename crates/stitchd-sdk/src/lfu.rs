@@ -12,6 +12,7 @@ pub struct LfuTracker {
 }
 
 impl LfuTracker {
+    /// Create a new tracker with the given capacity and window length.
     pub fn new(capacity: usize, window: Duration) -> Self {
         Self {
             counts: HashMap::new(),
@@ -54,6 +55,7 @@ pub struct LfuCache {
 }
 
 impl LfuCache {
+    /// Look up cached membership for a `(ctx_type, ctx_key, seg_key)` triple.
     pub fn get(&self, ctx_type: &str, ctx_key: &str, seg_key: &str) -> Option<bool> {
         self.entries
             .get(&(ctx_type.to_owned(), ctx_key.to_owned(), seg_key.to_owned()))
@@ -68,11 +70,14 @@ impl LfuCache {
 
 /// Combined LFU state — held behind a `Mutex` in `SdkClient`.
 pub struct LfuState {
+    /// Frequency tracker used to determine the hot set.
     pub tracker: LfuTracker,
+    /// Pre-computed membership results for hot contexts.
     pub cache: LfuCache,
 }
 
 impl LfuState {
+    /// Create a new LFU state with the given tracker capacity and window.
     pub fn new(capacity: usize, window: Duration) -> Self {
         Self {
             tracker: LfuTracker::new(capacity, window),

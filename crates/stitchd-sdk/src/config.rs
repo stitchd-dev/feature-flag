@@ -15,6 +15,7 @@ pub struct SdkConfig {
 }
 
 impl SdkConfig {
+    /// Create a config with sensible defaults (30-second poll interval, no LFU cache).
     pub fn new(
         grpc_url: impl Into<String>,
         http_url: impl Into<String>,

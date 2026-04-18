@@ -22,18 +22,22 @@ use crate::error::SdkError;
 /// Atomically-replaced snapshot of all flag and segment definitions.
 #[derive(Clone, Default)]
 pub struct DefinitionCache {
+    /// Flag definitions keyed by flag key string.
     pub flags: HashMap<String, SdkFlagDef>,
     /// Rule-based segments indexed by their server-assigned SegmentId.
     pub rule_segments: HashMap<SegmentId, RuleBasedSegment>,
     /// List-based segment metadata indexed by SegmentId.
     pub list_segments: HashMap<SegmentId, SdkListSegmentMeta>,
+    /// The resolved environment ID for this definition snapshot.
     pub environment_id: Option<EnvironmentId>,
 }
 
 /// SDK-internal flag definition.
 #[derive(Clone)]
 pub struct SdkFlagDef {
+    /// The flag's string key.
     pub key: String,
+    /// Whether this flag is currently enabled.
     pub enabled: bool,
     /// Domain Rule objects ready for `evaluate_rules`.
     pub rules: Vec<Rule>,
@@ -44,8 +48,11 @@ pub struct SdkFlagDef {
 /// SDK-internal list-segment metadata.
 #[derive(Clone)]
 pub struct SdkListSegmentMeta {
+    /// The segment's string key used in flag rules and list-check URLs.
     pub key: String,
+    /// Server-assigned UUID for this segment.
     pub id: SegmentId,
+    /// The context type this segment applies to (e.g. `"user"`).
     pub context_type: String,
 }
 

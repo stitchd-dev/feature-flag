@@ -1,28 +1,37 @@
 use stitchd_core::segment::SegmentEvaluatorError;
 
+/// All errors that the Stitchd SDK can return.
 #[derive(Debug, thiserror::Error)]
 pub enum SdkError {
+    /// SDK failed to initialize (e.g. bad gRPC URL, first sync failed).
     #[error("SDK initialization failed: {0}")]
     InitFailed(String),
 
+    /// Low-level gRPC transport failure.
     #[error("gRPC transport error: {0}")]
     GrpcTransport(String),
 
+    /// The server returned a non-OK gRPC status.
     #[error("gRPC status: {0}")]
     GrpcStatus(Box<tonic::Status>),
 
+    /// HTTP client error from a list-check REST call.
     #[error("HTTP error: {0}")]
     Http(#[from] reqwest::Error),
 
+    /// Failed to deserialize a server response.
     #[error("deserialization error: {0}")]
     Deserialization(String),
 
+    /// Flag evaluation produced an unexpected error.
     #[error("evaluation error: {0}")]
     Evaluation(String),
 
+    /// Segment evaluator reported an error.
     #[error("segment evaluation error: {0}")]
     SegmentEval(#[from] SegmentEvaluatorError),
 
+    /// Rule engine reported an error.
     #[error("rule engine error: {0}")]
     RuleEngine(#[from] stitchd_core::rule_engine::RuleEngineError),
 }
