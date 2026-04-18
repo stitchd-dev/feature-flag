@@ -7,6 +7,9 @@
 # Build artifacts
 target/
 
+# Generated mdBook output
+docs/book/
+
 # Environment — never commit secrets
 .env
 .env.local
@@ -44,3 +47,5 @@ lcov.info
 .worktrees/fix_ci_clippy_20260417/
 # bd worktree
 .worktrees/coverage_20260417/
+# bd worktree
+.worktrees/mdbook_docs_20260418/

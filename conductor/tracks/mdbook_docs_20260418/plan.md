@@ -9,7 +9,7 @@
   - New crate `crates/xtask` with a `docs` subcommand
   - Registers in `Cargo.toml` workspace members
   - Subcommand runs doc generation steps in sequence (stubs initially)
-- [ ] Task 1.3: Add `mdbook` + `mdbook-mermaid` to `xtask` as dependencies
+- [x] Task 1.3: Add `mdbook` + `mdbook-mermaid` to `xtask` as dependencies
   - Invoke `mdbook build` programmatically from xtask
   - Verify `mdbook build` succeeds with stub chapters
 - [ ] Task: Conductor - User Manual Verification 'Phase 1' (Protocol in workflow.md)

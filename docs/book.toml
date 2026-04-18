@@ -3,7 +3,6 @@ title = "Stitchd Feature Flag"
 authors = ["Stitchd"]
 description = "API reference, SDK guide, deployment, and architecture documentation for Stitchd Feature Flag."
 language = "en"
-multilingual = false
 src = "src"
 
 [build]
@@ -14,7 +13,6 @@ create-missing = false
 command = "mdbook-mermaid"
 
 [output.html]
-theme = "rust"
 git-repository-url = "https://github.com/stitchd/stitchd-feature-flag"
 edit-url-template = "https://github.com/stitchd/stitchd-feature-flag/edit/main/docs/{path}"
 no-section-label = false
