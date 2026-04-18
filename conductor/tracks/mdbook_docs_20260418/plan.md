@@ -32,7 +32,7 @@
   <!-- depends: task2.2 -->
   - xtask spawns `stitchd-server --export-openapi` or reads the JSON via reqwest
   - Writes output to `docs/src/api/openapi.json`
-- [ ] Task 2.4: Embed Swagger UI as a static mdBook chapter
+- [x] Task 2.4: Embed Swagger UI as a static mdBook chapter
   <!-- files: docs/src/api/, docs/src/SUMMARY.md -->
   <!-- depends: task2.3 -->
   - Download Swagger UI dist assets into `docs/src/api/`

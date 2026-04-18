@@ -49,3 +49,4 @@ lcov.info
 .worktrees/coverage_20260417/
 # bd worktree
 .worktrees/mdbook_docs_20260418/
+docs/src/api/openapi.json
