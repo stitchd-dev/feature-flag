@@ -361,7 +361,10 @@ mod tests {
         let env_id = EnvironmentId::from_uuid(Uuid::nil());
 
         let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
-        assert!(matches!(result, Err(RuleEngineError::MissingContext { .. })));
+        assert!(matches!(
+            result,
+            Err(RuleEngineError::MissingContext { .. })
+        ));
     }
 
     // ── Error path: percentage rollout — missing parameter ──────────────────
@@ -393,7 +396,10 @@ mod tests {
         let env_id = EnvironmentId::from_uuid(Uuid::nil());
 
         let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
-        assert!(matches!(result, Err(RuleEngineError::MissingParameter { .. })));
+        assert!(matches!(
+            result,
+            Err(RuleEngineError::MissingParameter { .. })
+        ));
     }
 
     // ── Error path: percentage rollout — weights don't cover bucket ──────────
@@ -433,7 +439,10 @@ mod tests {
                 break;
             }
         }
-        assert!(found_error, "Expected an Internal error from uncovered bucket");
+        assert!(
+            found_error,
+            "Expected an Internal error from uncovered bucket"
+        );
     }
 
     // ── Error path: percentage rollout — rollout matched nonexistent variant ──

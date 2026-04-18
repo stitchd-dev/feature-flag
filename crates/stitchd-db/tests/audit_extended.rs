@@ -34,13 +34,7 @@ async fn test_audit_log_multiple_events(pool: sqlx::PgPool) {
 
     for action in ["create", "update", "soft_delete"] {
         logger
-            .log(
-                None,
-                "flag",
-                resource_id,
-                action,
-                serde_json::json!({}),
-            )
+            .log(None, "flag", resource_id, action, serde_json::json!({}))
             .await
             .unwrap();
     }

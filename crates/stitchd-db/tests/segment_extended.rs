@@ -197,24 +197,14 @@ async fn test_check_list_membership_included(pool: sqlx::PgPool) {
     .unwrap();
 
     let result = repo
-        .check_list_membership(
-            env_id,
-            "user",
-            "alice",
-            &["membership-seg".to_string()],
-        )
+        .check_list_membership(env_id, "user", "alice", &["membership-seg".to_string()])
         .await
         .unwrap();
     assert_eq!(*result.get("membership-seg").unwrap(), true);
 
     // charlie is excluded
     let result_charlie = repo
-        .check_list_membership(
-            env_id,
-            "user",
-            "charlie",
-            &["membership-seg".to_string()],
-        )
+        .check_list_membership(env_id, "user", "charlie", &["membership-seg".to_string()])
         .await
         .unwrap();
     assert_eq!(*result_charlie.get("membership-seg").unwrap(), false);
@@ -241,11 +231,7 @@ async fn test_batch_check_empty_inputs(pool: sqlx::PgPool) {
 
     // Empty segment_keys
     let r2 = repo
-        .batch_check_list_membership(
-            env_id,
-            &[("user".to_string(), "alice".to_string())],
-            &[],
-        )
+        .batch_check_list_membership(env_id, &[("user".to_string(), "alice".to_string())], &[])
         .await
         .unwrap();
     assert!(r2.is_empty());
@@ -293,10 +279,7 @@ async fn test_batch_check_list_membership(pool: sqlx::PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn test_segment_find_by_key_not_found(pool: sqlx::PgPool) {
     let (repo, env_id) = setup(&pool).await;
-    let err = repo
-        .find_by_key("no-such-key", env_id)
-        .await
-        .unwrap_err();
+    let err = repo.find_by_key("no-such-key", env_id).await.unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
 

@@ -269,7 +269,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use stitchd_core::{
         flag::Variant,
-        id::{EnvironmentId, FlagId, ProjectId, RuleId, SegmentId, SdkKeyId, VariantId},
+        id::{EnvironmentId, FlagId, ProjectId, RuleId, SdkKeyId, SegmentId, VariantId},
         rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField},
         segment::{ListBasedSegment, RuleBasedSegment, Segment},
         tenant::SdkKey,
@@ -304,9 +304,7 @@ mod tests {
             &self,
             id: FlagId,
         ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -348,9 +346,7 @@ mod tests {
         }
 
         async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_hashing_config(
@@ -414,9 +410,7 @@ mod tests {
     #[async_trait]
     impl SegmentRepository for StubSegmentRepo {
         async fn find_by_id(&self, id: SegmentId) -> Result<Segment, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -454,10 +448,7 @@ mod tests {
             })
         }
 
-        async fn find_with_list(
-            &self,
-            id: SegmentId,
-        ) -> Result<ListBasedSegment, RepositoryError> {
+        async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
             Ok(ListBasedSegment {
                 id,
                 lists: std::collections::HashMap::new(),
@@ -535,9 +526,7 @@ mod tests {
     #[async_trait]
     impl SdkKeyRepository for StubSdkKeyRepo {
         async fn find_by_id(&self, id: SdkKeyId) -> Result<SdkKey, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn list_by_environment(
@@ -552,9 +541,7 @@ mod tests {
         }
 
         async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_active_by_environment(
@@ -569,10 +556,7 @@ mod tests {
                 .collect())
         }
 
-        async fn find_active_by_hash(
-            &self,
-            key_hash: &str,
-        ) -> Result<SdkKey, RepositoryError> {
+        async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
             self.active_keys
                 .iter()
                 .find(|k| k.key_hash == key_hash)

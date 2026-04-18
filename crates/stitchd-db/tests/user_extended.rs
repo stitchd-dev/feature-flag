@@ -145,13 +145,11 @@ async fn test_user_update_soft_deleted(pool: sqlx::PgPool) {
     repo.create(&user).await.unwrap();
 
     // Manually soft-delete the user
-    sqlx::query(
-        "UPDATE users SET deleted_at = NOW() WHERE id = $1",
-    )
-    .bind(user.id as UserId)
-    .execute(&pool)
-    .await
-    .unwrap();
+    sqlx::query("UPDATE users SET deleted_at = NOW() WHERE id = $1")
+        .bind(user.id as UserId)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let err = repo.update(&user).await.unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));

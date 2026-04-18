@@ -274,7 +274,10 @@ mod tests {
     fn flag_evaluated_as_roundtrip() {
         let flag_id = FlagId::new();
         let variant_id = VariantId::new();
-        let cond = Condition::FlagEvaluatedAs { flag_id, variant_id };
+        let cond = Condition::FlagEvaluatedAs {
+            flag_id,
+            variant_id,
+        };
         let json = serde_json::to_string(&cond).unwrap();
         let back: Condition = serde_json::from_str(&json).unwrap();
         assert_eq!(cond, back);

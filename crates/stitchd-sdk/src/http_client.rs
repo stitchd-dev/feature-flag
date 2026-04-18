@@ -163,10 +163,7 @@ mod tests {
     #[tokio::test]
     async fn list_check_empty_keys_returns_empty_map() {
         let client = SdkHttpClient::new("http://localhost:9999", "test-key");
-        let result = client
-            .list_check("env-1", "user", "u1", &[])
-            .await
-            .unwrap();
+        let result = client.list_check("env-1", "user", "u1", &[]).await.unwrap();
         assert!(result.is_empty());
     }
 
@@ -184,11 +181,7 @@ mod tests {
     async fn list_check_batch_empty_keys_returns_empty_map() {
         let client = SdkHttpClient::new("http://localhost:9999", "test-key");
         let result = client
-            .list_check_batch(
-                "env-1",
-                &[("user".to_string(), "u1".to_string())],
-                &[],
-            )
+            .list_check_batch("env-1", &[("user".to_string(), "u1".to_string())], &[])
             .await
             .unwrap();
         assert!(result.is_empty());
@@ -233,9 +226,7 @@ mod tests {
 
         let client = SdkHttpClient::new(server.uri(), "invalid-key");
         let keys = vec!["beta-users".to_string()];
-        let result = client
-            .list_check("env-123", "user", "u1", &keys)
-            .await;
+        let result = client.list_check("env-123", "user", "u1", &keys).await;
 
         assert!(result.is_err());
     }
@@ -280,11 +271,19 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            result.get(&("user".to_string(), "u1".to_string(), "beta-users".to_string())),
+            result.get(&(
+                "user".to_string(),
+                "u1".to_string(),
+                "beta-users".to_string()
+            )),
             Some(&true)
         );
         assert_eq!(
-            result.get(&("user".to_string(), "u2".to_string(), "beta-users".to_string())),
+            result.get(&(
+                "user".to_string(),
+                "u2".to_string(),
+                "beta-users".to_string()
+            )),
             Some(&false)
         );
     }
@@ -302,9 +301,7 @@ mod tests {
         let client = SdkHttpClient::new(server.uri(), "sdk-key-abc");
         let contexts = vec![("user".to_string(), "u1".to_string())];
         let keys = vec!["beta-users".to_string()];
-        let result = client
-            .list_check_batch("env-123", &contexts, &keys)
-            .await;
+        let result = client.list_check_batch("env-123", &contexts, &keys).await;
 
         assert!(result.is_err());
     }

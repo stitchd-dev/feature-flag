@@ -531,9 +531,7 @@ mod tests {
     ) -> stitchd_proto::flags::v1::Variant {
         stitchd_proto::flags::v1::Variant {
             key: key.to_string(),
-            value: Some(stitchd_proto::flags::v1::VariantValue {
-                value: Some(value),
-            }),
+            value: Some(stitchd_proto::flags::v1::VariantValue { value: Some(value) }),
         }
     }
 
@@ -577,7 +575,10 @@ mod tests {
             key: "str-flag".to_string(),
             enabled: true,
             value_type: 4,
-            variants: vec![make_variant_proto("hello", Value::StringValue("world".to_string()))],
+            variants: vec![make_variant_proto(
+                "hello",
+                Value::StringValue("world".to_string()),
+            )],
             rules: vec![],
         };
         let def = build_flag_def(flag).unwrap();
@@ -699,10 +700,8 @@ mod tests {
     #[test]
     fn build_flag_def_allocation_output() {
         use std::collections::HashMap as HM;
-        use stitchd_proto::flags::v1::{
-            AllocationBucket, ContextHashSpec, PercentageAllocation,
-        };
         use stitchd_proto::flags::v1::flag_rule::Output;
+        use stitchd_proto::flags::v1::{AllocationBucket, ContextHashSpec, PercentageAllocation};
 
         let flag = stitchd_proto::flags::v1::FeatureFlag {
             key: "pct-flag".to_string(),
@@ -751,10 +750,8 @@ mod tests {
     #[test]
     fn build_flag_def_allocation_with_parameter_hash_spec() {
         use std::collections::HashMap as HM;
-        use stitchd_proto::flags::v1::{
-            AllocationBucket, ContextHashSpec, PercentageAllocation,
-        };
         use stitchd_proto::flags::v1::flag_rule::Output;
+        use stitchd_proto::flags::v1::{AllocationBucket, ContextHashSpec, PercentageAllocation};
 
         let flag = stitchd_proto::flags::v1::FeatureFlag {
             key: "pct-flag".to_string(),
@@ -865,9 +862,7 @@ mod tests {
         let sid = SegmentId::new();
         let rule = Rule {
             id: RuleId::new(),
-            condition: ConditionExpr::Not(Box::new(ConditionExpr::Leaf(
-                Condition::InSegment(sid),
-            ))),
+            condition: ConditionExpr::Not(Box::new(ConditionExpr::Leaf(Condition::InSegment(sid)))),
             output: RuleOutput::Variant(VariantId::new()),
         };
         let ids = collect_segment_ids(&[rule]);

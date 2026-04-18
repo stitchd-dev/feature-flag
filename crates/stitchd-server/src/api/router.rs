@@ -5,7 +5,6 @@ use axum::{
     routing::{get, post, put},
 };
 
-
 /// Build the API router.
 pub fn build_api_router() -> Router<AppState> {
     Router::new()
@@ -69,13 +68,10 @@ mod tests {
         http::{Request, StatusCode},
     };
     use metrics_exporter_prometheus::PrometheusBuilder;
-    use std::{
-        collections::HashMap,
-        sync::Arc,
-    };
+    use std::{collections::HashMap, sync::Arc};
     use stitchd_core::{
         flag::Variant,
-        id::{EnvironmentId, FlagId, ProjectId, SegmentId, SdkKeyId, VariantId},
+        id::{EnvironmentId, FlagId, ProjectId, SdkKeyId, SegmentId, VariantId},
         rule_engine::types::Rule,
         segment::{ListBasedSegment, RuleBasedSegment, Segment},
         tenant::SdkKey,
@@ -95,9 +91,7 @@ mod tests {
             &self,
             id: FlagId,
         ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -139,9 +133,7 @@ mod tests {
         }
 
         async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_hashing_config(
@@ -205,9 +197,7 @@ mod tests {
     #[async_trait]
     impl SegmentRepository for StubSegmentRepo {
         async fn find_by_id(&self, id: SegmentId) -> Result<Segment, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -245,10 +235,7 @@ mod tests {
             })
         }
 
-        async fn find_with_list(
-            &self,
-            id: SegmentId,
-        ) -> Result<ListBasedSegment, RepositoryError> {
+        async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
             Ok(ListBasedSegment {
                 id,
                 lists: HashMap::new(),
@@ -302,9 +289,7 @@ mod tests {
     #[async_trait]
     impl SdkKeyRepository for StubSdkKeyRepo {
         async fn find_by_id(&self, id: SdkKeyId) -> Result<SdkKey, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn list_by_environment(
@@ -319,9 +304,7 @@ mod tests {
         }
 
         async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_active_by_environment(
@@ -331,10 +314,7 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn find_active_by_hash(
-            &self,
-            key_hash: &str,
-        ) -> Result<SdkKey, RepositoryError> {
+        async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
             Err(RepositoryError::NotFound {
                 id: key_hash.to_string(),
             })

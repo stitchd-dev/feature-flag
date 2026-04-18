@@ -64,7 +64,10 @@ impl SdkClient {
             cache: Arc::new(RwLock::new(cache)),
             http_client: SdkHttpClient::new(http_url, sdk_key),
             cancel: CancellationToken::new(),
-            lfu: Some(Arc::new(Mutex::new(LfuState::new(lfu_capacity, lfu_window)))),
+            lfu: Some(Arc::new(Mutex::new(LfuState::new(
+                lfu_capacity,
+                lfu_window,
+            )))),
         })
     }
 
@@ -450,7 +453,10 @@ mod tests {
     use crate::cache::DefinitionCache;
 
     fn make_bool_flag_cache(flag_key: &str, enabled: bool) -> DefinitionCache {
-        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        use stitchd_proto::flags::v1::{
+            FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue,
+            flag_rule::Output, variant_value::Value,
+        };
         let resp = SyncResponse {
             flags: vec![FeatureFlag {
                 key: flag_key.to_string(),
@@ -505,7 +511,10 @@ mod tests {
     #[tokio::test]
     async fn evaluate_with_rule_based_segment_not_matching() {
         use stitchd_core::rule_engine::condition::Condition;
-        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        use stitchd_proto::flags::v1::{
+            FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue,
+            flag_rule::Output, variant_value::Value,
+        };
         use stitchd_proto::segments::v1::RuleSegment as ProtoRuleSegment;
 
         let seg_uuid = uuid::Uuid::new_v4();
@@ -554,7 +563,10 @@ mod tests {
     #[tokio::test]
     async fn evaluate_with_rule_based_segment_matching() {
         use stitchd_core::rule_engine::condition::Condition;
-        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
+        use stitchd_proto::flags::v1::{
+            FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue,
+            flag_rule::Output, variant_value::Value,
+        };
         use stitchd_proto::segments::v1::RuleSegment as ProtoRuleSegment;
 
         let seg_uuid = uuid::Uuid::new_v4();
@@ -629,9 +641,12 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_list_segment_http_check() {
-        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
-        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
         use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_proto::flags::v1::{
+            FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue,
+            flag_rule::Output, variant_value::Value,
+        };
+        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -686,9 +701,12 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_list_segment_not_member() {
-        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
-        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
         use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_proto::flags::v1::{
+            FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue,
+            flag_rule::Output, variant_value::Value,
+        };
+        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -742,9 +760,12 @@ mod tests {
 
     #[tokio::test]
     async fn evaluate_list_segment_lfu_cache_hit() {
-        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue, variant_value::Value, flag_rule::Output};
-        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
         use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_proto::flags::v1::{
+            FeatureFlag, FlagRule, SyncResponse, Variant, VariantValue as ProtoVariantValue,
+            flag_rule::Output, variant_value::Value,
+        };
+        use stitchd_proto::segments::v1::ListSegmentMeta as ProtoListMeta;
 
         let seg_uuid = uuid::Uuid::new_v4();
         let seg_id = SegmentId::from_uuid(seg_uuid);
@@ -902,7 +923,10 @@ mod tests {
         let grpc = SdkGrpcClient::new(&grpc_url, "key");
         let http = SdkHttpClient::new("http://127.0.0.1:9999", "key");
         let cache: Arc<RwLock<DefinitionCache>> = Arc::new(RwLock::new(DefinitionCache::default()));
-        let lfu = Arc::new(Mutex::new(LfuState::new(10, std::time::Duration::from_secs(60))));
+        let lfu = Arc::new(Mutex::new(LfuState::new(
+            10,
+            std::time::Duration::from_secs(60),
+        )));
         // LFU has no entries → hot_set is empty → early return
         poll_once(&grpc, &http, &cache, Some(&lfu)).await;
         // Should still have updated the main cache
@@ -918,8 +942,14 @@ mod tests {
         let vid_a = VariantId::new();
         let vid_b = VariantId::new();
         let mut variant_map = HashMap::new();
-        variant_map.insert(vid_a, ("treatment".to_owned(), VariantValue::BoolValue(true)));
-        variant_map.insert(vid_b, ("control".to_owned(), VariantValue::BoolValue(false)));
+        variant_map.insert(
+            vid_a,
+            ("treatment".to_owned(), VariantValue::BoolValue(true)),
+        );
+        variant_map.insert(
+            vid_b,
+            ("control".to_owned(), VariantValue::BoolValue(false)),
+        );
         SdkFlagDef {
             key: flag_key.to_owned(),
             enabled: true,
@@ -927,12 +957,10 @@ mod tests {
                 id: RuleId::new(),
                 condition: ConditionExpr::And(vec![]),
                 output: RuleOutput::Percentage {
-                    targets: vec![
-                        stitchd_core::rule_engine::types::PercentageTarget {
-                            context_type: context_type.to_owned(),
-                            field: target_field,
-                        },
-                    ],
+                    targets: vec![stitchd_core::rule_engine::types::PercentageTarget {
+                        context_type: context_type.to_owned(),
+                        field: target_field,
+                    }],
                     weights: vec![(vid_a, 500), (vid_b, 500)],
                 },
             }],
@@ -946,8 +974,10 @@ mod tests {
         let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
 
         // Same inputs should always produce the same result
-        let result1 = apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
-        let result2 = apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        let result1 =
+            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        let result2 =
+            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
         assert_eq!(result1, result2);
         // Should return Some variant (one of treatment/control)
         assert!(result1.is_some());
@@ -965,8 +995,7 @@ mod tests {
                 .with_parameter("account_id", ParameterValue::Str("acct-123".into())),
         );
 
-        let result =
-            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        let result = apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
         assert!(result.is_some());
     }
 
@@ -979,8 +1008,7 @@ mod tests {
         let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
 
         // Should still return a result (with empty target_values, hash is deterministic)
-        let result =
-            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        let result = apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
         // The result might be None if weights don't cover the bucket, or Some
         let _ = result; // just verify no panic
     }
@@ -997,20 +1025,17 @@ mod tests {
                 id: RuleId::new(),
                 condition: ConditionExpr::And(vec![]),
                 output: RuleOutput::Percentage {
-                    targets: vec![
-                        stitchd_core::rule_engine::types::PercentageTarget {
-                            context_type: "user".to_owned(),
-                            field: TargetField::Key,
-                        },
-                    ],
+                    targets: vec![stitchd_core::rule_engine::types::PercentageTarget {
+                        context_type: "user".to_owned(),
+                        field: TargetField::Key,
+                    }],
                     weights: vec![], // no weights → cumulative never exceeds bucket
                 },
             }],
             variant_map,
         };
         let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
-        let result =
-            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        let result = apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
         assert_eq!(result, None);
     }
 
@@ -1024,8 +1049,7 @@ mod tests {
         );
         let ctx = EvaluationContext::new().with_context(Context::new("user", "u1"));
 
-        let result =
-            apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
+        let result = apply_rules(&def, &ctx.contexts, HashSet::new(), "pct-flag", "env-1").unwrap();
         // Should not panic; some deterministic result
         let _ = result;
     }

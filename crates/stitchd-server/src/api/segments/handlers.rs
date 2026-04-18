@@ -305,7 +305,7 @@ mod tests {
     };
     use stitchd_core::{
         flag::Variant,
-        id::{EnvironmentId, FlagId, ProjectId, SegmentId, SdkKeyId, VariantId},
+        id::{EnvironmentId, FlagId, ProjectId, SdkKeyId, SegmentId, VariantId},
         rule_engine::types::Rule,
         segment::{ListBasedSegment, RuleBasedSegment, Segment, SegmentType},
         tenant::SdkKey,
@@ -343,9 +343,7 @@ mod tests {
                 .iter()
                 .find(|s| s.id == id)
                 .cloned()
-                .ok_or(RepositoryError::NotFound {
-                    id: id.to_string(),
-                })
+                .ok_or(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -402,10 +400,7 @@ mod tests {
             })
         }
 
-        async fn find_with_list(
-            &self,
-            id: SegmentId,
-        ) -> Result<ListBasedSegment, RepositoryError> {
+        async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
             Ok(ListBasedSegment {
                 id,
                 lists: HashMap::new(),
@@ -435,9 +430,7 @@ mod tests {
             if segs.iter().any(|s| s.id == id) {
                 Ok(())
             } else {
-                Err(RepositoryError::NotFound {
-                    id: id.to_string(),
-                })
+                Err(RepositoryError::NotFound { id: id.to_string() })
             }
         }
 
@@ -462,10 +455,7 @@ mod tests {
                 .map(|(ct, ck)| ContextMembership {
                     context_type: ct.clone(),
                     context_key: ck.clone(),
-                    memberships: segment_keys
-                        .iter()
-                        .map(|k| (k.clone(), true))
-                        .collect(),
+                    memberships: segment_keys.iter().map(|k| (k.clone(), true)).collect(),
                 })
                 .collect())
         }
@@ -479,9 +469,7 @@ mod tests {
             &self,
             id: FlagId,
         ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -523,9 +511,7 @@ mod tests {
         }
 
         async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_hashing_config(
@@ -613,9 +599,7 @@ mod tests {
     #[async_trait]
     impl SdkKeyRepository for MockSdkKeyRepo {
         async fn find_by_id(&self, id: SdkKeyId) -> Result<SdkKey, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn list_by_environment(
@@ -630,9 +614,7 @@ mod tests {
         }
 
         async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_active_by_environment(
@@ -647,10 +629,7 @@ mod tests {
                 .collect())
         }
 
-        async fn find_active_by_hash(
-            &self,
-            key_hash: &str,
-        ) -> Result<SdkKey, RepositoryError> {
+        async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
             self.active_keys
                 .iter()
                 .find(|k| k.key_hash == key_hash)
@@ -967,9 +946,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!(
-                        "/v1/environments/{env_id}/segments/{missing_id}"
-                    ))
+                    .uri(format!("/v1/environments/{env_id}/segments/{missing_id}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1109,9 +1086,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(format!(
-                        "/v1/environments/{env_id}/segments/{missing_id}"
-                    ))
+                    .uri(format!("/v1/environments/{env_id}/segments/{missing_id}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1351,7 +1326,10 @@ mod tests {
     fn api_error_bad_request_is_422() {
         use axum::response::IntoResponse as _;
         let err = ApiError::BadRequest("bad input".to_string());
-        assert_eq!(err.into_response().status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 
     #[test]
@@ -1400,16 +1378,18 @@ mod tests {
         use crate::api::segments::types::ValidationError;
         let err: ApiError = ValidationError::InvalidSegmentRule.into();
         use axum::response::IntoResponse as _;
-        assert_eq!(err.into_response().status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 
     // RepositoryError::Database and RepositoryError::Unexpected map to 500
     #[test]
     fn repository_database_error_converts_to_500() {
-        let err: ApiError = RepositoryError::Database(
-            sqlx::Error::Protocol("db connection error".to_string())
-        )
-        .into();
+        let err: ApiError =
+            RepositoryError::Database(sqlx::Error::Protocol("db connection error".to_string()))
+                .into();
         use axum::response::IntoResponse as _;
         assert_eq!(
             err.into_response().status(),
@@ -1419,8 +1399,7 @@ mod tests {
 
     #[test]
     fn repository_unexpected_error_converts_to_500() {
-        let err: ApiError =
-            RepositoryError::Unexpected(anyhow::anyhow!("unexpected error")).into();
+        let err: ApiError = RepositoryError::Unexpected(anyhow::anyhow!("unexpected error")).into();
         use axum::response::IntoResponse as _;
         assert_eq!(
             err.into_response().status(),
@@ -1434,7 +1413,10 @@ mod tests {
         use crate::api::segments::types::ValidationError;
         let err: ApiError = ValidationError::MissingDefinition(SegmentType::List).into();
         use axum::response::IntoResponse as _;
-        assert_eq!(err.into_response().status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            err.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 
     // ---------------------------------------------------------------------------

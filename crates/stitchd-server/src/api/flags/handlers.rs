@@ -404,9 +404,7 @@ mod tests {
                 .iter()
                 .find(|f| f.id == id)
                 .cloned()
-                .ok_or(RepositoryError::NotFound {
-                    id: id.to_string(),
-                })
+                .ok_or(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -469,9 +467,7 @@ mod tests {
             if flags.iter().any(|f| f.id == id) {
                 Ok(())
             } else {
-                Err(RepositoryError::NotFound {
-                    id: id.to_string(),
-                })
+                Err(RepositoryError::NotFound { id: id.to_string() })
             }
         }
 
@@ -578,9 +574,7 @@ mod tests {
     #[async_trait]
     impl SegmentRepository for MockSegmentRepo {
         async fn find_by_id(&self, id: SegmentId) -> Result<Segment, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -618,10 +612,7 @@ mod tests {
             })
         }
 
-        async fn find_with_list(
-            &self,
-            id: SegmentId,
-        ) -> Result<ListBasedSegment, RepositoryError> {
+        async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
             Ok(ListBasedSegment {
                 id,
                 lists: HashMap::new(),
@@ -679,9 +670,7 @@ mod tests {
             &self,
             id: stitchd_core::id::SdkKeyId,
         ) -> Result<SdkKey, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn list_by_environment(
@@ -695,13 +684,8 @@ mod tests {
             Ok(())
         }
 
-        async fn revoke(
-            &self,
-            id: stitchd_core::id::SdkKeyId,
-        ) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+        async fn revoke(&self, id: stitchd_core::id::SdkKeyId) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_active_by_environment(
@@ -711,10 +695,7 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn find_active_by_hash(
-            &self,
-            key_hash: &str,
-        ) -> Result<SdkKey, RepositoryError> {
+        async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
             Err(RepositoryError::NotFound {
                 id: key_hash.to_string(),
             })
@@ -1174,9 +1155,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(format!(
-                        "/v1/projects/{project_id}/flags/{flag_id}/hashing"
-                    ))
+                    .uri(format!("/v1/projects/{project_id}/flags/{flag_id}/hashing"))
                     .header("content-type", "application/json")
                     .body(Body::from(serde_json::to_vec(&config).unwrap()))
                     .unwrap(),
@@ -1304,9 +1283,10 @@ mod tests {
         };
         let flag_repo = MockFlagRepo::with_flags(vec![flag]);
         let variant_repo = Arc::new(MockVariantRepo {
-            variants: std::sync::Mutex::new(
-                std::collections::HashMap::from([(flag_id, vec![variant])]),
-            ),
+            variants: std::sync::Mutex::new(std::collections::HashMap::from([(
+                flag_id,
+                vec![variant],
+            )])),
         });
         let state = make_test_state(flag_repo, variant_repo);
         let app = build_router(state);
@@ -1369,9 +1349,10 @@ mod tests {
 
         let flag_repo = MockFlagRepo::with_flags(vec![flag]);
         let variant_repo = Arc::new(MockVariantRepo {
-            variants: std::sync::Mutex::new(
-                std::collections::HashMap::from([(flag_id, vec![variant])]),
-            ),
+            variants: std::sync::Mutex::new(std::collections::HashMap::from([(
+                flag_id,
+                vec![variant],
+            )])),
         });
         let state = AppState {
             db: sqlx::PgPool::connect_lazy(

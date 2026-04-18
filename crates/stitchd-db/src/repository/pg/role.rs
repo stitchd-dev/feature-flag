@@ -144,7 +144,10 @@ mod unit_tests {
 
     #[test]
     fn resource_type_to_str_all_variants() {
-        assert_eq!(resource_type_to_str(ResourceType::Environment), "environment");
+        assert_eq!(
+            resource_type_to_str(ResourceType::Environment),
+            "environment"
+        );
         assert_eq!(resource_type_to_str(ResourceType::Flag), "flag");
         assert_eq!(resource_type_to_str(ResourceType::Segment), "segment");
     }

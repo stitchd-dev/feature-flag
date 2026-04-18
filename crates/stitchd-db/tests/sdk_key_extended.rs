@@ -146,7 +146,10 @@ async fn test_sdk_key_find_active_by_hash_revoked_not_found(pool: sqlx::PgPool) 
     };
     repo.create(&key).await.unwrap();
 
-    let err = repo.find_active_by_hash("revoked-active").await.unwrap_err();
+    let err = repo
+        .find_active_by_hash("revoked-active")
+        .await
+        .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
 
