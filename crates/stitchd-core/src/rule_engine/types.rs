@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 /// - `Or` short-circuits on the first `true` child
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(no_recursion))]
 pub enum ConditionExpr {
     /// A single leaf condition test.
     Leaf(Condition),

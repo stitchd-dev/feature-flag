@@ -22,7 +22,7 @@
   - Add to workspace dependencies and server `Cargo.toml`
   - Annotate all existing route handlers with `#[utoipa::path]`
   - Annotate all request/response types with `#[derive(ToSchema)]`
-- [ ] Task 2.2: Expose `/api-docs/openapi.json` endpoint
+- [x] Task 2.2: Expose `/api-docs/openapi.json` endpoint
   <!-- files: crates/stitchd-server/src/api/, crates/stitchd-server/src/startup.rs -->
   <!-- depends: task2.1 -->
   - Register `SwaggerUi` or raw JSON handler in the Axum router

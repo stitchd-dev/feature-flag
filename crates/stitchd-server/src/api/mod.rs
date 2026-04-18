@@ -2,6 +2,8 @@
 
 /// Feature Flag management API.
 pub mod flags;
+/// OpenAPI schema aggregator.
+pub mod openapi;
 /// Router implementation.
 pub mod router;
 /// SDK key authentication extractor.
