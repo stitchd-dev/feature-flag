@@ -25,3 +25,8 @@ This file tracks all major tracks for the project.
 
 ## [x] Track: Increase Test Coverage to >90% Across All Crates
 *Link: [./conductor/tracks/coverage_20260417/](./conductor/tracks/coverage_20260417/)*
+
+---
+
+## [~] Track: mdBook Documentation Site (API Docs + SDK Guide)
+*Link: [./conductor/tracks/mdbook_docs_20260418/](./conductor/tracks/mdbook_docs_20260418/)*
