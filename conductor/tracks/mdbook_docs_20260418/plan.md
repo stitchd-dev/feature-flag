@@ -1,6 +1,6 @@
 # Plan: mdBook Documentation Site
 
-## Phase 1: mdBook Foundation & xtask Scaffold
+## Phase 1: mdBook Foundation & xtask Scaffold [checkpoint: 59f707c]
 
 - [x] Task 1.1: Create `docs/` directory with `book.toml` and `src/SUMMARY.md` skeleton [15df307]
   - `book.toml` configures title, authors, preprocessors (mermaid, links)
