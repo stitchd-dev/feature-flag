@@ -38,7 +38,9 @@
 //!     };
 //!
 //!     let variant = client.evaluate("my-feature-flag", &ctx).await.expect("evaluation failed");
-//!     println!("Flag variant: {}", variant.key);
+//!     if let Some(v) = variant {
+//!         println!("Flag value: {:?}", v);
+//!     }
 //! }
 //! ```
 //!

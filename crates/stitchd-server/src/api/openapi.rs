@@ -1,4 +1,6 @@
 //! OpenAPI schema aggregator for the Stitchd REST API.
+// utoipa::OpenApi derive macro generates a for_each internally; suppress the lint.
+#![allow(clippy::needless_for_each)]
 
 use crate::api::flags::handlers::{
     BatchEvaluationResponse, CreateFlagRequest, CreateVariantRequest, EvaluationRequest,
@@ -19,7 +21,7 @@ use stitchd_core::{
     variants::VariantValue,
 };
 
-/// Aggregated OpenAPI document for the Stitchd REST API.
+/// Aggregated `OpenAPI` document for the Stitchd REST API.
 #[derive(utoipa::OpenApi)]
 #[openapi(
     info(

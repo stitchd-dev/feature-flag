@@ -49,7 +49,7 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// `GET /api-docs/openapi.json` — Serve the OpenAPI 3.x JSON document.
+/// `GET /api-docs/openapi.json` — Serve the `OpenAPI` 3.x JSON document.
 async fn openapi_json_handler() -> Json<utoipa::openapi::OpenApi> {
     Json(api::openapi::StitchdApiDoc::openapi())
 }
@@ -127,6 +127,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn make_stub_state() -> AppState {
         use metrics_exporter_prometheus::PrometheusBuilder;
         use std::collections::HashMap;
