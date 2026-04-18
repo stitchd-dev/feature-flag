@@ -2,10 +2,10 @@
 
 ## Phase 1: mdBook Foundation & xtask Scaffold
 
-- [~] Task 1.1: Create `docs/` directory with `book.toml` and `src/SUMMARY.md` skeleton
+- [x] Task 1.1: Create `docs/` directory with `book.toml` and `src/SUMMARY.md` skeleton [15df307]
   - `book.toml` configures title, authors, preprocessors (mermaid, links)
   - `src/SUMMARY.md` lists all planned chapters as stubs
-- [ ] Task 1.2: Add `xtask` crate to workspace
+- [x] Task 1.2: Add `xtask` crate to workspace
   - New crate `crates/xtask` with a `docs` subcommand
   - Registers in `Cargo.toml` workspace members
   - Subcommand runs doc generation steps in sequence (stubs initially)
