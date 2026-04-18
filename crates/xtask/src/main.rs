@@ -19,8 +19,8 @@ fn main() -> Result<()> {
 fn docs() -> Result<()> {
     let root = project_root();
 
-    ensure_tool("mdbook", "0.5")?;
-    ensure_tool("mdbook-mermaid", "0.17")?;
+    ensure_tool("mdbook", "^0.5")?;
+    ensure_tool("mdbook-mermaid", "^0.17")?;
 
     // Step 1: Generate gRPC reference from .proto files
     generate_grpc_docs(&root)?;
@@ -356,7 +356,7 @@ fn proto_to_markdown(source: &str, path: &Path) -> String {
 
 fn extract_name<'a>(line: &'a str, prefix: &str) -> &'a str {
     line.trim_start_matches(prefix)
-        .split(|c: char| c == ' ' || c == '{')
+        .split([' ', '{'])
         .next()
         .unwrap_or(line)
         .trim()
@@ -432,9 +432,9 @@ fn parse_field(line: &str) -> Option<FieldInfo> {
         (format!("repeated {}", parts[1]), parts[2])
     } else if parts[0] == "map" || parts[0].starts_with("map<") {
         // map<K, V> name = N
-        let map_type = code.splitn(2, '>').next().unwrap_or("map").trim();
-        let map_type = format!("{}>", map_type);
-        let rest = code.splitn(2, '>').nth(1).unwrap_or("").trim();
+        let (before, after) = code.split_once('>').unwrap_or(("map", ""));
+        let map_type = format!("{}>", before.trim());
+        let rest = after.trim();
         let name = rest.split_whitespace().next().unwrap_or("?");
         (map_type, name)
     } else {
@@ -535,11 +535,7 @@ fn extract_quickstart(root: &Path) -> Result<()> {
         .filter(|l| l.starts_with("//!"))
         .map(|l| {
             let stripped = l.trim_start_matches("//!");
-            if stripped.starts_with(' ') {
-                &stripped[1..]
-            } else {
-                stripped
-            }
+            stripped.strip_prefix(' ').unwrap_or(stripped)
         })
         .collect();
 
