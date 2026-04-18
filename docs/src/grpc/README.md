@@ -1,6 +1,11 @@
 # gRPC / Protobuf Reference
 
-> This chapter is auto-generated from `.proto` files via `protoc-gen-doc`.
-> Run `cargo xtask docs` to regenerate.
+Auto-generated from `.proto` files in the `proto/` directory.
+Run `cargo xtask docs` to regenerate.
 
-<!-- gRPC docs will be generated here by cargo xtask docs -->
+## Services & Messages
+
+- [Context](common_v1_context.md)
+- [Event](events_v1_event.md)
+- [Flag Sync](flags_v1_flag_sync.md)
+- [Segment](segments_v1_segment.md)
