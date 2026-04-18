@@ -14,6 +14,5 @@ command = "mdbook-mermaid"
 
 [output.html]
 git-repository-url = "https://github.com/stitchd-dev/feature-flag"
-edit-url-template = "https://github.com/stitchd-dev/feature-flag/edit/main/docs/{path}"
 no-section-label = false
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
