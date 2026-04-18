@@ -11,6 +11,10 @@
 # gRPC / Protobuf Reference
 
 - [gRPC Services](./grpc/README.md)
+  - [Context](./grpc/common_v1_context.md)
+  - [Event](./grpc/events_v1_event.md)
+  - [Flag Sync](./grpc/flags_v1_flag_sync.md)
+  - [Segment](./grpc/segments_v1_segment.md)
 
 # Rust SDK
 

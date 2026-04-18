@@ -50,3 +50,4 @@ lcov.info
 # bd worktree
 .worktrees/mdbook_docs_20260418/
 docs/src/api/openapi.json
+docs/src/grpc/*.md

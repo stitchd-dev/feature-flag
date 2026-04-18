@@ -42,12 +42,12 @@
 ## Phase 3: gRPC / Protobuf Reference
 <!-- depends: phase1 -->
 
-- [ ] Task 3.1: Add `protoc-gen-doc` generation to xtask
+- [x] Task 3.1: Add `protoc-gen-doc` generation to xtask
   <!-- files: crates/xtask/src/main.rs, docs/src/grpc/ -->
   - xtask invokes `protoc` with `protoc-gen-doc` plugin against `proto/` directory
   - Uses vendored `protoc` from `protoc-bin-vendored` (already in build deps)
   - Output format: Markdown, destination `docs/src/grpc/`
-- [ ] Task 3.2: Wire generated Markdown into SUMMARY.md
+- [x] Task 3.2: Wire generated Markdown into SUMMARY.md
   <!-- files: docs/src/grpc/, docs/src/SUMMARY.md -->
   <!-- depends: task3.1 -->
   - xtask updates `docs/src/grpc/README.md` and per-service chapter files
