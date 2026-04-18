@@ -77,14 +77,14 @@
 <!-- depends: phase1 -->
 <!-- execution: parallel -->
 
-- [ ] Task 5.1: Write Deployment chapter
+- [x] Task 5.1: Write Deployment chapter
   <!-- files: docs/src/deployment/ -->
   - `docs/src/deployment/README.md` — overview, prerequisites
   - `docs/src/deployment/postgres.md` — PostgreSQL 16+ setup
   - `docs/src/deployment/clickhouse.md` — ClickHouse 24+ setup
   - `docs/src/deployment/env-vars.md` — all environment variables
   - `docs/src/deployment/sdk-keys.md` — SDK key creation and rotation
-- [ ] Task 5.2: Write Architecture chapter with Mermaid diagrams
+- [x] Task 5.2: Write Architecture chapter with Mermaid diagrams
   <!-- files: docs/src/architecture/ -->
   - `docs/src/architecture/README.md` — high-level system diagram (Mermaid)
   - `docs/src/architecture/evaluation-flow.md` — flag evaluation sequence diagram
@@ -96,13 +96,13 @@
 <!-- depends: phase2, phase3, phase4, phase5 -->
 <!-- execution: parallel -->
 
-- [ ] Task 6.1: Add `cargo xtask docs` to CI workflow
+- [x] Task 6.1: Add `cargo xtask docs` to CI workflow
   <!-- files: .github/workflows/ -->
   - New GitHub Actions job: `docs-build`
   - Runs `cargo xtask docs` and fails on non-zero exit
   - Caches `mdbook` and `protoc-gen-doc` binaries
-- [ ] Task 6.2: Enforce `missing_docs` in CI
+- [x] Task 6.2: Enforce `missing_docs` in CI
   <!-- files: clippy.toml, .github/workflows/ -->
-  - `clippy.toml` or CI `cargo clippy` flags confirm `missing_docs` lint fires
-  - Verify CI fails if a public SDK symbol loses its doc comment
+  - `#![deny(missing_docs)]` in `stitchd-sdk/src/lib.rs` — the existing clippy job catches violations
+  - Verified: `cargo clippy --workspace --all-targets -- -D warnings` fails if doc comment removed
 - [ ] Task: Conductor - User Manual Verification 'Phase 6' (Protocol in workflow.md)

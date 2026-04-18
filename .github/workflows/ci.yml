@@ -130,3 +130,27 @@ jobs:
           name: coverage-report
           path: coverage/
           retention-days: 7
+
+  # ── 5. Docs build ──────────────────────────────────────────────────────────
+  docs-build:
+    name: Docs Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build docs
+        run: cargo run --manifest-path crates/xtask/Cargo.toml -- docs
+
+      - name: Upload docs artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: docs-site
+          path: docs/book/
+          retention-days: 7
