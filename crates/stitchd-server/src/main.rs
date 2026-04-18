@@ -4,12 +4,29 @@ use sqlx::postgres::PgPoolOptions;
 use stitchd_proto::flags::v1::flag_sync_service_server::FlagSyncServiceServer;
 use stitchd_server::{AppState, build_router, grpc::flag_sync::FlagSyncServiceImpl, telemetry};
 use tracing::info;
+use utoipa::OpenApi as _;
 
 const SERVICE_NAME: &str = "stitchd-server";
 const SERVICE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Short-circuit: export OpenAPI JSON and exit (no DB connection needed).
+    let mut args = std::env::args().skip(1);
+    if args.next().as_deref() == Some("--export-openapi") {
+        let out_path = args.next().unwrap_or_else(|| "openapi.json".to_string());
+        let doc = stitchd_server::api::openapi::StitchdApiDoc::openapi();
+        let json = serde_json::to_string_pretty(&doc).context("failed to serialise OpenAPI doc")?;
+        if out_path == "-" {
+            print!("{json}");
+        } else {
+            std::fs::write(&out_path, json)
+                .with_context(|| format!("failed to write OpenAPI JSON to {out_path}"))?;
+            println!("OpenAPI JSON written to {out_path}");
+        }
+        return Ok(());
+    }
+
     // Metrics must be installed before tracing so the metrics layer can record
     // any spans emitted during subscriber setup.
     let metrics_handle = telemetry::init_metrics().context("failed to initialise metrics")?;

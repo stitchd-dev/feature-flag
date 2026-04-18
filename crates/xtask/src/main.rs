@@ -23,13 +23,45 @@ fn docs() -> Result<()> {
     ensure_tool("mdbook-mermaid", "0.17")?;
 
     // Step 1: protoc-gen-doc (Phase 3 will wire this up)
-    // Step 2: OpenAPI export (Phase 2 will wire this up)
+    // Step 2: Export OpenAPI JSON from the server binary
+    export_openapi(&root)?;
     // Step 3: rustdoc copy (Phase 4 will wire this up)
 
     // Step 4: build the mdBook site
     mdbook_build(&root)?;
 
     println!("✓ Documentation built at docs/book/");
+    Ok(())
+}
+
+fn export_openapi(root: &Path) -> Result<()> {
+    let out_path = root.join("docs/src/api/openapi.json");
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).context("failed to create docs/src/api/")?;
+    }
+
+    println!("Exporting OpenAPI JSON → {}", out_path.display());
+
+    // Build the server binary first (no-op if already up to date).
+    let build_status = Command::new("cargo")
+        .args(["build", "-p", "stitchd-server"])
+        .current_dir(root)
+        .status()
+        .context("failed to run `cargo build -p stitchd-server`")?;
+    anyhow::ensure!(build_status.success(), "`cargo build` exited with {build_status}");
+
+    // Run the binary with --export-openapi <path>.
+    let binary = root.join("target/debug/stitchd-server");
+    let export_status = Command::new(&binary)
+        .args(["--export-openapi", out_path.to_str().unwrap()])
+        .current_dir(root)
+        .status()
+        .with_context(|| format!("failed to run `{}`", binary.display()))?;
+    anyhow::ensure!(
+        export_status.success(),
+        "`stitchd-server --export-openapi` exited with {export_status}"
+    );
+
     Ok(())
 }
 

@@ -27,7 +27,7 @@
   <!-- depends: task2.1 -->
   - Register `SwaggerUi` or raw JSON handler in the Axum router
   - Smoke-test: server returns valid JSON at that path
-- [ ] Task 2.3: Wire OpenAPI export into `cargo xtask docs`
+- [x] Task 2.3: Wire OpenAPI export into `cargo xtask docs`
   <!-- files: crates/xtask/src/main.rs, docs/src/api/ -->
   <!-- depends: task2.2 -->
   - xtask spawns `stitchd-server --export-openapi` or reads the JSON via reqwest
