@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/stitchd-dev/feature-flag/actions/workflows/ci.yml/badge.svg)](https://github.com/stitchd-dev/feature-flag/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/stitchd-dev/feature-flag/graph/badge.svg)](https://codecov.io/gh/stitchd-dev/feature-flag)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
 A production-ready feature flag and experimentation platform built in Rust. Supports multi-tenant deployments, rule-based flag evaluation, audience segmentation, and server-side SDK integration via gRPC.
@@ -170,4 +170,4 @@ See `.env.example` for a complete list.
 
 ## License
 
-Licensed under either of [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE) at your option.
+Licensed under the [MIT License](LICENSE).
