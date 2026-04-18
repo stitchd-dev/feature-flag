@@ -655,7 +655,7 @@ mod tests {
 
         // Mock the list-check endpoint to say user is a member
         Mock::given(method("POST"))
-            .and(path(format!("/v1/environments//segments/list-check")))
+            .and(path("/v1/environments//segments/list-check".to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "memberships": {
                     "list-seg": true
@@ -714,7 +714,7 @@ mod tests {
         let seg_uuid = uuid::Uuid::new_v4();
 
         Mock::given(method("POST"))
-            .and(path(format!("/v1/environments//segments/list-check")))
+            .and(path("/v1/environments//segments/list-check".to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "memberships": {
                     "list-seg": false

@@ -760,12 +760,12 @@ mod tests {
         let v = stitchd_core::flag::Variant {
             id: make_variant_id(),
             key: "rate".to_string(),
-            value: VariantValue::DoubleValue(3.14),
+            value: VariantValue::DoubleValue(2.5),
         };
         let proto = domain_variant_to_proto(v);
         assert!(matches!(
             proto.value.unwrap().value,
-            Some(ProtoVariantValueInner::DoubleValue(d)) if (d - 3.14).abs() < 1e-9
+            Some(ProtoVariantValueInner::DoubleValue(d)) if (d - 2.5).abs() < 1e-9
         ));
     }
 

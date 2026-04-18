@@ -91,151 +91,6 @@ fn assemble_variant(
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests for pure helpers
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod unit_tests {
-    use super::*;
-    use stitchd_core::flag::VariantValue;
-
-    #[test]
-    fn parse_flag_value_type_all_variants() {
-        assert!(matches!(
-            parse_flag_value_type("bool").unwrap(),
-            FlagValueType::Bool
-        ));
-        assert!(matches!(
-            parse_flag_value_type("int").unwrap(),
-            FlagValueType::Int
-        ));
-        assert!(matches!(
-            parse_flag_value_type("double").unwrap(),
-            FlagValueType::Double
-        ));
-        assert!(matches!(
-            parse_flag_value_type("str").unwrap(),
-            FlagValueType::Str
-        ));
-        assert!(matches!(
-            parse_flag_value_type("json").unwrap(),
-            FlagValueType::Json
-        ));
-    }
-
-    #[test]
-    fn parse_flag_value_type_unknown_returns_error() {
-        let err = parse_flag_value_type("unknown").unwrap_err();
-        assert!(err.to_string().contains("unknown flag value_type: unknown"));
-    }
-
-    #[test]
-    fn flag_value_type_to_str_all_variants() {
-        assert_eq!(flag_value_type_to_str(FlagValueType::Bool), "bool");
-        assert_eq!(flag_value_type_to_str(FlagValueType::Int), "int");
-        assert_eq!(flag_value_type_to_str(FlagValueType::Double), "double");
-        assert_eq!(flag_value_type_to_str(FlagValueType::Str), "str");
-        assert_eq!(flag_value_type_to_str(FlagValueType::Json), "json");
-    }
-
-    #[test]
-    fn flag_value_type_roundtrips() {
-        for vt in [
-            FlagValueType::Bool,
-            FlagValueType::Int,
-            FlagValueType::Double,
-            FlagValueType::Str,
-            FlagValueType::Json,
-        ] {
-            let s = flag_value_type_to_str(vt);
-            let parsed = parse_flag_value_type(s).unwrap();
-            assert_eq!(parsed, vt, "roundtrip failed for {s}");
-        }
-    }
-
-    #[test]
-    fn assemble_variant_bool_value() {
-        let id = uuid::Uuid::new_v4();
-        // VariantValue uses #[serde(untagged)]: BoolValue(true) serialises as plain `true`
-        let value = serde_json::json!(true);
-        let variant = assemble_variant(id, "on".to_string(), value).unwrap();
-        assert_eq!(variant.key, "on");
-        assert!(matches!(variant.value, VariantValue::BoolValue(true)));
-    }
-
-    #[test]
-    fn assemble_variant_str_value() {
-        let id = uuid::Uuid::new_v4();
-        let value = serde_json::json!("hello");
-        let variant = assemble_variant(id, "v1".to_string(), value).unwrap();
-        assert!(matches!(variant.value, VariantValue::StrValue(ref s) if s == "hello"));
-    }
-
-    #[test]
-    fn assemble_flag_valid() {
-        let id = uuid::Uuid::new_v4();
-        let project_id = uuid::Uuid::new_v4();
-        let now = chrono::Utc::now();
-        let flag = assemble_flag(
-            id,
-            project_id,
-            "my-flag".to_string(),
-            "bool",
-            true,
-            None,
-            now,
-            now,
-            None,
-            1,
-        )
-        .unwrap();
-        assert_eq!(flag.key.as_str(), "my-flag");
-        assert!(flag.enabled);
-    }
-
-    #[test]
-    fn assemble_flag_invalid_value_type_returns_error() {
-        let id = uuid::Uuid::new_v4();
-        let project_id = uuid::Uuid::new_v4();
-        let now = chrono::Utc::now();
-        let result = assemble_flag(
-            id,
-            project_id,
-            "my-flag".to_string(),
-            "badtype",
-            true,
-            None,
-            now,
-            now,
-            None,
-            1,
-        );
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn assemble_flag_invalid_key_returns_error() {
-        let id = uuid::Uuid::new_v4();
-        let project_id = uuid::Uuid::new_v4();
-        let now = chrono::Utc::now();
-        // FlagKey validation rejects empty string
-        let result = assemble_flag(
-            id,
-            project_id,
-            String::new(), // empty key should fail
-            "bool",
-            true,
-            None,
-            now,
-            now,
-            None,
-            1,
-        );
-        assert!(result.is_err());
-    }
-}
-
-// ---------------------------------------------------------------------------
 // PgFlagRepository
 // ---------------------------------------------------------------------------
 
@@ -842,5 +697,150 @@ impl VariantRepository for PgVariantRepository {
             .await?;
 
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for pure helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use stitchd_core::flag::VariantValue;
+
+    #[test]
+    fn parse_flag_value_type_all_variants() {
+        assert!(matches!(
+            parse_flag_value_type("bool").unwrap(),
+            FlagValueType::Bool
+        ));
+        assert!(matches!(
+            parse_flag_value_type("int").unwrap(),
+            FlagValueType::Int
+        ));
+        assert!(matches!(
+            parse_flag_value_type("double").unwrap(),
+            FlagValueType::Double
+        ));
+        assert!(matches!(
+            parse_flag_value_type("str").unwrap(),
+            FlagValueType::Str
+        ));
+        assert!(matches!(
+            parse_flag_value_type("json").unwrap(),
+            FlagValueType::Json
+        ));
+    }
+
+    #[test]
+    fn parse_flag_value_type_unknown_returns_error() {
+        let err = parse_flag_value_type("unknown").unwrap_err();
+        assert!(err.to_string().contains("unknown flag value_type: unknown"));
+    }
+
+    #[test]
+    fn flag_value_type_to_str_all_variants() {
+        assert_eq!(flag_value_type_to_str(FlagValueType::Bool), "bool");
+        assert_eq!(flag_value_type_to_str(FlagValueType::Int), "int");
+        assert_eq!(flag_value_type_to_str(FlagValueType::Double), "double");
+        assert_eq!(flag_value_type_to_str(FlagValueType::Str), "str");
+        assert_eq!(flag_value_type_to_str(FlagValueType::Json), "json");
+    }
+
+    #[test]
+    fn flag_value_type_roundtrips() {
+        for vt in [
+            FlagValueType::Bool,
+            FlagValueType::Int,
+            FlagValueType::Double,
+            FlagValueType::Str,
+            FlagValueType::Json,
+        ] {
+            let s = flag_value_type_to_str(vt);
+            let parsed = parse_flag_value_type(s).unwrap();
+            assert_eq!(parsed, vt, "roundtrip failed for {s}");
+        }
+    }
+
+    #[test]
+    fn assemble_variant_bool_value() {
+        let id = uuid::Uuid::new_v4();
+        // VariantValue uses #[serde(untagged)]: BoolValue(true) serialises as plain `true`
+        let value = serde_json::json!(true);
+        let variant = assemble_variant(id, "on".to_string(), value).unwrap();
+        assert_eq!(variant.key, "on");
+        assert!(matches!(variant.value, VariantValue::BoolValue(true)));
+    }
+
+    #[test]
+    fn assemble_variant_str_value() {
+        let id = uuid::Uuid::new_v4();
+        let value = serde_json::json!("hello");
+        let variant = assemble_variant(id, "v1".to_string(), value).unwrap();
+        assert!(matches!(variant.value, VariantValue::StrValue(ref s) if s == "hello"));
+    }
+
+    #[test]
+    fn assemble_flag_valid() {
+        let id = uuid::Uuid::new_v4();
+        let project_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let flag = assemble_flag(
+            id,
+            project_id,
+            "my-flag".to_string(),
+            "bool",
+            true,
+            None,
+            now,
+            now,
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(flag.key.as_str(), "my-flag");
+        assert!(flag.enabled);
+    }
+
+    #[test]
+    fn assemble_flag_invalid_value_type_returns_error() {
+        let id = uuid::Uuid::new_v4();
+        let project_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let result = assemble_flag(
+            id,
+            project_id,
+            "my-flag".to_string(),
+            "badtype",
+            true,
+            None,
+            now,
+            now,
+            None,
+            1,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn assemble_flag_invalid_key_returns_error() {
+        let id = uuid::Uuid::new_v4();
+        let project_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
+        // FlagKey validation rejects empty string
+        let result = assemble_flag(
+            id,
+            project_id,
+            String::new(), // empty key should fail
+            "bool",
+            true,
+            None,
+            now,
+            now,
+            None,
+            1,
+        );
+        assert!(result.is_err());
     }
 }

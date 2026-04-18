@@ -454,9 +454,11 @@ mod tests {
             for f in flags.iter_mut() {
                 if f.id == flag.id {
                     *f = flag.clone();
+                    drop(flags);
                     return Ok(flag.clone());
                 }
             }
+            drop(flags);
             Err(RepositoryError::NotFound {
                 id: flag.id.to_string(),
             })
@@ -1234,34 +1236,34 @@ mod tests {
 
     #[test]
     fn repository_error_not_found_converts_to_api_error() {
+        use axum::response::IntoResponse as _;
         let repo_err = RepositoryError::NotFound {
             id: "flag-id".to_string(),
         };
         let api_err: ApiError = repo_err.into();
-        use axum::response::IntoResponse as _;
         let resp = api_err.into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
     fn repository_error_version_conflict_converts_to_conflict() {
+        use axum::response::IntoResponse as _;
         let repo_err = RepositoryError::VersionConflict {
             expected: 1,
             actual: 2,
         };
         let api_err: ApiError = repo_err.into();
-        use axum::response::IntoResponse as _;
         let resp = api_err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[test]
     fn repository_error_unique_violation_converts_to_conflict() {
+        use axum::response::IntoResponse as _;
         let repo_err = RepositoryError::UniqueViolation {
             field: "key".to_string(),
         };
         let api_err: ApiError = repo_err.into();
-        use axum::response::IntoResponse as _;
         let resp = api_err.into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }

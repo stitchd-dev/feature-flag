@@ -135,91 +135,6 @@ fn parse_action(s: &str) -> Result<Action, RepositoryError> {
 }
 
 // ---------------------------------------------------------------------------
-// Unit tests for pure helpers
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod unit_tests {
-    use super::*;
-
-    #[test]
-    fn resource_type_to_str_all_variants() {
-        assert_eq!(
-            resource_type_to_str(ResourceType::Environment),
-            "environment"
-        );
-        assert_eq!(resource_type_to_str(ResourceType::Flag), "flag");
-        assert_eq!(resource_type_to_str(ResourceType::Segment), "segment");
-    }
-
-    #[test]
-    fn action_to_str_all_variants() {
-        assert_eq!(action_to_str(Action::Read), "read");
-        assert_eq!(action_to_str(Action::Write), "write");
-        assert_eq!(action_to_str(Action::Publish), "publish");
-        assert_eq!(action_to_str(Action::Admin), "admin");
-    }
-
-    #[test]
-    fn parse_resource_type_all_variants() {
-        assert!(matches!(
-            parse_resource_type("environment").unwrap(),
-            ResourceType::Environment
-        ));
-        assert!(matches!(
-            parse_resource_type("flag").unwrap(),
-            ResourceType::Flag
-        ));
-        assert!(matches!(
-            parse_resource_type("segment").unwrap(),
-            ResourceType::Segment
-        ));
-    }
-
-    #[test]
-    fn parse_resource_type_unknown_returns_error() {
-        let err = parse_resource_type("other").unwrap_err();
-        assert!(err.to_string().contains("unknown resource_type: other"));
-    }
-
-    #[test]
-    fn parse_action_all_variants() {
-        assert!(matches!(parse_action("read").unwrap(), Action::Read));
-        assert!(matches!(parse_action("write").unwrap(), Action::Write));
-        assert!(matches!(parse_action("publish").unwrap(), Action::Publish));
-        assert!(matches!(parse_action("admin").unwrap(), Action::Admin));
-    }
-
-    #[test]
-    fn parse_action_unknown_returns_error() {
-        let err = parse_action("delete").unwrap_err();
-        assert!(err.to_string().contains("unknown action: delete"));
-    }
-
-    #[test]
-    fn resource_type_roundtrips() {
-        for rt in [
-            ResourceType::Environment,
-            ResourceType::Flag,
-            ResourceType::Segment,
-        ] {
-            let s = resource_type_to_str(rt);
-            let parsed = parse_resource_type(s).unwrap();
-            assert_eq!(parsed, rt, "roundtrip failed for {s}");
-        }
-    }
-
-    #[test]
-    fn action_roundtrips() {
-        for action in [Action::Read, Action::Write, Action::Publish, Action::Admin] {
-            let s = action_to_str(action);
-            let parsed = parse_action(s).unwrap();
-            assert_eq!(parsed, action, "roundtrip failed for {s}");
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // RoleRepository impl
 // ---------------------------------------------------------------------------
 
@@ -443,5 +358,90 @@ impl RoleRepository for PgRoleRepository {
             .await?;
 
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for pure helpers
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn resource_type_to_str_all_variants() {
+        assert_eq!(
+            resource_type_to_str(ResourceType::Environment),
+            "environment"
+        );
+        assert_eq!(resource_type_to_str(ResourceType::Flag), "flag");
+        assert_eq!(resource_type_to_str(ResourceType::Segment), "segment");
+    }
+
+    #[test]
+    fn action_to_str_all_variants() {
+        assert_eq!(action_to_str(Action::Read), "read");
+        assert_eq!(action_to_str(Action::Write), "write");
+        assert_eq!(action_to_str(Action::Publish), "publish");
+        assert_eq!(action_to_str(Action::Admin), "admin");
+    }
+
+    #[test]
+    fn parse_resource_type_all_variants() {
+        assert!(matches!(
+            parse_resource_type("environment").unwrap(),
+            ResourceType::Environment
+        ));
+        assert!(matches!(
+            parse_resource_type("flag").unwrap(),
+            ResourceType::Flag
+        ));
+        assert!(matches!(
+            parse_resource_type("segment").unwrap(),
+            ResourceType::Segment
+        ));
+    }
+
+    #[test]
+    fn parse_resource_type_unknown_returns_error() {
+        let err = parse_resource_type("other").unwrap_err();
+        assert!(err.to_string().contains("unknown resource_type: other"));
+    }
+
+    #[test]
+    fn parse_action_all_variants() {
+        assert!(matches!(parse_action("read").unwrap(), Action::Read));
+        assert!(matches!(parse_action("write").unwrap(), Action::Write));
+        assert!(matches!(parse_action("publish").unwrap(), Action::Publish));
+        assert!(matches!(parse_action("admin").unwrap(), Action::Admin));
+    }
+
+    #[test]
+    fn parse_action_unknown_returns_error() {
+        let err = parse_action("delete").unwrap_err();
+        assert!(err.to_string().contains("unknown action: delete"));
+    }
+
+    #[test]
+    fn resource_type_roundtrips() {
+        for rt in [
+            ResourceType::Environment,
+            ResourceType::Flag,
+            ResourceType::Segment,
+        ] {
+            let s = resource_type_to_str(rt);
+            let parsed = parse_resource_type(s).unwrap();
+            assert_eq!(parsed, rt, "roundtrip failed for {s}");
+        }
+    }
+
+    #[test]
+    fn action_roundtrips() {
+        for action in [Action::Read, Action::Write, Action::Publish, Action::Admin] {
+            let s = action_to_str(action);
+            let parsed = parse_action(s).unwrap();
+            assert_eq!(parsed, action, "roundtrip failed for {s}");
+        }
     }
 }

@@ -1344,40 +1344,40 @@ mod tests {
 
     #[test]
     fn repository_not_found_converts_correctly() {
+        use axum::response::IntoResponse as _;
         let err: ApiError = RepositoryError::NotFound {
             id: "seg-id".to_string(),
         }
         .into();
-        use axum::response::IntoResponse as _;
         assert_eq!(err.into_response().status(), StatusCode::NOT_FOUND);
     }
 
     #[test]
     fn repository_version_conflict_converts_correctly() {
+        use axum::response::IntoResponse as _;
         let err: ApiError = RepositoryError::VersionConflict {
             expected: 1,
             actual: 2,
         }
         .into();
-        use axum::response::IntoResponse as _;
         assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
     }
 
     #[test]
     fn repository_unique_violation_converts_correctly() {
+        use axum::response::IntoResponse as _;
         let err: ApiError = RepositoryError::UniqueViolation {
             field: "key".to_string(),
         }
         .into();
-        use axum::response::IntoResponse as _;
         assert_eq!(err.into_response().status(), StatusCode::CONFLICT);
     }
 
     #[test]
     fn validation_error_converts_to_bad_request() {
         use crate::api::segments::types::ValidationError;
-        let err: ApiError = ValidationError::InvalidSegmentRule.into();
         use axum::response::IntoResponse as _;
+        let err: ApiError = ValidationError::InvalidSegmentRule.into();
         assert_eq!(
             err.into_response().status(),
             StatusCode::UNPROCESSABLE_ENTITY
@@ -1387,10 +1387,10 @@ mod tests {
     // RepositoryError::Database and RepositoryError::Unexpected map to 500
     #[test]
     fn repository_database_error_converts_to_500() {
+        use axum::response::IntoResponse as _;
         let err: ApiError =
             RepositoryError::Database(sqlx::Error::Protocol("db connection error".to_string()))
                 .into();
-        use axum::response::IntoResponse as _;
         assert_eq!(
             err.into_response().status(),
             StatusCode::INTERNAL_SERVER_ERROR
@@ -1399,8 +1399,8 @@ mod tests {
 
     #[test]
     fn repository_unexpected_error_converts_to_500() {
-        let err: ApiError = RepositoryError::Unexpected(anyhow::anyhow!("unexpected error")).into();
         use axum::response::IntoResponse as _;
+        let err: ApiError = RepositoryError::Unexpected(anyhow::anyhow!("unexpected error")).into();
         assert_eq!(
             err.into_response().status(),
             StatusCode::INTERNAL_SERVER_ERROR
@@ -1411,8 +1411,8 @@ mod tests {
     #[test]
     fn missing_definition_validation_error_converts_to_bad_request() {
         use crate::api::segments::types::ValidationError;
-        let err: ApiError = ValidationError::MissingDefinition(SegmentType::List).into();
         use axum::response::IntoResponse as _;
+        let err: ApiError = ValidationError::MissingDefinition(SegmentType::List).into();
         assert_eq!(
             err.into_response().status(),
             StatusCode::UNPROCESSABLE_ENTITY

@@ -200,21 +200,21 @@ async fn test_check_list_membership_included(pool: sqlx::PgPool) {
         .check_list_membership(env_id, "user", "alice", &["membership-seg".to_string()])
         .await
         .unwrap();
-    assert_eq!(*result.get("membership-seg").unwrap(), true);
+    assert!(*result.get("membership-seg").unwrap());
 
     // charlie is excluded
     let result_charlie = repo
         .check_list_membership(env_id, "user", "charlie", &["membership-seg".to_string()])
         .await
         .unwrap();
-    assert_eq!(*result_charlie.get("membership-seg").unwrap(), false);
+    assert!(!(*result_charlie.get("membership-seg").unwrap()));
 
     // dave is not in either list
     let result_dave = repo
         .check_list_membership(env_id, "user", "dave", &["membership-seg".to_string()])
         .await
         .unwrap();
-    assert_eq!(*result_dave.get("membership-seg").unwrap(), false);
+    assert!(!(*result_dave.get("membership-seg").unwrap()));
 }
 
 /// Test batch_check_list_membership with empty inputs returns empty.
@@ -270,9 +270,9 @@ async fn test_batch_check_list_membership(pool: sqlx::PgPool) {
 
     assert_eq!(results.len(), 2);
     let alice = results.iter().find(|r| r.context_key == "alice").unwrap();
-    assert_eq!(*alice.memberships.get("batch-seg").unwrap(), true);
+    assert!(*alice.memberships.get("batch-seg").unwrap());
     let bob = results.iter().find(|r| r.context_key == "bob").unwrap();
-    assert_eq!(*bob.memberships.get("batch-seg").unwrap(), false);
+    assert!(!(*bob.memberships.get("batch-seg").unwrap()));
 }
 
 /// Test find_by_key returns NotFound for missing segment.

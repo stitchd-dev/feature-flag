@@ -559,12 +559,12 @@ mod tests {
             key: "double-flag".to_string(),
             enabled: true,
             value_type: 3,
-            variants: vec![make_variant_proto("pi", Value::DoubleValue(3.14))],
+            variants: vec![make_variant_proto("pi", Value::DoubleValue(2.5))],
             rules: vec![],
         };
         let def = build_flag_def(flag).unwrap();
         let val = def.variant_map.values().next().unwrap();
-        assert_eq!(val.1, VariantValue::DoubleValue(3.14));
+        assert_eq!(val.1, VariantValue::DoubleValue(2.5));
     }
 
     #[test]

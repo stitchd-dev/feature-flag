@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(ParameterValue::Bool(true).to_string(), "true");
         assert_eq!(ParameterValue::Bool(false).to_string(), "false");
         assert_eq!(ParameterValue::Int(42).to_string(), "42");
-        assert_eq!(ParameterValue::Double(3.14).to_string(), "3.14");
+        assert_eq!(ParameterValue::Double(2.5).to_string(), "2.5");
         assert_eq!(
             ParameterValue::SemVer(Version::parse("2.0.0").unwrap()).to_string(),
             "2.0.0"
