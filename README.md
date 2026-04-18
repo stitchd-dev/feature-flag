@@ -7,7 +7,7 @@
 
 A production-ready feature flag and experimentation platform built in Rust. Supports multi-tenant deployments, rule-based flag evaluation, audience segmentation, and server-side SDK integration via gRPC.
 
-**[Documentation](https://stitchd-dev.github.io/feature-flag/)** · [REST API Reference](https://stitchd-dev.github.io/feature-flag/api-reference.html) · [Rust SDK](https://stitchd-dev.github.io/feature-flag/sdk/overview.html)
+**[Documentation](https://stitchd-dev.github.io/feature-flag/)** · [REST API](https://stitchd-dev.github.io/feature-flag/api/rest.html) · [gRPC Reference](https://stitchd-dev.github.io/feature-flag/grpc/) · [Rust SDK](https://stitchd-dev.github.io/feature-flag/sdk/)
 
 ---
 
@@ -130,7 +130,7 @@ See the [SDK documentation](https://stitchd-dev.github.io/feature-flag/sdk/quick
 - Rule-based segments are evaluated entirely in-process; list-based segments are resolved via REST with an LFU cache.
 - The admin REST API exposes full CRUD operations and an OpenAPI schema at `/api-docs/openapi.json`.
 
-For a deeper dive see [Architecture Overview](https://stitchd-dev.github.io/feature-flag/architecture/overview.html).
+For a deeper dive see [Architecture Overview](https://stitchd-dev.github.io/feature-flag/architecture/).
 
 ---
 
