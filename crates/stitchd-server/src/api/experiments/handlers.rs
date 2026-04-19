@@ -1043,4 +1043,313 @@ mod tests {
         assert_eq!(response.traffic_allocation, 75.0);
         assert!(response.ended_at.is_none());
     }
+
+    // ---------------------------------------------------------------------------
+    // ApiError mapping tests
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn api_error_not_found_maps_to_404() {
+        let err = ApiError::from(RepositoryError::NotFound {
+            id: "abc".to_string(),
+        });
+        assert!(matches!(err, ApiError::NotFound(_)));
+    }
+
+    #[test]
+    fn api_error_version_conflict_maps_to_conflict() {
+        let err = ApiError::from(RepositoryError::VersionConflict {
+            expected: 1,
+            actual: 2,
+        });
+        assert!(matches!(err, ApiError::Conflict(_)));
+        if let ApiError::Conflict(msg) = err {
+            assert!(msg.contains("version conflict"));
+            assert!(msg.contains('1'));
+            assert!(msg.contains('2'));
+        }
+    }
+
+    #[test]
+    fn api_error_unique_violation_maps_to_conflict() {
+        let err = ApiError::from(RepositoryError::UniqueViolation {
+            field: "flag_rule_id".to_string(),
+        });
+        assert!(matches!(err, ApiError::Conflict(_)));
+        if let ApiError::Conflict(msg) = err {
+            assert!(msg.contains("flag_rule_id"));
+        }
+    }
+
+    #[test]
+    fn api_error_invalid_state_maps_to_conflict() {
+        let err = ApiError::from(RepositoryError::InvalidState {
+            reason: "cannot mutate running experiment".to_string(),
+        });
+        assert!(matches!(err, ApiError::Conflict(_)));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Additional handler integration tests (coverage gaps)
+    // ---------------------------------------------------------------------------
+
+    /// A stub where `find_by_id` succeeds (returns a draft experiment), enabling
+    /// `update_experiment` and `delete_experiment` success paths.
+    struct FindSuccessRepository {
+        env_id: EnvironmentId,
+        flag_rule_id: RuleId,
+    }
+
+    impl FindSuccessRepository {
+        fn make_experiment(&self, id: ExperimentId) -> Experiment {
+            Experiment {
+                id,
+                environment_id: self.env_id,
+                flag_rule_id: self.flag_rule_id,
+                name: "Draft Experiment".to_string(),
+                description: None,
+                hypothesis: None,
+                metric_keys: vec!["metric_a".to_string()],
+                traffic_allocation: 100.0,
+                min_sample_size: None,
+                scheduled_start_at: None,
+                scheduled_end_at: None,
+                status: ExperimentStatus::Draft,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                deleted_at: None,
+                version: 1,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl stitchd_db::ExperimentRepository for FindSuccessRepository {
+        async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
+            Ok(self.make_experiment(id))
+        }
+
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+            _status_filter: Option<ExperimentStatus>,
+        ) -> Result<Vec<Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+
+        async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
+            Ok(experiment.clone())
+        }
+
+        async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn list_iterations(
+            &self,
+            _experiment_id: ExperimentId,
+        ) -> Result<Vec<stitchd_core::experimentation::ExperimentIteration>, RepositoryError>
+        {
+            Ok(vec![])
+        }
+
+        async fn apply_transition(
+            &self,
+            id: ExperimentId,
+            _to: ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<Experiment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_experiment_returns_200_on_success() {
+        let env_id = EnvironmentId::new();
+        let exp_id = ExperimentId::new();
+        let flag_rule_id = RuleId::new();
+        let repo = Arc::new(FindSuccessRepository { env_id, flag_rule_id });
+        let app = build_experiment_router(repo);
+
+        let body = serde_json::json!({
+            "name": "Updated Name",
+            "version": 1,
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/environments/{env_id}/experiments/{exp_id}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn patch_experiment_not_found_returns_404() {
+        let env_id = EnvironmentId::new();
+        let exp_id = ExperimentId::new();
+        let repo = Arc::new(StubExperimentRepository);
+        let app = build_experiment_router(repo);
+
+        let body = serde_json::json!({
+            "name": "Updated Name",
+            "version": 1,
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/environments/{env_id}/experiments/{exp_id}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn delete_experiment_returns_204_on_success() {
+        let env_id = EnvironmentId::new();
+        let exp_id = ExperimentId::new();
+        let flag_rule_id = RuleId::new();
+        let repo = Arc::new(SuccessExperimentRepository { env_id, flag_rule_id });
+        let app = build_experiment_router(repo);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/v1/environments/{env_id}/experiments/{exp_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn delete_experiment_not_found_returns_404() {
+        let env_id = EnvironmentId::new();
+        let exp_id = ExperimentId::new();
+        let repo = Arc::new(StubExperimentRepository);
+        let app = build_experiment_router(repo);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/v1/environments/{env_id}/experiments/{exp_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn post_transitions_not_found_returns_404() {
+        let env_id = EnvironmentId::new();
+        let exp_id = ExperimentId::new();
+        let repo = Arc::new(StubExperimentRepository);
+        let app = build_experiment_router(repo);
+
+        let body = serde_json::json!({ "to": "running" });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/v1/environments/{env_id}/experiments/{exp_id}/transitions"
+                    ))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_iterations_returns_200_with_empty_list() {
+        let env_id = EnvironmentId::new();
+        let exp_id = ExperimentId::new();
+        let repo = Arc::new(StubExperimentRepository);
+        let app = build_experiment_router(repo);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/environments/{env_id}/experiments/{exp_id}/iterations"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn list_experiments_returns_200_with_empty_list() {
+        let env_id = EnvironmentId::new();
+        let repo = Arc::new(StubExperimentRepository);
+        let app = build_experiment_router(repo);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/environments/{env_id}/experiments"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn list_experiments_with_status_filter_returns_200() {
+        let env_id = EnvironmentId::new();
+        let repo = Arc::new(StubExperimentRepository);
+        let app = build_experiment_router(repo);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/environments/{env_id}/experiments?status=draft"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }
