@@ -2,6 +2,8 @@
 
 /// Event definition registration API.
 pub mod event_definitions;
+/// Experiment management API.
+pub mod experiments;
 /// Event ingestion API.
 pub mod events;
 /// Feature Flag management API.

@@ -12,9 +12,9 @@ use stitchd_core::{
 use stitchd_db::{
     EnvironmentRepository, OrganisationRepository, ProjectRepository,
     repository::pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository, PgFlagRepository,
-        PgOrganisationRepository, PgProjectRepository, PgSdkKeyRepository, PgSegmentRepository,
-        PgVariantRepository,
+        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
+        PgExperimentRepository, PgFlagRepository, PgOrganisationRepository, PgProjectRepository,
+        PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository,
     },
 };
 use stitchd_server::{AppState, build_router};
@@ -71,6 +71,7 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         .build_recorder()
         .handle();
 
+    let experiment_repo = Arc::new(PgExperimentRepository::new(pool.clone(), audit.clone()));
     let state = AppState {
         db: pool,
         metrics_handle,
@@ -79,6 +80,7 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         variant_repo,
         sdk_key_repo,
         event_definition_repo,
+        experiment_repo,
         event_writer: None,
     };
 

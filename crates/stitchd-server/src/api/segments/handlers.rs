@@ -54,6 +54,7 @@ impl From<RepositoryError> for ApiError {
             }
             RepositoryError::Database(e) => Self::Database(e.to_string()),
             RepositoryError::Unexpected(e) => Self::Database(e.to_string()),
+            RepositoryError::InvalidState { reason } => Self::Conflict(reason),
         }
     }
 }
@@ -782,6 +783,64 @@ mod tests {
                 Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
             }
         }
+        struct MockExperimentRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::ExperimentRepository for MockExperimentRepo {
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::ExperimentId,
+            ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError>
+            {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn list_by_environment(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+                _: Option<stitchd_core::experimentation::ExperimentStatus>,
+            ) -> Result<
+                Vec<stitchd_core::experimentation::Experiment>,
+                stitchd_db::RepositoryError,
+            > {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::experimentation::Experiment,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                e: &stitchd_core::experimentation::Experiment,
+            ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError>
+            {
+                Ok(e.clone())
+            }
+            async fn soft_delete(
+                &self,
+                id: stitchd_core::id::ExperimentId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn list_iterations(
+                &self,
+                _: stitchd_core::id::ExperimentId,
+            ) -> Result<
+                Vec<stitchd_core::experimentation::ExperimentIteration>,
+                stitchd_db::RepositoryError,
+            > {
+                Ok(vec![])
+            }
+            async fn apply_transition(
+                &self,
+                id: stitchd_core::id::ExperimentId,
+                _: stitchd_core::experimentation::ExperimentStatus,
+                _: Option<stitchd_core::id::UserId>,
+            ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError>
+            {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+        }
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
                 .expect("lazy pool creation should never fail");
@@ -793,6 +852,7 @@ mod tests {
             variant_repo: Arc::new(MockVariantRepo),
             sdk_key_repo,
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
+            experiment_repo: Arc::new(MockExperimentRepo),
             event_writer: None,
         }
     }

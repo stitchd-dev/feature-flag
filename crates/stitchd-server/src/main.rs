@@ -75,8 +75,11 @@ async fn main() -> Result<()> {
         event_definition_repo: std::sync::Arc::new(
             stitchd_db::repository::pg::PgEventDefinitionRepository::new(
                 pool.clone(),
-                audit_logger,
+                audit_logger.clone(),
             ),
+        ),
+        experiment_repo: std::sync::Arc::new(
+            stitchd_db::repository::pg::PgExperimentRepository::new(pool.clone(), audit_logger),
         ),
         event_writer: std::env::var("CLICKHOUSE_URL").ok().map(|url| {
             info!(url = %url, "ClickHouse event writer enabled");

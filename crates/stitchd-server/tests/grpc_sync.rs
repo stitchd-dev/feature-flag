@@ -12,9 +12,9 @@ use stitchd_core::{
 use stitchd_db::{
     EnvironmentRepository, OrganisationRepository, ProjectRepository, SdkKeyRepository,
     repository::pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository, PgFlagRepository,
-        PgOrganisationRepository, PgProjectRepository, PgSdkKeyRepository, PgSegmentRepository,
-        PgVariantRepository,
+        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
+        PgExperimentRepository, PgFlagRepository, PgOrganisationRepository, PgProjectRepository,
+        PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository,
     },
 };
 use stitchd_proto::flags::v1::{SyncRequest, flag_sync_service_client::FlagSyncServiceClient};
@@ -89,6 +89,7 @@ async fn setup(pool: sqlx::PgPool) -> (AppState, EnvironmentId) {
             pool.clone(),
             audit.clone(),
         )),
+        experiment_repo: Arc::new(PgExperimentRepository::new(pool.clone(), audit.clone())),
         event_writer: None,
     };
 
