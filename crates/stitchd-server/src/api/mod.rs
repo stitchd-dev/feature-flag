@@ -2,10 +2,10 @@
 
 /// Event definition registration API.
 pub mod event_definitions;
-/// Experiment management API.
-pub mod experiments;
 /// Event ingestion API.
 pub mod events;
+/// Experiment management API.
+pub mod experiments;
 /// Feature Flag management API.
 pub mod flags;
 /// OpenAPI schema aggregator.

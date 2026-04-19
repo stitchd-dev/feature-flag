@@ -236,37 +236,27 @@ mod tests {
 
     #[test]
     fn valid_transition_running_to_paused_returns_ok() {
-        assert!(
-            validate_transition(ExperimentStatus::Running, ExperimentStatus::Paused).is_ok()
-        );
+        assert!(validate_transition(ExperimentStatus::Running, ExperimentStatus::Paused).is_ok());
     }
 
     #[test]
     fn valid_transition_running_to_stopped_returns_ok() {
-        assert!(
-            validate_transition(ExperimentStatus::Running, ExperimentStatus::Stopped).is_ok()
-        );
+        assert!(validate_transition(ExperimentStatus::Running, ExperimentStatus::Stopped).is_ok());
     }
 
     #[test]
     fn valid_transition_paused_to_running_returns_ok() {
-        assert!(
-            validate_transition(ExperimentStatus::Paused, ExperimentStatus::Running).is_ok()
-        );
+        assert!(validate_transition(ExperimentStatus::Paused, ExperimentStatus::Running).is_ok());
     }
 
     #[test]
     fn valid_transition_paused_to_stopped_returns_ok() {
-        assert!(
-            validate_transition(ExperimentStatus::Paused, ExperimentStatus::Stopped).is_ok()
-        );
+        assert!(validate_transition(ExperimentStatus::Paused, ExperimentStatus::Stopped).is_ok());
     }
 
     #[test]
     fn valid_transition_stopped_to_running_returns_ok() {
-        assert!(
-            validate_transition(ExperimentStatus::Stopped, ExperimentStatus::Running).is_ok()
-        );
+        assert!(validate_transition(ExperimentStatus::Stopped, ExperimentStatus::Running).is_ok());
     }
 
     #[test]
@@ -296,39 +286,60 @@ mod tests {
     #[test]
     fn invalid_transition_running_to_draft_returns_err() {
         let result = validate_transition(ExperimentStatus::Running, ExperimentStatus::Draft);
-        assert!(matches!(result, Err(ExperimentError::InvalidTransition { .. })));
+        assert!(matches!(
+            result,
+            Err(ExperimentError::InvalidTransition { .. })
+        ));
     }
 
     // ── creates_iteration ────────────────────────────────────────────────────
 
     #[test]
     fn draft_to_running_creates_iteration() {
-        assert!(creates_iteration(ExperimentStatus::Draft, ExperimentStatus::Running));
+        assert!(creates_iteration(
+            ExperimentStatus::Draft,
+            ExperimentStatus::Running
+        ));
     }
 
     #[test]
     fn paused_to_running_creates_iteration() {
-        assert!(creates_iteration(ExperimentStatus::Paused, ExperimentStatus::Running));
+        assert!(creates_iteration(
+            ExperimentStatus::Paused,
+            ExperimentStatus::Running
+        ));
     }
 
     #[test]
     fn stopped_to_running_creates_iteration() {
-        assert!(creates_iteration(ExperimentStatus::Stopped, ExperimentStatus::Running));
+        assert!(creates_iteration(
+            ExperimentStatus::Stopped,
+            ExperimentStatus::Running
+        ));
     }
 
     #[test]
     fn running_to_paused_does_not_create_iteration() {
-        assert!(!creates_iteration(ExperimentStatus::Running, ExperimentStatus::Paused));
+        assert!(!creates_iteration(
+            ExperimentStatus::Running,
+            ExperimentStatus::Paused
+        ));
     }
 
     #[test]
     fn running_to_stopped_does_not_create_iteration() {
-        assert!(!creates_iteration(ExperimentStatus::Running, ExperimentStatus::Stopped));
+        assert!(!creates_iteration(
+            ExperimentStatus::Running,
+            ExperimentStatus::Stopped
+        ));
     }
 
     #[test]
     fn draft_to_paused_does_not_create_iteration() {
-        assert!(!creates_iteration(ExperimentStatus::Draft, ExperimentStatus::Paused));
+        assert!(!creates_iteration(
+            ExperimentStatus::Draft,
+            ExperimentStatus::Paused
+        ));
     }
 
     // ── validate_mutation ────────────────────────────────────────────────────

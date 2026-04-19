@@ -315,7 +315,11 @@ pub async fn create_experiment(
 
     state.experiment_repo.create(&experiment).await?;
 
-    Ok((StatusCode::CREATED, Json(ExperimentResponse::from(experiment))).into_response())
+    Ok((
+        StatusCode::CREATED,
+        Json(ExperimentResponse::from(experiment)),
+    )
+        .into_response())
 }
 
 /// `GET /v1/environments/{env_id}/experiments` — List experiments in an environment.
@@ -542,10 +546,7 @@ mod tests {
 
     #[async_trait]
     impl stitchd_db::ExperimentRepository for StubExperimentRepository {
-        async fn find_by_id(
-            &self,
-            id: ExperimentId,
-        ) -> Result<Experiment, RepositoryError> {
+        async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
@@ -561,10 +562,7 @@ mod tests {
             Ok(())
         }
 
-        async fn update(
-            &self,
-            experiment: &Experiment,
-        ) -> Result<Experiment, RepositoryError> {
+        async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
             Ok(experiment.clone())
         }
 
@@ -590,7 +588,7 @@ mod tests {
         }
     }
 
-    /// Stub that succeeds for create/apply_transition (returns a synthetic experiment).
+    /// Stub that succeeds for create/`apply_transition` (returns a synthetic experiment).
     struct SuccessExperimentRepository {
         env_id: EnvironmentId,
         flag_rule_id: RuleId,
@@ -658,22 +656,23 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn make_stub_app_state(
         experiment_repo: Arc<dyn stitchd_db::ExperimentRepository>,
     ) -> crate::AppState {
-        use stitchd_db::{
-            FlagRepository, RepositoryError, SegmentRepository, SdkKeyRepository,
-            VariantRepository, EventDefinitionRepository,
-        };
+        use std::collections::HashMap;
         use stitchd_core::{
-            flag::{FlagRecord, FlagHashingConfig, FlagRule},
-            id::{FlagId, FlagKey, ProjectId, SdkKeyId, SegmentId, VariantId, EventDefinitionId},
+            event::EventDefinition,
+            flag::Variant,
+            flag::{FlagHashingConfig, FlagRecord, FlagRule},
+            id::{EventDefinitionId, FlagId, FlagKey, ProjectId, SdkKeyId, SegmentId, VariantId},
             segment::{ListBasedSegment, RuleBasedSegment, Segment},
             tenant::SdkKey,
-            flag::Variant,
-            event::EventDefinition,
         };
-        use std::collections::HashMap;
+        use stitchd_db::{
+            EventDefinitionRepository, FlagRepository, RepositoryError, SdkKeyRepository,
+            SegmentRepository, VariantRepository,
+        };
 
         struct NullRepo;
 
@@ -682,28 +681,71 @@ mod tests {
             async fn find_by_id(&self, id: FlagId) -> Result<FlagRecord, RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
-            async fn find_by_key(&self, key: &FlagKey, _: ProjectId) -> Result<FlagRecord, RepositoryError> {
-                Err(RepositoryError::NotFound { id: key.to_string() })
+            async fn find_by_key(
+                &self,
+                key: &FlagKey,
+                _: ProjectId,
+            ) -> Result<FlagRecord, RepositoryError> {
+                Err(RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
             }
-            async fn list_by_project(&self, _: ProjectId) -> Result<Vec<FlagRecord>, RepositoryError> { Ok(vec![]) }
-            async fn list_by_environment(&self, _: EnvironmentId) -> Result<Vec<FlagRecord>, RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: &FlagRecord) -> Result<(), RepositoryError> { Ok(()) }
-            async fn update(&self, f: &FlagRecord) -> Result<FlagRecord, RepositoryError> { Ok(f.clone()) }
+            async fn list_by_project(
+                &self,
+                _: ProjectId,
+            ) -> Result<Vec<FlagRecord>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn list_by_environment(
+                &self,
+                _: EnvironmentId,
+            ) -> Result<Vec<FlagRecord>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(&self, _: &FlagRecord) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn update(&self, f: &FlagRecord) -> Result<FlagRecord, RepositoryError> {
+                Ok(f.clone())
+            }
             async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
-            async fn find_hashing_config(&self, _: FlagId) -> Result<Vec<FlagHashingConfig>, RepositoryError> { Ok(vec![]) }
-            async fn upsert_hashing_config(&self, _: FlagId, _: &[FlagHashingConfig]) -> Result<(), RepositoryError> { Ok(()) }
-            async fn find_rules(&self, _: FlagId) -> Result<Vec<FlagRule>, RepositoryError> { Ok(vec![]) }
-            async fn upsert_rules(&self, _: FlagId, _: &[FlagRule]) -> Result<(), RepositoryError> { Ok(()) }
+            async fn find_hashing_config(
+                &self,
+                _: FlagId,
+            ) -> Result<Vec<FlagHashingConfig>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn upsert_hashing_config(
+                &self,
+                _: FlagId,
+                _: &[FlagHashingConfig],
+            ) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn find_rules(&self, _: FlagId) -> Result<Vec<FlagRule>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn upsert_rules(&self, _: FlagId, _: &[FlagRule]) -> Result<(), RepositoryError> {
+                Ok(())
+            }
         }
 
         #[async_trait]
         impl VariantRepository for NullRepo {
-            async fn find_by_flag(&self, _: FlagId) -> Result<Vec<Variant>, RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: FlagId, _: &Variant) -> Result<(), RepositoryError> { Ok(()) }
-            async fn update(&self, v: &Variant) -> Result<Variant, RepositoryError> { Ok(v.clone()) }
-            async fn delete(&self, _: VariantId) -> Result<(), RepositoryError> { Ok(()) }
+            async fn find_by_flag(&self, _: FlagId) -> Result<Vec<Variant>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(&self, _: FlagId, _: &Variant) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn update(&self, v: &Variant) -> Result<Variant, RepositoryError> {
+                Ok(v.clone())
+            }
+            async fn delete(&self, _: VariantId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
         }
 
         #[async_trait]
@@ -711,25 +753,78 @@ mod tests {
             async fn find_by_id(&self, id: SegmentId) -> Result<Segment, RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
-            async fn find_by_key(&self, key: &str, _: EnvironmentId) -> Result<Segment, RepositoryError> {
-                Err(RepositoryError::NotFound { id: key.to_string() })
+            async fn find_by_key(
+                &self,
+                key: &str,
+                _: EnvironmentId,
+            ) -> Result<Segment, RepositoryError> {
+                Err(RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
             }
-            async fn list_by_environment(&self, _: EnvironmentId) -> Result<Vec<Segment>, RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: &Segment) -> Result<(), RepositoryError> { Ok(()) }
-            async fn update(&self, s: &Segment) -> Result<Segment, RepositoryError> { Ok(s.clone()) }
-            async fn find_with_rules(&self, id: SegmentId) -> Result<RuleBasedSegment, RepositoryError> {
+            async fn list_by_environment(
+                &self,
+                _: EnvironmentId,
+            ) -> Result<Vec<Segment>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(&self, _: &Segment) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn update(&self, s: &Segment) -> Result<Segment, RepositoryError> {
+                Ok(s.clone())
+            }
+            async fn find_with_rules(
+                &self,
+                id: SegmentId,
+            ) -> Result<RuleBasedSegment, RepositoryError> {
                 Ok(RuleBasedSegment { id, rules: vec![] })
             }
-            async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
-                Ok(ListBasedSegment { id, lists: HashMap::new() })
+            async fn find_with_list(
+                &self,
+                id: SegmentId,
+            ) -> Result<ListBasedSegment, RepositoryError> {
+                Ok(ListBasedSegment {
+                    id,
+                    lists: HashMap::new(),
+                })
             }
-            async fn upsert_rules(&self, _: SegmentId, _: &[stitchd_core::rule_engine::types::Rule]) -> Result<(), RepositoryError> { Ok(()) }
-            async fn set_list_entries(&self, _: SegmentId, _: &str, _: &[String], _: &[String]) -> Result<(), RepositoryError> { Ok(()) }
-            async fn soft_delete(&self, _: SegmentId) -> Result<(), RepositoryError> { Ok(()) }
-            async fn check_list_membership(&self, _: EnvironmentId, _: &str, _: &str, keys: &[String]) -> Result<HashMap<String, bool>, RepositoryError> {
+            async fn upsert_rules(
+                &self,
+                _: SegmentId,
+                _: &[stitchd_core::rule_engine::types::Rule],
+            ) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn set_list_entries(
+                &self,
+                _: SegmentId,
+                _: &str,
+                _: &[String],
+                _: &[String],
+            ) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn soft_delete(&self, _: SegmentId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn check_list_membership(
+                &self,
+                _: EnvironmentId,
+                _: &str,
+                _: &str,
+                keys: &[String],
+            ) -> Result<HashMap<String, bool>, RepositoryError> {
                 Ok(keys.iter().map(|k| (k.clone(), false)).collect())
             }
-            async fn batch_check_list_membership(&self, _: EnvironmentId, _: &[(String, String)], _: &[String]) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> { Ok(vec![]) }
+            async fn batch_check_list_membership(
+                &self,
+                _: EnvironmentId,
+                _: &[(String, String)],
+                _: &[String],
+            ) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> {
+                Ok(vec![])
+            }
         }
 
         #[async_trait]
@@ -737,12 +832,24 @@ mod tests {
             async fn find_by_id(&self, id: SdkKeyId) -> Result<SdkKey, RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
-            async fn list_by_environment(&self, _: EnvironmentId) -> Result<Vec<SdkKey>, RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: &SdkKey) -> Result<(), RepositoryError> { Ok(()) }
+            async fn list_by_environment(
+                &self,
+                _: EnvironmentId,
+            ) -> Result<Vec<SdkKey>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(&self, _: &SdkKey) -> Result<(), RepositoryError> {
+                Ok(())
+            }
             async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
-            async fn find_active_by_environment(&self, _: EnvironmentId) -> Result<Vec<SdkKey>, RepositoryError> { Ok(vec![]) }
+            async fn find_active_by_environment(
+                &self,
+                _: EnvironmentId,
+            ) -> Result<Vec<SdkKey>, RepositoryError> {
+                Ok(vec![])
+            }
             async fn find_active_by_hash(&self, h: &str) -> Result<SdkKey, RepositoryError> {
                 Err(RepositoryError::NotFound { id: h.to_string() })
             }
@@ -750,15 +857,36 @@ mod tests {
 
         #[async_trait]
         impl EventDefinitionRepository for NullRepo {
-            async fn find_by_id(&self, id: EventDefinitionId) -> Result<EventDefinition, RepositoryError> {
+            async fn find_by_id(
+                &self,
+                id: EventDefinitionId,
+            ) -> Result<EventDefinition, RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
-            async fn find_by_key(&self, key: &str, _: EnvironmentId) -> Result<EventDefinition, RepositoryError> {
-                Err(RepositoryError::NotFound { id: key.to_string() })
+            async fn find_by_key(
+                &self,
+                key: &str,
+                _: EnvironmentId,
+            ) -> Result<EventDefinition, RepositoryError> {
+                Err(RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
             }
-            async fn list_by_environment(&self, _: EnvironmentId) -> Result<Vec<EventDefinition>, RepositoryError> { Ok(vec![]) }
-            async fn create(&self, _: &EventDefinition) -> Result<(), RepositoryError> { Ok(()) }
-            async fn update(&self, d: &EventDefinition) -> Result<EventDefinition, RepositoryError> { Ok(d.clone()) }
+            async fn list_by_environment(
+                &self,
+                _: EnvironmentId,
+            ) -> Result<Vec<EventDefinition>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(&self, _: &EventDefinition) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                d: &EventDefinition,
+            ) -> Result<EventDefinition, RepositoryError> {
+                Ok(d.clone())
+            }
             async fn soft_delete(&self, id: EventDefinitionId) -> Result<(), RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
@@ -779,7 +907,9 @@ mod tests {
         }
     }
 
-    fn build_experiment_router(experiment_repo: Arc<dyn stitchd_db::ExperimentRepository>) -> Router {
+    fn build_experiment_router(
+        experiment_repo: Arc<dyn stitchd_db::ExperimentRepository>,
+    ) -> Router {
         let state = make_stub_app_state(experiment_repo);
         Router::new()
             .route(
@@ -811,7 +941,10 @@ mod tests {
     async fn post_experiments_with_valid_body_returns_201() {
         let env_id = EnvironmentId::new();
         let flag_rule_id = RuleId::new();
-        let repo = Arc::new(SuccessExperimentRepository { env_id, flag_rule_id });
+        let repo = Arc::new(SuccessExperimentRepository {
+            env_id,
+            flag_rule_id,
+        });
         let app = build_experiment_router(repo);
 
         let body = serde_json::json!({
@@ -839,7 +972,10 @@ mod tests {
     async fn post_experiments_with_empty_metric_keys_returns_422() {
         let env_id = EnvironmentId::new();
         let flag_rule_id = RuleId::new();
-        let repo = Arc::new(SuccessExperimentRepository { env_id, flag_rule_id });
+        let repo = Arc::new(SuccessExperimentRepository {
+            env_id,
+            flag_rule_id,
+        });
         let app = build_experiment_router(repo);
 
         let body = serde_json::json!({
@@ -873,9 +1009,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!(
-                        "/v1/environments/{env_id}/experiments/{exp_id}"
-                    ))
+                    .uri(format!("/v1/environments/{env_id}/experiments/{exp_id}"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -890,7 +1024,10 @@ mod tests {
         let env_id = EnvironmentId::new();
         let exp_id = ExperimentId::new();
         let flag_rule_id = RuleId::new();
-        let repo = Arc::new(SuccessExperimentRepository { env_id, flag_rule_id });
+        let repo = Arc::new(SuccessExperimentRepository {
+            env_id,
+            flag_rule_id,
+        });
         let app = build_experiment_router(repo);
 
         let body = serde_json::json!({ "to": "running" });
@@ -934,9 +1071,11 @@ mod tests {
         };
         let result = req.validate();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("metric_keys must contain at least one entry"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("metric_keys must contain at least one entry")
+        );
     }
 
     #[test]
@@ -995,6 +1134,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_experiment_response_from_experiment() {
         use stitchd_core::id::EnvironmentId;
 
@@ -1024,6 +1164,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn test_experiment_iteration_response_from_iteration() {
         use stitchd_core::id::ExperimentIterationId;
 
@@ -1172,7 +1313,10 @@ mod tests {
         let env_id = EnvironmentId::new();
         let exp_id = ExperimentId::new();
         let flag_rule_id = RuleId::new();
-        let repo = Arc::new(FindSuccessRepository { env_id, flag_rule_id });
+        let repo = Arc::new(FindSuccessRepository {
+            env_id,
+            flag_rule_id,
+        });
         let app = build_experiment_router(repo);
 
         let body = serde_json::json!({
@@ -1227,7 +1371,10 @@ mod tests {
         let env_id = EnvironmentId::new();
         let exp_id = ExperimentId::new();
         let flag_rule_id = RuleId::new();
-        let repo = Arc::new(SuccessExperimentRepository { env_id, flag_rule_id });
+        let repo = Arc::new(SuccessExperimentRepository {
+            env_id,
+            flag_rule_id,
+        });
         let app = build_experiment_router(repo);
 
         let response = app

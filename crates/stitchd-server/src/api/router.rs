@@ -33,7 +33,10 @@ fn segment_routes() -> Router<AppState> {
                 .put(segments::handlers::update_segment)
                 .delete(segments::handlers::delete_segment),
         )
-        .route("/list-check", post(segments::handlers::list_check_membership))
+        .route(
+            "/list-check",
+            post(segments::handlers::list_check_membership),
+        )
         .route(
             "/list-check/batch",
             post(segments::handlers::batch_list_check_membership),
@@ -47,7 +50,10 @@ fn event_definition_routes() -> Router<AppState> {
             get(event_definitions::handlers::list_event_definitions)
                 .post(event_definitions::handlers::create_event_definition),
         )
-        .route("/{key}", delete(event_definitions::handlers::delete_event_definition))
+        .route(
+            "/{key}",
+            delete(event_definitions::handlers::delete_event_definition),
+        )
 }
 
 fn event_routes() -> Router<AppState> {
@@ -60,7 +66,8 @@ fn experiment_routes() -> Router<AppState> {
     Router::new()
         .route(
             "/",
-            get(experiments::handlers::list_experiments).post(experiments::handlers::create_experiment),
+            get(experiments::handlers::list_experiments)
+                .post(experiments::handlers::create_experiment),
         )
         .route(
             "/{id}",
@@ -68,13 +75,22 @@ fn experiment_routes() -> Router<AppState> {
                 .patch(experiments::handlers::update_experiment)
                 .delete(experiments::handlers::delete_experiment),
         )
-        .route("/{id}/transitions", post(experiments::handlers::transition_experiment))
-        .route("/{id}/iterations", get(experiments::handlers::list_iterations))
+        .route(
+            "/{id}/transitions",
+            post(experiments::handlers::transition_experiment),
+        )
+        .route(
+            "/{id}/iterations",
+            get(experiments::handlers::list_iterations),
+        )
 }
 
 fn flag_routes() -> Router<AppState> {
     Router::new()
-        .route("/", get(flags::handlers::list_flags).post(flags::handlers::create_flag))
+        .route(
+            "/",
+            get(flags::handlers::list_flags).post(flags::handlers::create_flag),
+        )
         .route(
             "/{flag_id}",
             get(flags::handlers::get_flag)
@@ -82,7 +98,10 @@ fn flag_routes() -> Router<AppState> {
                 .delete(flags::handlers::delete_flag),
         )
         .route("/{flag_id}/variants", post(flags::handlers::create_variant))
-        .route("/{flag_id}/hashing", put(flags::handlers::update_hashing_config))
+        .route(
+            "/{flag_id}/hashing",
+            put(flags::handlers::update_hashing_config),
+        )
         .route("/{flag_id}/rules", put(flags::handlers::update_rules))
 }
 

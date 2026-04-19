@@ -567,6 +567,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn make_state(
         flag_repo: Arc<dyn FlagRepository>,
         sdk_key_repo: Arc<dyn SdkKeyRepository>,
@@ -632,10 +633,8 @@ mod tests {
                 &self,
                 _: stitchd_core::id::EnvironmentId,
                 _: Option<stitchd_core::experimentation::ExperimentStatus>,
-            ) -> Result<
-                Vec<stitchd_core::experimentation::Experiment>,
-                stitchd_db::RepositoryError,
-            > {
+            ) -> Result<Vec<stitchd_core::experimentation::Experiment>, stitchd_db::RepositoryError>
+            {
                 Ok(vec![])
             }
             async fn create(

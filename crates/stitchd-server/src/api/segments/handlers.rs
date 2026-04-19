@@ -732,6 +732,7 @@ mod tests {
     // Test helpers
     // ---------------------------------------------------------------------------
 
+    #[allow(clippy::too_many_lines)]
     fn make_test_state_with_sdk_key(
         segment_repo: Arc<dyn SegmentRepository>,
         sdk_key_repo: Arc<dyn SdkKeyRepository>,
@@ -797,10 +798,8 @@ mod tests {
                 &self,
                 _: stitchd_core::id::EnvironmentId,
                 _: Option<stitchd_core::experimentation::ExperimentStatus>,
-            ) -> Result<
-                Vec<stitchd_core::experimentation::Experiment>,
-                stitchd_db::RepositoryError,
-            > {
+            ) -> Result<Vec<stitchd_core::experimentation::Experiment>, stitchd_db::RepositoryError>
+            {
                 Ok(vec![])
             }
             async fn create(

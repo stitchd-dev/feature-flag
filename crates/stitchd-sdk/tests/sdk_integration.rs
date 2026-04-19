@@ -26,9 +26,9 @@ use stitchd_db::{
     EnvironmentRepository, FlagRepository, OrganisationRepository, ProjectRepository,
     SdkKeyRepository, SegmentRepository, VariantRepository,
     repository::pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository, PgFlagRepository,
-        PgExperimentRepository, PgOrganisationRepository, PgProjectRepository, PgSdkKeyRepository,
-        PgSegmentRepository, PgVariantRepository,
+        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
+        PgExperimentRepository, PgFlagRepository, PgOrganisationRepository, PgProjectRepository,
+        PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository,
     },
 };
 use stitchd_proto::flags::v1::flag_sync_service_server::FlagSyncServiceServer;

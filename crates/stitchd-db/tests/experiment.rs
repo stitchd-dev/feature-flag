@@ -4,7 +4,9 @@ use chrono::Utc;
 use stitchd_core::{
     experimentation::{Experiment, ExperimentStatus},
     flag::{FlagRecord, FlagRule, FlagValueType},
-    id::{EnvironmentId, ExperimentId, FlagId, FlagKey, OrganisationId, ProjectId, RuleId, VariantId},
+    id::{
+        EnvironmentId, ExperimentId, FlagId, FlagKey, OrganisationId, ProjectId, RuleId, VariantId,
+    },
     rule_engine::types::{ConditionExpr, Rule, RuleOutput},
     tenant::{Environment, Organisation, Project},
 };
@@ -23,9 +25,7 @@ use stitchd_db::{
 
 /// Insert org → project → environment and return (env_id, flag_rule_id).
 /// The flag rule is needed as a FK for experiments.
-async fn setup_experiment_deps(
-    pool: sqlx::PgPool,
-) -> (EnvironmentId, RuleId) {
+async fn setup_experiment_deps(pool: sqlx::PgPool) -> (EnvironmentId, RuleId) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
@@ -138,10 +138,7 @@ async fn test_create_and_find(pool: sqlx::PgPool) {
     let exp = make_experiment(env_id, rule_id);
     repo.create(&exp).await.expect("create should succeed");
 
-    let found = repo
-        .find_by_id(exp.id)
-        .await
-        .expect("should find by id");
+    let found = repo.find_by_id(exp.id).await.expect("should find by id");
 
     assert_eq!(found.id, exp.id);
     assert_eq!(found.name, "Test Experiment");
@@ -302,7 +299,10 @@ async fn test_transition_draft_to_running_creates_iteration(pool: sqlx::PgPool) 
     let iterations = repo.list_iterations(exp.id).await.unwrap();
     assert_eq!(iterations.len(), 1);
     assert_eq!(iterations[0].iteration_number, 1);
-    assert!(iterations[0].ended_at.is_none(), "iteration should still be active");
+    assert!(
+        iterations[0].ended_at.is_none(),
+        "iteration should still be active"
+    );
     assert_eq!(iterations[0].metric_keys, exp.metric_keys);
 
     // Flag rule must be frozen
@@ -313,7 +313,10 @@ async fn test_transition_draft_to_running_creates_iteration(pool: sqlx::PgPool) 
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(frozen, "flag rule must be frozen when experiment is running");
+    assert!(
+        frozen,
+        "flag rule must be frozen when experiment is running"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -341,7 +344,10 @@ async fn test_transition_running_to_paused_ends_iteration(pool: sqlx::PgPool) {
     // Iteration must have ended_at set
     let iterations = repo.list_iterations(exp.id).await.unwrap();
     assert_eq!(iterations.len(), 1);
-    assert!(iterations[0].ended_at.is_some(), "iteration must be ended when paused");
+    assert!(
+        iterations[0].ended_at.is_some(),
+        "iteration must be ended when paused"
+    );
 
     // Flag rule must be unfrozen
     let frozen: bool = sqlx::query_scalar!(
@@ -351,7 +357,10 @@ async fn test_transition_running_to_paused_ends_iteration(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(!frozen, "flag rule must be unfrozen when experiment is paused");
+    assert!(
+        !frozen,
+        "flag rule must be unfrozen when experiment is paused"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -364,8 +373,12 @@ async fn test_transition_paused_to_running_creates_next_iteration(pool: sqlx::Pg
     repo.create(&exp).await.unwrap();
 
     // draft → running → paused
-    repo.apply_transition(exp.id, ExperimentStatus::Running, None).await.unwrap();
-    repo.apply_transition(exp.id, ExperimentStatus::Paused, None).await.unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Paused, None)
+        .await
+        .unwrap();
 
     // paused → running (second run)
     let updated = repo
@@ -379,9 +392,15 @@ async fn test_transition_paused_to_running_creates_next_iteration(pool: sqlx::Pg
     let iterations = repo.list_iterations(exp.id).await.unwrap();
     assert_eq!(iterations.len(), 2, "should have 2 iterations total");
     assert_eq!(iterations[0].iteration_number, 1);
-    assert!(iterations[0].ended_at.is_some(), "first iteration must be ended");
+    assert!(
+        iterations[0].ended_at.is_some(),
+        "first iteration must be ended"
+    );
     assert_eq!(iterations[1].iteration_number, 2);
-    assert!(iterations[1].ended_at.is_none(), "second iteration must be active");
+    assert!(
+        iterations[1].ended_at.is_none(),
+        "second iteration must be active"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -394,7 +413,9 @@ async fn test_transition_running_to_stopped_unfreezes_rule(pool: sqlx::PgPool) {
     repo.create(&exp).await.unwrap();
 
     // draft → running → stopped
-    repo.apply_transition(exp.id, ExperimentStatus::Running, None).await.unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .unwrap();
     let updated = repo
         .apply_transition(exp.id, ExperimentStatus::Stopped, None)
         .await
@@ -405,7 +426,10 @@ async fn test_transition_running_to_stopped_unfreezes_rule(pool: sqlx::PgPool) {
     // Iteration must be ended
     let iterations = repo.list_iterations(exp.id).await.unwrap();
     assert_eq!(iterations.len(), 1);
-    assert!(iterations[0].ended_at.is_some(), "iteration must be ended when stopped");
+    assert!(
+        iterations[0].ended_at.is_some(),
+        "iteration must be ended when stopped"
+    );
 
     // Flag rule must be unfrozen
     let frozen: bool = sqlx::query_scalar!(
@@ -415,7 +439,10 @@ async fn test_transition_running_to_stopped_unfreezes_rule(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(!frozen, "flag rule must be unfrozen when experiment is stopped");
+    assert!(
+        !frozen,
+        "flag rule must be unfrozen when experiment is stopped"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -486,8 +513,12 @@ async fn test_stopped_to_running_restart_increments_iteration(pool: sqlx::PgPool
     repo.create(&exp).await.unwrap();
 
     // draft → running → stopped → running (restart)
-    repo.apply_transition(exp.id, ExperimentStatus::Running, None).await.unwrap();
-    repo.apply_transition(exp.id, ExperimentStatus::Stopped, None).await.unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Stopped, None)
+        .await
+        .unwrap();
     let updated = repo
         .apply_transition(exp.id, ExperimentStatus::Running, None)
         .await
@@ -497,9 +528,19 @@ async fn test_stopped_to_running_restart_increments_iteration(pool: sqlx::PgPool
 
     // Should now have 2 iterations, second one active with iteration_number=2
     let iterations = repo.list_iterations(exp.id).await.unwrap();
-    assert_eq!(iterations.len(), 2, "should have 2 iterations after restart");
-    assert_eq!(iterations[1].iteration_number, 2, "restart iteration must be iteration #2");
-    assert!(iterations[1].ended_at.is_none(), "new iteration must be active");
+    assert_eq!(
+        iterations.len(),
+        2,
+        "should have 2 iterations after restart"
+    );
+    assert_eq!(
+        iterations[1].iteration_number, 2,
+        "restart iteration must be iteration #2"
+    );
+    assert!(
+        iterations[1].ended_at.is_none(),
+        "new iteration must be active"
+    );
 
     // Flag rule must be frozen again
     let frozen: bool = sqlx::query_scalar!(
@@ -533,7 +574,10 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
     let iterations = repo.list_iterations(exp.id).await.unwrap();
     assert_eq!(iterations.len(), 1);
     assert_eq!(iterations[0].iteration_number, 1);
-    assert!(iterations[0].ended_at.is_none(), "iteration 1 should be active");
+    assert!(
+        iterations[0].ended_at.is_none(),
+        "iteration 1 should be active"
+    );
 
     let frozen: bool = sqlx::query_scalar!(
         "SELECT frozen FROM feature_flag_rules WHERE id = $1",
@@ -551,7 +595,10 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
 
     let iterations = repo.list_iterations(exp.id).await.unwrap();
     assert_eq!(iterations.len(), 1);
-    assert!(iterations[0].ended_at.is_some(), "iteration 1 must be ended after pause");
+    assert!(
+        iterations[0].ended_at.is_some(),
+        "iteration 1 must be ended after pause"
+    );
 
     let frozen: bool = sqlx::query_scalar!(
         "SELECT frozen FROM feature_flag_rules WHERE id = $1",
@@ -570,7 +617,10 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
     let iterations = repo.list_iterations(exp.id).await.unwrap();
     assert_eq!(iterations.len(), 2);
     assert_eq!(iterations[1].iteration_number, 2);
-    assert!(iterations[1].ended_at.is_none(), "iteration 2 should be active");
+    assert!(
+        iterations[1].ended_at.is_none(),
+        "iteration 2 should be active"
+    );
 
     let frozen: bool = sqlx::query_scalar!(
         "SELECT frozen FROM feature_flag_rules WHERE id = $1",
@@ -591,8 +641,14 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
 
     let iterations = repo.list_iterations(exp.id).await.unwrap();
     assert_eq!(iterations.len(), 2, "must have exactly 2 iterations");
-    assert!(iterations[0].ended_at.is_some(), "iteration 1 must have ended_at set");
-    assert!(iterations[1].ended_at.is_some(), "iteration 2 must have ended_at set");
+    assert!(
+        iterations[0].ended_at.is_some(),
+        "iteration 1 must have ended_at set"
+    );
+    assert!(
+        iterations[1].ended_at.is_some(),
+        "iteration 2 must have ended_at set"
+    );
 
     let frozen: bool = sqlx::query_scalar!(
         "SELECT frozen FROM feature_flag_rules WHERE id = $1",
@@ -614,10 +670,18 @@ async fn test_stopped_to_running_second_restart_increments_to_iteration_3(pool: 
     repo.create(&exp).await.unwrap();
 
     // draft → running (iter 1) → stopped → running (iter 2) → stopped → running (iter 3)
-    repo.apply_transition(exp.id, ExperimentStatus::Running, None).await.unwrap();
-    repo.apply_transition(exp.id, ExperimentStatus::Stopped, None).await.unwrap();
-    repo.apply_transition(exp.id, ExperimentStatus::Running, None).await.unwrap();
-    repo.apply_transition(exp.id, ExperimentStatus::Stopped, None).await.unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Stopped, None)
+        .await
+        .unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Stopped, None)
+        .await
+        .unwrap();
     let updated = repo
         .apply_transition(exp.id, ExperimentStatus::Running, None)
         .await
@@ -626,13 +690,29 @@ async fn test_stopped_to_running_second_restart_increments_to_iteration_3(pool: 
     assert_eq!(updated.status, ExperimentStatus::Running);
 
     let iterations = repo.list_iterations(exp.id).await.unwrap();
-    assert_eq!(iterations.len(), 3, "should have 3 iterations after second restart");
-    assert_eq!(iterations[2].iteration_number, 3, "second restart must be iteration #3");
-    assert!(iterations[2].ended_at.is_none(), "iteration 3 must be active");
+    assert_eq!(
+        iterations.len(),
+        3,
+        "should have 3 iterations after second restart"
+    );
+    assert_eq!(
+        iterations[2].iteration_number, 3,
+        "second restart must be iteration #3"
+    );
+    assert!(
+        iterations[2].ended_at.is_none(),
+        "iteration 3 must be active"
+    );
 
     // All previous iterations must be ended
-    assert!(iterations[0].ended_at.is_some(), "iteration 1 must have ended_at set");
-    assert!(iterations[1].ended_at.is_some(), "iteration 2 must have ended_at set");
+    assert!(
+        iterations[0].ended_at.is_some(),
+        "iteration 1 must have ended_at set"
+    );
+    assert!(
+        iterations[1].ended_at.is_some(),
+        "iteration 2 must have ended_at set"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -684,7 +764,10 @@ async fn test_flag_rule_frozen_while_running(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(frozen, "flag rule must be frozen while experiment is running");
+    assert!(
+        frozen,
+        "flag rule must be frozen while experiment is running"
+    );
 
     // Transition to paused
     repo.apply_transition(exp.id, ExperimentStatus::Paused, None)
@@ -699,7 +782,10 @@ async fn test_flag_rule_frozen_while_running(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(!frozen, "flag rule must be unfrozen when experiment is paused");
+    assert!(
+        !frozen,
+        "flag rule must be unfrozen when experiment is paused"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -793,5 +879,8 @@ async fn test_soft_delete_while_stopped_succeeds(pool: sqlx::PgPool) {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert!(deleted_at.is_some(), "deleted_at must be set after soft delete");
+    assert!(
+        deleted_at.is_some(),
+        "deleted_at must be set after soft delete"
+    );
 }

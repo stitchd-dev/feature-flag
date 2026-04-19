@@ -109,6 +109,7 @@ impl ExperimentRepository for PgExperimentRepository {
         }
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError> {
         sqlx::query!(
             r#"
@@ -166,6 +167,7 @@ impl ExperimentRepository for PgExperimentRepository {
         Ok(())
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
     async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
         // Mutation guard: reject updates on active (running or paused) experiments.
         let current_status: Option<ExperimentStatus> = sqlx::query_scalar!(
@@ -182,7 +184,7 @@ impl ExperimentRepository for PgExperimentRepository {
                     id: experiment.id.to_string(),
                 });
             }
-            Some(ExperimentStatus::Running) | Some(ExperimentStatus::Paused) => {
+            Some(ExperimentStatus::Running | ExperimentStatus::Paused) => {
                 return Err(RepositoryError::InvalidState {
                     reason: "cannot update an experiment that is running or paused".to_string(),
                 });
@@ -359,6 +361,7 @@ impl ExperimentRepository for PgExperimentRepository {
         .map_err(RepositoryError::Database)
     }
 
+    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
     async fn apply_transition(
         &self,
         id: ExperimentId,
