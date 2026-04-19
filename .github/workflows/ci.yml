@@ -54,43 +54,13 @@ jobs:
   test:
     name: Tests
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: stitchd_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      clickhouse:
-        image: clickhouse/clickhouse-server:latest
-        env:
-          CLICKHOUSE_USER: stitchd
-          CLICKHOUSE_PASSWORD: stitchd
-          CLICKHOUSE_DB: stitchd
-        ports:
-          - 8123:8123
-        options: >-
-          --health-cmd "wget -q -O- http://localhost:8123/ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure ClickHouse macros
-        run: |
-          CONTAINER=$(docker ps --filter "ancestor=clickhouse/clickhouse-server:latest" --format "{{.ID}}")
-          docker exec "$CONTAINER" bash -c "printf '<clickhouse><macros><shard>01</shard><replica>01</replica></macros></clickhouse>' > /etc/clickhouse-server/config.d/macros.xml"
-          docker exec "$CONTAINER" clickhouse-client --user stitchd --password stitchd --query "SYSTEM RELOAD CONFIG"
+      - name: Start services
+        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up -d --wait
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -105,43 +75,13 @@ jobs:
   coverage:
     name: Coverage (≥90%)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: stitchd_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      clickhouse:
-        image: clickhouse/clickhouse-server:latest
-        env:
-          CLICKHOUSE_USER: stitchd
-          CLICKHOUSE_PASSWORD: stitchd
-          CLICKHOUSE_DB: stitchd
-        ports:
-          - 8123:8123
-        options: >-
-          --health-cmd "wget -q -O- http://localhost:8123/ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure ClickHouse macros
-        run: |
-          CONTAINER=$(docker ps --filter "ancestor=clickhouse/clickhouse-server:latest" --format "{{.ID}}")
-          docker exec "$CONTAINER" bash -c "printf '<clickhouse><macros><shard>01</shard><replica>01</replica></macros></clickhouse>' > /etc/clickhouse-server/config.d/macros.xml"
-          docker exec "$CONTAINER" clickhouse-client --user stitchd --password stitchd --query "SYSTEM RELOAD CONFIG"
+      - name: Start services
+        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up -d --wait
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
