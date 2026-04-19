@@ -77,13 +77,17 @@ pub struct EventWriter {
 impl EventWriter {
     /// Create a new `EventWriter` backed by `client`.
     #[must_use]
-    pub fn new(client: Client) -> Self {
+    pub const fn new(client: Client) -> Self {
         Self { client }
     }
 
     /// Write a single event to the `events` table.
     ///
     /// This is `async` — wrap in `tokio::spawn` for fire-and-forget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WriteError`] if the ClickHouse insert fails.
     #[instrument(skip(self, payload), fields(metric_key = %payload.metric_key))]
     pub async fn write(&self, env_id: Uuid, payload: &EventPayload) -> Result<(), WriteError> {
         let row = EventRow::from_payload(env_id, payload);
@@ -97,6 +101,10 @@ impl EventWriter {
     ///
     /// All events are inserted in a single ClickHouse insert statement.
     /// Wrap in `tokio::spawn` for fire-and-forget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WriteError`] if the ClickHouse insert fails.
     #[instrument(skip(self, batch), fields(count = batch.events.len()))]
     pub async fn write_batch(
         &self,

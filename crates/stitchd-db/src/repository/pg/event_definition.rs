@@ -162,10 +162,7 @@ impl EventDefinitionRepository for PgEventDefinitionRepository {
         Ok(())
     }
 
-    async fn update(
-        &self,
-        def: &EventDefinition,
-    ) -> Result<EventDefinition, RepositoryError> {
+    async fn update(&self, def: &EventDefinition) -> Result<EventDefinition, RepositoryError> {
         let new_version = def.version + 1;
         let result = sqlx::query_as!(
             EventDefinition,
@@ -193,44 +190,45 @@ impl EventDefinitionRepository for PgEventDefinitionRepository {
         .await
         .map_err(RepositoryError::Database)?;
 
-        match result {
-            Some(updated) => {
-                self.audit
-                    .log(
-                        None,
-                        "event_definition",
-                        def.id.as_uuid(),
-                        "update",
-                        serde_json::json!({
-                            "key": def.key,
-                            "value_type": format!("{:?}", def.value_type),
-                            "version": new_version,
-                        }),
-                    )
-                    .await?;
-                Ok(updated)
-            }
-            None => {
-                // Either the row doesn't exist or the version didn't match.
-                // Distinguish by looking up the current version.
-                let current = sqlx::query_scalar!(
-                    "SELECT version FROM event_definitions WHERE id = $1 AND deleted_at IS NULL",
-                    def.id as EventDefinitionId
+        if let Some(updated) = result {
+            self.audit
+                .log(
+                    None,
+                    "event_definition",
+                    def.id.as_uuid(),
+                    "update",
+                    serde_json::json!({
+                        "key": def.key,
+                        "value_type": format!("{:?}", def.value_type),
+                        "version": new_version,
+                    }),
                 )
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(RepositoryError::Database)?;
+                .await?;
+            Ok(updated)
+        } else {
+            // Either the row doesn't exist or the version didn't match.
+            // Distinguish by looking up the current version.
+            let current = sqlx::query_scalar!(
+                "SELECT version FROM event_definitions WHERE id = $1 AND deleted_at IS NULL",
+                def.id as EventDefinitionId
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(RepositoryError::Database)?;
 
-                match current {
-                    Some(current_version) => Err(RepositoryError::VersionConflict {
+            current.map_or_else(
+                || {
+                    Err(RepositoryError::NotFound {
+                        id: def.id.to_string(),
+                    })
+                },
+                |current_version| {
+                    Err(RepositoryError::VersionConflict {
                         expected: def.version,
                         actual: current_version,
-                    }),
-                    None => Err(RepositoryError::NotFound {
-                        id: def.id.to_string(),
-                    }),
-                }
-            }
+                    })
+                },
+            )
         }
     }
 

@@ -409,10 +409,7 @@ pub trait AuditLogger: Send + Sync {
 #[async_trait]
 pub trait EventDefinitionRepository: Send + Sync {
     /// Fetch a definition by ID.
-    async fn find_by_id(
-        &self,
-        id: EventDefinitionId,
-    ) -> Result<EventDefinition, RepositoryError>;
+    async fn find_by_id(&self, id: EventDefinitionId) -> Result<EventDefinition, RepositoryError>;
 
     /// Fetch a definition by its string key within an environment.
     async fn find_by_key(
@@ -431,12 +428,8 @@ pub trait EventDefinitionRepository: Send + Sync {
     async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError>;
 
     /// Update an existing definition (optimistic locking via `version`).
-    async fn update(
-        &self,
-        def: &EventDefinition,
-    ) -> Result<EventDefinition, RepositoryError>;
+    async fn update(&self, def: &EventDefinition) -> Result<EventDefinition, RepositoryError>;
 
     /// Soft-delete a definition by setting `deleted_at`.
     async fn soft_delete(&self, id: EventDefinitionId) -> Result<(), RepositoryError>;
 }
-

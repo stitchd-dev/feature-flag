@@ -4,12 +4,12 @@
 //! `IngestionError::TypeMismatch` (422). After validation the actual ClickHouse
 //! write is spawned as a fire-and-forget task.
 
+use std::sync::Arc;
 use stitchd_core::{
     event::{BatchEventPayload, EventPayload},
     id::EnvironmentId,
 };
 use stitchd_db::{EventDefinitionRepository, RepositoryError};
-use std::sync::Arc;
 
 use stitchd_events::writer::EventWriter;
 use tracing::instrument;
@@ -41,6 +41,10 @@ pub enum IngestionError {
 /// Validate a single event payload against registered definitions.
 ///
 /// Returns `Ok(())` if the payload is valid. Does not write to ClickHouse.
+///
+/// # Errors
+///
+/// Returns [`IngestionError`] if the key is unknown or the value type mismatches.
 #[instrument(skip(repo, payload), fields(metric_key = %payload.metric_key))]
 pub async fn validate_event(
     repo: &Arc<dyn EventDefinitionRepository>,
@@ -62,7 +66,7 @@ pub async fn validate_event(
         return Err(IngestionError::TypeMismatch {
             key: payload.metric_key.clone(),
             expected: format!("{:?}", def.value_type),
-            got: format!("{:?}", submitted),
+            got: format!("{submitted:?}"),
         });
     }
 
@@ -74,6 +78,10 @@ pub async fn validate_event(
 /// Validation is synchronous (PostgreSQL lookup); the ClickHouse write is
 /// spawned and the future resolves as soon as validation passes.
 /// If `writer` is `None` the write is skipped (useful in test environments).
+///
+/// # Errors
+///
+/// Returns [`IngestionError`] if validation fails.
 pub async fn ingest_event(
     repo: &Arc<dyn EventDefinitionRepository>,
     writer: Option<&EventWriter>,
@@ -100,6 +108,10 @@ pub async fn ingest_event(
 /// All events in the batch are validated before any ClickHouse write is initiated.
 /// A single unknown key or type mismatch causes the entire batch to be rejected (422).
 /// If `writer` is `None` the write is skipped (useful in test environments).
+///
+/// # Errors
+///
+/// Returns [`IngestionError`] if any event in the batch fails validation.
 pub async fn ingest_batch(
     repo: &Arc<dyn EventDefinitionRepository>,
     writer: Option<&EventWriter>,
@@ -150,7 +162,10 @@ mod tests {
 
     fn make_payload(key: &str, value: EventValue) -> EventPayload {
         EventPayload {
-            contexts: vec![EventContext { context_type: "user".into(), key: "u1".into() }],
+            contexts: vec![EventContext {
+                context_type: "user".into(),
+                key: "u1".into(),
+            }],
             metric_key: key.to_string(),
             value,
             timestamp: Utc::now(),
@@ -161,26 +176,71 @@ mod tests {
 
     #[async_trait]
     impl EventDefinitionRepository for OkRepo {
-        async fn find_by_id(&self, _id: EventDefinitionId) -> Result<EventDefinition, RepositoryError> { unimplemented!() }
-        async fn find_by_key(&self, _key: &str, _env_id: EnvironmentId) -> Result<EventDefinition, RepositoryError> { Ok(self.0.clone()) }
-        async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<EventDefinition>, RepositoryError> { unimplemented!() }
-        async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> { unimplemented!() }
-        async fn update(&self, _def: &EventDefinition) -> Result<EventDefinition, RepositoryError> { unimplemented!() }
-        async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> { unimplemented!() }
+        async fn find_by_id(
+            &self,
+            _id: EventDefinitionId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn find_by_key(
+            &self,
+            _key: &str,
+            _env_id: EnvironmentId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            Ok(self.0.clone())
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+        ) -> Result<Vec<EventDefinition>, RepositoryError> {
+            unimplemented!()
+        }
+        async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+        async fn update(&self, _def: &EventDefinition) -> Result<EventDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
     }
 
     struct ErrRepo;
 
     #[async_trait]
     impl EventDefinitionRepository for ErrRepo {
-        async fn find_by_id(&self, _id: EventDefinitionId) -> Result<EventDefinition, RepositoryError> { unimplemented!() }
-        async fn find_by_key(&self, _key: &str, _env_id: EnvironmentId) -> Result<EventDefinition, RepositoryError> {
-            Err(RepositoryError::VersionConflict { expected: 1, actual: 2 })
+        async fn find_by_id(
+            &self,
+            _id: EventDefinitionId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            unimplemented!()
         }
-        async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<EventDefinition>, RepositoryError> { unimplemented!() }
-        async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> { unimplemented!() }
-        async fn update(&self, _def: &EventDefinition) -> Result<EventDefinition, RepositoryError> { unimplemented!() }
-        async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> { unimplemented!() }
+        async fn find_by_key(
+            &self,
+            _key: &str,
+            _env_id: EnvironmentId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            Err(RepositoryError::VersionConflict {
+                expected: 1,
+                actual: 2,
+            })
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+        ) -> Result<Vec<EventDefinition>, RepositoryError> {
+            unimplemented!()
+        }
+        async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+        async fn update(&self, _def: &EventDefinition) -> Result<EventDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
     }
 
     fn make_writer() -> EventWriter {
@@ -211,7 +271,13 @@ mod tests {
         let repo: Arc<dyn EventDefinitionRepository> = Arc::new(OkRepo(def));
         let writer = make_writer();
 
-        let result = ingest_event(&repo, Some(&writer), env_id, make_payload("m", EventValue::Bool(true))).await;
+        let result = ingest_event(
+            &repo,
+            Some(&writer),
+            env_id,
+            make_payload("m", EventValue::Bool(true)),
+        )
+        .await;
         assert!(result.is_ok());
         // Yield so the spawned write task runs (connection refused → logs error)
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;

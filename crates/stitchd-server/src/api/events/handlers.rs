@@ -4,11 +4,7 @@
 //! - `POST /v1/environments/{env_id}/events`        — single event, 202 on success
 //! - `POST /v1/environments/{env_id}/events/batch`  — up to 500 events, 202 on success
 
-use axum::{
-    Json,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use serde_json::json;
 use stitchd_core::event::{BatchEventPayload, EventPayload};
 
@@ -38,8 +34,7 @@ pub enum ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> axum::response::Response {
         let (status, msg) = match self {
-            Self::UnknownKey(m) => (StatusCode::UNPROCESSABLE_ENTITY, m),
-            Self::TypeMismatch(m) => (StatusCode::UNPROCESSABLE_ENTITY, m),
+            Self::UnknownKey(m) | Self::TypeMismatch(m) => (StatusCode::UNPROCESSABLE_ENTITY, m),
             Self::BatchTooLarge => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("batch exceeds maximum of {BATCH_MAX} events"),
@@ -70,6 +65,10 @@ impl From<IngestionError> for ApiError {
 ///
 /// Validates the `metric_key` against registered definitions and checks the
 /// value type. Returns 202 immediately; the ClickHouse write is async.
+///
+/// # Errors
+///
+/// Returns [`ApiError`] if validation fails or an internal error occurs.
 #[utoipa::path(
     post,
     path = "/v1/environments/{env_id}/events",
@@ -105,6 +104,10 @@ pub async fn ingest_single_event(
 ///
 /// All events are validated before any write is initiated. A single invalid
 /// event causes the entire batch to be rejected with 422.
+///
+/// # Errors
+///
+/// Returns [`ApiError`] if the batch is too large, validation fails, or an internal error occurs.
 #[utoipa::path(
     post,
     path = "/v1/environments/{env_id}/events/batch",
