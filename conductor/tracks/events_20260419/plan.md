@@ -48,7 +48,7 @@
   <!-- files: crates/stitchd-server/src/api/events/handlers.rs -->
 - [x] Task: Conductor - User Manual Verification 'Phase 3: Event Ingestion API' (Protocol in workflow.md)
 
-## Phase 4: Integration Tests & Coverage
+## Phase 4: Integration Tests & Coverage [checkpoint: dd6c401]
 <!-- execution: sequential -->
 <!-- depends: phase3 -->
 

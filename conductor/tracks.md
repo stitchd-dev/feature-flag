@@ -25,5 +25,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [~] Track: Events Layer
+## [x] Track: Events Layer
 *Link: [./conductor/tracks/events_20260419/](./conductor/tracks/events_20260419/)*

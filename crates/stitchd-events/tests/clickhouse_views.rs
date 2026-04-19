@@ -218,3 +218,33 @@ async fn bool_events_not_included_in_numeric_mv() {
         "bool events should not appear in events_numeric"
     );
 }
+
+#[tokio::test]
+async fn write_batch_populates_events_count() {
+    use stitchd_core::event::BatchEventPayload;
+
+    let client = make_client();
+    setup_migrations(&client).await;
+    let writer = make_writer();
+    let env_id = Uuid::new_v4();
+
+    let batch = BatchEventPayload {
+        events: vec![
+            payload(env_id, "batch_metric", EventValue::Int(1)),
+            payload(env_id, "batch_metric", EventValue::Int(2)),
+            payload(env_id, "batch_metric", EventValue::Int(3)),
+        ],
+    };
+    writer.write_batch(env_id, &batch).await.unwrap();
+
+    wait_for_merge(&client, "events_count").await;
+
+    let rows = query_count_rows(&client, env_id).await;
+    let row = rows.iter().find(|r| r.metric_key == "batch_metric");
+    assert!(row.is_some(), "expected 'batch_metric' row in events_count");
+    assert!(
+        row.unwrap().event_count >= 3,
+        "expected at least 3 events, got {}",
+        row.unwrap().event_count
+    );
+}
