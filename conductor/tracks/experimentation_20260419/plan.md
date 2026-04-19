@@ -30,7 +30,7 @@ Track: experimentation_20260419
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Database Migrations & Domain Types' (Protocol in workflow.md)
 
-## Phase 2: Repository Layer
+## Phase 2: Repository Layer [checkpoint: b6ccf63]
 
 - [x] Task 1: ExperimentRepository trait + sqlx implementation [e7dd2a8]
   - [x] Sub-task: Write failing tests (sqlx::test) for create, get, list,
