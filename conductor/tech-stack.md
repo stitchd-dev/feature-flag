@@ -35,6 +35,10 @@
 | `cargo-tarpaulin` | Code coverage (≥90% threshold enforced in CI) |
 | `Swatinem/rust-cache` | GitHub Actions dependency caching |
 | `sqlx-cli` | Database migration management |
+| `xtask` (crate) | Single `cargo run --package xtask -- docs` command: protoc-gen-doc → OpenAPI export → rustdoc copy → mdbook build |
+| `mdBook` + `mdbook-mermaid` | Static documentation site in `docs/`; built by xtask |
+| `utoipa` + `utoipa-axum` | OpenAPI 3.1 spec generation from `#[utoipa::path]` annotations on Axum routes |
+| `protoc-gen-doc` | Generates Markdown from `.proto` files into `docs/src/grpc/` |
 
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs
