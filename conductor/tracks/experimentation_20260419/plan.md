@@ -4,29 +4,29 @@ Track: experimentation_20260419
 ## Phase 1: Database Migrations & Domain Types
 <!-- execution: parallel -->
 
-- [ ] Task 1: PostgreSQL migrations
+- [x] Task 1: PostgreSQL migrations [4cd3ac7]
   <!-- files: crates/stitchd-db/migrations/ -->
-  - [ ] Sub-task: Add `frozen` boolean column to `flag_rules` table
-  - [ ] Sub-task: Create `experiments` table (id, env_id, flag_rule_id, name,
+  - [x] Sub-task: Add `frozen` boolean column to `flag_rules` table
+  - [x] Sub-task: Create `experiments` table (id, env_id, flag_rule_id, name,
         description, hypothesis, status, metric_keys[], traffic_allocation,
         min_sample_size, scheduled_start_at, scheduled_end_at, version,
         created_at, updated_at, deleted_at)
-  - [ ] Sub-task: Create `experiment_iterations` table (id, experiment_id,
+  - [x] Sub-task: Create `experiment_iterations` table (id, experiment_id,
         iteration_number, started_at, ended_at, metric_keys[],
         traffic_allocation, min_sample_size)
-  - [ ] Sub-task: Unique partial index: one running/paused experiment
+  - [x] Sub-task: Unique partial index: one running/paused experiment
         per flag_rule_id
 
-- [ ] Task 2: Domain types in `stitchd-core`
+- [x] Task 2: Domain types in `stitchd-core` [0c2b614]
   <!-- files: crates/stitchd-core/src/experimentation/ -->
-  - [ ] Sub-task: Write failing tests for ExperimentStatus transitions
+  - [x] Sub-task: Write failing tests for ExperimentStatus transitions
         (valid and invalid)
-  - [ ] Sub-task: ExperimentId newtype, ExperimentIterationId newtype
-  - [ ] Sub-task: ExperimentStatus enum + allowed_transitions() method
-  - [ ] Sub-task: Experiment struct + ExperimentIteration struct
-  - [ ] Sub-task: Transition validation logic (mutation guard, uniqueness
+  - [x] Sub-task: ExperimentId newtype, ExperimentIterationId newtype
+  - [x] Sub-task: ExperimentStatus enum + allowed_transitions() method
+  - [x] Sub-task: Experiment struct + ExperimentIteration struct
+  - [x] Sub-task: Transition validation logic (mutation guard, uniqueness
         guard, creates_iteration predicate)
-  - [ ] Sub-task: Pass tests
+  - [x] Sub-task: Pass tests
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Database Migrations & Domain Types' (Protocol in workflow.md)
 
