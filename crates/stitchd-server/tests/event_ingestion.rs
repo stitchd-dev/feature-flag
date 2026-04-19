@@ -16,7 +16,7 @@ use stitchd_core::{
     tenant::{Environment, Organisation, Project, SdkKey},
 };
 use stitchd_db::{
-    EventDefinitionRepository, EnvironmentRepository, OrganisationRepository, ProjectRepository,
+    EnvironmentRepository, EventDefinitionRepository, OrganisationRepository, ProjectRepository,
     SdkKeyRepository,
     repository::pg::{
         PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository, PgFlagRepository,
@@ -24,7 +24,7 @@ use stitchd_db::{
         PgVariantRepository,
     },
 };
-use stitchd_server::{AppState, build_router, api::sdk_auth::hash_sdk_key};
+use stitchd_server::{AppState, api::sdk_auth::hash_sdk_key, build_router};
 use tower::ServiceExt as _;
 
 const SDK_KEY: &str = "test-ingestion-key";
@@ -38,8 +38,10 @@ async fn setup(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
     let flag_repo = Arc::new(PgFlagRepository::new(pool.clone(), audit.clone()));
     let variant_repo = Arc::new(PgVariantRepository::new(pool.clone(), audit.clone()));
     let sdk_key_repo = Arc::new(PgSdkKeyRepository::new(pool.clone(), audit.clone()));
-    let event_definition_repo =
-        Arc::new(PgEventDefinitionRepository::new(pool.clone(), audit.clone()));
+    let event_definition_repo = Arc::new(PgEventDefinitionRepository::new(
+        pool.clone(),
+        audit.clone(),
+    ));
 
     let org = Organisation {
         id: OrganisationId::new(),
@@ -330,7 +332,9 @@ async fn batch_events_accepted(pool: sqlx::PgPool) {
                 .uri(format!("/v1/environments/{env_id}/events/batch"))
                 .header("Content-Type", "application/json")
                 .header("x-sdk-key", SDK_KEY)
-                .body(Body::from(serde_json::to_vec(&json!({ "events": events })).unwrap()))
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "events": events })).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -361,7 +365,9 @@ async fn batch_over_500_rejected_422(pool: sqlx::PgPool) {
                 .uri(format!("/v1/environments/{env_id}/events/batch"))
                 .header("Content-Type", "application/json")
                 .header("x-sdk-key", SDK_KEY)
-                .body(Body::from(serde_json::to_vec(&json!({ "events": events })).unwrap()))
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "events": events })).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -396,7 +402,9 @@ async fn batch_unknown_key_rejected_422(pool: sqlx::PgPool) {
                 .uri(format!("/v1/environments/{env_id}/events/batch"))
                 .header("Content-Type", "application/json")
                 .header("x-sdk-key", SDK_KEY)
-                .body(Body::from(serde_json::to_vec(&json!({ "events": events })).unwrap()))
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "events": events })).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -424,7 +432,9 @@ async fn batch_type_mismatch_rejected_422(pool: sqlx::PgPool) {
                 .uri(format!("/v1/environments/{env_id}/events/batch"))
                 .header("Content-Type", "application/json")
                 .header("x-sdk-key", SDK_KEY)
-                .body(Body::from(serde_json::to_vec(&json!({ "events": events })).unwrap()))
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "events": events })).unwrap(),
+                ))
                 .unwrap(),
         )
         .await
@@ -450,7 +460,9 @@ async fn batch_missing_auth_rejected_401(pool: sqlx::PgPool) {
                 .method("POST")
                 .uri(format!("/v1/environments/{env_id}/events/batch"))
                 .header("Content-Type", "application/json")
-                .body(Body::from(serde_json::to_vec(&json!({ "events": events })).unwrap()))
+                .body(Body::from(
+                    serde_json::to_vec(&json!({ "events": events })).unwrap(),
+                ))
                 .unwrap(),
         )
         .await

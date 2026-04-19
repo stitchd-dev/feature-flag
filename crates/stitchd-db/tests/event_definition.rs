@@ -6,7 +6,7 @@ use stitchd_core::{
     tenant::{Environment, Organisation, Project},
 };
 use stitchd_db::{
-    EventDefinitionRepository, OrganisationRepository, ProjectRepository, EnvironmentRepository,
+    EnvironmentRepository, EventDefinitionRepository, OrganisationRepository, ProjectRepository,
     RepositoryError,
     repository::pg::{
         PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
@@ -15,9 +15,7 @@ use stitchd_db::{
 };
 
 /// Build a minimal environment hierarchy for tests.
-async fn setup_env(
-    pool: sqlx::PgPool,
-) -> (Organisation, Project, Environment) {
+async fn setup_env(pool: sqlx::PgPool) -> (Organisation, Project, Environment) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
@@ -138,7 +136,9 @@ async fn test_soft_delete_event_definition(pool: sqlx::PgPool) {
     };
     repo.create(&def).await.unwrap();
 
-    repo.soft_delete(def.id).await.expect("soft delete should succeed");
+    repo.soft_delete(def.id)
+        .await
+        .expect("soft delete should succeed");
 
     let result = repo.find_by_key("revenue", env.id).await;
     assert!(

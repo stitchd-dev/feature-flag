@@ -23,7 +23,9 @@ fn make_client() -> Client {
 }
 
 async fn setup_migrations(client: &Client) {
-    migrations::run(client).await.expect("migrations should apply");
+    migrations::run(client)
+        .await
+        .expect("migrations should apply");
 }
 
 fn make_writer() -> EventWriter {
@@ -96,11 +98,17 @@ async fn events_count_mv_populates_from_bool_events() {
     let env_id = Uuid::new_v4();
 
     writer
-        .write(env_id, &payload(env_id, "conversion", EventValue::Bool(true)))
+        .write(
+            env_id,
+            &payload(env_id, "conversion", EventValue::Bool(true)),
+        )
         .await
         .unwrap();
     writer
-        .write(env_id, &payload(env_id, "conversion", EventValue::Bool(false)))
+        .write(
+            env_id,
+            &payload(env_id, "conversion", EventValue::Bool(false)),
+        )
         .await
         .unwrap();
 
@@ -161,7 +169,10 @@ async fn events_numeric_mv_accumulates_sum_for_int_events() {
 
     let rows = query_numeric_rows(&client, env_id).await;
     let row = rows.iter().find(|r| r.metric_key == "revenue_int");
-    assert!(row.is_some(), "expected 'revenue_int' row in events_numeric");
+    assert!(
+        row.is_some(),
+        "expected 'revenue_int' row in events_numeric"
+    );
     assert!(
         (row.unwrap().value_sum - 60.0).abs() < 0.01,
         "expected sum ~60.0, got {}",
@@ -179,7 +190,10 @@ async fn events_numeric_mv_accumulates_sum_for_double_events() {
     // Insert 3 double events → sum should be ~9.99
     for v in [3.33f64, 3.33, 3.33] {
         writer
-            .write(env_id, &payload(env_id, "revenue_double", EventValue::Double(v)))
+            .write(
+                env_id,
+                &payload(env_id, "revenue_double", EventValue::Double(v)),
+            )
             .await
             .unwrap();
     }
@@ -188,7 +202,10 @@ async fn events_numeric_mv_accumulates_sum_for_double_events() {
 
     let rows = query_numeric_rows(&client, env_id).await;
     let row = rows.iter().find(|r| r.metric_key == "revenue_double");
-    assert!(row.is_some(), "expected 'revenue_double' row in events_numeric");
+    assert!(
+        row.is_some(),
+        "expected 'revenue_double' row in events_numeric"
+    );
     assert!(
         (row.unwrap().value_sum - 9.99).abs() < 0.01,
         "expected sum ~9.99, got {}",
@@ -205,7 +222,10 @@ async fn bool_events_not_included_in_numeric_mv() {
 
     // Bool events must NOT appear in events_numeric
     writer
-        .write(env_id, &payload(env_id, "bool_only_metric", EventValue::Bool(true)))
+        .write(
+            env_id,
+            &payload(env_id, "bool_only_metric", EventValue::Bool(true)),
+        )
         .await
         .unwrap();
 

@@ -395,14 +395,16 @@ mod tests {
             async fn find_by_id(
                 &self,
                 id: stitchd_core::id::EventDefinitionId,
-            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError>
+            {
                 Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
             }
             async fn find_by_key(
                 &self,
                 key: &str,
                 _: stitchd_core::id::EnvironmentId,
-            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError>
+            {
                 Err(stitchd_db::RepositoryError::NotFound {
                     id: key.to_string(),
                 })
@@ -423,7 +425,8 @@ mod tests {
             async fn update(
                 &self,
                 d: &stitchd_core::event::EventDefinition,
-            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError>
+            {
                 Ok(d.clone())
             }
             async fn soft_delete(

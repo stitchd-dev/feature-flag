@@ -175,7 +175,11 @@ pub async fn list_event_definitions(
         .event_definition_repo
         .list_by_environment(env_id)
         .await?;
-    Ok(Json(defs.into_iter().map(EventDefinitionResponse::from).collect()))
+    Ok(Json(
+        defs.into_iter()
+            .map(EventDefinitionResponse::from)
+            .collect(),
+    ))
 }
 
 /// `DELETE /v1/environments/{env_id}/event-definitions/{key}` — Soft-delete by key.
@@ -205,10 +209,7 @@ pub async fn delete_event_definition(
         .find_by_key(&key, env_id)
         .await?;
 
-    state
-        .event_definition_repo
-        .soft_delete(def.id)
-        .await?;
+    state.event_definition_repo.soft_delete(def.id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -29,8 +29,10 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
     let flag_repo = Arc::new(PgFlagRepository::new(pool.clone(), audit.clone()));
     let variant_repo = Arc::new(PgVariantRepository::new(pool.clone(), audit.clone()));
     let sdk_key_repo = Arc::new(PgSdkKeyRepository::new(pool.clone(), audit.clone()));
-    let event_definition_repo =
-        Arc::new(PgEventDefinitionRepository::new(pool.clone(), audit.clone()));
+    let event_definition_repo = Arc::new(PgEventDefinitionRepository::new(
+        pool.clone(),
+        audit.clone(),
+    ));
 
     // Setup hierarchy
     let org = Organisation {
