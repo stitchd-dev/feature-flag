@@ -1,0 +1,53 @@
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+
+coverage:
+  precision: 2
+  round: down
+  status:
+    project:
+      default:
+        # Global project coverage (combined across all flags via carryforward)
+        # must stay at or above 90%.
+        target: 90%
+        threshold: 1%        # tolerate ≤1% noise between commits
+    patch:
+      default:
+        # New lines introduced in a PR must also meet 90%.
+        target: 90%
+        threshold: 1%
+
+# Per-crate flags with carryforward enabled.
+# When only a subset of crates is tested in a given push, Codecov reaches
+# back to the most recent successful upload for each flag to fill in the
+# unchanged crates, keeping the global project % accurate.
+flags:
+  stitchd-core:
+    carryforward: true
+    paths:
+      - crates/stitchd-core/
+
+  stitchd-db:
+    carryforward: true
+    paths:
+      - crates/stitchd-db/
+
+  stitchd-events:
+    carryforward: true
+    paths:
+      - crates/stitchd-events/
+
+  stitchd-sdk:
+    carryforward: true
+    paths:
+      - crates/stitchd-sdk/
+
+  stitchd-server:
+    carryforward: true
+    paths:
+      - crates/stitchd-server/
+
+ignore:
+  - "crates/stitchd-proto/**"   # generated protobuf
+  - "crates/xtask/**"           # build tool

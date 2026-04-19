@@ -17,6 +17,32 @@ env:
   SQLX_OFFLINE: true
 
 jobs:
+  # ── 0. Changed-crate detection ─────────────────────────────────────────────
+  # Runs before tests and coverage to compute which workspace crates (and their
+  # transitive dependents) are affected by this push/PR.  fmt, clippy, and docs
+  # always run at workspace level and are not gated on this output.
+  detect-changes:
+    name: Detect Changed Crates
+    runs-on: ubuntu-latest
+    outputs:
+      test-packages: ${{ steps.compute.outputs.test-packages }}
+      crate-names:   ${{ steps.compute.outputs.crate-names }}
+      has-changes:   ${{ steps.compute.outputs.has-changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history to diff against the previous push/PR base.
+          fetch-depth: 0
+
+      - name: Compute affected crates
+        id: compute
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          BEFORE:   ${{ github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/affected_crates.py
+
   # ── 1. Formatting ──────────────────────────────────────────────────────────
   fmt:
     name: Rustfmt
@@ -51,8 +77,12 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   # ── 3. Tests ───────────────────────────────────────────────────────────────
+  # Runs only for crates affected by this push/PR (direct changes + their
+  # transitive dependents).  Skipped entirely when no testable crate changed.
   test:
     name: Tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
@@ -68,12 +98,18 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run tests
-        run: cargo test --workspace
+      - name: Run tests (${{ needs.detect-changes.outputs.crate-names }})
+        run: cargo test ${{ needs.detect-changes.outputs.test-packages }}
 
   # ── 4. Coverage ────────────────────────────────────────────────────────────
+  # Runs tarpaulin once per affected crate and uploads each result to Codecov
+  # under its own flag.  Unchanged crates are filled in via Codecov's
+  # carryforward feature (see codecov.yml), so the global project % stays
+  # accurate even though only a subset of crates ran.
   coverage:
     name: Coverage (≥90%)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
@@ -94,25 +130,43 @@ jobs:
         with:
           tool: cargo-tarpaulin
 
-      - name: Run coverage
+      - name: Run coverage per affected crate
+        env:
+          CRATE_NAMES: ${{ needs.detect-changes.outputs.crate-names }}
         run: |
-          cargo tarpaulin \
-            --workspace \
-            --timeout 120 \
-            --out Xml \
-            --output-dir coverage/ \
-            --fail-under 90 \
-            --exclude-files "crates/stitchd-proto/*" \
-            --exclude-files "crates/xtask/*"  # build tool, not production code
+          mkdir -p coverage
+          for crate in $CRATE_NAMES; do
+            echo "── coverage: $crate ──"
+            mkdir -p "coverage/$crate"
+            cargo tarpaulin \
+              -p "$crate" \
+              --timeout 120 \
+              --out Xml \
+              --output-dir "coverage/$crate/" \
+              --exclude-files "crates/stitchd-proto/*" \
+              --exclude-files "crates/xtask/*"
+          done
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/cobertura.xml
-          fail_ci_if_error: true
+      - name: Upload per-crate coverage to Codecov
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          CRATE_NAMES:   ${{ needs.detect-changes.outputs.crate-names }}
+        run: |
+          curl -Os https://uploader.codecov.io/latest/linux/codecov
+          chmod +x codecov
+          for crate in $CRATE_NAMES; do
+            xml="coverage/$crate/cobertura.xml"
+            if [ -f "$xml" ]; then
+              echo "── uploading: $crate (flag=$crate) ──"
+              ./codecov \
+                --token="$CODECOV_TOKEN" \
+                --file="$xml" \
+                --flag="$crate" \
+                --fail-on-error
+            fi
+          done
 
-      - name: Upload coverage report
+      - name: Upload coverage reports as artifact
         uses: actions/upload-artifact@v4
         if: always()
         with:
