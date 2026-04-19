@@ -50,7 +50,7 @@ Track: experimentation_20260419
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Repository Layer' (Protocol in workflow.md)
 
-## Phase 3: REST API Layer
+## Phase 3: REST API Layer [checkpoint: 018af3c]
 
 - [x] Task 1: Request/Response types & utoipa schemas [d946dac]
   - [x] Sub-task: Write failing tests for request deserialization and
