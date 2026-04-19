@@ -4,13 +4,13 @@
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task: Create ClickHouse migration for `events` table (env_id, contexts Array(Tuple(String,String)), metric_key, value_bool, value_int, value_double, timestamp, ingested_at) using ReplicatedMergeTree, partitioned by toYYYYMM(timestamp)
+- [x] Task: Create ClickHouse migration for `events` table (env_id, contexts Array(Tuple(String,String)), metric_key, value_bool, value_int, value_double, timestamp, ingested_at) using ReplicatedMergeTree, partitioned by toYYYYMM(timestamp)
   <!-- files: crates/stitchd-events/migrations/ -->
-- [ ] Task: Create ClickHouse migration for `metric_definitions` table (env_id, key, value_type) to mirror PostgreSQL registrations for query-time joins
+- [x] Task: Create ClickHouse migration for `metric_definitions` table (env_id, key, value_type) to mirror PostgreSQL registrations for query-time joins
   <!-- files: crates/stitchd-events/migrations/ -->
-- [ ] Task: Create materialized view `events_count_mv` — count per (env_id, metric_key, day)
+- [x] Task: Create materialized view `events_count_mv` — count per (env_id, metric_key, day)
   <!-- files: crates/stitchd-events/migrations/ -->
-- [ ] Task: Create materialized view `events_numeric_mv` — sum/avg/p50/p95/p99 per (env_id, metric_key, day)
+- [x] Task: Create materialized view `events_numeric_mv` — sum/avg/p50/p95/p99 per (env_id, metric_key, day)
   <!-- files: crates/stitchd-events/migrations/ -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: ClickHouse Schema & Migrations' (Protocol in workflow.md)
 

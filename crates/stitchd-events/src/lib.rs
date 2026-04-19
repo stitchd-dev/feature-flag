@@ -4,8 +4,7 @@
 #![deny(warnings, missing_docs, clippy::all)]
 #![warn(clippy::pedantic, clippy::nursery)]
 
-// TODO: event types and ingestion service
-// TODO: ClickHouse client setup
+pub mod migrations;
 
 #[cfg(test)]
 mod tests {
