@@ -20,13 +20,5 @@ This file tracks all major tracks for the project.
 
 <!-- Archived: sdk_20260417 (Rust Server-Side SDK) -->
 <!-- Archived: fix_ci_clippy_20260417 (Fix CI Clippy Failure — telemetry.rs map_unwrap_or) -->
-
----
-
-## [x] Track: Increase Test Coverage to >90% Across All Crates
-*Link: [./conductor/tracks/coverage_20260417/](./conductor/tracks/coverage_20260417/)*
-
----
-
-## [x] Track: mdBook Documentation Site (API Docs + SDK Guide)
-*Link: [./conductor/tracks/mdbook_docs_20260418/](./conductor/tracks/mdbook_docs_20260418/)*
+<!-- Archived: coverage_20260417 (Increase Test Coverage to >90% Across All Crates) -->
+<!-- Archived: mdbook_docs_20260418 (mdBook Documentation Site (API Docs + SDK Guide)) -->
