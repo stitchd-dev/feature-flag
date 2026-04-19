@@ -1,0 +1,400 @@
+//! Experimentation domain types.
+//!
+//! An [`Experiment`] is bound to a specific flag rule and progresses through
+//! a lifecycle of [`ExperimentStatus`] values. Each transition **into**
+//! [`ExperimentStatus::Running`] creates a new [`ExperimentIteration`] that
+//! captures a snapshot of the experiment configuration at that moment.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+use crate::id::{EnvironmentId, ExperimentId, ExperimentIterationId, RuleId};
+
+/// Errors that can occur during experiment operations.
+#[derive(Debug, Error, PartialEq)]
+pub enum ExperimentError {
+    /// The requested status transition is not valid.
+    #[error("Invalid status transition from {from:?} to {to:?}")]
+    InvalidTransition {
+        from: ExperimentStatus,
+        to: ExperimentStatus,
+    },
+    /// Mutation is not allowed while the experiment is running (409 semantics).
+    #[error("Experiment is running; mutations are not allowed")]
+    MutationWhileRunning,
+}
+
+/// The lifecycle status of an experiment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum ExperimentStatus {
+    /// The experiment has been created but not yet started.
+    Draft,
+    /// The experiment is actively running and enrolling traffic.
+    Running,
+    /// The experiment has been temporarily paused.
+    Paused,
+    /// The experiment has been permanently stopped.
+    Stopped,
+}
+
+impl ExperimentStatus {
+    /// Returns the set of valid next statuses from this status.
+    ///
+    /// Valid transitions:
+    /// - `draft → running`
+    /// - `running → paused`
+    /// - `running → stopped`
+    /// - `paused → running`
+    /// - `paused → stopped`
+    /// - `stopped → running` (restart)
+    pub fn allowed_transitions(&self) -> &'static [ExperimentStatus] {
+        match self {
+            ExperimentStatus::Draft => &[ExperimentStatus::Running],
+            ExperimentStatus::Running => &[ExperimentStatus::Paused, ExperimentStatus::Stopped],
+            ExperimentStatus::Paused => &[ExperimentStatus::Running, ExperimentStatus::Stopped],
+            ExperimentStatus::Stopped => &[ExperimentStatus::Running],
+        }
+    }
+
+    /// Returns `true` if transitioning to `to` from this status is valid.
+    pub fn can_transition_to(&self, to: ExperimentStatus) -> bool {
+        self.allowed_transitions().contains(&to)
+    }
+}
+
+/// Returns `true` when the transition causes a new iteration to be created.
+///
+/// A new iteration is created on every transition **into** `running`.
+pub fn creates_iteration(from: ExperimentStatus, to: ExperimentStatus) -> bool {
+    to == ExperimentStatus::Running
+        && matches!(
+            from,
+            ExperimentStatus::Draft | ExperimentStatus::Paused | ExperimentStatus::Stopped
+        )
+}
+
+/// Validates that a mutation is allowed given the current experiment status.
+///
+/// Returns `Err(ExperimentError::MutationWhileRunning)` if `status == Running`.
+pub fn validate_mutation(status: ExperimentStatus) -> Result<(), ExperimentError> {
+    if status == ExperimentStatus::Running {
+        Err(ExperimentError::MutationWhileRunning)
+    } else {
+        Ok(())
+    }
+}
+
+/// Validates a status transition, returning `Ok(())` if valid.
+pub fn validate_transition(
+    from: ExperimentStatus,
+    to: ExperimentStatus,
+) -> Result<(), ExperimentError> {
+    if from.can_transition_to(to) {
+        Ok(())
+    } else {
+        Err(ExperimentError::InvalidTransition { from, to })
+    }
+}
+
+/// An experiment record stored in the database.
+///
+/// An experiment is scoped to an environment and bound to a specific flag rule.
+/// Soft-deleted experiments retain their record with `deleted_at` set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct Experiment {
+    /// Unique identifier.
+    pub id: ExperimentId,
+    /// The environment this experiment belongs to.
+    pub environment_id: EnvironmentId,
+    /// The flag rule this experiment is bound to.
+    pub flag_rule_id: RuleId,
+    /// Human-readable name.
+    pub name: String,
+    /// Optional description of the experiment.
+    pub description: Option<String>,
+    /// Optional hypothesis statement.
+    pub hypothesis: Option<String>,
+    /// Pre-registered event definition keys used as metrics (at least one required).
+    pub metric_keys: Vec<String>,
+    /// Percentage of rule-matched contexts to enrol (0.1% granularity, default 100%).
+    pub traffic_allocation: f64,
+    /// Optional informational minimum sample size guardrail.
+    pub min_sample_size: Option<i64>,
+    /// Optional scheduled start time (persisted; enforcement out of scope).
+    pub scheduled_start_at: Option<DateTime<Utc>>,
+    /// Optional scheduled end time (persisted; enforcement out of scope).
+    pub scheduled_end_at: Option<DateTime<Utc>>,
+    /// Current lifecycle status.
+    pub status: ExperimentStatus,
+    /// When this record was created.
+    pub created_at: DateTime<Utc>,
+    /// When this record was last modified.
+    pub updated_at: DateTime<Utc>,
+    /// Set when the experiment is soft-deleted; `None` while active.
+    pub deleted_at: Option<DateTime<Utc>>,
+    /// Optimistic-concurrency version counter.
+    pub version: i64,
+}
+
+/// A snapshot of an experiment configuration at the start of a run period.
+///
+/// A new iteration is created on each transition **into** `running`.
+/// Once `ended_at` is set the iteration is immutable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ExperimentIteration {
+    /// Unique identifier.
+    pub id: ExperimentIterationId,
+    /// The experiment this iteration belongs to.
+    pub experiment_id: ExperimentId,
+    /// Sequential iteration number within the experiment (1-based).
+    pub iteration_number: i32,
+    /// When this iteration started (i.e. when the transition to running occurred).
+    pub started_at: DateTime<Utc>,
+    /// When this iteration ended; `None` while the experiment is still running.
+    pub ended_at: Option<DateTime<Utc>>,
+    /// Snapshot of metric keys at the moment this iteration started.
+    pub metric_keys: Vec<String>,
+    /// Snapshot of traffic allocation at the moment this iteration started.
+    pub traffic_allocation: f64,
+    /// Snapshot of minimum sample size at the moment this iteration started.
+    pub min_sample_size: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── ExperimentStatus::allowed_transitions ────────────────────────────────
+
+    #[test]
+    fn draft_can_only_transition_to_running() {
+        let transitions = ExperimentStatus::Draft.allowed_transitions();
+        assert_eq!(transitions, &[ExperimentStatus::Running]);
+    }
+
+    #[test]
+    fn running_can_transition_to_paused_and_stopped() {
+        let transitions = ExperimentStatus::Running.allowed_transitions();
+        assert!(transitions.contains(&ExperimentStatus::Paused));
+        assert!(transitions.contains(&ExperimentStatus::Stopped));
+        assert_eq!(transitions.len(), 2);
+    }
+
+    #[test]
+    fn paused_can_transition_to_running_and_stopped() {
+        let transitions = ExperimentStatus::Paused.allowed_transitions();
+        assert!(transitions.contains(&ExperimentStatus::Running));
+        assert!(transitions.contains(&ExperimentStatus::Stopped));
+        assert_eq!(transitions.len(), 2);
+    }
+
+    #[test]
+    fn stopped_can_only_transition_to_running() {
+        let transitions = ExperimentStatus::Stopped.allowed_transitions();
+        assert_eq!(transitions, &[ExperimentStatus::Running]);
+    }
+
+    // ── can_transition_to ────────────────────────────────────────────────────
+
+    #[test]
+    fn draft_cannot_transition_to_paused() {
+        assert!(!ExperimentStatus::Draft.can_transition_to(ExperimentStatus::Paused));
+    }
+
+    #[test]
+    fn draft_cannot_transition_to_stopped() {
+        assert!(!ExperimentStatus::Draft.can_transition_to(ExperimentStatus::Stopped));
+    }
+
+    #[test]
+    fn draft_cannot_transition_to_draft() {
+        assert!(!ExperimentStatus::Draft.can_transition_to(ExperimentStatus::Draft));
+    }
+
+    #[test]
+    fn running_cannot_transition_to_draft() {
+        assert!(!ExperimentStatus::Running.can_transition_to(ExperimentStatus::Draft));
+    }
+
+    #[test]
+    fn running_cannot_transition_to_running() {
+        assert!(!ExperimentStatus::Running.can_transition_to(ExperimentStatus::Running));
+    }
+
+    // ── validate_transition ──────────────────────────────────────────────────
+
+    #[test]
+    fn valid_transition_draft_to_running_returns_ok() {
+        assert!(validate_transition(ExperimentStatus::Draft, ExperimentStatus::Running).is_ok());
+    }
+
+    #[test]
+    fn valid_transition_running_to_paused_returns_ok() {
+        assert!(
+            validate_transition(ExperimentStatus::Running, ExperimentStatus::Paused).is_ok()
+        );
+    }
+
+    #[test]
+    fn valid_transition_running_to_stopped_returns_ok() {
+        assert!(
+            validate_transition(ExperimentStatus::Running, ExperimentStatus::Stopped).is_ok()
+        );
+    }
+
+    #[test]
+    fn valid_transition_paused_to_running_returns_ok() {
+        assert!(
+            validate_transition(ExperimentStatus::Paused, ExperimentStatus::Running).is_ok()
+        );
+    }
+
+    #[test]
+    fn valid_transition_paused_to_stopped_returns_ok() {
+        assert!(
+            validate_transition(ExperimentStatus::Paused, ExperimentStatus::Stopped).is_ok()
+        );
+    }
+
+    #[test]
+    fn valid_transition_stopped_to_running_returns_ok() {
+        assert!(
+            validate_transition(ExperimentStatus::Stopped, ExperimentStatus::Running).is_ok()
+        );
+    }
+
+    #[test]
+    fn invalid_transition_draft_to_paused_returns_err() {
+        let result = validate_transition(ExperimentStatus::Draft, ExperimentStatus::Paused);
+        assert_eq!(
+            result,
+            Err(ExperimentError::InvalidTransition {
+                from: ExperimentStatus::Draft,
+                to: ExperimentStatus::Paused,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_transition_draft_to_stopped_returns_err() {
+        let result = validate_transition(ExperimentStatus::Draft, ExperimentStatus::Stopped);
+        assert_eq!(
+            result,
+            Err(ExperimentError::InvalidTransition {
+                from: ExperimentStatus::Draft,
+                to: ExperimentStatus::Stopped,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_transition_running_to_draft_returns_err() {
+        let result = validate_transition(ExperimentStatus::Running, ExperimentStatus::Draft);
+        assert!(matches!(result, Err(ExperimentError::InvalidTransition { .. })));
+    }
+
+    // ── creates_iteration ────────────────────────────────────────────────────
+
+    #[test]
+    fn draft_to_running_creates_iteration() {
+        assert!(creates_iteration(ExperimentStatus::Draft, ExperimentStatus::Running));
+    }
+
+    #[test]
+    fn paused_to_running_creates_iteration() {
+        assert!(creates_iteration(ExperimentStatus::Paused, ExperimentStatus::Running));
+    }
+
+    #[test]
+    fn stopped_to_running_creates_iteration() {
+        assert!(creates_iteration(ExperimentStatus::Stopped, ExperimentStatus::Running));
+    }
+
+    #[test]
+    fn running_to_paused_does_not_create_iteration() {
+        assert!(!creates_iteration(ExperimentStatus::Running, ExperimentStatus::Paused));
+    }
+
+    #[test]
+    fn running_to_stopped_does_not_create_iteration() {
+        assert!(!creates_iteration(ExperimentStatus::Running, ExperimentStatus::Stopped));
+    }
+
+    #[test]
+    fn draft_to_paused_does_not_create_iteration() {
+        assert!(!creates_iteration(ExperimentStatus::Draft, ExperimentStatus::Paused));
+    }
+
+    // ── validate_mutation ────────────────────────────────────────────────────
+
+    #[test]
+    fn mutation_allowed_when_draft() {
+        assert!(validate_mutation(ExperimentStatus::Draft).is_ok());
+    }
+
+    #[test]
+    fn mutation_allowed_when_paused() {
+        assert!(validate_mutation(ExperimentStatus::Paused).is_ok());
+    }
+
+    #[test]
+    fn mutation_allowed_when_stopped() {
+        assert!(validate_mutation(ExperimentStatus::Stopped).is_ok());
+    }
+
+    #[test]
+    fn mutation_rejected_when_running() {
+        assert_eq!(
+            validate_mutation(ExperimentStatus::Running),
+            Err(ExperimentError::MutationWhileRunning)
+        );
+    }
+
+    // ── Struct construction sanity checks ────────────────────────────────────
+
+    #[test]
+    fn experiment_struct_can_be_constructed() {
+        let exp = Experiment {
+            id: ExperimentId::new(),
+            environment_id: EnvironmentId::new(),
+            flag_rule_id: RuleId::new(),
+            name: "My Experiment".to_string(),
+            description: Some("A/B test of checkout flow".to_string()),
+            hypothesis: Some("Variant B increases conversion".to_string()),
+            metric_keys: vec!["checkout_completed".to_string()],
+            traffic_allocation: 100.0,
+            min_sample_size: Some(1000),
+            scheduled_start_at: None,
+            scheduled_end_at: None,
+            status: ExperimentStatus::Draft,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+        assert_eq!(exp.status, ExperimentStatus::Draft);
+        assert_eq!(exp.metric_keys.len(), 1);
+    }
+
+    #[test]
+    fn experiment_iteration_struct_can_be_constructed() {
+        let iter = ExperimentIteration {
+            id: ExperimentIterationId::new(),
+            experiment_id: ExperimentId::new(),
+            iteration_number: 1,
+            started_at: Utc::now(),
+            ended_at: None,
+            metric_keys: vec!["checkout_completed".to_string()],
+            traffic_allocation: 50.0,
+            min_sample_size: None,
+        };
+        assert_eq!(iter.iteration_number, 1);
+        assert!(iter.ended_at.is_none());
+    }
+}
