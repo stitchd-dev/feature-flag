@@ -8,10 +8,11 @@ use uuid::Uuid;
 
 use stitchd_core::{
     event::EventDefinition,
+    experimentation::{Experiment, ExperimentIteration, ExperimentStatus},
     flag::Variant,
     id::{
-        EnvironmentId, EventDefinitionId, FlagId, FlagKey, OrganisationId, ProjectId, RoleId,
-        SdkKeyId, SegmentId, UserId, VariantId,
+        EnvironmentId, EventDefinitionId, ExperimentId, FlagId, FlagKey, OrganisationId, ProjectId,
+        RoleId, SdkKeyId, SegmentId, UserId, VariantId,
     },
     tenant::{Environment, Organisation, Project, SdkKey},
     user::{Permission, Role, User},
@@ -399,6 +400,41 @@ pub trait AuditLogger: Send + Sync {
         action: &str,
         diff: serde_json::Value,
     ) -> Result<(), RepositoryError>;
+}
+
+// ---------------------------------------------------------------------------
+// Experiment
+// ---------------------------------------------------------------------------
+
+/// CRUD operations for [`Experiment`] records scoped to an environment.
+#[async_trait]
+pub trait ExperimentRepository: Send + Sync {
+    /// Fetch a single experiment by ID (excludes soft-deleted).
+    async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError>;
+
+    /// List all non-deleted experiments for an environment, optionally filtered by status.
+    async fn list_by_environment(
+        &self,
+        env_id: EnvironmentId,
+        status_filter: Option<ExperimentStatus>,
+    ) -> Result<Vec<Experiment>, RepositoryError>;
+
+    /// Persist a new experiment.
+    async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError>;
+
+    /// Update an existing experiment (optimistic locking via `version`).
+    async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError>;
+
+    /// Soft-delete an experiment.
+    ///
+    /// Returns [`RepositoryError::InvalidState`] if the experiment is currently running.
+    async fn soft_delete(&self, id: ExperimentId) -> Result<(), RepositoryError>;
+
+    /// List all iterations for an experiment, ordered by `iteration_number`.
+    async fn list_iterations(
+        &self,
+        experiment_id: ExperimentId,
+    ) -> Result<Vec<ExperimentIteration>, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

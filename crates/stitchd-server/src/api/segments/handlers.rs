@@ -54,6 +54,7 @@ impl From<RepositoryError> for ApiError {
             }
             RepositoryError::Database(e) => Self::Database(e.to_string()),
             RepositoryError::Unexpected(e) => Self::Database(e.to_string()),
+            RepositoryError::InvalidState { reason } => Self::Conflict(reason),
         }
     }
 }

@@ -29,6 +29,13 @@ pub enum RepositoryError {
         field: String,
     },
 
+    /// The operation is not permitted given the entity's current state.
+    #[error("invalid state: {reason}")]
+    InvalidState {
+        /// Human-readable explanation.
+        reason: String,
+    },
+
     /// An underlying sqlx / Postgres error.
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),

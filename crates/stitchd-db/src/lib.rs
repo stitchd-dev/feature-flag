@@ -10,13 +10,14 @@ pub mod repository;
 
 pub use error::RepositoryError;
 pub use repository::{
-    AuditLogger, EnvironmentRepository, EventDefinitionRepository, FlagRepository,
-    OrganisationRepository, ProjectRepository, RoleRepository, SdkKeyRepository, SegmentRepository,
-    UserRepository, VariantRepository,
+    AuditLogger, EnvironmentRepository, EventDefinitionRepository, ExperimentRepository,
+    FlagRepository, OrganisationRepository, ProjectRepository, RoleRepository, SdkKeyRepository,
+    SegmentRepository, UserRepository, VariantRepository,
     pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository, PgFlagRepository,
-        PgOrganisationRepository, PgProjectRepository, PgRoleRepository, PgSdkKeyRepository,
-        PgSegmentRepository, PgUserRepository, PgVariantRepository,
+        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
+        PgExperimentRepository, PgFlagRepository, PgOrganisationRepository, PgProjectRepository,
+        PgRoleRepository, PgSdkKeyRepository, PgSegmentRepository, PgUserRepository,
+        PgVariantRepository,
     },
 };
 
