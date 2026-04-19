@@ -56,5 +56,5 @@
   <!-- files: crates/stitchd-server/tests/event_ingestion.rs -->
 - [x] Task: Verify ClickHouse materialized views populate correctly from test events
   <!-- files: crates/stitchd-events/tests/clickhouse_views.rs -->
-- [ ] Task: Run coverage — enforce ≥90% on new code across `stitchd-events` and new handlers
+- [x] Task: Run coverage — enforce ≥90% on new code across `stitchd-events` and new handlers
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Integration Tests & Coverage' (Protocol in workflow.md)

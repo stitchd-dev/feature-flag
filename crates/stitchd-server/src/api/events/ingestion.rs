@@ -122,3 +122,116 @@ pub async fn ingest_batch(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use clickhouse::Client;
+    use stitchd_core::{
+        event::{EventContext, EventDefinition, EventPayload, EventValue, EventValueType},
+        id::{EnvironmentId, EventDefinitionId},
+    };
+    use stitchd_events::writer::EventWriter;
+
+    fn make_def(env_id: EnvironmentId, key: &str, vt: EventValueType) -> EventDefinition {
+        EventDefinition {
+            id: EventDefinitionId::new(),
+            environment_id: env_id,
+            key: key.to_string(),
+            value_type: vt,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+        }
+    }
+
+    fn make_payload(key: &str, value: EventValue) -> EventPayload {
+        EventPayload {
+            contexts: vec![EventContext { context_type: "user".into(), key: "u1".into() }],
+            metric_key: key.to_string(),
+            value,
+            timestamp: Utc::now(),
+        }
+    }
+
+    struct OkRepo(EventDefinition);
+
+    #[async_trait]
+    impl EventDefinitionRepository for OkRepo {
+        async fn find_by_id(&self, _id: EventDefinitionId) -> Result<EventDefinition, RepositoryError> { unimplemented!() }
+        async fn find_by_key(&self, _key: &str, _env_id: EnvironmentId) -> Result<EventDefinition, RepositoryError> { Ok(self.0.clone()) }
+        async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<EventDefinition>, RepositoryError> { unimplemented!() }
+        async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> { unimplemented!() }
+        async fn update(&self, _def: &EventDefinition) -> Result<EventDefinition, RepositoryError> { unimplemented!() }
+        async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> { unimplemented!() }
+    }
+
+    struct ErrRepo;
+
+    #[async_trait]
+    impl EventDefinitionRepository for ErrRepo {
+        async fn find_by_id(&self, _id: EventDefinitionId) -> Result<EventDefinition, RepositoryError> { unimplemented!() }
+        async fn find_by_key(&self, _key: &str, _env_id: EnvironmentId) -> Result<EventDefinition, RepositoryError> {
+            Err(RepositoryError::VersionConflict { expected: 1, actual: 2 })
+        }
+        async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<EventDefinition>, RepositoryError> { unimplemented!() }
+        async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> { unimplemented!() }
+        async fn update(&self, _def: &EventDefinition) -> Result<EventDefinition, RepositoryError> { unimplemented!() }
+        async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> { unimplemented!() }
+    }
+
+    fn make_writer() -> EventWriter {
+        // Non-existent port → writes fail fast (connection refused), exercising the error path
+        EventWriter::new(
+            Client::default()
+                .with_url("http://localhost:19999")
+                .with_user("stitchd")
+                .with_password("stitchd")
+                .with_database("stitchd"),
+        )
+    }
+
+    #[tokio::test]
+    async fn non_not_found_repo_error_maps_to_repository_variant() {
+        let repo: Arc<dyn EventDefinitionRepository> = Arc::new(ErrRepo);
+        let env_id = EnvironmentId::new();
+        let payload = make_payload("key", EventValue::Bool(true));
+
+        let err = validate_event(&repo, env_id, &payload).await.unwrap_err();
+        assert!(matches!(err, IngestionError::Repository(_)));
+    }
+
+    #[tokio::test]
+    async fn ingest_event_with_writer_returns_ok_and_spawns_write() {
+        let env_id = EnvironmentId::new();
+        let def = make_def(env_id, "m", EventValueType::Bool);
+        let repo: Arc<dyn EventDefinitionRepository> = Arc::new(OkRepo(def));
+        let writer = make_writer();
+
+        let result = ingest_event(&repo, Some(&writer), env_id, make_payload("m", EventValue::Bool(true))).await;
+        assert!(result.is_ok());
+        // Yield so the spawned write task runs (connection refused → logs error)
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
+    #[tokio::test]
+    async fn ingest_batch_with_writer_returns_ok_and_spawns_write() {
+        let env_id = EnvironmentId::new();
+        let def = make_def(env_id, "m", EventValueType::Int);
+        let repo: Arc<dyn EventDefinitionRepository> = Arc::new(OkRepo(def));
+        let writer = make_writer();
+        let batch = BatchEventPayload {
+            events: vec![
+                make_payload("m", EventValue::Int(1)),
+                make_payload("m", EventValue::Int(2)),
+            ],
+        };
+
+        let result = ingest_batch(&repo, Some(&writer), env_id, batch).await;
+        assert!(result.is_ok());
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
