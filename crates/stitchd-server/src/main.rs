@@ -1,6 +1,7 @@
 //! Stitchd server binary entry point.
 use anyhow::{Context, Result};
 use sqlx::postgres::PgPoolOptions;
+use stitchd_events::writer::EventWriter;
 use stitchd_proto::flags::v1::flag_sync_service_server::FlagSyncServiceServer;
 use stitchd_server::{AppState, build_router, grpc::flag_sync::FlagSyncServiceImpl, telemetry};
 use tracing::info;
@@ -77,6 +78,10 @@ async fn main() -> Result<()> {
                 audit_logger,
             ),
         ),
+        event_writer: std::env::var("CLICKHOUSE_URL").ok().map(|url| {
+            info!(url = %url, "ClickHouse event writer enabled");
+            EventWriter::new(clickhouse::Client::default().with_url(url))
+        }),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")

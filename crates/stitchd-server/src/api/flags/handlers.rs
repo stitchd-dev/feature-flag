@@ -890,6 +890,7 @@ mod tests {
             variant_repo,
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
+            event_writer: None,
         }
     }
 
@@ -1529,6 +1530,7 @@ mod tests {
             variant_repo,
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
+            event_writer: None,
         };
         let app = build_router(state);
 
@@ -1575,6 +1577,7 @@ mod tests {
             variant_repo: MockVariantRepo::new(),
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
+            event_writer: None,
         };
         let app = build_router(state);
 

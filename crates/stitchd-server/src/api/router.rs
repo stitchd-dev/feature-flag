@@ -1,5 +1,5 @@
 use crate::AppState;
-use crate::api::{event_definitions, flags, segments};
+use crate::api::{event_definitions, events, flags, segments};
 use axum::{
     Router,
     routing::{delete, get, post, put},
@@ -48,6 +48,12 @@ pub fn build_api_router() -> Router<AppState> {
                             "/{key}",
                             delete(event_definitions::handlers::delete_event_definition),
                         ),
+                )
+                .nest(
+                    "/events",
+                    Router::new()
+                        .route("/", post(events::handlers::ingest_single_event))
+                        .route("/batch", post(events::handlers::ingest_batch_events)),
                 ),
         )
         .nest(
@@ -391,6 +397,7 @@ mod tests {
             variant_repo: Arc::new(StubVariantRepo),
             sdk_key_repo: Arc::new(StubSdkKeyRepo),
             event_definition_repo: Arc::new(StubEventDefinitionRepo),
+            event_writer: None,
         }
     }
 

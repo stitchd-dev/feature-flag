@@ -77,6 +77,7 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         variant_repo,
         sdk_key_repo,
         event_definition_repo,
+        event_writer: None,
     };
 
     (build_router(state), env.id)

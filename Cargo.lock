@@ -2714,6 +2714,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "clickhouse",
  "metrics",
  "metrics-exporter-prometheus",
  "opentelemetry",

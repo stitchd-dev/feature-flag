@@ -224,6 +224,7 @@ async fn setup(pool: sqlx::PgPool) -> (SdkConfig, EnvironmentId) {
             pool.clone(),
             Arc::new(PgAuditLogger::new(pool.clone())),
         )),
+        event_writer: None,
     };
 
     let grpc_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

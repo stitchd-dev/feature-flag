@@ -626,6 +626,7 @@ mod tests {
             variant_repo: Arc::new(StubVariantRepo),
             sdk_key_repo,
             event_definition_repo: Arc::new(StubEventDefinitionRepo),
+            event_writer: None,
         }
     }
 

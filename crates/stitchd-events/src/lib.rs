@@ -5,6 +5,7 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 
 pub mod migrations;
+pub mod writer;
 
 #[cfg(test)]
 mod tests {

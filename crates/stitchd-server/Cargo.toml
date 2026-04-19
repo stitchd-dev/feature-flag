@@ -14,6 +14,7 @@ path = "src/main.rs"
 stitchd-core = { path = "../stitchd-core", features = ["openapi"] }
 stitchd-db = { path = "../stitchd-db" }
 stitchd-events = { path = "../stitchd-events" }
+clickhouse = { workspace = true }
 stitchd-proto = { path = "../stitchd-proto" }
 axum = { workspace = true }
 tonic = { workspace = true }

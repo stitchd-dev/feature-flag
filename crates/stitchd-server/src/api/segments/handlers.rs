@@ -790,6 +790,7 @@ mod tests {
             variant_repo: Arc::new(MockVariantRepo),
             sdk_key_repo,
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
+            event_writer: None,
         }
     }
 

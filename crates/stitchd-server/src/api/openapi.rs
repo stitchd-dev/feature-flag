@@ -15,7 +15,7 @@ use crate::api::segments::types::{
 };
 use stitchd_core::{
     context::{Context, EvaluationContext, ParameterValue},
-    event::EventValueType,
+    event::{BatchEventPayload, EventContext, EventPayload, EventValue, EventValueType},
     flag::{FlagHashingConfig, FlagRecord, FlagRule, FlagValueType, Variant},
     rule_engine::{
         condition::Condition,
@@ -34,6 +34,8 @@ use stitchd_core::{
         description = "REST API for managing feature flags, segments, and evaluation."
     ),
     paths(
+        crate::api::events::handlers::ingest_single_event,
+        crate::api::events::handlers::ingest_batch_events,
         crate::api::event_definitions::handlers::list_event_definitions,
         crate::api::event_definitions::handlers::create_event_definition,
         crate::api::event_definitions::handlers::delete_event_definition,
@@ -56,6 +58,10 @@ use stitchd_core::{
     ),
     components(schemas(
         // Request/response types from handlers
+        EventPayload,
+        BatchEventPayload,
+        EventContext,
+        EventValue,
         CreateEventDefinitionRequest,
         EventDefinitionResponse,
         EventValueType,

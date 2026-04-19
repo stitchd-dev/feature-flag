@@ -2,6 +2,8 @@
 
 /// Event definition registration API.
 pub mod event_definitions;
+/// Event ingestion API.
+pub mod events;
 /// Feature Flag management API.
 pub mod flags;
 /// OpenAPI schema aggregator.

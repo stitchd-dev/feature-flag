@@ -89,6 +89,7 @@ async fn setup(pool: sqlx::PgPool) -> (AppState, EnvironmentId) {
             pool.clone(),
             audit.clone(),
         )),
+        event_writer: None,
     };
 
     (state, env.id)

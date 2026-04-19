@@ -1,6 +1,6 @@
 # Implementation Plan: Events Layer
 
-## Phase 1: ClickHouse Schema & Migrations
+## Phase 1: ClickHouse Schema & Migrations [checkpoint: 1c73c33]
 <!-- execution: parallel -->
 <!-- depends: -->
 
@@ -14,7 +14,7 @@
   <!-- files: crates/stitchd-events/migrations/ -->
 - [x] Task: Conductor - User Manual Verification 'Phase 1: ClickHouse Schema & Migrations' (Protocol in workflow.md)
 
-## Phase 2: Event Registration (PostgreSQL)
+## Phase 2: Event Registration (PostgreSQL) [checkpoint: 1c73c33]
 <!-- execution: sequential -->
 <!-- depends: -->
 
@@ -34,18 +34,18 @@
 <!-- execution: sequential -->
 <!-- depends: phase1, phase2 -->
 
-- [ ] Task: Write failing tests for single and batch event ingestion (valid, unknown key, type mismatch, batch > 500)
+- [x] Task: Write failing tests for single and batch event ingestion (valid, unknown key, type mismatch, batch > 500)
   <!-- files: crates/stitchd-server/tests/event_ingestion.rs -->
-- [ ] Task: Define `EventPayload` and `BatchEventPayload` types in `stitchd-core` (`contexts: Vec<EventContext>`, metric_key, typed value union, timestamp)
+- [x] Task: Define `EventPayload` and `BatchEventPayload` types in `stitchd-core` (`contexts: Vec<EventContext>`, metric_key, typed value union, timestamp)
   <!-- files: crates/stitchd-core/src/models/event.rs -->
-- [ ] Task: Implement ClickHouse writer in `stitchd-events` crate — async fire-and-forget with OTel spans
+- [x] Task: Implement ClickHouse writer in `stitchd-events` crate — async fire-and-forget with OTel spans
   <!-- files: crates/stitchd-events/src/writer.rs -->
-- [ ] Task: Implement ingestion validation: resolve event definition from PostgreSQL, check value type match, reject unknown keys with 422
-  <!-- files: crates/stitchd-server/src/services/event_ingestion.rs -->
-- [ ] Task: Implement `POST /v1/environments/{env_id}/events` (single event) with SDK key auth, 202 on success, utoipa annotations
-  <!-- files: crates/stitchd-server/src/handlers/events.rs -->
-- [ ] Task: Implement `POST /v1/environments/{env_id}/events/batch` (max 500 events), 202 on success, utoipa annotations
-  <!-- files: crates/stitchd-server/src/handlers/events.rs -->
+- [x] Task: Implement ingestion validation: resolve event definition from PostgreSQL, check value type match, reject unknown keys with 422
+  <!-- files: crates/stitchd-server/src/api/events/ingestion.rs -->
+- [x] Task: Implement `POST /v1/environments/{env_id}/events` (single event) with SDK key auth, 202 on success, utoipa annotations
+  <!-- files: crates/stitchd-server/src/api/events/handlers.rs -->
+- [x] Task: Implement `POST /v1/environments/{env_id}/events/batch` (max 500 events), 202 on success, utoipa annotations
+  <!-- files: crates/stitchd-server/src/api/events/handlers.rs -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Event Ingestion API' (Protocol in workflow.md)
 
 ## Phase 4: Integration Tests & Coverage

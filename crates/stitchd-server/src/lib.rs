@@ -20,6 +20,7 @@ use stitchd_db::{
     EventDefinitionRepository, FlagRepository, SdkKeyRepository, SegmentRepository,
     VariantRepository,
 };
+use stitchd_events::writer::EventWriter;
 use utoipa::OpenApi as _;
 
 /// Shared application state.
@@ -39,6 +40,8 @@ pub struct AppState {
     pub sdk_key_repo: Arc<dyn SdkKeyRepository>,
     /// Repository for event definition registration.
     pub event_definition_repo: Arc<dyn EventDefinitionRepository>,
+    /// ClickHouse event writer. `None` when ClickHouse is unavailable (writes are skipped).
+    pub event_writer: Option<EventWriter>,
 }
 
 /// Build the Axum router.
@@ -135,6 +138,7 @@ mod tests {
             variant_repo,
             sdk_key_repo,
             event_definition_repo,
+            event_writer: None,
         }
     }
 
@@ -440,6 +444,7 @@ mod tests {
             variant_repo: stub.clone(),
             sdk_key_repo: stub.clone(),
             event_definition_repo: stub,
+            event_writer: None,
         }
     }
 
