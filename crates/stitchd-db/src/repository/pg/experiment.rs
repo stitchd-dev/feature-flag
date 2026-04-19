@@ -109,7 +109,6 @@ impl ExperimentRepository for PgExperimentRepository {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation)]
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError> {
         sqlx::query!(
             r#"
@@ -128,10 +127,10 @@ impl ExperimentRepository for PgExperimentRepository {
             experiment.status as ExperimentStatus,
             &experiment.metric_keys,
             experiment.traffic_allocation,
-            experiment.min_sample_size.map(|v| v as i32),
+            experiment.min_sample_size,
             experiment.scheduled_start_at,
             experiment.scheduled_end_at,
-            experiment.version as i32,
+            experiment.version,
             experiment.created_at,
             experiment.updated_at,
             experiment.deleted_at,
@@ -167,7 +166,7 @@ impl ExperimentRepository for PgExperimentRepository {
         Ok(())
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines)]
     async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
         // Mutation guard: reject updates on active (running or paused) experiments.
         let current_status: Option<ExperimentStatus> = sqlx::query_scalar!(
@@ -233,12 +232,12 @@ impl ExperimentRepository for PgExperimentRepository {
             experiment.status as ExperimentStatus,
             &experiment.metric_keys,
             experiment.traffic_allocation as f64,
-            experiment.min_sample_size.map(|v| v as i32),
+            experiment.min_sample_size,
             experiment.scheduled_start_at,
             experiment.scheduled_end_at,
-            new_version as i32,
+            new_version,
             experiment.id as ExperimentId,
-            experiment.version as i32,
+            experiment.version,
         )
         .fetch_optional(&self.pool)
         .await
@@ -278,7 +277,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 |current_version| {
                     Err(RepositoryError::VersionConflict {
                         expected: experiment.version,
-                        actual: i64::from(current_version),
+                        actual: current_version,
                     })
                 },
             )
@@ -361,7 +360,7 @@ impl ExperimentRepository for PgExperimentRepository {
         .map_err(RepositoryError::Database)
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines)]
     async fn apply_transition(
         &self,
         id: ExperimentId,
@@ -436,9 +435,9 @@ impl ExperimentRepository for PgExperimentRepository {
                 deleted_at
             "#,
             to as ExperimentStatus,
-            new_version as i32,
+            new_version,
             id as ExperimentId,
-            current.version as i32,
+            current.version,
         )
         .fetch_optional(&mut *tx)
         .await
@@ -492,7 +491,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 next_iteration,
                 &current.metric_keys,
                 current.traffic_allocation as f64,
-                current.min_sample_size.map(|v| v as i32),
+                current.min_sample_size,
             )
             .execute(&mut *tx)
             .await

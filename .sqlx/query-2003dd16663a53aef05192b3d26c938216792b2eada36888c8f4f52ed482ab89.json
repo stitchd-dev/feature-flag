@@ -51,7 +51,7 @@
       {
         "ordinal": 9,
         "name": "min_sample_size: i64",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 10,
@@ -66,7 +66,7 @@
       {
         "ordinal": 12,
         "name": "version: i64",
-        "type_info": "Int4"
+        "type_info": "Int8"
       },
       {
         "ordinal": 13,

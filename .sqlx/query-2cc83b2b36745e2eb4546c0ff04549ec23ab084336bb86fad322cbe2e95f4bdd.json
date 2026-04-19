@@ -14,10 +14,10 @@
         "Text",
         "TextArray",
         "Float8",
-        "Int4",
+        "Int8",
         "Timestamptz",
         "Timestamptz",
-        "Int4",
+        "Int8",
         "Timestamptz",
         "Timestamptz",
         "Timestamptz"

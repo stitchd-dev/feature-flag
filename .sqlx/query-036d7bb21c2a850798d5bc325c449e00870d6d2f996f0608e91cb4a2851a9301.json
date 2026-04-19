@@ -10,7 +10,7 @@
         "Int4",
         "TextArray",
         "Float8",
-        "Int4"
+        "Int8"
       ]
     },
     "nullable": []
