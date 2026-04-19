@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  actions: read    # needed by detect-changes to query workflow run history
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,6 +42,9 @@ jobs:
           BEFORE:   ${{ github.event.before }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.sha }}
+          BRANCH:   ${{ github.ref_name }}
+          WORKFLOW: ci.yml
+          GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/affected_crates.py
 
   # ── 1. Formatting ──────────────────────────────────────────────────────────

@@ -119,26 +119,67 @@ def affected_crates(
 
 
 # ---------------------------------------------------------------------------
+# GitHub API helpers
+# ---------------------------------------------------------------------------
+
+def last_successful_sha(workflow: str, branch: str) -> str | None:
+    """Return the HEAD SHA of the most recent successful CI run on `branch`.
+
+    Uses the `gh` CLI (available on all GitHub-hosted runners).  Returns None
+    if no successful run exists yet (e.g., a brand-new repo or branch).
+    """
+    result = subprocess.run(
+        [
+            "gh", "run", "list",
+            f"--workflow={workflow}",
+            f"--branch={branch}",
+            "--status=success",
+            "--limit=1",
+            "--json=headSha",
+            "--jq=.[0].headSha",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    sha = result.stdout.strip()
+    # `gh` returns "null" (jq output) when the list is empty
+    return sha if sha and sha != "null" else None
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    event       = os.environ.get("GITHUB_EVENT_NAME", "push")
-    before      = os.environ.get("BEFORE", "")
-    base_sha    = os.environ.get("BASE_SHA", "")
-    head_sha    = os.environ.get("HEAD_SHA", "HEAD")
-    output_file = os.environ.get("GITHUB_OUTPUT", "/dev/stdout")
+    event        = os.environ.get("GITHUB_EVENT_NAME", "push")
+    before       = os.environ.get("BEFORE", "")
+    base_sha     = os.environ.get("BASE_SHA", "")
+    head_sha     = os.environ.get("HEAD_SHA", "HEAD")
+    branch       = os.environ.get("BRANCH", "main")
+    workflow     = os.environ.get("WORKFLOW", "ci.yml")
+    output_file  = os.environ.get("GITHUB_OUTPUT", "/dev/stdout")
 
     all_crates = workspace_crates()
     rev_graph  = build_reverse_graph(all_crates)
     testable   = set(all_crates) - EXCLUDE
 
     if event == "pull_request":
+        # PRs: diff against the branch point, not last green (PR base is authoritative)
         base = base_sha or None
-    elif before and before != "0" * 40:
-        base = before
     else:
-        base = None  # new branch / initial push → run everything
+        # Pushes: find the last SHA that had a green CI run on this branch.
+        # Falls back to github.event.before (previous tip) if no successful run
+        # exists yet, and to None (run everything) if before is the null SHA.
+        green = last_successful_sha(workflow, branch)
+        if green:
+            base = green
+            print(f"Last successful run: {green}")
+        elif before and before != "0" * 40:
+            base = before
+            print(f"No successful run found; falling back to event.before: {before}")
+        else:
+            base = None  # new branch / initial push → run everything
+            print("No base SHA available; running all crates")
 
     if base is None:
         crates = testable
