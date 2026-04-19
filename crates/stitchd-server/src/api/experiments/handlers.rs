@@ -99,7 +99,10 @@ impl CreateExperimentRequest {
     ///
     /// Rules:
     /// - `metric_keys` must contain at least one entry.
-    /// - `traffic_allocation`, when provided, must be in the range [0.1, 100.0].
+    /// - `traffic_allocation`, when provided, must be in the range \[0.1, 100.0\].
+    ///
+    /// # Errors
+    /// Returns `Err` with a description if validation fails.
     pub fn validate(&self) -> Result<(), String> {
         if self.metric_keys.is_empty() {
             return Err("metric_keys must contain at least one entry".to_string());
@@ -164,7 +167,7 @@ pub struct ExperimentResponse {
     pub description: Option<String>,
     /// Optional hypothesis statement.
     pub hypothesis: Option<String>,
-    /// Current lifecycle status serialized as a snake_case string.
+    /// Current lifecycle status serialized as a `snake_case` string.
     pub status: String,
     /// Pre-registered event definition keys used as metrics.
     pub metric_keys: Vec<String>,
@@ -193,9 +196,9 @@ impl From<Experiment> for ExperimentResponse {
             name: e.name,
             description: e.description,
             hypothesis: e.hypothesis,
-            status: serde_json::to_value(&e.status)
+            status: serde_json::to_value(e.status)
                 .ok()
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .and_then(|v| v.as_str().map(ToString::to_string))
                 .unwrap_or_else(|| format!("{:?}", e.status).to_lowercase()),
             metric_keys: e.metric_keys,
             traffic_allocation: e.traffic_allocation,
@@ -368,7 +371,7 @@ pub async fn list_experiments(
 #[tracing::instrument(skip(state))]
 pub async fn get_experiment(
     State(state): State<AppState>,
-    Path((_env_id, id)): Path<(EnvironmentId, ExperimentId)>,
+    Path((_, id)): Path<(EnvironmentId, ExperimentId)>,
 ) -> Result<impl IntoResponse, ApiError> {
     let experiment = state.experiment_repo.find_by_id(id).await?;
     Ok((StatusCode::OK, Json(ExperimentResponse::from(experiment))).into_response())
@@ -397,7 +400,7 @@ pub async fn get_experiment(
 #[tracing::instrument(skip(state))]
 pub async fn update_experiment(
     State(state): State<AppState>,
-    Path((_env_id, id)): Path<(EnvironmentId, ExperimentId)>,
+    Path((_, id)): Path<(EnvironmentId, ExperimentId)>,
     Json(req): Json<UpdateExperimentRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let existing = state.experiment_repo.find_by_id(id).await?;
@@ -444,7 +447,7 @@ pub async fn update_experiment(
 #[tracing::instrument(skip(state))]
 pub async fn delete_experiment(
     State(state): State<AppState>,
-    Path((_env_id, id)): Path<(EnvironmentId, ExperimentId)>,
+    Path((_, id)): Path<(EnvironmentId, ExperimentId)>,
 ) -> Result<impl IntoResponse, ApiError> {
     state.experiment_repo.soft_delete(id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -473,7 +476,7 @@ pub async fn delete_experiment(
 #[tracing::instrument(skip(state))]
 pub async fn transition_experiment(
     State(state): State<AppState>,
-    Path((_env_id, id)): Path<(EnvironmentId, ExperimentId)>,
+    Path((_, id)): Path<(EnvironmentId, ExperimentId)>,
     Json(req): Json<TransitionRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let experiment = state
@@ -504,7 +507,7 @@ pub async fn transition_experiment(
 #[tracing::instrument(skip(state))]
 pub async fn list_iterations(
     State(state): State<AppState>,
-    Path((_env_id, id)): Path<(EnvironmentId, ExperimentId)>,
+    Path((_, id)): Path<(EnvironmentId, ExperimentId)>,
 ) -> Result<impl IntoResponse, ApiError> {
     let iterations = state.experiment_repo.list_iterations(id).await?;
     let responses: Vec<ExperimentIterationResponse> =

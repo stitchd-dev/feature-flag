@@ -8,97 +8,82 @@ use axum::{
 /// Build the API router.
 pub fn build_api_router() -> Router<AppState> {
     Router::new()
-        .nest(
-            "/v1/environments/{env_id}",
-            Router::new()
-                .nest(
-                    "/segments",
-                    Router::new()
-                        .route(
-                            "/",
-                            get(segments::handlers::list_segments)
-                                .post(segments::handlers::create_segment),
-                        )
-                        .route(
-                            "/{seg_id}",
-                            get(segments::handlers::get_segment)
-                                .put(segments::handlers::update_segment)
-                                .delete(segments::handlers::delete_segment),
-                        )
-                        // SDK-authenticated list-check endpoints
-                        .route(
-                            "/list-check",
-                            post(segments::handlers::list_check_membership),
-                        )
-                        .route(
-                            "/list-check/batch",
-                            post(segments::handlers::batch_list_check_membership),
-                        ),
-                )
-                .route("/evaluate", post(flags::handlers::evaluate_all_flags))
-                .nest(
-                    "/event-definitions",
-                    Router::new()
-                        .route(
-                            "/",
-                            get(event_definitions::handlers::list_event_definitions)
-                                .post(event_definitions::handlers::create_event_definition),
-                        )
-                        .route(
-                            "/{key}",
-                            delete(event_definitions::handlers::delete_event_definition),
-                        ),
-                )
-                .nest(
-                    "/events",
-                    Router::new()
-                        .route("/", post(events::handlers::ingest_single_event))
-                        .route("/batch", post(events::handlers::ingest_batch_events)),
-                )
-                .nest(
-                    "/experiments",
-                    Router::new()
-                        .route(
-                            "/",
-                            get(experiments::handlers::list_experiments)
-                                .post(experiments::handlers::create_experiment),
-                        )
-                        .route(
-                            "/{id}",
-                            get(experiments::handlers::get_experiment)
-                                .patch(experiments::handlers::update_experiment)
-                                .delete(experiments::handlers::delete_experiment),
-                        )
-                        .route(
-                            "/{id}/transitions",
-                            post(experiments::handlers::transition_experiment),
-                        )
-                        .route(
-                            "/{id}/iterations",
-                            get(experiments::handlers::list_iterations),
-                        ),
-                ),
+        .nest("/v1/environments/{env_id}", environment_routes())
+        .nest("/v1/projects/{project_id}/flags", flag_routes())
+}
+
+fn environment_routes() -> Router<AppState> {
+    Router::new()
+        .nest("/segments", segment_routes())
+        .route("/evaluate", post(flags::handlers::evaluate_all_flags))
+        .nest("/event-definitions", event_definition_routes())
+        .nest("/events", event_routes())
+        .nest("/experiments", experiment_routes())
+}
+
+fn segment_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/",
+            get(segments::handlers::list_segments).post(segments::handlers::create_segment),
         )
-        .nest(
-            "/v1/projects/{project_id}/flags",
-            Router::new()
-                .route(
-                    "/",
-                    get(flags::handlers::list_flags).post(flags::handlers::create_flag),
-                )
-                .route(
-                    "/{flag_id}",
-                    get(flags::handlers::get_flag)
-                        .put(flags::handlers::update_flag)
-                        .delete(flags::handlers::delete_flag),
-                )
-                .route("/{flag_id}/variants", post(flags::handlers::create_variant))
-                .route(
-                    "/{flag_id}/hashing",
-                    put(flags::handlers::update_hashing_config),
-                )
-                .route("/{flag_id}/rules", put(flags::handlers::update_rules)),
+        .route(
+            "/{seg_id}",
+            get(segments::handlers::get_segment)
+                .put(segments::handlers::update_segment)
+                .delete(segments::handlers::delete_segment),
         )
+        .route("/list-check", post(segments::handlers::list_check_membership))
+        .route(
+            "/list-check/batch",
+            post(segments::handlers::batch_list_check_membership),
+        )
+}
+
+fn event_definition_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/",
+            get(event_definitions::handlers::list_event_definitions)
+                .post(event_definitions::handlers::create_event_definition),
+        )
+        .route("/{key}", delete(event_definitions::handlers::delete_event_definition))
+}
+
+fn event_routes() -> Router<AppState> {
+    Router::new()
+        .route("/", post(events::handlers::ingest_single_event))
+        .route("/batch", post(events::handlers::ingest_batch_events))
+}
+
+fn experiment_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/",
+            get(experiments::handlers::list_experiments).post(experiments::handlers::create_experiment),
+        )
+        .route(
+            "/{id}",
+            get(experiments::handlers::get_experiment)
+                .patch(experiments::handlers::update_experiment)
+                .delete(experiments::handlers::delete_experiment),
+        )
+        .route("/{id}/transitions", post(experiments::handlers::transition_experiment))
+        .route("/{id}/iterations", get(experiments::handlers::list_iterations))
+}
+
+fn flag_routes() -> Router<AppState> {
+    Router::new()
+        .route("/", get(flags::handlers::list_flags).post(flags::handlers::create_flag))
+        .route(
+            "/{flag_id}",
+            get(flags::handlers::get_flag)
+                .put(flags::handlers::update_flag)
+                .delete(flags::handlers::delete_flag),
+        )
+        .route("/{flag_id}/variants", post(flags::handlers::create_variant))
+        .route("/{flag_id}/hashing", put(flags::handlers::update_hashing_config))
+        .route("/{flag_id}/rules", put(flags::handlers::update_rules))
 }
 
 #[cfg(test)]
