@@ -2,6 +2,7 @@
 
 pub mod audit;
 pub mod environment;
+pub mod event_definition;
 pub mod flag;
 pub mod organisation;
 pub mod project;
@@ -12,6 +13,7 @@ pub mod user;
 
 pub use audit::PgAuditLogger;
 pub use environment::PgEnvironmentRepository;
+pub use event_definition::PgEventDefinitionRepository;
 pub use flag::{PgFlagRepository, PgVariantRepository};
 pub use organisation::PgOrganisationRepository;
 pub use project::PgProjectRepository;

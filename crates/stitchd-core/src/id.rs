@@ -62,6 +62,7 @@ define_id!(SegmentId);
 define_id!(RuleId);
 define_id!(HashingConfigId);
 define_id!(EventId);
+define_id!(EventDefinitionId);
 define_id!(ExperimentId);
 define_id!(MetricId);
 define_id!(AuditLogId);

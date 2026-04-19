@@ -1,16 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT id, project_id, key, value_type, enabled,\n                   created_at, updated_at, deleted_at, version\n            FROM feature_flags\n            WHERE id = $1 AND deleted_at IS NULL\n            ",
+  "query": "\n            SELECT\n                id             AS \"id: EventDefinitionId\",\n                environment_id AS \"environment_id: EnvironmentId\",\n                key,\n                value_type     AS \"value_type: EventValueType\",\n                created_at,\n                updated_at,\n                deleted_at,\n                version\n            FROM event_definitions\n            WHERE key = $1 AND environment_id = $2 AND deleted_at IS NULL\n            ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "id: EventDefinitionId",
         "type_info": "Uuid"
       },
       {
         "ordinal": 1,
-        "name": "project_id",
+        "name": "environment_id: EnvironmentId",
         "type_info": "Uuid"
       },
       {
@@ -20,37 +20,33 @@
       },
       {
         "ordinal": 3,
-        "name": "value_type",
+        "name": "value_type: EventValueType",
         "type_info": "Text"
       },
       {
         "ordinal": 4,
-        "name": "enabled",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "updated_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 6,
         "name": "deleted_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 7,
         "name": "version",
         "type_info": "Int8"
       }
     ],
     "parameters": {
       "Left": [
+        "Text",
         "Uuid"
       ]
     },
@@ -61,10 +57,9 @@
       false,
       false,
       false,
-      false,
       true,
       false
     ]
   },
-  "hash": "35559f42e4faf2b97b3d0ee50e57254e2dc323716c7bf302b6bdea2ebdabe847"
+  "hash": "9ba03147ef1fc15250874ddb6312993a7a266670aa330a4ba397030b0a774a95"
 }

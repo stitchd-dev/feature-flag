@@ -18,11 +18,11 @@
 <!-- execution: sequential -->
 <!-- depends: -->
 
-- [ ] Task: Write failing tests for EventDefinition repository (create, list, soft-delete, optimistic locking)
+- [x] Task: Write failing tests for EventDefinition repository (create, list, soft-delete, optimistic locking)
   <!-- files: crates/stitchd-db/src/repositories/event_definition.rs -->
-- [ ] Task: Create PostgreSQL migration for `event_definitions` table (env_id, key, value_type enum, version, deleted_at, audit fields)
+- [x] Task: Create PostgreSQL migration for `event_definitions` table (env_id, key, value_type enum, version, deleted_at, audit fields)
   <!-- files: crates/stitchd-db/migrations/ -->
-- [ ] Task: Implement `EventDefinition` domain model and `EventDefinitionRepository` in `stitchd-db`
+- [x] Task: Implement `EventDefinition` domain model and `EventDefinitionRepository` in `stitchd-db`
   <!-- files: crates/stitchd-db/src/repositories/event_definition.rs, crates/stitchd-core/src/models/event.rs -->
 - [ ] Task: Implement `EventDefinitionService` in `stitchd-server` with optimistic locking and audit log writes
   <!-- files: crates/stitchd-server/src/services/event_definition.rs -->

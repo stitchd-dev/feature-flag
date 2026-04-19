@@ -7,10 +7,11 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use stitchd_core::{
+    event::EventDefinition,
     flag::Variant,
     id::{
-        EnvironmentId, FlagId, FlagKey, OrganisationId, ProjectId, RoleId, SdkKeyId, SegmentId,
-        UserId, VariantId,
+        EnvironmentId, EventDefinitionId, FlagId, FlagKey, OrganisationId, ProjectId, RoleId,
+        SdkKeyId, SegmentId, UserId, VariantId,
     },
     tenant::{Environment, Organisation, Project, SdkKey},
     user::{Permission, Role, User},
@@ -399,3 +400,43 @@ pub trait AuditLogger: Send + Sync {
         diff: serde_json::Value,
     ) -> Result<(), RepositoryError>;
 }
+
+// ---------------------------------------------------------------------------
+// EventDefinition
+// ---------------------------------------------------------------------------
+
+/// CRUD operations for [`EventDefinition`] records scoped to an environment.
+#[async_trait]
+pub trait EventDefinitionRepository: Send + Sync {
+    /// Fetch a definition by ID.
+    async fn find_by_id(
+        &self,
+        id: EventDefinitionId,
+    ) -> Result<EventDefinition, RepositoryError>;
+
+    /// Fetch a definition by its string key within an environment.
+    async fn find_by_key(
+        &self,
+        key: &str,
+        environment_id: EnvironmentId,
+    ) -> Result<EventDefinition, RepositoryError>;
+
+    /// List all non-deleted definitions for an environment.
+    async fn list_by_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<EventDefinition>, RepositoryError>;
+
+    /// Persist a new definition.
+    async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError>;
+
+    /// Update an existing definition (optimistic locking via `version`).
+    async fn update(
+        &self,
+        def: &EventDefinition,
+    ) -> Result<EventDefinition, RepositoryError>;
+
+    /// Soft-delete a definition by setting `deleted_at`.
+    async fn soft_delete(&self, id: EventDefinitionId) -> Result<(), RepositoryError>;
+}
+

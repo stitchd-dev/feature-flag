@@ -1,16 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            UPDATE feature_flags\n            SET key = $1, value_type = $2, enabled = $3,\n                updated_at = NOW(), version = $4\n            WHERE id = $5 AND version = $6 AND deleted_at IS NULL\n            RETURNING id, project_id, key, value_type, enabled,\n                      created_at, updated_at, deleted_at, version\n            ",
+  "query": "\n            UPDATE event_definitions\n            SET key = $1, value_type = $2, updated_at = NOW(), version = $3\n            WHERE id = $4 AND version = $5 AND deleted_at IS NULL\n            RETURNING\n                id             AS \"id: EventDefinitionId\",\n                environment_id AS \"environment_id: EnvironmentId\",\n                key,\n                value_type     AS \"value_type: EventValueType\",\n                created_at,\n                updated_at,\n                deleted_at,\n                version\n            ",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "id: EventDefinitionId",
         "type_info": "Uuid"
       },
       {
         "ordinal": 1,
-        "name": "project_id",
+        "name": "environment_id: EnvironmentId",
         "type_info": "Uuid"
       },
       {
@@ -20,31 +20,26 @@
       },
       {
         "ordinal": 3,
-        "name": "value_type",
+        "name": "value_type: EventValueType",
         "type_info": "Text"
       },
       {
         "ordinal": 4,
-        "name": "enabled",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 5,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "updated_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 7,
+        "ordinal": 6,
         "name": "deleted_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 7,
         "name": "version",
         "type_info": "Int8"
       }
@@ -53,7 +48,6 @@
       "Left": [
         "Text",
         "Text",
-        "Bool",
         "Int8",
         "Uuid",
         "Int8"
@@ -66,10 +60,9 @@
       false,
       false,
       false,
-      false,
       true,
       false
     ]
   },
-  "hash": "2d9ff7ac76fcf9e7804cdee32077f67207dd4397700cec67594d491b921c02f8"
+  "hash": "343f3e96f001d756c44e6d064c7dafb69362489eb8daa6aaf16684fd1ca801c5"
 }
