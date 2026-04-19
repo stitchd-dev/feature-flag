@@ -25,7 +25,8 @@ pub enum WriteError {
 /// so exactly one is `Some` depending on the event's value type.
 #[derive(Debug, Serialize, clickhouse::Row)]
 pub struct EventRow {
-    /// Environment UUID (stored as string for ClickHouse UUID type).
+    /// Environment UUID.
+    #[serde(with = "clickhouse::serde::uuid")]
     pub env_id: Uuid,
     /// Evaluation-time context pairs: (type, key).
     pub contexts: Vec<(String, String)>,

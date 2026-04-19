@@ -33,6 +33,8 @@ services:
       - "${CLICKHOUSE_NATIVE_PORT:-9000}:9000" # Native (TCP) interface
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+      - ./docker/clickhouse/macros.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+      - ./docker/clickhouse/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
     networks:
       - stitchd
     healthcheck:

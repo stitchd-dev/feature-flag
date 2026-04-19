@@ -75,9 +75,16 @@ pub async fn run(client: &Client) -> Result<(), MigrationError> {
         tracing::info!(migration = name, "applying ClickHouse migration");
 
         // Split on semicolons so multi-statement migration files work (e.g. table + MV).
+        // Strip leading SQL line-comments before checking if a statement is empty,
+        // since our migration files include comment blocks above each DDL statement.
         for statement in sql.split(';') {
-            let stmt = statement.trim();
-            if stmt.is_empty() || stmt.starts_with("--") {
+            let stmt: String = statement
+                .lines()
+                .filter(|l| !l.trim().starts_with("--"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let stmt = stmt.trim();
+            if stmt.is_empty() {
                 continue;
             }
             client

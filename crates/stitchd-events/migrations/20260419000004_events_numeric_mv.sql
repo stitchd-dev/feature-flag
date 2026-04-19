@@ -30,12 +30,12 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS events_numeric_mv TO events_numeric AS
 SELECT
     env_id,
     metric_key,
-    toDate(timestamp)                                                                       AS day,
-    sumState(coalesce(value_double, CAST(value_int AS Nullable(Float64))))                 AS value_sum,
-    countState()                                                                            AS value_count,
-    quantileState(0.5)(coalesce(value_double, CAST(value_int AS Nullable(Float64))))       AS value_p50,
-    quantileState(0.95)(coalesce(value_double, CAST(value_int AS Nullable(Float64))))      AS value_p95,
-    quantileState(0.99)(coalesce(value_double, CAST(value_int AS Nullable(Float64))))      AS value_p99
+    toDate(timestamp)                                                                                                AS day,
+    sumState(assumeNotNull(coalesce(value_double, CAST(value_int AS Nullable(Float64)))))                          AS value_sum,
+    countState()                                                                                                     AS value_count,
+    quantileState(0.5)(assumeNotNull(coalesce(value_double, CAST(value_int AS Nullable(Float64)))))                AS value_p50,
+    quantileState(0.95)(assumeNotNull(coalesce(value_double, CAST(value_int AS Nullable(Float64)))))               AS value_p95,
+    quantileState(0.99)(assumeNotNull(coalesce(value_double, CAST(value_int AS Nullable(Float64)))))               AS value_p99
 FROM events
 WHERE value_double IS NOT NULL OR value_int IS NOT NULL
 GROUP BY env_id, metric_key, toDate(timestamp);

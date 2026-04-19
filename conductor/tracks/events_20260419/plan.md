@@ -30,7 +30,7 @@
   <!-- files: crates/stitchd-server/src/handlers/event_definition.rs -->
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Event Registration (PostgreSQL)' (Protocol in workflow.md)
 
-## Phase 3: Event Ingestion API
+## Phase 3: Event Ingestion API [checkpoint: 5b2b83a]
 <!-- execution: sequential -->
 <!-- depends: phase1, phase2 -->
 
@@ -46,15 +46,15 @@
   <!-- files: crates/stitchd-server/src/api/events/handlers.rs -->
 - [x] Task: Implement `POST /v1/environments/{env_id}/events/batch` (max 500 events), 202 on success, utoipa annotations
   <!-- files: crates/stitchd-server/src/api/events/handlers.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Event Ingestion API' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Event Ingestion API' (Protocol in workflow.md)
 
 ## Phase 4: Integration Tests & Coverage
 <!-- execution: sequential -->
 <!-- depends: phase3 -->
 
-- [ ] Task: Write integration tests: valid single event accepted (202), valid batch accepted (202), unknown metric_key → 422, type mismatch → 422, batch > 500 → 422
+- [x] Task: Write integration tests: valid single event accepted (202), valid batch accepted (202), unknown metric_key → 422, type mismatch → 422, batch > 500 → 422
   <!-- files: crates/stitchd-server/tests/event_ingestion.rs -->
-- [ ] Task: Verify ClickHouse materialized views populate correctly from test events
+- [x] Task: Verify ClickHouse materialized views populate correctly from test events
   <!-- files: crates/stitchd-events/tests/clickhouse_views.rs -->
 - [ ] Task: Run coverage — enforce ≥90% on new code across `stitchd-events` and new handlers
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Integration Tests & Coverage' (Protocol in workflow.md)

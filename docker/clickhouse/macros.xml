@@ -1,0 +1,6 @@
+<clickhouse>
+    <macros>
+        <shard>1</shard>
+        <replica>localhost</replica>
+    </macros>
+</clickhouse>
