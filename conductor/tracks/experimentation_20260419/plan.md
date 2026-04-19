@@ -1,7 +1,7 @@
 # Plan: Experimentation Module — Experiment CRUD
 Track: experimentation_20260419
 
-## Phase 1: Database Migrations & Domain Types
+## Phase 1: Database Migrations & Domain Types [checkpoint: 8c79067]
 <!-- execution: parallel -->
 
 - [x] Task 1: PostgreSQL migrations [4cd3ac7]
