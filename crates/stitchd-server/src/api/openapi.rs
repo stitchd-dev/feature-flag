@@ -5,6 +5,10 @@
 use crate::api::event_definitions::handlers::{
     CreateEventDefinitionRequest, EventDefinitionResponse,
 };
+use crate::api::experiments::handlers::{
+    CreateExperimentRequest, ExperimentIterationResponse, ExperimentResponse, TransitionRequest,
+    UpdateExperimentRequest,
+};
 use crate::api::flags::handlers::{
     BatchEvaluationResponse, CreateFlagRequest, CreateVariantRequest, EvaluationRequest,
     EvaluationResult, FlagResponse, UpdateFlagRequest,
@@ -55,6 +59,13 @@ use stitchd_core::{
         crate::api::segments::handlers::delete_segment,
         crate::api::segments::handlers::list_check_membership,
         crate::api::segments::handlers::batch_list_check_membership,
+        crate::api::experiments::handlers::list_experiments,
+        crate::api::experiments::handlers::create_experiment,
+        crate::api::experiments::handlers::get_experiment,
+        crate::api::experiments::handlers::update_experiment,
+        crate::api::experiments::handlers::delete_experiment,
+        crate::api::experiments::handlers::transition_experiment,
+        crate::api::experiments::handlers::list_iterations,
     ),
     components(schemas(
         // Request/response types from handlers
@@ -80,6 +91,12 @@ use stitchd_core::{
         BatchListCheckRequest,
         BatchListCheckResponse,
         BatchContextMembership,
+        // Experiment types
+        CreateExperimentRequest,
+        UpdateExperimentRequest,
+        TransitionRequest,
+        ExperimentResponse,
+        ExperimentIterationResponse,
         // Core domain types
         FlagRecord,
         FlagValueType,

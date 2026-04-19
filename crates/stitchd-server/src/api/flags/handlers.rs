@@ -865,6 +865,58 @@ mod tests {
         }
     }
 
+    struct MockExperimentRepo;
+
+    #[async_trait]
+    impl stitchd_db::ExperimentRepository for MockExperimentRepo {
+        async fn find_by_id(
+            &self,
+            id: stitchd_core::id::ExperimentId,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn list_by_environment(
+            &self,
+            _: EnvironmentId,
+            _: Option<stitchd_core::experimentation::ExperimentStatus>,
+        ) -> Result<Vec<stitchd_core::experimentation::Experiment>, RepositoryError> {
+            Ok(Vec::new())
+        }
+        async fn create(
+            &self,
+            _: &stitchd_core::experimentation::Experiment,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(
+            &self,
+            e: &stitchd_core::experimentation::Experiment,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            Ok(e.clone())
+        }
+        async fn soft_delete(
+            &self,
+            id: stitchd_core::id::ExperimentId,
+        ) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn list_iterations(
+            &self,
+            _: stitchd_core::id::ExperimentId,
+        ) -> Result<Vec<stitchd_core::experimentation::ExperimentIteration>, RepositoryError>
+        {
+            Ok(Vec::new())
+        }
+        async fn apply_transition(
+            &self,
+            id: stitchd_core::id::ExperimentId,
+            _: stitchd_core::experimentation::ExperimentStatus,
+            _: Option<stitchd_core::id::UserId>,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // Test helpers
     // ---------------------------------------------------------------------------
@@ -890,6 +942,7 @@ mod tests {
             variant_repo,
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
+            experiment_repo: Arc::new(MockExperimentRepo),
             event_writer: None,
         }
     }
@@ -1530,6 +1583,7 @@ mod tests {
             variant_repo,
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
+            experiment_repo: Arc::new(MockExperimentRepo),
             event_writer: None,
         };
         let app = build_router(state);
@@ -1577,6 +1631,7 @@ mod tests {
             variant_repo: MockVariantRepo::new(),
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
+            experiment_repo: Arc::new(MockExperimentRepo),
             event_writer: None,
         };
         let app = build_router(state);

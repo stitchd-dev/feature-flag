@@ -1,5 +1,5 @@
 use crate::AppState;
-use crate::api::{event_definitions, events, flags, segments};
+use crate::api::{event_definitions, events, experiments, flags, segments};
 use axum::{
     Router,
     routing::{delete, get, post, put},
@@ -54,6 +54,29 @@ pub fn build_api_router() -> Router<AppState> {
                     Router::new()
                         .route("/", post(events::handlers::ingest_single_event))
                         .route("/batch", post(events::handlers::ingest_batch_events)),
+                )
+                .nest(
+                    "/experiments",
+                    Router::new()
+                        .route(
+                            "/",
+                            get(experiments::handlers::list_experiments)
+                                .post(experiments::handlers::create_experiment),
+                        )
+                        .route(
+                            "/{id}",
+                            get(experiments::handlers::get_experiment)
+                                .patch(experiments::handlers::update_experiment)
+                                .delete(experiments::handlers::delete_experiment),
+                        )
+                        .route(
+                            "/{id}/transitions",
+                            post(experiments::handlers::transition_experiment),
+                        )
+                        .route(
+                            "/{id}/iterations",
+                            get(experiments::handlers::list_iterations),
+                        ),
                 ),
         )
         .nest(
@@ -96,8 +119,8 @@ mod tests {
         tenant::SdkKey,
     };
     use stitchd_db::{
-        ContextMembership, FlagRepository, RepositoryError, SdkKeyRepository, SegmentRepository,
-        VariantRepository,
+        ContextMembership, ExperimentRepository, FlagRepository, RepositoryError, SdkKeyRepository,
+        SegmentRepository, VariantRepository,
     };
     use tower::ServiceExt as _;
 
@@ -340,6 +363,64 @@ mod tests {
         }
     }
 
+    struct StubExperimentRepo;
+
+    #[async_trait]
+    impl ExperimentRepository for StubExperimentRepo {
+        async fn find_by_id(
+            &self,
+            id: stitchd_core::id::ExperimentId,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+            _status_filter: Option<stitchd_core::experimentation::ExperimentStatus>,
+        ) -> Result<Vec<stitchd_core::experimentation::Experiment>, RepositoryError> {
+            Ok(Vec::new())
+        }
+
+        async fn create(
+            &self,
+            _experiment: &stitchd_core::experimentation::Experiment,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(
+            &self,
+            experiment: &stitchd_core::experimentation::Experiment,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            Ok(experiment.clone())
+        }
+
+        async fn soft_delete(
+            &self,
+            id: stitchd_core::id::ExperimentId,
+        ) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+
+        async fn list_iterations(
+            &self,
+            _experiment_id: stitchd_core::id::ExperimentId,
+        ) -> Result<Vec<stitchd_core::experimentation::ExperimentIteration>, RepositoryError>
+        {
+            Ok(Vec::new())
+        }
+
+        async fn apply_transition(
+            &self,
+            id: stitchd_core::id::ExperimentId,
+            _to: stitchd_core::experimentation::ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+    }
+
     struct StubEventDefinitionRepo;
 
     #[async_trait]
@@ -397,6 +478,7 @@ mod tests {
             variant_repo: Arc::new(StubVariantRepo),
             sdk_key_repo: Arc::new(StubSdkKeyRepo),
             event_definition_repo: Arc::new(StubEventDefinitionRepo),
+            experiment_repo: Arc::new(StubExperimentRepo),
             event_writer: None,
         }
     }

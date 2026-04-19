@@ -17,8 +17,8 @@ use serde::Serialize;
 use sqlx::PgPool;
 use std::sync::Arc;
 use stitchd_db::{
-    EventDefinitionRepository, FlagRepository, SdkKeyRepository, SegmentRepository,
-    VariantRepository,
+    EventDefinitionRepository, ExperimentRepository, FlagRepository, SdkKeyRepository,
+    SegmentRepository, VariantRepository,
 };
 use stitchd_events::writer::EventWriter;
 use utoipa::OpenApi as _;
@@ -40,6 +40,8 @@ pub struct AppState {
     pub sdk_key_repo: Arc<dyn SdkKeyRepository>,
     /// Repository for event definition registration.
     pub event_definition_repo: Arc<dyn EventDefinitionRepository>,
+    /// Repository for experiment management.
+    pub experiment_repo: Arc<dyn ExperimentRepository>,
     /// ClickHouse event writer. `None` when ClickHouse is unavailable (writes are skipped).
     pub event_writer: Option<EventWriter>,
 }
@@ -130,6 +132,11 @@ mod tests {
         let event_definition_repo = std::sync::Arc::new(
             stitchd_db::repository::pg::PgEventDefinitionRepository::new(db.clone(), audit5),
         );
+        let audit6 =
+            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
+        let experiment_repo = std::sync::Arc::new(
+            stitchd_db::repository::pg::PgExperimentRepository::new(db.clone(), audit6),
+        );
         AppState {
             db,
             metrics_handle,
@@ -138,6 +145,7 @@ mod tests {
             variant_repo,
             sdk_key_repo,
             event_definition_repo,
+            experiment_repo,
             event_writer: None,
         }
     }
@@ -437,6 +445,62 @@ mod tests {
             }
         }
 
+        #[async_trait::async_trait]
+        impl stitchd_db::ExperimentRepository for StubRepo {
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::ExperimentId,
+            ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError>
+            {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn list_by_environment(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+                _: Option<stitchd_core::experimentation::ExperimentStatus>,
+            ) -> Result<Vec<stitchd_core::experimentation::Experiment>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::experimentation::Experiment,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                e: &stitchd_core::experimentation::Experiment,
+            ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError>
+            {
+                Ok(e.clone())
+            }
+            async fn soft_delete(
+                &self,
+                id: stitchd_core::id::ExperimentId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn list_iterations(
+                &self,
+                _: stitchd_core::id::ExperimentId,
+            ) -> Result<
+                Vec<stitchd_core::experimentation::ExperimentIteration>,
+                stitchd_db::RepositoryError,
+            > {
+                Ok(vec![])
+            }
+            async fn apply_transition(
+                &self,
+                id: stitchd_core::id::ExperimentId,
+                _: stitchd_core::experimentation::ExperimentStatus,
+                _: Option<stitchd_core::id::UserId>,
+            ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError>
+            {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+        }
+
         let stub = Arc::new(StubRepo);
         AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_stub")
@@ -446,7 +510,8 @@ mod tests {
             flag_repo: stub.clone(),
             variant_repo: stub.clone(),
             sdk_key_repo: stub.clone(),
-            event_definition_repo: stub,
+            event_definition_repo: stub.clone(),
+            experiment_repo: stub,
             event_writer: None,
         }
     }
