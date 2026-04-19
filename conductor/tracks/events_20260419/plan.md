@@ -12,7 +12,7 @@
   <!-- files: crates/stitchd-events/migrations/ -->
 - [x] Task: Create materialized view `events_numeric_mv` — sum/avg/p50/p95/p99 per (env_id, metric_key, day)
   <!-- files: crates/stitchd-events/migrations/ -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: ClickHouse Schema & Migrations' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: ClickHouse Schema & Migrations' (Protocol in workflow.md)
 
 ## Phase 2: Event Registration (PostgreSQL)
 <!-- execution: sequential -->
@@ -28,7 +28,7 @@
   <!-- files: crates/stitchd-server/src/services/event_definition.rs -->
 - [x] Task: Implement REST handlers with utoipa annotations: `POST /v1/environments/{env_id}/event-definitions`, `GET /v1/environments/{env_id}/event-definitions`, `DELETE /v1/environments/{env_id}/event-definitions/{key}`
   <!-- files: crates/stitchd-server/src/handlers/event_definition.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Event Registration (PostgreSQL)' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Event Registration (PostgreSQL)' (Protocol in workflow.md)
 
 ## Phase 3: Event Ingestion API
 <!-- execution: sequential -->
