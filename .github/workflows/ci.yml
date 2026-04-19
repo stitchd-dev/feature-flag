@@ -68,6 +68,19 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      clickhouse:
+        image: clickhouse/clickhouse-server:latest
+        env:
+          CLICKHOUSE_USER: stitchd
+          CLICKHOUSE_PASSWORD: stitchd
+          CLICKHOUSE_DB: stitchd
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget -q -O- http://localhost:8123/ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
     steps:
@@ -97,6 +110,19 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      clickhouse:
+        image: clickhouse/clickhouse-server:latest
+        env:
+          CLICKHOUSE_USER: stitchd
+          CLICKHOUSE_PASSWORD: stitchd
+          CLICKHOUSE_DB: stitchd
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget -q -O- http://localhost:8123/ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
