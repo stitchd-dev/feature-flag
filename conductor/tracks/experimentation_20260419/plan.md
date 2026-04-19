@@ -76,7 +76,7 @@ Track: experimentation_20260419
 
 - [x] Task: Conductor - User Manual Verification 'Phase 3: REST API Layer' (Protocol in workflow.md) [018af3c]
 
-## Phase 4: Coverage & Quality Gate
+## Phase 4: Coverage & Quality Gate [checkpoint: e993143]
 
 - [x] Task 1: Full lifecycle integration tests [604f988]
   - [x] Sub-task: draft→running→paused→running→stopped full lifecycle
