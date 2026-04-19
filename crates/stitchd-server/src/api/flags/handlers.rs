@@ -820,6 +820,51 @@ mod tests {
         }
     }
 
+    struct MockEventDefinitionRepo;
+
+    #[async_trait]
+    impl stitchd_db::EventDefinitionRepository for MockEventDefinitionRepo {
+        async fn find_by_id(
+            &self,
+            id: stitchd_core::id::EventDefinitionId,
+        ) -> Result<stitchd_core::event::EventDefinition, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn find_by_key(
+            &self,
+            key: &str,
+            _: EnvironmentId,
+        ) -> Result<stitchd_core::event::EventDefinition, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: key.to_string(),
+            })
+        }
+        async fn list_by_environment(
+            &self,
+            _: EnvironmentId,
+        ) -> Result<Vec<stitchd_core::event::EventDefinition>, RepositoryError> {
+            Ok(Vec::new())
+        }
+        async fn create(
+            &self,
+            _: &stitchd_core::event::EventDefinition,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(
+            &self,
+            d: &stitchd_core::event::EventDefinition,
+        ) -> Result<stitchd_core::event::EventDefinition, RepositoryError> {
+            Ok(d.clone())
+        }
+        async fn soft_delete(
+            &self,
+            id: stitchd_core::id::EventDefinitionId,
+        ) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // Test helpers
     // ---------------------------------------------------------------------------
@@ -844,6 +889,7 @@ mod tests {
             flag_repo,
             variant_repo,
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
+            event_definition_repo: Arc::new(MockEventDefinitionRepo),
         }
     }
 
@@ -1482,6 +1528,7 @@ mod tests {
             flag_repo,
             variant_repo,
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
+            event_definition_repo: Arc::new(MockEventDefinitionRepo),
         };
         let app = build_router(state);
 
@@ -1527,6 +1574,7 @@ mod tests {
             flag_repo,
             variant_repo: MockVariantRepo::new(),
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
+            event_definition_repo: Arc::new(MockEventDefinitionRepo),
         };
         let app = build_router(state);
 

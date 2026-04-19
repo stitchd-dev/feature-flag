@@ -574,6 +574,50 @@ mod tests {
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
                 .expect("lazy pool");
+        struct StubEventDefinitionRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::EventDefinitionRepository for StubEventDefinitionRepo {
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::EventDefinitionId,
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_by_key(
+                &self,
+                key: &str,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
+            }
+            async fn list_by_environment(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<Vec<stitchd_core::event::EventDefinition>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::event::EventDefinition,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                d: &stitchd_core::event::EventDefinition,
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+                Ok(d.clone())
+            }
+            async fn soft_delete(
+                &self,
+                id: stitchd_core::id::EventDefinitionId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+        }
         crate::AppState {
             db,
             metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
@@ -581,6 +625,7 @@ mod tests {
             flag_repo,
             variant_repo: Arc::new(StubVariantRepo),
             sdk_key_repo,
+            event_definition_repo: Arc::new(StubEventDefinitionRepo),
         }
     }
 

@@ -1,8 +1,8 @@
 use crate::AppState;
-use crate::api::{flags, segments};
+use crate::api::{event_definitions, flags, segments};
 use axum::{
     Router,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 
 /// Build the API router.
@@ -35,7 +35,20 @@ pub fn build_api_router() -> Router<AppState> {
                             post(segments::handlers::batch_list_check_membership),
                         ),
                 )
-                .route("/evaluate", post(flags::handlers::evaluate_all_flags)),
+                .route("/evaluate", post(flags::handlers::evaluate_all_flags))
+                .nest(
+                    "/event-definitions",
+                    Router::new()
+                        .route(
+                            "/",
+                            get(event_definitions::handlers::list_event_definitions)
+                                .post(event_definitions::handlers::create_event_definition),
+                        )
+                        .route(
+                            "/{key}",
+                            delete(event_definitions::handlers::delete_event_definition),
+                        ),
+                ),
         )
         .nest(
             "/v1/projects/{project_id}/flags",
@@ -321,6 +334,51 @@ mod tests {
         }
     }
 
+    struct StubEventDefinitionRepo;
+
+    #[async_trait]
+    impl stitchd_db::EventDefinitionRepository for StubEventDefinitionRepo {
+        async fn find_by_id(
+            &self,
+            id: stitchd_core::id::EventDefinitionId,
+        ) -> Result<stitchd_core::event::EventDefinition, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn find_by_key(
+            &self,
+            key: &str,
+            _: EnvironmentId,
+        ) -> Result<stitchd_core::event::EventDefinition, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: key.to_string(),
+            })
+        }
+        async fn list_by_environment(
+            &self,
+            _: EnvironmentId,
+        ) -> Result<Vec<stitchd_core::event::EventDefinition>, RepositoryError> {
+            Ok(Vec::new())
+        }
+        async fn create(
+            &self,
+            _: &stitchd_core::event::EventDefinition,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(
+            &self,
+            d: &stitchd_core::event::EventDefinition,
+        ) -> Result<stitchd_core::event::EventDefinition, RepositoryError> {
+            Ok(d.clone())
+        }
+        async fn soft_delete(
+            &self,
+            id: stitchd_core::id::EventDefinitionId,
+        ) -> Result<(), RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+    }
+
     fn make_test_state() -> AppState {
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -332,6 +390,7 @@ mod tests {
             flag_repo: Arc::new(StubFlagRepo),
             variant_repo: Arc::new(StubVariantRepo),
             sdk_key_repo: Arc::new(StubSdkKeyRepo),
+            event_definition_repo: Arc::new(StubEventDefinitionRepo),
         }
     }
 

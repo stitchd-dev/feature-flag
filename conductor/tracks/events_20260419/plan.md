@@ -24,9 +24,9 @@
   <!-- files: crates/stitchd-db/migrations/ -->
 - [x] Task: Implement `EventDefinition` domain model and `EventDefinitionRepository` in `stitchd-db`
   <!-- files: crates/stitchd-db/src/repositories/event_definition.rs, crates/stitchd-core/src/models/event.rs -->
-- [ ] Task: Implement `EventDefinitionService` in `stitchd-server` with optimistic locking and audit log writes
+- [x] Task: Implement `EventDefinitionService` in `stitchd-server` with optimistic locking and audit log writes
   <!-- files: crates/stitchd-server/src/services/event_definition.rs -->
-- [ ] Task: Implement REST handlers with utoipa annotations: `POST /v1/environments/{env_id}/event-definitions`, `GET /v1/environments/{env_id}/event-definitions`, `DELETE /v1/environments/{env_id}/event-definitions/{key}`
+- [x] Task: Implement REST handlers with utoipa annotations: `POST /v1/environments/{env_id}/event-definitions`, `GET /v1/environments/{env_id}/event-definitions`, `DELETE /v1/environments/{env_id}/event-definitions/{key}`
   <!-- files: crates/stitchd-server/src/handlers/event_definition.rs -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Event Registration (PostgreSQL)' (Protocol in workflow.md)
 

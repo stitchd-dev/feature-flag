@@ -1,5 +1,7 @@
 //! API router and handlers.
 
+/// Event definition registration API.
+pub mod event_definitions;
 /// Feature Flag management API.
 pub mod flags;
 /// OpenAPI schema aggregator.

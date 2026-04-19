@@ -2,6 +2,9 @@
 // utoipa::OpenApi derive macro generates a for_each internally; suppress the lint.
 #![allow(clippy::needless_for_each)]
 
+use crate::api::event_definitions::handlers::{
+    CreateEventDefinitionRequest, EventDefinitionResponse,
+};
 use crate::api::flags::handlers::{
     BatchEvaluationResponse, CreateFlagRequest, CreateVariantRequest, EvaluationRequest,
     EvaluationResult, FlagResponse, UpdateFlagRequest,
@@ -12,6 +15,7 @@ use crate::api::segments::types::{
 };
 use stitchd_core::{
     context::{Context, EvaluationContext, ParameterValue},
+    event::EventValueType,
     flag::{FlagHashingConfig, FlagRecord, FlagRule, FlagValueType, Variant},
     rule_engine::{
         condition::Condition,
@@ -30,6 +34,9 @@ use stitchd_core::{
         description = "REST API for managing feature flags, segments, and evaluation."
     ),
     paths(
+        crate::api::event_definitions::handlers::list_event_definitions,
+        crate::api::event_definitions::handlers::create_event_definition,
+        crate::api::event_definitions::handlers::delete_event_definition,
         crate::api::flags::handlers::list_flags,
         crate::api::flags::handlers::create_flag,
         crate::api::flags::handlers::get_flag,
@@ -49,6 +56,9 @@ use stitchd_core::{
     ),
     components(schemas(
         // Request/response types from handlers
+        CreateEventDefinitionRequest,
+        EventDefinitionResponse,
+        EventValueType,
         CreateFlagRequest,
         UpdateFlagRequest,
         FlagResponse,

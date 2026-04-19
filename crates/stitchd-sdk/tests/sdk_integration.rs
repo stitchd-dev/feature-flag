@@ -26,8 +26,9 @@ use stitchd_db::{
     EnvironmentRepository, FlagRepository, OrganisationRepository, ProjectRepository,
     SdkKeyRepository, SegmentRepository, VariantRepository,
     repository::pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgFlagRepository, PgOrganisationRepository,
-        PgProjectRepository, PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository,
+        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository, PgFlagRepository,
+        PgOrganisationRepository, PgProjectRepository, PgSdkKeyRepository, PgSegmentRepository,
+        PgVariantRepository,
     },
 };
 use stitchd_proto::flags::v1::flag_sync_service_server::FlagSyncServiceServer;
@@ -219,6 +220,10 @@ async fn setup(pool: sqlx::PgPool) -> (SdkConfig, EnvironmentId) {
         flag_repo: Arc::clone(&flag_repo),
         variant_repo: Arc::clone(&variant_repo),
         sdk_key_repo: Arc::clone(&sdk_key_repo),
+        event_definition_repo: Arc::new(PgEventDefinitionRepository::new(
+            pool.clone(),
+            Arc::new(PgAuditLogger::new(pool.clone())),
+        )),
     };
 
     let grpc_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

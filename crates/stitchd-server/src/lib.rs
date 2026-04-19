@@ -16,7 +16,10 @@ use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use sqlx::PgPool;
 use std::sync::Arc;
-use stitchd_db::{FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository};
+use stitchd_db::{
+    EventDefinitionRepository, FlagRepository, SdkKeyRepository, SegmentRepository,
+    VariantRepository,
+};
 use utoipa::OpenApi as _;
 
 /// Shared application state.
@@ -34,6 +37,8 @@ pub struct AppState {
     pub variant_repo: Arc<dyn VariantRepository>,
     /// Repository for SDK key authentication.
     pub sdk_key_repo: Arc<dyn SdkKeyRepository>,
+    /// Repository for event definition registration.
+    pub event_definition_repo: Arc<dyn EventDefinitionRepository>,
 }
 
 /// Build the Axum router.
@@ -104,6 +109,8 @@ mod tests {
             std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
         let audit4 =
             std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
+        let audit5 =
+            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
         let segment_repo = std::sync::Arc::new(
             stitchd_db::repository::pg::PgSegmentRepository::new(db.clone(), audit),
         );
@@ -117,6 +124,9 @@ mod tests {
         let sdk_key_repo = std::sync::Arc::new(
             stitchd_db::repository::pg::PgSdkKeyRepository::new(db.clone(), audit4),
         );
+        let event_definition_repo = std::sync::Arc::new(
+            stitchd_db::repository::pg::PgEventDefinitionRepository::new(db.clone(), audit5),
+        );
         AppState {
             db,
             metrics_handle,
@@ -124,6 +134,7 @@ mod tests {
             flag_repo,
             variant_repo,
             sdk_key_repo,
+            event_definition_repo,
         }
     }
 
@@ -375,6 +386,50 @@ mod tests {
             }
         }
 
+        #[async_trait::async_trait]
+        impl stitchd_db::EventDefinitionRepository for StubRepo {
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::EventDefinitionId,
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_by_key(
+                &self,
+                key: &str,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
+            }
+            async fn list_by_environment(
+                &self,
+                _: stitchd_core::id::EnvironmentId,
+            ) -> Result<Vec<stitchd_core::event::EventDefinition>, stitchd_db::RepositoryError>
+            {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::event::EventDefinition,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                d: &stitchd_core::event::EventDefinition,
+            ) -> Result<stitchd_core::event::EventDefinition, stitchd_db::RepositoryError> {
+                Ok(d.clone())
+            }
+            async fn soft_delete(
+                &self,
+                id: stitchd_core::id::EventDefinitionId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+        }
+
         let stub = Arc::new(StubRepo);
         AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_stub")
@@ -383,7 +438,8 @@ mod tests {
             segment_repo: stub.clone(),
             flag_repo: stub.clone(),
             variant_repo: stub.clone(),
-            sdk_key_repo: stub,
+            sdk_key_repo: stub.clone(),
+            event_definition_repo: stub,
         }
     }
 
