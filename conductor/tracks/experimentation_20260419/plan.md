@@ -28,7 +28,7 @@ Track: experimentation_20260419
         guard, creates_iteration predicate)
   - [x] Sub-task: Pass tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Database Migrations & Domain Types' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1: Database Migrations & Domain Types' (Protocol in workflow.md) [8c79067]
 
 ## Phase 2: Repository Layer [checkpoint: b6ccf63]
 
@@ -48,7 +48,7 @@ Track: experimentation_20260419
   - [x] Sub-task: Implement uniqueness check in apply_transition
   - [x] Sub-task: Pass all tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Repository Layer' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Repository Layer' (Protocol in workflow.md) [b6ccf63]
 
 ## Phase 3: REST API Layer [checkpoint: 018af3c]
 
@@ -74,22 +74,22 @@ Track: experimentation_20260419
   - [x] Sub-task: Run xtask docs, confirm all experiment endpoints appear
         in generated OpenAPI spec
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: REST API Layer' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: REST API Layer' (Protocol in workflow.md) [018af3c]
 
 ## Phase 4: Coverage & Quality Gate
 
-- [ ] Task 1: Full lifecycle integration tests
-  - [ ] Sub-task: draft→running→paused→running→stopped full lifecycle
-  - [ ] Sub-task: stopped→running restart (iteration number increments)
-  - [ ] Sub-task: Mutation guard: PATCH while running → 409
-  - [ ] Sub-task: Flag rule frozen while running; PATCH flag rule → 409
-  - [ ] Sub-task: Two experiments on same rule, second start → 409
-  - [ ] Sub-task: Soft-delete while running → 409; while stopped → 204
+- [x] Task 1: Full lifecycle integration tests [604f988]
+  - [x] Sub-task: draft→running→paused→running→stopped full lifecycle
+  - [x] Sub-task: stopped→running restart (iteration number increments)
+  - [x] Sub-task: Mutation guard: PATCH while running → 409
+  - [x] Sub-task: Flag rule frozen while running; PATCH flag rule → 409
+  - [x] Sub-task: Two experiments on same rule, second start → 409
+  - [x] Sub-task: Soft-delete while running → 409; while stopped → 204
 
-- [ ] Task 2: Coverage verification
-  - [ ] Sub-task: Run cargo-tarpaulin on stitchd-core, stitchd-db,
+- [x] Task 2: Coverage verification [f72d847]
+  - [x] Sub-task: Run cargo-tarpaulin on stitchd-core, stitchd-db,
         stitchd-server (experiment paths)
-  - [ ] Sub-task: Achieve ≥ 90% coverage on new code; add missing tests
+  - [x] Sub-task: Achieve ≥ 90% coverage on new code; add missing tests
         until threshold met
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Coverage & Quality Gate' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Coverage & Quality Gate' (Protocol in workflow.md) [f72d847]
