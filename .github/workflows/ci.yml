@@ -8,7 +8,14 @@ on:
 
 permissions:
   contents: read
-  actions: read    # needed by detect-changes to query workflow run history
+  actions: write   # needed by detect-changes to query run history and cancel in-progress runs
+
+# Cancel any in-progress run for the same branch/PR the moment a newer push
+# arrives.  PRs and branch pushes each get their own concurrency group so they
+# never cancel each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
