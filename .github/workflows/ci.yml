@@ -60,7 +60,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Start services
-        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up -d --wait
+        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up -d --wait --wait-timeout 120
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -81,7 +81,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Start services
-        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up -d --wait
+        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up -d --wait --wait-timeout 120
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
