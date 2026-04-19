@@ -22,3 +22,8 @@ This file tracks all major tracks for the project.
 <!-- Archived: fix_ci_clippy_20260417 (Fix CI Clippy Failure — telemetry.rs map_unwrap_or) -->
 <!-- Archived: coverage_20260417 (Increase Test Coverage to >90% Across All Crates) -->
 <!-- Archived: mdbook_docs_20260418 (mdBook Documentation Site (API Docs + SDK Guide)) -->
+
+---
+
+## [ ] Track: Events Layer
+*Link: [./conductor/tracks/events_20260419/](./conductor/tracks/events_20260419/)*
