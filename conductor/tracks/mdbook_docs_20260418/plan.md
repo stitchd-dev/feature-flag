@@ -37,7 +37,7 @@
   <!-- depends: task2.3 -->
   - Download Swagger UI dist assets into `docs/src/api/`
   - Create `docs/src/api/rest.md` with embedded `<iframe>` or inline HTML
-- [ ] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md) [checkpoint: 570f9ab]
 
 ## Phase 3: gRPC / Protobuf Reference
 <!-- depends: phase1 -->
@@ -52,7 +52,7 @@
   <!-- depends: task3.1 -->
   - xtask updates `docs/src/grpc/README.md` and per-service chapter files
   - Ensure chapter links resolve in `SUMMARY.md`
-- [ ] Task: Conductor - User Manual Verification 'Phase 3' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3' (Protocol in workflow.md) [checkpoint: 570f9ab]
 
 ## Phase 4: Rust SDK Docs
 <!-- depends: phase1 -->
@@ -71,7 +71,7 @@
   <!-- depends: task4.2 -->
   - `docs/src/sdk/README.md` with narrative intro and link to rustdoc
   - `docs/src/sdk/quickstart.md` extracted from `//!` module doc in `stitchd-sdk/src/lib.rs`
-- [ ] Task: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md) [checkpoint: 570f9ab]
 
 ## Phase 5: Deployment & Architecture Chapters
 <!-- depends: phase1 -->
@@ -90,7 +90,7 @@
   - `docs/src/architecture/evaluation-flow.md` — flag evaluation sequence diagram
   - `docs/src/architecture/multi-tenancy.md` — tenant → env → SDK key model
   - `docs/src/architecture/data-stores.md` — PostgreSQL + ClickHouse split
-- [ ] Task: Conductor - User Manual Verification 'Phase 5' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5' (Protocol in workflow.md) [checkpoint: 570f9ab]
 
 ## Phase 6: CI Integration
 <!-- depends: phase2, phase3, phase4, phase5 -->
@@ -105,4 +105,4 @@
   <!-- files: clippy.toml, .github/workflows/ -->
   - `#![deny(missing_docs)]` in `stitchd-sdk/src/lib.rs` — the existing clippy job catches violations
   - Verified: `cargo clippy --workspace --all-targets -- -D warnings` fails if doc comment removed
-- [ ] Task: Conductor - User Manual Verification 'Phase 6' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 6' (Protocol in workflow.md) [checkpoint: 570f9ab]

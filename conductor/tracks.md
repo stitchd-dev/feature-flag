@@ -28,5 +28,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [~] Track: mdBook Documentation Site (API Docs + SDK Guide)
+## [x] Track: mdBook Documentation Site (API Docs + SDK Guide)
 *Link: [./conductor/tracks/mdbook_docs_20260418/](./conductor/tracks/mdbook_docs_20260418/)*
