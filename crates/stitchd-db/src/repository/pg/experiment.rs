@@ -167,6 +167,29 @@ impl ExperimentRepository for PgExperimentRepository {
     }
 
     async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
+        // Mutation guard: reject updates on active (running or paused) experiments.
+        let current_status: Option<ExperimentStatus> = sqlx::query_scalar!(
+            r#"SELECT status AS "status: ExperimentStatus" FROM experiments WHERE id = $1 AND deleted_at IS NULL"#,
+            experiment.id as ExperimentId,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        match current_status {
+            None => {
+                return Err(RepositoryError::NotFound {
+                    id: experiment.id.to_string(),
+                });
+            }
+            Some(ExperimentStatus::Running) | Some(ExperimentStatus::Paused) => {
+                return Err(RepositoryError::InvalidState {
+                    reason: "cannot update an experiment that is running or paused".to_string(),
+                });
+            }
+            _ => {}
+        }
+
         let new_version = experiment.version + 1;
         let result = sqlx::query_as!(
             Experiment,
