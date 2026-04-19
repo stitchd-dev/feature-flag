@@ -32,21 +32,21 @@ Track: experimentation_20260419
 
 ## Phase 2: Repository Layer
 
-- [ ] Task 1: ExperimentRepository trait + sqlx implementation
-  - [ ] Sub-task: Write failing tests (sqlx::test) for create, get, list,
+- [x] Task 1: ExperimentRepository trait + sqlx implementation [e7dd2a8]
+  - [x] Sub-task: Write failing tests (sqlx::test) for create, get, list,
         soft-delete
-  - [ ] Sub-task: Implement create / get / list / update / soft-delete
-  - [ ] Sub-task: Pass tests
+  - [x] Sub-task: Implement create / get / list / update / soft-delete
+  - [x] Sub-task: Pass tests
 
-- [ ] Task 2: Transition repository operations
-  - [ ] Sub-task: Write failing tests for transition + iteration creation
+- [x] Task 2: Transition repository operations [1a66e42]
+  - [x] Sub-task: Write failing tests for transition + iteration creation
         (paused→running creates new iteration; stopped→running creates next)
-  - [ ] Sub-task: Implement apply_transition: update status, freeze/unfreeze
+  - [x] Sub-task: Implement apply_transition: update status, freeze/unfreeze
         flag rule, insert iteration row if transitioning into running
-  - [ ] Sub-task: Write failing tests for uniqueness guard (one
+  - [x] Sub-task: Write failing tests for uniqueness guard (one
         running/paused per rule → Err)
-  - [ ] Sub-task: Implement uniqueness check in apply_transition
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Implement uniqueness check in apply_transition
+  - [x] Sub-task: Pass all tests
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Repository Layer' (Protocol in workflow.md)
 
