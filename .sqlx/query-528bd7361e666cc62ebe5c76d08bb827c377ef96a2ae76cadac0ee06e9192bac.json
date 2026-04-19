@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT COUNT(*) AS \"count!\"\n                FROM experiments\n                WHERE flag_rule_id = $1\n                  AND id <> $2\n                  AND status IN ('running', 'paused')\n                  AND deleted_at IS NULL\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "528bd7361e666cc62ebe5c76d08bb827c377ef96a2ae76cadac0ee06e9192bac"
+}

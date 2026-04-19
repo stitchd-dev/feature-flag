@@ -275,3 +275,239 @@ async fn test_list_iterations_empty(pool: sqlx::PgPool) {
         "new experiment should have no iterations"
     );
 }
+
+// ---------------------------------------------------------------------------
+// apply_transition tests
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_transition_draft_to_running_creates_iteration(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let exp = make_experiment(env_id, rule_id);
+    repo.create(&exp).await.unwrap();
+
+    // Transition draft → running
+    let updated = repo
+        .apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .expect("draft→running should succeed");
+
+    assert_eq!(updated.status, ExperimentStatus::Running);
+    assert_eq!(updated.version, 2);
+
+    // An iteration must have been created
+    let iterations = repo.list_iterations(exp.id).await.unwrap();
+    assert_eq!(iterations.len(), 1);
+    assert_eq!(iterations[0].iteration_number, 1);
+    assert!(iterations[0].ended_at.is_none(), "iteration should still be active");
+    assert_eq!(iterations[0].metric_keys, exp.metric_keys);
+
+    // Flag rule must be frozen
+    let frozen: bool = sqlx::query_scalar!(
+        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
+        rule_id.as_uuid()
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(frozen, "flag rule must be frozen when experiment is running");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_transition_running_to_paused_ends_iteration(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let exp = make_experiment(env_id, rule_id);
+    repo.create(&exp).await.unwrap();
+
+    // draft → running
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .unwrap();
+
+    // running → paused
+    let updated = repo
+        .apply_transition(exp.id, ExperimentStatus::Paused, None)
+        .await
+        .expect("running→paused should succeed");
+
+    assert_eq!(updated.status, ExperimentStatus::Paused);
+
+    // Iteration must have ended_at set
+    let iterations = repo.list_iterations(exp.id).await.unwrap();
+    assert_eq!(iterations.len(), 1);
+    assert!(iterations[0].ended_at.is_some(), "iteration must be ended when paused");
+
+    // Flag rule must be unfrozen
+    let frozen: bool = sqlx::query_scalar!(
+        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
+        rule_id.as_uuid()
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!frozen, "flag rule must be unfrozen when experiment is paused");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_transition_paused_to_running_creates_next_iteration(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let exp = make_experiment(env_id, rule_id);
+    repo.create(&exp).await.unwrap();
+
+    // draft → running → paused
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None).await.unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Paused, None).await.unwrap();
+
+    // paused → running (second run)
+    let updated = repo
+        .apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .expect("paused→running should succeed");
+
+    assert_eq!(updated.status, ExperimentStatus::Running);
+
+    // Now there should be 2 iterations, second one active
+    let iterations = repo.list_iterations(exp.id).await.unwrap();
+    assert_eq!(iterations.len(), 2, "should have 2 iterations total");
+    assert_eq!(iterations[0].iteration_number, 1);
+    assert!(iterations[0].ended_at.is_some(), "first iteration must be ended");
+    assert_eq!(iterations[1].iteration_number, 2);
+    assert!(iterations[1].ended_at.is_none(), "second iteration must be active");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_transition_running_to_stopped_unfreezes_rule(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let exp = make_experiment(env_id, rule_id);
+    repo.create(&exp).await.unwrap();
+
+    // draft → running → stopped
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None).await.unwrap();
+    let updated = repo
+        .apply_transition(exp.id, ExperimentStatus::Stopped, None)
+        .await
+        .expect("running→stopped should succeed");
+
+    assert_eq!(updated.status, ExperimentStatus::Stopped);
+
+    // Iteration must be ended
+    let iterations = repo.list_iterations(exp.id).await.unwrap();
+    assert_eq!(iterations.len(), 1);
+    assert!(iterations[0].ended_at.is_some(), "iteration must be ended when stopped");
+
+    // Flag rule must be unfrozen
+    let frozen: bool = sqlx::query_scalar!(
+        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
+        rule_id.as_uuid()
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(!frozen, "flag rule must be unfrozen when experiment is stopped");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_uniqueness_guard_rejects_second_active_experiment(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    // Create first experiment and start it
+    let exp1 = make_experiment(env_id, rule_id);
+    repo.create(&exp1).await.unwrap();
+    repo.apply_transition(exp1.id, ExperimentStatus::Running, None)
+        .await
+        .expect("first experiment should start");
+
+    // Create a second experiment on the same flag_rule_id
+    let exp2 = make_experiment(env_id, rule_id);
+    repo.create(&exp2).await.unwrap();
+
+    // Attempting to run the second experiment on the same rule must fail with UniqueViolation
+    let result = repo
+        .apply_transition(exp2.id, ExperimentStatus::Running, None)
+        .await;
+
+    assert!(
+        matches!(result, Err(RepositoryError::UniqueViolation { ref field }) if field == "flag_rule_id"),
+        "second active experiment on same rule must return UniqueViolation, got: {result:?}"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_invalid_transition_rejected(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let exp = make_experiment(env_id, rule_id);
+    repo.create(&exp).await.unwrap();
+
+    // draft → paused is invalid
+    let result = repo
+        .apply_transition(exp.id, ExperimentStatus::Paused, None)
+        .await;
+
+    assert!(
+        matches!(result, Err(RepositoryError::InvalidState { .. })),
+        "invalid transition must return InvalidState, got: {result:?}"
+    );
+
+    // draft → stopped is also invalid
+    let result = repo
+        .apply_transition(exp.id, ExperimentStatus::Stopped, None)
+        .await;
+
+    assert!(
+        matches!(result, Err(RepositoryError::InvalidState { .. })),
+        "invalid transition must return InvalidState, got: {result:?}"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn test_stopped_to_running_restart_increments_iteration(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let exp = make_experiment(env_id, rule_id);
+    repo.create(&exp).await.unwrap();
+
+    // draft → running → stopped → running (restart)
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None).await.unwrap();
+    repo.apply_transition(exp.id, ExperimentStatus::Stopped, None).await.unwrap();
+    let updated = repo
+        .apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .expect("stopped→running restart should succeed");
+
+    assert_eq!(updated.status, ExperimentStatus::Running);
+
+    // Should now have 2 iterations, second one active with iteration_number=2
+    let iterations = repo.list_iterations(exp.id).await.unwrap();
+    assert_eq!(iterations.len(), 2, "should have 2 iterations after restart");
+    assert_eq!(iterations[1].iteration_number, 2, "restart iteration must be iteration #2");
+    assert!(iterations[1].ended_at.is_none(), "new iteration must be active");
+
+    // Flag rule must be frozen again
+    let frozen: bool = sqlx::query_scalar!(
+        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
+        rule_id.as_uuid()
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(frozen, "flag rule must be frozen on restart");
+}

@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use stitchd_core::{
-    experimentation::{Experiment, ExperimentIteration, ExperimentStatus},
-    id::{EnvironmentId, ExperimentId, ExperimentIterationId, RuleId},
+    experimentation::{Experiment, ExperimentIteration, ExperimentStatus, validate_transition},
+    id::{EnvironmentId, ExperimentId, ExperimentIterationId, RuleId, UserId},
 };
 
 use crate::{
@@ -334,5 +334,201 @@ impl ExperimentRepository for PgExperimentRepository {
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)
+    }
+
+    async fn apply_transition(
+        &self,
+        id: ExperimentId,
+        to: ExperimentStatus,
+        actor_id: Option<UserId>,
+    ) -> Result<Experiment, RepositoryError> {
+        // 1. Fetch current experiment to determine `from` status and current data.
+        let current = self.find_by_id(id).await?;
+        let from = current.status;
+
+        // 2. Validate transition.
+        validate_transition(from, to).map_err(|e| RepositoryError::InvalidState {
+            reason: e.to_string(),
+        })?;
+
+        // 3. Execute everything in a single transaction.
+        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
+
+        // 3a. Uniqueness check: if transitioning to running or paused, ensure no
+        //     other non-deleted experiment on the same flag_rule_id is already
+        //     running or paused (excluding self).
+        if to == ExperimentStatus::Running || to == ExperimentStatus::Paused {
+            let conflict_count: i64 = sqlx::query_scalar!(
+                r#"
+                SELECT COUNT(*) AS "count!"
+                FROM experiments
+                WHERE flag_rule_id = $1
+                  AND id <> $2
+                  AND status IN ('running', 'paused')
+                  AND deleted_at IS NULL
+                "#,
+                current.flag_rule_id as RuleId,
+                id as ExperimentId,
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+
+            if conflict_count > 0 {
+                return Err(RepositoryError::UniqueViolation {
+                    field: "flag_rule_id".to_string(),
+                });
+            }
+        }
+
+        // 3b. Update experiment status and bump version (optimistic concurrency).
+        let new_version = current.version + 1;
+        let updated = sqlx::query_as!(
+            Experiment,
+            r#"
+            UPDATE experiments
+            SET status    = $1::text,
+                version   = $2,
+                updated_at = NOW()
+            WHERE id = $3 AND version = $4 AND deleted_at IS NULL
+            RETURNING
+                id                  AS "id: ExperimentId",
+                env_id              AS "environment_id: EnvironmentId",
+                flag_rule_id        AS "flag_rule_id: RuleId",
+                name,
+                description,
+                hypothesis,
+                status              AS "status: ExperimentStatus",
+                metric_keys,
+                traffic_allocation  AS "traffic_allocation: f64",
+                min_sample_size     AS "min_sample_size: i64",
+                scheduled_start_at,
+                scheduled_end_at,
+                version             AS "version: i64",
+                created_at,
+                updated_at,
+                deleted_at
+            "#,
+            to as ExperimentStatus,
+            new_version as i32,
+            id as ExperimentId,
+            current.version as i32,
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(RepositoryError::Database)?
+        .ok_or_else(|| RepositoryError::VersionConflict {
+            expected: current.version,
+            actual: new_version, // could be stale, but we can't re-query inside the tx here
+        })?;
+
+        // 3c. If transitioning into Running: end the previous active iteration (if any),
+        //     then insert a new iteration.
+        if to == ExperimentStatus::Running {
+            // End any currently active iteration (handles paused→running restart).
+            sqlx::query!(
+                r#"
+                UPDATE experiment_iterations
+                SET ended_at = NOW()
+                WHERE experiment_id = $1 AND ended_at IS NULL
+                "#,
+                id as ExperimentId,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+
+            // Calculate next iteration_number.
+            let max_iter: Option<i32> = sqlx::query_scalar!(
+                r#"
+                SELECT MAX(iteration_number)
+                FROM experiment_iterations
+                WHERE experiment_id = $1
+                "#,
+                id as ExperimentId,
+            )
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+
+            let next_iteration = max_iter.unwrap_or(0) + 1;
+            let iteration_id = ExperimentIterationId::new();
+
+            sqlx::query!(
+                r#"
+                INSERT INTO experiment_iterations
+                    (id, experiment_id, iteration_number, started_at, metric_keys,
+                     traffic_allocation, min_sample_size)
+                VALUES ($1, $2, $3, NOW(), $4, $5::float8::numeric, $6)
+                "#,
+                iteration_id as ExperimentIterationId,
+                id as ExperimentId,
+                next_iteration,
+                &current.metric_keys,
+                current.traffic_allocation as f64,
+                current.min_sample_size.map(|v| v as i32),
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+        }
+
+        // 3d. If transitioning into Running: freeze the flag rule.
+        if to == ExperimentStatus::Running {
+            sqlx::query!(
+                "UPDATE feature_flag_rules SET frozen = TRUE WHERE id = $1",
+                current.flag_rule_id as RuleId,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+        }
+
+        // 3e. If transitioning into Paused or Stopped: unfreeze the flag rule.
+        if to == ExperimentStatus::Paused || to == ExperimentStatus::Stopped {
+            sqlx::query!(
+                "UPDATE feature_flag_rules SET frozen = FALSE WHERE id = $1",
+                current.flag_rule_id as RuleId,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+        }
+
+        // 3f. If from == Running and transitioning to Paused or Stopped: end active iteration.
+        if from == ExperimentStatus::Running
+            && (to == ExperimentStatus::Paused || to == ExperimentStatus::Stopped)
+        {
+            sqlx::query!(
+                r#"
+                UPDATE experiment_iterations
+                SET ended_at = NOW()
+                WHERE experiment_id = $1 AND ended_at IS NULL
+                "#,
+                id as ExperimentId,
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+        }
+
+        tx.commit().await.map_err(RepositoryError::Database)?;
+
+        // 4. Audit log the transition.
+        self.audit
+            .log(
+                actor_id,
+                "experiment",
+                id.as_uuid(),
+                "transition",
+                serde_json::json!({
+                    "from": format!("{from:?}"),
+                    "to": format!("{to:?}"),
+                    "version": new_version,
+                }),
+            )
+            .await?;
+
+        Ok(updated)
     }
 }

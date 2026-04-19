@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                UPDATE experiment_iterations\n                SET ended_at = NOW()\n                WHERE experiment_id = $1 AND ended_at IS NULL\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f5361f9a4f471ea75e34aa29b4fe45bbf4350de3f9e2eaab9fd30ea446ad7346"
+}

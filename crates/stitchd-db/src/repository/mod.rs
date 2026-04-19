@@ -435,6 +435,28 @@ pub trait ExperimentRepository: Send + Sync {
         &self,
         experiment_id: ExperimentId,
     ) -> Result<Vec<ExperimentIteration>, RepositoryError>;
+
+    /// Apply a status transition to an experiment.
+    ///
+    /// On transition into `running`:
+    /// - Creates a new `experiment_iterations` row (snapshot of current metric_keys,
+    ///   traffic_allocation, min_sample_size)
+    /// - Sets `feature_flag_rules.frozen = true` for the experiment's flag_rule_id
+    ///
+    /// On transition into `paused` or `stopped`:
+    /// - Sets `feature_flag_rules.frozen = false` for the experiment's flag_rule_id
+    /// - If ending an iteration (running→paused, running→stopped): sets ended_at = now() on the current active iteration
+    ///
+    /// Uniqueness: if another experiment is already running or paused on the same flag_rule_id,
+    /// return `RepositoryError::UniqueViolation { field: "flag_rule_id" }`.
+    ///
+    /// Invalid transition: return `RepositoryError::InvalidState { reason }`.
+    async fn apply_transition(
+        &self,
+        id: ExperimentId,
+        to: ExperimentStatus,
+        actor_id: Option<UserId>,
+    ) -> Result<Experiment, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
