@@ -52,26 +52,26 @@ Track: experimentation_20260419
 
 ## Phase 3: REST API Layer
 
-- [ ] Task 1: Request/Response types & utoipa schemas
-  - [ ] Sub-task: Write failing tests for request deserialization and
+- [x] Task 1: Request/Response types & utoipa schemas [d946dac]
+  - [x] Sub-task: Write failing tests for request deserialization and
         validation (metric_keys empty → error)
-  - [ ] Sub-task: CreateExperimentRequest, UpdateExperimentRequest,
+  - [x] Sub-task: CreateExperimentRequest, UpdateExperimentRequest,
         TransitionRequest, response types with utoipa annotations
-  - [ ] Sub-task: Pass tests
+  - [x] Sub-task: Pass tests
 
-- [ ] Task 2: Route handlers
-  - [ ] Sub-task: Write failing integration tests (tower::oneshot) for
+- [x] Task 2: Route handlers [881f54a]
+  - [x] Sub-task: Write failing integration tests (tower::oneshot) for
         POST /experiments, GET /experiments, GET /experiments/{id},
         PATCH /experiments/{id}, DELETE /experiments/{id},
         POST /experiments/{id}/transitions,
         GET /experiments/{id}/iterations
-  - [ ] Sub-task: Implement all handlers with mutation guards and JWT auth
-  - [ ] Sub-task: Wire OpenTelemetry spans on each handler
-  - [ ] Sub-task: Register routes in stitchd-server router
-  - [ ] Sub-task: Pass all integration tests
+  - [x] Sub-task: Implement all handlers with mutation guards and JWT auth
+  - [x] Sub-task: Wire OpenTelemetry spans on each handler
+  - [x] Sub-task: Register routes in stitchd-server router
+  - [x] Sub-task: Pass all integration tests
 
-- [ ] Task 3: OpenAPI spec verification
-  - [ ] Sub-task: Run xtask docs, confirm all experiment endpoints appear
+- [x] Task 3: OpenAPI spec verification [881f54a]
+  - [x] Sub-task: Run xtask docs, confirm all experiment endpoints appear
         in generated OpenAPI spec
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: REST API Layer' (Protocol in workflow.md)
