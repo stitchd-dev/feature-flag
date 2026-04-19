@@ -32,22 +32,6 @@ lcov.info
 # Temporary files
 *.tmp
 *.bak
-.worktrees/feature_flags_20260416/
-# bd worktree
-.worktrees/fix_lint_errors_20260417/worker_1_flag/
-# bd worktree
-.worktrees/fix_lint_errors_20260417/worker_2_segment/
-# bd worktree
-.worktrees/fix_lint_errors_20260417/worker_3_rule_engine/
-# bd worktree
-.worktrees/fix_lint_errors_20260417/worker_4_others/
-# bd worktree
-.worktrees/sdk_20260417/
-# bd worktree
-.worktrees/fix_ci_clippy_20260417/
-# bd worktree
-.worktrees/coverage_20260417/
-# bd worktree
-.worktrees/mdbook_docs_20260418/
+.worktrees
 docs/src/api/openapi.json
 docs/src/grpc/*.md
