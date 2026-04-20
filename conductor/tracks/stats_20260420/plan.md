@@ -1,7 +1,7 @@
 # Plan: Experiment Statistical Analysis
 Track: stats_20260420
 
-## Phase 1: Database Schema & Domain Types
+## Phase 1: Database Schema & Domain Types [checkpoint: 58d8af8]
 <!-- execution: parallel -->
 
 - [x] Task 1: PostgreSQL migrations <!-- 97c41d3 -->
