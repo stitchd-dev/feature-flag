@@ -3,6 +3,8 @@
 //! This module provides all types needed to represent the results of a
 //! statistical analysis run on an [`super::ExperimentIteration`].
 
+pub mod bootstrap;
+
 use std::collections::HashMap;
 use std::fmt;
 
