@@ -100,7 +100,12 @@ impl ExperimentResultsResponse {
             .min()
             .expect("non-empty slice always has a minimum");
         let metrics = rows.iter().map(MetricResultResponse::from_row).collect();
-        Self { experiment_id, iteration_id, computed_at, metrics }
+        Self {
+            experiment_id,
+            iteration_id,
+            computed_at,
+            metrics,
+        }
     }
 }
 
@@ -163,11 +168,13 @@ pub async fn get_latest_results(
     let iteration_id = rows[0].iteration_id;
 
     // Fire-and-forget recompute if results are stale.
-    if let Ok(true) = state
-        .results_repo
-        .is_stale(experiment_id.as_uuid(), iteration_id)
-        .await
-    {
+    if matches!(
+        state
+            .results_repo
+            .is_stale(experiment_id.as_uuid(), iteration_id)
+            .await,
+        Ok(true)
+    ) {
         maybe_spawn_recompute(&state, experiment_id.as_uuid(), iteration_id);
     }
 
@@ -248,18 +255,13 @@ pub async fn recompute_results(
     Path((_, experiment_id)): Path<(EnvironmentId, ExperimentId)>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Determine the latest iteration by looking at existing iterations.
-    let iterations = state
-        .experiment_repo
-        .list_iterations(experiment_id)
-        .await?;
+    let iterations = state.experiment_repo.list_iterations(experiment_id).await?;
 
     let latest = iterations
         .into_iter()
         .max_by_key(|i| i.iteration_number)
         .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "experiment {experiment_id} has no iterations"
-            ))
+            ApiError::NotFound(format!("experiment {experiment_id} has no iterations"))
         })?;
 
     // Spawn recompute job fire-and-forget (best-effort; no ClickHouse = no-op).
@@ -286,7 +288,7 @@ fn maybe_spawn_recompute(state: &AppState, experiment_id: Uuid, iteration_id: Uu
             experiment_id,
             iteration_id,
             analysis_type: AnalysisType::Frequentist,
-            metrics: vec![],           // caller is expected to populate metrics for real runs
+            metrics: vec![], // caller is expected to populate metrics for real runs
             date_from: chrono::Utc::now(),
             date_to: chrono::Utc::now(),
             min_sample_size: None,
@@ -447,7 +449,9 @@ mod tests {
     use sqlx::PgPool;
     use std::sync::Arc;
     use stitchd_core::id::{EnvironmentId, ExperimentId, ExperimentIterationId};
-    use stitchd_db::experiment_results::{ExperimentResultRow, ExperimentResultsRepository, UpsertResultRow};
+    use stitchd_db::experiment_results::{
+        ExperimentResultRow, ExperimentResultsRepository, UpsertResultRow,
+    };
     use tower::ServiceExt as _;
 
     // ── Stub: empty results repository (always returns empty) ─────────────
@@ -504,10 +508,7 @@ mod tests {
         async fn upsert(&self, _: &UpsertResultRow) -> Result<ExperimentResultRow, sqlx::Error> {
             Err(sqlx::Error::RowNotFound)
         }
-        async fn fetch_latest(
-            &self,
-            _: Uuid,
-        ) -> Result<Vec<ExperimentResultRow>, sqlx::Error> {
+        async fn fetch_latest(&self, _: Uuid) -> Result<Vec<ExperimentResultRow>, sqlx::Error> {
             Ok(vec![self.make_row("checkout")])
         }
         async fn fetch_by_iteration(
@@ -533,7 +534,8 @@ mod tests {
         async fn find_by_id(
             &self,
             id: ExperimentId,
-        ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError> {
+        ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError>
+        {
             Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
         }
         async fn list_by_environment(
@@ -557,10 +559,7 @@ mod tests {
         {
             Ok(e.clone())
         }
-        async fn soft_delete(
-            &self,
-            id: ExperimentId,
-        ) -> Result<(), stitchd_db::RepositoryError> {
+        async fn soft_delete(&self, id: ExperimentId) -> Result<(), stitchd_db::RepositoryError> {
             Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
         }
         async fn list_iterations(
@@ -599,7 +598,8 @@ mod tests {
         async fn find_by_id(
             &self,
             id: ExperimentId,
-        ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError> {
+        ) -> Result<stitchd_core::experimentation::Experiment, stitchd_db::RepositoryError>
+        {
             Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
         }
         async fn list_by_environment(
@@ -623,10 +623,7 @@ mod tests {
         {
             Ok(e.clone())
         }
-        async fn soft_delete(
-            &self,
-            id: ExperimentId,
-        ) -> Result<(), stitchd_db::RepositoryError> {
+        async fn soft_delete(&self, id: ExperimentId) -> Result<(), stitchd_db::RepositoryError> {
             Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
         }
         async fn list_iterations(
@@ -651,6 +648,7 @@ mod tests {
 
     // ── Router builder ─────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_lines)]
     fn build_results_router(
         results_repo: Arc<dyn ExperimentResultsRepository>,
         experiment_repo: Arc<dyn stitchd_db::ExperimentRepository>,
@@ -681,7 +679,9 @@ mod tests {
                 key: &FlagKey,
                 _: ProjectId,
             ) -> Result<FlagRecord, RepositoryError> {
-                Err(RepositoryError::NotFound { id: key.to_string() })
+                Err(RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
             }
             async fn list_by_project(
                 &self,
@@ -695,7 +695,9 @@ mod tests {
             ) -> Result<Vec<FlagRecord>, RepositoryError> {
                 Ok(vec![])
             }
-            async fn create(&self, _: &FlagRecord) -> Result<(), RepositoryError> { Ok(()) }
+            async fn create(&self, _: &FlagRecord) -> Result<(), RepositoryError> {
+                Ok(())
+            }
             async fn update(&self, f: &FlagRecord) -> Result<FlagRecord, RepositoryError> {
                 Ok(f.clone())
             }
@@ -718,11 +720,7 @@ mod tests {
             async fn find_rules(&self, _: FlagId) -> Result<Vec<FlagRule>, RepositoryError> {
                 Ok(vec![])
             }
-            async fn upsert_rules(
-                &self,
-                _: FlagId,
-                _: &[FlagRule],
-            ) -> Result<(), RepositoryError> {
+            async fn upsert_rules(&self, _: FlagId, _: &[FlagRule]) -> Result<(), RepositoryError> {
                 Ok(())
             }
         }
@@ -737,7 +735,9 @@ mod tests {
             async fn update(&self, v: &Variant) -> Result<Variant, RepositoryError> {
                 Ok(v.clone())
             }
-            async fn delete(&self, _: VariantId) -> Result<(), RepositoryError> { Ok(()) }
+            async fn delete(&self, _: VariantId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
         }
         #[async_trait]
         impl SegmentRepository for NullRepo {
@@ -749,7 +749,9 @@ mod tests {
                 key: &str,
                 _: EnvironmentId,
             ) -> Result<Segment, RepositoryError> {
-                Err(RepositoryError::NotFound { id: key.to_string() })
+                Err(RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
             }
             async fn list_by_environment(
                 &self,
@@ -757,7 +759,9 @@ mod tests {
             ) -> Result<Vec<Segment>, RepositoryError> {
                 Ok(vec![])
             }
-            async fn create(&self, _: &Segment) -> Result<(), RepositoryError> { Ok(()) }
+            async fn create(&self, _: &Segment) -> Result<(), RepositoryError> {
+                Ok(())
+            }
             async fn update(&self, s: &Segment) -> Result<Segment, RepositoryError> {
                 Ok(s.clone())
             }
@@ -771,7 +775,10 @@ mod tests {
                 &self,
                 id: SegmentId,
             ) -> Result<ListBasedSegment, RepositoryError> {
-                Ok(ListBasedSegment { id, lists: HashMap::new() })
+                Ok(ListBasedSegment {
+                    id,
+                    lists: HashMap::new(),
+                })
             }
             async fn upsert_rules(
                 &self,
@@ -789,7 +796,9 @@ mod tests {
             ) -> Result<(), RepositoryError> {
                 Ok(())
             }
-            async fn soft_delete(&self, _: SegmentId) -> Result<(), RepositoryError> { Ok(()) }
+            async fn soft_delete(&self, _: SegmentId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
             async fn check_list_membership(
                 &self,
                 _: EnvironmentId,
@@ -819,7 +828,9 @@ mod tests {
             ) -> Result<Vec<SdkKey>, RepositoryError> {
                 Ok(vec![])
             }
-            async fn create(&self, _: &SdkKey) -> Result<(), RepositoryError> { Ok(()) }
+            async fn create(&self, _: &SdkKey) -> Result<(), RepositoryError> {
+                Ok(())
+            }
             async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
@@ -846,7 +857,9 @@ mod tests {
                 key: &str,
                 _: EnvironmentId,
             ) -> Result<EventDefinition, RepositoryError> {
-                Err(RepositoryError::NotFound { id: key.to_string() })
+                Err(RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
             }
             async fn list_by_environment(
                 &self,
@@ -854,17 +867,16 @@ mod tests {
             ) -> Result<Vec<EventDefinition>, RepositoryError> {
                 Ok(vec![])
             }
-            async fn create(&self, _: &EventDefinition) -> Result<(), RepositoryError> { Ok(()) }
+            async fn create(&self, _: &EventDefinition) -> Result<(), RepositoryError> {
+                Ok(())
+            }
             async fn update(
                 &self,
                 d: &EventDefinition,
             ) -> Result<EventDefinition, RepositoryError> {
                 Ok(d.clone())
             }
-            async fn soft_delete(
-                &self,
-                id: EventDefinitionId,
-            ) -> Result<(), RepositoryError> {
+            async fn soft_delete(&self, id: EventDefinitionId) -> Result<(), RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
         }
@@ -953,7 +965,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), HttpStatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert!(json["metrics"].is_array());
         assert_eq!(json["metrics"].as_array().unwrap().len(), 1);
@@ -1050,7 +1064,9 @@ mod tests {
         let env_id = EnvironmentId::new();
         let exp_id = ExperimentId::new();
         let iter_id = Uuid::new_v4();
-        let repo_with_iter = Arc::new(StubExperimentRepoWithIter { iteration_id: iter_id });
+        let repo_with_iter = Arc::new(StubExperimentRepoWithIter {
+            iteration_id: iter_id,
+        });
         let app = build_results_router(Arc::new(EmptyResultsRepo), repo_with_iter);
 
         let resp = app
@@ -1068,7 +1084,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), HttpStatusCode::ACCEPTED);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["status"], "accepted");
     }

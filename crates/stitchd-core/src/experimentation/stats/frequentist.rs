@@ -24,8 +24,7 @@ fn erf(x: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.3275911 * x);
     let poly = t
         * (0.254829592
-            + t * (-0.284496736
-                + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+            + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
     sign * (1.0 - poly * (-x * x).exp())
 }
 
@@ -47,7 +46,7 @@ fn z_to_p(z: f64) -> f64 {
 /// expansion (Numerical Recipes, §6.4).  Accurate to ~10⁻¹⁰ for typical
 /// degree-of-freedom values seen in A/B tests.
 fn regularised_incomplete_beta(x: f64, a: f64, b: f64) -> f64 {
-    if x < 0.0 || x > 1.0 {
+    if !(0.0..=1.0).contains(&x) {
         return 0.0;
     }
     if x == 0.0 {
@@ -122,9 +121,7 @@ fn lgamma(x: f64) -> f64 {
 
     let x = if x < 0.5 {
         // Reflection formula: Γ(1-x)Γ(x) = π/sin(πx)
-        return std::f64::consts::PI.ln()
-            - (std::f64::consts::PI * x).sin().ln()
-            - lgamma(1.0 - x);
+        return std::f64::consts::PI.ln() - (std::f64::consts::PI * x).sin().ln() - lgamma(1.0 - x);
     } else {
         x - 1.0
     };
@@ -135,10 +132,7 @@ fn lgamma(x: f64) -> f64 {
     }
 
     let tmp = x + G + 0.5;
-    (2.0 * std::f64::consts::PI).sqrt().ln()
-        + sum.ln()
-        + (x + 0.5) * tmp.ln()
-        - tmp
+    (2.0 * std::f64::consts::PI).sqrt().ln() + sum.ln() + (x + 0.5) * tmp.ln() - tmp
 }
 
 /// Two-tailed p-value from the Student's t-distribution with `df` degrees of
@@ -181,8 +175,12 @@ fn t_critical_95(df: f64) -> f64 {
 pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> FrequentistResult {
     let n1 = control.sample_size as f64;
     let n2 = variant.sample_size as f64;
-    let c1 = control.conversions.expect("analyze_count: control.conversions must be Some") as f64;
-    let c2 = variant.conversions.expect("analyze_count: variant.conversions must be Some") as f64;
+    let c1 = control
+        .conversions
+        .expect("analyze_count: control.conversions must be Some") as f64;
+    let c2 = variant
+        .conversions
+        .expect("analyze_count: variant.conversions must be Some") as f64;
 
     let p1 = c1 / n1;
     let p2 = c2 / n2;
@@ -190,7 +188,11 @@ pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> Frequent
     let p_pool = (c1 + c2) / (n1 + n2);
     let se_pool = (p_pool * (1.0 - p_pool) * (1.0 / n1 + 1.0 / n2)).sqrt();
 
-    let z = if se_pool == 0.0 { 0.0 } else { (p2 - p1) / se_pool };
+    let z = if se_pool == 0.0 {
+        0.0
+    } else {
+        (p2 - p1) / se_pool
+    };
     let p_value = z_to_p(z);
 
     // 95 % CI on lift using unpooled SE
@@ -221,10 +223,18 @@ pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> Frequent
 pub fn analyze_numeric(control: &VariantStats, variant: &VariantStats) -> FrequentistResult {
     let n1 = control.sample_size as f64;
     let n2 = variant.sample_size as f64;
-    let mean1 = control.mean.expect("analyze_numeric: control.mean must be Some");
-    let mean2 = variant.mean.expect("analyze_numeric: variant.mean must be Some");
-    let var1 = control.variance.expect("analyze_numeric: control.variance must be Some");
-    let var2 = variant.variance.expect("analyze_numeric: variant.variance must be Some");
+    let mean1 = control
+        .mean
+        .expect("analyze_numeric: control.mean must be Some");
+    let mean2 = variant
+        .mean
+        .expect("analyze_numeric: variant.mean must be Some");
+    let var1 = control
+        .variance
+        .expect("analyze_numeric: control.variance must be Some");
+    let var2 = variant
+        .variance
+        .expect("analyze_numeric: variant.variance must be Some");
 
     let s1_sq = var1 / n1;
     let s2_sq = var2 / n2;
@@ -274,10 +284,8 @@ pub fn analyze_percentile(
     percentile: f64,
 ) -> FrequentistResult {
     let p = percentile / 100.0;
-    let (c_lower, c_upper) =
-        super::bootstrap::bootstrap_percentile_ci(control_samples, p, 1_000);
-    let (v_lower, v_upper) =
-        super::bootstrap::bootstrap_percentile_ci(variant_samples, p, 1_000);
+    let (c_lower, c_upper) = super::bootstrap::bootstrap_percentile_ci(control_samples, p, 1_000);
+    let (v_lower, v_upper) = super::bootstrap::bootstrap_percentile_ci(variant_samples, p, 1_000);
     FrequentistResult {
         p_value: f64::NAN,
         confidence_interval: ConfidenceInterval {
@@ -314,7 +322,11 @@ pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> Frequen
     let p_pool = (c1 + c2) / (n1 + n2);
     let se_pool = (p_pool * (1.0 - p_pool) * (1.0 / n1 + 1.0 / n2)).sqrt();
 
-    let z = if se_pool == 0.0 { 0.0 } else { (p2 - p1) / se_pool };
+    let z = if se_pool == 0.0 {
+        0.0
+    } else {
+        (p2 - p1) / se_pool
+    };
     let p_value = z_to_p(z);
 
     let se_lift = (p1 * (1.0 - p1) / n1 + p2 * (1.0 - p2) / n2).sqrt();
@@ -384,14 +396,20 @@ mod tests {
     #[test]
     fn norm_cdf_at_196_is_approximately_975() {
         let p = norm_cdf(1.96);
-        assert!((p - 0.975).abs() < 1e-3, "Φ(1.96) should be ≈ 0.975, got {p}");
+        assert!(
+            (p - 0.975).abs() < 1e-3,
+            "Φ(1.96) should be ≈ 0.975, got {p}"
+        );
     }
 
     #[test]
     fn norm_cdf_symmetric() {
         for z in [-3.0, -1.96, -1.0, 0.0, 1.0, 1.96, 3.0] {
             let p = norm_cdf(z) + norm_cdf(-z);
-            assert!((p - 1.0).abs() < 1e-6, "Φ(z)+Φ(-z) should be 1 for z={z}, got {p}");
+            assert!(
+                (p - 1.0).abs() < 1e-6,
+                "Φ(z)+Φ(-z) should be 1 for z={z}, got {p}"
+            );
         }
     }
 
@@ -416,7 +434,10 @@ mod tests {
     fn t_to_p_large_df_approaches_normal() {
         // With df=1000, t-distribution ≈ normal.  t=1.96 → p ≈ 0.05
         let p = t_to_p(1.96, 1000.0);
-        assert!((p - 0.05).abs() < 0.01, "t→p with df=1000 should be ≈0.05, got {p}");
+        assert!(
+            (p - 0.05).abs() < 0.01,
+            "t→p with df=1000 should be ≈0.05, got {p}"
+        );
     }
 
     #[test]
@@ -495,8 +516,7 @@ mod tests {
         let result = analyze_count(&control, &variant);
 
         let expected_lift = 0.15 - 0.10;
-        let midpoint =
-            (result.confidence_interval.lower + result.confidence_interval.upper) / 2.0;
+        let midpoint = (result.confidence_interval.lower + result.confidence_interval.upper) / 2.0;
         assert!(
             (midpoint - expected_lift).abs() < 0.001,
             "CI midpoint {midpoint} should be near lift {expected_lift}"
@@ -520,7 +540,11 @@ mod tests {
             "large numeric difference should be significant; p_value={}",
             result.p_value
         );
-        assert!(result.p_value < 0.001, "p_value should be very small, got {}", result.p_value);
+        assert!(
+            result.p_value < 0.001,
+            "p_value should be very small, got {}",
+            result.p_value
+        );
     }
 
     /// Small difference → NOT significant
@@ -538,7 +562,11 @@ mod tests {
             "tiny numeric difference should NOT be significant; p_value={}",
             result.p_value
         );
-        assert!(result.p_value > 0.9, "p_value should be very high, got {}", result.p_value);
+        assert!(
+            result.p_value > 0.9,
+            "p_value should be very high, got {}",
+            result.p_value
+        );
     }
 
     /// CI should straddle zero when not significant
@@ -683,7 +711,10 @@ mod tests {
         // lgamma(0.5) = ln(sqrt(π)) ≈ 0.5723...
         let v2 = lgamma(0.5);
         let expected = (std::f64::consts::PI.sqrt()).ln();
-        assert!((v2 - expected).abs() < 1e-6, "lgamma(0.5) should be {expected}, got {v2}");
+        assert!(
+            (v2 - expected).abs() < 1e-6,
+            "lgamma(0.5) should be {expected}, got {v2}"
+        );
 
         // Trigger the x < 0.5 branch explicitly
         let v3 = lgamma(0.25);
@@ -699,7 +730,11 @@ mod tests {
         let variant = make_numeric_stats(100, 5.0, 0.0);
         let result = analyze_numeric(&control, &variant);
         // t = 0 → p_value should be 1.0 (or very close)
-        assert!(result.p_value > 0.9, "zero variance, same mean: p_value should be ~1, got {}", result.p_value);
+        assert!(
+            result.p_value > 0.9,
+            "zero variance, same mean: p_value should be ~1, got {}",
+            result.p_value
+        );
         assert!(!result.significant);
     }
 

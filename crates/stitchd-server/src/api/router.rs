@@ -85,10 +85,7 @@ fn experiment_routes() -> Router<AppState> {
             "/{id}/iterations",
             get(experiments::handlers::list_iterations),
         )
-        .route(
-            "/{id}/results",
-            get(results_api::get_latest_results),
-        )
+        .route("/{id}/results", get(results_api::get_latest_results))
         .route(
             "/{id}/iterations/{iter_id}/results",
             get(results_api::get_iteration_results),

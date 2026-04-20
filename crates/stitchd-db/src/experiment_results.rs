@@ -95,11 +95,7 @@ pub trait ExperimentResultsRepository: Send + Sync {
     /// - no result rows exist yet for this `(experiment_id, iteration_id)`, or
     /// - the minimum `computed_at` across all result rows is earlier than
     ///   `experiment_iterations.started_at`.
-    async fn is_stale(
-        &self,
-        experiment_id: Uuid,
-        iteration_id: Uuid,
-    ) -> Result<bool, sqlx::Error>;
+    async fn is_stale(&self, experiment_id: Uuid, iteration_id: Uuid) -> Result<bool, sqlx::Error>;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,7 +110,7 @@ pub struct PgExperimentResultsRepository {
 impl PgExperimentResultsRepository {
     /// Construct a new repository bound to `pool`.
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
+    pub const fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -227,17 +223,15 @@ impl ExperimentResultsRepository for PgExperimentResultsRepository {
         .await
     }
 
-    async fn is_stale(
-        &self,
-        experiment_id: Uuid,
-        iteration_id: Uuid,
-    ) -> Result<bool, sqlx::Error> {
+    async fn is_stale(&self, experiment_id: Uuid, iteration_id: Uuid) -> Result<bool, sqlx::Error> {
         // If MIN(computed_at) IS NULL → no rows exist → stale.
         // If MIN(computed_at) < started_at → at least one result is older than the
         // iteration start → stale.
-        let row: Option<(Option<chrono::DateTime<chrono::Utc>>, chrono::DateTime<chrono::Utc>)> =
-            sqlx::query_as(
-                r"
+        let row: Option<(
+            Option<chrono::DateTime<chrono::Utc>>,
+            chrono::DateTime<chrono::Utc>,
+        )> = sqlx::query_as(
+            r"
                 SELECT
                     MIN(er.computed_at) AS min_computed_at,
                     ei.started_at
@@ -249,21 +243,18 @@ impl ExperimentResultsRepository for PgExperimentResultsRepository {
                   AND ei.id            = $2
                 GROUP BY ei.started_at
                 ",
-            )
-            .bind(experiment_id)
-            .bind(iteration_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        )
+        .bind(experiment_id)
+        .bind(iteration_id)
+        .fetch_optional(&self.pool)
+        .await?;
 
         let Some((min_computed_at, started_at)) = row else {
             // Iteration not found — treat as stale.
             return Ok(true);
         };
 
-        match min_computed_at {
-            None => Ok(true), // No results yet.
-            Some(computed_at) => Ok(computed_at < started_at),
-        }
+        Ok(min_computed_at.is_none_or(|computed_at| computed_at < started_at))
     }
 }
 
@@ -276,6 +267,14 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    use crate::{
+        EnvironmentRepository, ExperimentRepository, FlagRepository, OrganisationRepository,
+        ProjectRepository,
+        repository::pg::{
+            PgAuditLogger, PgEnvironmentRepository, PgExperimentRepository, PgFlagRepository,
+            PgOrganisationRepository, PgProjectRepository,
+        },
+    };
     use chrono::Utc;
     use stitchd_core::{
         experimentation::{Experiment, ExperimentStatus},
@@ -286,14 +285,6 @@ mod tests {
         },
         rule_engine::types::{ConditionExpr, Rule, RuleOutput},
         tenant::{Environment, Organisation, Project},
-    };
-    use crate::{
-        EnvironmentRepository, ExperimentRepository, FlagRepository, OrganisationRepository,
-        ProjectRepository,
-        repository::pg::{
-            PgAuditLogger, PgEnvironmentRepository, PgExperimentRepository, PgFlagRepository,
-            PgOrganisationRepository, PgProjectRepository,
-        },
     };
 
     // -----------------------------------------------------------------------
@@ -441,7 +432,10 @@ mod tests {
         let iter = &iterations[0];
 
         let input = make_upsert_row(exp.id.as_uuid(), iter.id.as_uuid(), "checkout");
-        let returned = results_repo.upsert(&input).await.expect("upsert should succeed");
+        let returned = results_repo
+            .upsert(&input)
+            .await
+            .expect("upsert should succeed");
 
         assert_eq!(returned.experiment_id, exp.id.as_uuid());
         assert_eq!(returned.iteration_id, iter.id.as_uuid());
@@ -482,7 +476,10 @@ mod tests {
 
         // Second upsert with updated recommendation.
         input.recommendation = "keep_control".to_string();
-        let returned = results_repo.upsert(&input).await.expect("second upsert should succeed");
+        let returned = results_repo
+            .upsert(&input)
+            .await
+            .expect("second upsert should succeed");
         assert_eq!(returned.recommendation, "keep_control");
 
         // Should still be exactly one row.

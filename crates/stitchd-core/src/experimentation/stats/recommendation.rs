@@ -123,12 +123,15 @@ pub fn pick_winner(recommendations: &[(String, Recommendation)]) -> Recommendati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::experimentation::stats::{ConfidenceInterval, FrequentistResult, BayesianResult};
+    use crate::experimentation::stats::{BayesianResult, ConfidenceInterval, FrequentistResult};
 
     fn make_frequentist(significant: bool, ci_lower: f64, ci_upper: f64) -> FrequentistResult {
         FrequentistResult {
             p_value: if significant { 0.03 } else { 0.42 },
-            confidence_interval: ConfidenceInterval { lower: ci_lower, upper: ci_upper },
+            confidence_interval: ConfidenceInterval {
+                lower: ci_lower,
+                upper: ci_upper,
+            },
             significant,
         }
     }
@@ -136,7 +139,10 @@ mod tests {
     fn make_bayesian(prob_best: f64) -> BayesianResult {
         BayesianResult {
             prob_best,
-            credible_interval: ConfidenceInterval { lower: 0.01, upper: 0.15 },
+            credible_interval: ConfidenceInterval {
+                lower: 0.01,
+                upper: 0.15,
+            },
             expected_loss: 0.001,
         }
     }

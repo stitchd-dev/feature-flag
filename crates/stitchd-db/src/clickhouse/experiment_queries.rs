@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn funnel_step_sql_injects_step_index() {
         let sql = build_funnel_step_sql(3, "add_to_cart");
-        assert!(sql.contains("3"), "step_index 3 should appear in SQL");
+        assert!(sql.contains('3'), "step_index 3 should appear in SQL");
     }
 
     #[test]
@@ -503,7 +503,7 @@ mod tests {
 
     #[test]
     fn mock_count_results_conversion_rate() {
-        let rows = vec![
+        let rows = [
             CountMetricRow {
                 variant_key: "control".to_string(),
                 sample_size: 1000,
@@ -530,7 +530,7 @@ mod tests {
 
     #[test]
     fn mock_numeric_results_mean_difference() {
-        let rows = vec![
+        let rows = [
             NumericMetricRow {
                 variant_key: "control".to_string(),
                 sample_size: 500,
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn mock_funnel_final_step_conversion_rate() {
         // Simulates: step 0 = page_view, step 1 = add_to_cart, step 2 = checkout
-        let rows = vec![
+        let rows = [
             FunnelStepRow {
                 variant_key: "control".to_string(),
                 step_index: 0,
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn funnel_rows_can_be_grouped_by_variant() {
-        let rows = vec![
+        let rows = [
             FunnelStepRow {
                 variant_key: "control".to_string(),
                 step_index: 0,
@@ -645,12 +645,13 @@ mod tests {
                 count: 110,
             },
         ];
-        let control_rows: Vec<_> = rows.iter().filter(|r| r.variant_key == "control").collect();
-        let treatment_rows: Vec<_> = rows
-            .iter()
-            .filter(|r| r.variant_key == "treatment")
-            .collect();
-        assert_eq!(control_rows.len(), 1);
-        assert_eq!(treatment_rows.len(), 1);
+        assert_eq!(
+            rows.iter().filter(|r| r.variant_key == "control").count(),
+            1
+        );
+        assert_eq!(
+            rows.iter().filter(|r| r.variant_key == "treatment").count(),
+            1
+        );
     }
 }

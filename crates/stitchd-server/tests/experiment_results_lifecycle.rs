@@ -9,16 +9,14 @@ use std::sync::Arc;
 
 use chrono::{Duration, Utc};
 use stitchd_core::{
-    experimentation::{Experiment, ExperimentStatus},
     experimentation::stats::{
-        AnalysisType, BayesianResult, FrequentistResult, VariantStats,
-        bayesian, frequentist, recommendation,
-        recommendation::RecommendationInput,
+        AnalysisType, BayesianResult, FrequentistResult, VariantStats, bayesian, frequentist,
+        recommendation, recommendation::RecommendationInput,
     },
+    experimentation::{Experiment, ExperimentStatus},
     flag::{FlagRecord, FlagRule, FlagValueType},
     id::{
-        EnvironmentId, ExperimentId, FlagId, FlagKey, OrganisationId, ProjectId, RuleId,
-        VariantId,
+        EnvironmentId, ExperimentId, FlagId, FlagKey, OrganisationId, ProjectId, RuleId, VariantId,
     },
     rule_engine::types::{ConditionExpr, Rule, RuleOutput},
     tenant::{Environment, Organisation, Project},
@@ -579,7 +577,10 @@ async fn test_recompute_updates_computed_at(pool: sqlx::PgPool) {
         .is_stale(exp.id.as_uuid(), iter.id.as_uuid())
         .await
         .unwrap();
-    assert!(stale, "result should be stale when computed_at is before started_at");
+    assert!(
+        stale,
+        "result should be stale when computed_at is before started_at"
+    );
 
     // Recompute: upsert with fresh computed_at (now + 1s to ensure > started_at)
     let fresh_computed_at = Utc::now() + Duration::seconds(1);
@@ -599,7 +600,10 @@ async fn test_recompute_updates_computed_at(pool: sqlx::PgPool) {
         .is_stale(exp.id.as_uuid(), iter.id.as_uuid())
         .await
         .unwrap();
-    assert!(!stale_after, "result should no longer be stale after recompute");
+    assert!(
+        !stale_after,
+        "result should no longer be stale after recompute"
+    );
 }
 
 // ── Scenario 7: Funnel metric — correct chained conversion rate ───────────────

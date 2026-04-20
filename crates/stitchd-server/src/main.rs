@@ -88,9 +88,9 @@ async fn main() -> Result<()> {
             info!(url = %url, "ClickHouse client enabled");
             std::sync::Arc::new(clickhouse::Client::default().with_url(url))
         }),
-        event_writer: std::env::var("CLICKHOUSE_URL").ok().map(|url| {
-            EventWriter::new(clickhouse::Client::default().with_url(url))
-        }),
+        event_writer: std::env::var("CLICKHOUSE_URL")
+            .ok()
+            .map(|url| EventWriter::new(clickhouse::Client::default().with_url(url))),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")

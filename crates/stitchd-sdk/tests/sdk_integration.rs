@@ -22,6 +22,7 @@ use stitchd_core::{
     tenant::{Environment, Organisation, Project, SdkKey},
     variants::{Variant, VariantValue},
 };
+use stitchd_db::experiment_results::PgExperimentResultsRepository;
 use stitchd_db::{
     EnvironmentRepository, FlagRepository, OrganisationRepository, ProjectRepository,
     SdkKeyRepository, SegmentRepository, VariantRepository,
@@ -228,6 +229,8 @@ async fn setup(pool: sqlx::PgPool) -> (SdkConfig, EnvironmentId) {
             pool.clone(),
             Arc::new(PgAuditLogger::new(pool.clone())),
         )),
+        results_repo: Arc::new(PgExperimentResultsRepository::new(pool.clone())),
+        ch_client: None,
         event_writer: None,
     };
 

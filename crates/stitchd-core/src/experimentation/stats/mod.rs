@@ -139,7 +139,10 @@ pub enum Recommendation {
 impl Recommendation {
     /// Returns `true` if this recommendation is actionable (i.e. a winner is clear).
     pub fn is_actionable(&self) -> bool {
-        matches!(self, Recommendation::VariantWins(_) | Recommendation::ControlWins)
+        matches!(
+            self,
+            Recommendation::VariantWins(_) | Recommendation::ControlWins
+        )
     }
 
     /// Numeric priority for ordering recommendations from most to least decisive.
@@ -256,7 +259,7 @@ mod tests {
     fn analysis_type_is_clone_and_copy() {
         let a = AnalysisType::Frequentist;
         let b = a; // Copy
-        let c = a.clone(); // Clone
+        let c = a;
         assert_eq!(a, b);
         assert_eq!(a, c);
     }
@@ -265,10 +268,22 @@ mod tests {
 
     #[test]
     fn metric_type_all_variants_serialize() {
-        assert_eq!(serde_json::to_string(&MetricType::Count).unwrap(), "\"count\"");
-        assert_eq!(serde_json::to_string(&MetricType::Numeric).unwrap(), "\"numeric\"");
-        assert_eq!(serde_json::to_string(&MetricType::Percentile).unwrap(), "\"percentile\"");
-        assert_eq!(serde_json::to_string(&MetricType::Funnel).unwrap(), "\"funnel\"");
+        assert_eq!(
+            serde_json::to_string(&MetricType::Count).unwrap(),
+            "\"count\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MetricType::Numeric).unwrap(),
+            "\"numeric\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MetricType::Percentile).unwrap(),
+            "\"percentile\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MetricType::Funnel).unwrap(),
+            "\"funnel\""
+        );
     }
 
     #[test]
@@ -366,14 +381,22 @@ mod tests {
 
     #[test]
     fn percentiles_struct_can_be_constructed_and_cloned() {
-        let p = Percentiles { p50: 100.0, p95: 250.0, p99: 400.0 };
+        let p = Percentiles {
+            p50: 100.0,
+            p95: 250.0,
+            p99: 400.0,
+        };
         let p2 = p.clone();
         assert_eq!(p, p2);
     }
 
     #[test]
     fn percentiles_serializes_to_snake_case_keys() {
-        let p = Percentiles { p50: 1.0, p95: 2.0, p99: 3.0 };
+        let p = Percentiles {
+            p50: 1.0,
+            p95: 2.0,
+            p99: 3.0,
+        };
         let v = serde_json::to_value(&p).unwrap();
         assert!(v.get("p50").is_some());
         assert!(v.get("p95").is_some());
@@ -405,7 +428,11 @@ mod tests {
             mean: Some(0.1),
             variance: Some(0.09),
             conversion_rate: Some(0.1),
-            percentiles: Some(Percentiles { p50: 100.0, p95: 250.0, p99: 400.0 }),
+            percentiles: Some(Percentiles {
+                p50: 100.0,
+                p95: 250.0,
+                p99: 400.0,
+            }),
         };
         assert_eq!(vs.sample_size, 500);
         assert_eq!(vs.conversions, Some(50));
@@ -417,7 +444,10 @@ mod tests {
 
     #[test]
     fn confidence_interval_can_be_constructed_and_cloned() {
-        let ci = ConfidenceInterval { lower: -0.05, upper: 0.15 };
+        let ci = ConfidenceInterval {
+            lower: -0.05,
+            upper: 0.15,
+        };
         let ci2 = ci.clone();
         assert_eq!(ci, ci2);
     }
@@ -428,7 +458,10 @@ mod tests {
     fn frequentist_result_significant_when_p_value_low() {
         let result = FrequentistResult {
             p_value: 0.01,
-            confidence_interval: ConfidenceInterval { lower: 0.02, upper: 0.18 },
+            confidence_interval: ConfidenceInterval {
+                lower: 0.02,
+                upper: 0.18,
+            },
             significant: true,
         };
         assert!(result.significant);
@@ -439,7 +472,10 @@ mod tests {
     fn frequentist_result_not_significant_when_p_value_high() {
         let result = FrequentistResult {
             p_value: 0.42,
-            confidence_interval: ConfidenceInterval { lower: -0.05, upper: 0.15 },
+            confidence_interval: ConfidenceInterval {
+                lower: -0.05,
+                upper: 0.15,
+            },
             significant: false,
         };
         assert!(!result.significant);
@@ -451,7 +487,10 @@ mod tests {
     fn bayesian_result_can_be_constructed_and_cloned() {
         let result = BayesianResult {
             prob_best: 0.95,
-            credible_interval: ConfidenceInterval { lower: 0.02, upper: 0.18 },
+            credible_interval: ConfidenceInterval {
+                lower: 0.02,
+                upper: 0.18,
+            },
             expected_loss: 0.001,
         };
         let result2 = result.clone();
@@ -493,7 +532,10 @@ mod tests {
             variant_stats,
             frequentist_result: Some(FrequentistResult {
                 p_value: 0.03,
-                confidence_interval: ConfidenceInterval { lower: 0.005, upper: 0.035 },
+                confidence_interval: ConfidenceInterval {
+                    lower: 0.005,
+                    upper: 0.035,
+                },
                 significant: true,
             }),
             bayesian_result: None,

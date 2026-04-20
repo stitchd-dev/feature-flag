@@ -16,8 +16,7 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use stitchd_core::experimentation::stats::{
-    AnalysisType, MetricType, Percentiles, VariantStats,
-    bayesian, frequentist, recommendation,
+    AnalysisType, MetricType, Percentiles, VariantStats, bayesian, frequentist, recommendation,
     recommendation::RecommendationInput,
 };
 use stitchd_db::{
@@ -101,12 +100,20 @@ impl ComputeResultsJob {
 
         for metric in &self.metrics {
             let row = self
-                .compute_metric(metric, &ch_client, &results_repo, &experiment_id_str, computed_at)
+                .compute_metric(
+                    metric,
+                    &ch_client,
+                    &results_repo,
+                    &experiment_id_str,
+                    computed_at,
+                )
                 .await?;
-            results_repo
-                .upsert(&row)
-                .await
-                .map_err(|e| anyhow!("failed to upsert result for metric '{}': {e}", metric.metric_key))?;
+            results_repo.upsert(&row).await.map_err(|e| {
+                anyhow!(
+                    "failed to upsert result for metric '{}': {e}",
+                    metric.metric_key
+                )
+            })?;
         }
         Ok(())
     }
@@ -114,6 +121,7 @@ impl ComputeResultsJob {
     // ── private helpers ───────────────────────────────────────────────────────
 
     /// Compute the result row for a single metric.
+    #[allow(clippy::too_many_lines)]
     async fn compute_metric(
         &self,
         metric: &MetricDefinition,
@@ -134,7 +142,12 @@ impl ComputeResultsJob {
                     self.date_to,
                 )
                 .await
-                .map_err(|e| anyhow!("clickhouse count query failed for '{}': {e}", metric.metric_key))?;
+                .map_err(|e| {
+                    anyhow!(
+                        "clickhouse count query failed for '{}': {e}",
+                        metric.metric_key
+                    )
+                })?;
                 build_count_variant_stats(&rows)
             }
             MetricType::Numeric | MetricType::Percentile => {
@@ -147,7 +160,12 @@ impl ComputeResultsJob {
                     self.date_to,
                 )
                 .await
-                .map_err(|e| anyhow!("clickhouse numeric query failed for '{}': {e}", metric.metric_key))?;
+                .map_err(|e| {
+                    anyhow!(
+                        "clickhouse numeric query failed for '{}': {e}",
+                        metric.metric_key
+                    )
+                })?;
                 build_numeric_variant_stats(&rows, metric.metric_type)
             }
             MetricType::Funnel => {
@@ -167,19 +185,30 @@ impl ComputeResultsJob {
                     self.date_to,
                 )
                 .await
-                .map_err(|e| anyhow!("clickhouse funnel query failed for '{}': {e}", metric.metric_key))?;
+                .map_err(|e| {
+                    anyhow!(
+                        "clickhouse funnel query failed for '{}': {e}",
+                        metric.metric_key
+                    )
+                })?;
                 build_funnel_variant_stats(&rows)
             }
         };
 
         // 2. Identify the control variant.
         let control_key = find_control_key(&variant_stats_map);
-        let control_stats = variant_stats_map
-            .get(&control_key)
-            .ok_or_else(|| anyhow!("no control variant found for metric '{}'", metric.metric_key))?;
+        let control_stats = variant_stats_map.get(&control_key).ok_or_else(|| {
+            anyhow!(
+                "no control variant found for metric '{}'",
+                metric.metric_key
+            )
+        })?;
 
         // 3. Run analysis for each non-control variant vs control.
-        let mut all_variant_recommendations: Vec<(String, stitchd_core::experimentation::stats::Recommendation)> = Vec::new();
+        let mut all_variant_recommendations: Vec<(
+            String,
+            stitchd_core::experimentation::stats::Recommendation,
+        )> = Vec::new();
         let mut frequentist_result_val: Option<JsonValue> = None;
         let mut bayesian_result_val: Option<JsonValue> = None;
 
@@ -192,12 +221,8 @@ impl ComputeResultsJob {
         for variant_key in &treatment_keys {
             let variant_stats = &variant_stats_map[variant_key];
 
-            let (freq_result, bayes_result) = run_analysis(
-                metric,
-                control_stats,
-                variant_stats,
-                self.analysis_type,
-            );
+            let (freq_result, bayes_result) =
+                run_analysis(metric, control_stats, variant_stats, self.analysis_type);
 
             let rec_input = RecommendationInput {
                 variant_key: variant_key.clone(),
@@ -295,7 +320,11 @@ fn build_numeric_variant_stats(
     rows.iter()
         .map(|row| {
             let percentiles = if metric_type == MetricType::Percentile {
-                Some(Percentiles { p50: row.p50, p95: row.p95, p99: row.p99 })
+                Some(Percentiles {
+                    p50: row.p50,
+                    p95: row.p95,
+                    p99: row.p99,
+                })
             } else {
                 None
             };
@@ -315,12 +344,15 @@ fn build_numeric_variant_stats(
 /// Build a `VariantStats` map from funnel step rows.
 ///
 /// Uses the final (maximum) step count as the conversion count; the first step
-/// count (step 0) is used as the sample_size denominator.
+/// count (step 0) is used as the `sample_size` denominator.
 fn build_funnel_variant_stats(rows: &[FunnelStepRow]) -> HashMap<String, VariantStats> {
     // Group by variant key.
     let mut by_variant: HashMap<String, Vec<&FunnelStepRow>> = HashMap::new();
     for row in rows {
-        by_variant.entry(row.variant_key.clone()).or_default().push(row);
+        by_variant
+            .entry(row.variant_key.clone())
+            .or_default()
+            .push(row);
     }
 
     by_variant
@@ -387,12 +419,10 @@ fn run_analysis(
         (MetricType::Count, AnalysisType::Bayesian) => {
             (None, Some(bayesian::analyze_count(control, variant)))
         }
-        (MetricType::Numeric, AnalysisType::Frequentist)
-        | (MetricType::Percentile, AnalysisType::Frequentist) => {
+        (MetricType::Numeric | MetricType::Percentile, AnalysisType::Frequentist) => {
             (Some(frequentist::analyze_numeric(control, variant)), None)
         }
-        (MetricType::Numeric, AnalysisType::Bayesian)
-        | (MetricType::Percentile, AnalysisType::Bayesian) => {
+        (MetricType::Numeric | MetricType::Percentile, AnalysisType::Bayesian) => {
             (None, Some(bayesian::analyze_numeric(control, variant)))
         }
         (MetricType::Funnel, AnalysisType::Frequentist) => {
@@ -433,7 +463,9 @@ mod tests {
 
     impl MockResultsRepo {
         fn new() -> Self {
-            Self { rows: Arc::new(Mutex::new(Vec::new())) }
+            Self {
+                rows: Arc::new(Mutex::new(Vec::new())),
+            }
         }
 
         fn snapshot(&self) -> Vec<UpsertResultRow> {
@@ -465,11 +497,14 @@ mod tests {
             Ok(result)
         }
 
-        async fn fetch_latest(
-            &self,
-            _: Uuid,
-        ) -> Result<Vec<ExperimentResultRow>, sqlx::Error> {
-            Ok(self.rows.lock().unwrap().iter().map(make_result_row).collect())
+        async fn fetch_latest(&self, _: Uuid) -> Result<Vec<ExperimentResultRow>, sqlx::Error> {
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .map(make_result_row)
+                .collect())
         }
 
         async fn fetch_by_iteration(
@@ -477,7 +512,13 @@ mod tests {
             _: Uuid,
             _: Uuid,
         ) -> Result<Vec<ExperimentResultRow>, sqlx::Error> {
-            Ok(self.rows.lock().unwrap().iter().map(make_result_row).collect())
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .map(make_result_row)
+                .collect())
         }
 
         async fn is_stale(&self, _: Uuid, _: Uuid) -> Result<bool, sqlx::Error> {
@@ -490,8 +531,16 @@ mod tests {
     #[test]
     fn build_count_variant_stats_computes_conversion_rate() {
         let rows = vec![
-            CountMetricRow { variant_key: "control".to_string(), sample_size: 1000, conversions: 100 },
-            CountMetricRow { variant_key: "treatment".to_string(), sample_size: 1000, conversions: 150 },
+            CountMetricRow {
+                variant_key: "control".to_string(),
+                sample_size: 1000,
+                conversions: 100,
+            },
+            CountMetricRow {
+                variant_key: "treatment".to_string(),
+                sample_size: 1000,
+                conversions: 150,
+            },
         ];
         let stats = build_count_variant_stats(&rows);
         assert_eq!(stats.len(), 2);
@@ -535,7 +584,10 @@ mod tests {
         assert_eq!(ctrl.sample_size, 500);
         assert!((ctrl.mean.unwrap() - 5.0).abs() < 1e-9);
         assert!((ctrl.variance.unwrap() - 2.5).abs() < 1e-9);
-        assert!(ctrl.percentiles.is_none(), "Numeric type should not populate percentiles");
+        assert!(
+            ctrl.percentiles.is_none(),
+            "Numeric type should not populate percentiles"
+        );
     }
 
     #[test]
@@ -561,9 +613,24 @@ mod tests {
     #[test]
     fn build_funnel_variant_stats_uses_first_and_last_steps() {
         let rows = vec![
-            FunnelStepRow { variant_key: "control".to_string(), step_index: 0, event_key: "view".to_string(), count: 1000 },
-            FunnelStepRow { variant_key: "control".to_string(), step_index: 1, event_key: "click".to_string(), count: 400 },
-            FunnelStepRow { variant_key: "control".to_string(), step_index: 2, event_key: "checkout".to_string(), count: 200 },
+            FunnelStepRow {
+                variant_key: "control".to_string(),
+                step_index: 0,
+                event_key: "view".to_string(),
+                count: 1000,
+            },
+            FunnelStepRow {
+                variant_key: "control".to_string(),
+                step_index: 1,
+                event_key: "click".to_string(),
+                count: 400,
+            },
+            FunnelStepRow {
+                variant_key: "control".to_string(),
+                step_index: 2,
+                event_key: "checkout".to_string(),
+                count: 200,
+            },
         ];
         let stats = build_funnel_variant_stats(&rows);
         let ctrl = &stats["control"];
@@ -576,10 +643,30 @@ mod tests {
     #[test]
     fn build_funnel_variant_stats_multiple_variants() {
         let rows = vec![
-            FunnelStepRow { variant_key: "control".to_string(), step_index: 0, event_key: "view".to_string(), count: 1000 },
-            FunnelStepRow { variant_key: "control".to_string(), step_index: 1, event_key: "buy".to_string(), count: 200 },
-            FunnelStepRow { variant_key: "treatment".to_string(), step_index: 0, event_key: "view".to_string(), count: 1000 },
-            FunnelStepRow { variant_key: "treatment".to_string(), step_index: 1, event_key: "buy".to_string(), count: 260 },
+            FunnelStepRow {
+                variant_key: "control".to_string(),
+                step_index: 0,
+                event_key: "view".to_string(),
+                count: 1000,
+            },
+            FunnelStepRow {
+                variant_key: "control".to_string(),
+                step_index: 1,
+                event_key: "buy".to_string(),
+                count: 200,
+            },
+            FunnelStepRow {
+                variant_key: "treatment".to_string(),
+                step_index: 0,
+                event_key: "view".to_string(),
+                count: 1000,
+            },
+            FunnelStepRow {
+                variant_key: "treatment".to_string(),
+                step_index: 1,
+                event_key: "buy".to_string(),
+                count: 260,
+            },
         ];
         let stats = build_funnel_variant_stats(&rows);
         assert_eq!(stats.len(), 2);
@@ -590,15 +677,45 @@ mod tests {
     #[test]
     fn find_control_key_returns_control_when_present() {
         let mut map = HashMap::new();
-        map.insert("control".to_string(), VariantStats { sample_size: 100, conversions: None, mean: None, variance: None, conversion_rate: None, percentiles: None });
-        map.insert("treatment".to_string(), VariantStats { sample_size: 100, conversions: None, mean: None, variance: None, conversion_rate: None, percentiles: None });
+        map.insert(
+            "control".to_string(),
+            VariantStats {
+                sample_size: 100,
+                conversions: None,
+                mean: None,
+                variance: None,
+                conversion_rate: None,
+                percentiles: None,
+            },
+        );
+        map.insert(
+            "treatment".to_string(),
+            VariantStats {
+                sample_size: 100,
+                conversions: None,
+                mean: None,
+                variance: None,
+                conversion_rate: None,
+                percentiles: None,
+            },
+        );
         assert_eq!(find_control_key(&map), "control");
     }
 
     #[test]
     fn find_control_key_fallback_when_no_control_key() {
         let mut map = HashMap::new();
-        map.insert("variant_a".to_string(), VariantStats { sample_size: 100, conversions: None, mean: None, variance: None, conversion_rate: None, percentiles: None });
+        map.insert(
+            "variant_a".to_string(),
+            VariantStats {
+                sample_size: 100,
+                conversions: None,
+                mean: None,
+                variance: None,
+                conversion_rate: None,
+                percentiles: None,
+            },
+        );
         let key = find_control_key(&map);
         assert_eq!(key, "variant_a");
     }
@@ -623,6 +740,7 @@ mod tests {
     }
 
     fn make_count_stats_for_analysis(sample_size: i64, conversions: i64) -> VariantStats {
+        #[allow(clippy::cast_precision_loss)]
         let rate = conversions as f64 / sample_size as f64;
         VariantStats {
             sample_size,
@@ -641,7 +759,10 @@ mod tests {
         let variant = make_count_stats_for_analysis(1000, 150);
         let (freq, bayes) = run_analysis(&def, &ctrl, &variant, AnalysisType::Frequentist);
         assert!(freq.is_some(), "frequentist result should be present");
-        assert!(bayes.is_none(), "bayesian result should be absent for frequentist run");
+        assert!(
+            bayes.is_none(),
+            "bayesian result should be absent for frequentist run"
+        );
         assert!(freq.unwrap().significant);
     }
 
@@ -651,7 +772,10 @@ mod tests {
         let ctrl = make_count_stats_for_analysis(1000, 100);
         let variant = make_count_stats_for_analysis(1000, 150);
         let (freq, bayes) = run_analysis(&def, &ctrl, &variant, AnalysisType::Bayesian);
-        assert!(freq.is_none(), "frequentist result should be absent for Bayesian run");
+        assert!(
+            freq.is_none(),
+            "frequentist result should be absent for Bayesian run"
+        );
         assert!(bayes.is_some(), "bayesian result should be present");
         assert!(bayes.unwrap().prob_best > 0.99);
     }
@@ -664,8 +788,22 @@ mod tests {
             funnel_steps: None,
             percentile: None,
         };
-        let ctrl = VariantStats { sample_size: 500, conversions: None, mean: Some(10.0), variance: Some(4.0), conversion_rate: None, percentiles: None };
-        let variant = VariantStats { sample_size: 500, conversions: None, mean: Some(12.0), variance: Some(4.0), conversion_rate: None, percentiles: None };
+        let ctrl = VariantStats {
+            sample_size: 500,
+            conversions: None,
+            mean: Some(10.0),
+            variance: Some(4.0),
+            conversion_rate: None,
+            percentiles: None,
+        };
+        let variant = VariantStats {
+            sample_size: 500,
+            conversions: None,
+            mean: Some(12.0),
+            variance: Some(4.0),
+            conversion_rate: None,
+            percentiles: None,
+        };
         let (freq, _) = run_analysis(&def, &ctrl, &variant, AnalysisType::Frequentist);
         assert!(freq.is_some());
         assert!(freq.unwrap().significant);
@@ -679,8 +817,22 @@ mod tests {
             funnel_steps: Some(vec!["view".to_string(), "signup".to_string()]),
             percentile: None,
         };
-        let ctrl = VariantStats { sample_size: 1000, conversions: None, mean: None, variance: None, conversion_rate: Some(0.10), percentiles: None };
-        let variant = VariantStats { sample_size: 1000, conversions: None, mean: None, variance: None, conversion_rate: Some(0.15), percentiles: None };
+        let ctrl = VariantStats {
+            sample_size: 1000,
+            conversions: None,
+            mean: None,
+            variance: None,
+            conversion_rate: Some(0.10),
+            percentiles: None,
+        };
+        let variant = VariantStats {
+            sample_size: 1000,
+            conversions: None,
+            mean: None,
+            variance: None,
+            conversion_rate: Some(0.15),
+            percentiles: None,
+        };
         let (freq, _) = run_analysis(&def, &ctrl, &variant, AnalysisType::Frequentist);
         assert!(freq.is_some());
         assert!(freq.unwrap().significant);
@@ -703,7 +855,7 @@ mod tests {
             experiment_id: Uuid::new_v4(),
             iteration_id: Uuid::new_v4(),
             analysis_type: AnalysisType::Frequentist,
-            metrics: vec![],          // empty — no CH queries attempted
+            metrics: vec![], // empty — no CH queries attempted
             date_from: Utc::now(),
             date_to: Utc::now(),
             min_sample_size: None,
@@ -732,7 +884,7 @@ mod tests {
             computed_at: Utc::now(),
         };
         // Verify the mock won't panic when we use it in a sync context.
-        repo.rows.lock().unwrap().push(row.clone());
+        repo.rows.lock().unwrap().push(row);
         let snapshot = repo.snapshot();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].metric_key, "checkout");

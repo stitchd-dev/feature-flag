@@ -6,6 +6,6 @@
 pub mod experiment_queries;
 
 pub use experiment_queries::{
-    CountMetricRow, FunnelStepRow, NumericMetricRow, QueryError, query_count_metric,
-    query_funnel, query_numeric_metric,
+    CountMetricRow, FunnelStepRow, NumericMetricRow, QueryError, query_count_metric, query_funnel,
+    query_numeric_metric,
 };

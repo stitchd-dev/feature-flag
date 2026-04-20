@@ -24,7 +24,10 @@ impl Lcg {
 
     /// Returns the next pseudo-random u64.
     fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state = self
+            .state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.state
     }
 
@@ -65,7 +68,8 @@ fn erf(x: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.3275911 * x);
     let poly = t
         * (0.254_829_592
-            + t * (-0.284_496_736 + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
 
     1.0 - poly * (-x * x).exp()
 }
@@ -178,7 +182,13 @@ pub fn analyze_numeric(control: &VariantStats, variant: &VariantStats) -> Bayesi
 
     // P(variant > control) = P(diff > 0) = 1 - Φ(-mean_diff / se)
     let prob_best = if se == 0.0 {
-        if mean_diff > 0.0 { 1.0 } else if mean_diff < 0.0 { 0.0 } else { 0.5 }
+        if mean_diff > 0.0 {
+            1.0
+        } else if mean_diff < 0.0 {
+            0.0
+        } else {
+            0.5
+        }
     } else {
         1.0 - normal_cdf(-mean_diff / se)
     };
@@ -225,7 +235,10 @@ pub fn analyze_percentile(
     if control_samples.is_empty() || variant_samples.is_empty() {
         return BayesianResult {
             prob_best: 0.5,
-            credible_interval: ConfidenceInterval { lower: 0.0, upper: 0.0 },
+            credible_interval: ConfidenceInterval {
+                lower: 0.0,
+                upper: 0.0,
+            },
             expected_loss: 0.0,
         };
     }
@@ -274,8 +287,7 @@ pub fn analyze_percentile(
     let upper = percentile_sorted(&diff_sorted, 97.5);
 
     // Expected loss = mean of max(-diff, 0)
-    let expected_loss =
-        differences.iter().map(|&d| (-d).max(0.0)).sum::<f64>() / N_BOOT as f64;
+    let expected_loss = differences.iter().map(|&d| (-d).max(0.0)).sum::<f64>() / N_BOOT as f64;
 
     BayesianResult {
         prob_best,
@@ -345,8 +357,7 @@ fn beta_binomial_mc(
     let upper = percentile_sorted(&diff_sorted, 97.5);
 
     // Expected loss = E[max(control_rate - variant_rate, 0)] = mean of max(-diff, 0)
-    let expected_loss =
-        differences.iter().map(|&d| (-d).max(0.0)).sum::<f64>() / n_samples as f64;
+    let expected_loss = differences.iter().map(|&d| (-d).max(0.0)).sum::<f64>() / n_samples as f64;
 
     BayesianResult {
         prob_best,
@@ -676,7 +687,10 @@ mod tests {
         let (alpha, beta) = (3.0, 7.0);
         let expected_mean = alpha / (alpha + beta); // 0.3
         let n = 50_000usize;
-        let mean: f64 = (0..n).map(|_| sample_beta(alpha, beta, &mut rng)).sum::<f64>() / n as f64;
+        let mean: f64 = (0..n)
+            .map(|_| sample_beta(alpha, beta, &mut rng))
+            .sum::<f64>()
+            / n as f64;
         assert!(
             (mean - expected_mean).abs() < 0.01,
             "Beta mean ≈ {expected_mean}, got {mean}"
@@ -718,13 +732,21 @@ mod tests {
         let mut sum = 0.0f64;
         for _ in 0..n {
             let v = sample_gamma(0.5, &mut rng);
-            if v <= 0.0 { all_positive = false; }
+            if v <= 0.0 {
+                all_positive = false;
+            }
             sum += v;
         }
-        assert!(all_positive, "all samples from Gamma(0.5) should be positive");
+        assert!(
+            all_positive,
+            "all samples from Gamma(0.5) should be positive"
+        );
         // Gamma(0.5) has mean = shape = 0.5
         let mean = sum / n as f64;
-        assert!((mean - 0.5).abs() < 0.05, "Gamma(0.5) mean ≈ 0.5, got {mean}");
+        assert!(
+            (mean - 0.5).abs() < 0.05,
+            "Gamma(0.5) mean ≈ 0.5, got {mean}"
+        );
     }
 
     // ── analyze_funnel with no conversions and no conversion_rate ────────────

@@ -519,27 +519,26 @@ mod tests {
             async fn upsert(
                 &self,
                 _: &stitchd_db::experiment_results::UpsertResultRow,
-            ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error> {
+            ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error>
+            {
                 Err(sqlx::Error::RowNotFound)
             }
             async fn fetch_latest(
                 &self,
                 _: uuid::Uuid,
-            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error>
+            {
                 Ok(vec![])
             }
             async fn fetch_by_iteration(
                 &self,
                 _: uuid::Uuid,
                 _: uuid::Uuid,
-            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error>
+            {
                 Ok(vec![])
             }
-            async fn is_stale(
-                &self,
-                _: uuid::Uuid,
-                _: uuid::Uuid,
-            ) -> Result<bool, sqlx::Error> {
+            async fn is_stale(&self, _: uuid::Uuid, _: uuid::Uuid) -> Result<bool, sqlx::Error> {
                 Ok(false)
             }
         }

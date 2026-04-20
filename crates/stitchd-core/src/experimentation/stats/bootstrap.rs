@@ -20,7 +20,9 @@ impl Xorshift64 {
         s = (s ^ (s >> 27)).wrapping_mul(0x94d049bb133111eb);
         s = s ^ (s >> 31);
         // Ensure non-zero
-        Self { state: if s == 0 { 1 } else { s } }
+        Self {
+            state: if s == 0 { 1 } else { s },
+        }
     }
 
     /// Returns next u64 in [0, u64::MAX].
@@ -79,12 +81,11 @@ pub fn percentile_value(sorted_data: &[f64], p: f64) -> f64 {
 ///
 /// # Panics
 /// Panics if `samples` is empty.
-pub fn bootstrap_percentile_ci(
-    samples: &[f64],
-    percentile: f64,
-    n_resamples: usize,
-) -> (f64, f64) {
-    assert!(!samples.is_empty(), "bootstrap_percentile_ci: samples must not be empty");
+pub fn bootstrap_percentile_ci(samples: &[f64], percentile: f64, n_resamples: usize) -> (f64, f64) {
+    assert!(
+        !samples.is_empty(),
+        "bootstrap_percentile_ci: samples must not be empty"
+    );
 
     let n = samples.len();
     // Fixed seed derived from sample length for determinism when called without
@@ -120,7 +121,10 @@ pub fn bootstrap_percentile_ci_seeded(
     n_resamples: usize,
     seed: u64,
 ) -> (f64, f64) {
-    assert!(!samples.is_empty(), "bootstrap_percentile_ci_seeded: samples must not be empty");
+    assert!(
+        !samples.is_empty(),
+        "bootstrap_percentile_ci_seeded: samples must not be empty"
+    );
 
     let n = samples.len();
     let mut rng = Xorshift64::new(seed);
@@ -301,8 +305,18 @@ mod tests {
     /// Rational approximation to the standard normal quantile (probit) function.
     /// Beasley-Springer-Moro algorithm; error < 3e-9 for p in (0, 1).
     fn probit(p: f64) -> f64 {
-        const A: [f64; 4] = [2.50662823884, -18.61500062529, 41.39119773534, -25.44106049637];
-        const B: [f64; 4] = [-8.47351093090, 23.08336743743, -21.06224101826, 3.13082909833];
+        const A: [f64; 4] = [
+            2.50662823884,
+            -18.61500062529,
+            41.39119773534,
+            -25.44106049637,
+        ];
+        const B: [f64; 4] = [
+            -8.47351093090,
+            23.08336743743,
+            -21.06224101826,
+            3.13082909833,
+        ];
         const C: [f64; 9] = [
             0.3374754822726147,
             0.9761690190917186,
@@ -329,8 +343,7 @@ mod tests {
                     + s * (C[1]
                         + s * (C[2]
                             + s * (C[3]
-                                + s * (C[4]
-                                    + s * (C[5] + s * (C[6] + s * (C[7] + s * C[8]))))))));
+                                + s * (C[4] + s * (C[5] + s * (C[6] + s * (C[7] + s * C[8]))))))));
             if y < 0.0 { -t } else { t }
         }
     }

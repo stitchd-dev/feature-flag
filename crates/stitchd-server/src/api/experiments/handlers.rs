@@ -911,27 +911,26 @@ mod tests {
             async fn upsert(
                 &self,
                 _: &stitchd_db::experiment_results::UpsertResultRow,
-            ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error> {
+            ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error>
+            {
                 Err(sqlx::Error::RowNotFound)
             }
             async fn fetch_latest(
                 &self,
                 _: uuid::Uuid,
-            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error>
+            {
                 Ok(vec![])
             }
             async fn fetch_by_iteration(
                 &self,
                 _: uuid::Uuid,
                 _: uuid::Uuid,
-            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error>
+            {
                 Ok(vec![])
             }
-            async fn is_stale(
-                &self,
-                _: uuid::Uuid,
-                _: uuid::Uuid,
-            ) -> Result<bool, sqlx::Error> {
+            async fn is_stale(&self, _: uuid::Uuid, _: uuid::Uuid) -> Result<bool, sqlx::Error> {
                 Ok(false)
             }
         }
@@ -1620,7 +1619,10 @@ mod tests {
         let env_id = EnvironmentId::new();
         let exp_id = ExperimentId::new();
         let flag_rule_id = RuleId::new();
-        let repo = Arc::new(RunningExperimentRepository { env_id, flag_rule_id });
+        let repo = Arc::new(RunningExperimentRepository {
+            env_id,
+            flag_rule_id,
+        });
         let app = build_experiment_router(repo);
 
         let body = serde_json::json!({
@@ -1650,7 +1652,10 @@ mod tests {
         let env_id = EnvironmentId::new();
         let exp_id = ExperimentId::new();
         let flag_rule_id = RuleId::new();
-        let repo = Arc::new(RunningExperimentRepository { env_id, flag_rule_id });
+        let repo = Arc::new(RunningExperimentRepository {
+            env_id,
+            flag_rule_id,
+        });
         let app = build_experiment_router(repo);
 
         let body = serde_json::json!({
