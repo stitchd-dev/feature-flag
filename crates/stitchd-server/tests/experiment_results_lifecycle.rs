@@ -591,7 +591,7 @@ async fn test_recompute_updates_computed_at(pool: sqlx::PgPool) {
     let returned = results_repo.upsert(&fresh_row).await.unwrap();
 
     assert!(
-        returned.computed_at >= fresh_computed_at,
+        returned.computed_at.timestamp_micros() >= fresh_computed_at.timestamp_micros(),
         "computed_at should be updated after recompute"
     );
 
