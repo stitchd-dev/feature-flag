@@ -917,6 +917,34 @@ mod tests {
         }
     }
 
+    struct MockResultsRepo;
+
+    #[async_trait]
+    impl stitchd_db::experiment_results::ExperimentResultsRepository for MockResultsRepo {
+        async fn upsert(
+            &self,
+            _: &stitchd_db::experiment_results::UpsertResultRow,
+        ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+        async fn fetch_latest(
+            &self,
+            _: uuid::Uuid,
+        ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+            Ok(vec![])
+        }
+        async fn fetch_by_iteration(
+            &self,
+            _: uuid::Uuid,
+            _: uuid::Uuid,
+        ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+            Ok(vec![])
+        }
+        async fn is_stale(&self, _: uuid::Uuid, _: uuid::Uuid) -> Result<bool, sqlx::Error> {
+            Ok(false)
+        }
+    }
+
     // ---------------------------------------------------------------------------
     // Test helpers
     // ---------------------------------------------------------------------------
@@ -943,6 +971,8 @@ mod tests {
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
             experiment_repo: Arc::new(MockExperimentRepo),
+            results_repo: Arc::new(MockResultsRepo),
+            ch_client: None,
             event_writer: None,
         }
     }
@@ -1584,6 +1614,8 @@ mod tests {
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
             experiment_repo: Arc::new(MockExperimentRepo),
+            results_repo: Arc::new(MockResultsRepo),
+            ch_client: None,
             event_writer: None,
         };
         let app = build_router(state);
@@ -1632,6 +1664,8 @@ mod tests {
             sdk_key_repo: Arc::new(MockSdkKeyRepo),
             event_definition_repo: Arc::new(MockEventDefinitionRepo),
             experiment_repo: Arc::new(MockExperimentRepo),
+            results_repo: Arc::new(MockResultsRepo),
+            ch_client: None,
             event_writer: None,
         };
         let app = build_router(state);

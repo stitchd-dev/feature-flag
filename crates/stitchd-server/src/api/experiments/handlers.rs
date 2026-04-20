@@ -892,6 +892,37 @@ mod tests {
             }
         }
 
+        struct NullResultsRepo;
+        #[async_trait]
+        impl stitchd_db::experiment_results::ExperimentResultsRepository for NullResultsRepo {
+            async fn upsert(
+                &self,
+                _: &stitchd_db::experiment_results::UpsertResultRow,
+            ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error> {
+                Err(sqlx::Error::RowNotFound)
+            }
+            async fn fetch_latest(
+                &self,
+                _: uuid::Uuid,
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+                Ok(vec![])
+            }
+            async fn fetch_by_iteration(
+                &self,
+                _: uuid::Uuid,
+                _: uuid::Uuid,
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+                Ok(vec![])
+            }
+            async fn is_stale(
+                &self,
+                _: uuid::Uuid,
+                _: uuid::Uuid,
+            ) -> Result<bool, sqlx::Error> {
+                Ok(false)
+            }
+        }
+
         let null = Arc::new(NullRepo);
         crate::AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -903,6 +934,8 @@ mod tests {
             sdk_key_repo: null.clone(),
             event_definition_repo: null,
             experiment_repo,
+            results_repo: Arc::new(NullResultsRepo),
+            ch_client: None,
             event_writer: None,
         }
     }
