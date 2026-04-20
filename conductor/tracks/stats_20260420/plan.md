@@ -4,33 +4,33 @@ Track: stats_20260420
 ## Phase 1: Database Schema & Domain Types
 <!-- execution: parallel -->
 
-- [ ] Task 1: PostgreSQL migrations
+- [x] Task 1: PostgreSQL migrations <!-- 97c41d3 -->
   <!-- files: crates/stitchd-db/migrations/ -->
-  - [ ] Sub-task: Add `analysis_type` column to `experiments` table
+  - [x] Sub-task: Add `analysis_type` column to `experiments` table
         (`frequentist | bayesian`, default `frequentist`)
-  - [ ] Sub-task: Create `experiment_results` table
+  - [x] Sub-task: Create `experiment_results` table
         (id, experiment_id, iteration_id, metric_key, metric_type,
         variant_stats JSONB, frequentist_result JSONB, bayesian_result JSONB,
         recommendation, computed_at, created_at)
 
-- [ ] Task 2: Domain types in `stitchd-core`
+- [x] Task 2: Domain types in `stitchd-core` <!-- 002b7f2 -->
   <!-- files: crates/stitchd-core/src/experimentation/stats/ -->
-  - [ ] Sub-task: Write failing tests for AnalysisType enum parsing,
+  - [x] Sub-task: Write failing tests for AnalysisType enum parsing,
         Recommendation enum ordering
-  - [ ] Sub-task: `AnalysisType` enum (`Frequentist | Bayesian`)
-  - [ ] Sub-task: `MetricType` enum (`Count | Numeric | Percentile | Funnel`)
-  - [ ] Sub-task: `VariantStats` struct (sample_size, conversions, mean,
+  - [x] Sub-task: `AnalysisType` enum (`Frequentist | Bayesian`)
+  - [x] Sub-task: `MetricType` enum (`Count | Numeric | Percentile | Funnel`)
+  - [x] Sub-task: `VariantStats` struct (sample_size, conversions, mean,
         variance, conversion_rate, percentiles)
-  - [ ] Sub-task: `FrequentistResult` (p_value, confidence_interval, significant)
-  - [ ] Sub-task: `BayesianResult` (prob_best, credible_interval, expected_loss)
-  - [ ] Sub-task: `MetricResult` (metric_key, metric_type, per-variant stats,
+  - [x] Sub-task: `FrequentistResult` (p_value, confidence_interval, significant)
+  - [x] Sub-task: `BayesianResult` (prob_best, credible_interval, expected_loss)
+  - [x] Sub-task: `MetricResult` (metric_key, metric_type, per-variant stats,
         frequentist/bayesian result, recommendation)
-  - [ ] Sub-task: `Recommendation` enum with ordering logic
-  - [ ] Sub-task: `IterationResults` struct (experiment_id, iteration_id,
+  - [x] Sub-task: `Recommendation` enum with ordering logic
+  - [x] Sub-task: `IterationResults` struct (experiment_id, iteration_id,
         iteration_number, computed_at, metrics: Vec<MetricResult>)
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 1: Database Schema & Domain Types' (Protocol in workflow.md)
+- [~] Task: Conductor - User Manual Verification 'Phase 1: Database Schema & Domain Types' (Protocol in workflow.md)
 
 ## Phase 2: ClickHouse Query Layer
 <!-- execution: parallel -->
