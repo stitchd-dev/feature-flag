@@ -4,6 +4,7 @@
 //! statistical analysis run on an [`super::ExperimentIteration`].
 
 pub mod bootstrap;
+pub mod frequentist;
 
 use std::collections::HashMap;
 use std::fmt;
