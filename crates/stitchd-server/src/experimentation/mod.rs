@@ -5,3 +5,5 @@
 
 /// Async stats compute pipeline for experiment result generation.
 pub mod compute;
+/// Response types for the experiment results REST API.
+pub mod results_api;
