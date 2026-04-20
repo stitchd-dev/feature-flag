@@ -1,0 +1,13 @@
+{
+  "track_id": "stats_20260420",
+  "type": "feature",
+  "status": "new",
+  "priority": "critical",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-04-20T00:00:00Z",
+  "updated_at": "2026-04-20T00:00:00Z",
+  "description": "Experiment Statistical Analysis — Frequentist & Bayesian with all metric types",
+  "git_branch": "track/stats_20260420",
+  "worktree_path": ".worktrees/stats_20260420"
+}

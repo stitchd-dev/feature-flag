@@ -29,3 +29,6 @@ This file tracks all major tracks for the project.
 <!-- Archived: experimentation_20260419 (Experimentation Module — Experiment CRUD) -->
 
 ---
+
+## [ ] Track: Experiment Statistical Analysis
+*Link: [./conductor/tracks/stats_20260420/](./conductor/tracks/stats_20260420/)*
