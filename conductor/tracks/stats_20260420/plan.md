@@ -91,10 +91,10 @@ Track: stats_20260420
 
 - [~] Task: Conductor - User Manual Verification 'Phase 3: Statistical Engine' (Protocol in workflow.md)
 
-## Phase 4: Results Repository & Compute Pipeline
+## Phase 4: Results Repository & Compute Pipeline [checkpoint: 0dc3aee]
 <!-- depends: phase2, phase3 -->
 
-- [ ] Task 1: Results repository
+- [x] Task 1: Results repository <!-- 1ff1ac3 -->
   <!-- files: crates/stitchd-db/src/experiment_results.rs -->
   - [ ] Sub-task: Write failing tests (sqlx::test) for upsert and fetch by
         experiment_id + iteration_id
@@ -105,7 +105,7 @@ Track: stats_20260420
   - [ ] Sub-task: Staleness check: `computed_at` vs iteration `started_at`
   - [ ] Sub-task: Pass tests
 
-- [ ] Task 2: Compute pipeline orchestration
+- [x] Task 2: Compute pipeline orchestration <!-- 0dc3aee -->
   <!-- files: crates/stitchd-server/src/experimentation/compute.rs -->
   <!-- depends: task1 -->
   - [ ] Sub-task: Write failing tests for orchestrator (mock CH + repo)
@@ -115,7 +115,7 @@ Track: stats_20260420
   - [ ] Sub-task: Async tokio task; returns immediately (fire-and-forget)
   - [ ] Sub-task: Pass tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Results Repository & Compute Pipeline' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Results Repository & Compute Pipeline' (Protocol in workflow.md)
 
 ## Phase 5: REST API Layer
 <!-- depends: phase4 -->
