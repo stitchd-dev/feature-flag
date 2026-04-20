@@ -675,6 +675,39 @@ mod tests {
                 Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
             }
         }
+        struct StubResultsRepo;
+        #[async_trait]
+        impl stitchd_db::experiment_results::ExperimentResultsRepository for StubResultsRepo {
+            async fn upsert(
+                &self,
+                _: &stitchd_db::experiment_results::UpsertResultRow,
+            ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error> {
+                Err(sqlx::Error::RowNotFound)
+            }
+            async fn fetch_latest(
+                &self,
+                _: uuid::Uuid,
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error>
+            {
+                Ok(vec![])
+            }
+            async fn fetch_by_iteration(
+                &self,
+                _: uuid::Uuid,
+                _: uuid::Uuid,
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error>
+            {
+                Ok(vec![])
+            }
+            async fn is_stale(
+                &self,
+                _: uuid::Uuid,
+                _: uuid::Uuid,
+            ) -> Result<bool, sqlx::Error> {
+                Ok(false)
+            }
+        }
+
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
                 .expect("lazy pool");
@@ -687,6 +720,8 @@ mod tests {
             sdk_key_repo,
             event_definition_repo: Arc::new(StubEventDefinitionRepo),
             experiment_repo: Arc::new(StubExperimentRepo),
+            results_repo: Arc::new(StubResultsRepo),
+            ch_client: None,
             event_writer: None,
         }
     }

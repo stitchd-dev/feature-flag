@@ -5,10 +5,16 @@
 #![deny(warnings, missing_docs, clippy::all)]
 #![warn(clippy::pedantic, clippy::nursery)]
 
+pub mod clickhouse;
 pub mod error;
+pub mod experiment_results;
 pub mod repository;
 
 pub use error::RepositoryError;
+pub use experiment_results::{
+    ExperimentResultRow, ExperimentResultsRepository, PgExperimentResultsRepository,
+    UpsertResultRow,
+};
 pub use repository::{
     AuditLogger, EnvironmentRepository, EventDefinitionRepository, ExperimentRepository,
     FlagRepository, OrganisationRepository, ProjectRepository, RoleRepository, SdkKeyRepository,

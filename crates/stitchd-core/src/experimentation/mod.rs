@@ -5,6 +5,8 @@
 //! [`ExperimentStatus::Running`] creates a new [`ExperimentIteration`] that
 //! captures a snapshot of the experiment configuration at that moment.
 
+pub mod stats;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

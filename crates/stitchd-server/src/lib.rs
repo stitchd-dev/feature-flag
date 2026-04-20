@@ -4,6 +4,8 @@
 
 /// API routes and handlers.
 pub mod api;
+/// Experimentation server-side logic (async compute pipeline).
+pub mod experimentation;
 /// gRPC service implementations.
 pub mod grpc;
 /// Server startup and maintenance tasks.
@@ -18,7 +20,7 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use stitchd_db::{
     EventDefinitionRepository, ExperimentRepository, FlagRepository, SdkKeyRepository,
-    SegmentRepository, VariantRepository,
+    SegmentRepository, VariantRepository, experiment_results::ExperimentResultsRepository,
 };
 use stitchd_events::writer::EventWriter;
 use utoipa::OpenApi as _;
@@ -42,6 +44,11 @@ pub struct AppState {
     pub event_definition_repo: Arc<dyn EventDefinitionRepository>,
     /// Repository for experiment management.
     pub experiment_repo: Arc<dyn ExperimentRepository>,
+    /// Repository for experiment results read/write.
+    pub results_repo: Arc<dyn ExperimentResultsRepository>,
+    /// ClickHouse client used for fire-and-forget compute jobs. `None` when
+    /// ClickHouse is unavailable (recompute requests are accepted but not executed).
+    pub ch_client: Option<Arc<clickhouse::Client>>,
     /// ClickHouse event writer. `None` when ClickHouse is unavailable (writes are skipped).
     pub event_writer: Option<EventWriter>,
 }
@@ -137,6 +144,9 @@ mod tests {
         let experiment_repo = std::sync::Arc::new(
             stitchd_db::repository::pg::PgExperimentRepository::new(db.clone(), audit6),
         );
+        let results_repo = std::sync::Arc::new(
+            stitchd_db::experiment_results::PgExperimentResultsRepository::new(db.clone()),
+        );
         AppState {
             db,
             metrics_handle,
@@ -146,6 +156,8 @@ mod tests {
             sdk_key_repo,
             event_definition_repo,
             experiment_repo,
+            results_repo,
+            ch_client: None,
             event_writer: None,
         }
     }
@@ -501,6 +513,37 @@ mod tests {
             }
         }
 
+        struct NullResultsRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::experiment_results::ExperimentResultsRepository for NullResultsRepo {
+            async fn upsert(
+                &self,
+                _: &stitchd_db::experiment_results::UpsertResultRow,
+            ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error> {
+                Err(sqlx::Error::RowNotFound)
+            }
+            async fn fetch_latest(
+                &self,
+                _: uuid::Uuid,
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+                Ok(vec![])
+            }
+            async fn fetch_by_iteration(
+                &self,
+                _: uuid::Uuid,
+                _: uuid::Uuid,
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+                Ok(vec![])
+            }
+            async fn is_stale(
+                &self,
+                _: uuid::Uuid,
+                _: uuid::Uuid,
+            ) -> Result<bool, sqlx::Error> {
+                Ok(false)
+            }
+        }
+
         let stub = Arc::new(StubRepo);
         AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_stub")
@@ -512,6 +555,8 @@ mod tests {
             sdk_key_repo: stub.clone(),
             event_definition_repo: stub.clone(),
             experiment_repo: stub,
+            results_repo: Arc::new(NullResultsRepo),
+            ch_client: None,
             event_writer: None,
         }
     }
