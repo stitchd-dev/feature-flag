@@ -127,6 +127,7 @@ async fn setup(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         .handle();
 
     let experiment_repo = Arc::new(PgExperimentRepository::new(pool.clone(), audit.clone()));
+    let results_repo = Arc::new(stitchd_db::experiment_results::PgExperimentResultsRepository::new(pool.clone()));
     let state = AppState {
         db: pool,
         metrics_handle,
@@ -136,6 +137,8 @@ async fn setup(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         sdk_key_repo,
         event_definition_repo,
         experiment_repo,
+        results_repo,
+        ch_client: None,
         event_writer: None,
     };
 

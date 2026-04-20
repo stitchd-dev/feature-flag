@@ -81,8 +81,14 @@ async fn main() -> Result<()> {
         experiment_repo: std::sync::Arc::new(
             stitchd_db::repository::pg::PgExperimentRepository::new(pool.clone(), audit_logger),
         ),
+        results_repo: std::sync::Arc::new(
+            stitchd_db::experiment_results::PgExperimentResultsRepository::new(pool.clone()),
+        ),
+        ch_client: std::env::var("CLICKHOUSE_URL").ok().map(|url| {
+            info!(url = %url, "ClickHouse client enabled");
+            std::sync::Arc::new(clickhouse::Client::default().with_url(url))
+        }),
         event_writer: std::env::var("CLICKHOUSE_URL").ok().map(|url| {
-            info!(url = %url, "ClickHouse event writer enabled");
             EventWriter::new(clickhouse::Client::default().with_url(url))
         }),
     };

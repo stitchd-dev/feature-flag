@@ -63,6 +63,8 @@ fn event_routes() -> Router<AppState> {
 }
 
 fn experiment_routes() -> Router<AppState> {
+    use crate::experimentation::results_api;
+
     Router::new()
         .route(
             "/",
@@ -82,6 +84,18 @@ fn experiment_routes() -> Router<AppState> {
         .route(
             "/{id}/iterations",
             get(experiments::handlers::list_iterations),
+        )
+        .route(
+            "/{id}/results",
+            get(results_api::get_latest_results),
+        )
+        .route(
+            "/{id}/iterations/{iter_id}/results",
+            get(results_api::get_iteration_results),
+        )
+        .route(
+            "/{id}/results/recompute",
+            post(results_api::recompute_results),
         )
 }
 
@@ -470,6 +484,34 @@ mod tests {
         }
     }
 
+    struct StubResultsRepo;
+
+    #[async_trait]
+    impl stitchd_db::experiment_results::ExperimentResultsRepository for StubResultsRepo {
+        async fn upsert(
+            &self,
+            _: &stitchd_db::experiment_results::UpsertResultRow,
+        ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+        async fn fetch_latest(
+            &self,
+            _: uuid::Uuid,
+        ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+            Ok(vec![])
+        }
+        async fn fetch_by_iteration(
+            &self,
+            _: uuid::Uuid,
+            _: uuid::Uuid,
+        ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+            Ok(vec![])
+        }
+        async fn is_stale(&self, _: uuid::Uuid, _: uuid::Uuid) -> Result<bool, sqlx::Error> {
+            Ok(false)
+        }
+    }
+
     fn make_test_state() -> AppState {
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -483,6 +525,8 @@ mod tests {
             sdk_key_repo: Arc::new(StubSdkKeyRepo),
             event_definition_repo: Arc::new(StubEventDefinitionRepo),
             experiment_repo: Arc::new(StubExperimentRepo),
+            results_repo: Arc::new(StubResultsRepo),
+            ch_client: None,
             event_writer: None,
         }
     }

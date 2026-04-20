@@ -90,6 +90,8 @@ async fn setup(pool: sqlx::PgPool) -> (AppState, EnvironmentId) {
             audit.clone(),
         )),
         experiment_repo: Arc::new(PgExperimentRepository::new(pool.clone(), audit.clone())),
+        results_repo: Arc::new(stitchd_db::experiment_results::PgExperimentResultsRepository::new(pool.clone())),
+        ch_client: None,
         event_writer: None,
     };
 

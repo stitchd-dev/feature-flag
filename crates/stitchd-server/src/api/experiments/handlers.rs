@@ -137,6 +137,12 @@ pub struct UpdateExperimentRequest {
     pub scheduled_start_at: Option<DateTime<Utc>>,
     /// Updated scheduled end time.
     pub scheduled_end_at: Option<DateTime<Utc>>,
+    /// Statistical analysis type (`"frequentist"` or `"bayesian"`).
+    ///
+    /// **Cannot be changed while the experiment is in `running` state** — doing
+    /// so would invalidate already-computed results.  A 409 Conflict is returned
+    /// if this field is supplied for a running experiment.
+    pub analysis_type: Option<String>,
     /// Current version for optimistic locking (required).
     pub version: i64,
 }
@@ -408,6 +414,13 @@ pub async fn update_experiment(
     Json(req): Json<UpdateExperimentRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     let existing = state.experiment_repo.find_by_id(id).await?;
+
+    // Guard: `analysis_type` cannot be changed while the experiment is running.
+    if existing.status == ExperimentStatus::Running && req.analysis_type.is_some() {
+        return Err(ApiError::Conflict(
+            "cannot change analysis_type while the experiment is running".to_string(),
+        ));
+    }
 
     let updated = Experiment {
         name: req.name.unwrap_or(existing.name),
@@ -892,6 +905,37 @@ mod tests {
             }
         }
 
+        struct NullResultsRepo;
+        #[async_trait]
+        impl stitchd_db::experiment_results::ExperimentResultsRepository for NullResultsRepo {
+            async fn upsert(
+                &self,
+                _: &stitchd_db::experiment_results::UpsertResultRow,
+            ) -> Result<stitchd_db::experiment_results::ExperimentResultRow, sqlx::Error> {
+                Err(sqlx::Error::RowNotFound)
+            }
+            async fn fetch_latest(
+                &self,
+                _: uuid::Uuid,
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+                Ok(vec![])
+            }
+            async fn fetch_by_iteration(
+                &self,
+                _: uuid::Uuid,
+                _: uuid::Uuid,
+            ) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> {
+                Ok(vec![])
+            }
+            async fn is_stale(
+                &self,
+                _: uuid::Uuid,
+                _: uuid::Uuid,
+            ) -> Result<bool, sqlx::Error> {
+                Ok(false)
+            }
+        }
+
         let null = Arc::new(NullRepo);
         crate::AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -903,6 +947,8 @@ mod tests {
             sdk_key_repo: null.clone(),
             event_definition_repo: null,
             experiment_repo,
+            results_repo: Arc::new(NullResultsRepo),
+            ch_client: None,
             event_writer: None,
         }
     }
@@ -1497,6 +1543,135 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    // ── analysis_type mutation guard ────────────────────────────────────────
+
+    /// Stub that returns a **running** experiment from `find_by_id`.
+    struct RunningExperimentRepository {
+        env_id: EnvironmentId,
+        flag_rule_id: RuleId,
+    }
+
+    impl RunningExperimentRepository {
+        fn make_running_experiment(&self, id: ExperimentId) -> Experiment {
+            Experiment {
+                id,
+                environment_id: self.env_id,
+                flag_rule_id: self.flag_rule_id,
+                name: "Running Experiment".to_string(),
+                description: None,
+                hypothesis: None,
+                metric_keys: vec!["checkout".to_string()],
+                traffic_allocation: 100.0,
+                min_sample_size: None,
+                scheduled_start_at: None,
+                scheduled_end_at: None,
+                status: ExperimentStatus::Running,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                deleted_at: None,
+                version: 2,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl stitchd_db::ExperimentRepository for RunningExperimentRepository {
+        async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
+            Ok(self.make_running_experiment(id))
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+            _status_filter: Option<ExperimentStatus>,
+        ) -> Result<Vec<Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
+            Ok(experiment.clone())
+        }
+        async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn list_iterations(
+            &self,
+            _experiment_id: ExperimentId,
+        ) -> Result<Vec<stitchd_core::experimentation::ExperimentIteration>, RepositoryError>
+        {
+            Ok(vec![])
+        }
+        async fn apply_transition(
+            &self,
+            id: ExperimentId,
+            _to: ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<Experiment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_analysis_type_while_running_returns_409() {
+        let env_id = EnvironmentId::new();
+        let exp_id = ExperimentId::new();
+        let flag_rule_id = RuleId::new();
+        let repo = Arc::new(RunningExperimentRepository { env_id, flag_rule_id });
+        let app = build_experiment_router(repo);
+
+        let body = serde_json::json!({
+            "analysis_type": "bayesian",
+            "version": 2,
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/environments/{env_id}/experiments/{exp_id}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn patch_other_fields_while_running_does_not_block_at_handler_level() {
+        // The handler should NOT block other field updates (the DB layer handles that).
+        // This test confirms analysis_type guard is specific to analysis_type field only.
+        let env_id = EnvironmentId::new();
+        let exp_id = ExperimentId::new();
+        let flag_rule_id = RuleId::new();
+        let repo = Arc::new(RunningExperimentRepository { env_id, flag_rule_id });
+        let app = build_experiment_router(repo);
+
+        let body = serde_json::json!({
+            "name": "Updated Name",
+            "version": 2,
+        });
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/v1/environments/{env_id}/experiments/{exp_id}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // Handler passes through to DB (which would return 409 in real life);
+        // stub update() returns Ok, so we get 200 here.
         assert_eq!(response.status(), StatusCode::OK);
     }
 }

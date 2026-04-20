@@ -1,0 +1,754 @@
+//! Bayesian statistical analysis engine.
+//!
+//! Provides Bayesian inference for all four metric types:
+//! - **Count** — Beta-Binomial conjugate posterior
+//! - **Numeric** — Normal-Normal conjugate (analytical difference distribution)
+//! - **Percentile** — Bootstrap posterior approximation
+//! - **Funnel** — Beta-Binomial on final-step conversion rate
+
+use super::{BayesianResult, ConfidenceInterval, VariantStats};
+
+// ── Simple LCG RNG ───────────────────────────────────────────────────────────
+
+/// A minimal Linear Congruential Generator for Monte Carlo sampling.
+///
+/// Parameters from Numerical Recipes (Knuth).
+struct Lcg {
+    state: u64,
+}
+
+impl Lcg {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    /// Returns the next pseudo-random u64.
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.state
+    }
+
+    /// Returns a pseudo-random f64 in [0, 1).
+    fn next_f64(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+/// Trait used as the `Rng` bound in sampling helpers so tests can substitute a seeded RNG.
+trait Rng {
+    fn next_f64(&mut self) -> f64;
+}
+
+impl Rng for Lcg {
+    fn next_f64(&mut self) -> f64 {
+        self.next_f64()
+    }
+}
+
+// ── Normal CDF ───────────────────────────────────────────────────────────────
+
+/// Standard normal CDF Φ(x) approximated via the error function.
+///
+/// Uses the identity: Φ(x) = (1 + erf(x / √2)) / 2
+fn normal_cdf(x: f64) -> f64 {
+    0.5 * (1.0 + erf(x / std::f64::consts::SQRT_2))
+}
+
+/// Abramowitz & Stegun approximation of erf(x) (maximum error ≈ 1.5e-7).
+fn erf(x: f64) -> f64 {
+    // Handle negative x via symmetry
+    if x < 0.0 {
+        return -erf(-x);
+    }
+
+    // Constants for the rational approximation
+    let t = 1.0 / (1.0 + 0.3275911 * x);
+    let poly = t
+        * (0.254_829_592
+            + t * (-0.284_496_736 + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+
+    1.0 - poly * (-x * x).exp()
+}
+
+// ── Gamma / Beta sampling ────────────────────────────────────────────────────
+
+/// Sample from Gamma(shape, rate=1) using the Marsaglia-Tsang method.
+///
+/// Handles shape < 1 via the Ahrens–Dieter boost: Gamma(a) = Gamma(a+1) * U^(1/a).
+fn sample_gamma(shape: f64, rng: &mut impl Rng) -> f64 {
+    if shape < 1.0 {
+        // Boost: sample Gamma(shape+1) then scale
+        let u = rng.next_f64();
+        return sample_gamma(shape + 1.0, rng) * u.powf(1.0 / shape);
+    }
+
+    // Marsaglia-Tsang: d = shape - 1/3, c = 1 / sqrt(9d)
+    let d = shape - 1.0 / 3.0;
+    let c = 1.0 / (9.0 * d).sqrt();
+
+    loop {
+        // Draw a standard normal via Box-Muller
+        let u1 = rng.next_f64().max(1e-300); // avoid log(0)
+        let u2 = rng.next_f64();
+        let z = (2.0 * std::f64::consts::PI * u2).cos() * (-2.0 * u1.ln()).sqrt();
+
+        let v = 1.0 + c * z;
+        if v <= 0.0 {
+            continue;
+        }
+        let v3 = v * v * v;
+        let u = rng.next_f64().max(1e-300);
+
+        // Accept/reject
+        if u < 1.0 - 0.0331 * (z * z) * (z * z) {
+            return d * v3;
+        }
+        if u.ln() < 0.5 * z * z + d * (1.0 - v3 + v3.ln()) {
+            return d * v3;
+        }
+    }
+}
+
+/// Sample from Beta(alpha, beta) using the ratio-of-Gammas method.
+fn sample_beta(alpha: f64, beta: f64, rng: &mut impl Rng) -> f64 {
+    let x = sample_gamma(alpha, rng);
+    let y = sample_gamma(beta, rng);
+    let sum = x + y;
+    if sum == 0.0 { 0.5 } else { x / sum }
+}
+
+// ── Percentile helper ────────────────────────────────────────────────────────
+
+/// Compute the `p`-th percentile (0..=100) of a sorted slice via linear interpolation.
+fn percentile_sorted(sorted: &[f64], p: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0];
+    }
+    let n = sorted.len() as f64;
+    let index = p / 100.0 * (n - 1.0);
+    let lo = index.floor() as usize;
+    let hi = (lo + 1).min(sorted.len() - 1);
+    let frac = index - lo as f64;
+    sorted[lo] + frac * (sorted[hi] - sorted[lo])
+}
+
+// ── Public analysis functions ────────────────────────────────────────────────
+
+/// Bayesian analysis of a **count/conversion** metric using Beta-Binomial posteriors.
+///
+/// Prior: Beta(1, 1) (uniform).
+/// Posterior: Beta(1 + conversions, 1 + sample_size - conversions).
+/// Uses 10,000 Monte Carlo samples to estimate `prob_best`, the credible interval,
+/// and the expected loss.
+pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> BayesianResult {
+    let n_c = control.sample_size as f64;
+    let conv_c = control.conversions.unwrap_or(0) as f64;
+    let n_v = variant.sample_size as f64;
+    let conv_v = variant.conversions.unwrap_or(0) as f64;
+
+    // Posterior parameters (Beta with uniform prior)
+    let alpha_c = 1.0 + conv_c;
+    let beta_c = 1.0 + (n_c - conv_c).max(0.0);
+    let alpha_v = 1.0 + conv_v;
+    let beta_v = 1.0 + (n_v - conv_v).max(0.0);
+
+    beta_binomial_mc(alpha_c, beta_c, alpha_v, beta_v, 10_000, 42)
+}
+
+/// Bayesian analysis of a **numeric** metric using a Normal-Normal conjugate approximation.
+///
+/// Uses empirical mean and variance. `prob_best` is derived from the CDF of the
+/// difference distribution N(mean_v - mean_c, sqrt(var_v/n_v + var_c/n_c)).
+pub fn analyze_numeric(control: &VariantStats, variant: &VariantStats) -> BayesianResult {
+    let n_c = control.sample_size as f64;
+    let n_v = variant.sample_size as f64;
+    let mean_c = control.mean.unwrap_or(0.0);
+    let mean_v = variant.mean.unwrap_or(0.0);
+    let var_c = control.variance.unwrap_or(0.0).max(0.0);
+    let var_v = variant.variance.unwrap_or(0.0).max(0.0);
+
+    // Standard error of the difference
+    let se2 = var_v / n_v.max(1.0) + var_c / n_c.max(1.0);
+    let se = se2.sqrt();
+
+    let mean_diff = mean_v - mean_c;
+
+    // P(variant > control) = P(diff > 0) = 1 - Φ(-mean_diff / se)
+    let prob_best = if se == 0.0 {
+        if mean_diff > 0.0 { 1.0 } else if mean_diff < 0.0 { 0.0 } else { 0.5 }
+    } else {
+        1.0 - normal_cdf(-mean_diff / se)
+    };
+
+    // 95% credible interval for the difference
+    let z95 = 1.959_964; // Φ^{-1}(0.975)
+    let lower = mean_diff - z95 * se;
+    let upper = mean_diff + z95 * se;
+
+    // Expected loss = E[max(mean_c - mean_v, 0)] — analytic formula for normal distribution
+    // If X ~ N(mu, sigma^2), E[max(-X, 0)] = sigma * phi(-mu/sigma) - mu * (1 - Phi(mu/sigma))
+    // where we set X = diff = mean_v - mean_c, so max(mean_c - mean_v, 0) = max(-X, 0)
+    let expected_loss = if se == 0.0 {
+        (-mean_diff).max(0.0)
+    } else {
+        let d = mean_diff / se;
+        // E[max(-X, 0)] where X ~ N(mean_diff, se^2)
+        // = se * phi(d) - mean_diff * (1 - Phi(d))   … where phi is standard normal PDF
+        let phi_d = (-0.5 * d * d).exp() / (2.0 * std::f64::consts::PI).sqrt();
+        se * phi_d + (-mean_diff) * (1.0 - normal_cdf(d))
+    };
+
+    BayesianResult {
+        prob_best,
+        credible_interval: ConfidenceInterval { lower, upper },
+        expected_loss: expected_loss.max(0.0),
+    }
+}
+
+/// Bayesian analysis of a **percentile** metric via bootstrap posterior approximation.
+///
+/// Draws 1,000 bootstrap samples from each group, computes the `percentile` on each,
+/// and estimates `prob_best`, the credible interval, and the expected loss from the
+/// empirical distribution of differences.
+pub fn analyze_percentile(
+    control_samples: &[f64],
+    variant_samples: &[f64],
+    percentile: f64,
+) -> BayesianResult {
+    const N_BOOT: usize = 1_000;
+    let seed = 42u64;
+    let mut rng = Lcg::new(seed);
+
+    if control_samples.is_empty() || variant_samples.is_empty() {
+        return BayesianResult {
+            prob_best: 0.5,
+            credible_interval: ConfidenceInterval { lower: 0.0, upper: 0.0 },
+            expected_loss: 0.0,
+        };
+    }
+
+    let n_c = control_samples.len();
+    let n_v = variant_samples.len();
+
+    // Pre-sort for percentile computation
+    let mut ctrl_sorted = control_samples.to_vec();
+    let mut var_sorted = variant_samples.to_vec();
+    ctrl_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    var_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut differences = Vec::with_capacity(N_BOOT);
+
+    for _ in 0..N_BOOT {
+        // Bootstrap resample control
+        let mut boot_c = Vec::with_capacity(n_c);
+        for _ in 0..n_c {
+            let idx = (rng.next_f64() * n_c as f64) as usize % n_c;
+            boot_c.push(control_samples[idx]);
+        }
+        boot_c.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Bootstrap resample variant
+        let mut boot_v = Vec::with_capacity(n_v);
+        for _ in 0..n_v {
+            let idx = (rng.next_f64() * n_v as f64) as usize % n_v;
+            boot_v.push(variant_samples[idx]);
+        }
+        boot_v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let perc_c = percentile_sorted(&boot_c, percentile);
+        let perc_v = percentile_sorted(&boot_v, percentile);
+        differences.push(perc_v - perc_c);
+    }
+
+    // prob_best = fraction where variant > control
+    let wins = differences.iter().filter(|&&d| d > 0.0).count();
+    let prob_best = wins as f64 / N_BOOT as f64;
+
+    // Credible interval: 2.5th and 97.5th percentile of differences
+    let mut diff_sorted = differences.clone();
+    diff_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let lower = percentile_sorted(&diff_sorted, 2.5);
+    let upper = percentile_sorted(&diff_sorted, 97.5);
+
+    // Expected loss = mean of max(-diff, 0)
+    let expected_loss =
+        differences.iter().map(|&d| (-d).max(0.0)).sum::<f64>() / N_BOOT as f64;
+
+    BayesianResult {
+        prob_best,
+        credible_interval: ConfidenceInterval { lower, upper },
+        expected_loss,
+    }
+}
+
+/// Bayesian analysis of a **funnel** metric using Beta-Binomial posteriors.
+///
+/// Approximates conversions as `(conversion_rate * sample_size) as i64` when raw
+/// conversion counts are not populated, then delegates to the same Beta-Binomial
+/// Monte Carlo estimator used by [`analyze_count`].
+pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> BayesianResult {
+    let approx_conversions = |stats: &VariantStats| -> f64 {
+        if let Some(c) = stats.conversions {
+            return c as f64;
+        }
+        if let Some(rate) = stats.conversion_rate {
+            return (rate * stats.sample_size as f64).round();
+        }
+        0.0
+    };
+
+    let n_c = control.sample_size as f64;
+    let conv_c = approx_conversions(control);
+    let n_v = variant.sample_size as f64;
+    let conv_v = approx_conversions(variant);
+
+    let alpha_c = 1.0 + conv_c;
+    let beta_c = 1.0 + (n_c - conv_c).max(0.0);
+    let alpha_v = 1.0 + conv_v;
+    let beta_v = 1.0 + (n_v - conv_v).max(0.0);
+
+    beta_binomial_mc(alpha_c, beta_c, alpha_v, beta_v, 10_000, 42)
+}
+
+// ── Shared Monte Carlo helper ─────────────────────────────────────────────────
+
+/// Estimate `prob_best`, credible interval, and expected loss for two Beta posteriors
+/// via Monte Carlo with `n_samples` draws and a fixed RNG `seed`.
+fn beta_binomial_mc(
+    alpha_c: f64,
+    beta_c: f64,
+    alpha_v: f64,
+    beta_v: f64,
+    n_samples: usize,
+    seed: u64,
+) -> BayesianResult {
+    let mut rng = Lcg::new(seed);
+    let mut differences = Vec::with_capacity(n_samples);
+
+    for _ in 0..n_samples {
+        let s_c = sample_beta(alpha_c, beta_c, &mut rng);
+        let s_v = sample_beta(alpha_v, beta_v, &mut rng);
+        differences.push(s_v - s_c);
+    }
+
+    // prob_best = P(variant > control)
+    let wins = differences.iter().filter(|&&d| d > 0.0).count();
+    let prob_best = wins as f64 / n_samples as f64;
+
+    // Credible interval of differences
+    let mut diff_sorted = differences.clone();
+    diff_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let lower = percentile_sorted(&diff_sorted, 2.5);
+    let upper = percentile_sorted(&diff_sorted, 97.5);
+
+    // Expected loss = E[max(control_rate - variant_rate, 0)] = mean of max(-diff, 0)
+    let expected_loss =
+        differences.iter().map(|&d| (-d).max(0.0)).sum::<f64>() / n_samples as f64;
+
+    BayesianResult {
+        prob_best,
+        credible_interval: ConfidenceInterval { lower, upper },
+        expected_loss,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_count_stats(sample_size: i64, conversions: i64) -> VariantStats {
+        VariantStats {
+            sample_size,
+            conversions: Some(conversions),
+            mean: None,
+            variance: None,
+            conversion_rate: Some(conversions as f64 / sample_size as f64),
+            percentiles: None,
+        }
+    }
+
+    fn make_numeric_stats(sample_size: i64, mean: f64, variance: f64) -> VariantStats {
+        VariantStats {
+            sample_size,
+            conversions: None,
+            mean: Some(mean),
+            variance: Some(variance),
+            conversion_rate: None,
+            percentiles: None,
+        }
+    }
+
+    // ── analyze_count ─────────────────────────────────────────────────────────
+
+    /// Clear winner: 150/1000 vs 100/1000 — variant is clearly better, prob_best > 0.99
+    #[test]
+    fn count_clear_winner_prob_best_exceeds_0_99() {
+        let control = make_count_stats(1000, 100);
+        let variant = make_count_stats(1000, 150);
+        let result = analyze_count(&control, &variant);
+        assert!(
+            result.prob_best > 0.99,
+            "expected prob_best > 0.99, got {}",
+            result.prob_best
+        );
+    }
+
+    /// Near-equal: 11 vs 10 conversions out of 100 — prob_best should be near 0.5
+    #[test]
+    fn count_near_equal_prob_best_near_0_5() {
+        let control = make_count_stats(100, 10);
+        let variant = make_count_stats(100, 11);
+        let result = analyze_count(&control, &variant);
+        assert!(
+            result.prob_best > 0.3 && result.prob_best < 0.7,
+            "expected prob_best near 0.5, got {}",
+            result.prob_best
+        );
+    }
+
+    #[test]
+    fn count_credible_interval_is_ordered() {
+        let control = make_count_stats(1000, 100);
+        let variant = make_count_stats(1000, 150);
+        let result = analyze_count(&control, &variant);
+        assert!(
+            result.credible_interval.lower < result.credible_interval.upper,
+            "lower={} should be < upper={}",
+            result.credible_interval.lower,
+            result.credible_interval.upper
+        );
+    }
+
+    #[test]
+    fn count_clear_winner_credible_interval_excludes_zero() {
+        let control = make_count_stats(1000, 100);
+        let variant = make_count_stats(1000, 150);
+        let result = analyze_count(&control, &variant);
+        // The 95% CI for a clear positive effect should have lower > 0
+        assert!(
+            result.credible_interval.lower > 0.0,
+            "expected lower > 0 for clear winner, got {}",
+            result.credible_interval.lower
+        );
+    }
+
+    #[test]
+    fn count_expected_loss_near_zero_for_clear_winner() {
+        let control = make_count_stats(1000, 100);
+        let variant = make_count_stats(1000, 150);
+        let result = analyze_count(&control, &variant);
+        assert!(
+            result.expected_loss < 0.01,
+            "expected expected_loss < 0.01 for clear winner, got {}",
+            result.expected_loss
+        );
+    }
+
+    #[test]
+    fn count_prob_best_sums_to_one_approximately() {
+        // When control and variant use same params, prob_best should be near 0.5
+        let control = make_count_stats(1000, 100);
+        let variant = make_count_stats(1000, 100);
+        let result = analyze_count(&control, &variant);
+        assert!(
+            (result.prob_best - 0.5).abs() < 0.05,
+            "expected prob_best ≈ 0.5 for identical groups, got {}",
+            result.prob_best
+        );
+    }
+
+    // ── analyze_numeric ───────────────────────────────────────────────────────
+
+    /// Large, clear numeric difference: variant is far superior
+    #[test]
+    fn numeric_clear_winner_prob_best_exceeds_0_99() {
+        // control: mean=100, var=100, n=1000
+        // variant: mean=110, var=100, n=1000
+        // SE = sqrt(100/1000 + 100/1000) = sqrt(0.2) ≈ 0.447
+        // diff = 10 >> SE → prob_best ≈ 1.0
+        let control = make_numeric_stats(1000, 100.0, 100.0);
+        let variant = make_numeric_stats(1000, 110.0, 100.0);
+        let result = analyze_numeric(&control, &variant);
+        assert!(
+            result.prob_best > 0.99,
+            "expected prob_best > 0.99, got {}",
+            result.prob_best
+        );
+    }
+
+    #[test]
+    fn numeric_near_equal_prob_best_near_0_5() {
+        // diff = 0.1, SE = sqrt(25/1000 + 25/1000) = sqrt(0.05) ≈ 0.224
+        // d = 0.1 / 0.224 ≈ 0.45 → prob_best ≈ 0.67; still well within 0.3–0.7
+        let control = make_numeric_stats(1000, 50.0, 25.0);
+        let variant = make_numeric_stats(1000, 50.1, 25.0);
+        let result = analyze_numeric(&control, &variant);
+        assert!(
+            result.prob_best > 0.3 && result.prob_best < 0.7,
+            "expected prob_best near 0.5, got {}",
+            result.prob_best
+        );
+    }
+
+    #[test]
+    fn numeric_credible_interval_is_ordered() {
+        let control = make_numeric_stats(1000, 100.0, 100.0);
+        let variant = make_numeric_stats(1000, 110.0, 100.0);
+        let result = analyze_numeric(&control, &variant);
+        assert!(
+            result.credible_interval.lower < result.credible_interval.upper,
+            "lower={} should be < upper={}",
+            result.credible_interval.lower,
+            result.credible_interval.upper
+        );
+    }
+
+    #[test]
+    fn numeric_credible_interval_centered_on_diff() {
+        let control = make_numeric_stats(1000, 100.0, 100.0);
+        let variant = make_numeric_stats(1000, 110.0, 100.0);
+        let result = analyze_numeric(&control, &variant);
+        let mid = (result.credible_interval.lower + result.credible_interval.upper) / 2.0;
+        assert!(
+            (mid - 10.0).abs() < 0.1,
+            "expected CI midpoint ≈ 10.0, got {}",
+            mid
+        );
+    }
+
+    #[test]
+    fn numeric_expected_loss_is_nonnegative() {
+        let control = make_numeric_stats(500, 50.0, 20.0);
+        let variant = make_numeric_stats(500, 55.0, 20.0);
+        let result = analyze_numeric(&control, &variant);
+        assert!(
+            result.expected_loss >= 0.0,
+            "expected_loss should be non-negative, got {}",
+            result.expected_loss
+        );
+    }
+
+    #[test]
+    fn numeric_zero_variance_deterministic() {
+        let control = make_numeric_stats(100, 5.0, 0.0);
+        let variant = make_numeric_stats(100, 10.0, 0.0);
+        let result = analyze_numeric(&control, &variant);
+        // With zero variance and positive diff, variant should always win
+        assert_eq!(result.prob_best, 1.0);
+        assert_eq!(result.expected_loss, 0.0);
+    }
+
+    // ── analyze_percentile ────────────────────────────────────────────────────
+
+    fn make_uniform_samples(n: usize, lo: f64, hi: f64, seed: u64) -> Vec<f64> {
+        let mut rng = Lcg::new(seed);
+        (0..n).map(|_| lo + rng.next_f64() * (hi - lo)).collect()
+    }
+
+    #[test]
+    fn percentile_clear_winner_prob_best_high() {
+        // variant samples are clearly larger — variant p50 should beat control p50
+        let control = make_uniform_samples(500, 0.0, 10.0, 1);
+        let variant = make_uniform_samples(500, 15.0, 25.0, 2);
+        let result = analyze_percentile(&control, &variant, 50.0);
+        assert!(
+            result.prob_best > 0.95,
+            "expected prob_best > 0.95, got {}",
+            result.prob_best
+        );
+    }
+
+    #[test]
+    fn percentile_identical_samples_prob_best_near_0_5() {
+        // Using exact same distribution, prob_best should be near 0.5
+        let samples: Vec<f64> = (0..200).map(|i| i as f64).collect();
+        let result = analyze_percentile(&samples, &samples, 50.0);
+        assert!(
+            result.prob_best >= 0.3 && result.prob_best <= 0.7,
+            "expected prob_best near 0.5, got {}",
+            result.prob_best
+        );
+    }
+
+    #[test]
+    fn percentile_empty_samples_returns_default() {
+        let result = analyze_percentile(&[], &[], 50.0);
+        assert_eq!(result.prob_best, 0.5);
+    }
+
+    #[test]
+    fn percentile_credible_interval_ordered() {
+        let control = make_uniform_samples(300, 0.0, 10.0, 3);
+        let variant = make_uniform_samples(300, 5.0, 15.0, 4);
+        let result = analyze_percentile(&control, &variant, 50.0);
+        assert!(
+            result.credible_interval.lower < result.credible_interval.upper,
+            "lower={} should be < upper={}",
+            result.credible_interval.lower,
+            result.credible_interval.upper
+        );
+    }
+
+    // ── analyze_funnel ────────────────────────────────────────────────────────
+
+    fn make_funnel_stats_from_rate(sample_size: i64, conversion_rate: f64) -> VariantStats {
+        VariantStats {
+            sample_size,
+            conversions: None, // force the rate-based approximation path
+            mean: None,
+            variance: None,
+            conversion_rate: Some(conversion_rate),
+            percentiles: None,
+        }
+    }
+
+    #[test]
+    fn funnel_clear_winner_prob_best_exceeds_0_99() {
+        let control = make_count_stats(1000, 100);
+        let variant = make_count_stats(1000, 150);
+        let result = analyze_funnel(&control, &variant);
+        assert!(
+            result.prob_best > 0.99,
+            "expected prob_best > 0.99, got {}",
+            result.prob_best
+        );
+    }
+
+    #[test]
+    fn funnel_rate_approximation_matches_count_closely() {
+        // Using conversion_rate path should give similar results to direct count path
+        let control_count = make_count_stats(1000, 100);
+        let variant_count = make_count_stats(1000, 150);
+        let result_count = analyze_funnel(&control_count, &variant_count);
+
+        let control_rate = make_funnel_stats_from_rate(1000, 0.10);
+        let variant_rate = make_funnel_stats_from_rate(1000, 0.15);
+        let result_rate = analyze_funnel(&control_rate, &variant_rate);
+
+        assert!(
+            (result_count.prob_best - result_rate.prob_best).abs() < 0.01,
+            "rate and count paths should agree closely: count={}, rate={}",
+            result_count.prob_best,
+            result_rate.prob_best
+        );
+    }
+
+    #[test]
+    fn funnel_expected_loss_is_nonnegative() {
+        let control = make_count_stats(500, 50);
+        let variant = make_count_stats(500, 60);
+        let result = analyze_funnel(&control, &variant);
+        assert!(
+            result.expected_loss >= 0.0,
+            "expected_loss must be >= 0, got {}",
+            result.expected_loss
+        );
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    #[test]
+    fn normal_cdf_at_zero_is_half() {
+        assert!((normal_cdf(0.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn normal_cdf_at_plus_infinity_ish() {
+        assert!((normal_cdf(10.0) - 1.0) < 1e-6);
+    }
+
+    #[test]
+    fn normal_cdf_symmetry() {
+        for x in [0.5, 1.0, 1.645, 1.96, 2.576] {
+            let sum = normal_cdf(x) + normal_cdf(-x);
+            assert!((sum - 1.0).abs() < 1e-6, "symmetry failed at x={x}: {sum}");
+        }
+    }
+
+    #[test]
+    fn sample_beta_mean_approx() {
+        let mut rng = Lcg::new(99);
+        let (alpha, beta) = (3.0, 7.0);
+        let expected_mean = alpha / (alpha + beta); // 0.3
+        let n = 50_000usize;
+        let mean: f64 = (0..n).map(|_| sample_beta(alpha, beta, &mut rng)).sum::<f64>() / n as f64;
+        assert!(
+            (mean - expected_mean).abs() < 0.01,
+            "Beta mean ≈ {expected_mean}, got {mean}"
+        );
+    }
+
+    #[test]
+    fn percentile_sorted_basic() {
+        let data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        assert!((percentile_sorted(&data, 50.0) - 3.0).abs() < 1e-9);
+        assert!((percentile_sorted(&data, 0.0) - 1.0).abs() < 1e-9);
+        assert!((percentile_sorted(&data, 100.0) - 5.0).abs() < 1e-9);
+    }
+
+    // ── percentile_sorted edge cases ──────────────────────────────────────────
+
+    #[test]
+    fn percentile_sorted_empty_returns_zero() {
+        // Covers the `if sorted.is_empty()` branch (line 125)
+        assert_eq!(percentile_sorted(&[], 50.0), 0.0);
+    }
+
+    #[test]
+    fn percentile_sorted_single_element_returns_that_element() {
+        // Covers the `if sorted.len() == 1` branch (line 128)
+        assert_eq!(percentile_sorted(&[42.0], 50.0), 42.0);
+        assert_eq!(percentile_sorted(&[7.5], 0.0), 7.5);
+        assert_eq!(percentile_sorted(&[7.5], 100.0), 7.5);
+    }
+
+    // ── sample_gamma with shape < 1.0 ────────────────────────────────────────
+
+    #[test]
+    fn sample_gamma_small_shape_returns_positive() {
+        // Covers lines 81-82 (shape < 1 boost path)
+        let mut rng = Lcg::new(1234);
+        let n = 10_000usize;
+        let mut all_positive = true;
+        let mut sum = 0.0f64;
+        for _ in 0..n {
+            let v = sample_gamma(0.5, &mut rng);
+            if v <= 0.0 { all_positive = false; }
+            sum += v;
+        }
+        assert!(all_positive, "all samples from Gamma(0.5) should be positive");
+        // Gamma(0.5) has mean = shape = 0.5
+        let mean = sum / n as f64;
+        assert!((mean - 0.5).abs() < 0.05, "Gamma(0.5) mean ≈ 0.5, got {mean}");
+    }
+
+    // ── analyze_funnel with no conversions and no conversion_rate ────────────
+
+    #[test]
+    fn funnel_no_conversions_no_rate_falls_back_to_zero() {
+        // Covers the `0.0` fallback in `approx_conversions` (line 300)
+        let empty_stats = |n: i64| VariantStats {
+            sample_size: n,
+            conversions: None,
+            mean: None,
+            variance: None,
+            conversion_rate: None,
+            percentiles: None,
+        };
+        let control = empty_stats(1000);
+        let variant = empty_stats(1000);
+        let result = analyze_funnel(&control, &variant);
+        // Both groups effectively have 0 conversions → prob_best ≈ 0.5
+        assert!(
+            result.prob_best > 0.3 && result.prob_best < 0.7,
+            "prob_best with zero conversions both sides should be near 0.5, got {}",
+            result.prob_best
+        );
+        assert!(result.expected_loss >= 0.0);
+    }
+}
