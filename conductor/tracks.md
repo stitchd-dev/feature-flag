@@ -27,8 +27,6 @@ This file tracks all major tracks for the project.
 
 <!-- Archived: events_20260419 (Events Layer) -->
 <!-- Archived: experimentation_20260419 (Experimentation Module — Experiment CRUD) -->
+<!-- Archived: stats_20260420 (Experiment Statistical Analysis) -->
 
 ---
-
-## [x] Track: Experiment Statistical Analysis
-*Link: [./conductor/tracks/stats_20260420/](./conductor/tracks/stats_20260420/)*
