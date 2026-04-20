@@ -4,6 +4,8 @@
 
 /// API routes and handlers.
 pub mod api;
+/// Experimentation server-side logic (async compute pipeline).
+pub mod experimentation;
 /// gRPC service implementations.
 pub mod grpc;
 /// Server startup and maintenance tasks.
