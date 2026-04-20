@@ -82,3 +82,15 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 ## Data Stores
 - PostgreSQL: flag/segment configuration, tenants, environments, SDK keys
 - ClickHouse: events, experiment results, metric aggregations
+
+## Deferred: ClickHouse Query Optimisations
+
+ClickHouse performance optimisations for the Experimentation and Events modules are **explicitly out of scope until core functionality is complete and in production**.
+
+Current implementation queries the raw `events` table directly (using `arrayFirst`/`arrayExists` on the contexts array) because the existing materialized views (`events_count_mv`, `events_numeric_mv`) aggregate at `(env_id, metric_key, day)` and discard per-experiment context.
+
+**Deferred work (pick up when recompute p95 > 100ms at production load):**
+- New experiment-scoped MVs keyed on `(env_id, experiment_id, variant, metric_key, day)`
+- Rewrite `experiment_queries.rs` to read from MVs instead of raw events
+- Historical backfill migration
+- Equivalent optimisation for general event ingestion/query paths
