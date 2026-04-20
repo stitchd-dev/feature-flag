@@ -258,24 +258,32 @@ pub fn analyze_numeric(control: &VariantStats, variant: &VariantStats) -> Freque
 
 /// Bootstrap-based analysis for percentile metrics.
 ///
-/// Delegates to [`super::bootstrap::bootstrap_ci`] for the confidence
-/// interval.  Because bootstrap produces no analytical p-value, `p_value` is
-/// set to [`f64::NAN`] and `significant` is always `false` — callers should
-/// use CI overlap to assess significance for percentile metrics.
+/// Because bootstrap produces no analytical p-value, `p_value` is set to
+/// [`f64::NAN`] and `significant` is always `false` — callers should use CI
+/// overlap to assess significance for percentile metrics.
+///
+/// The CI represents the difference (variant percentile − control percentile).
 ///
 /// # Arguments
 /// * `control_samples`  – raw observations for the control variant
 /// * `variant_samples`  – raw observations for the treatment variant
-/// * `percentile`       – target percentile in `[0, 100]`
+/// * `percentile`       – target percentile in `[0, 100]` (e.g. `95.0` for p95)
 pub fn analyze_percentile(
     control_samples: &[f64],
     variant_samples: &[f64],
     percentile: f64,
 ) -> FrequentistResult {
-    let ci = super::bootstrap::bootstrap_ci(control_samples, variant_samples, percentile, 1_000);
+    let p = percentile / 100.0;
+    let (c_lower, c_upper) =
+        super::bootstrap::bootstrap_percentile_ci(control_samples, p, 1_000);
+    let (v_lower, v_upper) =
+        super::bootstrap::bootstrap_percentile_ci(variant_samples, p, 1_000);
     FrequentistResult {
         p_value: f64::NAN,
-        confidence_interval: ci,
+        confidence_interval: ConfidenceInterval {
+            lower: v_lower - c_upper,
+            upper: v_upper - c_lower,
+        },
         significant: false,
     }
 }
