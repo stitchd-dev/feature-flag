@@ -30,5 +30,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Experiment Statistical Analysis
+## [x] Track: Experiment Statistical Analysis
 *Link: [./conductor/tracks/stats_20260420/](./conductor/tracks/stats_20260420/)*
