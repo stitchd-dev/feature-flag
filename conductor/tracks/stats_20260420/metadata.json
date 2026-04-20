@@ -9,5 +9,28 @@
   "updated_at": "2026-04-20T00:00:00Z",
   "description": "Experiment Statistical Analysis — Frequentist & Bayesian with all metric types",
   "git_branch": "track/stats_20260420",
-  "worktree_path": ".worktrees/stats_20260420"
+  "worktree_path": ".worktrees/stats_20260420",
+  "beads_epic": "feature-flag-5o8",
+  "beads_tasks": {
+    "phase1": "feature-flag-5o8.1",
+    "phase1_task1": "feature-flag-5o8.1.1",
+    "phase1_task2": "feature-flag-5o8.1.2",
+    "phase2": "feature-flag-5o8.2",
+    "phase2_task1": "feature-flag-5o8.2.1",
+    "phase2_task2": "feature-flag-5o8.2.2",
+    "phase3": "feature-flag-5o8.3",
+    "phase3_task1": "feature-flag-5o8.3.1",
+    "phase3_task2": "feature-flag-5o8.3.2",
+    "phase3_task3": "feature-flag-5o8.3.3",
+    "phase4": "feature-flag-5o8.4",
+    "phase4_task1": "feature-flag-5o8.4.1",
+    "phase4_task2": "feature-flag-5o8.4.2",
+    "phase5": "feature-flag-5o8.5",
+    "phase5_task1": "feature-flag-5o8.5.1",
+    "phase5_task2": "feature-flag-5o8.5.2",
+    "phase5_task3": "feature-flag-5o8.5.3",
+    "phase6": "feature-flag-5o8.6",
+    "phase6_task1": "feature-flag-5o8.6.1",
+    "phase6_task2": "feature-flag-5o8.6.2"
+  }
 }
