@@ -652,6 +652,57 @@ mod tests {
         assert!(result.p_value >= 0.05);
     }
 
+    // ── regularised_incomplete_beta edge cases ────────────────────────────────
+
+    #[test]
+    fn regularised_incomplete_beta_out_of_range_returns_zero() {
+        // x < 0
+        assert_eq!(regularised_incomplete_beta(-0.1, 2.0, 3.0), 0.0);
+        // x > 1
+        assert_eq!(regularised_incomplete_beta(1.1, 2.0, 3.0), 0.0);
+    }
+
+    #[test]
+    fn regularised_incomplete_beta_at_zero_returns_zero() {
+        assert_eq!(regularised_incomplete_beta(0.0, 2.0, 3.0), 0.0);
+    }
+
+    #[test]
+    fn regularised_incomplete_beta_at_one_returns_one() {
+        assert_eq!(regularised_incomplete_beta(1.0, 2.0, 3.0), 1.0);
+    }
+
+    // ── lgamma reflection formula (x < 0.5) ──────────────────────────────────
+
+    #[test]
+    fn lgamma_at_small_x_uses_reflection() {
+        // lgamma(1) = ln(Γ(1)) = ln(1) = 0
+        let v = lgamma(1.0);
+        assert!((v - 0.0).abs() < 1e-6, "lgamma(1) should be 0, got {v}");
+
+        // lgamma(0.5) = ln(sqrt(π)) ≈ 0.5723...
+        let v2 = lgamma(0.5);
+        let expected = (std::f64::consts::PI.sqrt()).ln();
+        assert!((v2 - expected).abs() < 1e-6, "lgamma(0.5) should be {expected}, got {v2}");
+
+        // Trigger the x < 0.5 branch explicitly
+        let v3 = lgamma(0.25);
+        assert!(v3.is_finite(), "lgamma(0.25) should be finite, got {v3}");
+    }
+
+    // ── analyze_numeric with zero variance (se == 0.0) ───────────────────────
+
+    #[test]
+    fn analyze_numeric_zero_variance_identical_means_returns_high_p_value() {
+        // Both variances zero, identical means → se = 0, t = 0, df = 1
+        let control = make_numeric_stats(100, 5.0, 0.0);
+        let variant = make_numeric_stats(100, 5.0, 0.0);
+        let result = analyze_numeric(&control, &variant);
+        // t = 0 → p_value should be 1.0 (or very close)
+        assert!(result.p_value > 0.9, "zero variance, same mean: p_value should be ~1, got {}", result.p_value);
+        assert!(!result.significant);
+    }
+
     /// analyze_funnel and analyze_count should give identical results when
     /// both are derived from the same proportions.
     #[test]

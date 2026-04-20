@@ -690,4 +690,65 @@ mod tests {
         assert!((percentile_sorted(&data, 0.0) - 1.0).abs() < 1e-9);
         assert!((percentile_sorted(&data, 100.0) - 5.0).abs() < 1e-9);
     }
+
+    // ── percentile_sorted edge cases ──────────────────────────────────────────
+
+    #[test]
+    fn percentile_sorted_empty_returns_zero() {
+        // Covers the `if sorted.is_empty()` branch (line 125)
+        assert_eq!(percentile_sorted(&[], 50.0), 0.0);
+    }
+
+    #[test]
+    fn percentile_sorted_single_element_returns_that_element() {
+        // Covers the `if sorted.len() == 1` branch (line 128)
+        assert_eq!(percentile_sorted(&[42.0], 50.0), 42.0);
+        assert_eq!(percentile_sorted(&[7.5], 0.0), 7.5);
+        assert_eq!(percentile_sorted(&[7.5], 100.0), 7.5);
+    }
+
+    // ── sample_gamma with shape < 1.0 ────────────────────────────────────────
+
+    #[test]
+    fn sample_gamma_small_shape_returns_positive() {
+        // Covers lines 81-82 (shape < 1 boost path)
+        let mut rng = Lcg::new(1234);
+        let n = 10_000usize;
+        let mut all_positive = true;
+        let mut sum = 0.0f64;
+        for _ in 0..n {
+            let v = sample_gamma(0.5, &mut rng);
+            if v <= 0.0 { all_positive = false; }
+            sum += v;
+        }
+        assert!(all_positive, "all samples from Gamma(0.5) should be positive");
+        // Gamma(0.5) has mean = shape = 0.5
+        let mean = sum / n as f64;
+        assert!((mean - 0.5).abs() < 0.05, "Gamma(0.5) mean ≈ 0.5, got {mean}");
+    }
+
+    // ── analyze_funnel with no conversions and no conversion_rate ────────────
+
+    #[test]
+    fn funnel_no_conversions_no_rate_falls_back_to_zero() {
+        // Covers the `0.0` fallback in `approx_conversions` (line 300)
+        let empty_stats = |n: i64| VariantStats {
+            sample_size: n,
+            conversions: None,
+            mean: None,
+            variance: None,
+            conversion_rate: None,
+            percentiles: None,
+        };
+        let control = empty_stats(1000);
+        let variant = empty_stats(1000);
+        let result = analyze_funnel(&control, &variant);
+        // Both groups effectively have 0 conversions → prob_best ≈ 0.5
+        assert!(
+            result.prob_best > 0.3 && result.prob_best < 0.7,
+            "prob_best with zero conversions both sides should be near 0.5, got {}",
+            result.prob_best
+        );
+        assert!(result.expected_loss >= 0.0);
+    }
 }
