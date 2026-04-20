@@ -94,3 +94,12 @@ Current implementation queries the raw `events` table directly (using `arrayFirs
 - Rewrite `experiment_queries.rs` to read from MVs instead of raw events
 - Historical backfill migration
 - Equivalent optimisation for general event ingestion/query paths
+
+**Scheduled Stats Processing (deferred — pick up alongside MV optimisations):**
+
+Stats computation should run on a **1-hour scheduled interval**, not on-demand per API request. The computed results must be written to a dedicated processed results table (PostgreSQL `experiment_results` already exists for this purpose). The Results API must read exclusively from this pre-computed table — never triggering a live ClickHouse query at request time.
+
+- Replace the current fire-and-forget `ComputeResultsJob` (triggered by POST `/recompute`) with a periodic scheduler (tokio cron or similar) that runs every 60 minutes per active experiment
+- Results API (`GET /experiments/{id}/results`) reads from `experiment_results` only; returns stale data with a `computed_at` timestamp — no inline recompute
+- The manual `/recompute` endpoint may remain as an escape hatch but must not block the response
+- Staleness indicator on the API response (`is_stale: bool`, `computed_at`) so consumers know result freshness
