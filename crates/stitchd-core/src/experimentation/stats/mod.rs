@@ -6,6 +6,7 @@
 pub mod bayesian;
 pub mod bootstrap;
 pub mod frequentist;
+pub mod recommendation;
 
 use std::collections::HashMap;
 use std::fmt;
