@@ -32,64 +32,64 @@ Track: stats_20260420
 
 - [~] Task: Conductor - User Manual Verification 'Phase 1: Database Schema & Domain Types' (Protocol in workflow.md)
 
-## Phase 2: ClickHouse Query Layer
+## Phase 2: ClickHouse Query Layer [checkpoint: pending]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task 1: ClickHouse aggregation queries
+- [x] Task 1: ClickHouse aggregation queries <!-- 8b804c3 -->
   <!-- files: crates/stitchd-db/src/clickhouse/experiment_queries.rs -->
-  - [ ] Sub-task: Write failing unit tests for query builders (mock results)
-  - [ ] Sub-task: Query `events_count_mv` for count/conversion metrics
+  - [x] Sub-task: Write failing unit tests for query builders (mock results)
+  - [x] Sub-task: Query `events_count_mv` for count/conversion metrics
         per (env_id, experiment_id, metric_key, variant, date range)
-  - [ ] Sub-task: Query `events_numeric_mv` for numeric sum/avg/percentile metrics
-  - [ ] Sub-task: Funnel query: per-step conversion counts, chained via context keys
-  - [ ] Sub-task: Pass tests
+  - [x] Sub-task: Query `events_numeric_mv` for numeric sum/avg/percentile metrics
+  - [x] Sub-task: Funnel query: per-step conversion counts, chained via context keys
+  - [x] Sub-task: Pass tests
 
-- [ ] Task 2: Bootstrap sampling for percentile CI
+- [x] Task 2: Bootstrap sampling for percentile CI <!-- 6a0360e -->
   <!-- files: crates/stitchd-core/src/experimentation/stats/bootstrap.rs -->
-  - [ ] Sub-task: Write failing tests for bootstrap CI correctness
+  - [x] Sub-task: Write failing tests for bootstrap CI correctness
         (known distribution → expected interval bounds)
-  - [ ] Sub-task: Implement 1000-resample bootstrap on raw percentile data
-  - [ ] Sub-task: Pass tests
+  - [x] Sub-task: Implement 1000-resample bootstrap on raw percentile data
+  - [x] Sub-task: Pass tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: ClickHouse Query Layer' (Protocol in workflow.md)
+- [~] Task: Conductor - User Manual Verification 'Phase 2: ClickHouse Query Layer' (Protocol in workflow.md)
 
-## Phase 3: Statistical Engine
+## Phase 3: Statistical Engine [checkpoint: pending]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Frequentist analysis
+- [x] Task 1: Frequentist analysis <!-- 6d6f93f -->
   <!-- files: crates/stitchd-core/src/experimentation/stats/frequentist.rs -->
-  - [ ] Sub-task: Write failing tests for z-test (proportion), Welch t-test (numeric),
+  - [x] Sub-task: Write failing tests for z-test (proportion), Welch t-test (numeric),
         bootstrap CI (percentile), funnel z-test — test against known values
-  - [ ] Sub-task: Two-proportion z-test: p-value, 95% CI on lift
-  - [ ] Sub-task: Welch's t-test: p-value, 95% CI on mean difference
-  - [ ] Sub-task: Percentile CI via bootstrap (delegates to bootstrap module)
-  - [ ] Sub-task: Funnel final-step z-test
-  - [ ] Sub-task: `significant: bool` threshold at α = 0.05
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Two-proportion z-test: p-value, 95% CI on lift
+  - [x] Sub-task: Welch's t-test: p-value, 95% CI on mean difference
+  - [x] Sub-task: Percentile CI via bootstrap (delegates to bootstrap module)
+  - [x] Sub-task: Funnel final-step z-test
+  - [x] Sub-task: `significant: bool` threshold at α = 0.05
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task 2: Bayesian analysis
+- [x] Task 2: Bayesian analysis <!-- 90a8ad9 -->
   <!-- files: crates/stitchd-core/src/experimentation/stats/bayesian.rs -->
-  - [ ] Sub-task: Write failing tests for Beta-Binomial P(best), Normal-Normal
+  - [x] Sub-task: Write failing tests for Beta-Binomial P(best), Normal-Normal
         credible interval, expected_loss — test against known posteriors
-  - [ ] Sub-task: Beta-Binomial posterior for count/conversion metrics
-  - [ ] Sub-task: Normal-Normal conjugate for numeric metrics
-  - [ ] Sub-task: Bootstrap posterior approximation for percentile metrics
-  - [ ] Sub-task: Beta-Binomial for funnel final-step
-  - [ ] Sub-task: `prob_best`, `credible_interval`, `expected_loss` per variant
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Beta-Binomial posterior for count/conversion metrics
+  - [x] Sub-task: Normal-Normal conjugate for numeric metrics
+  - [x] Sub-task: Bootstrap posterior approximation for percentile metrics
+  - [x] Sub-task: Beta-Binomial for funnel final-step
+  - [x] Sub-task: `prob_best`, `credible_interval`, `expected_loss` per variant
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task 3: Recommendation engine
+- [x] Task 3: Recommendation engine <!-- d84fb7b -->
   <!-- files: crates/stitchd-core/src/experimentation/stats/recommendation.rs -->
-  - [ ] Sub-task: Write failing tests for all four outcomes
+  - [x] Sub-task: Write failing tests for all four outcomes
         (variant_wins, control_wins, inconclusive, needs_more_data)
-  - [ ] Sub-task: Frequentist rule: p < 0.05 → winner; else inconclusive
-  - [ ] Sub-task: Bayesian rule: P(best) > 0.95 → winner; else inconclusive
-  - [ ] Sub-task: `needs_more_data` guard: sample_size < min_sample_size
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Frequentist rule: p < 0.05 → winner; else inconclusive
+  - [x] Sub-task: Bayesian rule: P(best) > 0.95 → winner; else inconclusive
+  - [x] Sub-task: `needs_more_data` guard: sample_size < min_sample_size
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Statistical Engine' (Protocol in workflow.md)
+- [~] Task: Conductor - User Manual Verification 'Phase 3: Statistical Engine' (Protocol in workflow.md)
 
 ## Phase 4: Results Repository & Compute Pipeline
 <!-- depends: phase2, phase3 -->
