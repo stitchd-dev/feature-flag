@@ -1,0 +1,2 @@
+# Beads Dolt DB — keep main's version on merge; Dolt manages its own history
+.beads/** merge=ours
