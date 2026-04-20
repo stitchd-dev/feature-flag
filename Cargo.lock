@@ -2644,6 +2644,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "clickhouse",
+ "serde",
  "serde_json",
  "sqlx",
  "stitchd-core",

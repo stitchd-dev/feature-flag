@@ -5,6 +5,7 @@
 #![deny(warnings, missing_docs, clippy::all)]
 #![warn(clippy::pedantic, clippy::nursery)]
 
+pub mod clickhouse;
 pub mod error;
 pub mod repository;
 
