@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 //! Entry point for the `stitchd-flag-service` gRPC microservice.
 //!
 //! The server listens on `FLAG_SERVICE_PORT` (default `50052`) and exposes
@@ -94,3 +95,7 @@ async fn shutdown_signal() {
 
     info!("shutdown signal received, stopping flag service");
 }
+=======
+//! Flag service stub.
+fn main() {}
+>>>>>>> track/microservices_20260421_worker_phase4

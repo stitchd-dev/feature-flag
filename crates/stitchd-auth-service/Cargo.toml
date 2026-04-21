@@ -10,6 +10,7 @@ license.workspace = true
 name = "stitchd-auth-service"
 path = "src/main.rs"
 <<<<<<< HEAD
+<<<<<<< HEAD
 
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
@@ -37,3 +38,8 @@ metrics-exporter-prometheus = { workspace = true }
 tokio = { workspace = true }
 =======
 >>>>>>> track/microservices_20260421_worker_phase3
+=======
+
+[dependencies]
+tokio = { workspace = true }
+>>>>>>> track/microservices_20260421_worker_phase4

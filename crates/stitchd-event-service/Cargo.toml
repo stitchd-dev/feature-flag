@@ -6,9 +6,18 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> track/microservices_20260421_worker_phase4
 
 [[bin]]
 name = "stitchd-event-service"
 path = "src/main.rs"
+<<<<<<< HEAD
 >>>>>>> track/microservices_20260421_worker_phase3
+=======
+
+[dependencies]
+tokio = { workspace = true }
+>>>>>>> track/microservices_20260421_worker_phase4

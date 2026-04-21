@@ -6,13 +6,17 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> track/microservices_20260421_worker_phase4
 
 [[bin]]
 name = "stitchd-flag-service"
 path = "src/main.rs"
 
 [dependencies]
+<<<<<<< HEAD
 stitchd-core = { path = "../stitchd-core" }
 stitchd-db = { path = "../stitchd-db" }
 stitchd-proto = { path = "../stitchd-proto" }
@@ -38,3 +42,6 @@ chrono = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 >>>>>>> track/microservices_20260421_worker_phase3
+=======
+tokio = { workspace = true }
+>>>>>>> track/microservices_20260421_worker_phase4
