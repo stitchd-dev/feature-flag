@@ -14,7 +14,7 @@
 
 - [ ] Task: Conductor - User Manual Verification 'Fix xtask Pipeline & Gateway Export Flag' (Protocol in workflow.md)
 
-## Phase 2: Audit & Update OpenAPI Annotations
+## Phase 2: Audit & Update OpenAPI Annotations [checkpoint: 360e45b]
 
 - [x] Task 1: Inventory all gateway route handlers
   - [x] List all Axum routes in `stitchd-gateway/src/`
