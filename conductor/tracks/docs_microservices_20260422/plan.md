@@ -2,15 +2,15 @@
 
 ## Phase 1: Fix xtask Pipeline & Gateway Export Flag
 
-- [ ] Task 1: Add `--export-openapi <path>` CLI flag to `stitchd-gateway`
-  - [ ] Add clap/CLI argument parsing for `--export-openapi` in gateway `main.rs`
-  - [ ] In export mode: generate OpenAPI JSON via utoipa, write to path, exit 0
-  - [ ] Write test: gateway `--export-openapi` flag produces valid, non-empty JSON file
+- [x] Task 1: Add `--export-openapi <path>` CLI flag to `stitchd-gateway` [4c337af]
+  - [x] Add clap/CLI argument parsing for `--export-openapi` in gateway `main.rs`
+  - [x] In export mode: generate OpenAPI JSON via utoipa, write to path, exit 0
+  - [x] Write test: gateway `--export-openapi` flag produces valid, non-empty JSON file
 
-- [ ] Task 2: Update `export_openapi()` in `crates/xtask/src/main.rs`
-  - [ ] Replace `stitchd-server` build target with `stitchd-gateway`
-  - [ ] Replace binary path `target/debug/stitchd-server` with `target/debug/stitchd-gateway`
-  - [ ] Verify `cargo xtask docs` Step 2 completes without error locally
+- [x] Task 2: Update `export_openapi()` in `crates/xtask/src/main.rs` [9008ba1]
+  - [x] Replace `stitchd-server` build target with `stitchd-gateway`
+  - [x] Replace binary path `target/debug/stitchd-server` with `target/debug/stitchd-gateway`
+  - [x] Verify `cargo xtask docs` Step 2 completes without error locally
 
 - [ ] Task: Conductor - User Manual Verification 'Fix xtask Pipeline & Gateway Export Flag' (Protocol in workflow.md)
 
