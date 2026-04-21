@@ -785,4 +785,78 @@ mod tests {
         assert_eq!(body.accepted_count, 0);
         assert!(body.rejected_keys.is_empty());
     }
+
+    // -----------------------------------------------------------------------
+    // Database error path
+    // -----------------------------------------------------------------------
+
+    /// An `EventDefinitionRepository` that always fails `list_by_environment`.
+    struct AlwaysFailingEventDefRepo;
+
+    #[async_trait]
+    impl EventDefinitionRepository for AlwaysFailingEventDefRepo {
+        async fn find_by_id(
+            &self,
+            _id: EventDefinitionId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            Err(RepositoryError::NotFound { id: "mock".into() })
+        }
+
+        async fn find_by_key(
+            &self,
+            _key: &str,
+            _environment_id: EnvironmentId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            Err(RepositoryError::NotFound { id: "mock".into() })
+        }
+
+        async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<EventDefinition>, RepositoryError> {
+            Err(RepositoryError::Unexpected(anyhow::anyhow!("db unavailable")))
+        }
+
+        async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(
+            &self,
+            def: &EventDefinition,
+        ) -> Result<EventDefinition, RepositoryError> {
+            Ok(def.clone())
+        }
+
+        async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_internal_error_when_event_def_repo_fails() {
+        let env_id = EnvironmentId::new();
+        let raw_key = "sk_test_key";
+        let key_hash = hash_sdk_key(raw_key);
+
+        let sdk_key_repo: Arc<dyn SdkKeyRepository> =
+            Arc::new(MockSdkKeyRepo::new_with_key(key_hash, env_id));
+        let event_def_repo: Arc<dyn EventDefinitionRepository> =
+            Arc::new(AlwaysFailingEventDefRepo);
+
+        let svc = EventIngestionServiceImpl::new(ServiceState {
+            event_def_repo,
+            sdk_key_repo,
+            event_writer: noop_event_writer(),
+        });
+
+        let req = make_request_with_sdk_key(vec![], raw_key);
+        let err = svc
+            .ingest_event(req)
+            .await
+            .expect_err("should return internal error when db fails");
+
+        assert_eq!(err.code(), tonic::Code::Internal);
+        assert!(err.message().contains("db unavailable"));
+    }
 }
