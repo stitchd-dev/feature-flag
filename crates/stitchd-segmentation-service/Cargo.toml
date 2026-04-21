@@ -5,23 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> track/microservices_20260421_worker_phase4
-=======
->>>>>>> track/microservices_20260421_worker_phase5
 
 [[bin]]
 name = "stitchd-segmentation-service"
 path = "src/main.rs"
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> track/microservices_20260421_worker_phase3
-=======
 
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
@@ -45,10 +32,3 @@ metrics-exporter-prometheus = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 async-trait = { workspace = true }
->>>>>>> track/microservices_20260421_worker_phase4
-=======
->>>>>>> track/microservices_20260421_worker_phase5
-=======
-
-[dependencies]
->>>>>>> track/microservices_20260421_worker_phase6

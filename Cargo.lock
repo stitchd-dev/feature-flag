@@ -3753,6 +3753,30 @@ dependencies = [
 [[package]]
 name = "stitchd-event-service"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clickhouse",
+ "hex",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "prost",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "stitchd-core",
+ "stitchd-db",
+ "stitchd-events",
+ "stitchd-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "stitchd-events"
@@ -3770,8 +3794,80 @@ dependencies = [
 ]
 
 [[package]]
+name = "stitchd-experimentation-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "prost",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "stitchd-core",
+ "stitchd-db",
+ "stitchd-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "stitchd-flag-service"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "hex",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "prost",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "stitchd-core",
+ "stitchd-db",
+ "stitchd-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "stitchd-gateway"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "http 1.4.0",
+ "http-body-util",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "prost",
+ "serde",
+ "serde_json",
+ "stitchd-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "stitchd-proto"
@@ -3814,6 +3910,26 @@ dependencies = [
 [[package]]
 name = "stitchd-segmentation-service"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "prost",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "stitchd-core",
+ "stitchd-db",
+ "stitchd-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "stitchd-server"

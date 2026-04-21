@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-// stub
-=======
 //! Segmentation Service binary entrypoint.
 //!
 //! Reads configuration from environment variables and starts the tonic gRPC server
@@ -123,7 +119,3 @@ async fn shutdown_signal() {
         () = terminate => tracing::info!("received SIGTERM"),
     }
 }
->>>>>>> track/microservices_20260421_worker_phase4
-=======
-fn main() {}
->>>>>>> track/microservices_20260421_worker_phase5

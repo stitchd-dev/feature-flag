@@ -1,11 +1,3 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-// stub
-=======
-//! Event service stub.
-fn main() {}
->>>>>>> track/microservices_20260421_worker_phase4
-=======
 //! `stitchd-event-service` — Experimentation Event gRPC Service.
 //!
 //! Listens on `EVENT_SERVICE_PORT` (default: 50054).
@@ -125,4 +117,3 @@ async fn shutdown_signal() {
 
     info!("Shutdown signal received");
 }
->>>>>>> track/microservices_20260421_worker_phase5

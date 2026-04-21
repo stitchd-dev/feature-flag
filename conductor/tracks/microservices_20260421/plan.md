@@ -90,7 +90,7 @@
 ## Phase 7: Orchestration / Gateway Service (`stitchd-gateway`)
 <!-- depends: phase2, phase3, phase4, phase5, phase6 -->
 
-- [ ] Task 1: Scaffold `crates/stitchd-gateway` — Axum REST server + tonic gRPC clients for all domain services
+- [~] Task 1: Scaffold `crates/stitchd-gateway` — Axum REST server + tonic gRPC clients for all domain services
 - [ ] Task 2: Write failing tests for auth middleware — every request must call Auth Service gRPC before forwarding
 - [ ] Task 3: Implement auth middleware — call `AuthService::ValidateCredential`, inject `RbacContext` into request extensions
 - [ ] Task 4: Write failing tests for flag route proxying (REST → gRPC Flag Service)
