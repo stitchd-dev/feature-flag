@@ -9,14 +9,14 @@
 
 use axum::{
     Json,
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use stitchd_proto::management::v1::CreateOrgRequest;
+use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -34,6 +34,21 @@ pub struct OrgJson {
     pub org_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SeedUserBody {
+    pub email:        String,
+    pub display_name: String,
+    pub password:     String,
+    pub org_role:     Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserJson {
+    pub user_id:      String,
+    pub email:        String,
+    pub display_name: String,
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// `POST /v1/admin/orgs`
@@ -48,6 +63,25 @@ pub async fn create_org(
     Ok((StatusCode::CREATED, Json(OrgJson { org_id: r.org_id, org_name: r.org_name })))
 }
 
+/// `POST /v1/admin/orgs/{org_id}/users` — seed the first user into a newly created org.
+pub async fn seed_user(
+    State(state): State<Arc<GatewayState>>,
+    Path(org_id): Path<String>,
+    Json(body): Json<SeedUserBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(CreateUserRequest {
+        org_id,
+        email:        body.email,
+        display_name: body.display_name,
+        password:     body.password,
+        org_role:     body.org_role.unwrap_or_else(|| "org_admin".into()),
+    });
+    let mut client = state.management_client.lock().await;
+    let resp = client.create_user(req).await.map_err(GatewayError::from)?;
+    let r = resp.into_inner();
+    Ok((StatusCode::CREATED, Json(UserJson { user_id: r.user_id, email: r.email, display_name: r.display_name })))
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -55,6 +89,7 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     use axum::routing::post;
     axum::Router::new()
         .route("/v1/admin/orgs", post(create_org))
+        .route("/v1/admin/orgs/{org_id}/users", post(seed_user))
         .with_state(state)
 }
 
