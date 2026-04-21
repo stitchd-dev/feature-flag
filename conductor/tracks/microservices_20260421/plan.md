@@ -90,20 +90,20 @@
 ## Phase 7: Orchestration / Gateway Service (`stitchd-gateway`)
 <!-- depends: phase2, phase3, phase4, phase5, phase6 -->
 
-- [~] Task 1: Scaffold `crates/stitchd-gateway` — Axum REST server + tonic gRPC clients for all domain services
-- [ ] Task 2: Write failing tests for auth middleware — every request must call Auth Service gRPC before forwarding
-- [ ] Task 3: Implement auth middleware — call `AuthService::ValidateCredential`, inject `RbacContext` into request extensions
-- [ ] Task 4: Write failing tests for flag route proxying (REST → gRPC Flag Service)
-- [ ] Task 5: Implement flag route handlers — translate REST JSON ↔ gRPC proto, forward to Flag Service
-- [ ] Task 6: Write failing tests for segment route proxying
-- [ ] Task 7: Implement segment route handlers
-- [ ] Task 8: Write failing tests for event route proxying
-- [ ] Task 9: Implement event route handlers
-- [ ] Task 10: Write failing tests for experiment route proxying
-- [ ] Task 11: Implement experiment route handlers
-- [ ] Task 12: Implement SDK gRPC passthrough — gateway accepts SDK `GetFlagDefinitions` stream, proxies to Flag Service
-- [ ] Task 13: Migrate OpenAPI spec annotations (`utoipa`) from `stitchd-server` to gateway handlers
-- [ ] Task 14: Verify >95% unit test coverage for crate
+- [x] Task 1: Scaffold `crates/stitchd-gateway` — Axum REST server + tonic gRPC clients for all domain services [0770ac7]
+- [x] Task 2: Write failing tests for auth middleware — every request must call Auth Service gRPC before forwarding [0770ac7]
+- [x] Task 3: Implement auth middleware — call `AuthService::ValidateCredential`, inject `RbacContext` into request extensions [0770ac7]
+- [x] Task 4: Write failing tests for flag route proxying (REST → gRPC Flag Service) [0770ac7]
+- [x] Task 5: Implement flag route handlers — translate REST JSON ↔ gRPC proto, forward to Flag Service [0770ac7]
+- [x] Task 6: Write failing tests for segment route proxying [0770ac7]
+- [x] Task 7: Implement segment route handlers [0770ac7]
+- [x] Task 8: Write failing tests for event route proxying [0770ac7]
+- [x] Task 9: Implement event route handlers [0770ac7]
+- [x] Task 10: Write failing tests for experiment route proxying [0770ac7]
+- [x] Task 11: Implement experiment route handlers [0770ac7]
+- [x] Task 12: Implement SDK gRPC passthrough — gateway accepts SDK `GetFlagDefinitions` stream, proxies to Flag Service [0770ac7]
+- [x] Task 13: Migrate OpenAPI spec annotations (`utoipa`) from `stitchd-server` to gateway handlers [0770ac7]
+- [x] Task 14: Verify >95% unit test coverage for crate (60 tests, all passing) [0770ac7]
 - [ ] Task: Conductor - User Manual Verification 'Orchestration / Gateway Service' (Protocol in workflow.md)
 
 ## Phase 8: Docker Compose Wiring & End-to-End Integration
