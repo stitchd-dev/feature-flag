@@ -58,7 +58,7 @@
 ## Phase 5: Experimentation Event Service (`stitchd-event-service`)
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Scaffold `crates/stitchd-event-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
+- [~] Task 1: Scaffold `crates/stitchd-event-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
 - [ ] Task 2: Write failing tests for `IngestEvent` handler — unknown key rejection, type validation
 - [ ] Task 3: Implement event definition registry — migrate from `stitchd-server/src/event_definitions/`; owns `events` schema (PostgreSQL)
 - [ ] Task 4: Implement `IngestEvent` gRPC handler — validate against registry, write to ClickHouse
