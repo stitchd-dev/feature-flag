@@ -90,48 +90,48 @@ Track: auth_20260421
   - [x] Sub-task: `RequireEnvRole(EnvRole)` extractor (queries `user_env_roles`)
   - [x] Sub-task: Pass all tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
 
 ## Phase 3: Password Auth + Session Management
 <!-- depends: phase2 -->
 
-- [ ] Task 1: User repository (`stitchd-db`)
+- [x] Task 1: User repository (`stitchd-db`) — 251fa65
   <!-- files: crates/stitchd-db/src/auth/users.rs -->
-  - [ ] Sub-task: Write failing integration tests
-  - [ ] Sub-task: `create(email, display_name, password_hash) -> User`
-  - [ ] Sub-task: `find_by_email(email) -> Option<User>`
-  - [ ] Sub-task: `find_by_id(id) -> Option<User>`
-  - [ ] Sub-task: `rotate_token_secret(user_id) -> Uuid`
-  - [ ] Sub-task: `update_status(user_id, status)`
-  - [ ] Sub-task: `update_password_hash(user_id, hash)`
-  - [ ] Sub-task: `update_profile(user_id, display_name, avatar_url)`
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Write failing integration tests
+  - [x] Sub-task: `create(email, display_name, password_hash) -> User`
+  - [x] Sub-task: `find_by_email(email) -> Option<User>`
+  - [x] Sub-task: `find_by_id(id) -> Option<User>`
+  - [x] Sub-task: `rotate_token_secret(user_id) -> Uuid`
+  - [x] Sub-task: `update_status(user_id, status)`
+  - [x] Sub-task: `update_password_hash(user_id, hash)`
+  - [x] Sub-task: `update_profile(user_id, display_name, avatar_url)`
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task 2: Org membership repository (`stitchd-db`)
+- [x] Task 2: Org membership repository (`stitchd-db`) — 251fa65
   <!-- files: crates/stitchd-db/src/auth/memberships.rs -->
-  - [ ] Sub-task: Write failing integration tests
-  - [ ] Sub-task: `add_member(user_id, org_id, role) -> OrgMembership`
-  - [ ] Sub-task: `find_membership(user_id, org_id) -> Option<OrgMembership>`
-  - [ ] Sub-task: `list_orgs_for_user(user_id) -> Vec<OrgMembership>`
-  - [ ] Sub-task: `remove_member(user_id, org_id)`
-  - [ ] Sub-task: `update_role(user_id, org_id, role)`
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Write failing integration tests
+  - [x] Sub-task: `add_member(user_id, org_id, role) -> OrgMembership`
+  - [x] Sub-task: `find_membership(user_id, org_id) -> Option<OrgMembership>`
+  - [x] Sub-task: `list_orgs_for_user(user_id) -> Vec<OrgMembership>`
+  - [x] Sub-task: `remove_member(user_id, org_id)`
+  - [x] Sub-task: `update_role(user_id, org_id, role)`
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task 3: Password auth + session handlers (`stitchd-server`)
+- [x] Task 3: Password auth + session handlers (`stitchd-server`) — 617604f
   <!-- files: crates/stitchd-server/src/api/auth/password.rs,
               crates/stitchd-server/src/api/auth/sessions.rs -->
   <!-- depends: task1, task2 -->
-  - [ ] Sub-task: Write failing handler tests (login ok, wrong password, deactivated,
+  - [x] Sub-task: Write failing handler tests (login ok, wrong password, deactivated,
         mfa_required branch, refresh rotation, sign-out-all, org-switch)
-  - [ ] Sub-task: POST /auth/login — verify Argon2id → if MFA disabled issue tokens;
+  - [x] Sub-task: POST /auth/login — verify Argon2id → if MFA disabled issue tokens;
         if MFA enabled return `{mfa_required:true, challenge_token}`
-  - [ ] Sub-task: POST /auth/refresh — find+consume refresh token → issue new pair
-  - [ ] Sub-task: POST /auth/logout — revoke current refresh token
-  - [ ] Sub-task: DELETE /auth/sessions — rotate token_secret + revoke_all
-  - [ ] Sub-task: GET /auth/sessions — list active refresh tokens for caller
-  - [ ] Sub-task: DELETE /auth/sessions/{id} — revoke specific session
-  - [ ] Sub-task: POST /auth/switch-org {org_id} — validate membership → new pair
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: POST /auth/refresh — find+consume refresh token → issue new pair
+  - [x] Sub-task: POST /auth/logout — revoke current refresh token
+  - [x] Sub-task: DELETE /auth/sessions — rotate token_secret + revoke_all
+  - [x] Sub-task: GET /auth/sessions — list active refresh tokens for caller
+  - [x] Sub-task: DELETE /auth/sessions/{id} — revoke specific session
+  - [x] Sub-task: POST /auth/switch-org {org_id} — validate membership → new pair
+  - [x] Sub-task: Pass all tests
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 3' (Protocol in workflow.md)
 
