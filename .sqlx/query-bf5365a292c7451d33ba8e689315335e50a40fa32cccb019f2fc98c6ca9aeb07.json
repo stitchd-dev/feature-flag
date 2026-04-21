@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE users\n            SET token_secret = gen_random_uuid(), updated_at = now()\n            WHERE id = $1\n            RETURNING token_secret\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token_secret",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bf5365a292c7451d33ba8e689315335e50a40fa32cccb019f2fc98c6ca9aeb07"
+}

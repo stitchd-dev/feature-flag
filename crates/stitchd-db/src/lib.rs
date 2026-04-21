@@ -11,7 +11,11 @@ pub mod error;
 pub mod experiment_results;
 pub mod repository;
 
-pub use auth::{PgRefreshTokenRepository, RefreshTokenRepository};
+pub use auth::{
+    AuthUserRepository, MfaChallengeRepository, OrgMembershipRepository,
+    PgAuthUserRepository, PgMfaChallengeRepository, PgOrgMembershipRepository,
+    PgRefreshTokenRepository, RefreshTokenRepository,
+};
 pub use error::RepositoryError;
 pub use experiment_results::{
     ExperimentResultRow, ExperimentResultsRepository, PgExperimentResultsRepository,
