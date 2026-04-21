@@ -12,6 +12,9 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 
 pub mod grpc;
+pub mod registry;
 
 /// Re-export the service implementation for use in `main.rs`.
 pub use grpc::event_ingestion::EventIngestionServiceImpl;
+/// Re-export the event definition registry.
+pub use registry::EventDefinitionRegistry;
