@@ -15,6 +15,7 @@ use anyhow::Context;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use sqlx::postgres::PgPoolOptions;
 use tonic::transport::Server;
+use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use stitchd_db::{PgAuditLogger, PgSegmentRepository, SegmentRepository};
@@ -82,7 +83,11 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!(%addr, "starting segmentation service gRPC server");
 
+    let (health_reporter, health_service) = health_reporter();
+    health_reporter.set_serving::<SegmentationServiceServer<SegmentationServiceImpl>>().await;
+
     Server::builder()
+        .add_service(health_service)
         .add_service(svc)
         .serve_with_shutdown(addr, shutdown_signal())
         .await

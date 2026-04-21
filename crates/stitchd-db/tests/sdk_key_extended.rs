@@ -26,7 +26,8 @@ async fn setup(pool: &sqlx::PgPool) -> (Arc<PgAuditLogger>, EnvironmentId) {
         updated_at: chrono::Utc::now(),
         deleted_at: None,
         version: 1,
-    };
+        is_system: false,
+};
     org_repo.create(&org).await.unwrap();
 
     let project = Project {

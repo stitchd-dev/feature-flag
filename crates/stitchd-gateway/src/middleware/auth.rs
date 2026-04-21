@@ -99,6 +99,46 @@ pub fn rbac_context(req: &Request) -> Option<&RbacContext> {
     req.extensions().get::<RbacContext>()
 }
 
+/// Middleware that allows only callers whose token has `is_system = true`.
+/// Used on `/admin` routes — only superadmin (System-org users) may access them.
+/// Returns `403 Forbidden` for non-system callers.
+pub async fn require_system_org(
+    req: Request,
+    next: Next,
+) -> Response {
+    match req.extensions().get::<RbacContext>() {
+        Some(ctx) if ctx.is_system => next.run(req).await,
+        _ => (
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({ "error": "superadmin access required" })),
+        )
+            .into_response(),
+    }
+}
+
+/// Middleware that blocks callers whose token has `is_system = true`.
+/// Used on `/management` routes — System-org users (superadmins) must not
+/// call org-scoped management APIs.
+/// Returns `403 Forbidden` for system-org callers.
+pub async fn require_non_system_org(
+    req: Request,
+    next: Next,
+) -> Response {
+    match req.extensions().get::<RbacContext>() {
+        Some(ctx) if ctx.is_system => (
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({ "error": "superadmin cannot use management APIs" })),
+        )
+            .into_response(),
+        Some(_) => next.run(req).await,
+        None => (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({ "error": "missing credentials" })),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +223,46 @@ mod tests {
             cred.credential,
             Some(Credential::BearerToken(_))
         ));
+    }
+
+    /// Build a request with an `RbacContext` extension already inserted.
+    fn req_with_rbac(is_system: bool) -> Request<axum::body::Body> {
+        let mut req = Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(RbacContext {
+            is_system,
+            ..Default::default()
+        });
+        req
+    }
+
+    #[tokio::test]
+    async fn require_system_org_rejects_non_system() {
+        use axum::{middleware::from_fn, routing::get, Router};
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .layer(from_fn(require_system_org));
+
+        let req = req_with_rbac(false);
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn require_non_system_org_rejects_system() {
+        use axum::{middleware::from_fn, routing::get, Router};
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .layer(from_fn(require_non_system_org));
+
+        let req = req_with_rbac(true);
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
     }
 }

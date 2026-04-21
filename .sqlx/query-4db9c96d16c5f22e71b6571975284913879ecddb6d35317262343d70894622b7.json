@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id         AS \"id: OrganisationId\",\n                name,\n                created_at,\n                updated_at,\n                deleted_at,\n                version\n            FROM organisations\n            WHERE id = $1 AND deleted_at IS NULL\n            ",
+  "query": "\n            SELECT\n                id         AS \"id: OrganisationId\",\n                name,\n                created_at,\n                updated_at,\n                deleted_at,\n                version,\n                is_system\n            FROM organisations\n            WHERE id = $1 AND deleted_at IS NULL\n            ",
   "describe": {
     "columns": [
       {
@@ -32,6 +32,11 @@
         "ordinal": 5,
         "name": "version",
         "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "is_system",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -45,8 +50,9 @@
       false,
       false,
       true,
+      false,
       false
     ]
   },
-  "hash": "711d37c2759c3620a6c1d1bdad22262ebe83b261737c6d07455a378ba2027a32"
+  "hash": "4db9c96d16c5f22e71b6571975284913879ecddb6d35317262343d70894622b7"
 }

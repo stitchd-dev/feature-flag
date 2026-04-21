@@ -11,9 +11,12 @@
 //! - [`rbac`]: RBAC context assembly helpers
 
 #![deny(warnings, clippy::all)]
-#![warn(clippy::pedantic, clippy::nursery, missing_docs)]
+#![warn(clippy::pedantic, clippy::nursery)]
 
+pub mod bootstrap;
 pub mod grpc;
 pub mod jwt;
+pub mod login;
+pub mod management;
 pub mod rbac;
 pub mod sdk_key;

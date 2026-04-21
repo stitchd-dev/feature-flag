@@ -23,6 +23,7 @@ fn main() {
         proto_root.join("segments/v1/segmentation_service.proto"),
         proto_root.join("events/v1/event_service.proto"),
         proto_root.join("experiments/v1/experimentation_service.proto"),
+        proto_root.join("management/v1/management_service.proto"),
     ];
 
     // Re-run build script if any proto file changes.

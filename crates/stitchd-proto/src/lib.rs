@@ -48,4 +48,11 @@ pub mod experiments {
     }
 }
 
+/// Platform management service (org/project/env/sdk-key/user bootstrap).
+pub mod management {
+    pub mod v1 {
+        tonic::include_proto!("stitchd.management.v1");
+    }
+}
+
 mod tests;

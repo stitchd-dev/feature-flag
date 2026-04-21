@@ -10,6 +10,7 @@ use anyhow::Context as _;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::signal;
 use tonic::transport::Server;
+use tonic_health::server::health_reporter;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -79,7 +80,11 @@ async fn main() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0], service_port));
     info!("EventIngestionService listening on {addr}");
 
+    let (health_reporter, health_service) = health_reporter();
+    health_reporter.set_serving::<EventIngestionServiceServer<EventIngestionServiceImpl>>().await;
+
     Server::builder()
+        .add_service(health_service)
         .add_service(EventIngestionServiceServer::new(
             EventIngestionServiceImpl::new(state),
         ))

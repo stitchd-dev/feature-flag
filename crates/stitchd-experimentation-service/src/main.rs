@@ -14,6 +14,7 @@ use anyhow::Context as _;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use sqlx::postgres::PgPoolOptions;
 use tonic::transport::Server;
+use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use stitchd_db::{PgExperimentRepository, PgExperimentResultsRepository, PgAuditLogger};
@@ -78,7 +79,11 @@ async fn main() -> anyhow::Result<()> {
 
     let svc = ExperimentationServiceImpl::new(experiment_repo, results_repo, flag_client);
 
+    let (health_reporter, health_service) = health_reporter();
+    health_reporter.set_serving::<ExperimentationServiceServer<ExperimentationServiceImpl>>().await;
+
     Server::builder()
+        .add_service(health_service)
         .add_service(ExperimentationServiceServer::new(svc))
         .serve_with_shutdown(addr, async {
             tokio::signal::ctrl_c()

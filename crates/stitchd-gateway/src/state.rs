@@ -8,6 +8,7 @@ use stitchd_proto::auth::v1::auth_service_client::AuthServiceClient;
 use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
+use stitchd_proto::management::v1::management_service_client::ManagementServiceClient;
 use stitchd_proto::segments::v1::segmentation_service_client::SegmentationServiceClient;
 
 /// Shared state injected into every Axum handler via `State<Arc<GatewayState>>`.
@@ -23,6 +24,8 @@ pub struct GatewayState {
     pub event_client: Arc<Mutex<EventIngestionServiceClient<Channel>>>,
     /// Experimentation service gRPC client.
     pub experimentation_client: Arc<Mutex<ExperimentationServiceClient<Channel>>>,
+    /// Management service gRPC client (hosted on the auth-service port).
+    pub management_client: Arc<Mutex<ManagementServiceClient<Channel>>>,
 }
 
 impl GatewayState {
@@ -37,11 +40,17 @@ impl GatewayState {
         event_addr: String,
         experimentation_addr: String,
     ) -> Result<Self, anyhow::Error> {
-        let auth_channel = Channel::from_shared(auth_addr)
+        let auth_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid Auth Service URI: {e}"))?
             .connect()
             .await
             .map_err(|e| anyhow::anyhow!("connect to Auth Service: {e}"))?;
+
+        let mgmt_channel = Channel::from_shared(auth_addr)
+            .map_err(|e| anyhow::anyhow!("invalid Management Service URI: {e}"))?
+            .connect()
+            .await
+            .map_err(|e| anyhow::anyhow!("connect to Management Service: {e}"))?;
 
         let flag_channel = Channel::from_shared(flag_addr)
             .map_err(|e| anyhow::anyhow!("invalid Flag Service URI: {e}"))?
@@ -75,6 +84,7 @@ impl GatewayState {
             experimentation_client: Arc::new(Mutex::new(ExperimentationServiceClient::new(
                 exp_channel,
             ))),
+            management_client: Arc::new(Mutex::new(ManagementServiceClient::new(mgmt_channel))),
         })
     }
 
@@ -86,6 +96,7 @@ impl GatewayState {
         segmentation_client: SegmentationServiceClient<Channel>,
         event_client: EventIngestionServiceClient<Channel>,
         experimentation_client: ExperimentationServiceClient<Channel>,
+        management_client: ManagementServiceClient<Channel>,
     ) -> Self {
         Self {
             auth_client: Arc::new(Mutex::new(auth_client)),
@@ -93,6 +104,7 @@ impl GatewayState {
             segmentation_client: Arc::new(Mutex::new(segmentation_client)),
             event_client: Arc::new(Mutex::new(event_client)),
             experimentation_client: Arc::new(Mutex::new(experimentation_client)),
+            management_client: Arc::new(Mutex::new(management_client)),
         }
     }
 }

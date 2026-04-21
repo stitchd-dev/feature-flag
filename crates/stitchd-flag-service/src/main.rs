@@ -19,6 +19,7 @@ use stitchd_db::{PgFlagRepository, PgSdkKeyRepository, PgVariantRepository};
 use stitchd_flag_service::service::FlagServiceImpl;
 use stitchd_proto::flags::v1::flag_service_server::FlagServiceServer;
 use tonic::transport::Server;
+use tonic_health::server::health_reporter;
 use tracing::info;
 
 #[tokio::main]
@@ -57,9 +58,13 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
     let svc = FlagServiceImpl::new(flag_repo, variant_repo, sdk_key_repo);
 
+    let (health_reporter, health_service) = health_reporter();
+    health_reporter.set_serving::<FlagServiceServer<FlagServiceImpl>>().await;
+
     info!("stitchd-flag-service listening on {addr}");
 
     Server::builder()
+        .add_service(health_service)
         .add_service(FlagServiceServer::new(svc))
         .serve_with_shutdown(addr, shutdown_signal())
         .await

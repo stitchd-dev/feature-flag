@@ -30,6 +30,7 @@ pub fn rbac_context_from_jwt(validated: &ValidatedJwt) -> RbacContext {
         roles: vec![role_str.to_string()],
         permissions: vec![],
         subject: validated.user.id.to_string(),
+        is_system: validated.is_system,
     }
 }
 
@@ -49,6 +50,7 @@ pub fn rbac_context_from_sdk_key(ctx: &SdkKeyContext) -> RbacContext {
         roles: vec!["sdk".to_string()],
         permissions: vec![],
         subject: ctx.sdk_key_id.to_string(),
+        is_system: false,
     }
 }
 
@@ -79,6 +81,7 @@ mod tests {
             },
             org_id: org_id.to_string(),
             org_role: OrgRole::OrgMember,
+            is_system: false,
         }
     }
 

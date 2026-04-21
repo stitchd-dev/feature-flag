@@ -26,6 +26,29 @@ message RbacContext {
   repeated string permissions    = 4;
   // The resolved actor identity (user_id for JWT, sdk_key_id for SDK keys).
   string          subject        = 5;
+  // True when the credential belongs to a user in the platform System org.
+  // Used by the gateway to enforce admin-only vs. management-only route
+  // separation: admin routes require is_system=true; management routes
+  // require is_system=false.
+  bool            is_system      = 6;
+}
+
+// ─── Login request / response ─────────────────────────────────────────────────
+
+message LoginRequest {
+  string email    = 1;
+  string password = 2;
+  // Optional org scope; if empty the first org the user belongs to is used.
+  string org_id   = 3;
+}
+
+message LoginResponse {
+  string access_token  = 1;
+  string refresh_token = 2;
+  // Seconds until the access token expires.
+  int64  expires_in    = 3;
+  string user_id       = 4;
+  string org_id        = 5;
 }
 
 // ─── Auth service ─────────────────────────────────────────────────────────────
@@ -34,4 +57,7 @@ service AuthService {
   // Validates a credential and returns the RBAC context for the caller.
   // Returns UNAUTHENTICATED if the credential is invalid or expired.
   rpc ValidateCredential(CredentialRequest) returns (RbacContext);
+
+  // Authenticates an email + password credential and issues a JWT.
+  rpc LoginWithPassword(LoginRequest) returns (LoginResponse);
 }

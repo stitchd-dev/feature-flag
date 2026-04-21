@@ -7,6 +7,7 @@ use stitchd_proto::auth::v1::auth_service_client::AuthServiceClient;
 use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
+use stitchd_proto::management::v1::management_service_client::ManagementServiceClient;
 use stitchd_proto::segments::v1::segmentation_service_client::SegmentationServiceClient;
 
 use crate::state::GatewayState;
@@ -29,7 +30,10 @@ pub fn make_stub_state() -> Arc<GatewayState> {
     let exp = ExperimentationServiceClient::new(
         Channel::from_static("http://127.0.0.1:5").connect_lazy(),
     );
-    Arc::new(GatewayState::from_channels(auth, flag, seg, event, exp))
+    let mgmt = ManagementServiceClient::new(
+        Channel::from_static("http://127.0.0.1:6").connect_lazy(),
+    );
+    Arc::new(GatewayState::from_channels(auth, flag, seg, event, exp, mgmt))
 }
 
 /// Same as `make_stub_state` — the `_with_flag` variant exists for tests that

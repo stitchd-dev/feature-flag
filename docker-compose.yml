@@ -60,6 +60,8 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
       AUTH_SERVICE_PORT: "50051"
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
+      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-admin@stitchd.io}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-changeme}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
       - "${AUTH_SERVICE_PORT:-50051}:50051"

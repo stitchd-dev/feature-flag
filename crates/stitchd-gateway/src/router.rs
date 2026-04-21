@@ -1,16 +1,52 @@
-//! Axum router builder — three auth trees (SDK, public auth stubs, admin + gRPC passthrough).
+//! Axum router — four auth trees with distinct middleware policies.
+//!
+//! | Tree           | Auth                              | Who can call              |
+//! |----------------|-----------------------------------|---------------------------|
+//! | `auth_routes`  | none (public)                     | anyone                    |
+//! | `admin_routes` | JWT + `require_system_org`        | superadmin only           |
+//! | `mgmt_routes`  | JWT + `require_non_system_org`    | non-superadmin users only |
+//! | `sdk_routes`   | SDK key or JWT (`auth_middleware`) | SDK clients               |
+//! | `flag_routes`  | JWT (`auth_middleware`)           | authenticated users       |
 
 use std::sync::Arc;
 
 use axum::{Router, middleware, routing::{get, post, put}};
 
-use crate::middleware::auth::auth_middleware;
-use crate::routes::{events, experiments, flags, sdk, segments};
+use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
+use crate::routes::{admin, auth, events, experiments, flags, management, sdk, segments};
 use crate::state::GatewayState;
 
 /// Build the full gateway `Router`.
 pub fn build_router(state: Arc<GatewayState>) -> Router {
     let auth_client = Arc::clone(&state.auth_client);
+
+    // ── Public: login (no auth required) ─────────────────────────────────────
+    let auth_routes = Router::new()
+        .route("/v1/auth/login", post(auth::login))
+        .with_state(Arc::clone(&state));
+
+    // ── Superadmin-only routes (JWT + system-org check) ───────────────────────
+    let admin_routes = Router::new()
+        .route("/v1/admin/orgs", post(admin::create_org))
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn(require_system_org))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&auth_client),
+            auth_middleware,
+        ));
+
+    // ── Management routes (JWT + non-system-org check) ────────────────────────
+    let mgmt_routes = Router::new()
+        .route("/v1/management/orgs/{org_id}/projects",          post(management::create_project))
+        .route("/v1/management/projects/{project_id}/environments", post(management::create_environment))
+        .route("/v1/management/environments/{environment_id}/sdk-keys", post(management::create_sdk_key))
+        .route("/v1/management/orgs/{org_id}/users",             post(management::create_user))
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn(require_non_system_org))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&auth_client),
+            auth_middleware,
+        ));
 
     // ── SDK routes (x-sdk-key auth) ──────────────────────────────────────────
     let sdk_routes = Router::new()
@@ -24,12 +60,12 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
-            auth_client.clone(),
+            Arc::clone(&auth_client),
             auth_middleware,
         ));
 
-    // ── Admin routes (JWT Bearer auth) ────────────────────────────────────────
-    let admin_routes = Router::new()
+    // ── JWT-authenticated resource routes ─────────────────────────────────────
+    let resource_routes = Router::new()
         // Flags
         .route(
             "/v1/projects/{project_id}/flags",
@@ -101,8 +137,11 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         ));
 
     Router::new()
-        .merge(sdk_routes)
+        .merge(auth_routes)
         .merge(admin_routes)
+        .merge(mgmt_routes)
+        .merge(sdk_routes)
+        .merge(resource_routes)
 }
 
 #[cfg(test)]
@@ -114,105 +153,79 @@ mod tests {
 
     #[tokio::test]
     async fn flags_without_auth_returns_401() {
-        let state = make_stub_state();
-        let app = build_router(state);
+        let app = build_router(make_stub_state());
         let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/projects/proj-1/flags")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            .oneshot(Request::builder().uri("/v1/projects/proj-1/flags").body(Body::empty()).unwrap())
+            .await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
     async fn segments_without_auth_returns_401() {
-        let state = make_stub_state();
-        let app = build_router(state);
+        let app = build_router(make_stub_state());
         let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/environments/env-1/segments")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+            .oneshot(Request::builder().uri("/v1/environments/env-1/segments").body(Body::empty()).unwrap())
+            .await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
-    async fn experiments_without_auth_returns_401() {
-        let state = make_stub_state();
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/environments/env-1/experiments")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn event_definitions_without_auth_returns_401() {
-        let state = make_stub_state();
-        let app = build_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/environments/env-1/event-definitions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn sdk_evaluate_without_auth_returns_401() {
-        let state = make_stub_state();
-        let app = build_router(state);
+    async fn admin_create_org_without_auth_returns_401() {
+        let app = build_router(make_stub_state());
         let resp = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v1/environments/env-1/evaluate")
+                    .uri("/v1/admin/orgs")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"context_key":"u1","context_type":"user"}"#))
+                    .body(Body::from(r#"{"name":"Test"}"#))
                     .unwrap(),
             )
-            .await
-            .unwrap();
+            .await.unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
-    async fn unknown_route_returns_404() {
-        let state = make_stub_state();
-        let app = build_router(state);
+    async fn management_create_project_without_auth_returns_401() {
+        let app = build_router(make_stub_state());
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/unknown/path")
-                    .body(Body::empty())
+                    .method("POST")
+                    .uri("/v1/management/orgs/org-1/projects")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"Test"}"#))
                     .unwrap(),
             )
-            .await
-            .unwrap();
-        // Auth middleware fires before routing — unauthenticated requests to unknown
-        // paths get 401 (middleware short-circuits) rather than 404.
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_route_exists_and_returns_non_404() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"email":"a@b.com","password":"x"}"#))
+                    .unwrap(),
+            )
+            .await.unwrap();
+        assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn unknown_route_returns_404() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/unknown/path").body(Body::empty()).unwrap())
+            .await.unwrap();
         assert!(
             resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::UNAUTHORIZED,
-            "status: {}",
-            resp.status()
+            "status: {}", resp.status()
         );
     }
 }

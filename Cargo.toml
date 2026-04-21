@@ -29,6 +29,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["macros"] }
 tonic = { version = "0.13" }
 tonic-build = { version = "0.13" }
+tonic-health = { version = "0.13" }
 prost = { version = "0.13" }
 prost-build = { version = "0.13" }
 protoc-bin-vendored = { version = "3" }

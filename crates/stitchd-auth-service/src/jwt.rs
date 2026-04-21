@@ -58,6 +58,8 @@ pub struct ValidatedJwt {
     pub org_id: String,
     /// The organisation role from the token claims.
     pub org_role: OrgRole,
+    /// Whether the token was issued for a System-org user.
+    pub is_system: bool,
 }
 
 /// Validate a bearer token by:
@@ -105,6 +107,7 @@ pub async fn validate_bearer_token(
         user,
         org_id: claims.org_id,
         org_role: claims.org_role,
+        is_system: claims.is_system,
     })
 }
 
@@ -209,6 +212,7 @@ mod tests {
             org_id,
             &user.email,
             OrgRole::OrgMember,
+            false,
             &user.token_secret,
         )
         .unwrap();

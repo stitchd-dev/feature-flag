@@ -27,6 +27,10 @@ pub struct AccessTokenClaims {
     pub email: String,
     /// User's role within the organisation.
     pub org_role: OrgRole,
+    /// `true` when the token was issued for a user in the platform System org.
+    /// Defaults to `false` for tokens issued before this field was added.
+    #[serde(default)]
+    pub is_system: bool,
     /// Expiry as Unix timestamp (seconds).
     pub exp: usize,
     /// Issued-at as Unix timestamp (seconds).
@@ -46,6 +50,7 @@ impl JwtEngine {
         org_id: OrganisationId,
         email: &str,
         org_role: OrgRole,
+        is_system: bool,
         token_secret: &uuid::Uuid,
     ) -> Result<String, JwtError> {
         let now = jsonwebtoken::get_current_timestamp() as usize;
@@ -54,6 +59,7 @@ impl JwtEngine {
             org_id: org_id.to_string(),
             email: email.to_owned(),
             org_role,
+            is_system,
             iat: now,
             exp: now + ACCESS_TOKEN_TTL_SECS as usize,
         };
@@ -128,7 +134,7 @@ mod tests {
     #[test]
     fn issue_and_verify_roundtrip() {
         let (user_id, org_id, secret) = test_ids();
-        let token = JwtEngine::issue(user_id, org_id, "alice@example.com", OrgRole::OrgAdmin, &secret)
+        let token = JwtEngine::issue(user_id, org_id, "alice@example.com", OrgRole::OrgAdmin, false, &secret)
             .unwrap();
         let claims = JwtEngine::verify(&token, &secret).unwrap();
 
@@ -152,6 +158,7 @@ mod tests {
             org_id: org_id.to_string(),
             email: "bob@example.com".to_owned(),
             org_role: OrgRole::OrgMember,
+            is_system: false,
             iat: 1_000_000,
             exp: 1_000_001, // far in the past
         };
@@ -170,7 +177,7 @@ mod tests {
     fn wrong_secret_returns_error() {
         let (user_id, org_id, secret) = test_ids();
         let token =
-            JwtEngine::issue(user_id, org_id, "carol@example.com", OrgRole::OrgMember, &secret)
+            JwtEngine::issue(user_id, org_id, "carol@example.com", OrgRole::OrgMember, false, &secret)
                 .unwrap();
 
         let wrong_secret = uuid::Uuid::new_v4();
@@ -190,6 +197,7 @@ mod tests {
             org_id,
             "dave@example.com",
             OrgRole::OrgAdmin,
+            false,
             &original_secret,
         )
         .unwrap();
@@ -211,7 +219,7 @@ mod tests {
     fn decode_unverified_extracts_sub() {
         let (user_id, org_id, secret) = test_ids();
         let token =
-            JwtEngine::issue(user_id, org_id, "eve@example.com", OrgRole::OrgMember, &secret)
+            JwtEngine::issue(user_id, org_id, "eve@example.com", OrgRole::OrgMember, false, &secret)
                 .unwrap();
 
         let claims = JwtEngine::decode_unverified(&token).unwrap();

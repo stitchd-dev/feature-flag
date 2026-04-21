@@ -27,7 +27,8 @@ async fn test_flag_hashing_and_rules(pool: sqlx::PgPool) {
         updated_at: chrono::Utc::now(),
         deleted_at: None,
         version: 1,
-    };
+        is_system: false,
+};
     org_repo.create(&org).await.unwrap();
     let project = Project {
         id: ProjectId::new(),

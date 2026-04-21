@@ -28,7 +28,8 @@ async fn setup_env(pool: sqlx::PgPool) -> (Organisation, Project, Environment) {
         updated_at: chrono::Utc::now(),
         deleted_at: None,
         version: 1,
-    };
+        is_system: false,
+};
     org_repo.create(&org).await.unwrap();
 
     let project = Project {

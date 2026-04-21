@@ -17,6 +17,7 @@ stitchd-events = { path = "../stitchd-events" }
 stitchd-proto = { path = "../stitchd-proto" }
 tokio = { workspace = true }
 tonic = { workspace = true }
+tonic-health = { workspace = true }
 prost = { workspace = true }
 sqlx = { workspace = true }
 clickhouse = { workspace = true }

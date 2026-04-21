@@ -1,0 +1,77 @@
+syntax = "proto3";
+
+package stitchd.management.v1;
+
+// ─── Org ──────────────────────────────────────────────────────────────────────
+
+message CreateOrgRequest {
+  string name = 1;
+}
+
+message CreateOrgResponse {
+  string org_id   = 1;
+  string org_name = 2;
+}
+
+// ─── Project ──────────────────────────────────────────────────────────────────
+
+message CreateProjectRequest {
+  string org_id = 1;
+  string name   = 2;
+}
+
+message CreateProjectResponse {
+  string project_id   = 1;
+  string project_name = 2;
+}
+
+// ─── Environment ─────────────────────────────────────────────────────────────
+
+message CreateEnvironmentRequest {
+  string project_id = 1;
+  string name       = 2;
+}
+
+message CreateEnvironmentResponse {
+  string environment_id   = 1;
+  string environment_name = 2;
+}
+
+// ─── SDK Key ──────────────────────────────────────────────────────────────────
+
+message CreateSdkKeyRequest {
+  string environment_id = 1;
+}
+
+message CreateSdkKeyResponse {
+  string sdk_key_id  = 1;
+  // The raw key — only returned on creation, never stored in plaintext.
+  string raw_key     = 2;
+}
+
+// ─── User ─────────────────────────────────────────────────────────────────────
+
+message CreateUserRequest {
+  string org_id       = 1;
+  string email        = 2;
+  string display_name = 3;
+  string password     = 4;
+  // "org_admin" or "org_member"
+  string org_role     = 5;
+}
+
+message CreateUserResponse {
+  string user_id      = 1;
+  string email        = 2;
+  string display_name = 3;
+}
+
+// ─── Management service ───────────────────────────────────────────────────────
+
+service ManagementService {
+  rpc CreateOrg(CreateOrgRequest)               returns (CreateOrgResponse);
+  rpc CreateProject(CreateProjectRequest)       returns (CreateProjectResponse);
+  rpc CreateEnvironment(CreateEnvironmentRequest) returns (CreateEnvironmentResponse);
+  rpc CreateSdkKey(CreateSdkKeyRequest)         returns (CreateSdkKeyResponse);
+  rpc CreateUser(CreateUserRequest)             returns (CreateUserResponse);
+}
