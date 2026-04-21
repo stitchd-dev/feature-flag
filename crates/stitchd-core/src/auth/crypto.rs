@@ -53,6 +53,16 @@ pub enum CryptoError {
 pub struct CryptoKey([u8; 32]);
 
 impl CryptoKey {
+    /// Construct a [`CryptoKey`] directly from 32 raw bytes.
+    ///
+    /// Useful in tests where you want a deterministic key without environment
+    /// variables.  **Do not use with secret material in production code** — use
+    /// [`from_env`](Self::from_env) instead.
+    #[must_use]
+    pub const fn from_bytes(key: [u8; 32]) -> Self {
+        Self(key)
+    }
+
     /// Read and base64-decode `AUTH_ENCRYPTION_KEY` from the environment.
     ///
     /// # Errors

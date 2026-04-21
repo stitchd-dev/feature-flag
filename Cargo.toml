@@ -74,3 +74,4 @@ rand = "0.8"
 hex = "0.4"
 base64 = "0.22"
 jsonwebtoken = "9"
+totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
