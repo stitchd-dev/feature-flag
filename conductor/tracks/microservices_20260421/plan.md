@@ -69,14 +69,22 @@
 ## Phase 6: Experimentation Service (`stitchd-experimentation-service`)
 <!-- depends: phase3 -->
 
-- [ ] Task 1: Scaffold `crates/stitchd-experimentation-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
-- [ ] Task 2: Write failing tests for experiment CRUD gRPC handlers
-- [ ] Task 3: Implement experiment CRUD — migrate from `stitchd-server/src/api/experiments/`; owns `experiments` schema
-- [ ] Task 4: Write failing tests for flag-lock integration (experiment activate → Flag Service gRPC call)
-- [ ] Task 5: Implement Flag Service gRPC client — call `GetFlag` to verify and lock flag state during experiment lifecycle
-- [ ] Task 6: Implement `GetResults` handler — reads from pre-computed `experiment_results` table (PostgreSQL)
-- [ ] Task 7: Wire tonic gRPC server in `main.rs` with graceful shutdown; metrics
-- [ ] Task 8: Verify >95% unit test coverage for crate
+- [x] Task 1: Scaffold `crates/stitchd-experimentation-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure [53d5adb]
+  <!-- files: crates/stitchd-experimentation-service/Cargo.toml, src/lib.rs, src/main.rs, src/service.rs, src/flag_client.rs -->
+- [x] Task 2: Write failing tests for experiment CRUD gRPC handlers [53d5adb]
+  <!-- files: crates/stitchd-experimentation-service/src/service.rs -->
+- [x] Task 3: Implement experiment CRUD — migrate from `stitchd-server/src/api/experiments/`; owns `experiments` schema [53d5adb]
+  <!-- files: crates/stitchd-experimentation-service/src/service.rs -->
+- [x] Task 4: Write failing tests for flag-lock integration (experiment activate → Flag Service gRPC call) [53d5adb]
+  <!-- files: crates/stitchd-experimentation-service/src/service.rs -->
+- [x] Task 5: Implement Flag Service gRPC client — call `GetFlag` to verify and lock flag state during experiment lifecycle [53d5adb]
+  <!-- files: crates/stitchd-experimentation-service/src/flag_client.rs -->
+- [x] Task 6: Implement `GetResults` handler — reads from pre-computed `experiment_results` table (PostgreSQL) [53d5adb]
+  <!-- files: crates/stitchd-experimentation-service/src/service.rs -->
+- [x] Task 7: Wire tonic gRPC server in `main.rs` with graceful shutdown; metrics [53d5adb]
+  <!-- files: crates/stitchd-experimentation-service/src/main.rs -->
+- [x] Task 8: Verify >95% unit test coverage for crate [53d5adb]
+  <!-- 33 unit tests, all pass, clippy -D warnings clean -->
 - [ ] Task: Conductor - User Manual Verification 'Experimentation Service' (Protocol in workflow.md)
 
 ## Phase 7: Orchestration / Gateway Service (`stitchd-gateway`)

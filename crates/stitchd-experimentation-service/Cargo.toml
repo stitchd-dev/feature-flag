@@ -1,43 +1,23 @@
 [package]
-name = "stitchd-event-service"
+name = "stitchd-experimentation-service"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> track/microservices_20260421_worker_phase4
-=======
->>>>>>> track/microservices_20260421_worker_phase5
 
 [[bin]]
-name = "stitchd-event-service"
+name = "stitchd-experimentation-service"
 path = "src/main.rs"
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> track/microservices_20260421_worker_phase3
-=======
-
-[dependencies]
-tokio = { workspace = true }
->>>>>>> track/microservices_20260421_worker_phase4
-=======
 
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
 stitchd-db = { path = "../stitchd-db" }
-stitchd-events = { path = "../stitchd-events" }
 stitchd-proto = { path = "../stitchd-proto" }
 tokio = { workspace = true }
 tonic = { workspace = true }
 prost = { workspace = true }
 sqlx = { workspace = true }
-clickhouse = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -45,17 +25,10 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+chrono = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 async-trait = { workspace = true }
-sha2 = { workspace = true }
-hex = { workspace = true }
-chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
->>>>>>> track/microservices_20260421_worker_phase5
-=======
-
-[dependencies]
->>>>>>> track/microservices_20260421_worker_phase6

@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 // Placeholder — Phase 5 implementation pending.
 =======
 //! Experimentation Event Service — gRPC service for event ingestion and definition registry.
@@ -22,3 +23,6 @@ pub use grpc::event_ingestion::EventIngestionServiceImpl;
 /// Re-export the event definition registry.
 pub use registry::EventDefinitionRegistry;
 >>>>>>> track/microservices_20260421_worker_phase5
+=======
+// placeholder
+>>>>>>> track/microservices_20260421_worker_phase6

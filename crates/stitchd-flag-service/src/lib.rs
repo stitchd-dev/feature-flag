@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 // Placeholder — Phase 3 implementation pending.
 =======
 //! `stitchd-flag-service` — gRPC service for feature flag management.
@@ -18,3 +19,6 @@ pub mod error;
 pub mod mapping;
 pub mod service;
 >>>>>>> track/microservices_20260421_worker_phase3
+=======
+// placeholder
+>>>>>>> track/microservices_20260421_worker_phase6

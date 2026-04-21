@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 //! `stitchd-auth-service` — gRPC auth microservice.
 //!
 //! Implements the `AuthService` gRPC contract, accepting a [`CredentialRequest`]
@@ -17,3 +18,6 @@ pub mod grpc;
 pub mod jwt;
 pub mod rbac;
 pub mod sdk_key;
+=======
+// placeholder
+>>>>>>> track/microservices_20260421_worker_phase6

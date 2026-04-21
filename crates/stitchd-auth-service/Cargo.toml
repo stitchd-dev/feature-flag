@@ -6,6 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
+<<<<<<< HEAD
 [[bin]]
 name = "stitchd-auth-service"
 path = "src/main.rs"
@@ -46,3 +47,6 @@ tokio = { workspace = true }
 >>>>>>> track/microservices_20260421_worker_phase4
 =======
 >>>>>>> track/microservices_20260421_worker_phase5
+=======
+[dependencies]
+>>>>>>> track/microservices_20260421_worker_phase6

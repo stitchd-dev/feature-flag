@@ -8,6 +8,7 @@ license.workspace = true
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 =======
 >>>>>>> track/microservices_20260421_worker_phase4
@@ -47,3 +48,7 @@ async-trait = { workspace = true }
 >>>>>>> track/microservices_20260421_worker_phase4
 =======
 >>>>>>> track/microservices_20260421_worker_phase5
+=======
+
+[dependencies]
+>>>>>>> track/microservices_20260421_worker_phase6
