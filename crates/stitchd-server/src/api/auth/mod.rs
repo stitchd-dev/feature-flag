@@ -16,13 +16,17 @@
 //! - `GET  /auth/saml/{org_slug}/metadata` — SP metadata XML
 //! - `POST /auth/saml/{org_slug}/slo`      — Single Logout
 
-pub mod mfa;
+pub mod invites;
 pub mod middleware;
+pub mod mfa;
 pub mod oidc;
 pub mod password;
+pub mod password_reset;
+pub mod profile;
 pub mod providers;
 pub mod saml;
 pub mod sessions;
+pub mod user_management;
 
 pub use middleware::{AuthenticatedUser, RequireEnvRole, RequireOrgRole, RequireProjectRole};
 

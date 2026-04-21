@@ -965,6 +965,7 @@ mod tests {
         async fn update_status(&self, id: stitchd_core::id::UserId, _: stitchd_core::auth::UserStatus) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn update_password_hash(&self, id: stitchd_core::id::UserId, _: &str) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn update_profile(&self, id: stitchd_core::id::UserId, _: &str, _: Option<&str>) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        async fn list_org_users(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<(stitchd_core::auth::User, stitchd_core::auth::OrgRole)>, stitchd_db::RepositoryError> { Ok(vec![]) }
     }
     struct StubMembershipRepo;
     #[async_trait]
@@ -993,6 +994,22 @@ mod tests {
         async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> { Ok(vec![]) }
         async fn update(&self, id: stitchd_core::id::AuthProviderId, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn delete(&self, _: stitchd_core::id::AuthProviderId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+    }
+    struct StubInviteRepo;
+    #[async_trait]
+    impl stitchd_db::InviteRepository for StubInviteRepo {
+        async fn create(&self, _: stitchd_core::id::OrganisationId, _: &str, _: stitchd_core::auth::OrgRole, _: Option<stitchd_core::id::UserId>, _: i64) -> Result<(stitchd_core::auth::Invite, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: "stub".to_string() }) }
+        async fn find_by_token_hash(&self, _: &str) -> Result<Option<stitchd_core::auth::Invite>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn accept(&self, id: stitchd_core::id::InviteId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::Invite>, stitchd_db::RepositoryError> { Ok(vec![]) }
+        async fn revoke(&self, id: stitchd_core::id::InviteId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+    }
+    struct StubOtpRepo;
+    #[async_trait]
+    impl stitchd_db::OtpRepository for StubOtpRepo {
+        async fn create(&self, _: &str) -> Result<(uuid::Uuid, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: "stub".to_string() }) }
+        async fn find_valid_by_email(&self, _: &str) -> Result<Option<(uuid::Uuid, String)>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn consume(&self, id: uuid::Uuid) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
     }
 
     // ---------------------------------------------------------------------------
@@ -1047,6 +1064,9 @@ mod tests {
             saml_state_cache: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            email_service: Arc::new(crate::email::EmailService::from_env()),
+            invite_repo: Arc::new(StubInviteRepo),
+            otp_repo: Arc::new(StubOtpRepo),
         }
     }
 
@@ -1700,6 +1720,9 @@ mod tests {
             saml_state_cache: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            email_service: Arc::new(crate::email::EmailService::from_env()),
+            invite_repo: Arc::new(StubInviteRepo),
+            otp_repo: Arc::new(StubOtpRepo),
         };
         let app = build_router(state);
 
@@ -1760,6 +1783,9 @@ mod tests {
             saml_state_cache: Arc::new(std::sync::Mutex::new(
                 std::collections::HashMap::new(),
             )),
+            email_service: Arc::new(crate::email::EmailService::from_env()),
+            invite_repo: Arc::new(StubInviteRepo),
+            otp_repo: Arc::new(StubOtpRepo),
         };
         let app = build_router(state);
 

@@ -34,6 +34,28 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
+// Stub invite / OTP repos used by multiple test helpers
+// ---------------------------------------------------------------------------
+
+pub(crate) struct StubInviteRepoT;
+#[async_trait::async_trait]
+impl stitchd_db::InviteRepository for StubInviteRepoT {
+    async fn create(&self, org_id: stitchd_core::id::OrganisationId, _: &str, _: stitchd_core::auth::OrgRole, _: Option<stitchd_core::id::UserId>, _: i64) -> Result<(stitchd_core::auth::Invite, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: org_id.to_string() }) }
+    async fn find_by_token_hash(&self, _: &str) -> Result<Option<stitchd_core::auth::Invite>, stitchd_db::RepositoryError> { Ok(None) }
+    async fn accept(&self, id: stitchd_core::id::InviteId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+    async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::Invite>, stitchd_db::RepositoryError> { Ok(vec![]) }
+    async fn revoke(&self, id: stitchd_core::id::InviteId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+}
+
+pub(crate) struct StubOtpRepoT;
+#[async_trait::async_trait]
+impl stitchd_db::OtpRepository for StubOtpRepoT {
+    async fn create(&self, _: &str) -> Result<(uuid::Uuid, String), stitchd_db::RepositoryError> { Ok((uuid::Uuid::new_v4(), "000000".to_string())) }
+    async fn find_valid_by_email(&self, _: &str) -> Result<Option<(uuid::Uuid, String)>, stitchd_db::RepositoryError> { Ok(None) }
+    async fn consume(&self, id: uuid::Uuid) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+}
+
+// ---------------------------------------------------------------------------
 // In-memory stub repositories
 // ---------------------------------------------------------------------------
 
@@ -108,6 +130,9 @@ impl AuthUserRepository for InMemAuthUserRepo {
         u.display_name = display_name.to_string();
         u.avatar_url = avatar_url.map(str::to_string);
         Ok(())
+    }
+    async fn list_org_users(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<(User, OrgRole)>, RepositoryError> {
+        Ok(vec![])
     }
 }
 
@@ -491,6 +516,9 @@ fn make_state(
         event_writer: None,
         oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         saml_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        email_service: Arc::new(crate::email::EmailService::from_env()),
+        invite_repo: Arc::new(StubInviteRepoT),
+        otp_repo: Arc::new(StubOtpRepoT),
     }
 }
 
@@ -730,6 +758,9 @@ async fn switch_org_success_returns_new_tokens() {
         event_writer: None,
         oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         saml_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        email_service: Arc::new(crate::email::EmailService::from_env()),
+        invite_repo: Arc::new(crate::api::auth::tests::StubInviteRepoT),
+        otp_repo: Arc::new(crate::api::auth::tests::StubOtpRepoT),
     };
     let app = app_from_state(state);
 
@@ -875,6 +906,9 @@ fn make_mfa_state(
         event_writer: None,
         oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         saml_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        email_service: Arc::new(crate::email::EmailService::from_env()),
+        invite_repo: Arc::new(StubInviteRepoT),
+        otp_repo: Arc::new(StubOtpRepoT),
     }
 }
 

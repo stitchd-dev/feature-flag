@@ -43,6 +43,7 @@ openidconnect = { workspace = true }
 reqwest = { workspace = true }
 url = { workspace = true }
 rand = { workspace = true }
+lettre = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

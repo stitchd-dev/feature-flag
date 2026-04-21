@@ -12,10 +12,11 @@ pub mod experiment_results;
 pub mod repository;
 
 pub use auth::{
-    AuthProviderRepository, AuthUserRepository, MfaChallengeRepository, MfaRepository,
-    OrgMembershipRepository, PgAuthProviderRepository, PgAuthUserRepository,
-    PgMfaChallengeRepository, PgMfaRepository, PgOrgMembershipRepository,
-    PgRefreshTokenRepository, RefreshTokenRepository, challenge_token_hash,
+    AuthProviderRepository, AuthUserRepository, InviteRepository, MfaChallengeRepository,
+    MfaRepository, OrgMembershipRepository, OtpRepository, PgAuthProviderRepository,
+    PgAuthUserRepository, PgInviteRepository, PgMfaChallengeRepository, PgMfaRepository,
+    PgOrgMembershipRepository, PgOtpRepository, PgRefreshTokenRepository, RefreshTokenRepository,
+    challenge_token_hash,
 };
 pub use error::RepositoryError;
 pub use experiment_results::{

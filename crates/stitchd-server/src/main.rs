@@ -104,6 +104,9 @@ async fn main() -> Result<()> {
         saml_state_cache: std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
+        email_service: std::sync::Arc::new(stitchd_server::email::EmailService::from_env()),
+        invite_repo: std::sync::Arc::new(stitchd_db::PgInviteRepository::new(pool.clone())),
+        otp_repo: std::sync::Arc::new(stitchd_db::PgOtpRepository::new(pool.clone())),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")
