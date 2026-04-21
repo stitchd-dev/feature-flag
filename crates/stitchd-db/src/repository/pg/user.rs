@@ -325,8 +325,8 @@ trait UserStatusExt {
 impl UserStatusExt for UserStatus {
     fn to_db_str(&self) -> &'static str {
         match self {
-            UserStatus::Active => "active",
-            UserStatus::Deactivated => "deactivated",
+            Self::Active => "active",
+            Self::Deactivated => "deactivated",
         }
     }
 }

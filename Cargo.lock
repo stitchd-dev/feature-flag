@@ -2897,6 +2897,7 @@ dependencies = [
  "axum",
  "chrono",
  "clickhouse",
+ "jsonwebtoken",
  "metrics",
  "metrics-exporter-prometheus",
  "opentelemetry",

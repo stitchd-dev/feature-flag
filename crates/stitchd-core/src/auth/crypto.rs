@@ -154,7 +154,7 @@ pub fn generate_opaque_token() -> (String, String) {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     let raw_hex = hex::encode(bytes);
-    let hash_bytes = Sha256::digest(&bytes);
+    let hash_bytes = Sha256::digest(bytes);
     let hash_hex = hex::encode(hash_bytes);
     (raw_hex, hash_hex)
 }

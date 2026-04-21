@@ -55,7 +55,8 @@ pub struct PgRefreshTokenRepository {
 
 impl PgRefreshTokenRepository {
     /// Construct a new repository bound to `pool`.
-    pub fn new(pool: PgPool) -> Self {
+    #[must_use]
+    pub const fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
