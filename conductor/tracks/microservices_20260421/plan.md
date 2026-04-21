@@ -15,7 +15,7 @@
   <!-- files: proto/experimentation_service.proto -->
 - [x] Task 7: Regenerate Rust bindings, verify workspace compiles with all new proto contracts [80b0867]
   <!-- depends: task2, task3, task4, task5, task6 -->
-- [ ] Task: Conductor - User Manual Verification 'Proto Contracts & Shared gRPC Definitions' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Proto Contracts & Shared gRPC Definitions' (Protocol in workflow.md) [ca08993]
 
 ## Phase 2: Auth Service (`stitchd-auth-service`)
 <!-- depends: phase1 -->
