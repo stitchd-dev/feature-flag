@@ -1,11 +1,12 @@
 # Project Workflow
+<!-- Last refreshed: 2026-04-22 -->
 
 ## Guiding Principles
 
 1. **The Plan is the Source of Truth:** All work must be tracked in `plan.md`
 2. **The Tech Stack is Deliberate:** Changes to the tech stack must be documented in `tech-stack.md` *before* implementation
 3. **Test-Driven Development:** Write unit tests before implementing functionality
-4. **High Code Coverage:** Aim for >95% code coverage for all modules
+4. **High Code Coverage:** Aim for ≥90% code coverage for all modules (CI enforces ≥90% via cargo-tarpaulin)
 5. **User Experience First:** Every decision should prioritize user experience
 6. **Non-Interactive & CI-Aware:** Prefer non-interactive commands. Use `CI=true` for watch-mode tools (tests, linters) to ensure single execution.
 
@@ -51,7 +52,7 @@ All tasks follow a strict lifecycle:
    ```bash
    pytest --cov=app --cov-report=html
    ```
-   Target: >95% coverage for new code. The specific tools and commands will vary by language and framework.
+   Target: ≥90% coverage for new code. Run `cargo tarpaulin -p <crate_name>` to check locally.
 
 7. **Document Deviations:** If implementation differs from tech stack:
   - **STOP** implementation
@@ -154,7 +155,7 @@ All tasks follow a strict lifecycle:
 Before marking any task complete, verify:
 
 - [ ] All tests pass
-- [ ] Code coverage meets requirements (>95%)
+- [ ] Code coverage meets requirements (≥90%)
 - [ ] Code follows project's code style guidelines (as defined in `code_styleguides/`)
 - [ ] All public functions/methods are documented (e.g., docstrings, JSDoc, GoDoc)
 - [ ] Type safety is enforced (e.g., type hints, TypeScript types, Go types)
@@ -165,28 +166,52 @@ Before marking any task complete, verify:
 
 ## Development Commands
 
-**AI AGENT INSTRUCTION: This section should be adapted to the project's specific language, framework, and build tools.**
-
 ### Setup
 ```bash
-# Example: Commands to set up the development environment (e.g., install dependencies, configure database)
-# e.g., for a Node.js project: npm install
-# e.g., for a Go project: go mod tidy
+# Install sqlx-cli (compile-time query checking)
+cargo install sqlx-cli --no-default-features --features rustls,postgres
+
+# Start infrastructure (Postgres + ClickHouse only — microservices are built separately)
+docker compose up postgres clickhouse -d --wait
+
+# Run DB migrations
+cargo sqlx migrate run --source crates/stitchd-db/migrations
 ```
 
 ### Daily Development
 ```bash
-# Example: Commands for common daily tasks (e.g., start dev server, run tests, lint, format)
-# e.g., for a Node.js project: npm run dev, npm test, npm run lint
-# e.g., for a Go project: go run main.go, go test ./..., go fmt ./...
+# Run all tests (requires running postgres + clickhouse)
+cargo test --workspace
+
+# Run tests for a specific crate
+cargo test -p stitchd-auth-service
+
+# Format code
+cargo fmt --all
+
+# Lint (mirrors CI — all warnings are errors)
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Build docs site (protoc-gen-doc → OpenAPI → rustdoc → mdbook)
+cargo run --manifest-path crates/xtask/Cargo.toml -- docs
 ```
 
 ### Before Committing
 ```bash
-# Example: Commands to run all pre-commit checks (e.g., format, lint, type check, run tests)
-# e.g., for a Node.js project: npm run check
-# e.g., for a Go project: make check (if a Makefile exists)
+# Full pre-commit check (format + lint + tests)
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+
+# After adding new sqlx::query! macros — regenerate offline cache
+SQLX_OFFLINE=false cargo sqlx prepare --workspace
 ```
+
+### CI Environment Notes
+- `SQLX_OFFLINE=true` in CI — all `sqlx::query!` macros use the `.sqlx/` offline cache
+- CI only starts `postgres` and `clickhouse` containers; the six microservice containers are exercised by E2E Step CI workflows in `tests/e2e/`
+- Coverage threshold: ≥90% per crate (cargo-tarpaulin, uploaded to Codecov per crate flag)
+- `contract-check` job verifies the gateway covers the pre-decomposition OpenAPI surface (`scripts/check_openapi_contract.py`)
 
 ## Testing Requirements
 
@@ -317,7 +342,7 @@ A task is complete when:
 
 ### Pre-Deployment Checklist
 - [ ] All tests passing
-- [ ] Coverage >95%
+- [ ] Coverage ≥90%
 - [ ] No linting errors
 - [ ] Mobile testing complete
 - [ ] Environment variables configured

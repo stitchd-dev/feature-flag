@@ -1,5 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
+<!-- Last refreshed: 2026-04-22 -->
 
 # Product Guide
 
@@ -16,7 +17,8 @@ A/B experimentation. Admin UI is coming later as a separate project.
 - Data / growth teams running A/B and multivariate experiments
 
 ## Deployment Model
-- **Current:** Self-hosted (primary focus)
+- **Current:** Self-hosted (primary focus) — six-service Docker Compose stack
+- **Internal Architecture:** Six gRPC microservices (`auth`, `flag`, `segmentation`, `event`, `experimentation`) + REST gateway; `stitchd-server` monolith removed (2026-04-21)
 - **Future:** Cloud SaaS offering
 
 ## Multi-Tenancy
@@ -44,6 +46,19 @@ A dedicated layer that observes contexts flowing through the system and maintain
 a registry of known context types, their properties, and observed value ranges/enums.
 Exposed as an API for the Admin UI (coming later) to power dropdown/autocomplete 
 behaviour (e.g. when building segment rules or flag targeting conditions).
+
+## Implementation Status (as of 2026-04-22)
+
+| Module | Status |
+|---|---|
+| Domain model + DB scaffold | ✅ Complete |
+| Segmentation (rule-based + list-based) | ✅ Complete |
+| Feature Flags + Rule Engine | ✅ Complete |
+| Events + Experimentation (Frequentist/Bayesian) | ✅ Complete |
+| Server-side Rust SDK | ✅ Complete |
+| Human Auth (JWT, Password, OIDC, SAML, MFA, Invites, Rate Limiting) | ✅ Complete |
+| Microservice decomposition (6 services + gateway) | ✅ Complete |
+| Admin UI | ⬜ Deferred (separate project) |
 
 ## Modules
 

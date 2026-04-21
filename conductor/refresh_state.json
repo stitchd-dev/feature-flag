@@ -1,0 +1,25 @@
+{
+  "last_refreshed": "2026-04-22T00:00:00Z",
+  "scope": "all",
+  "changes": {
+    "tech-stack.md": [
+      "Added Architecture section documenting 6-microservice decomposition (stitchd-server removed)",
+      "Added all auth/crypto/email/rate-limiting dependencies from auth_20260421 track",
+      "Added Docker Compose infrastructure note",
+      "Updated coverage threshold to ≥90%"
+    ],
+    "product.md": [
+      "Added internal microservice architecture note under Deployment Model",
+      "Added Implementation Status table reflecting current completion state"
+    ],
+    "workflow.md": [
+      "Fixed coverage threshold from >95% to ≥90% (matches CI)",
+      "Replaced generic Development Commands placeholder with real Rust/Cargo commands",
+      "Added CI environment notes (SQLX_OFFLINE, contract-check, tarpaulin per-crate)"
+    ],
+    "patterns.md": [
+      "Added Auth Patterns section with 4 new patterns from auth_20260421",
+      "Updated last refreshed date"
+    ]
+  }
+}

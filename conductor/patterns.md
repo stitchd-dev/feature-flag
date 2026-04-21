@@ -24,6 +24,13 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Type Dispatch:** `matches!` macro with tuple patterns is the cleanest way to express multi-arm type dispatch (e.g., `matches!((val, type), (Variant::Int(_), Type::Int))`). (from: domain_20260411, 2026-04-11)
 - **Wildcard Matching:** Use `strip_suffix('*')` for simple prefix-based wildcard matching without the overhead of regex. (from: domain_20260411, 2026-04-11)
 
+## Auth Patterns
+
+- **Enum privilege ordering:** Define role enum variants low-privilege first so `#[derive(Ord)]` gives higher-numbered variants more privilege. E.g., `OrgMember=0, OrgAdmin=1` → `OrgAdmin > OrgMember` without custom `PartialOrd`. (from: auth_20260421, 2026-04-21)
+- **sqlx enum DB mapping:** `#[sqlx(rename_all = "snake_case")]` on an enum with `sqlx::Type` maps Rust `PascalCase` variants to `snake_case` in the DB CHECK constraint values automatically. (from: auth_20260421, 2026-04-21)
+- **ID type name:** The org identifier type is `OrganisationId` (not `OrgId`) — always check actual type names in `crates/stitchd-core/src/id.rs` before using. (from: auth_20260421, 2026-04-21)
+- **Rate limiting pattern:** `governor` + `tower_governor` with a `SmartIpKeyExtractor` that reads `x-forwarded-for` → `x-real-ip` → peer address in that order to correctly key per-client behind a reverse proxy. (from: auth_20260421, 2026-04-21)
+
 ## Gotchas
 
 - `clickhouse` crate v0.13 has no `derive` feature — use `uuid`, `time`, `lz4` features instead. (from: scaffold_20260411, 2026-04-11)
@@ -41,4 +48,4 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Isolated DB Testing:** `#[sqlx::test(migrations = "./migrations")]` is the idiomatic way to run fast, isolated database tests with automatic migration handling in SQLx 0.8. (from: domain_20260411, 2026-04-11)
 
 ---
-Last refreshed: 2026-04-11
+Last refreshed: 2026-04-22
