@@ -1,0 +1,11 @@
+[package]
+name = "stitchd-event-service"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stitchd-event-service"
+path = "src/main.rs"

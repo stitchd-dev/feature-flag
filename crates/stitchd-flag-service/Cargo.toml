@@ -1,0 +1,37 @@
+[package]
+name = "stitchd-flag-service"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stitchd-flag-service"
+path = "src/main.rs"
+
+[dependencies]
+stitchd-core = { path = "../stitchd-core" }
+stitchd-db = { path = "../stitchd-db" }
+stitchd-proto = { path = "../stitchd-proto" }
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+tokio-stream = "0.1"
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

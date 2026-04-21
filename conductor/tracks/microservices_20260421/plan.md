@@ -33,7 +33,7 @@
 ## Phase 3: Flag Service (`stitchd-flag-service`)
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Scaffold `crates/stitchd-flag-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
+- [~] Task 1: Scaffold `crates/stitchd-flag-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
 - [ ] Task 2: Write failing tests for `GetFlagDefinitions` streaming handler (definition sync contract)
 - [ ] Task 3: Implement flag CRUD handlers — migrate from `stitchd-server/src/api/flags/`; owns `flags` schema
 - [ ] Task 4: Write failing tests for flag mutation handlers (create, update, delete, archive)
