@@ -1,6 +1,6 @@
 # Plan: Microservice Architecture Decomposition
 
-## Phase 1: Proto Contracts & Shared gRPC Definitions
+## Phase 1: Proto Contracts & Shared gRPC Definitions [checkpoint: 78ff491]
 
 - [x] Task 1: Write proto compilation tests — confirm existing `stitchd-proto` builds cleanly (baseline) [0ed8e8c]
 - [x] Task 2: Define `auth_service.proto` — `ValidateCredential(CredentialRequest) → RbacContext` [80b0867]
