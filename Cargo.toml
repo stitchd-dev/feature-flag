@@ -74,3 +74,4 @@ rand = "0.8"
 hex = "0.4"
 base64 = "0.22"
 jsonwebtoken = "9"
+lettre = { version = "0.11", features = ["tokio1-native-tls", "smtp-transport", "builder"], default-features = false }
