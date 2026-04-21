@@ -30,3 +30,6 @@ This file tracks all major tracks for the project.
 <!-- Archived: stats_20260420 (Experiment Statistical Analysis) -->
 
 ---
+
+## [ ] Track: JWT / Multi-Mechanism Human Auth
+*Link: [./conductor/tracks/auth_20260421/](./conductor/tracks/auth_20260421/)*
