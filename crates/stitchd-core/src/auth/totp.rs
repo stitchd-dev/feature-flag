@@ -84,6 +84,21 @@ impl TotpEngine {
         Ok(totp.check(code, now))
     }
 
+    /// Encode `secret_bytes` as a base32 string (RFC 4648, no padding).
+    ///
+    /// Used for manual entry when scanning a QR code is not possible.
+    ///
+    /// # Errors
+    /// Returns [`TotpError::TotpRs`] if the bytes cannot be wrapped in a `Secret`.
+    pub fn secret_to_base32(secret_bytes: &[u8]) -> Result<String, TotpError> {
+        use totp_rs::Secret;
+        let secret = Secret::Raw(secret_bytes.to_vec());
+        match secret.to_encoded() {
+            Secret::Encoded(s) => Ok(s),
+            _ => Err(TotpError::TotpRs("base32 encoding failed".into())),
+        }
+    }
+
     /// Generate `n` single-use recovery codes.
     ///
     /// Each code is an 8-character alphanumeric string (upper-case letters +

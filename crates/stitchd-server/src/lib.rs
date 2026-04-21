@@ -736,6 +736,19 @@ mod tests {
             ) -> Result<bool, stitchd_db::RepositoryError> {
                 Ok(false)
             }
+            async fn store_pending_totp_secret(
+                &self,
+                _: stitchd_core::id::UserId,
+                _: Vec<u8>,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn get_user_id_for_challenge(
+                &self,
+                _: &str,
+            ) -> Result<Option<stitchd_core::id::UserId>, stitchd_db::RepositoryError> {
+                Ok(None)
+            }
         }
 
         let stub = Arc::new(StubRepo);

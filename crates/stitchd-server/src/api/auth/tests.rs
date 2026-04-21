@@ -297,13 +297,137 @@ impl stitchd_db::experiment_results::ExperimentResultsRepository for NullResults
 
 struct NullMfaRepo;
 #[async_trait::async_trait]
-impl stitchd_db::MfaRepository for NullMfaRepo {
+impl MfaRepository for NullMfaRepo {
     async fn create_challenge(&self, _: stitchd_core::id::UserId, _: i64) -> Result<(stitchd_core::id::MfaChallengeId, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: "stub".to_string() }) }
     async fn consume_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::MfaChallengeId>, stitchd_db::RepositoryError> { Ok(None) }
     async fn enable_totp(&self, _: stitchd_core::id::UserId, _: Vec<u8>, _: Vec<String>) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
     async fn disable_totp(&self, _: stitchd_core::id::UserId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
     async fn get_totp_secret(&self, _: stitchd_core::id::UserId) -> Result<Option<Vec<u8>>, stitchd_db::RepositoryError> { Ok(None) }
     async fn consume_recovery_code(&self, _: stitchd_core::id::UserId, _: &str) -> Result<bool, stitchd_db::RepositoryError> { Ok(false) }
+    async fn store_pending_totp_secret(&self, _: stitchd_core::id::UserId, _: Vec<u8>) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+    async fn get_user_id_for_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::UserId>, stitchd_db::RepositoryError> { Ok(None) }
+}
+
+/// In-memory MFA repository for handler tests.
+#[derive(Default)]
+struct InMemMfaRepo {
+    totp_secrets: Mutex<HashMap<UserId, Vec<u8>>>,
+    totp_enabled: Mutex<HashMap<UserId, bool>>,
+    recovery_codes: Mutex<HashMap<UserId, Vec<String>>>,
+    /// Map challenge_token_hash -> user_id for verify tests.
+    challenges: Mutex<HashMap<String, (UserId, bool)>>, // (user_id, consumed)
+}
+
+impl InMemMfaRepo {
+    /// Pre-seed an encrypted TOTP secret for `user_id`.
+    fn with_secret(user_id: UserId, encrypted_secret: Vec<u8>) -> Self {
+        let mut secrets = HashMap::new();
+        secrets.insert(user_id, encrypted_secret);
+        Self {
+            totp_secrets: Mutex::new(secrets),
+            totp_enabled: Mutex::new(HashMap::new()),
+            recovery_codes: Mutex::new(HashMap::new()),
+            challenges: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Pre-seed a live challenge token hash for a user.
+    fn with_challenge(user_id: UserId, encrypted_secret: Vec<u8>, token_hash: String) -> Self {
+        let mut secrets = HashMap::new();
+        secrets.insert(user_id, encrypted_secret);
+        let mut challenges = HashMap::new();
+        challenges.insert(token_hash, (user_id, false));
+        Self {
+            totp_secrets: Mutex::new(secrets),
+            totp_enabled: Mutex::new(HashMap::new()),
+            recovery_codes: Mutex::new(HashMap::new()),
+            challenges: Mutex::new(challenges),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MfaRepository for InMemMfaRepo {
+    async fn create_challenge(
+        &self,
+        _: UserId,
+        _: i64,
+    ) -> Result<(stitchd_core::id::MfaChallengeId, String), RepositoryError> {
+        Err(RepositoryError::NotFound { id: "stub".to_string() })
+    }
+
+    async fn consume_challenge(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<stitchd_core::id::MfaChallengeId>, RepositoryError> {
+        let mut lock = self.challenges.lock().unwrap();
+        if let Some(entry) = lock.get_mut(token_hash) {
+            if entry.1 {
+                // Already consumed.
+                return Ok(None);
+            }
+            entry.1 = true;
+            return Ok(Some(stitchd_core::id::MfaChallengeId::from_uuid(
+                uuid::Uuid::new_v4(),
+            )));
+        }
+        Ok(None)
+    }
+
+    async fn enable_totp(
+        &self,
+        user_id: UserId,
+        encrypted_secret: Vec<u8>,
+        recovery_code_hashes: Vec<String>,
+    ) -> Result<(), RepositoryError> {
+        self.totp_secrets.lock().unwrap().insert(user_id, encrypted_secret);
+        self.totp_enabled.lock().unwrap().insert(user_id, true);
+        self.recovery_codes.lock().unwrap().insert(user_id, recovery_code_hashes);
+        Ok(())
+    }
+
+    async fn disable_totp(&self, user_id: UserId) -> Result<(), RepositoryError> {
+        self.totp_secrets.lock().unwrap().remove(&user_id);
+        self.totp_enabled.lock().unwrap().insert(user_id, false);
+        self.recovery_codes.lock().unwrap().remove(&user_id);
+        Ok(())
+    }
+
+    async fn get_totp_secret(
+        &self,
+        user_id: UserId,
+    ) -> Result<Option<Vec<u8>>, RepositoryError> {
+        Ok(self.totp_secrets.lock().unwrap().get(&user_id).cloned())
+    }
+
+    async fn consume_recovery_code(
+        &self,
+        _: UserId,
+        _: &str,
+    ) -> Result<bool, RepositoryError> {
+        Ok(false)
+    }
+
+    async fn store_pending_totp_secret(
+        &self,
+        user_id: UserId,
+        encrypted_secret: Vec<u8>,
+    ) -> Result<(), RepositoryError> {
+        self.totp_secrets.lock().unwrap().insert(user_id, encrypted_secret);
+        Ok(())
+    }
+
+    async fn get_user_id_for_challenge(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<UserId>, RepositoryError> {
+        Ok(self
+            .challenges
+            .lock()
+            .unwrap()
+            .get(token_hash)
+            .map(|(uid, _)| *uid))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -582,6 +706,7 @@ async fn switch_org_success_returns_new_tokens() {
         auth_user_repo: Arc::new(InMemAuthUserRepo::with_user(user.clone())),
         membership_repo,
         refresh_token_repo: token_repo,
+        mfa_repo: Arc::new(NullMfaRepo),
         segment_repo: null.clone(),
         flag_repo: null.clone(),
         variant_repo: null.clone(),
@@ -687,4 +812,394 @@ async fn switch_org_not_member_returns_403() {
         .unwrap();
 
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+}
+
+// ---------------------------------------------------------------------------
+// MFA handler tests
+// ---------------------------------------------------------------------------
+
+/// Set `AUTH_ENCRYPTION_KEY` to a stable test value (32 zero bytes, base64).
+/// Returns a [`CryptoKey`] backed by the same bytes for symmetric round-trips.
+fn set_test_encryption_key() -> stitchd_core::auth::crypto::CryptoKey {
+    // base64(32 × 0x00) — acceptable for tests only.
+    // SAFETY: single-threaded test setup; no other thread reads this env var
+    //         until after this function returns.
+    unsafe {
+        std::env::set_var(
+            "AUTH_ENCRYPTION_KEY",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        );
+    }
+    stitchd_core::auth::crypto::CryptoKey::from_bytes([0u8; 32])
+}
+
+/// Build an `AppState` with `InMemMfaRepo` and the given `user` / `org`.
+fn make_mfa_state(
+    user: User,
+    org_id: OrganisationId,
+    mfa_repo: Arc<InMemMfaRepo>,
+) -> AppState {
+    let null = Arc::new(NullRepo);
+    AppState {
+        db: sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
+            .expect("lazy pool"),
+        metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
+        user_repo: null.clone(),
+        auth_user_repo: Arc::new(InMemAuthUserRepo::with_user(user.clone())),
+        membership_repo: Arc::new(InMemMembershipRepo::with(user.id, org_id, OrgRole::OrgMember)),
+        refresh_token_repo: Arc::new(InMemRefreshTokenRepo::default()),
+        mfa_repo,
+        segment_repo: null.clone(),
+        flag_repo: null.clone(),
+        variant_repo: null.clone(),
+        sdk_key_repo: null.clone(),
+        event_definition_repo: null.clone(),
+        experiment_repo: null.clone(),
+        results_repo: Arc::new(NullResults),
+        ch_client: None,
+        event_writer: None,
+    }
+}
+
+#[tokio::test]
+async fn mfa_setup_returns_otpauth_uri() {
+    let crypto = set_test_encryption_key();
+    let (user, password) = make_test_user(UserStatus::Active);
+    let org_id = OrganisationId::new();
+
+    // Login to get an access token.
+    let token_repo = Arc::new(InMemRefreshTokenRepo::default());
+    let login_app =
+        app_from_state(make_state(user.clone(), org_id, OrgRole::OrgMember, token_repo));
+    let login_body = serde_json::json!({ "email": "test@example.com", "password": password });
+    let login_resp = login_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("Content-Type", "application/json")
+                .body(Body::from(login_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(login_resp.into_body(), usize::MAX).await.unwrap();
+    let login_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let access_token = login_json["access_token"].as_str().unwrap().to_string();
+
+    // Call setup.
+    let mfa_repo = Arc::new(InMemMfaRepo::default());
+    let app = app_from_state(make_mfa_state(user.clone(), org_id, mfa_repo.clone()));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/users/me/mfa/setup")
+                .header("Authorization", bearer(&access_token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let uri = json["otpauth_uri"].as_str().unwrap();
+    assert!(uri.starts_with("otpauth://totp/"), "must be otpauth URI");
+    assert!(json["secret_base32"].is_string(), "must include base32 secret");
+    // Verify the pending secret was stored in the repo.
+    let stored = mfa_repo.get_totp_secret(user.id).await.unwrap();
+    assert!(stored.is_some(), "pending secret must be stored");
+    // Round-trip decrypt to confirm it's valid ciphertext.
+    let _ = crypto.decrypt(&stored.unwrap()).expect("encrypted secret must decrypt");
+}
+
+#[tokio::test]
+async fn mfa_confirm_valid_code_enables_mfa_and_returns_recovery_codes() {
+    let crypto = set_test_encryption_key();
+    let (user, password) = make_test_user(UserStatus::Active);
+    let org_id = OrganisationId::new();
+
+    // Generate a real TOTP secret and encrypt it to pre-seed the repo.
+    let (secret_bytes, _uri) =
+        stitchd_core::auth::TotpEngine::generate_secret(&user.email).unwrap();
+    let encrypted = crypto.encrypt(&secret_bytes).unwrap();
+
+    // Build current TOTP code.
+    let totp = totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret_bytes.clone(),
+        Some("Stitchd".to_owned()),
+        user.email.clone(),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let totp_code = totp.generate(now);
+
+    // Pre-seed repo with the pending (unconfirmed) secret.
+    let mfa_repo = Arc::new(InMemMfaRepo::with_secret(user.id, encrypted));
+
+    // Login to get access token.
+    let token_repo = Arc::new(InMemRefreshTokenRepo::default());
+    let login_app =
+        app_from_state(make_state(user.clone(), org_id, OrgRole::OrgMember, token_repo));
+    let login_body = serde_json::json!({ "email": "test@example.com", "password": password });
+    let login_resp = login_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("Content-Type", "application/json")
+                .body(Body::from(login_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(login_resp.into_body(), usize::MAX).await.unwrap();
+    let login_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let access_token = login_json["access_token"].as_str().unwrap().to_string();
+
+    // Call confirm.
+    let app = app_from_state(make_mfa_state(user.clone(), org_id, mfa_repo.clone()));
+    let confirm_body = serde_json::json!({ "totp_code": totp_code });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/users/me/mfa/confirm")
+                .header("Authorization", bearer(&access_token))
+                .header("Content-Type", "application/json")
+                .body(Body::from(confirm_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let codes = json["recovery_codes"].as_array().unwrap();
+    assert_eq!(codes.len(), 10, "must return 10 recovery codes");
+    // MFA should now be enabled in the repo.
+    let enabled = mfa_repo.totp_enabled.lock().unwrap().get(&user.id).copied();
+    assert_eq!(enabled, Some(true), "totp_enabled must be set to true");
+}
+
+#[tokio::test]
+async fn mfa_confirm_invalid_code_returns_400() {
+    let crypto = set_test_encryption_key();
+    let (user, password) = make_test_user(UserStatus::Active);
+    let org_id = OrganisationId::new();
+
+    let (secret_bytes, _) =
+        stitchd_core::auth::TotpEngine::generate_secret(&user.email).unwrap();
+    let encrypted = crypto.encrypt(&secret_bytes).unwrap();
+    let mfa_repo = Arc::new(InMemMfaRepo::with_secret(user.id, encrypted));
+
+    // Login.
+    let token_repo = Arc::new(InMemRefreshTokenRepo::default());
+    let login_app =
+        app_from_state(make_state(user.clone(), org_id, OrgRole::OrgMember, token_repo));
+    let login_body = serde_json::json!({ "email": "test@example.com", "password": password });
+    let login_resp = login_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("Content-Type", "application/json")
+                .body(Body::from(login_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(login_resp.into_body(), usize::MAX).await.unwrap();
+    let login_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let access_token = login_json["access_token"].as_str().unwrap().to_string();
+
+    // Confirm with a deliberately wrong code.
+    // "000000" is almost certainly wrong (1-in-1,000,000 chance of collision).
+    let app = app_from_state(make_mfa_state(user, org_id, mfa_repo));
+    let confirm_body = serde_json::json!({ "totp_code": "000000" });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/users/me/mfa/confirm")
+                .header("Authorization", bearer(&access_token))
+                .header("Content-Type", "application/json")
+                .body(Body::from(confirm_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn mfa_verify_valid_totp_returns_tokens() {
+    let crypto = set_test_encryption_key();
+    let (user, _password) = make_test_user(UserStatus::Active);
+    let org_id = OrganisationId::new();
+
+    // Create TOTP secret and encrypt.
+    let (secret_bytes, _) =
+        stitchd_core::auth::TotpEngine::generate_secret(&user.email).unwrap();
+    let encrypted = crypto.encrypt(&secret_bytes).unwrap();
+
+    // Build the current TOTP code.
+    let totp = totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret_bytes.clone(),
+        Some("Stitchd".to_owned()),
+        user.email.clone(),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let totp_code = totp.generate(now);
+
+    // Create a fake raw challenge token and compute its hash.
+    let raw_token = "aabbccdd".repeat(8); // 64-char hex-like string
+    let token_hash = stitchd_db::challenge_token_hash(&raw_token);
+
+    // Pre-seed InMemMfaRepo with the encrypted secret and the challenge.
+    let mfa_repo = Arc::new(InMemMfaRepo::with_challenge(
+        user.id,
+        encrypted,
+        token_hash,
+    ));
+
+    let app = app_from_state(make_mfa_state(user, org_id, mfa_repo));
+    let verify_body = serde_json::json!({
+        "challenge_token": raw_token,
+        "totp_code": totp_code,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/mfa/verify")
+                .header("Content-Type", "application/json")
+                .body(Body::from(verify_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json["access_token"].is_string(), "must return access_token");
+    assert!(json["refresh_token"].is_string(), "must return refresh_token");
+}
+
+#[tokio::test]
+async fn mfa_verify_expired_challenge_returns_401() {
+    set_test_encryption_key();
+    let (user, _) = make_test_user(UserStatus::Active);
+    let org_id = OrganisationId::new();
+
+    // No challenge pre-seeded — consume_challenge returns None.
+    let mfa_repo = Arc::new(InMemMfaRepo::default());
+    let app = app_from_state(make_mfa_state(user, org_id, mfa_repo));
+
+    let verify_body =
+        serde_json::json!({ "challenge_token": "nonexistent", "totp_code": "000000" });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/mfa/verify")
+                .header("Content-Type", "application/json")
+                .body(Body::from(verify_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn mfa_disable_valid_code_returns_204() {
+    let crypto = set_test_encryption_key();
+    let (user, password) = make_test_user(UserStatus::Active);
+    let org_id = OrganisationId::new();
+
+    let (secret_bytes, _) =
+        stitchd_core::auth::TotpEngine::generate_secret(&user.email).unwrap();
+    let encrypted = crypto.encrypt(&secret_bytes).unwrap();
+
+    // Build current TOTP code.
+    let totp = totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        secret_bytes.clone(),
+        Some("Stitchd".to_owned()),
+        user.email.clone(),
+    )
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let totp_code = totp.generate(now);
+
+    let mfa_repo = Arc::new(InMemMfaRepo::with_secret(user.id, encrypted));
+
+    // Login to get access token.
+    let token_repo = Arc::new(InMemRefreshTokenRepo::default());
+    let login_app =
+        app_from_state(make_state(user.clone(), org_id, OrgRole::OrgMember, token_repo));
+    let login_body = serde_json::json!({ "email": "test@example.com", "password": password });
+    let login_resp = login_app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/auth/login")
+                .header("Content-Type", "application/json")
+                .body(Body::from(login_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(login_resp.into_body(), usize::MAX).await.unwrap();
+    let login_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let access_token = login_json["access_token"].as_str().unwrap().to_string();
+
+    // Disable MFA with valid TOTP code.
+    let app = app_from_state(make_mfa_state(user.clone(), org_id, mfa_repo.clone()));
+    let disable_body = serde_json::json!({ "totp_code": totp_code });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/users/me/mfa/disable")
+                .header("Authorization", bearer(&access_token))
+                .header("Content-Type", "application/json")
+                .body(Body::from(disable_body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    // Secret should be cleared.
+    let stored = mfa_repo.get_totp_secret(user.id).await.unwrap();
+    assert!(stored.is_none(), "secret must be cleared after disable");
 }

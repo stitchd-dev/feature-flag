@@ -79,6 +79,27 @@ pub trait MfaRepository: Send + Sync {
         user_id: UserId,
         code_hash: &str,
     ) -> Result<bool, RepositoryError>;
+
+    /// Store an encrypted TOTP secret for `user_id` without enabling TOTP.
+    ///
+    /// Used by `POST /v1/users/me/mfa/setup` to persist the pending secret while
+    /// keeping `totp_enabled = false` until the caller confirms ownership via
+    /// `/mfa/confirm`.
+    async fn store_pending_totp_secret(
+        &self,
+        user_id: UserId,
+        encrypted_secret: Vec<u8>,
+    ) -> Result<(), RepositoryError>;
+
+    /// Look up the `user_id` associated with a challenge token hash.
+    ///
+    /// Returns the `user_id` even after the challenge has been consumed
+    /// (i.e. `used_at IS NOT NULL`), because `POST /auth/mfa/verify` needs
+    /// to identify the user after it marks the challenge as used.
+    async fn get_user_id_for_challenge(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<UserId>, RepositoryError>;
 }
 
 /// Legacy alias kept for backward compatibility with Phase 3.
@@ -295,6 +316,36 @@ impl MfaRepository for PgMfaRepository {
         .map_err(RepositoryError::Database)?;
 
         Ok(row.is_some())
+    }
+
+    async fn store_pending_totp_secret(
+        &self,
+        user_id: UserId,
+        encrypted_secret: Vec<u8>,
+    ) -> Result<(), RepositoryError> {
+        sqlx::query!(
+            r#"UPDATE users SET totp_secret = $1, updated_at = now() WHERE id = $2"#,
+            &encrypted_secret,
+            user_id.as_uuid(),
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+        Ok(())
+    }
+
+    async fn get_user_id_for_challenge(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<UserId>, RepositoryError> {
+        let row = sqlx::query!(
+            r#"SELECT user_id FROM mfa_challenges WHERE challenge_token_hash = $1"#,
+            token_hash,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+        Ok(row.map(|r| UserId::from_uuid(r.user_id)))
     }
 }
 
