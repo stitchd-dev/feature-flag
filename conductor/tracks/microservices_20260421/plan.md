@@ -2,18 +2,18 @@
 
 ## Phase 1: Proto Contracts & Shared gRPC Definitions
 
-- [ ] Task 1: Write proto compilation tests — confirm existing `stitchd-proto` builds cleanly (baseline)
-- [ ] Task 2: Define `auth_service.proto` — `ValidateCredential(CredentialRequest) → RbacContext`
+- [x] Task 1: Write proto compilation tests — confirm existing `stitchd-proto` builds cleanly (baseline) [0ed8e8c]
+- [x] Task 2: Define `auth_service.proto` — `ValidateCredential(CredentialRequest) → RbacContext` [80b0867]
   <!-- files: proto/auth_service.proto -->
-- [ ] Task 3: Define `flag_service.proto` — `GetFlagDefinitions(stream)`, `GetFlag`, `ListFlags`, `MutateFlag`
+- [x] Task 3: Define `flag_service.proto` — `GetFlagDefinitions(stream)`, `GetFlag`, `ListFlags`, `MutateFlag` [80b0867]
   <!-- files: proto/flag_service.proto -->
-- [ ] Task 4: Define `segmentation_service.proto` — `GetSegment`, `ListSegments`, `EvaluateMembership`, `MutateSegment`
+- [x] Task 4: Define `segmentation_service.proto` — `GetSegment`, `ListSegments`, `EvaluateMembership`, `MutateSegment` [80b0867]
   <!-- files: proto/segmentation_service.proto -->
-- [ ] Task 5: Define `event_service.proto` — `IngestEvent(EventRequest) → IngestResponse`
+- [x] Task 5: Define `event_service.proto` — `IngestEvent(EventRequest) → IngestResponse` [80b0867]
   <!-- files: proto/event_service.proto -->
-- [ ] Task 6: Define `experimentation_service.proto` — `CreateExperiment`, `GetExperiment`, `ListExperiments`, `GetResults`
+- [x] Task 6: Define `experimentation_service.proto` — `CreateExperiment`, `GetExperiment`, `ListExperiments`, `GetResults` [80b0867]
   <!-- files: proto/experimentation_service.proto -->
-- [ ] Task 7: Regenerate Rust bindings, verify workspace compiles with all new proto contracts
+- [x] Task 7: Regenerate Rust bindings, verify workspace compiles with all new proto contracts [80b0867]
   <!-- depends: task2, task3, task4, task5, task6 -->
 - [ ] Task: Conductor - User Manual Verification 'Proto Contracts & Shared gRPC Definitions' (Protocol in workflow.md)
 
