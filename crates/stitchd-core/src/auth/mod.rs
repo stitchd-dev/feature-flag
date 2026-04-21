@@ -6,6 +6,7 @@
 mod types;
 pub mod crypto;
 pub mod jwt;
+pub mod oidc;
 
 pub use types::{
     AuthProvider, EnvRole, Invite, OrgMembership, OrgRole, ProjectRole, ProviderType,
@@ -15,3 +16,4 @@ pub use types::{
 pub use crate::id::{AuthProviderId, InviteId, MfaChallengeId, RefreshTokenId, UserId};
 pub use crypto::CryptoKey;
 pub use jwt::JwtEngine;
+pub use oidc::{OidcError, OidcProvider};
