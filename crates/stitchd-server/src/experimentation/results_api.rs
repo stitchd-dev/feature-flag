@@ -944,6 +944,14 @@ mod tests {
             async fn revoke_all_for_user(&self, id: UserId) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
             async fn list_active(&self, _: UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, RepositoryError> { Ok(vec![]) }
         }
+        #[async_trait]
+        impl stitchd_db::AuthProviderRepository for NullRepo {
+            async fn create(&self, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::ProviderType, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, RepositoryError> { Err(RepositoryError::Unexpected(anyhow::anyhow!("stub"))) }
+            async fn find_by_id(&self, _: stitchd_core::id::AuthProviderId) -> Result<Option<stitchd_core::auth::AuthProvider>, RepositoryError> { Ok(None) }
+            async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::AuthProvider>, RepositoryError> { Ok(vec![]) }
+            async fn update(&self, id: stitchd_core::id::AuthProviderId, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn delete(&self, _: stitchd_core::id::AuthProviderId) -> Result<(), RepositoryError> { Ok(()) }
+        }
 
         let null = Arc::new(NullRepo);
         let state = crate::AppState {
@@ -962,7 +970,9 @@ mod tests {
             event_writer: None,
             auth_user_repo: null.clone(),
             membership_repo: null.clone(),
-            refresh_token_repo: null,
+            refresh_token_repo: null.clone(),
+            auth_provider_repo: null,
+            oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         };
 
         Router::new()

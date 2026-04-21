@@ -293,6 +293,14 @@ impl stitchd_db::experiment_results::ExperimentResultsRepository for NullResults
     async fn fetch_by_iteration(&self, _: uuid::Uuid, _: uuid::Uuid) -> Result<Vec<stitchd_db::experiment_results::ExperimentResultRow>, sqlx::Error> { Ok(vec![]) }
     async fn is_stale(&self, _: uuid::Uuid, _: uuid::Uuid) -> Result<bool, sqlx::Error> { Ok(false) }
 }
+#[async_trait::async_trait]
+impl stitchd_db::AuthProviderRepository for NullRepo {
+    async fn create(&self, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::ProviderType, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::Unexpected(anyhow::anyhow!("stub"))) }
+    async fn find_by_id(&self, _: stitchd_core::id::AuthProviderId) -> Result<Option<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> { Ok(None) }
+    async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> { Ok(vec![]) }
+    async fn update(&self, id: stitchd_core::id::AuthProviderId, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+    async fn delete(&self, _: stitchd_core::id::AuthProviderId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+}
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -334,6 +342,7 @@ fn make_state(
         auth_user_repo: Arc::new(InMemAuthUserRepo::with_user(user.clone())),
         membership_repo: Arc::new(InMemMembershipRepo::with(user.id, org_id, role)),
         refresh_token_repo: token_repo,
+        auth_provider_repo: null.clone(),
         segment_repo: null.clone(),
         flag_repo: null.clone(),
         variant_repo: null.clone(),
@@ -343,6 +352,7 @@ fn make_state(
         results_repo: Arc::new(NullResults),
         ch_client: None,
         event_writer: None,
+        oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     }
 }
 
@@ -569,6 +579,7 @@ async fn switch_org_success_returns_new_tokens() {
         auth_user_repo: Arc::new(InMemAuthUserRepo::with_user(user.clone())),
         membership_repo,
         refresh_token_repo: token_repo,
+        auth_provider_repo: null.clone(),
         segment_repo: null.clone(),
         flag_repo: null.clone(),
         variant_repo: null.clone(),
@@ -578,6 +589,7 @@ async fn switch_org_success_returns_new_tokens() {
         results_repo: Arc::new(NullResults),
         ch_client: None,
         event_writer: None,
+        oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
     let app = app_from_state(state);
 

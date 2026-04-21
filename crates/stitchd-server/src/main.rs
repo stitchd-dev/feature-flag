@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
         auth_user_repo: std::sync::Arc::new(stitchd_db::PgAuthUserRepository::new(pool.clone())),
         membership_repo: std::sync::Arc::new(stitchd_db::PgOrgMembershipRepository::new(pool.clone())),
         refresh_token_repo: std::sync::Arc::new(stitchd_db::PgRefreshTokenRepository::new(pool.clone())),
+        auth_provider_repo: std::sync::Arc::new(stitchd_db::PgAuthProviderRepository::new(pool.clone())),
         segment_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(
             pool.clone(),
             audit_logger.clone(),
@@ -98,6 +99,7 @@ async fn main() -> Result<()> {
         event_writer: std::env::var("CLICKHOUSE_URL")
             .ok()
             .map(|url| EventWriter::new(clickhouse::Client::default().with_url(url))),
+        oidc_state_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")
