@@ -10,9 +10,13 @@
 //! - [`password`]: login, refresh, logout, switch-org
 //! - [`sessions`]: list sessions, revoke session, revoke all
 
+pub mod invites;
 pub mod middleware;
 pub mod password;
+pub mod password_reset;
+pub mod profile;
 pub mod sessions;
+pub mod user_management;
 
 pub use middleware::{AuthenticatedUser, RequireEnvRole, RequireOrgRole, RequireProjectRole};
 

@@ -924,6 +924,7 @@ mod tests {
             async fn update_status(&self, id: UserId, _: stitchd_core::auth::UserStatus) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
             async fn update_password_hash(&self, id: UserId, _: &str) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
             async fn update_profile(&self, id: UserId, _: &str, _: Option<&str>) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn list_org_users(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<(stitchd_core::auth::User, stitchd_core::auth::OrgRole)>, RepositoryError> { Ok(vec![]) }
         }
 
         #[async_trait]
@@ -944,6 +945,22 @@ mod tests {
             async fn revoke_all_for_user(&self, id: UserId) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
             async fn list_active(&self, _: UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, RepositoryError> { Ok(vec![]) }
         }
+        struct StubInviteRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::InviteRepository for StubInviteRepo {
+            async fn create(&self, _: stitchd_core::id::OrganisationId, _: &str, _: stitchd_core::auth::OrgRole, _: Option<stitchd_core::id::UserId>, _: i64) -> Result<(stitchd_core::auth::Invite, String), RepositoryError> { Err(RepositoryError::NotFound { id: "stub".to_string() }) }
+            async fn find_by_token_hash(&self, _: &str) -> Result<Option<stitchd_core::auth::Invite>, RepositoryError> { Ok(None) }
+            async fn accept(&self, id: stitchd_core::id::InviteId) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::Invite>, RepositoryError> { Ok(vec![]) }
+            async fn revoke(&self, id: stitchd_core::id::InviteId) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+        }
+        struct StubOtpRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::OtpRepository for StubOtpRepo {
+            async fn create(&self, _: &str) -> Result<(uuid::Uuid, String), RepositoryError> { Err(RepositoryError::NotFound { id: "stub".to_string() }) }
+            async fn find_valid_by_email(&self, _: &str) -> Result<Option<(uuid::Uuid, String)>, RepositoryError> { Ok(None) }
+            async fn consume(&self, id: uuid::Uuid) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+        }
 
         let null = Arc::new(NullRepo);
         let state = crate::AppState {
@@ -963,6 +980,9 @@ mod tests {
             auth_user_repo: null.clone(),
             membership_repo: null.clone(),
             refresh_token_repo: null,
+            email_service: Arc::new(crate::email::EmailService::from_env()),
+            invite_repo: Arc::new(StubInviteRepo),
+            otp_repo: Arc::new(StubOtpRepo),
         };
 
         Router::new()

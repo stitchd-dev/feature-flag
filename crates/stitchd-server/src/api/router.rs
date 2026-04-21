@@ -11,6 +11,16 @@ pub fn build_api_router() -> Router<AppState> {
         .nest("/auth", auth_routes())
         .nest("/v1/environments/{env_id}", environment_routes())
         .nest("/v1/projects/{project_id}/flags", flag_routes())
+        .nest("/v1/users", user_routes())
+        .nest("/v1/orgs/{org_id}", org_routes())
+        .nest(
+            "/v1/projects/{project_id}/members/{user_id}",
+            project_member_routes(),
+        )
+        .nest(
+            "/v1/environments/{env_id}/members/{user_id}",
+            env_member_routes(),
+        )
 }
 
 fn auth_routes() -> Router<AppState> {
@@ -24,6 +34,65 @@ fn auth_routes() -> Router<AppState> {
             get(auth::sessions::list_sessions).delete(auth::sessions::revoke_all_sessions),
         )
         .route("/sessions/{token_id}", delete(auth::sessions::revoke_session))
+        .route(
+            "/invites/{token}/accept",
+            post(auth::invites::accept_invite),
+        )
+        .route(
+            "/password/reset-request",
+            post(auth::password_reset::reset_request),
+        )
+        .route("/password/reset", post(auth::password_reset::reset_password))
+}
+
+fn user_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/me",
+            get(auth::profile::get_me).put(auth::profile::update_me),
+        )
+        .route("/me/password", put(auth::profile::change_my_password))
+}
+
+fn org_routes() -> Router<AppState> {
+    Router::new()
+        .nest(
+            "/invites",
+            Router::new()
+                .route(
+                    "/",
+                    get(auth::invites::list_invites).post(auth::invites::create_invite),
+                )
+                .route("/{invite_id}", delete(auth::invites::revoke_invite)),
+        )
+        .nest(
+            "/users",
+            Router::new()
+                .route("/", get(auth::user_management::list_org_users))
+                .route(
+                    "/{user_id}",
+                    put(auth::user_management::update_user_status)
+                        .delete(auth::user_management::remove_org_user),
+                )
+                .route(
+                    "/{user_id}/role",
+                    put(auth::user_management::update_org_user_role),
+                ),
+        )
+}
+
+fn project_member_routes() -> Router<AppState> {
+    Router::new().route(
+        "/role",
+        put(auth::user_management::update_project_member_role),
+    )
+}
+
+fn env_member_routes() -> Router<AppState> {
+    Router::new().route(
+        "/role",
+        put(auth::user_management::update_env_member_role),
+    )
 }
 
 fn environment_routes() -> Router<AppState> {
@@ -544,6 +613,7 @@ mod tests {
         async fn update_status(&self, id: stitchd_core::id::UserId, _: stitchd_core::auth::UserStatus) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn update_password_hash(&self, id: stitchd_core::id::UserId, _: &str) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn update_profile(&self, id: stitchd_core::id::UserId, _: &str, _: Option<&str>) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        async fn list_org_users(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<(stitchd_core::auth::User, stitchd_core::auth::OrgRole)>, stitchd_db::RepositoryError> { Ok(vec![]) }
     }
 
     struct StubMembershipRepo;
@@ -567,6 +637,24 @@ mod tests {
         async fn list_active(&self, _: stitchd_core::id::UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, stitchd_db::RepositoryError> { Ok(vec![]) }
     }
 
+    struct StubInviteRepo2;
+    #[async_trait]
+    impl stitchd_db::InviteRepository for StubInviteRepo2 {
+        async fn create(&self, org_id: stitchd_core::id::OrganisationId, _: &str, _: stitchd_core::auth::OrgRole, _: Option<stitchd_core::id::UserId>, _: i64) -> Result<(stitchd_core::auth::Invite, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: org_id.to_string() }) }
+        async fn find_by_token_hash(&self, _: &str) -> Result<Option<stitchd_core::auth::Invite>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn accept(&self, id: stitchd_core::id::InviteId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::Invite>, stitchd_db::RepositoryError> { Ok(vec![]) }
+        async fn revoke(&self, id: stitchd_core::id::InviteId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+    }
+
+    struct StubOtpRepo2;
+    #[async_trait]
+    impl stitchd_db::OtpRepository for StubOtpRepo2 {
+        async fn create(&self, _: &str) -> Result<(uuid::Uuid, String), stitchd_db::RepositoryError> { Ok((uuid::Uuid::new_v4(), "000000".to_string())) }
+        async fn find_valid_by_email(&self, _: &str) -> Result<Option<(uuid::Uuid, String)>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn consume(&self, id: uuid::Uuid) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+    }
+
     fn make_test_state() -> AppState {
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -587,6 +675,9 @@ mod tests {
             results_repo: Arc::new(StubResultsRepo),
             ch_client: None,
             event_writer: None,
+            email_service: Arc::new(crate::email::EmailService::from_env()),
+            invite_repo: Arc::new(StubInviteRepo2),
+            otp_repo: Arc::new(StubOtpRepo2),
         }
     }
 
