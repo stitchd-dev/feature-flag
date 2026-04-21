@@ -28,13 +28,5 @@ This file tracks all major tracks for the project.
 <!-- Archived: events_20260419 (Events Layer) -->
 <!-- Archived: experimentation_20260419 (Experimentation Module — Experiment CRUD) -->
 <!-- Archived: stats_20260420 (Experiment Statistical Analysis) -->
-
----
-
-## [x] Track: JWT / Multi-Mechanism Human Auth
-*Link: [./conductor/tracks/auth_20260421/](./conductor/tracks/auth_20260421/)*
-
----
-
-## [x] Track: Microservice Architecture Decomposition
-*Link: [./conductor/tracks/microservices_20260421/](./conductor/tracks/microservices_20260421/)*
+<!-- Archived: auth_20260421 (JWT / Multi-Mechanism Human Auth) -->
+<!-- Archived: microservices_20260421 (Microservice Architecture Decomposition) -->
