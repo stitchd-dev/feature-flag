@@ -1,0 +1,13 @@
+{
+  "track_id": "docs_microservices_20260422",
+  "type": "chore",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-04-22T00:00:00Z",
+  "updated_at": "2026-04-22T00:00:00Z",
+  "description": "Update mdBook xtask doc to adapt to new micro-service endpoint. Two sections: Public/Gateway Endpoints & Internal. Document service coordination flows, per-layer functionality, OpenAPI spec for REST, and gRPC reference.",
+  "git_branch": "track/docs_microservices_20260422",
+  "worktree_path": ".worktrees/docs_microservices_20260422"
+}

@@ -30,3 +30,8 @@ This file tracks all major tracks for the project.
 <!-- Archived: stats_20260420 (Experiment Statistical Analysis) -->
 <!-- Archived: auth_20260421 (JWT / Multi-Mechanism Human Auth) -->
 <!-- Archived: microservices_20260421 (Microservice Architecture Decomposition) -->
+
+---
+
+## [ ] Track: mdBook Docs — Microservice Architecture Update
+*Link: [./conductor/tracks/docs_microservices_20260422/](./conductor/tracks/docs_microservices_20260422/)*
