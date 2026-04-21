@@ -33,14 +33,14 @@
 ## Phase 3: Flag Service (`stitchd-flag-service`)
 <!-- depends: phase1 -->
 
-- [~] Task 1: Scaffold `crates/stitchd-flag-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
-- [ ] Task 2: Write failing tests for `GetFlagDefinitions` streaming handler (definition sync contract)
-- [ ] Task 3: Implement flag CRUD handlers — migrate from `stitchd-server/src/api/flags/`; owns `flags` schema
-- [ ] Task 4: Write failing tests for flag mutation handlers (create, update, delete, archive)
-- [ ] Task 5: Implement flag mutation handlers with optimistic locking (version field)
-- [ ] Task 6: Implement `GetFlagDefinitions` server-streaming gRPC handler for SDK sync
-- [ ] Task 7: Wire tonic gRPC server in `main.rs` with graceful shutdown; metrics
-- [ ] Task 8: Verify >95% unit test coverage for crate
+- [x] Task 1: Scaffold `crates/stitchd-flag-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure [c581ec2]
+- [x] Task 2: Write failing tests for `GetFlagDefinitions` streaming handler (definition sync contract) [c581ec2]
+- [x] Task 3: Implement flag CRUD handlers — migrate from `stitchd-server/src/api/flags/`; owns `flags` schema [c581ec2]
+- [x] Task 4: Write failing tests for flag mutation handlers (create, update, delete, archive) [c581ec2]
+- [x] Task 5: Implement flag mutation handlers with optimistic locking (version field) [c581ec2]
+- [x] Task 6: Implement `GetFlagDefinitions` server-streaming gRPC handler for SDK sync [c581ec2]
+- [x] Task 7: Wire tonic gRPC server in `main.rs` with graceful shutdown; metrics [c581ec2]
+- [x] Task 8: Verify >95% unit test coverage for crate (40 tests, all passing) [c581ec2]
 - [ ] Task: Conductor - User Manual Verification 'Flag Service' (Protocol in workflow.md)
 
 ## Phase 4: Segmentation Service (`stitchd-segmentation-service`)
