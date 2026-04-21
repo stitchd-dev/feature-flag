@@ -20,8 +20,7 @@ use stitchd_core::event::EventValueType;
 use stitchd_db::{EventDefinitionRepository, SdkKeyRepository};
 use stitchd_events::writer::EventWriter;
 use stitchd_proto::events::v1::{
-    IngestRequest, IngestResponse,
-    event_ingestion_service_server::EventIngestionService,
+    IngestRequest, IngestResponse, event_ingestion_service_server::EventIngestionService,
 };
 
 // ---------------------------------------------------------------------------
@@ -130,9 +129,18 @@ impl EventIngestionService for EventIngestionServiceImpl {
             let value = event.value.as_ref().and_then(|v| v.value.as_ref());
             let type_ok = matches!(
                 (expected_type, value),
-                (EventValueType::Bool, Some(stitchd_proto::events::v1::metric_value::Value::BoolValue(_)))
-                    | (EventValueType::Int, Some(stitchd_proto::events::v1::metric_value::Value::IntValue(_)))
-                    | (EventValueType::Double, Some(stitchd_proto::events::v1::metric_value::Value::DoubleValue(_)))
+                (
+                    EventValueType::Bool,
+                    Some(stitchd_proto::events::v1::metric_value::Value::BoolValue(_))
+                ) | (
+                    EventValueType::Int,
+                    Some(stitchd_proto::events::v1::metric_value::Value::IntValue(_))
+                ) | (
+                    EventValueType::Double,
+                    Some(stitchd_proto::events::v1::metric_value::Value::DoubleValue(
+                        _
+                    ))
+                )
             );
 
             if !type_ok {
@@ -142,9 +150,15 @@ impl EventIngestionService for EventIngestionServiceImpl {
 
             // Build ClickHouse row.
             let (value_bool, value_int, value_double) = match value {
-                Some(stitchd_proto::events::v1::metric_value::Value::BoolValue(b)) => (Some(*b), None, None),
-                Some(stitchd_proto::events::v1::metric_value::Value::IntValue(i)) => (None, Some(*i), None),
-                Some(stitchd_proto::events::v1::metric_value::Value::DoubleValue(d)) => (None, None, Some(*d)),
+                Some(stitchd_proto::events::v1::metric_value::Value::BoolValue(b)) => {
+                    (Some(*b), None, None)
+                }
+                Some(stitchd_proto::events::v1::metric_value::Value::IntValue(i)) => {
+                    (None, Some(*i), None)
+                }
+                Some(stitchd_proto::events::v1::metric_value::Value::DoubleValue(d)) => {
+                    (None, None, Some(*d))
+                }
                 _ => unreachable!("type_ok guarantees one branch"),
             };
 
@@ -172,8 +186,7 @@ impl EventIngestionService for EventIngestionServiceImpl {
         }
 
         metrics::counter!("event_service.events.accepted").increment(u64::from(accepted_count));
-        metrics::counter!("event_service.events.rejected")
-            .increment(rejected_keys.len() as u64);
+        metrics::counter!("event_service.events.rejected").increment(rejected_keys.len() as u64);
 
         Ok(Response::new(IngestResponse {
             accepted_count,
@@ -197,17 +210,11 @@ mod tests {
 
     use stitchd_core::{
         event::{EventDefinition, EventValueType},
-        id::{
-            EnvironmentId, EventDefinitionId, SdkKeyId,
-        },
+        id::{EnvironmentId, EventDefinitionId, SdkKeyId},
         tenant::SdkKey,
     };
     use stitchd_db::{EventDefinitionRepository, RepositoryError, SdkKeyRepository};
-    use stitchd_proto::events::v1::{
-        Event, IngestRequest,
-        metric_value::Value,
-        MetricValue,
-    };
+    use stitchd_proto::events::v1::{Event, IngestRequest, MetricValue, metric_value::Value};
 
     use super::*;
 
@@ -218,7 +225,7 @@ mod tests {
     /// Simple mock SDK key repository.
     /// `find_active_by_hash` returns the pre-loaded key if the hash matches.
     struct MockSdkKeyRepo {
-        /// key_hash → SdkKey
+        /// `key_hash` → `SdkKey`
         keys: HashMap<String, SdkKey>,
     }
 
@@ -239,7 +246,6 @@ mod tests {
             );
             Self { keys }
         }
-
     }
 
     #[async_trait]
@@ -274,7 +280,9 @@ mod tests {
             self.keys
                 .get(key_hash)
                 .cloned()
-                .ok_or_else(|| RepositoryError::NotFound { id: key_hash.to_string() })
+                .ok_or_else(|| RepositoryError::NotFound {
+                    id: key_hash.to_string(),
+                })
         }
     }
 
@@ -283,7 +291,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     struct MockEventDefRepo {
-        /// env_id string → list of EventDefinition
+        /// `env_id` string → list of `EventDefinition`
         defs: Mutex<HashMap<String, Vec<EventDefinition>>>,
     }
 
@@ -305,9 +313,10 @@ mod tests {
                 })
                 .collect();
             map.insert(env_id.as_uuid().to_string(), event_defs);
-            Self { defs: Mutex::new(map) }
+            Self {
+                defs: Mutex::new(map),
+            }
         }
-
     }
 
     #[async_trait]
@@ -329,7 +338,9 @@ mod tests {
                 .get(&environment_id.as_uuid().to_string())
                 .and_then(|v| v.iter().find(|d| d.key == key))
                 .cloned()
-                .ok_or_else(|| RepositoryError::NotFound { id: key.to_string() })
+                .ok_or_else(|| RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
         }
 
         async fn list_by_environment(
@@ -344,25 +355,26 @@ mod tests {
         }
 
         async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError> {
-            let mut guard = self.defs.lock().unwrap();
-            guard
-                .entry(def.environment_id.as_uuid().to_string())
-                .or_default()
-                .push(def.clone());
+            {
+                let mut guard = self.defs.lock().unwrap();
+                guard
+                    .entry(def.environment_id.as_uuid().to_string())
+                    .or_default()
+                    .push(def.clone());
+            }
             Ok(())
         }
 
-        async fn update(
-            &self,
-            def: &EventDefinition,
-        ) -> Result<EventDefinition, RepositoryError> {
+        async fn update(&self, def: &EventDefinition) -> Result<EventDefinition, RepositoryError> {
             Ok(def.clone())
         }
 
         async fn soft_delete(&self, id: EventDefinitionId) -> Result<(), RepositoryError> {
-            let mut guard = self.defs.lock().unwrap();
-            for defs in guard.values_mut() {
-                defs.retain(|d| d.id != id);
+            {
+                let mut guard = self.defs.lock().unwrap();
+                for defs in guard.values_mut() {
+                    defs.retain(|d| d.id != id);
+                }
             }
             Ok(())
         }
@@ -477,12 +489,17 @@ mod tests {
             metric_key: "unknown_metric".to_string(),
             context_type: "user".to_string(),
             context_key: "u1".to_string(),
-            value: Some(MetricValue { value: Some(Value::IntValue(1)) }),
+            value: Some(MetricValue {
+                value: Some(Value::IntValue(1)),
+            }),
             timestamp_ms: 0,
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 0);
         assert_eq!(body.rejected_keys, vec!["unknown_metric"]);
@@ -499,20 +516,27 @@ mod tests {
                 metric_key: "a".to_string(),
                 context_type: "user".to_string(),
                 context_key: "u1".to_string(),
-                value: Some(MetricValue { value: Some(Value::BoolValue(true)) }),
+                value: Some(MetricValue {
+                    value: Some(Value::BoolValue(true)),
+                }),
                 timestamp_ms: 0,
             },
             Event {
                 metric_key: "b".to_string(),
                 context_type: "user".to_string(),
                 context_key: "u2".to_string(),
-                value: Some(MetricValue { value: Some(Value::IntValue(42)) }),
+                value: Some(MetricValue {
+                    value: Some(Value::IntValue(42)),
+                }),
                 timestamp_ms: 0,
             },
         ];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 0);
         assert_eq!(body.rejected_keys.len(), 2);
@@ -537,12 +561,17 @@ mod tests {
             metric_key: "converted".to_string(),
             context_type: "user".to_string(),
             context_key: "u1".to_string(),
-            value: Some(MetricValue { value: Some(Value::IntValue(1)) }),
+            value: Some(MetricValue {
+                value: Some(Value::IntValue(1)),
+            }),
             timestamp_ms: 0,
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 0);
         assert_eq!(body.rejected_keys, vec!["converted"]);
@@ -560,12 +589,17 @@ mod tests {
             metric_key: "click_count".to_string(),
             context_type: "user".to_string(),
             context_key: "u1".to_string(),
-            value: Some(MetricValue { value: Some(Value::DoubleValue(1.5)) }),
+            value: Some(MetricValue {
+                value: Some(Value::DoubleValue(1.5)),
+            }),
             timestamp_ms: 0,
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 0);
         assert_eq!(body.rejected_keys, vec!["click_count"]);
@@ -583,12 +617,17 @@ mod tests {
             metric_key: "revenue".to_string(),
             context_type: "user".to_string(),
             context_key: "u1".to_string(),
-            value: Some(MetricValue { value: Some(Value::BoolValue(false)) }),
+            value: Some(MetricValue {
+                value: Some(Value::BoolValue(false)),
+            }),
             timestamp_ms: 0,
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 0);
         assert_eq!(body.rejected_keys, vec!["revenue"]);
@@ -612,7 +651,10 @@ mod tests {
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 0);
         assert_eq!(body.rejected_keys, vec!["click_count"]);
@@ -636,7 +678,10 @@ mod tests {
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 0);
         assert_eq!(body.rejected_keys, vec!["click_count"]);
@@ -658,12 +703,17 @@ mod tests {
             metric_key: "converted".to_string(),
             context_type: "user".to_string(),
             context_key: "u1".to_string(),
-            value: Some(MetricValue { value: Some(Value::BoolValue(true)) }),
+            value: Some(MetricValue {
+                value: Some(Value::BoolValue(true)),
+            }),
             timestamp_ms: 1_000,
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 1);
         assert!(body.rejected_keys.is_empty());
@@ -681,12 +731,17 @@ mod tests {
             metric_key: "click_count".to_string(),
             context_type: "user".to_string(),
             context_key: "u42".to_string(),
-            value: Some(MetricValue { value: Some(Value::IntValue(7)) }),
+            value: Some(MetricValue {
+                value: Some(Value::IntValue(7)),
+            }),
             timestamp_ms: 2_000,
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 1);
         assert!(body.rejected_keys.is_empty());
@@ -704,12 +759,17 @@ mod tests {
             metric_key: "revenue".to_string(),
             context_type: "session".to_string(),
             context_key: "s1".to_string(),
-            value: Some(MetricValue { value: Some(Value::DoubleValue(9.99)) }),
+            value: Some(MetricValue {
+                value: Some(Value::DoubleValue(9.99)),
+            }),
             timestamp_ms: 3_000,
         }];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 1);
         assert!(body.rejected_keys.is_empty());
@@ -736,7 +796,9 @@ mod tests {
                 metric_key: "converted".to_string(),
                 context_type: "user".to_string(),
                 context_key: "u1".to_string(),
-                value: Some(MetricValue { value: Some(Value::BoolValue(true)) }),
+                value: Some(MetricValue {
+                    value: Some(Value::BoolValue(true)),
+                }),
                 timestamp_ms: 1_000,
             },
             // ✗ unknown key
@@ -744,7 +806,9 @@ mod tests {
                 metric_key: "unknown".to_string(),
                 context_type: "user".to_string(),
                 context_key: "u2".to_string(),
-                value: Some(MetricValue { value: Some(Value::IntValue(1)) }),
+                value: Some(MetricValue {
+                    value: Some(Value::IntValue(1)),
+                }),
                 timestamp_ms: 1_000,
             },
             // ✗ type mismatch (Int key, Double value)
@@ -752,7 +816,9 @@ mod tests {
                 metric_key: "click_count".to_string(),
                 context_type: "user".to_string(),
                 context_key: "u3".to_string(),
-                value: Some(MetricValue { value: Some(Value::DoubleValue(1.0)) }),
+                value: Some(MetricValue {
+                    value: Some(Value::DoubleValue(1.0)),
+                }),
                 timestamp_ms: 1_000,
             },
             // ✓ valid int
@@ -760,13 +826,18 @@ mod tests {
                 metric_key: "click_count".to_string(),
                 context_type: "user".to_string(),
                 context_key: "u4".to_string(),
-                value: Some(MetricValue { value: Some(Value::IntValue(5)) }),
+                value: Some(MetricValue {
+                    value: Some(Value::IntValue(5)),
+                }),
                 timestamp_ms: 2_000,
             },
         ];
 
         let req = make_request_with_sdk_key(events, "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 2);
         assert_eq!(body.rejected_keys.len(), 2);
@@ -780,7 +851,10 @@ mod tests {
         let svc = make_service(env_id, vec![]);
 
         let req = make_request_with_sdk_key(vec![], "sk_test_key");
-        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let resp = svc
+            .ingest_event(req)
+            .await
+            .expect("handler should not error");
         let body = resp.into_inner();
         assert_eq!(body.accepted_count, 0);
         assert!(body.rejected_keys.is_empty());
@@ -814,17 +888,16 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
         ) -> Result<Vec<EventDefinition>, RepositoryError> {
-            Err(RepositoryError::Unexpected(anyhow::anyhow!("db unavailable")))
+            Err(RepositoryError::Unexpected(anyhow::anyhow!(
+                "db unavailable"
+            )))
         }
 
         async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
             Ok(())
         }
 
-        async fn update(
-            &self,
-            def: &EventDefinition,
-        ) -> Result<EventDefinition, RepositoryError> {
+        async fn update(&self, def: &EventDefinition) -> Result<EventDefinition, RepositoryError> {
             Ok(def.clone())
         }
 

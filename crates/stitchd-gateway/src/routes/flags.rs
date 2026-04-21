@@ -251,16 +251,15 @@ pub async fn update_flag_hashing(
 
 /// Build a minimal router for unit testing.
 #[cfg(test)]
-pub fn test_router(
-    _client: Arc<GatewayState>,
-    state: Arc<GatewayState>,
-) -> axum::Router {
+pub fn test_router(_client: Arc<GatewayState>, state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
-
     use axum::routing::{delete, get, post, put};
     let _ = _client;
     axum::Router::new()
-        .route("/v1/projects/{project_id}/flags", get(list_flags).post(create_flag))
+        .route(
+            "/v1/projects/{project_id}/flags",
+            get(list_flags).post(create_flag),
+        )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}",
             get(get_flag).put(update_flag).delete(delete_flag),
@@ -294,8 +293,7 @@ mod tests {
     #[tokio::test]
     async fn list_flags_returns_200() {
         let state = make_stub_state();
-        let app = test_router(Arc::clone(&state), state,
-        );
+        let app = test_router(Arc::clone(&state), state);
         let resp = app
             .oneshot(
                 Request::builder()
@@ -317,8 +315,7 @@ mod tests {
     #[tokio::test]
     async fn get_flag_not_found_returns_404_or_502() {
         let state = make_stub_state();
-        let app = test_router(Arc::clone(&state), state,
-        );
+        let app = test_router(Arc::clone(&state), state);
         let resp = app
             .oneshot(
                 Request::builder()
@@ -341,8 +338,7 @@ mod tests {
     #[tokio::test]
     async fn create_flag_returns_201_or_502() {
         let state = make_stub_state();
-        let app = test_router(Arc::clone(&state), state,
-        );
+        let app = test_router(Arc::clone(&state), state);
         let resp = app
             .oneshot(
                 Request::builder()
@@ -364,8 +360,7 @@ mod tests {
     #[tokio::test]
     async fn delete_flag_returns_204_or_502() {
         let state = make_stub_state();
-        let app = test_router(Arc::clone(&state), state,
-        );
+        let app = test_router(Arc::clone(&state), state);
         let resp = app
             .oneshot(
                 Request::builder()
@@ -386,8 +381,7 @@ mod tests {
     #[tokio::test]
     async fn create_variant_returns_202() {
         let state = make_stub_state();
-        let app = test_router(Arc::clone(&state), state,
-        );
+        let app = test_router(Arc::clone(&state), state);
         let resp = app
             .oneshot(
                 Request::builder()
@@ -405,8 +399,7 @@ mod tests {
     #[tokio::test]
     async fn update_rules_returns_202() {
         let state = make_stub_state();
-        let app = test_router(Arc::clone(&state), state,
-        );
+        let app = test_router(Arc::clone(&state), state);
         let resp = app
             .oneshot(
                 Request::builder()

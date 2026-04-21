@@ -3,15 +3,12 @@
 #[cfg(test)]
 #[allow(missing_docs)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     use tonic::Request;
 
-    use stitchd_core::{
-        id::EnvironmentId,
-        segment::ContextList,
-    };
+    use stitchd_core::{id::EnvironmentId, segment::ContextList};
     use stitchd_proto::segments::v1::{
         GetSegmentRequest, ListSegment, MutateSegmentRequest, RuleSegment, SegmentMutationKind,
         mutate_segment_request, segmentation_service_server::SegmentationService,
@@ -73,8 +70,8 @@ mod tests {
         lists.insert(
             "user".to_string(),
             ContextList {
-                include: ["u1".to_string()].into_iter().collect(),
-                exclude: Default::default(),
+                include: std::iter::once("u1".to_string()).collect(),
+                exclude: HashSet::default(),
             },
         );
         repo.insert_list_segment(env_id, "upd-list-seg", lists);
@@ -155,8 +152,11 @@ mod tests {
         lists.insert(
             "user".to_string(),
             ContextList {
-                include: ["u1".to_string(), "u2".to_string()].into_iter().collect(),
-                exclude: ["u3".to_string()].into_iter().collect(),
+                include: ["u1".to_string(), "u2".to_string()]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                exclude: std::iter::once("u3".to_string()).collect(),
             },
         );
         repo.insert_list_segment(env_id, "my-list-seg", lists);
@@ -174,7 +174,11 @@ mod tests {
         assert_eq!(bundle.list_segments.len(), 1);
         assert_eq!(bundle.rule_segments.len(), 0);
         assert_eq!(bundle.list_segments[0].key, "my-list-seg");
-        assert!(bundle.list_segments[0].included_keys.contains(&"u1".to_string()));
+        assert!(
+            bundle.list_segments[0]
+                .included_keys
+                .contains(&"u1".to_string())
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -387,8 +391,8 @@ mod tests {
         lists.insert(
             "user".to_string(),
             ContextList {
-                include: Default::default(),
-                exclude: Default::default(),
+                include: HashSet::default(),
+                exclude: HashSet::default(),
             },
         );
         repo.insert_rule_segment(env_id, "rule-seg", vec![]);

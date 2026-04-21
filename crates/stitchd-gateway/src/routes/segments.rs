@@ -72,8 +72,8 @@ pub async fn create_segment(
     Path(env_id): Path<String>,
     Json(body): Json<SegmentCreateRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    use stitchd_proto::segments::v1::{MutateSegmentRequest, RuleSegment};
     use stitchd_proto::segments::v1::mutate_segment_request::Segment;
+    use stitchd_proto::segments::v1::{MutateSegmentRequest, RuleSegment};
 
     let rule_seg = RuleSegment {
         key: body.key.unwrap_or_default(),
@@ -126,10 +126,7 @@ pub async fn get_segment(
         segment_key,
     });
     let mut client = state.segmentation_client.lock().await;
-    let resp = client
-        .get_segment(req)
-        .await
-        .map_err(GatewayError::from)?;
+    let resp = client.get_segment(req).await.map_err(GatewayError::from)?;
     let bundle = resp.into_inner();
     // Return first rule or list segment found
     let result = if let Some(s) = bundle.rule_segments.first() {
@@ -231,7 +228,6 @@ pub async fn delete_segment(
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
-
     use axum::routing::{delete, get, post, put};
     axum::Router::new()
         .route(

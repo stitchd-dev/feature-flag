@@ -42,7 +42,14 @@ pub mod tests {
         pub list_memberships: Mutex<HashMap<(EnvironmentId, String, String, String), bool>>,
     }
 
+    impl Default for MockSegmentRepoForTest {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl MockSegmentRepoForTest {
+        #[must_use]
         pub fn new() -> Self {
             Self {
                 segments: Mutex::new(HashMap::new()),
@@ -52,6 +59,9 @@ pub mod tests {
             }
         }
 
+        /// # Panics
+        ///
+        /// Panics if the internal mutex is poisoned.
         pub fn insert_rule_segment(
             &self,
             env_id: EnvironmentId,
@@ -69,10 +79,7 @@ pub mod tests {
                 deleted_at: None,
                 version: 1,
             };
-            let def = RuleBasedSegment {
-                id: seg_id,
-                rules,
-            };
+            let def = RuleBasedSegment { id: seg_id, rules };
             self.segments
                 .lock()
                 .unwrap()
@@ -81,6 +88,9 @@ pub mod tests {
             seg
         }
 
+        /// # Panics
+        ///
+        /// Panics if the internal mutex is poisoned.
         pub fn insert_list_segment(
             &self,
             env_id: EnvironmentId,
@@ -98,10 +108,7 @@ pub mod tests {
                 deleted_at: None,
                 version: 1,
             };
-            let def = ListBasedSegment {
-                id: seg_id,
-                lists,
-            };
+            let def = ListBasedSegment { id: seg_id, lists };
             self.segments
                 .lock()
                 .unwrap()
@@ -110,6 +117,9 @@ pub mod tests {
             seg
         }
 
+        /// # Panics
+        ///
+        /// Panics if the internal mutex is poisoned.
         #[allow(dead_code)]
         pub fn insert_list_membership_entry(
             &self,
@@ -140,9 +150,7 @@ pub mod tests {
                 .values()
                 .find(|s| s.id == id)
                 .cloned()
-                .ok_or_else(|| RepositoryError::NotFound {
-                    id: id.to_string(),
-                })
+                .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn find_by_key(
@@ -175,21 +183,22 @@ pub mod tests {
         }
 
         async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {
-            self.segments
-                .lock()
-                .unwrap()
-                .insert((segment.environment_id, segment.key.clone()), segment.clone());
+            self.segments.lock().unwrap().insert(
+                (segment.environment_id, segment.key.clone()),
+                segment.clone(),
+            );
             Ok(())
         }
 
         async fn update(&self, segment: &Segment) -> Result<Segment, RepositoryError> {
-            let mut segs = self.segments.lock().unwrap();
-            let entry = segs
-                .get_mut(&(segment.environment_id, segment.key.clone()))
-                .ok_or_else(|| RepositoryError::NotFound {
+            let key = (segment.environment_id, segment.key.clone());
+            let exists = self.segments.lock().unwrap().contains_key(&key);
+            if !exists {
+                return Err(RepositoryError::NotFound {
                     id: segment.id.to_string(),
-                })?;
-            *entry = segment.clone();
+                });
+            }
+            self.segments.lock().unwrap().insert(key, segment.clone());
             Ok(segment.clone())
         }
 
@@ -202,23 +211,16 @@ pub mod tests {
                 .unwrap()
                 .get(&id)
                 .cloned()
-                .ok_or_else(|| RepositoryError::NotFound {
-                    id: id.to_string(),
-                })
+                .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })
         }
 
-        async fn find_with_list(
-            &self,
-            id: SegmentId,
-        ) -> Result<ListBasedSegment, RepositoryError> {
+        async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
             self.list_defs
                 .lock()
                 .unwrap()
                 .get(&id)
                 .cloned()
-                .ok_or_else(|| RepositoryError::NotFound {
-                    id: id.to_string(),
-                })
+                .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })
         }
 
         async fn upsert_rules(
@@ -253,6 +255,7 @@ pub mod tests {
                     exclude: exclude.iter().cloned().collect(),
                 },
             );
+            drop(defs);
             Ok(())
         }
 
@@ -261,10 +264,9 @@ pub mod tests {
             let seg = segs
                 .values_mut()
                 .find(|s| s.id == id)
-                .ok_or_else(|| RepositoryError::NotFound {
-                    id: id.to_string(),
-                })?;
+                .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })?;
             seg.deleted_at = Some(chrono::Utc::now());
+            drop(segs);
             Ok(())
         }
 
@@ -297,8 +299,8 @@ pub mod tests {
                     let is_member = segs
                         .get(&(environment_id, seg_key.clone()))
                         .and_then(|seg| list_defs.get(&seg.id))
-                        .map(|def| {
-                            def.lists.get(context_type).map_or(false, |ctx_list| {
+                        .is_some_and(|def| {
+                            def.lists.get(context_type).is_some_and(|ctx_list| {
                                 // Exclude takes precedence over include.
                                 if ctx_list.exclude.contains(context_key) {
                                     false
@@ -306,8 +308,7 @@ pub mod tests {
                                     ctx_list.include.contains(context_key)
                                 }
                             })
-                        })
-                        .unwrap_or(false);
+                        });
 
                     (seg_key.clone(), is_member)
                 })
@@ -358,7 +359,7 @@ pub mod tests {
 
     /// A rule-based segment that matches when `user.plan == "pro"` should return
     /// `is_member = true` when the context key identifies a known user and the
-    /// context_type carries the discriminant.
+    /// `context_type` carries the discriminant.
     ///
     /// NOTE: `EvaluateMembership` does NOT accept arbitrary parameters — it only
     /// receives `(environment_id, segment_key, context_key, context_type)`.
@@ -418,7 +419,7 @@ pub mod tests {
         assert!(!resp.into_inner().is_member);
     }
 
-    /// Requesting evaluation for a segment that does not exist returns NOT_FOUND.
+    /// Requesting evaluation for a segment that does not exist returns `NOT_FOUND`.
     #[tokio::test]
     async fn rule_based_missing_segment_returns_not_found_status() {
         let repo = MockSegmentRepoForTest::new();
@@ -439,7 +440,7 @@ pub mod tests {
         assert_eq!(status.code(), tonic::Code::NotFound);
     }
 
-    /// Passing an invalid environment_id UUID returns INVALID_ARGUMENT.
+    /// Passing an invalid `environment_id` UUID returns `INVALID_ARGUMENT`.
     #[tokio::test]
     async fn rule_based_invalid_env_id_returns_invalid_argument() {
         let repo = MockSegmentRepoForTest::new();
@@ -459,7 +460,7 @@ pub mod tests {
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
     }
 
-    /// A rule with `InSegment` condition returns FAILED_PRECONDITION.
+    /// A rule with `InSegment` condition returns `FAILED_PRECONDITION`.
     #[tokio::test]
     async fn rule_based_in_segment_condition_returns_failed_precondition() {
         let repo = MockSegmentRepoForTest::new();

@@ -34,10 +34,8 @@ pub trait InviteRepository: Send + Sync {
     ) -> Result<(Invite, String), RepositoryError>;
 
     /// Find a pending (not accepted, not expired) invite by the SHA-256 hash of its token.
-    async fn find_by_token_hash(
-        &self,
-        token_hash: &str,
-    ) -> Result<Option<Invite>, RepositoryError>;
+    async fn find_by_token_hash(&self, token_hash: &str)
+    -> Result<Option<Invite>, RepositoryError>;
 
     /// Mark an invite as accepted by setting `accepted_at = now()`.
     async fn accept(&self, id: InviteId) -> Result<(), RepositoryError>;
@@ -113,8 +111,7 @@ impl InviteRepository for PgInviteRepository {
         invited_by: Option<UserId>,
         ttl_hours: i64,
     ) -> Result<(Invite, String), RepositoryError> {
-        let (raw_token, token_hash) =
-            stitchd_core::auth::crypto::generate_opaque_token();
+        let (raw_token, token_hash) = stitchd_core::auth::crypto::generate_opaque_token();
         let expires_at = Utc::now() + Duration::hours(ttl_hours);
         let invited_by_uuid = invited_by.map(|u| u.as_uuid());
 
@@ -191,9 +188,7 @@ impl InviteRepository for PgInviteRepository {
         .rows_affected();
 
         if affected == 0 {
-            return Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            });
+            return Err(RepositoryError::NotFound { id: id.to_string() });
         }
         Ok(())
     }
@@ -225,13 +220,10 @@ impl InviteRepository for PgInviteRepository {
     }
 
     async fn revoke(&self, id: InviteId) -> Result<(), RepositoryError> {
-        sqlx::query!(
-            r#"DELETE FROM invites WHERE id = $1"#,
-            id.as_uuid(),
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
+        sqlx::query!(r#"DELETE FROM invites WHERE id = $1"#, id.as_uuid(),)
+            .execute(&self.pool)
+            .await
+            .map_err(RepositoryError::Database)?;
         Ok(())
     }
 }
@@ -243,6 +235,7 @@ impl InviteRepository for PgInviteRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
 
     async fn seed_org(pool: &PgPool) -> OrganisationId {
         let org_id = OrganisationId::new();
@@ -284,7 +277,6 @@ mod tests {
             .unwrap();
 
         // Compute the same SHA-256 hash
-        use sha2::{Digest, Sha256};
         let raw_bytes = hex::decode(&raw_token).unwrap();
         let hash = hex::encode(Sha256::digest(raw_bytes));
 

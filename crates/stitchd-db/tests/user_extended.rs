@@ -1,9 +1,9 @@
-/// Extended integration tests for user.rs covering edge cases.
+/// Extended integration tests for PgUserRepository covering edge cases.
 use std::sync::Arc;
 use stitchd_core::{
+    auth::{User, UserStatus},
     id::{OrganisationId, ProjectId, UserId},
     tenant::{Organisation, Project},
-    user::User,
 };
 use stitchd_db::{
     OrganisationRepository, ProjectRepository, RepositoryError, UserRepository,
@@ -25,7 +25,7 @@ async fn setup(pool: &sqlx::PgPool) -> (Arc<PgAuditLogger>, OrganisationId, Proj
         deleted_at: None,
         version: 1,
         is_system: false,
-};
+    };
     org_repo.create(&org).await.unwrap();
 
     let project = Project {
@@ -42,6 +42,22 @@ async fn setup(pool: &sqlx::PgPool) -> (Arc<PgAuditLogger>, OrganisationId, Proj
     (audit, org.id, project.id)
 }
 
+fn make_user(email: &str) -> User {
+    User {
+        id: UserId::new(),
+        email: email.to_string(),
+        display_name: "Test User".to_string(),
+        avatar_url: None,
+        password_hash: Some("hash".to_string()),
+        token_secret: uuid::Uuid::new_v4(),
+        totp_secret: None,
+        totp_enabled: false,
+        status: UserStatus::Active,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn test_user_find_by_id_not_found(pool: sqlx::PgPool) {
     let (audit, _, _) = setup(&pool).await;
@@ -52,31 +68,29 @@ async fn test_user_find_by_id_not_found(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_user_find_by_email_not_found(pool: sqlx::PgPool) {
-    let (audit, org_id, _) = setup(&pool).await;
+    let (audit, _, _) = setup(&pool).await;
     let repo = PgUserRepository::new(pool, audit);
-    let err = repo
-        .find_by_email("nobody@example.com", org_id)
-        .await
-        .unwrap_err();
+    let err = repo.find_by_email("nobody@example.com").await.unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_user_list_by_organisation(pool: sqlx::PgPool) {
     let (audit, org_id, _) = setup(&pool).await;
-    let repo = PgUserRepository::new(pool, audit);
+    let repo = PgUserRepository::new(pool.clone(), audit);
 
-    let user = User {
-        id: UserId::new(),
-        email: "list@example.com".into(),
-        password_hash: "hash".into(),
-        organisation_id: org_id,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
+    let user = make_user("list@example.com");
     repo.create(&user).await.unwrap();
+
+    // Wire up membership so the join in list_by_organisation returns the user
+    sqlx::query!(
+        "INSERT INTO org_memberships (user_id, org_id, role) VALUES ($1, $2, 'org_member')",
+        user.id.as_uuid(),
+        org_id.as_uuid(),
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let users = repo.list_by_organisation(org_id).await.unwrap();
     assert_eq!(users.len(), 1);
@@ -84,93 +98,35 @@ async fn test_user_list_by_organisation(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn test_user_update_version_conflict(pool: sqlx::PgPool) {
-    let (audit, org_id, _) = setup(&pool).await;
-    let repo = PgUserRepository::new(pool, audit);
-
-    let user = User {
-        id: UserId::new(),
-        email: "conflict@example.com".into(),
-        password_hash: "hash".into(),
-        organisation_id: org_id,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
-    repo.create(&user).await.unwrap();
-
-    let mut updated = user.clone();
-    updated.email = "changed@example.com".into();
-    repo.update(&updated).await.unwrap();
-
-    let err = repo.update(&user).await.unwrap_err();
-    assert!(matches!(err, RepositoryError::VersionConflict { .. }));
-}
-
-#[sqlx::test(migrations = "./migrations")]
 async fn test_user_update_not_found(pool: sqlx::PgPool) {
-    let (audit, org_id, _) = setup(&pool).await;
+    let (audit, _, _) = setup(&pool).await;
     let repo = PgUserRepository::new(pool, audit);
 
-    let ghost = User {
-        id: UserId::new(),
-        email: "ghost@example.com".into(),
-        password_hash: "hash".into(),
-        organisation_id: org_id,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
+    let ghost = make_user("ghost@example.com");
     let err = repo.update(&ghost).await.unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn test_user_update_soft_deleted(pool: sqlx::PgPool) {
-    let (audit, org_id, _) = setup(&pool).await;
-    // Use raw query to soft-delete since UserRepository has no soft_delete method
-    let repo = PgUserRepository::new(pool.clone(), audit);
+async fn test_user_update_changes_fields(pool: sqlx::PgPool) {
+    let (audit, _, _) = setup(&pool).await;
+    let repo = PgUserRepository::new(pool, audit);
 
-    let user = User {
-        id: UserId::new(),
-        email: "softdel@example.com".into(),
-        password_hash: "hash".into(),
-        organisation_id: org_id,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
+    let user = make_user("updateme@example.com");
     repo.create(&user).await.unwrap();
 
-    // Manually soft-delete the user
-    sqlx::query("UPDATE users SET deleted_at = NOW() WHERE id = $1")
-        .bind(user.id as UserId)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let err = repo.update(&user).await.unwrap_err();
-    assert!(matches!(err, RepositoryError::NotFound { .. }));
+    let mut updated = user.clone();
+    updated.display_name = "Updated Name".to_string();
+    let result = repo.update(&updated).await.unwrap();
+    assert_eq!(result.display_name, "Updated Name");
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_user_find_permissions_empty(pool: sqlx::PgPool) {
-    let (audit, org_id, project_id) = setup(&pool).await;
+    let (audit, _, project_id) = setup(&pool).await;
     let repo = PgUserRepository::new(pool.clone(), audit);
 
-    let user = User {
-        id: UserId::new(),
-        email: "noperm@example.com".into(),
-        password_hash: "hash".into(),
-        organisation_id: org_id,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
+    let user = make_user("noperm@example.com");
     repo.create(&user).await.unwrap();
 
     let perms = repo

@@ -249,7 +249,7 @@ impl OrgMembershipRepository for PgOrgMembershipRepository {
 mod tests {
     use super::*;
 
-    /// Helper: insert a minimal user and org, return (org_id, user_id).
+    /// Helper: insert a minimal user and org, return (`org_id`, `user_id`).
     async fn seed(pool: &PgPool) -> (OrganisationId, UserId) {
         let org_id = OrganisationId::new();
         sqlx::query!(
@@ -394,7 +394,11 @@ mod tests {
             .await
             .unwrap();
 
-        let found = repo.find_membership(user_id, org_id).await.unwrap().unwrap();
+        let found = repo
+            .find_membership(user_id, org_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(found.role, OrgRole::OrgAdmin);
     }
 

@@ -52,9 +52,9 @@ impl From<ServiceError> for Status {
     fn from(e: ServiceError) -> Self {
         match e {
             ServiceError::NotFound(msg) => Self::not_found(msg),
-            ServiceError::VersionConflict { expected, actual } => {
-                Self::aborted(format!("version conflict: expected {expected}, actual {actual}"))
-            }
+            ServiceError::VersionConflict { expected, actual } => Self::aborted(format!(
+                "version conflict: expected {expected}, actual {actual}"
+            )),
             ServiceError::UniqueViolation { field } => {
                 Self::already_exists(format!("unique violation on: {field}"))
             }
@@ -108,24 +108,32 @@ mod tests {
 
     #[test]
     fn service_error_display_messages() {
-        assert!(ServiceError::NotFound("x".to_string())
+        assert!(
+            ServiceError::NotFound("x".to_string())
+                .to_string()
+                .contains('x')
+        );
+        assert!(
+            ServiceError::InvalidArgument("bad".to_string())
+                .to_string()
+                .contains("bad")
+        );
+        assert!(
+            ServiceError::Internal("oops".to_string())
+                .to_string()
+                .contains("oops")
+        );
+        assert!(
+            ServiceError::UniqueViolation {
+                field: "key".to_string()
+            }
             .to_string()
-            .contains("x"));
-        assert!(ServiceError::InvalidArgument("bad".to_string())
-            .to_string()
-            .contains("bad"));
-        assert!(ServiceError::Internal("oops".to_string())
-            .to_string()
-            .contains("oops"));
-        assert!(ServiceError::UniqueViolation {
-            field: "key".to_string()
-        }
-        .to_string()
-        .contains("key"));
+            .contains("key")
+        );
         let vc = ServiceError::VersionConflict {
             expected: 1,
             actual: 2,
         };
-        assert!(vc.to_string().contains("1"));
+        assert!(vc.to_string().contains('1'));
     }
 }
