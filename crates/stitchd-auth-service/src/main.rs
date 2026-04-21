@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 //! Entry point for the `stitchd-auth-service` gRPC microservice.
 //!
 //! Reads configuration from environment variables:
@@ -75,3 +76,6 @@ async fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
+=======
+// stub
+>>>>>>> track/microservices_20260421_worker_phase3

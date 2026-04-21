@@ -5,3 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+<<<<<<< HEAD
+=======
+
+[[bin]]
+name = "stitchd-segmentation-service"
+path = "src/main.rs"
+>>>>>>> track/microservices_20260421_worker_phase3
