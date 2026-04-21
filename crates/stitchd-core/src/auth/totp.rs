@@ -8,7 +8,7 @@
 use thiserror::Error;
 use totp_rs::{Algorithm, Secret, TOTP};
 
-use crate::auth::crypto::{hash_password, CryptoError};
+use crate::auth::crypto::{CryptoError, hash_password};
 
 /// Errors that can arise from TOTP operations.
 #[derive(Debug, Error)]
@@ -37,7 +37,9 @@ impl TotpEngine {
     pub fn generate_secret(email: &str) -> Result<(Vec<u8>, String), TotpError> {
         // Generate a random 20-byte (160-bit) secret.
         let secret = Secret::generate_secret();
-        let secret_bytes = secret.to_bytes().map_err(|e| TotpError::TotpRs(e.to_string()))?;
+        let secret_bytes = secret
+            .to_bytes()
+            .map_err(|e| TotpError::TotpRs(e.to_string()))?;
 
         let totp = TOTP::new(
             Algorithm::SHA1,
@@ -50,9 +52,7 @@ impl TotpEngine {
         )
         .map_err(|e| TotpError::TotpRs(e.to_string()))?;
 
-        let uri = totp
-            .get_url()
-            .to_string();
+        let uri = totp.get_url().to_string();
 
         Ok((secret_bytes, uri))
     }
@@ -121,7 +121,8 @@ impl TotpEngine {
                         CHARSET[idx] as char
                     })
                     .collect();
-                let hash = hash_password(&code).expect("argon2 recovery code hashing should not fail");
+                let hash =
+                    hash_password(&code).expect("argon2 recovery code hashing should not fail");
                 (code, hash)
             })
             .collect()
@@ -136,9 +137,15 @@ mod tests {
     fn generate_secret_returns_non_empty_bytes_and_valid_uri() {
         let (bytes, uri) = TotpEngine::generate_secret("test@example.com").unwrap();
         assert!(!bytes.is_empty(), "secret bytes must not be empty");
-        assert!(uri.starts_with("otpauth://totp/"), "URI must start with otpauth://totp/");
+        assert!(
+            uri.starts_with("otpauth://totp/"),
+            "URI must start with otpauth://totp/"
+        );
         assert!(uri.contains("Stitchd"), "URI must contain issuer");
-        assert!(uri.contains("test%40example.com") || uri.contains("test@example.com"), "URI must contain email");
+        assert!(
+            uri.contains("test%40example.com") || uri.contains("test@example.com"),
+            "URI must contain email"
+        );
     }
 
     #[test]

@@ -27,7 +27,7 @@ async fn test_role_lifecycle(pool: sqlx::PgPool) {
         deleted_at: None,
         version: 1,
         is_system: false,
-};
+    };
     org_repo.create(&org).await.unwrap();
     let project = Project {
         id: ProjectId::new(),

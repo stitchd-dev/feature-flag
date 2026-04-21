@@ -28,9 +28,7 @@ use crate::flag_client::FlagClient;
 
 /// Map proto `ExperimentStatus` integer to core [`ExperimentStatus`].
 #[allow(clippy::result_large_err)]
-fn proto_status_to_core(
-    status: i32,
-) -> Result<ExperimentStatus, Status> {
+fn proto_status_to_core(status: i32) -> Result<ExperimentStatus, Status> {
     use stitchd_proto::experiments::v1::ExperimentStatus as ProtoStatus;
     match ProtoStatus::try_from(status).unwrap_or(ProtoStatus::Unspecified) {
         ProtoStatus::Unspecified | ProtoStatus::Draft => Ok(ExperimentStatus::Draft),
@@ -124,9 +122,9 @@ impl ExperimentationService for ExperimentationServiceImpl {
         request: Request<CreateExperimentRequest>,
     ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
         let req = request.into_inner();
-        let proto_exp = req.experiment.ok_or_else(|| {
-            Status::invalid_argument("experiment field is required")
-        })?;
+        let proto_exp = req
+            .experiment
+            .ok_or_else(|| Status::invalid_argument("experiment field is required"))?;
 
         let target_status = proto_status_to_core(proto_exp.status)?;
 
@@ -149,9 +147,8 @@ impl ExperimentationService for ExperimentationServiceImpl {
         }
 
         // Parse IDs.
-        let env_uuid = uuid::Uuid::parse_str(&proto_exp.environment_id).map_err(|_| {
-            Status::invalid_argument("invalid environment_id UUID")
-        })?;
+        let env_uuid = uuid::Uuid::parse_str(&proto_exp.environment_id)
+            .map_err(|_| Status::invalid_argument("invalid environment_id UUID"))?;
         let env_id = EnvironmentId::from_uuid(env_uuid);
 
         let now = Utc::now();
@@ -198,9 +195,8 @@ impl ExperimentationService for ExperimentationServiceImpl {
         request: Request<GetExperimentRequest>,
     ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
         let req = request.into_inner();
-        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id).map_err(|_| {
-            Status::invalid_argument("invalid experiment_id UUID")
-        })?;
+        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
         let exp_id = ExperimentId::from_uuid(exp_uuid);
 
         let experiment = self
@@ -220,9 +216,8 @@ impl ExperimentationService for ExperimentationServiceImpl {
         request: Request<ListExperimentsRequest>,
     ) -> Result<Response<ListExperimentsResponse>, Status> {
         let req = request.into_inner();
-        let env_uuid = uuid::Uuid::parse_str(&req.environment_id).map_err(|_| {
-            Status::invalid_argument("invalid environment_id UUID")
-        })?;
+        let env_uuid = uuid::Uuid::parse_str(&req.environment_id)
+            .map_err(|_| Status::invalid_argument("invalid environment_id UUID"))?;
         let env_id = EnvironmentId::from_uuid(env_uuid);
 
         let experiments = self
@@ -245,9 +240,9 @@ impl ExperimentationService for ExperimentationServiceImpl {
         request: Request<UpdateExperimentRequest>,
     ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
         let req = request.into_inner();
-        let proto_exp = req.experiment.ok_or_else(|| {
-            Status::invalid_argument("experiment field is required")
-        })?;
+        let proto_exp = req
+            .experiment
+            .ok_or_else(|| Status::invalid_argument("experiment field is required"))?;
 
         let exp_uuid = uuid::Uuid::parse_str(&proto_exp.id)
             .map_err(|_| Status::invalid_argument("invalid experiment id UUID"))?;
@@ -361,9 +356,10 @@ impl ExperimentationService for ExperimentationServiceImpl {
         request: Request<GetResultsRequest>,
     ) -> Result<Response<ExperimentResults>, Status> {
         let req = request.into_inner();
-        let exp_id_uuid = req.experiment_id.parse::<uuid::Uuid>().map_err(|_| {
-            Status::invalid_argument("invalid experiment_id UUID")
-        })?;
+        let exp_id_uuid = req
+            .experiment_id
+            .parse::<uuid::Uuid>()
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
 
         let rows = self
             .results_repo
@@ -388,15 +384,16 @@ impl ExperimentationService for ExperimentationServiceImpl {
             if let Some(obj) = row.variant_stats.as_object() {
                 for (variant_key, count_val) in obj {
                     let participant_count = count_val.as_u64().unwrap_or(0);
-                    let entry = by_variant.entry(variant_key.clone()).or_insert_with(|| {
-                        VariantResult {
-                            variant_key: variant_key.clone(),
-                            participant_count,
-                            metric_values: HashMap::new(),
-                            p_value: 0.0,
-                            p_value_present: false,
-                        }
-                    });
+                    let entry =
+                        by_variant
+                            .entry(variant_key.clone())
+                            .or_insert_with(|| VariantResult {
+                                variant_key: variant_key.clone(),
+                                participant_count,
+                                metric_values: HashMap::new(),
+                                p_value: 0.0,
+                                p_value_present: false,
+                            });
 
                     // Add metric value from frequentist_result if present.
                     if let Some(freq) = &row.frequentist_result {
@@ -434,15 +431,13 @@ fn repo_err_to_status(e: stitchd_db::RepositoryError) -> Status {
         stitchd_db::RepositoryError::NotFound { id } => {
             Status::not_found(format!("not found: {id}"))
         }
-        stitchd_db::RepositoryError::VersionConflict { expected, actual } => {
-            Status::aborted(format!("version conflict: expected {expected}, actual {actual}"))
-        }
+        stitchd_db::RepositoryError::VersionConflict { expected, actual } => Status::aborted(
+            format!("version conflict: expected {expected}, actual {actual}"),
+        ),
         stitchd_db::RepositoryError::UniqueViolation { field } => {
             Status::already_exists(format!("unique violation on: {field}"))
         }
-        stitchd_db::RepositoryError::InvalidState { reason } => {
-            Status::failed_precondition(reason)
-        }
+        stitchd_db::RepositoryError::InvalidState { reason } => Status::failed_precondition(reason),
         stitchd_db::RepositoryError::Database(e) => Status::internal(format!("database: {e}")),
         stitchd_db::RepositoryError::Unexpected(e) => Status::internal(format!("unexpected: {e}")),
     }
@@ -462,8 +457,8 @@ mod tests {
         experimentation::{Experiment, ExperimentIteration, ExperimentStatus},
         id::{EnvironmentId, ExperimentId, RuleId},
     };
-    use stitchd_db::{ExperimentResultsRepository, RepositoryError};
     use stitchd_db::experiment_results::{ExperimentResultRow, UpsertResultRow};
+    use stitchd_db::{ExperimentResultsRepository, RepositoryError};
     use uuid::Uuid;
 
     // -----------------------------------------------------------------------
@@ -599,10 +594,7 @@ mod tests {
 
     #[async_trait]
     impl ExperimentResultsRepository for EmptyResultsRepo {
-        async fn upsert(
-            &self,
-            _row: &UpsertResultRow,
-        ) -> Result<ExperimentResultRow, sqlx::Error> {
+        async fn upsert(&self, _row: &UpsertResultRow) -> Result<ExperimentResultRow, sqlx::Error> {
             Err(sqlx::Error::RowNotFound)
         }
 
@@ -636,10 +628,7 @@ mod tests {
 
     #[async_trait]
     impl ExperimentResultsRepository for ResultsWithDataRepo {
-        async fn upsert(
-            &self,
-            _row: &UpsertResultRow,
-        ) -> Result<ExperimentResultRow, sqlx::Error> {
+        async fn upsert(&self, _row: &UpsertResultRow) -> Result<ExperimentResultRow, sqlx::Error> {
             Err(sqlx::Error::RowNotFound)
         }
 
@@ -688,9 +677,7 @@ mod tests {
         }
     }
 
-    fn make_service(
-        env_id: EnvironmentId,
-    ) -> ExperimentationServiceImpl {
+    fn make_service(env_id: EnvironmentId) -> ExperimentationServiceImpl {
         ExperimentationServiceImpl::new(
             Arc::new(AlwaysSucceedRepo { env_id }),
             Arc::new(EmptyResultsRepo),
@@ -752,25 +739,37 @@ mod tests {
     #[test]
     fn test_core_draft_to_proto() {
         use stitchd_proto::experiments::v1::ExperimentStatus as PS;
-        assert_eq!(core_status_to_proto(ExperimentStatus::Draft), PS::Draft as i32);
+        assert_eq!(
+            core_status_to_proto(ExperimentStatus::Draft),
+            PS::Draft as i32
+        );
     }
 
     #[test]
     fn test_core_running_to_proto() {
         use stitchd_proto::experiments::v1::ExperimentStatus as PS;
-        assert_eq!(core_status_to_proto(ExperimentStatus::Running), PS::Active as i32);
+        assert_eq!(
+            core_status_to_proto(ExperimentStatus::Running),
+            PS::Active as i32
+        );
     }
 
     #[test]
     fn test_core_paused_to_proto() {
         use stitchd_proto::experiments::v1::ExperimentStatus as PS;
-        assert_eq!(core_status_to_proto(ExperimentStatus::Paused), PS::Paused as i32);
+        assert_eq!(
+            core_status_to_proto(ExperimentStatus::Paused),
+            PS::Paused as i32
+        );
     }
 
     #[test]
     fn test_core_stopped_to_proto() {
         use stitchd_proto::experiments::v1::ExperimentStatus as PS;
-        assert_eq!(core_status_to_proto(ExperimentStatus::Stopped), PS::Concluded as i32);
+        assert_eq!(
+            core_status_to_proto(ExperimentStatus::Stopped),
+            PS::Concluded as i32
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -842,9 +841,9 @@ mod tests {
 
     #[test]
     fn test_repo_err_unexpected_to_internal() {
-        let s = repo_err_to_status(RepositoryError::Unexpected(
-            anyhow::anyhow!("unexpected error"),
-        ));
+        let s = repo_err_to_status(RepositoryError::Unexpected(anyhow::anyhow!(
+            "unexpected error"
+        )));
         assert_eq!(s.code(), tonic::Code::Internal);
     }
 

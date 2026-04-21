@@ -110,8 +110,7 @@ pub fn build_feature_flag_proto(
     variants: Vec<stitchd_core::flag::Variant>,
     flag_rules: &[stitchd_core::flag::FlagRule],
 ) -> FeatureFlag {
-    let variant_key_map: HashMap<_, _> =
-        variants.iter().map(|v| (v.id, v.key.clone())).collect();
+    let variant_key_map: HashMap<_, _> = variants.iter().map(|v| (v.id, v.key.clone())).collect();
 
     let proto_variants = variants
         .into_iter()

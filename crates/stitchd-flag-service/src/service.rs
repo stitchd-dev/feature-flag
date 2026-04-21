@@ -586,10 +586,7 @@ mod tests {
             flag_id: FlagId,
             rules: &[FlagRule],
         ) -> Result<(), RepositoryError> {
-            self.rules
-                .lock()
-                .unwrap()
-                .insert(flag_id, rules.to_vec());
+            self.rules.lock().unwrap().insert(flag_id, rules.to_vec());
             Ok(())
         }
     }

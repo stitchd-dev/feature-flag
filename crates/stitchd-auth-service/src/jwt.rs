@@ -75,8 +75,8 @@ pub async fn validate_bearer_token(
     auth_user_repo: &Arc<dyn AuthUserRepository>,
 ) -> Result<ValidatedJwt, JwtValidationError> {
     // Step 1 — decode unverified to get sub (user_id).
-    let unverified =
-        JwtEngine::decode_unverified(token).map_err(|e| JwtValidationError::Malformed(e.to_string()))?;
+    let unverified = JwtEngine::decode_unverified(token)
+        .map_err(|e| JwtValidationError::Malformed(e.to_string()))?;
 
     let user_id: UserId = unverified
         .sub
@@ -149,10 +149,7 @@ mod tests {
             Ok(self.user.clone())
         }
 
-        async fn rotate_token_secret(
-            &self,
-            id: UserId,
-        ) -> Result<uuid::Uuid, RepositoryError> {
+        async fn rotate_token_secret(&self, id: UserId) -> Result<uuid::Uuid, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
@@ -225,8 +222,9 @@ mod tests {
     async fn valid_token_for_active_user_succeeds() {
         let user = make_active_user();
         let (token, org_id) = issue_token(&user);
-        let repo: Arc<dyn AuthUserRepository> =
-            Arc::new(StubAuthUserRepo { user: Some(user.clone()) });
+        let repo: Arc<dyn AuthUserRepository> = Arc::new(StubAuthUserRepo {
+            user: Some(user.clone()),
+        });
 
         let result = validate_bearer_token(&token, &repo).await;
         assert!(result.is_ok(), "expected Ok, got: {result:?}");
@@ -237,8 +235,7 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_token_returns_malformed_error() {
-        let repo: Arc<dyn AuthUserRepository> =
-            Arc::new(StubAuthUserRepo { user: None });
+        let repo: Arc<dyn AuthUserRepository> = Arc::new(StubAuthUserRepo { user: None });
 
         let result = validate_bearer_token("not.a.jwt", &repo).await;
         assert!(matches!(result, Err(JwtValidationError::Malformed(_))));
@@ -249,8 +246,7 @@ mod tests {
         let user = make_active_user();
         let (token, _) = issue_token(&user);
         // Repo returns None — user doesn't exist
-        let repo: Arc<dyn AuthUserRepository> =
-            Arc::new(StubAuthUserRepo { user: None });
+        let repo: Arc<dyn AuthUserRepository> = Arc::new(StubAuthUserRepo { user: None });
 
         let result = validate_bearer_token(&token, &repo).await;
         assert!(matches!(result, Err(JwtValidationError::UserNotFound)));
@@ -261,8 +257,7 @@ mod tests {
         let mut user = make_active_user();
         let (token, _) = issue_token(&user);
         user.status = UserStatus::Deactivated;
-        let repo: Arc<dyn AuthUserRepository> =
-            Arc::new(StubAuthUserRepo { user: Some(user) });
+        let repo: Arc<dyn AuthUserRepository> = Arc::new(StubAuthUserRepo { user: Some(user) });
 
         let result = validate_bearer_token(&token, &repo).await;
         assert!(matches!(result, Err(JwtValidationError::Deactivated)));
@@ -275,8 +270,9 @@ mod tests {
         // Store a *different* user with a different secret — same ID trick
         let mut wrong_user = user.clone();
         wrong_user.token_secret = uuid::Uuid::new_v4();
-        let repo: Arc<dyn AuthUserRepository> =
-            Arc::new(StubAuthUserRepo { user: Some(wrong_user) });
+        let repo: Arc<dyn AuthUserRepository> = Arc::new(StubAuthUserRepo {
+            user: Some(wrong_user),
+        });
 
         let result = validate_bearer_token(&token, &repo).await;
         assert!(matches!(result, Err(JwtValidationError::Invalid(_))));

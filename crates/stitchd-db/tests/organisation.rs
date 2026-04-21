@@ -19,7 +19,7 @@ async fn test_organisation_lifecycle(pool: sqlx::PgPool) {
         deleted_at: None,
         version: 1,
         is_system: false,
-};
+    };
 
     repo.create(&org)
         .await

@@ -193,7 +193,6 @@ pub struct Invite {
     pub created_at: DateTime<Utc>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +243,4 @@ mod tests {
         let id = UserId::from_uuid(uuid);
         assert_eq!(id.as_uuid(), uuid);
     }
-
 }

@@ -3,16 +3,16 @@
 //! Provides newtypes, role enums, and structs for users, memberships,
 //! refresh tokens, auth providers, and invites. Also exposes the SAML engine.
 
-mod types;
 pub mod crypto;
 pub mod jwt;
 pub mod oidc;
 pub mod saml;
 pub mod totp;
+mod types;
 
 pub use types::{
-    AuthProvider, EnvRole, Invite, OrgMembership, OrgRole, ProjectRole, ProviderType,
-    RefreshToken, User, UserStatus,
+    AuthProvider, EnvRole, Invite, OrgMembership, OrgRole, ProjectRole, ProviderType, RefreshToken,
+    User, UserStatus,
 };
 
 pub use crate::id::{AuthProviderId, InviteId, MfaChallengeId, RefreshTokenId, UserId};

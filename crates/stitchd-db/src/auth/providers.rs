@@ -31,10 +31,8 @@ pub trait AuthProviderRepository: Send + Sync {
     ) -> Result<AuthProvider, RepositoryError>;
 
     /// Find an auth provider by its ID. Returns `None` if absent.
-    async fn find_by_id(
-        &self,
-        id: AuthProviderId,
-    ) -> Result<Option<AuthProvider>, RepositoryError>;
+    async fn find_by_id(&self, id: AuthProviderId)
+    -> Result<Option<AuthProvider>, RepositoryError>;
 
     /// List all auth providers for the given organisation.
     async fn list_for_org(
@@ -244,9 +242,7 @@ impl AuthProviderRepository for PgAuthProviderRepository {
 
         row.map(|r| -> Result<AuthProvider, RepositoryError> { Ok(map_row!(r)) })
             .transpose()?
-            .ok_or_else(|| RepositoryError::NotFound {
-                id: id.to_string(),
-            })
+            .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })
     }
 
     async fn delete(&self, id: AuthProviderId) -> Result<(), RepositoryError> {
@@ -261,9 +257,7 @@ impl AuthProviderRepository for PgAuthProviderRepository {
         .await
         .map_err(RepositoryError::Database)?;
 
-        let row = row.ok_or_else(|| RepositoryError::NotFound {
-            id: id.to_string(),
-        })?;
+        let row = row.ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })?;
 
         // Enforce at-least-one-enabled constraint
         if row.enabled {
@@ -287,13 +281,10 @@ impl AuthProviderRepository for PgAuthProviderRepository {
             }
         }
 
-        sqlx::query!(
-            r#"DELETE FROM auth_providers WHERE id = $1"#,
-            id.as_uuid(),
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
+        sqlx::query!(r#"DELETE FROM auth_providers WHERE id = $1"#, id.as_uuid(),)
+            .execute(&self.pool)
+            .await
+            .map_err(RepositoryError::Database)?;
 
         Ok(())
     }
@@ -328,7 +319,13 @@ mod tests {
 
         let config = serde_json::json!({ "client_id": "abc", "client_secret_enc": "xyz" });
         let provider = repo
-            .create(org_id, ProviderType::Oidc, "Google OIDC", config.clone(), true)
+            .create(
+                org_id,
+                ProviderType::Oidc,
+                "Google OIDC",
+                config.clone(),
+                true,
+            )
             .await
             .unwrap();
 
@@ -345,7 +342,13 @@ mod tests {
         let org_id = seed_org(&pool).await;
 
         let created = repo
-            .create(org_id, ProviderType::Oidc, "Test Provider", serde_json::json!({}), true)
+            .create(
+                org_id,
+                ProviderType::Oidc,
+                "Test Provider",
+                serde_json::json!({}),
+                true,
+            )
             .await
             .unwrap();
 
@@ -366,12 +369,24 @@ mod tests {
         let repo = PgAuthProviderRepository::new(pool.clone());
         let org_id = seed_org(&pool).await;
 
-        repo.create(org_id, ProviderType::Oidc, "Provider A", serde_json::json!({}), true)
-            .await
-            .unwrap();
-        repo.create(org_id, ProviderType::Saml, "Provider B", serde_json::json!({}), true)
-            .await
-            .unwrap();
+        repo.create(
+            org_id,
+            ProviderType::Oidc,
+            "Provider A",
+            serde_json::json!({}),
+            true,
+        )
+        .await
+        .unwrap();
+        repo.create(
+            org_id,
+            ProviderType::Saml,
+            "Provider B",
+            serde_json::json!({}),
+            true,
+        )
+        .await
+        .unwrap();
 
         let list = repo.list_for_org(org_id).await.unwrap();
         assert_eq!(list.len(), 2);
@@ -383,7 +398,13 @@ mod tests {
         let org_id = seed_org(&pool).await;
 
         let created = repo
-            .create(org_id, ProviderType::Oidc, "Original", serde_json::json!({}), true)
+            .create(
+                org_id,
+                ProviderType::Oidc,
+                "Original",
+                serde_json::json!({}),
+                true,
+            )
             .await
             .unwrap();
 
@@ -407,12 +428,24 @@ mod tests {
         let org_id = seed_org(&pool).await;
 
         let p1 = repo
-            .create(org_id, ProviderType::Oidc, "Provider 1", serde_json::json!({}), true)
+            .create(
+                org_id,
+                ProviderType::Oidc,
+                "Provider 1",
+                serde_json::json!({}),
+                true,
+            )
             .await
             .unwrap();
-        repo.create(org_id, ProviderType::Saml, "Provider 2", serde_json::json!({}), true)
-            .await
-            .unwrap();
+        repo.create(
+            org_id,
+            ProviderType::Saml,
+            "Provider 2",
+            serde_json::json!({}),
+            true,
+        )
+        .await
+        .unwrap();
 
         repo.delete(p1.id).await.unwrap();
         let list = repo.list_for_org(org_id).await.unwrap();
@@ -425,7 +458,13 @@ mod tests {
         let org_id = seed_org(&pool).await;
 
         let provider = repo
-            .create(org_id, ProviderType::Oidc, "Only Provider", serde_json::json!({}), true)
+            .create(
+                org_id,
+                ProviderType::Oidc,
+                "Only Provider",
+                serde_json::json!({}),
+                true,
+            )
             .await
             .unwrap();
 

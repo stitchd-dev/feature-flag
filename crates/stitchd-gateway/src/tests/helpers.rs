@@ -15,25 +15,20 @@ use crate::state::GatewayState;
 /// Lazily-connected clients pointing at unused localhost ports.
 /// The connections are lazy — they fail only when the first RPC is made.
 pub fn make_stub_state() -> Arc<GatewayState> {
-    let auth = AuthServiceClient::new(
-        Channel::from_static("http://127.0.0.1:1").connect_lazy(),
-    );
-    let flag = FlagServiceClient::new(
-        Channel::from_static("http://127.0.0.1:2").connect_lazy(),
-    );
-    let seg = SegmentationServiceClient::new(
-        Channel::from_static("http://127.0.0.1:3").connect_lazy(),
-    );
-    let event = EventIngestionServiceClient::new(
-        Channel::from_static("http://127.0.0.1:4").connect_lazy(),
-    );
+    let auth = AuthServiceClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
+    let flag = FlagServiceClient::new(Channel::from_static("http://127.0.0.1:2").connect_lazy());
+    let seg =
+        SegmentationServiceClient::new(Channel::from_static("http://127.0.0.1:3").connect_lazy());
+    let event =
+        EventIngestionServiceClient::new(Channel::from_static("http://127.0.0.1:4").connect_lazy());
     let exp = ExperimentationServiceClient::new(
         Channel::from_static("http://127.0.0.1:5").connect_lazy(),
     );
-    let mgmt = ManagementServiceClient::new(
-        Channel::from_static("http://127.0.0.1:6").connect_lazy(),
-    );
-    Arc::new(GatewayState::from_channels(auth, flag, seg, event, exp, mgmt))
+    let mgmt =
+        ManagementServiceClient::new(Channel::from_static("http://127.0.0.1:6").connect_lazy());
+    Arc::new(GatewayState::from_channels(
+        auth, flag, seg, event, exp, mgmt,
+    ))
 }
 
 /// Same as `make_stub_state` — the `_with_flag` variant exists for tests that

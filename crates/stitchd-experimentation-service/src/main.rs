@@ -17,10 +17,9 @@ use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use stitchd_db::{PgExperimentRepository, PgExperimentResultsRepository, PgAuditLogger};
+use stitchd_db::{PgAuditLogger, PgExperimentRepository, PgExperimentResultsRepository};
 use stitchd_experimentation_service::{
-    flag_client::FlagClient,
-    service::ExperimentationServiceImpl,
+    flag_client::FlagClient, service::ExperimentationServiceImpl,
 };
 use stitchd_proto::experiments::v1::experimentation_service_server::ExperimentationServiceServer;
 
@@ -50,8 +49,8 @@ async fn main() -> anyhow::Result<()> {
     let results_repo = Arc::new(PgExperimentResultsRepository::new(pool));
 
     // ── Flag Service client ───────────────────────────────────────────────────
-    let flag_service_addr = std::env::var("FLAG_SERVICE_ADDR")
-        .unwrap_or_else(|_| "http://localhost:50052".to_string());
+    let flag_service_addr =
+        std::env::var("FLAG_SERVICE_ADDR").unwrap_or_else(|_| "http://localhost:50052".to_string());
 
     let flag_client = match FlagClient::connect(flag_service_addr.clone()).await {
         Ok(fc) => {
@@ -80,7 +79,9 @@ async fn main() -> anyhow::Result<()> {
     let svc = ExperimentationServiceImpl::new(experiment_repo, results_repo, flag_client);
 
     let (health_reporter, health_service) = health_reporter();
-    health_reporter.set_serving::<ExperimentationServiceServer<ExperimentationServiceImpl>>().await;
+    health_reporter
+        .set_serving::<ExperimentationServiceServer<ExperimentationServiceImpl>>()
+        .await;
 
     Server::builder()
         .add_service(health_service)

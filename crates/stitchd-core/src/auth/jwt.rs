@@ -134,8 +134,15 @@ mod tests {
     #[test]
     fn issue_and_verify_roundtrip() {
         let (user_id, org_id, secret) = test_ids();
-        let token = JwtEngine::issue(user_id, org_id, "alice@example.com", OrgRole::OrgAdmin, false, &secret)
-            .unwrap();
+        let token = JwtEngine::issue(
+            user_id,
+            org_id,
+            "alice@example.com",
+            OrgRole::OrgAdmin,
+            false,
+            &secret,
+        )
+        .unwrap();
         let claims = JwtEngine::verify(&token, &secret).unwrap();
 
         assert_eq!(claims.sub, user_id.to_string());
@@ -176,9 +183,15 @@ mod tests {
     #[test]
     fn wrong_secret_returns_error() {
         let (user_id, org_id, secret) = test_ids();
-        let token =
-            JwtEngine::issue(user_id, org_id, "carol@example.com", OrgRole::OrgMember, false, &secret)
-                .unwrap();
+        let token = JwtEngine::issue(
+            user_id,
+            org_id,
+            "carol@example.com",
+            OrgRole::OrgMember,
+            false,
+            &secret,
+        )
+        .unwrap();
 
         let wrong_secret = uuid::Uuid::new_v4();
         let result = JwtEngine::verify(&token, &wrong_secret);
@@ -218,9 +231,15 @@ mod tests {
     #[test]
     fn decode_unverified_extracts_sub() {
         let (user_id, org_id, secret) = test_ids();
-        let token =
-            JwtEngine::issue(user_id, org_id, "eve@example.com", OrgRole::OrgMember, false, &secret)
-                .unwrap();
+        let token = JwtEngine::issue(
+            user_id,
+            org_id,
+            "eve@example.com",
+            OrgRole::OrgMember,
+            false,
+            &secret,
+        )
+        .unwrap();
 
         let claims = JwtEngine::decode_unverified(&token).unwrap();
         assert_eq!(claims.sub, user_id.to_string());

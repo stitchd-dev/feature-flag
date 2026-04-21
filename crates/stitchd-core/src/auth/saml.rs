@@ -296,9 +296,13 @@ fn extract_email_from_response_xml(xml: &str) -> Result<String, SamlError> {
     }
 
     // Try Attribute values for email
-    for attr_name in &["email", "emailAddress", "mail",
+    for attr_name in &[
+        "email",
+        "emailAddress",
+        "mail",
         "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
-        "urn:oid:1.2.840.113549.1.9.1"] {
+        "urn:oid:1.2.840.113549.1.9.1",
+    ] {
         if let Some(email) = find_attribute_value(xml, attr_name) {
             if email.contains('@') {
                 return Ok(email);

@@ -31,7 +31,8 @@ impl From<stitchd_db::RepositoryError> for FlagServiceError {
     fn from(e: stitchd_db::RepositoryError) -> Self {
         match e {
             stitchd_db::RepositoryError::NotFound { id } => Self::NotFound(id),
-            stitchd_db::RepositoryError::VersionConflict { expected, actual } => {
+            stitchd_db::RepositoryError::VersionConflict { expected, actual } =>
+            {
                 #[allow(clippy::cast_sign_loss)]
                 Self::VersionConflict {
                     expected: expected as u64,

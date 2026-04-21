@@ -10,7 +10,12 @@
 
 use std::sync::Arc;
 
-use axum::{Router, http::StatusCode, middleware, routing::{get, post, put}};
+use axum::{
+    Router,
+    http::StatusCode,
+    middleware,
+    routing::{get, post, put},
+};
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
 use crate::routes::{admin, auth, events, experiments, flags, management, sdk, segments};
@@ -39,10 +44,22 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
 
     // ── Management routes (JWT + non-system-org check) ────────────────────────
     let mgmt_routes = Router::new()
-        .route("/v1/management/orgs/{org_id}/projects",          post(management::create_project))
-        .route("/v1/management/projects/{project_id}/environments", post(management::create_environment))
-        .route("/v1/management/environments/{environment_id}/sdk-keys", post(management::create_sdk_key))
-        .route("/v1/management/orgs/{org_id}/users",             post(management::create_user))
+        .route(
+            "/v1/management/orgs/{org_id}/projects",
+            post(management::create_project),
+        )
+        .route(
+            "/v1/management/projects/{project_id}/environments",
+            post(management::create_environment),
+        )
+        .route(
+            "/v1/management/environments/{environment_id}/sdk-keys",
+            post(management::create_sdk_key),
+        )
+        .route(
+            "/v1/management/orgs/{org_id}/users",
+            post(management::create_user),
+        )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_non_system_org))
         .layer(middleware::from_fn_with_state(
@@ -54,8 +71,14 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
     let sdk_routes = Router::new()
         .route("/v1/environments/{env_id}/evaluate", post(sdk::evaluate))
         .route("/v1/environments/{env_id}/events", post(sdk::ingest_event))
-        .route("/v1/environments/{env_id}/events/batch", post(sdk::ingest_batch_events))
-        .route("/v1/environments/{env_id}/segments/list-check", post(sdk::list_check_membership))
+        .route(
+            "/v1/environments/{env_id}/events/batch",
+            post(sdk::ingest_batch_events),
+        )
+        .route(
+            "/v1/environments/{env_id}/segments/list-check",
+            post(sdk::list_check_membership),
+        )
         .route(
             "/v1/environments/{env_id}/segments/list-check/batch",
             post(sdk::batch_list_check_membership),
@@ -149,16 +172,25 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::{Request, StatusCode}};
-    use tower::ServiceExt as _;
     use crate::tests::helpers::make_stub_state;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
 
     #[tokio::test]
     async fn flags_without_auth_returns_401() {
         let app = build_router(make_stub_state());
         let resp = app
-            .oneshot(Request::builder().uri("/v1/projects/proj-1/flags").body(Body::empty()).unwrap())
-            .await.unwrap();
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/projects/proj-1/flags")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -166,8 +198,14 @@ mod tests {
     async fn segments_without_auth_returns_401() {
         let app = build_router(make_stub_state());
         let resp = app
-            .oneshot(Request::builder().uri("/v1/environments/env-1/segments").body(Body::empty()).unwrap())
-            .await.unwrap();
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/segments")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -183,7 +221,8 @@ mod tests {
                     .body(Body::from(r#"{"name":"Test"}"#))
                     .unwrap(),
             )
-            .await.unwrap();
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -199,7 +238,8 @@ mod tests {
                     .body(Body::from(r#"{"name":"Test"}"#))
                     .unwrap(),
             )
-            .await.unwrap();
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -215,7 +255,8 @@ mod tests {
                     .body(Body::from(r#"{"email":"a@b.com","password":"x"}"#))
                     .unwrap(),
             )
-            .await.unwrap();
+            .await
+            .unwrap();
         assert_ne!(resp.status(), StatusCode::NOT_FOUND);
     }
 
@@ -223,11 +264,18 @@ mod tests {
     async fn unknown_route_returns_404() {
         let app = build_router(make_stub_state());
         let resp = app
-            .oneshot(Request::builder().uri("/unknown/path").body(Body::empty()).unwrap())
-            .await.unwrap();
+            .oneshot(
+                Request::builder()
+                    .uri("/unknown/path")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert!(
             resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::UNAUTHORIZED,
-            "status: {}", resp.status()
+            "status: {}",
+            resp.status()
         );
     }
 }

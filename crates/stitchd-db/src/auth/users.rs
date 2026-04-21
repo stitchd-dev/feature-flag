@@ -474,10 +474,7 @@ mod tests {
     #[sqlx::test(migrations = "./migrations")]
     async fn rotate_token_secret_changes_value(pool: PgPool) {
         let repo = PgAuthUserRepository::new(pool);
-        let user = repo
-            .create("dave@example.com", "Dave", None)
-            .await
-            .unwrap();
+        let user = repo.create("dave@example.com", "Dave", None).await.unwrap();
         let original = user.token_secret;
 
         let new_secret = repo.rotate_token_secret(user.id).await.unwrap();
@@ -498,10 +495,7 @@ mod tests {
     #[sqlx::test(migrations = "./migrations")]
     async fn update_status_deactivates_user(pool: PgPool) {
         let repo = PgAuthUserRepository::new(pool);
-        let user = repo
-            .create("eve@example.com", "Eve", None)
-            .await
-            .unwrap();
+        let user = repo.create("eve@example.com", "Eve", None).await.unwrap();
         repo.update_status(user.id, UserStatus::Deactivated)
             .await
             .unwrap();
@@ -513,7 +507,10 @@ mod tests {
     #[sqlx::test(migrations = "./migrations")]
     async fn update_password_hash_stores_new_hash(pool: PgPool) {
         let repo = PgAuthUserRepository::new(pool);
-        let user = repo.create("frank@example.com", "Frank", None).await.unwrap();
+        let user = repo
+            .create("frank@example.com", "Frank", None)
+            .await
+            .unwrap();
         repo.update_password_hash(user.id, "newhash456")
             .await
             .unwrap();
@@ -529,9 +526,13 @@ mod tests {
             .create("grace@example.com", "Grace", None)
             .await
             .unwrap();
-        repo.update_profile(user.id, "Grace Updated", Some("https://example.com/avatar.png"))
-            .await
-            .unwrap();
+        repo.update_profile(
+            user.id,
+            "Grace Updated",
+            Some("https://example.com/avatar.png"),
+        )
+        .await
+        .unwrap();
 
         let found = repo.find_by_id(user.id).await.unwrap().unwrap();
         assert_eq!(found.display_name, "Grace Updated");
