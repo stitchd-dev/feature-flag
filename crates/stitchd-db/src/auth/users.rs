@@ -397,7 +397,7 @@ mod tests {
     async fn seed_org(pool: &PgPool) -> stitchd_core::id::OrganisationId {
         let org_id = stitchd_core::id::OrganisationId::new();
         sqlx::query!(
-            "INSERT INTO organisations (id, name) VALUES ($1, $2)",
+            "INSERT INTO organisations (id, name, is_system) VALUES ($1, $2, false)",
             org_id.as_uuid(),
             "test-org"
         )

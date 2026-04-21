@@ -253,7 +253,7 @@ mod tests {
     async fn seed(pool: &PgPool) -> (OrganisationId, UserId) {
         let org_id = OrganisationId::new();
         sqlx::query!(
-            "INSERT INTO organisations (id, name) VALUES ($1, $2)",
+            "INSERT INTO organisations (id, name, is_system) VALUES ($1, $2, false)",
             org_id.as_uuid(),
             "test-org"
         )
@@ -336,7 +336,7 @@ mod tests {
         let org1_id = OrganisationId::new();
         let org2_id = OrganisationId::new();
         sqlx::query!(
-            "INSERT INTO organisations (id, name) VALUES ($1, $2), ($3, $4)",
+            "INSERT INTO organisations (id, name, is_system) VALUES ($1, $2, false), ($3, $4, false)",
             org1_id.as_uuid(),
             "org1",
             org2_id.as_uuid(),

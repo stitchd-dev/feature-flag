@@ -13,6 +13,7 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-server/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/xtask/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-events/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-core/examples" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
