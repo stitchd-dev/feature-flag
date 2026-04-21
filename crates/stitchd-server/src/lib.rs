@@ -1,4 +1,7 @@
-//! Stitchd server: Axum REST Admin API + tonic gRPC SDK API.
+//! **DEPRECATED** — replaced by the microservice stack (stitchd-gateway +
+//! stitchd-{auth,flag,segmentation,event,experimentation}-service).
+//! Retained only for stitchd-sdk integration tests until they are migrated.
+//! This crate is excluded from `cargo build/test --workspace`.
 #![deny(warnings, missing_docs, clippy::all)]
 #![warn(clippy::pedantic, clippy::nursery)]
 
