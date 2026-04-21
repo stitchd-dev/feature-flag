@@ -34,4 +34,18 @@ pub mod events {
     }
 }
 
+/// Auth service — credential validation and RBAC context.
+pub mod auth {
+    pub mod v1 {
+        tonic::include_proto!("stitchd.auth.v1");
+    }
+}
+
+/// Experiment management service.
+pub mod experiments {
+    pub mod v1 {
+        tonic::include_proto!("stitchd.experiments.v1");
+    }
+}
+
 mod tests;

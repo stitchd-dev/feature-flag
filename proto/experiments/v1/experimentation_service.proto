@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package stitchd.experiments.v1;
+
+// ─── Experiment status ────────────────────────────────────────────────────────
+
+enum ExperimentStatus {
+  EXPERIMENT_STATUS_UNSPECIFIED = 0;
+  EXPERIMENT_STATUS_DRAFT       = 1;
+  EXPERIMENT_STATUS_ACTIVE      = 2;
+  EXPERIMENT_STATUS_PAUSED      = 3;
+  EXPERIMENT_STATUS_CONCLUDED   = 4;
+}
+
+// ─── Experiment definition ────────────────────────────────────────────────────
+
+message Experiment {
+  string           id             = 1;
+  string           environment_id = 2;
+  string           name           = 3;
+  string           description    = 4;
+  // The feature flag key this experiment is tied to.
+  string           flag_key       = 5;
+  ExperimentStatus status         = 6;
+  // Variant keys that are part of this experiment.
+  repeated string  variant_keys   = 7;
+  // Epoch millis.
+  int64            created_at_ms  = 8;
+  int64            updated_at_ms  = 9;
+  uint64           version        = 10;
+}
+
+// ─── Results ──────────────────────────────────────────────────────────────────
+
+message VariantResult {
+  string variant_key     = 1;
+  uint64 participant_count = 2;
+  // Metric key → aggregated value.
+  map<string, double> metric_values = 3;
+  // p-value vs control variant (null if not yet computed).
+  double p_value         = 4;
+  bool   p_value_present = 5;
+}
+
+message ExperimentResults {
+  string                 experiment_id   = 1;
+  repeated VariantResult variant_results = 2;
+  // Epoch millis of the latest results computation.
+  int64                  computed_at_ms  = 3;
+}
+
+// ─── CRUD requests ────────────────────────────────────────────────────────────
+
+message CreateExperimentRequest {
+  Experiment experiment = 1;
+}
+
+message GetExperimentRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+message ListExperimentsRequest {
+  string environment_id = 1;
+}
+
+message ListExperimentsResponse {
+  repeated Experiment experiments = 1;
+}
+
+message GetResultsRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+// ─── Experimentation service ──────────────────────────────────────────────────
+
+service ExperimentationService {
+  // Create a new experiment.
+  // Calls Flag Service internally to verify and lock the flag state.
+  rpc CreateExperiment(CreateExperimentRequest) returns (Experiment);
+
+  // Fetch a single experiment by ID.
+  rpc GetExperiment(GetExperimentRequest) returns (Experiment);
+
+  // List all experiments for an environment.
+  rpc ListExperiments(ListExperimentsRequest) returns (ListExperimentsResponse);
+
+  // Fetch pre-computed statistical results for an experiment.
+  rpc GetResults(GetResultsRequest) returns (ExperimentResults);
+}

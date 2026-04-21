@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package stitchd.events.v1;
+
+import "events/v1/event.proto";
+
+// ─── Event definition registry ────────────────────────────────────────────────
+
+// A pre-registered event definition — only registered events are accepted.
+message EventDefinition {
+  string          key         = 1;
+  string          description = 2;
+  // Expected value type for this metric.
+  MetricValueType value_type  = 3;
+  string          environment_id = 4;
+}
+
+enum MetricValueType {
+  METRIC_VALUE_TYPE_UNSPECIFIED = 0;
+  METRIC_VALUE_TYPE_BOOL        = 1;
+  METRIC_VALUE_TYPE_INT         = 2;
+  METRIC_VALUE_TYPE_DOUBLE      = 3;
+}
+
+// ─── Event ingestion ──────────────────────────────────────────────────────────
+
+// EventIngestionService provides the ingestion endpoint for the Event Service crate.
+// The existing EventService (in event.proto) is the legacy SDK-facing service.
+// This service is used for inter-service communication.
+service EventIngestionService {
+  // Ingest a batch of metric events.
+  // Unknown keys (not pre-registered) are rejected and reported in rejected_keys.
+  // SDK key is supplied via gRPC metadata header `x-sdk-key`.
+  rpc IngestEvent(IngestRequest) returns (IngestResponse);
+}

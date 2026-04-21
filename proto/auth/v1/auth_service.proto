@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package stitchd.auth.v1;
+
+// ─── Credential request ───────────────────────────────────────────────────────
+
+// A raw credential presented by a caller for validation.
+// Exactly one field must be set.
+message CredentialRequest {
+  oneof credential {
+    // A signed JWT issued by the human-auth flow.
+    string bearer_token = 1;
+    // A raw SDK key presented via `x-sdk-key` header.
+    string sdk_key      = 2;
+  }
+}
+
+// ─── RBAC context ─────────────────────────────────────────────────────────────
+
+// Access-control information returned for a validated credential.
+// Downstream services inject this into request context without re-validating.
+message RbacContext {
+  string          tenant_id      = 1;
+  string          environment_id = 2;
+  repeated string roles          = 3;
+  repeated string permissions    = 4;
+  // The resolved actor identity (user_id for JWT, sdk_key_id for SDK keys).
+  string          subject        = 5;
+}
+
+// ─── Auth service ─────────────────────────────────────────────────────────────
+
+service AuthService {
+  // Validates a credential and returns the RBAC context for the caller.
+  // Returns UNAUTHENTICATED if the credential is invalid or expired.
+  rpc ValidateCredential(CredentialRequest) returns (RbacContext);
+}

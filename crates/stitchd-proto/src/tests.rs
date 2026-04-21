@@ -3,7 +3,9 @@
 
 #[cfg(test)]
 mod compilation_tests {
-    use crate::{common, events, flags, segments};
+    use crate::{auth, common, events, experiments, flags, segments};
+
+    // ── Existing SDK-facing types ─────────────────────────────────────────────
 
     #[test]
     fn common_types_accessible() {
@@ -32,5 +34,50 @@ mod compilation_tests {
         let _: Option<events::v1::IngestRequest> = None;
         let _: Option<events::v1::IngestResponse> = None;
         let _: Option<events::v1::Event> = None;
+    }
+
+    // ── New microservice contracts ─────────────────────────────────────────────
+
+    #[test]
+    fn auth_service_types_accessible() {
+        let _: Option<auth::v1::CredentialRequest> = None;
+        let _: Option<auth::v1::RbacContext> = None;
+    }
+
+    #[test]
+    fn flag_service_types_accessible() {
+        let _: Option<flags::v1::GetFlagRequest> = None;
+        let _: Option<flags::v1::ListFlagsRequest> = None;
+        let _: Option<flags::v1::ListFlagsResponse> = None;
+        let _: Option<flags::v1::MutateFlagRequest> = None;
+        let _: Option<flags::v1::MutateFlagResponse> = None;
+        let _: Option<flags::v1::GetFlagDefinitionsRequest> = None;
+    }
+
+    #[test]
+    fn segmentation_service_types_accessible() {
+        let _: Option<segments::v1::GetSegmentRequest> = None;
+        let _: Option<segments::v1::ListSegmentsRequest> = None;
+        let _: Option<segments::v1::ListSegmentsResponse> = None;
+        let _: Option<segments::v1::EvaluateMembershipRequest> = None;
+        let _: Option<segments::v1::EvaluateMembershipResponse> = None;
+        let _: Option<segments::v1::MutateSegmentRequest> = None;
+        let _: Option<segments::v1::MutateSegmentResponse> = None;
+    }
+
+    #[test]
+    fn event_service_types_accessible() {
+        let _: Option<events::v1::EventDefinition> = None;
+    }
+
+    #[test]
+    fn experimentation_service_types_accessible() {
+        let _: Option<experiments::v1::Experiment> = None;
+        let _: Option<experiments::v1::ExperimentResults> = None;
+        let _: Option<experiments::v1::CreateExperimentRequest> = None;
+        let _: Option<experiments::v1::GetExperimentRequest> = None;
+        let _: Option<experiments::v1::ListExperimentsRequest> = None;
+        let _: Option<experiments::v1::ListExperimentsResponse> = None;
+        let _: Option<experiments::v1::GetResultsRequest> = None;
     }
 }
