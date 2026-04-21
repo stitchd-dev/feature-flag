@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 // stub
 =======
 //! Segmentation Service binary entrypoint.
@@ -123,3 +124,6 @@ async fn shutdown_signal() {
     }
 }
 >>>>>>> track/microservices_20260421_worker_phase4
+=======
+fn main() {}
+>>>>>>> track/microservices_20260421_worker_phase5

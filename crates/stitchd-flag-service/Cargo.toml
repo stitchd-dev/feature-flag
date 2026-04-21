@@ -7,13 +7,17 @@ authors.workspace = true
 license.workspace = true
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 =======
 >>>>>>> track/microservices_20260421_worker_phase4
+=======
+>>>>>>> track/microservices_20260421_worker_phase5
 
 [[bin]]
 name = "stitchd-flag-service"
 path = "src/main.rs"
+<<<<<<< HEAD
 
 [dependencies]
 <<<<<<< HEAD
@@ -45,3 +49,5 @@ tokio = { workspace = true }
 =======
 tokio = { workspace = true }
 >>>>>>> track/microservices_20260421_worker_phase4
+=======
+>>>>>>> track/microservices_20260421_worker_phase5

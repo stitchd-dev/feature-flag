@@ -11,6 +11,7 @@ name = "stitchd-auth-service"
 path = "src/main.rs"
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
@@ -43,3 +44,5 @@ tokio = { workspace = true }
 [dependencies]
 tokio = { workspace = true }
 >>>>>>> track/microservices_20260421_worker_phase4
+=======
+>>>>>>> track/microservices_20260421_worker_phase5
