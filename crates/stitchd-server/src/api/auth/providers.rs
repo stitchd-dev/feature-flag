@@ -598,7 +598,7 @@ mod tests {
     fn make_router(repo: Arc<dyn stitchd_db::AuthProviderRepository>) -> Router {
         use crate::api::router::build_api_router;
         let state = make_state_with_repo(repo);
-        build_api_router().with_state(state)
+        build_api_router(state.clone()).with_state(state)
     }
 
     #[allow(dead_code)]
