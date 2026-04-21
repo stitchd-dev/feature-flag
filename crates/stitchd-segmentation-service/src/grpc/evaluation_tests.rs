@@ -4,8 +4,10 @@
 //! `SegmentationServiceImpl::evaluate_membership` gRPC method using an
 //! in-memory mock repository.
 
+/// Expose the mock repo for use in sibling test modules.
 #[cfg(test)]
-mod tests {
+#[allow(missing_docs)]
+pub mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -29,19 +31,19 @@ mod tests {
     use crate::grpc::service::{AppState, SegmentationServiceImpl};
 
     // -------------------------------------------------------------------------
-    // Minimal mock repository
+    // Minimal mock repository (public so crud_tests can reuse it)
     // -------------------------------------------------------------------------
 
     /// A minimal in-memory segment repository for unit testing.
-    struct MockSegmentRepo {
-        segments: Mutex<HashMap<(EnvironmentId, String), Segment>>,
-        rule_defs: Mutex<HashMap<SegmentId, RuleBasedSegment>>,
-        list_defs: Mutex<HashMap<SegmentId, ListBasedSegment>>,
-        list_memberships: Mutex<HashMap<(EnvironmentId, String, String, String), bool>>,
+    pub struct MockSegmentRepoForTest {
+        pub segments: Mutex<HashMap<(EnvironmentId, String), Segment>>,
+        pub rule_defs: Mutex<HashMap<SegmentId, RuleBasedSegment>>,
+        pub list_defs: Mutex<HashMap<SegmentId, ListBasedSegment>>,
+        pub list_memberships: Mutex<HashMap<(EnvironmentId, String, String, String), bool>>,
     }
 
-    impl MockSegmentRepo {
-        fn new() -> Self {
+    impl MockSegmentRepoForTest {
+        pub fn new() -> Self {
             Self {
                 segments: Mutex::new(HashMap::new()),
                 rule_defs: Mutex::new(HashMap::new()),
@@ -50,7 +52,7 @@ mod tests {
             }
         }
 
-        fn insert_rule_segment(
+        pub fn insert_rule_segment(
             &self,
             env_id: EnvironmentId,
             key: &str,
@@ -80,7 +82,7 @@ mod tests {
         }
 
         #[allow(dead_code)]
-        fn insert_list_membership(
+        pub fn insert_list_membership(
             &self,
             env_id: EnvironmentId,
             segment_key: &str,
@@ -101,7 +103,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl SegmentRepository for MockSegmentRepo {
+    impl SegmentRepository for MockSegmentRepoForTest {
         async fn find_by_id(&self, id: SegmentId) -> Result<Segment, RepositoryError> {
             self.segments
                 .lock()
@@ -287,7 +289,7 @@ mod tests {
         }
     }
 
-    fn make_service(repo: MockSegmentRepo) -> SegmentationServiceImpl {
+    fn make_service(repo: MockSegmentRepoForTest) -> SegmentationServiceImpl {
         SegmentationServiceImpl::new(AppState {
             segment_repo: Arc::new(repo),
         })
@@ -318,7 +320,7 @@ mod tests {
     /// the result is `is_member = false`.
     #[tokio::test]
     async fn rule_based_no_params_in_context_returns_not_member() {
-        let repo = MockSegmentRepo::new();
+        let repo = MockSegmentRepoForTest::new();
         let (env_id, env_id_str) = env_id();
 
         // Rule: user.plan == "pro" — won't match because bare context has no params.
@@ -345,7 +347,7 @@ mod tests {
     /// A segment with an empty rule list never matches any context.
     #[tokio::test]
     async fn rule_based_empty_rules_returns_not_member() {
-        let repo = MockSegmentRepo::new();
+        let repo = MockSegmentRepoForTest::new();
         let (env_id, env_id_str) = env_id();
 
         repo.insert_rule_segment(env_id, "empty-seg", vec![]);
@@ -367,7 +369,7 @@ mod tests {
     /// Requesting evaluation for a segment that does not exist returns NOT_FOUND.
     #[tokio::test]
     async fn rule_based_missing_segment_returns_not_found_status() {
-        let repo = MockSegmentRepo::new();
+        let repo = MockSegmentRepoForTest::new();
         let (_, env_id_str) = env_id();
 
         let svc = make_service(repo);
@@ -388,7 +390,7 @@ mod tests {
     /// Passing an invalid environment_id UUID returns INVALID_ARGUMENT.
     #[tokio::test]
     async fn rule_based_invalid_env_id_returns_invalid_argument() {
-        let repo = MockSegmentRepo::new();
+        let repo = MockSegmentRepoForTest::new();
         let svc = make_service(repo);
 
         let result = svc
@@ -408,7 +410,7 @@ mod tests {
     /// A rule with `InSegment` condition returns FAILED_PRECONDITION.
     #[tokio::test]
     async fn rule_based_in_segment_condition_returns_failed_precondition() {
-        let repo = MockSegmentRepo::new();
+        let repo = MockSegmentRepoForTest::new();
         let (env_id, env_id_str) = env_id();
 
         // Rule containing an invalid InSegment condition.
