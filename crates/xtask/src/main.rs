@@ -468,19 +468,19 @@ fn export_openapi(root: &Path) -> Result<()> {
 
     println!("Exporting OpenAPI JSON → {}", out_path.display());
 
-    // Build the server binary first (no-op if already up to date).
+    // Build the gateway binary first (no-op if already up to date).
     let build_status = Command::new("cargo")
-        .args(["build", "-p", "stitchd-server"])
+        .args(["build", "-p", "stitchd-gateway"])
         .current_dir(root)
         .status()
-        .context("failed to run `cargo build -p stitchd-server`")?;
+        .context("failed to run `cargo build -p stitchd-gateway`")?;
     anyhow::ensure!(
         build_status.success(),
         "`cargo build` exited with {build_status}"
     );
 
     // Run the binary with --export-openapi <path>.
-    let binary = root.join("target/debug/stitchd-server");
+    let binary = root.join("target/debug/stitchd-gateway");
     let export_status = Command::new(&binary)
         .args(["--export-openapi", out_path.to_str().unwrap()])
         .current_dir(root)
@@ -488,7 +488,7 @@ fn export_openapi(root: &Path) -> Result<()> {
         .with_context(|| format!("failed to run `{}`", binary.display()))?;
     anyhow::ensure!(
         export_status.success(),
-        "`stitchd-server --export-openapi` exited with {export_status}"
+        "`stitchd-gateway --export-openapi` exited with {export_status}"
     );
 
     Ok(())
