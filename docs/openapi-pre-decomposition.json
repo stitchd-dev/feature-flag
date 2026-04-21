@@ -1,0 +1,3350 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Stitchd Feature Flag API",
+    "description": "REST API for managing feature flags, segments, and evaluation.",
+    "contact": {
+      "name": "Stitchd"
+    },
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/environments/{env_id}/evaluate": {
+      "post": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/evaluate` — Evaluate all flags for a context.",
+        "description": "# Errors\nReturns [`ApiError::Database`] if evaluation logic fails.",
+        "operationId": "evaluate_all_flags",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Evaluation results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchEvaluationResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/environments/{env_id}/event-definitions": {
+      "get": {
+        "tags": [
+          "event-definitions"
+        ],
+        "summary": "`GET /v1/environments/{env_id}/event-definitions` — List active event definitions.",
+        "description": "# Errors\nReturns 500 if the repository query fails.",
+        "operationId": "list_event_definitions",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of event definitions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EventDefinitionResponse"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "event-definitions"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/event-definitions` — Register an event definition.",
+        "description": "# Errors\nReturns 409 if a definition with the same key already exists in the environment.",
+        "operationId": "create_event_definition",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEventDefinitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Event definition registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDefinitionResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Key already exists in this environment"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/environments/{env_id}/event-definitions/{key}": {
+      "delete": {
+        "tags": [
+          "event-definitions"
+        ],
+        "summary": "`DELETE /v1/environments/{env_id}/event-definitions/{key}` — Soft-delete by key.",
+        "description": "# Errors\nReturns 404 if no active definition with that key exists.",
+        "operationId": "delete_event_definition",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Event definition key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Event definition deleted"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/environments/{env_id}/events": {
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/events` — Ingest a single event.",
+        "description": "Validates the `metric_key` against registered definitions and checks the\nvalue type. Returns 202 immediately; the ClickHouse write is async.\n\n# Errors\n\nReturns [`ApiError`] if validation fails or an internal error occurs.",
+        "operationId": "ingest_single_event",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EventPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Event accepted for ingestion"
+          },
+          "401": {
+            "description": "Missing or invalid SDK key"
+          },
+          "422": {
+            "description": "Unknown key or type mismatch"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        },
+        "security": [
+          {
+            "sdk_key": []
+          }
+        ]
+      }
+    },
+    "/v1/environments/{env_id}/events/batch": {
+      "post": {
+        "tags": [
+          "events"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/events/batch` — Ingest up to 500 events.",
+        "description": "All events are validated before any write is initiated. A single invalid\nevent causes the entire batch to be rejected with 422.\n\n# Errors\n\nReturns [`ApiError`] if the batch is too large, validation fails, or an internal error occurs.",
+        "operationId": "ingest_batch_events",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchEventPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Batch accepted for ingestion"
+          },
+          "401": {
+            "description": "Missing or invalid SDK key"
+          },
+          "422": {
+            "description": "Batch too large, unknown key, or type mismatch"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        },
+        "security": [
+          {
+            "sdk_key": []
+          }
+        ]
+      }
+    },
+    "/v1/environments/{env_id}/experiments": {
+      "get": {
+        "tags": [
+          "experiments"
+        ],
+        "summary": "`GET /v1/environments/{env_id}/experiments` — List experiments in an environment.",
+        "description": "# Errors\nReturns 500 on database error.",
+        "operationId": "list_experiments",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Filter by status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of experiments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExperimentResponse"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "experiments"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/experiments` — Create a new experiment.",
+        "description": "# Errors\nReturns 422 if validation fails; 500 on database error.",
+        "operationId": "create_experiment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExperimentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Experiment created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation error"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/environments/{env_id}/experiments/{id}": {
+      "get": {
+        "tags": [
+          "experiments"
+        ],
+        "summary": "`GET /v1/environments/{env_id}/experiments/{id}` — Get a single experiment.",
+        "description": "# Errors\nReturns 404 if not found; 500 on database error.",
+        "operationId": "get_experiment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Experiment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Experiment found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "experiments"
+        ],
+        "summary": "`DELETE /v1/environments/{env_id}/experiments/{id}` — Soft-delete an experiment.",
+        "description": "# Errors\nReturns 404 if not found; 409 if experiment is currently running; 500 on database error.",
+        "operationId": "delete_experiment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Experiment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Experiment deleted"
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Conflict — experiment is running"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "experiments"
+        ],
+        "summary": "`PATCH /v1/environments/{env_id}/experiments/{id}` — Update an experiment.",
+        "description": "# Errors\nReturns 404 if not found; 409 on version conflict or invalid state; 500 on database error.",
+        "operationId": "update_experiment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Experiment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExperimentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Experiment updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Conflict"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/environments/{env_id}/experiments/{id}/iterations": {
+      "get": {
+        "tags": [
+          "experiments"
+        ],
+        "summary": "`GET /v1/environments/{env_id}/experiments/{id}/iterations` — List iterations for an experiment.",
+        "description": "# Errors\nReturns 404 if not found; 500 on database error.",
+        "operationId": "list_iterations",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Experiment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of iterations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExperimentIterationResponse"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/environments/{env_id}/experiments/{id}/transitions": {
+      "post": {
+        "tags": [
+          "experiments"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/experiments/{id}/transitions` — Transition experiment lifecycle.",
+        "description": "# Errors\nReturns 404 if not found; 409 on invalid transition; 500 on database error.",
+        "operationId": "transition_experiment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Experiment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Experiment transitioned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          },
+          "409": {
+            "description": "Invalid transition"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/environments/{env_id}/segments": {
+      "get": {
+        "tags": [
+          "segments"
+        ],
+        "summary": "`GET /v1/environments/{env_id}/segments` — List active segments.",
+        "description": "# Errors\nReturns [`ApiError::Database`] if the repository fails to list segments.",
+        "operationId": "list_segments",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of segments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Segment"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "segments"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/segments` — Create segment.",
+        "description": "# Errors\nReturns [`ApiError::BadRequest`] if validation fails or [`ApiError::Conflict`] if the key exists.",
+        "operationId": "create_segment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSegmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Segment created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Segment"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Key conflict"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        }
+      }
+    },
+    "/v1/environments/{env_id}/segments/list-check": {
+      "post": {
+        "tags": [
+          "segments"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/segments/list-check` — Check list-segment membership.",
+        "description": "Requires a valid `x-sdk-key` header for the target environment.\n\n# Errors\nReturns [`ApiError::BadRequest`] for empty segment keys, [`ApiError::Database`] on failure.",
+        "operationId": "list_check_membership",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Membership results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListCheckResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        },
+        "security": [
+          {
+            "sdk_key": []
+          }
+        ]
+      }
+    },
+    "/v1/environments/{env_id}/segments/list-check/batch": {
+      "post": {
+        "tags": [
+          "segments"
+        ],
+        "summary": "`POST /v1/environments/{env_id}/segments/list-check/batch` — Batch list-segment membership.",
+        "description": "Requires a valid `x-sdk-key` header for the target environment.\n\n# Errors\nReturns [`ApiError::Database`] on failure.",
+        "operationId": "batch_list_check_membership",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchListCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Batch membership results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchListCheckResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        },
+        "security": [
+          {
+            "sdk_key": []
+          }
+        ]
+      }
+    },
+    "/v1/environments/{env_id}/segments/{seg_id}": {
+      "get": {
+        "tags": [
+          "segments"
+        ],
+        "summary": "`GET /v1/environments/{env_id}/segments/{seg_id}` — Get segment + definition.",
+        "description": "# Errors\nReturns [`ApiError::NotFound`] if the segment does not exist.",
+        "operationId": "get_segment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "seg_id",
+            "in": "path",
+            "description": "Segment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Segment details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SegmentResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Segment not found"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "segments"
+        ],
+        "summary": "`PUT /v1/environments/{env_id}/segments/{seg_id}` — Replace definition.",
+        "description": "# Errors\nReturns [`ApiError::Conflict`] if the version mismatch or [`ApiError::NotFound`] if missing.",
+        "operationId": "update_segment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "seg_id",
+            "in": "path",
+            "description": "Segment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSegmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated segment"
+          },
+          "404": {
+            "description": "Segment not found"
+          },
+          "409": {
+            "description": "Version conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "segments"
+        ],
+        "summary": "`DELETE /v1/environments/{env_id}/segments/{seg_id}` — Soft-delete.",
+        "description": "# Errors\nReturns [`ApiError::NotFound`] if the segment does not exist.",
+        "operationId": "delete_segment",
+        "parameters": [
+          {
+            "name": "env_id",
+            "in": "path",
+            "description": "Environment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "seg_id",
+            "in": "path",
+            "description": "Segment UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Segment deleted"
+          },
+          "404": {
+            "description": "Segment not found"
+          }
+        }
+      }
+    },
+    "/v1/projects/{project_id}/flags": {
+      "get": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`GET /v1/projects/{project_id}/flags` — List flags in a project.",
+        "description": "# Errors\nReturns [`ApiError::Database`] if the repository fails.",
+        "operationId": "list_flags",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of flags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FlagRecord"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`POST /v1/projects/{project_id}/flags` — Create a new flag.",
+        "description": "# Errors\nReturns [`ApiError::BadRequest`] if validation fails or [`ApiError::Conflict`] if the key exists.",
+        "operationId": "create_flag",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateFlagRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Flag created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlagRecord"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Key conflict"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        }
+      }
+    },
+    "/v1/projects/{project_id}/flags/{flag_id}": {
+      "get": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`GET /v1/projects/{project_id}/flags/{flag_id}` — Get a flag with its details.",
+        "description": "# Errors\nReturns [`ApiError::NotFound`] if the flag is missing.",
+        "operationId": "get_flag",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flag_id",
+            "in": "path",
+            "description": "Flag UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flag details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlagResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Flag not found"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`PUT /v1/projects/{project_id}/flags/{flag_id}` — Update flag metadata.",
+        "description": "# Errors\nReturns [`ApiError::Conflict`] if the version mismatch or [`ApiError::NotFound`] if missing.",
+        "operationId": "update_flag",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flag_id",
+            "in": "path",
+            "description": "Flag UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateFlagRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated flag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlagRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Flag not found"
+          },
+          "409": {
+            "description": "Version conflict"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`DELETE /v1/projects/{project_id}/flags/{flag_id}` — Soft-delete a flag.",
+        "description": "# Errors\nReturns [`ApiError::NotFound`] if the flag does not exist.",
+        "operationId": "delete_flag",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flag_id",
+            "in": "path",
+            "description": "Flag UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Flag deleted"
+          },
+          "404": {
+            "description": "Flag not found"
+          }
+        }
+      }
+    },
+    "/v1/projects/{project_id}/flags/{flag_id}/hashing": {
+      "put": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`PUT /v1/projects/{project_id}/flags/{flag_id}/hashing` — Set hashing config.",
+        "description": "# Errors\nReturns [`ApiError::Database`] if upsert fails.",
+        "operationId": "update_hashing_config",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flag_id",
+            "in": "path",
+            "description": "Flag UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FlagHashingConfig"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Hashing config updated"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/projects/{project_id}/flags/{flag_id}/rules": {
+      "put": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`PUT /v1/projects/{project_id}/flags/{flag_id}/rules` — Set evaluation rules.",
+        "description": "# Errors\nReturns [`ApiError::Database`] if upsert fails.",
+        "operationId": "update_rules",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flag_id",
+            "in": "path",
+            "description": "Flag UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/FlagRule"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Rules updated"
+          },
+          "500": {
+            "description": "Internal error"
+          }
+        }
+      }
+    },
+    "/v1/projects/{project_id}/flags/{flag_id}/variants": {
+      "post": {
+        "tags": [
+          "flags"
+        ],
+        "summary": "`POST /v1/projects/{project_id}/flags/{flag_id}/variants` — Add a variant to a flag.",
+        "description": "# Errors\nReturns [`ApiError::BadRequest`] if type mismatch.",
+        "operationId": "create_variant",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flag_id",
+            "in": "path",
+            "description": "Flag UUID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVariantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Variant created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Variant"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Type mismatch"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BatchContext": {
+        "type": "object",
+        "description": "A single context entry for a batch list-check request.",
+        "required": [
+          "context_type",
+          "context_key"
+        ],
+        "properties": {
+          "context_key": {
+            "type": "string",
+            "description": "Context key."
+          },
+          "context_type": {
+            "type": "string",
+            "description": "Context type (e.g. `\"user\"`, `\"org\"`)."
+          }
+        }
+      },
+      "BatchContextMembership": {
+        "type": "object",
+        "description": "Membership result for a single context in a batch response.",
+        "required": [
+          "context_type",
+          "context_key",
+          "memberships"
+        ],
+        "properties": {
+          "context_key": {
+            "type": "string",
+            "description": "Context key."
+          },
+          "context_type": {
+            "type": "string",
+            "description": "Context type."
+          },
+          "memberships": {
+            "type": "object",
+            "description": "Map from segment key to membership boolean.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "BatchEvaluationResponse": {
+        "type": "object",
+        "description": "Response containing all evaluated flags for the requested context.",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluationResult"
+            },
+            "description": "Map of flag keys to results."
+          }
+        }
+      },
+      "BatchEventPayload": {
+        "type": "object",
+        "description": "Payload for a batch event ingestion request (max 500 events).",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventPayload"
+            },
+            "description": "Events to ingest; maximum 500."
+          }
+        }
+      },
+      "BatchListCheckRequest": {
+        "type": "object",
+        "description": "`POST /v1/environments/{env_id}/segments/list-check/batch` request body.",
+        "required": [
+          "contexts",
+          "segment_keys"
+        ],
+        "properties": {
+          "contexts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchContext"
+            },
+            "description": "Contexts to check membership for."
+          },
+          "segment_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Segment keys to check membership against."
+          }
+        }
+      },
+      "BatchListCheckResponse": {
+        "type": "object",
+        "description": "`POST /v1/environments/{env_id}/segments/list-check/batch` response body.",
+        "required": [
+          "results"
+        ],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchContextMembership"
+            },
+            "description": "One entry per requested context."
+          }
+        }
+      },
+      "Condition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Exact match: `context[context_type].parameters[param] == value`.",
+            "required": [
+              "Eq"
+            ],
+            "properties": {
+              "Eq": {
+                "type": "object",
+                "description": "Exact match: `context[context_type].parameters[param] == value`.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "value"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/ParameterValue"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Not-equal: `context[context_type].parameters[param] != value`.",
+            "required": [
+              "Ne"
+            ],
+            "properties": {
+              "Ne": {
+                "type": "object",
+                "description": "Not-equal: `context[context_type].parameters[param] != value`.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "value"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/ParameterValue"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Less-than.",
+            "required": [
+              "Lt"
+            ],
+            "properties": {
+              "Lt": {
+                "type": "object",
+                "description": "Less-than.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "value"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/ParameterValue"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Less-than-or-equal.",
+            "required": [
+              "Lte"
+            ],
+            "properties": {
+              "Lte": {
+                "type": "object",
+                "description": "Less-than-or-equal.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "value"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/ParameterValue"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Greater-than.",
+            "required": [
+              "Gt"
+            ],
+            "properties": {
+              "Gt": {
+                "type": "object",
+                "description": "Greater-than.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "value"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/ParameterValue"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Greater-than-or-equal.",
+            "required": [
+              "Gte"
+            ],
+            "properties": {
+              "Gte": {
+                "type": "object",
+                "description": "Greater-than-or-equal.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "value"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "$ref": "#/components/schemas/ParameterValue"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`value.contains(substr)`.",
+            "required": [
+              "Contains"
+            ],
+            "properties": {
+              "Contains": {
+                "type": "object",
+                "description": "`value.contains(substr)`.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "substr"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "substr": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`value.starts_with(prefix)`.",
+            "required": [
+              "StartsWith"
+            ],
+            "properties": {
+              "StartsWith": {
+                "type": "object",
+                "description": "`value.starts_with(prefix)`.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "prefix"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "prefix": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`value.ends_with(suffix)`.",
+            "required": [
+              "EndsWith"
+            ],
+            "properties": {
+              "EndsWith": {
+                "type": "object",
+                "description": "`value.ends_with(suffix)`.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "suffix"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "suffix": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`>=` — parameter version satisfies the given requirement.",
+            "required": [
+              "SemverGte"
+            ],
+            "properties": {
+              "SemverGte": {
+                "type": "object",
+                "description": "`>=` — parameter version satisfies the given requirement.",
+                "required": [
+                  "context_type",
+                  "param",
+                  "version"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "Reference version string, e.g. `\"1.2.0\"`."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`~` — patch-compatible (same major + minor, patch ≥ reference).",
+            "required": [
+              "SemverTilde"
+            ],
+            "properties": {
+              "SemverTilde": {
+                "type": "object",
+                "description": "`~` — patch-compatible (same major + minor, patch ≥ reference).",
+                "required": [
+                  "context_type",
+                  "param",
+                  "version"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "`^` — minor-compatible (same major, minor+patch ≥ reference).",
+            "required": [
+              "SemverCaret"
+            ],
+            "properties": {
+              "SemverCaret": {
+                "type": "object",
+                "description": "`^` — minor-compatible (same major, minor+patch ≥ reference).",
+                "required": [
+                  "context_type",
+                  "param",
+                  "version"
+                ],
+                "properties": {
+                  "context_type": {
+                    "type": "string"
+                  },
+                  "param": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "True when the segment ID is in the resolved segments set.",
+            "required": [
+              "InSegment"
+            ],
+            "properties": {
+              "InSegment": {
+                "$ref": "#/components/schemas/SegmentId",
+                "description": "True when the segment ID is in the resolved segments set."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "True when the segment ID is **not** in the resolved segments set.",
+            "required": [
+              "NotInSegment"
+            ],
+            "properties": {
+              "NotInSegment": {
+                "$ref": "#/components/schemas/SegmentId",
+                "description": "True when the segment ID is **not** in the resolved segments set."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "True when the specified flag resolved to the specified variant.",
+            "required": [
+              "FlagEvaluatedAs"
+            ],
+            "properties": {
+              "FlagEvaluatedAs": {
+                "type": "object",
+                "description": "True when the specified flag resolved to the specified variant.",
+                "required": [
+                  "flag_id",
+                  "variant_id"
+                ],
+                "properties": {
+                  "flag_id": {
+                    "$ref": "#/components/schemas/FlagId"
+                  },
+                  "variant_id": {
+                    "$ref": "#/components/schemas/VariantId"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "A single leaf condition that tests one value from an evaluation context."
+      },
+      "ConditionExpr": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A single leaf condition test.",
+            "required": [
+              "Leaf"
+            ],
+            "properties": {
+              "Leaf": {
+                "$ref": "#/components/schemas/Condition",
+                "description": "A single leaf condition test."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "All children must evaluate to `true`.",
+            "required": [
+              "And"
+            ],
+            "properties": {
+              "And": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConditionExpr"
+                },
+                "description": "All children must evaluate to `true`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "At least one child must evaluate to `true`.",
+            "required": [
+              "Or"
+            ],
+            "properties": {
+              "Or": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConditionExpr"
+                },
+                "description": "At least one child must evaluate to `true`."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Inverts the inner expression.",
+            "required": [
+              "Not"
+            ],
+            "properties": {
+              "Not": {
+                "$ref": "#/components/schemas/ConditionExpr",
+                "description": "Inverts the inner expression."
+              }
+            }
+          }
+        ],
+        "description": "A recursive condition expression supporting arbitrary nesting of AND / OR / NOT.\n\n# Evaluation rules\n- `And([])` evaluates to `true`  (vacuously true)\n- `Or([])` evaluates to `false` (vacuously false)\n- `And` short-circuits on the first `false` child\n- `Or` short-circuits on the first `true` child"
+      },
+      "Context": {
+        "type": "object",
+        "required": [
+          "context_type",
+          "key",
+          "parameters",
+          "private_parameters"
+        ],
+        "properties": {
+          "context_type": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ParameterValue"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "private_parameters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          }
+        }
+      },
+      "ContextList": {
+        "type": "object",
+        "description": "Include and exclude lists for a specific context type.",
+        "required": [
+          "include",
+          "exclude"
+        ],
+        "properties": {
+          "exclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys to exclude from the segment (takes precedence over include).",
+            "uniqueItems": true
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keys to include in the segment.",
+            "uniqueItems": true
+          }
+        }
+      },
+      "CreateEventDefinitionRequest": {
+        "type": "object",
+        "description": "Request body for registering a new event definition.",
+        "required": [
+          "key",
+          "value_type"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "URL-safe string key, unique within the environment."
+          },
+          "value_type": {
+            "$ref": "#/components/schemas/EventValueType",
+            "description": "The metric value type this event will carry."
+          }
+        }
+      },
+      "CreateExperimentRequest": {
+        "type": "object",
+        "description": "Request body for creating a new experiment.",
+        "required": [
+          "flag_rule_id",
+          "name",
+          "metric_keys"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional description of what the experiment tests."
+          },
+          "flag_rule_id": {
+            "$ref": "#/components/schemas/RuleId",
+            "description": "The flag rule this experiment is bound to."
+          },
+          "hypothesis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional hypothesis statement for the experiment."
+          },
+          "metric_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pre-registered event definition keys to use as metrics (at least one required)."
+          },
+          "min_sample_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional informational minimum sample size guardrail."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name for the experiment."
+          },
+          "scheduled_end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional ISO-8601 scheduled end time (informational only)."
+          },
+          "scheduled_start_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional ISO-8601 scheduled start time (informational only)."
+          },
+          "traffic_allocation": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Percentage of rule-matched contexts to enrol (0.1–100.0); defaults to 100.0."
+          }
+        }
+      },
+      "CreateFlagRequest": {
+        "type": "object",
+        "description": "Request to create a new feature flag.",
+        "required": [
+          "key",
+          "value_type",
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Initial enabled status."
+          },
+          "key": {
+            "type": "string",
+            "description": "URL-safe key."
+          },
+          "value_type": {
+            "$ref": "#/components/schemas/FlagValueType",
+            "description": "Value type (bool, int, etc)."
+          }
+        }
+      },
+      "CreateSegmentRequest": {
+        "type": "object",
+        "description": "Request to create a new segment.",
+        "required": [
+          "key",
+          "segment_type"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "URL-safe string key (unique within the environment)."
+          },
+          "lists": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "List definitions for list-based segments (optional, required if type is list).",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContextList"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "rules": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "description": "Ordered rules for rule-based segments (optional, required if type is rule)."
+          },
+          "segment_type": {
+            "$ref": "#/components/schemas/SegmentType",
+            "description": "Whether this is a rule-based or list-based segment."
+          }
+        }
+      },
+      "CreateVariantRequest": {
+        "type": "object",
+        "description": "Request to create a new flag variant.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Unique key within the flag."
+          },
+          "value": {
+            "description": "Typed value."
+          }
+        }
+      },
+      "EnvironmentId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "EvaluationContext": {
+        "type": "object",
+        "description": "A collection of contexts used for a single evaluation.\n\nTypical contexts include 'user', 'session', 'application', etc.",
+        "required": [
+          "contexts"
+        ],
+        "properties": {
+          "contexts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Context"
+            }
+          }
+        }
+      },
+      "EvaluationRequest": {
+        "type": "object",
+        "description": "Request for context-based flag evaluation.",
+        "required": [
+          "context"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/EvaluationContext",
+            "description": "Context parameters for evaluation."
+          }
+        }
+      },
+      "EvaluationResult": {
+        "type": "object",
+        "description": "The result of a single flag evaluation.",
+        "required": [
+          "flag_key",
+          "variant_key",
+          "variant_value"
+        ],
+        "properties": {
+          "flag_key": {
+            "type": "string",
+            "description": "Flag key."
+          },
+          "variant_key": {
+            "type": "string",
+            "description": "Matched variant key."
+          },
+          "variant_value": {
+            "description": "Variant value."
+          }
+        }
+      },
+      "EventContext": {
+        "type": "object",
+        "description": "A single context dimension attached to an event (e.g. `user:u1`, `session:s99`).",
+        "required": [
+          "_type",
+          "key"
+        ],
+        "properties": {
+          "_type": {
+            "type": "string",
+            "description": "Dimension type (e.g. `\"user\"`, `\"session\"`)."
+          },
+          "key": {
+            "type": "string",
+            "description": "Dimension value (e.g. `\"u1\"`)."
+          }
+        }
+      },
+      "EventDefinitionId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "EventDefinitionResponse": {
+        "type": "object",
+        "description": "Response body for a single event definition.",
+        "required": [
+          "id",
+          "environment_id",
+          "key",
+          "value_type",
+          "created_at",
+          "updated_at",
+          "version"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 creation timestamp."
+          },
+          "environment_id": {
+            "$ref": "#/components/schemas/EnvironmentId",
+            "description": "The environment this definition belongs to."
+          },
+          "id": {
+            "$ref": "#/components/schemas/EventDefinitionId",
+            "description": "Unique identifier."
+          },
+          "key": {
+            "type": "string",
+            "description": "URL-safe string key, unique within the environment."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 last-updated timestamp."
+          },
+          "value_type": {
+            "$ref": "#/components/schemas/EventValueType",
+            "description": "The metric value type this event carries."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-concurrency version counter."
+          }
+        }
+      },
+      "EventPayload": {
+        "type": "object",
+        "description": "Payload for a single event ingestion request.",
+        "required": [
+          "contexts",
+          "metric_key",
+          "value",
+          "timestamp"
+        ],
+        "properties": {
+          "contexts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventContext"
+            },
+            "description": "Context dimensions for this event (e.g. user, session)."
+          },
+          "metric_key": {
+            "type": "string",
+            "description": "Pre-registered metric key for this event."
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Client-supplied event timestamp."
+          },
+          "value": {
+            "$ref": "#/components/schemas/EventValue",
+            "description": "Typed metric value; must match the registered value type."
+          }
+        }
+      },
+      "EventValue": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Boolean metric.",
+            "required": [
+              "bool"
+            ],
+            "properties": {
+              "bool": {
+                "type": "boolean",
+                "description": "Boolean metric."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "64-bit integer metric.",
+            "required": [
+              "int"
+            ],
+            "properties": {
+              "int": {
+                "type": "integer",
+                "format": "int64",
+                "description": "64-bit integer metric."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "64-bit floating-point metric.",
+            "required": [
+              "double"
+            ],
+            "properties": {
+              "double": {
+                "type": "number",
+                "format": "double",
+                "description": "64-bit floating-point metric."
+              }
+            }
+          }
+        ],
+        "description": "The typed metric value carried by an event.\n\nExactly one variant must be present; the variant must match the registered\n`EventValueType` for the event's `metric_key` or the event is rejected (422)."
+      },
+      "EventValueType": {
+        "type": "string",
+        "description": "The metric value type an event definition accepts.",
+        "enum": [
+          "bool",
+          "int",
+          "double"
+        ]
+      },
+      "ExperimentId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "ExperimentIterationId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "ExperimentIterationResponse": {
+        "type": "object",
+        "description": "Response body for a single experiment iteration snapshot.",
+        "required": [
+          "id",
+          "experiment_id",
+          "iteration_number",
+          "started_at",
+          "metric_keys",
+          "traffic_allocation"
+        ],
+        "properties": {
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of when this iteration ended; `null` while running."
+          },
+          "experiment_id": {
+            "$ref": "#/components/schemas/ExperimentId",
+            "description": "The experiment this iteration belongs to."
+          },
+          "id": {
+            "$ref": "#/components/schemas/ExperimentIterationId",
+            "description": "Unique identifier of the iteration."
+          },
+          "iteration_number": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sequential iteration number within the experiment (1-based)."
+          },
+          "metric_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Snapshot of metric keys at iteration start."
+          },
+          "min_sample_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Snapshot of minimum sample size at iteration start."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 timestamp of when this iteration started."
+          },
+          "traffic_allocation": {
+            "type": "number",
+            "format": "double",
+            "description": "Snapshot of traffic allocation at iteration start."
+          }
+        }
+      },
+      "ExperimentResponse": {
+        "type": "object",
+        "description": "Response body for a single experiment.",
+        "required": [
+          "id",
+          "env_id",
+          "flag_rule_id",
+          "name",
+          "status",
+          "metric_keys",
+          "traffic_allocation",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 creation timestamp."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional description of the experiment."
+          },
+          "env_id": {
+            "$ref": "#/components/schemas/EnvironmentId",
+            "description": "The environment this experiment belongs to."
+          },
+          "flag_rule_id": {
+            "$ref": "#/components/schemas/RuleId",
+            "description": "The flag rule this experiment is bound to."
+          },
+          "hypothesis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional hypothesis statement."
+          },
+          "id": {
+            "$ref": "#/components/schemas/ExperimentId",
+            "description": "Unique identifier of the experiment."
+          },
+          "metric_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pre-registered event definition keys used as metrics."
+          },
+          "min_sample_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional informational minimum sample size guardrail."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name."
+          },
+          "scheduled_end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional ISO-8601 scheduled end time."
+          },
+          "scheduled_start_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional ISO-8601 scheduled start time."
+          },
+          "status": {
+            "type": "string",
+            "description": "Current lifecycle status serialized as a `snake_case` string."
+          },
+          "traffic_allocation": {
+            "type": "number",
+            "format": "double",
+            "description": "Percentage of rule-matched contexts enrolled (0.1–100.0)."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO-8601 last-updated timestamp."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-concurrency version counter."
+          }
+        }
+      },
+      "ExperimentStatus": {
+        "type": "string",
+        "description": "The lifecycle status of an experiment.",
+        "enum": [
+          "draft",
+          "running",
+          "paused",
+          "stopped"
+        ]
+      },
+      "FlagHashingConfig": {
+        "type": "object",
+        "description": "Configures which context parameters are used for hashing a specific flag.",
+        "required": [
+          "flag_id",
+          "parameter_key",
+          "parameter_type",
+          "order"
+        ],
+        "properties": {
+          "flag_id": {
+            "$ref": "#/components/schemas/FlagId",
+            "description": "The flag this config belongs to."
+          },
+          "order": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The order in which parameters are combined for hashing."
+          },
+          "parameter_key": {
+            "type": "string",
+            "description": "The parameter key to hash."
+          },
+          "parameter_type": {
+            "type": "string",
+            "description": "The context type (e.g. 'user', 'session')."
+          }
+        }
+      },
+      "FlagId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "FlagKey": {
+        "type": "string"
+      },
+      "FlagRecord": {
+        "type": "object",
+        "description": "A feature flag definition stored in the database.\n\nVariants belonging to this flag are fetched separately via `VariantRepository`.",
+        "required": [
+          "id",
+          "project_id",
+          "key",
+          "value_type",
+          "enabled",
+          "created_at",
+          "updated_at",
+          "version"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this record was created."
+          },
+          "default_variant_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VariantId",
+                "description": "The variant to return if no rules match."
+              }
+            ]
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set when the flag is soft-deleted; `None` while active."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether evaluation is active (`true`) or the flag always returns its default."
+          },
+          "id": {
+            "$ref": "#/components/schemas/FlagId",
+            "description": "Unique identifier."
+          },
+          "key": {
+            "$ref": "#/components/schemas/FlagKey",
+            "description": "URL-safe string key (unique within the project)."
+          },
+          "project_id": {
+            "$ref": "#/components/schemas/ProjectId",
+            "description": "The project this flag belongs to."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this record was last modified."
+          },
+          "value_type": {
+            "$ref": "#/components/schemas/FlagValueType",
+            "description": "The type every variant value must match."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-concurrency version counter."
+          }
+        }
+      },
+      "FlagResponse": {
+        "type": "object",
+        "description": "Full response for a single flag, including its rules and variants.",
+        "required": [
+          "record",
+          "variants",
+          "hashing_config",
+          "rules"
+        ],
+        "properties": {
+          "hashing_config": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlagHashingConfig"
+            },
+            "description": "Hashing configuration."
+          },
+          "record": {
+            "$ref": "#/components/schemas/FlagRecord",
+            "description": "Core record."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlagRule"
+            },
+            "description": "Evaluation rules."
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Variant"
+            },
+            "description": "Associated variants."
+          }
+        }
+      },
+      "FlagRule": {
+        "type": "object",
+        "description": "A rule associated with a feature flag.",
+        "required": [
+          "flag_id",
+          "rule_index",
+          "rule"
+        ],
+        "properties": {
+          "flag_id": {
+            "$ref": "#/components/schemas/FlagId",
+            "description": "The flag this rule belongs to."
+          },
+          "rule": {
+            "$ref": "#/components/schemas/Rule",
+            "description": "The rule definition (condition and output)."
+          },
+          "rule_index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Evaluation priority (lower is higher priority)."
+          }
+        }
+      },
+      "FlagValueType": {
+        "type": "string",
+        "description": "The type of value a feature flag produces.",
+        "enum": [
+          "bool",
+          "int",
+          "double",
+          "str",
+          "json"
+        ]
+      },
+      "ListBasedSegment": {
+        "type": "object",
+        "description": "A list-based segment.",
+        "required": [
+          "id",
+          "lists"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/SegmentId",
+            "description": "Unique identifier."
+          },
+          "lists": {
+            "type": "object",
+            "description": "Per-context-type include/exclude lists.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContextList"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ListCheckRequest": {
+        "type": "object",
+        "description": "`POST /v1/environments/{env_id}/segments/list-check` request body.",
+        "required": [
+          "context_type",
+          "context_key",
+          "segment_keys"
+        ],
+        "properties": {
+          "context_key": {
+            "type": "string",
+            "description": "Context key to check membership for."
+          },
+          "context_type": {
+            "type": "string",
+            "description": "Context type (e.g. `\"user\"`, `\"org\"`)."
+          },
+          "segment_keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Segment keys to check membership against."
+          }
+        }
+      },
+      "ListCheckResponse": {
+        "type": "object",
+        "description": "`POST /v1/environments/{env_id}/segments/list-check` response body.",
+        "required": [
+          "memberships"
+        ],
+        "properties": {
+          "memberships": {
+            "type": "object",
+            "description": "Map from segment key to membership boolean.",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ParameterValue": {
+        "oneOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "integer",
+            "format": "int64"
+          },
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "PercentageTarget": {
+        "type": "object",
+        "description": "One contributor to the percentage hash input.",
+        "required": [
+          "context_type",
+          "field"
+        ],
+        "properties": {
+          "context_type": {
+            "type": "string",
+            "description": "Which context type to look up."
+          },
+          "field": {
+            "$ref": "#/components/schemas/TargetField",
+            "description": "Which field within that context to use."
+          }
+        }
+      },
+      "ProjectId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "Rule": {
+        "type": "object",
+        "description": "A single rule: a condition expression paired with an output.",
+        "required": [
+          "id",
+          "condition",
+          "output"
+        ],
+        "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/ConditionExpr"
+          },
+          "id": {
+            "$ref": "#/components/schemas/RuleId"
+          },
+          "output": {
+            "$ref": "#/components/schemas/RuleOutput"
+          }
+        }
+      },
+      "RuleBasedSegment": {
+        "type": "object",
+        "description": "A rule-based segment.",
+        "required": [
+          "id",
+          "rules"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/SegmentId",
+            "description": "Unique identifier."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "description": "Rules to evaluate, in order."
+          }
+        }
+      },
+      "RuleId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "RuleOutput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Assign the evaluation directly to this variant.",
+            "required": [
+              "Variant"
+            ],
+            "properties": {
+              "Variant": {
+                "$ref": "#/components/schemas/VariantId",
+                "description": "Assign the evaluation directly to this variant."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Hash one or more context fields to bucket into a weighted variant set.",
+            "required": [
+              "Percentage"
+            ],
+            "properties": {
+              "Percentage": {
+                "type": "object",
+                "description": "Hash one or more context fields to bucket into a weighted variant set.",
+                "required": [
+                  "targets",
+                  "weights"
+                ],
+                "properties": {
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PercentageTarget"
+                    },
+                    "description": "At least one target is required; values are hashed in declaration order."
+                  },
+                  "weights": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": false,
+                      "prefixItems": [
+                        {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        {
+                          "type": "integer",
+                          "format": "int32",
+                          "minimum": 0
+                        }
+                      ]
+                    },
+                    "description": "`(variant_id, weight)` pairs; weights are tenths-of-a-percent and must sum to 1000."
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "The outcome produced when a rule matches."
+      },
+      "Segment": {
+        "type": "object",
+        "description": "A segment record stored in the database.",
+        "required": [
+          "id",
+          "environment_id",
+          "key",
+          "segment_type",
+          "created_at",
+          "updated_at",
+          "version"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this record was created."
+          },
+          "deleted_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set when the segment is soft-deleted; `None` while active."
+          },
+          "environment_id": {
+            "$ref": "#/components/schemas/EnvironmentId",
+            "description": "The environment this segment belongs to."
+          },
+          "id": {
+            "$ref": "#/components/schemas/SegmentId",
+            "description": "Unique identifier."
+          },
+          "key": {
+            "type": "string",
+            "description": "URL-safe string key (unique within the environment)."
+          },
+          "segment_type": {
+            "$ref": "#/components/schemas/SegmentType",
+            "description": "Whether this is a rule-based or list-based segment."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this record was last modified."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-concurrency version counter."
+          }
+        }
+      },
+      "SegmentDefinition": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RuleBasedSegment",
+                "description": "Evaluated by matching a rule tree."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "rule_based"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Evaluated by matching a rule tree."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ListBasedSegment",
+                "description": "Evaluated by checking whether a context key appears in an explicit list."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "list_based"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Evaluated by checking whether a context key appears in an explicit list."
+          }
+        ],
+        "description": "A segment definition used for evaluation."
+      },
+      "SegmentId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "SegmentResponse": {
+        "type": "object",
+        "description": "Full segment details returned by the API.",
+        "required": [
+          "id",
+          "key",
+          "segment_type",
+          "definition",
+          "version"
+        ],
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/SegmentDefinition",
+            "description": "The segment's evaluation definition."
+          },
+          "id": {
+            "$ref": "#/components/schemas/SegmentId",
+            "description": "Unique identifier."
+          },
+          "key": {
+            "type": "string",
+            "description": "URL-safe string key."
+          },
+          "segment_type": {
+            "$ref": "#/components/schemas/SegmentType",
+            "description": "Whether this is a rule-based or list-based segment."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-concurrency version counter."
+          }
+        }
+      },
+      "SegmentType": {
+        "type": "string",
+        "description": "Whether a segment is rule-based or key-list-based.",
+        "enum": [
+          "rule",
+          "list"
+        ]
+      },
+      "TargetField": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Use `Context::key`.",
+            "enum": [
+              "Key"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Use `Context::parameters[name]` (stringified via `Display`).",
+            "required": [
+              "Parameter"
+            ],
+            "properties": {
+              "Parameter": {
+                "type": "string",
+                "description": "Use `Context::parameters[name]` (stringified via `Display`)."
+              }
+            }
+          }
+        ],
+        "description": "Identifies which field on which context to hash for percentage allocation."
+      },
+      "TransitionRequest": {
+        "type": "object",
+        "description": "Request body for transitioning an experiment to a new lifecycle status.",
+        "required": [
+          "to"
+        ],
+        "properties": {
+          "to": {
+            "$ref": "#/components/schemas/ExperimentStatus",
+            "description": "The target lifecycle status to transition to."
+          }
+        }
+      },
+      "UpdateExperimentRequest": {
+        "type": "object",
+        "description": "Request body for updating an existing experiment.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "analysis_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Statistical analysis type (`\"frequentist\"` or `\"bayesian\"`).\n\n**Cannot be changed while the experiment is in `running` state** — doing\nso would invalidate already-computed results.  A 409 Conflict is returned\nif this field is supplied for a running experiment."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Updated description of the experiment."
+          },
+          "hypothesis": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Updated hypothesis statement."
+          },
+          "metric_keys": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Updated list of metric event definition keys (at least one required if provided)."
+          },
+          "min_sample_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Updated minimum sample size guardrail."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Updated human-readable name for the experiment."
+          },
+          "scheduled_end_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Updated scheduled end time."
+          },
+          "scheduled_start_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Updated scheduled start time."
+          },
+          "traffic_allocation": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Updated traffic allocation percentage (0.1–100.0)."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Current version for optimistic locking (required)."
+          }
+        }
+      },
+      "UpdateFlagRequest": {
+        "type": "object",
+        "description": "Request to update an existing flag's metadata.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "default_variant_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VariantId",
+                "description": "New default variant ID."
+              }
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "New enabled status."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic concurrency version."
+          }
+        }
+      },
+      "UpdateSegmentRequest": {
+        "type": "object",
+        "description": "Request to update a segment definition.",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "lists": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "List definitions for list-based segments.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ContextList"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "rules": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Rule"
+            },
+            "description": "Ordered rules for rule-based segments."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimistic-concurrency version counter."
+          }
+        }
+      },
+      "Value": {},
+      "Variant": {
+        "type": "object",
+        "description": "A named variant of a feature flag.\n\nEach variant belongs to exactly one flag and carries a value whose type\nmust match the parent flag's [`FlagValueType`].",
+        "required": [
+          "id",
+          "key",
+          "value"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/VariantId",
+            "description": "Unique identifier for this variant."
+          },
+          "key": {
+            "type": "string",
+            "description": "Human-readable key (unique within the flag, e.g. `\"control\"`, `\"treatment\"`)."
+          },
+          "value": {
+            "$ref": "#/components/schemas/VariantValue",
+            "description": "The value returned when this variant is selected."
+          }
+        }
+      },
+      "VariantId": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "VariantValue": {
+        "oneOf": [
+          {
+            "type": "boolean",
+            "description": "Boolean value."
+          },
+          {
+            "type": "integer",
+            "format": "int64",
+            "description": "Integer value."
+          },
+          {
+            "type": "number",
+            "format": "double",
+            "description": "Double-precision floating-point value."
+          },
+          {
+            "type": "string",
+            "description": "String value."
+          },
+          {
+            "$ref": "#/components/schemas/Value",
+            "description": "Arbitrary JSON value."
+          }
+        ],
+        "description": "A concrete value carried by a variant.\n\nThe discriminant must match the parent flag's [`FlagValueType`].\nUse [`VariantValue::matches_type`] to enforce this invariant."
+      }
+    }
+  }
+}

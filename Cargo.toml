@@ -6,8 +6,13 @@ members = [
     "crates/stitchd-events",
     "crates/stitchd-proto",
     "crates/stitchd-sdk",
-    "crates/stitchd-server",
     "crates/xtask",
+    "crates/stitchd-auth-service",
+    "crates/stitchd-flag-service",
+    "crates/stitchd-segmentation-service",
+    "crates/stitchd-event-service",
+    "crates/stitchd-experimentation-service",
+    "crates/stitchd-gateway",
 ]
 
 [workspace.package]
@@ -24,6 +29,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["macros"] }
 tonic = { version = "0.13" }
 tonic-build = { version = "0.13" }
+tonic-health = { version = "0.13" }
 prost = { version = "0.13" }
 prost-build = { version = "0.13" }
 protoc-bin-vendored = { version = "3" }

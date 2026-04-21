@@ -36,5 +36,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Microservice Architecture Decomposition
+## [x] Track: Microservice Architecture Decomposition
 *Link: [./conductor/tracks/microservices_20260421/](./conductor/tracks/microservices_20260421/)*

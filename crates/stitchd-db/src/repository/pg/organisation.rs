@@ -37,7 +37,8 @@ impl OrganisationRepository for PgOrganisationRepository {
                 created_at,
                 updated_at,
                 deleted_at,
-                version
+                version,
+                is_system
             FROM organisations
             WHERE id = $1 AND deleted_at IS NULL
             "#,
@@ -61,7 +62,8 @@ impl OrganisationRepository for PgOrganisationRepository {
                 created_at,
                 updated_at,
                 deleted_at,
-                version
+                version,
+                is_system
             FROM organisations
             WHERE deleted_at IS NULL
             ORDER BY created_at
@@ -75,8 +77,8 @@ impl OrganisationRepository for PgOrganisationRepository {
     async fn create(&self, org: &Organisation) -> Result<(), RepositoryError> {
         sqlx::query!(
             r#"
-            INSERT INTO organisations (id, name, created_at, updated_at, deleted_at, version)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO organisations (id, name, created_at, updated_at, deleted_at, version, is_system)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             "#,
             org.id as OrganisationId,
             org.name,
@@ -84,6 +86,7 @@ impl OrganisationRepository for PgOrganisationRepository {
             org.updated_at,
             org.deleted_at,
             org.version,
+            org.is_system,
         )
         .execute(&self.pool)
         .await
@@ -104,7 +107,7 @@ impl OrganisationRepository for PgOrganisationRepository {
                 "organisation",
                 org.id.as_uuid(),
                 "create",
-                serde_json::json!({ "name": org.name }),
+                serde_json::json!({ "name": org.name, "is_system": org.is_system }),
             )
             .await?;
 
@@ -118,14 +121,15 @@ impl OrganisationRepository for PgOrganisationRepository {
             r#"
             UPDATE organisations
             SET name = $1, updated_at = NOW(), version = $2
-            WHERE id = $3 AND version = $4 AND deleted_at IS NULL
+            WHERE id = $3 AND version = $4 AND deleted_at IS NULL AND is_system = false
             RETURNING
                 id         AS "id: OrganisationId",
                 name,
                 created_at,
                 updated_at,
                 deleted_at,
-                version
+                version,
+                is_system
             "#,
             org.name,
             new_version,
@@ -149,7 +153,7 @@ impl OrganisationRepository for PgOrganisationRepository {
             Ok(updated)
         } else {
             let current = sqlx::query!(
-                r#"SELECT version, deleted_at FROM organisations WHERE id = $1"#,
+                r#"SELECT version, deleted_at, is_system FROM organisations WHERE id = $1"#,
                 org.id as OrganisationId
             )
             .fetch_optional(&self.pool)
@@ -163,6 +167,9 @@ impl OrganisationRepository for PgOrganisationRepository {
                 Some(row) if row.deleted_at.is_some() => Err(RepositoryError::NotFound {
                     id: org.id.to_string(),
                 }),
+                Some(row) if row.is_system => Err(RepositoryError::InvalidState {
+                    reason: "cannot modify the System organisation".to_string(),
+                }),
                 Some(row) => Err(RepositoryError::VersionConflict {
                     expected: org.version,
                     actual: row.version,
@@ -172,6 +179,22 @@ impl OrganisationRepository for PgOrganisationRepository {
     }
 
     async fn soft_delete(&self, id: OrganisationId) -> Result<(), RepositoryError> {
+        // Refuse to delete the System org at the DB layer.
+        let row = sqlx::query!(
+            r#"SELECT is_system FROM organisations WHERE id = $1 AND deleted_at IS NULL"#,
+            id as OrganisationId,
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?
+        .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })?;
+
+        if row.is_system {
+            return Err(RepositoryError::InvalidState {
+                reason: "cannot delete the System organisation".to_string(),
+            });
+        }
+
         let result = sqlx::query!(
             r#"
             UPDATE organisations

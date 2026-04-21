@@ -24,6 +24,10 @@ pub struct Organisation {
     pub deleted_at: Option<DateTime<Utc>>,
     /// Optimistic-concurrency version counter.
     pub version: i64,
+    /// `true` for the platform-owned System org created during superadmin
+    /// bootstrap. System orgs are immutable: they cannot be deleted, renamed,
+    /// or used to host customer projects or users.
+    pub is_system: bool,
 }
 
 /// A project within an [`Organisation`].
@@ -161,6 +165,7 @@ mod tests {
             updated_at: Utc::now(),
             deleted_at: None,
             version: 1,
+            is_system: false,
         };
         let json = serde_json::to_string(&org).unwrap();
         let back: Organisation = serde_json::from_str(&json).unwrap();

@@ -25,7 +25,8 @@ async fn test_organisation_update_not_found(pool: sqlx::PgPool) {
         updated_at: chrono::Utc::now(),
         deleted_at: None,
         version: 1,
-    };
+        is_system: false,
+};
     let err = repo.update(&ghost).await.unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
@@ -50,7 +51,8 @@ async fn test_organisation_update_soft_deleted_returns_not_found(pool: sqlx::PgP
         updated_at: chrono::Utc::now(),
         deleted_at: None,
         version: 1,
-    };
+        is_system: false,
+};
     repo.create(&org).await.unwrap();
     repo.soft_delete(org.id).await.unwrap();
 
@@ -71,7 +73,8 @@ async fn test_organisation_create_duplicate_returns_unique_violation(pool: sqlx:
         updated_at: chrono::Utc::now(),
         deleted_at: None,
         version: 1,
-    };
+        is_system: false,
+};
     repo.create(&org).await.unwrap();
 
     let dup = Organisation {
@@ -81,7 +84,8 @@ async fn test_organisation_create_duplicate_returns_unique_violation(pool: sqlx:
         updated_at: chrono::Utc::now(),
         deleted_at: None,
         version: 1,
-    };
+        is_system: false,
+};
     let err = repo.create(&dup).await.unwrap_err();
     assert!(matches!(err, RepositoryError::UniqueViolation { .. }));
 }

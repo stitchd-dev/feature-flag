@@ -7,7 +7,6 @@ authors.workspace = true
 license.workspace = true
 
 [dev-dependencies]
-stitchd-server = { path = "../stitchd-server" }
 stitchd-db = { path = "../stitchd-db" }
 sqlx = { workspace = true }
 chrono = { workspace = true }

@@ -1,0 +1,331 @@
+version: "1.1"
+name: Admin Flow — REST auth, flag CRUD, experiment lifecycle
+
+# Run against a live Docker Compose stack:
+#   docker compose up -d --wait
+#   E2E_JWT_TOKEN=$(your_token) stepci run tests/e2e/admin-flow.yaml
+#
+# Override defaults:
+#   stepci run tests/e2e/admin-flow.yaml \
+#     --env gateway=http://custom:8080 \
+#     --env jwt_token=eyJ... \
+#     --env project_id=proj-abc \
+#     --env env_id=env-abc
+
+env:
+  gateway: http://localhost:8080
+  jwt_token: ${{env.E2E_JWT_TOKEN}}
+  project_id: proj-e2e-001
+  env_id: env-e2e-001
+
+tests:
+  auth_rejects_unauthenticated:
+    name: Admin routes require Bearer token
+    steps:
+      - name: GET flags — no auth returns 401
+        http:
+          url: ${{env.gateway}}/v1/projects/${{env.project_id}}/flags
+          method: GET
+          check:
+            status: 401
+
+      - name: GET segments — no auth returns 401
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/segments
+          method: GET
+          check:
+            status: 401
+
+      - name: GET experiments — no auth returns 401
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/experiments
+          method: GET
+          check:
+            status: 401
+
+  flag_crud:
+    name: Flag lifecycle — create, get, update, delete
+    steps:
+      - name: "Step 1: List flags"
+        http:
+          url: ${{env.gateway}}/v1/projects/${{env.project_id}}/flags
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 502
+
+      - name: "Step 2: Create flag"
+        http:
+          url: ${{env.gateway}}/v1/projects/${{env.project_id}}/flags
+          method: POST
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+            Content-Type: application/json
+          json:
+              key: e2e-flag-001
+              enabled: false
+          check:
+            status:
+              - 201
+              - 502
+        captures:
+          flag_key:
+            jsonpath: $.key
+
+      - name: "Step 3: Get flag"
+        http:
+          url: ${{env.gateway}}/v1/projects/${{env.project_id}}/flags/${{captures.flag_key}}
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 404
+              - 502
+
+      - name: "Step 4: Enable flag"
+        http:
+          url: ${{env.gateway}}/v1/projects/${{env.project_id}}/flags/${{captures.flag_key}}
+          method: PUT
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+            Content-Type: application/json
+          json:
+              enabled: true
+              version: 1
+          check:
+            status:
+              - 200
+              - 502
+
+      - name: "Step 5: Add variant"
+        http:
+          url: ${{env.gateway}}/v1/projects/${{env.project_id}}/flags/${{captures.flag_key}}/variants
+          method: POST
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+            Content-Type: application/json
+          json:
+              key: treatment
+              value: true
+          check:
+            status:
+              - 202
+              - 502
+
+      - name: "Step 6: Delete flag"
+        http:
+          url: ${{env.gateway}}/v1/projects/${{env.project_id}}/flags/${{captures.flag_key}}
+          method: DELETE
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 204
+              - 502
+
+  experiment_lifecycle:
+    name: Experiment lifecycle — create flag, create experiment, get results
+    steps:
+      - name: "Step 1: Create flag for experiment"
+        http:
+          url: ${{env.gateway}}/v1/projects/${{env.project_id}}/flags
+          method: POST
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+            Content-Type: application/json
+          json:
+              key: e2e-exp-flag
+              enabled: true
+          check:
+            status:
+              - 201
+              - 502
+        captures:
+          exp_flag_key:
+            jsonpath: $.key
+
+      - name: "Step 2: Create experiment"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/experiments
+          method: POST
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+            Content-Type: application/json
+          json:
+              name: E2E Experiment
+              description: Created by stepci admin-flow test
+              flag_key: e2e-exp-flag
+              variant_keys:
+                - control
+                - treatment
+          check:
+            status:
+              - 201
+              - 502
+        captures:
+          experiment_id:
+            jsonpath: $.id
+
+      - name: "Step 3: List experiments"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/experiments
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 502
+
+      - name: "Step 4: Get experiment by ID"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/experiments/${{captures.experiment_id}}
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 404
+              - 502
+
+      - name: "Step 5: Get experiment results"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/experiments/${{captures.experiment_id}}/results
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 404
+              - 502
+
+      - name: "Step 6: Delete experiment"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/experiments/${{captures.experiment_id}}
+          method: DELETE
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 204
+              - 404
+              - 502
+
+  segment_crud:
+    name: Segment CRUD — create, get, update, delete
+    steps:
+      - name: "Step 1: List segments"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/segments
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 502
+
+      - name: "Step 2: Create segment"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/segments
+          method: POST
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+            Content-Type: application/json
+          json:
+              key: e2e-segment-001
+              context_type: user
+          check:
+            status:
+              - 201
+              - 502
+        captures:
+          segment_key:
+            jsonpath: $.key
+
+      - name: "Step 3: Get segment"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/segments/${{captures.segment_key}}
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 404
+              - 502
+
+      - name: "Step 4: Delete segment"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/segments/${{captures.segment_key}}
+          method: DELETE
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 204
+              - 502
+
+  event_definition_crud:
+    name: Event definition CRUD — create, get, delete
+    steps:
+      - name: "Step 1: List event definitions"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/event-definitions
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 502
+
+      - name: "Step 2: Create event definition"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/event-definitions
+          method: POST
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+            Content-Type: application/json
+          json:
+              key: button_click
+              description: User clicked a button
+              value_type: bool
+          check:
+            status:
+              - 201
+              - 502
+        captures:
+          def_id:
+            jsonpath: $.id
+
+      - name: "Step 3: Get event definition"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/event-definitions/${{captures.def_id}}
+          method: GET
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 200
+              - 404
+              - 502
+
+      - name: "Step 4: Delete event definition"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/event-definitions/${{captures.def_id}}
+          method: DELETE
+          headers:
+            Authorization: Bearer ${{env.jwt_token}}
+          check:
+            status:
+              - 204
+              - 404
+              - 502

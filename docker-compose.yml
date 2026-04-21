@@ -48,6 +48,175 @@ services:
         soft: 262144
         hard: 262144
 
+  # ── Microservices ──────────────────────────────────────────────────────────
+
+  auth-service:
+    build:
+      context: .
+      dockerfile: docker/auth-service/Dockerfile
+    container_name: stitchd-auth-service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      AUTH_SERVICE_PORT: "50051"
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
+      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-admin@stitchd.io}
+      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-changeme}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${AUTH_SERVICE_PORT:-50051}:50051"
+    networks:
+      - stitchd
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=:50051 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  flag-service:
+    build:
+      context: .
+      dockerfile: docker/flag-service/Dockerfile
+    container_name: stitchd-flag-service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      FLAG_SERVICE_PORT: "50052"
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${FLAG_SERVICE_PORT:-50052}:50052"
+    networks:
+      - stitchd
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=:50052 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  segmentation-service:
+    build:
+      context: .
+      dockerfile: docker/segmentation-service/Dockerfile
+    container_name: stitchd-segmentation-service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      SEGMENTATION_SERVICE_PORT: "50053"
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${SEGMENTATION_SERVICE_PORT:-50053}:50053"
+    networks:
+      - stitchd
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=:50053 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  event-service:
+    build:
+      context: .
+      dockerfile: docker/event-service/Dockerfile
+    container_name: stitchd-event-service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      CLICKHOUSE_URL: http://${CLICKHOUSE_USER:-stitchd}:${CLICKHOUSE_PASSWORD:-stitchd}@clickhouse:8123/${CLICKHOUSE_DB:-stitchd}
+      EVENT_SERVICE_PORT: "50054"
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${EVENT_SERVICE_PORT:-50054}:50054"
+    networks:
+      - stitchd
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=:50054 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  experimentation-service:
+    build:
+      context: .
+      dockerfile: docker/experimentation-service/Dockerfile
+    container_name: stitchd-experimentation-service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      FLAG_SERVICE_ADDR: http://flag-service:50052
+      EXPERIMENTATION_SERVICE_PORT: "50055"
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${EXPERIMENTATION_SERVICE_PORT:-50055}:50055"
+    networks:
+      - stitchd
+    depends_on:
+      postgres:
+        condition: service_healthy
+      flag-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=:50055 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: docker/gateway/Dockerfile
+    container_name: stitchd-gateway
+    restart: unless-stopped
+    environment:
+      GATEWAY_PORT: "8080"
+      METRICS_PORT: "9080"
+      AUTH_SERVICE_ADDR: http://auth-service:50051
+      FLAG_SERVICE_ADDR: http://flag-service:50052
+      SEGMENTATION_SERVICE_ADDR: http://segmentation-service:50053
+      EVENT_SERVICE_ADDR: http://event-service:50054
+      EXPERIMENTATION_SERVICE_ADDR: http://experimentation-service:50055
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+      - "${GATEWAY_METRICS_PORT:-9080}:9080"
+    networks:
+      - stitchd
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      flag-service:
+        condition: service_healthy
+      segmentation-service:
+        condition: service_healthy
+      event-service:
+        condition: service_healthy
+      experimentation-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
 volumes:
   postgres_data:
     driver: local

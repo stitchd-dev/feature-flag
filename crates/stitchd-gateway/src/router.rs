@@ -1,0 +1,233 @@
+//! Axum router — four auth trees with distinct middleware policies.
+//!
+//! | Tree           | Auth                              | Who can call              |
+//! |----------------|-----------------------------------|---------------------------|
+//! | `auth_routes`  | none (public)                     | anyone                    |
+//! | `admin_routes` | JWT + `require_system_org`        | superadmin only           |
+//! | `mgmt_routes`  | JWT + `require_non_system_org`    | non-superadmin users only |
+//! | `sdk_routes`   | SDK key or JWT (`auth_middleware`) | SDK clients               |
+//! | `flag_routes`  | JWT (`auth_middleware`)           | authenticated users       |
+
+use std::sync::Arc;
+
+use axum::{Router, http::StatusCode, middleware, routing::{get, post, put}};
+
+use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
+use crate::routes::{admin, auth, events, experiments, flags, management, sdk, segments};
+use crate::state::GatewayState;
+
+/// Build the full gateway `Router`.
+pub fn build_router(state: Arc<GatewayState>) -> Router {
+    let auth_client = Arc::clone(&state.auth_client);
+
+    // ── Public: health + login (no auth required) ────────────────────────────
+    let auth_routes = Router::new()
+        .route("/health", get(|| async { StatusCode::OK }))
+        .route("/v1/auth/login", post(auth::login))
+        .with_state(Arc::clone(&state));
+
+    // ── Superadmin-only routes (JWT + system-org check) ───────────────────────
+    let admin_routes = Router::new()
+        .route("/v1/admin/orgs", post(admin::create_org))
+        .route("/v1/admin/orgs/{org_id}/users", post(admin::seed_user))
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn(require_system_org))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&auth_client),
+            auth_middleware,
+        ));
+
+    // ── Management routes (JWT + non-system-org check) ────────────────────────
+    let mgmt_routes = Router::new()
+        .route("/v1/management/orgs/{org_id}/projects",          post(management::create_project))
+        .route("/v1/management/projects/{project_id}/environments", post(management::create_environment))
+        .route("/v1/management/environments/{environment_id}/sdk-keys", post(management::create_sdk_key))
+        .route("/v1/management/orgs/{org_id}/users",             post(management::create_user))
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn(require_non_system_org))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&auth_client),
+            auth_middleware,
+        ));
+
+    // ── SDK routes (x-sdk-key auth) ──────────────────────────────────────────
+    let sdk_routes = Router::new()
+        .route("/v1/environments/{env_id}/evaluate", post(sdk::evaluate))
+        .route("/v1/environments/{env_id}/events", post(sdk::ingest_event))
+        .route("/v1/environments/{env_id}/events/batch", post(sdk::ingest_batch_events))
+        .route("/v1/environments/{env_id}/segments/list-check", post(sdk::list_check_membership))
+        .route(
+            "/v1/environments/{env_id}/segments/list-check/batch",
+            post(sdk::batch_list_check_membership),
+        )
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&auth_client),
+            auth_middleware,
+        ));
+
+    // ── JWT-authenticated resource routes ─────────────────────────────────────
+    let resource_routes = Router::new()
+        // Flags
+        .route(
+            "/v1/projects/{project_id}/flags",
+            get(flags::list_flags).post(flags::create_flag),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}",
+            get(flags::get_flag).put(flags::update_flag).delete(flags::delete_flag),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/variants",
+            post(flags::create_variant),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/rules",
+            put(flags::update_rules),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/hashing",
+            put(flags::update_flag_hashing),
+        )
+        // Segments
+        .route(
+            "/v1/environments/{env_id}/segments",
+            get(segments::list_segments).post(segments::create_segment),
+        )
+        .route(
+            "/v1/environments/{env_id}/segments/{segment_id}",
+            get(segments::get_segment).put(segments::update_segment).delete(segments::delete_segment),
+        )
+        // Events
+        .route(
+            "/v1/environments/{env_id}/event-definitions",
+            get(events::list_event_definitions).post(events::create_event_definition),
+        )
+        .route(
+            "/v1/environments/{env_id}/event-definitions/{def_id}",
+            get(events::get_event_definition)
+                .put(events::update_event_definition)
+                .delete(events::delete_event_definition),
+        )
+        // Experiments
+        .route(
+            "/v1/environments/{env_id}/experiments",
+            get(experiments::list_experiments).post(experiments::create_experiment),
+        )
+        .route(
+            "/v1/environments/{env_id}/experiments/{experiment_id}",
+            get(experiments::get_experiment)
+                .patch(experiments::update_experiment)
+                .delete(experiments::delete_experiment),
+        )
+        .route(
+            "/v1/environments/{env_id}/experiments/{experiment_id}/results",
+            get(experiments::get_results),
+        )
+        .route(
+            "/v1/environments/{env_id}/experiments/{experiment_id}/transitions",
+            post(experiments::transition_experiment),
+        )
+        .route(
+            "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
+            get(experiments::list_iterations),
+        )
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn_with_state(
+            auth_client,
+            auth_middleware,
+        ));
+
+    Router::new()
+        .merge(auth_routes)
+        .merge(admin_routes)
+        .merge(mgmt_routes)
+        .merge(sdk_routes)
+        .merge(resource_routes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use tower::ServiceExt as _;
+    use crate::tests::helpers::make_stub_state;
+
+    #[tokio::test]
+    async fn flags_without_auth_returns_401() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/v1/projects/proj-1/flags").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn segments_without_auth_returns_401() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/v1/environments/env-1/segments").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_create_org_without_auth_returns_401() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/orgs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"Test"}"#))
+                    .unwrap(),
+            )
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn management_create_project_without_auth_returns_401() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/management/orgs/org-1/projects")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"Test"}"#))
+                    .unwrap(),
+            )
+            .await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_route_exists_and_returns_non_404() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/auth/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"email":"a@b.com","password":"x"}"#))
+                    .unwrap(),
+            )
+            .await.unwrap();
+        assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn unknown_route_returns_404() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(Request::builder().uri("/unknown/path").body(Body::empty()).unwrap())
+            .await.unwrap();
+        assert!(
+            resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::UNAUTHORIZED,
+            "status: {}", resp.status()
+        );
+    }
+}

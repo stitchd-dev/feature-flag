@@ -18,7 +18,8 @@ async fn setup_org(pool: &sqlx::PgPool, audit: &Arc<PgAuditLogger>) -> Organisat
         updated_at: chrono::Utc::now(),
         deleted_at: None,
         version: 1,
-    };
+        is_system: false,
+};
     repo.create(&org).await.unwrap();
     org.id
 }

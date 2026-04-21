@@ -1,0 +1,122 @@
+syntax = "proto3";
+
+package stitchd.experiments.v1;
+
+// ─── Experiment status ────────────────────────────────────────────────────────
+
+enum ExperimentStatus {
+  EXPERIMENT_STATUS_UNSPECIFIED = 0;
+  EXPERIMENT_STATUS_DRAFT       = 1;
+  EXPERIMENT_STATUS_ACTIVE      = 2;
+  EXPERIMENT_STATUS_PAUSED      = 3;
+  EXPERIMENT_STATUS_CONCLUDED   = 4;
+}
+
+// ─── Experiment definition ────────────────────────────────────────────────────
+
+message Experiment {
+  string           id             = 1;
+  string           environment_id = 2;
+  string           name           = 3;
+  string           description    = 4;
+  string           flag_key       = 5;
+  ExperimentStatus status         = 6;
+  repeated string  variant_keys   = 7;
+  int64            created_at_ms  = 8;
+  int64            updated_at_ms  = 9;
+  uint64           version        = 10;
+}
+
+// ─── Iteration (a single run of an experiment) ────────────────────────────────
+
+message ExperimentIteration {
+  string          id               = 1;
+  string          experiment_id    = 2;
+  int32           iteration_number = 3;
+  int64           started_at_ms    = 4;
+  // Zero when the iteration is still running.
+  int64           ended_at_ms      = 5;
+  repeated string metric_keys      = 6;
+  double          traffic_allocation = 7;
+}
+
+// ─── Results ──────────────────────────────────────────────────────────────────
+
+message VariantResult {
+  string variant_key       = 1;
+  uint64 participant_count = 2;
+  map<string, double> metric_values = 3;
+  double p_value           = 4;
+  bool   p_value_present   = 5;
+}
+
+message ExperimentResults {
+  string                 experiment_id   = 1;
+  repeated VariantResult variant_results = 2;
+  int64                  computed_at_ms  = 3;
+}
+
+// ─── CRUD requests ────────────────────────────────────────────────────────────
+
+message CreateExperimentRequest {
+  Experiment experiment = 1;
+}
+
+message UpdateExperimentRequest {
+  Experiment experiment = 1;
+}
+
+message DeleteExperimentRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+message GetExperimentRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+message ListExperimentsRequest {
+  string environment_id = 1;
+}
+
+message ListExperimentsResponse {
+  repeated Experiment experiments = 1;
+}
+
+message GetResultsRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+// ─── Lifecycle / transitions ──────────────────────────────────────────────────
+
+message TransitionExperimentRequest {
+  string           environment_id = 1;
+  string           experiment_id  = 2;
+  ExperimentStatus new_status     = 3;
+  // Human-readable reason for the transition (optional).
+  string           reason         = 4;
+}
+
+message ListIterationsRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+message ListIterationsResponse {
+  repeated ExperimentIteration iterations = 1;
+}
+
+// ─── Experimentation service ──────────────────────────────────────────────────
+
+service ExperimentationService {
+  rpc CreateExperiment(CreateExperimentRequest) returns (Experiment);
+  rpc GetExperiment(GetExperimentRequest)       returns (Experiment);
+  rpc ListExperiments(ListExperimentsRequest)   returns (ListExperimentsResponse);
+  rpc UpdateExperiment(UpdateExperimentRequest) returns (Experiment);
+  rpc DeleteExperiment(DeleteExperimentRequest) returns (Experiment);
+  rpc TransitionExperiment(TransitionExperimentRequest) returns (Experiment);
+  rpc ListIterations(ListIterationsRequest)     returns (ListIterationsResponse);
+  rpc GetResults(GetResultsRequest)             returns (ExperimentResults);
+}

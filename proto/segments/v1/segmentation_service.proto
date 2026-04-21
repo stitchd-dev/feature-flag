@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package stitchd.segments.v1;
+
+import "segments/v1/segment.proto";
+
+// ─── Scalar requests ──────────────────────────────────────────────────────────
+
+message GetSegmentRequest {
+  string environment_id = 1;
+  string segment_key    = 2;
+}
+
+message ListSegmentsRequest {
+  string environment_id = 1;
+}
+
+message ListSegmentsResponse {
+  repeated RuleSegment     rule_segments = 1;
+  repeated ListSegmentMeta list_segments = 2;
+}
+
+// ─── Membership evaluation ────────────────────────────────────────────────────
+
+message EvaluateMembershipRequest {
+  string environment_id = 1;
+  string segment_key    = 2;
+  // The context key to test for membership.
+  string context_key    = 3;
+  string context_type   = 4;
+}
+
+message EvaluateMembershipResponse {
+  bool is_member = 1;
+}
+
+// ─── Mutation ─────────────────────────────────────────────────────────────────
+
+enum SegmentMutationKind {
+  SEGMENT_MUTATION_KIND_UNSPECIFIED = 0;
+  SEGMENT_MUTATION_KIND_CREATE      = 1;
+  SEGMENT_MUTATION_KIND_UPDATE      = 2;
+  SEGMENT_MUTATION_KIND_DELETE      = 3;
+}
+
+message MutateSegmentRequest {
+  string              environment_id = 1;
+  SegmentMutationKind kind           = 2;
+  // Exactly one of rule_segment or list_segment must be set.
+  oneof segment {
+    RuleSegment rule_segment = 3;
+    ListSegment list_segment = 4;
+  }
+  uint64 version = 5;
+}
+
+message MutateSegmentResponse {
+  oneof segment {
+    RuleSegment rule_segment = 1;
+    ListSegment list_segment = 2;
+  }
+  uint64 version = 3;
+}
+
+// ─── Segmentation service ─────────────────────────────────────────────────────
+
+service SegmentationService {
+  // Fetch a single segment definition by key.
+  rpc GetSegment(GetSegmentRequest) returns (SegmentBundle);
+
+  // List all segments for an environment.
+  rpc ListSegments(ListSegmentsRequest) returns (ListSegmentsResponse);
+
+  // Evaluate whether a context key is a member of a segment.
+  // Handles both rule-based and list-based segments.
+  rpc EvaluateMembership(EvaluateMembershipRequest) returns (EvaluateMembershipResponse);
+
+  // Create, update, or delete a segment.
+  rpc MutateSegment(MutateSegmentRequest) returns (MutateSegmentResponse);
+}

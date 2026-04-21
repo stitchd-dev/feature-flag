@@ -11,10 +11,19 @@ fn main() {
     let proto_root = workspace_root().join("proto");
 
     let proto_files = [
+        // Shared types
         proto_root.join("common/v1/context.proto"),
+        // Existing SDK-facing services
         proto_root.join("flags/v1/flag_sync.proto"),
         proto_root.join("segments/v1/segment.proto"),
         proto_root.join("events/v1/event.proto"),
+        // New microservice contracts
+        proto_root.join("auth/v1/auth_service.proto"),
+        proto_root.join("flags/v1/flag_service.proto"),
+        proto_root.join("segments/v1/segmentation_service.proto"),
+        proto_root.join("events/v1/event_service.proto"),
+        proto_root.join("experiments/v1/experimentation_service.proto"),
+        proto_root.join("management/v1/management_service.proto"),
     ];
 
     // Re-run build script if any proto file changes.

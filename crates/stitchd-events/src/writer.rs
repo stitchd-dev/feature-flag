@@ -119,4 +119,25 @@ impl EventWriter {
         insert.end().await?;
         Ok(())
     }
+
+    /// Write pre-constructed [`EventRow`]s to the `events` table.
+    ///
+    /// This is the preferred path when rows have already been validated and
+    /// assembled by the caller (e.g. the gRPC ingestion handler). All rows are
+    /// inserted in a single ClickHouse statement.
+    ///
+    /// Wrap in `tokio::spawn` for fire-and-forget.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WriteError`] if the ClickHouse insert fails.
+    #[instrument(skip(self, rows), fields(count = rows.len()))]
+    pub async fn write_rows(&self, rows: Vec<EventRow>) -> Result<(), WriteError> {
+        let mut insert = self.client.insert("events")?;
+        for row in &rows {
+            insert.write(row).await?;
+        }
+        insert.end().await?;
+        Ok(())
+    }
 }

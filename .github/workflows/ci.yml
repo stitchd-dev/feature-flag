@@ -87,9 +87,25 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  # ── 3. Tests ───────────────────────────────────────────────────────────────
+  # ── 3. API contract check ──────────────────────────────────────────────────
+  # Ensures no REST routes present in the pre-decomposition OpenAPI snapshot
+  # are silently dropped by the gateway (exits non-zero on unexpected gaps).
+  contract-check:
+    name: API Contract Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify gateway covers pre-decomposition API surface
+        run: python3 scripts/check_openapi_contract.py
+
+  # ── 4. Tests ───────────────────────────────────────────────────────────────
   # Runs only for crates affected by this push/PR (direct changes + their
   # transitive dependents).  Skipped entirely when no testable crate changed.
+  #
+  # Only the infrastructure services (postgres, clickhouse) are started here.
+  # The six microservice containers require built Docker images and are exercised
+  # by the E2E Step CI workflows (tests/e2e/) against a live stack, not in CI.
   test:
     name: Tests
     needs: detect-changes
@@ -100,8 +116,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start services
-        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up -d --wait --wait-timeout 120
+      - name: Start infrastructure services
+        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up postgres clickhouse -d --wait --wait-timeout 120
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -127,8 +143,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start services
-        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up -d --wait --wait-timeout 120
+      - name: Start infrastructure services
+        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up postgres clickhouse -d --wait --wait-timeout 120
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable

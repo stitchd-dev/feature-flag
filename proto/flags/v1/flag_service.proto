@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package stitchd.flags.v1;
+
+import "flags/v1/flag_sync.proto";
+
+// ─── Scalar requests ──────────────────────────────────────────────────────────
+
+message GetFlagRequest {
+  string environment_id = 1;
+  string flag_key       = 2;
+}
+
+message ListFlagsRequest {
+  string environment_id = 1;
+}
+
+message ListFlagsResponse {
+  repeated FeatureFlag flags = 1;
+}
+
+// ─── Mutation ─────────────────────────────────────────────────────────────────
+
+enum MutationKind {
+  MUTATION_KIND_UNSPECIFIED = 0;
+  MUTATION_KIND_CREATE      = 1;
+  MUTATION_KIND_UPDATE      = 2;
+  MUTATION_KIND_DELETE      = 3;
+  MUTATION_KIND_ARCHIVE     = 4;
+}
+
+message MutateFlagRequest {
+  string        environment_id = 1;
+  MutationKind  kind           = 2;
+  FeatureFlag   flag           = 3;
+  // Optimistic-locking version — required for UPDATE / DELETE / ARCHIVE.
+  // Server rejects with ABORTED if stored version differs.
+  uint64        version        = 4;
+}
+
+message MutateFlagResponse {
+  FeatureFlag flag    = 1;
+  uint64      version = 2;
+}
+
+// ─── Streaming definitions for SDK sync ───────────────────────────────────────
+
+message GetFlagDefinitionsRequest {
+  string environment_id = 1;
+}
+
+// ─── Flag hashing config ──────────────────────────────────────────────────────
+
+// Controls which context parameters are used for percentage-rollout hashing.
+message FlagHashingConfig {
+  string parameter_key  = 1;
+  string parameter_type = 2;
+  int32  order          = 3;
+}
+
+message UpdateFlagHashingRequest {
+  string environment_id              = 1;
+  string flag_key                    = 2;
+  repeated FlagHashingConfig configs = 3;
+}
+
+message UpdateFlagHashingResponse {
+  FeatureFlag flag                   = 1;
+  repeated FlagHashingConfig configs = 2;
+}
+
+// ─── Flag management service ──────────────────────────────────────────────────
+
+service FlagService {
+  // Fetch a single flag definition by key.
+  rpc GetFlag(GetFlagRequest) returns (FeatureFlag);
+
+  // List all flag definitions for an environment.
+  rpc ListFlags(ListFlagsRequest) returns (ListFlagsResponse);
+
+  // Create, update, delete, or archive a flag.
+  rpc MutateFlag(MutateFlagRequest) returns (MutateFlagResponse);
+
+  // Server-streaming endpoint for SDK definition sync.
+  rpc GetFlagDefinitions(GetFlagDefinitionsRequest) returns (stream FeatureFlag);
+
+  // Replace the hashing config for a flag (which context params drive rollout %).
+  rpc UpdateFlagHashing(UpdateFlagHashingRequest) returns (UpdateFlagHashingResponse);
+}
