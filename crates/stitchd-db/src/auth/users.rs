@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
 use stitchd_core::{
-    auth::{User, UserStatus},
-    id::UserId,
+    auth::{OrgRole, User, UserStatus},
+    id::{OrganisationId, UserId},
 };
 
 use crate::RepositoryError;
@@ -61,6 +61,12 @@ pub trait AuthUserRepository: Send + Sync {
         display_name: &str,
         avatar_url: Option<&str>,
     ) -> Result<(), RepositoryError>;
+
+    /// List all users that are members of `org_id`, along with their org role.
+    async fn list_org_users(
+        &self,
+        org_id: OrganisationId,
+    ) -> Result<Vec<(User, OrgRole)>, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +328,60 @@ impl AuthUserRepository for PgAuthUserRepository {
             });
         }
         Ok(())
+    }
+
+    async fn list_org_users(
+        &self,
+        org_id: OrganisationId,
+    ) -> Result<Vec<(User, OrgRole)>, RepositoryError> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT
+                u.id,
+                u.email,
+                u.display_name,
+                u.avatar_url,
+                u.password_hash,
+                u.token_secret,
+                u.totp_secret,
+                u.totp_enabled,
+                u.status,
+                u.created_at,
+                u.updated_at,
+                m.role AS org_role
+            FROM users u
+            JOIN org_memberships m ON u.id = m.user_id
+            WHERE m.org_id = $1
+            ORDER BY u.email
+            "#,
+            org_id.as_uuid(),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        rows.into_iter()
+            .map(|r| {
+                let org_role = match r.org_role.as_str() {
+                    "org_admin" => OrgRole::OrgAdmin,
+                    _ => OrgRole::OrgMember,
+                };
+                let user = User {
+                    id: UserId::from_uuid(r.id),
+                    email: r.email,
+                    display_name: r.display_name,
+                    avatar_url: r.avatar_url,
+                    password_hash: r.password_hash,
+                    token_secret: r.token_secret,
+                    totp_secret: r.totp_secret,
+                    totp_enabled: r.totp_enabled,
+                    status: parse_status(&r.status)?,
+                    created_at: r.created_at,
+                    updated_at: r.updated_at,
+                };
+                Ok((user, org_role))
+            })
+            .collect()
     }
 }
 
