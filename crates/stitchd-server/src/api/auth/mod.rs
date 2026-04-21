@@ -12,7 +12,9 @@
 
 pub mod mfa;
 pub mod middleware;
+pub mod oidc;
 pub mod password;
+pub mod providers;
 pub mod sessions;
 
 pub use middleware::{AuthenticatedUser, RequireEnvRole, RequireOrgRole, RequireProjectRole};

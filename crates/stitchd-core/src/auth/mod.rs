@@ -6,6 +6,7 @@
 mod types;
 pub mod crypto;
 pub mod jwt;
+pub mod oidc;
 pub mod totp;
 
 pub use types::{
@@ -16,4 +17,5 @@ pub use types::{
 pub use crate::id::{AuthProviderId, InviteId, MfaChallengeId, RefreshTokenId, UserId};
 pub use crypto::CryptoKey;
 pub use jwt::JwtEngine;
+pub use oidc::{OidcError, OidcProvider};
 pub use totp::{TotpEngine, TotpError};

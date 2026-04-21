@@ -5,10 +5,12 @@
 //! - [`AuthUserRepository`] / [`PgAuthUserRepository`]
 //! - [`OrgMembershipRepository`] / [`PgOrgMembershipRepository`]
 //! - [`MfaRepository`] / [`PgMfaRepository`]
-//! - [`MfaChallengeRepository`] / [`PgMfaChallengeRepository`] (Phase 3 compat)
+//! - [`MfaChallengeRepository`] / [`PgMfaChallengeRepository`]
+//! - [`AuthProviderRepository`] / [`PgAuthProviderRepository`]
 
 pub mod memberships;
 pub mod mfa;
+pub mod providers;
 pub mod refresh_tokens;
 pub mod users;
 
@@ -17,5 +19,6 @@ pub use mfa::{
     MfaChallengeRepository, MfaRepository, PgMfaChallengeRepository, PgMfaRepository,
     challenge_token_hash,
 };
+pub use providers::{AuthProviderRepository, PgAuthProviderRepository};
 pub use refresh_tokens::{PgRefreshTokenRepository, RefreshTokenRepository};
 pub use users::{AuthUserRepository, PgAuthUserRepository};

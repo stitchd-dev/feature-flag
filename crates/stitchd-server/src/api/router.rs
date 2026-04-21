@@ -12,6 +12,7 @@ pub fn build_api_router() -> Router<AppState> {
         .nest("/v1/environments/{env_id}", environment_routes())
         .nest("/v1/projects/{project_id}/flags", flag_routes())
         .nest("/v1/users/me/mfa", mfa_user_routes())
+        .nest("/v1/orgs/{org_id}", org_routes())
 }
 
 fn auth_routes() -> Router<AppState> {
@@ -27,6 +28,15 @@ fn auth_routes() -> Router<AppState> {
         .route("/sessions/{token_id}", delete(auth::sessions::revoke_session))
         // MFA verify endpoint (no AuthenticatedUser — uses challenge token instead)
         .route("/mfa/verify", post(auth::mfa::verify))
+        // OIDC / OAuth2 authorization-code flow (unauthenticated)
+        .route(
+            "/oidc/{org_slug}/{provider_id}/authorize",
+            get(auth::oidc::authorize),
+        )
+        .route(
+            "/oidc/{org_slug}/{provider_id}/callback",
+            get(auth::oidc::callback),
+        )
 }
 
 fn mfa_user_routes() -> Router<AppState> {
@@ -37,6 +47,18 @@ fn mfa_user_routes() -> Router<AppState> {
         .route(
             "/recovery-codes/regenerate",
             post(auth::mfa::regenerate_recovery_codes),
+        )
+}
+
+fn org_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/auth-providers",
+            get(auth::providers::list_providers).post(auth::providers::create_provider),
+        )
+        .route(
+            "/auth-providers/{provider_id}",
+            put(auth::providers::update_provider).delete(auth::providers::delete_provider),
         )
 }
 
@@ -594,6 +616,16 @@ mod tests {
         async fn get_user_id_for_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::UserId>, stitchd_db::RepositoryError> { Ok(None) }
     }
 
+    struct StubAuthProviderRepo;
+    #[async_trait]
+    impl stitchd_db::AuthProviderRepository for StubAuthProviderRepo {
+        async fn create(&self, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::ProviderType, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::Unexpected(anyhow::anyhow!("stub"))) }
+        async fn find_by_id(&self, _: stitchd_core::id::AuthProviderId) -> Result<Option<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> { Ok(vec![]) }
+        async fn update(&self, id: stitchd_core::id::AuthProviderId, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        async fn delete(&self, _: stitchd_core::id::AuthProviderId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+    }
+
     fn make_test_state() -> AppState {
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -606,6 +638,7 @@ mod tests {
             membership_repo: Arc::new(StubMembershipRepo),
             refresh_token_repo: Arc::new(StubRefreshTokenRepo),
             mfa_repo: Arc::new(StubMfaRepo),
+            auth_provider_repo: Arc::new(StubAuthProviderRepo),
             segment_repo: Arc::new(StubSegmentRepo),
             flag_repo: Arc::new(StubFlagRepo),
             variant_repo: Arc::new(StubVariantRepo),
@@ -615,6 +648,7 @@ mod tests {
             results_repo: Arc::new(StubResultsRepo),
             ch_client: None,
             event_writer: None,
+            oidc_state_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 

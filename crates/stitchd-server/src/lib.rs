@@ -17,15 +17,23 @@ use axum::{Json, Router, extract::State, routing::get};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use sqlx::PgPool;
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
+use stitchd_core::id::AuthProviderId;
 use stitchd_db::{
-    AuthUserRepository, EventDefinitionRepository, ExperimentRepository, FlagRepository,
-    MfaRepository, OrgMembershipRepository, RefreshTokenRepository, SdkKeyRepository,
-    SegmentRepository, UserRepository, VariantRepository,
+    AuthProviderRepository, AuthUserRepository, EventDefinitionRepository, ExperimentRepository,
+    FlagRepository, MfaRepository, OrgMembershipRepository, RefreshTokenRepository,
+    SdkKeyRepository, SegmentRepository, UserRepository, VariantRepository,
     experiment_results::ExperimentResultsRepository,
 };
 use stitchd_events::writer::EventWriter;
 use utoipa::OpenApi as _;
+
+/// Type alias for the OIDC state cache inner map: state token → (`pkce_verifier`, `provider_id`, `issued_at`).
+pub type OidcStateMap = HashMap<String, (String, AuthProviderId, Instant)>;
 
 /// Shared application state.
 #[derive(Clone)]
@@ -44,6 +52,8 @@ pub struct AppState {
     pub refresh_token_repo: Arc<dyn RefreshTokenRepository>,
     /// MFA repository (challenges, TOTP enable/disable, recovery codes).
     pub mfa_repo: Arc<dyn MfaRepository>,
+    /// Auth provider repository (OIDC/SAML provider management).
+    pub auth_provider_repo: Arc<dyn AuthProviderRepository>,
     /// Repository for segment management.
     pub segment_repo: Arc<dyn SegmentRepository>,
     /// Repository for feature flag management.
@@ -63,6 +73,9 @@ pub struct AppState {
     pub ch_client: Option<Arc<clickhouse::Client>>,
     /// ClickHouse event writer. `None` when ClickHouse is unavailable (writes are skipped).
     pub event_writer: Option<EventWriter>,
+    /// Short-lived OIDC state cache: state → (`pkce_verifier`, `provider_id`, `issued_at`).
+    /// TTL is 10 minutes; entries are checked on use.
+    pub oidc_state_cache: Arc<Mutex<OidcStateMap>>,
 }
 
 /// Build the Axum router.
@@ -176,6 +189,9 @@ mod tests {
         let mfa_repo = std::sync::Arc::new(
             stitchd_db::PgMfaRepository::new(db.clone()),
         );
+        let auth_provider_repo = std::sync::Arc::new(
+            stitchd_db::PgAuthProviderRepository::new(db.clone()),
+        );
         AppState {
             db,
             metrics_handle,
@@ -184,6 +200,7 @@ mod tests {
             membership_repo,
             refresh_token_repo,
             mfa_repo,
+            auth_provider_repo,
             segment_repo,
             flag_repo,
             variant_repo,
@@ -193,6 +210,7 @@ mod tests {
             results_repo,
             ch_client: None,
             event_writer: None,
+            oidc_state_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -751,6 +769,27 @@ mod tests {
             }
         }
 
+        struct StubAuthProviderRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::AuthProviderRepository for StubAuthProviderRepo {
+            async fn create(&self, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::ProviderType, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::Unexpected(anyhow::anyhow!("stub")))
+            }
+            async fn find_by_id(&self, id: stitchd_core::id::AuthProviderId) -> Result<Option<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> {
+                let _ = id;
+                Ok(None)
+            }
+            async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> {
+                Ok(vec![])
+            }
+            async fn update(&self, id: stitchd_core::id::AuthProviderId, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn delete(&self, _: stitchd_core::id::AuthProviderId) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+        }
+
         let stub = Arc::new(StubRepo);
         AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_stub")
@@ -761,6 +800,7 @@ mod tests {
             membership_repo: Arc::new(StubMembershipRepo),
             refresh_token_repo: Arc::new(StubRefreshTokenRepo),
             mfa_repo: Arc::new(StubMfaRepo),
+            auth_provider_repo: Arc::new(StubAuthProviderRepo),
             segment_repo: stub.clone(),
             flag_repo: stub.clone(),
             variant_repo: stub.clone(),
@@ -770,6 +810,7 @@ mod tests {
             results_repo: Arc::new(NullResultsRepo),
             ch_client: None,
             event_writer: None,
+            oidc_state_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
