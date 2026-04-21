@@ -46,13 +46,13 @@
 ## Phase 4: Segmentation Service (`stitchd-segmentation-service`)
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Scaffold `crates/stitchd-segmentation-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
-- [ ] Task 2: Write failing tests for rule-based segment evaluation handler
-- [ ] Task 3: Implement segment CRUD — migrate from `stitchd-server/src/api/segments/`; owns `segments` schema
-- [ ] Task 4: Write failing tests for list-based segment membership evaluation
-- [ ] Task 5: Implement `EvaluateMembership` gRPC handler (rule-based + list-based paths)
-- [ ] Task 6: Wire tonic gRPC server in `main.rs` with graceful shutdown; metrics
-- [ ] Task 7: Verify >95% unit test coverage for crate
+- [x] Task 1: Scaffold `crates/stitchd-segmentation-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure [aff5be5]
+- [x] Task 2: Write failing tests for rule-based segment evaluation handler [c859f22]
+- [x] Task 3: Implement segment CRUD — migrate from `stitchd-server/src/api/segments/`; owns `segments` schema [c6402b7]
+- [x] Task 4: Write failing tests for list-based segment membership evaluation [90b8499]
+- [x] Task 5: Implement `EvaluateMembership` gRPC handler (rule-based + list-based paths) [90b8499]
+- [x] Task 6: Wire tonic gRPC server in `main.rs` with graceful shutdown; metrics [782d418]
+- [x] Task 7: Verify >95% unit test coverage for crate [a60a6ea]
 - [ ] Task: Conductor - User Manual Verification 'Segmentation Service' (Protocol in workflow.md)
 
 ## Phase 5: Experimentation Event Service (`stitchd-event-service`)
