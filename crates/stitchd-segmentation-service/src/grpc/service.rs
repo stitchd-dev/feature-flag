@@ -214,7 +214,10 @@ async fn evaluate_rule_membership(
         Err(SegmentEvaluatorError::InvalidSegmentRule) => Err(Status::failed_precondition(
             "segment rule contains invalid in-segment condition",
         )),
-        Err(e) => Err(Status::internal(e.to_string())),
+        // Rule engine errors (e.g. missing parameter) indicate the rule cannot
+        // be evaluated with the bare context provided to EvaluateMembership —
+        // treat as not-a-member rather than an internal error.
+        Err(SegmentEvaluatorError::RuleEngine(_)) => Ok(false),
     }
 }
 
