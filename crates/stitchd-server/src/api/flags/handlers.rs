@@ -393,6 +393,7 @@ pub struct BatchEvaluationResponse {
     tag = "flags"
 )]
 pub async fn evaluate_all_flags(
+    _auth: crate::api::sdk_auth::SdkAuth,
     Path(env_id): Path<EnvironmentId>,
     State(state): State<AppState>,
     Json(req): Json<EvaluationRequest>,
@@ -779,6 +780,9 @@ mod tests {
         }
     }
 
+    /// Raw SDK key used for evaluate tests
+    const TEST_SDK_KEY_RAW: &str = "test-sdk-key-for-evaluate-tests";
+
     #[derive(Default)]
     struct MockSdkKeyRepo;
 
@@ -808,15 +812,38 @@ mod tests {
 
         async fn find_active_by_environment(
             &self,
-            _environment_id: EnvironmentId,
+            environment_id: EnvironmentId,
         ) -> Result<Vec<SdkKey>, RepositoryError> {
-            Ok(Vec::new())
+            // Return a valid key for any environment so SdkAuth passes when
+            // TEST_SDK_KEY_RAW is presented.
+            let key_hash = crate::api::sdk_auth::hash_sdk_key(TEST_SDK_KEY_RAW);
+            Ok(vec![SdkKey {
+                id: stitchd_core::id::SdkKeyId::new(),
+                environment_id,
+                key_hash,
+                is_active: true,
+                created_at: chrono::Utc::now(),
+                revoked_at: None,
+            }])
         }
 
         async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
-            Err(RepositoryError::NotFound {
-                id: key_hash.to_string(),
-            })
+            // Return a valid key when the test key is presented
+            let expected_hash = crate::api::sdk_auth::hash_sdk_key(TEST_SDK_KEY_RAW);
+            if key_hash == expected_hash {
+                Ok(SdkKey {
+                    id: stitchd_core::id::SdkKeyId::new(),
+                    environment_id: EnvironmentId::new(),
+                    key_hash: expected_hash,
+                    is_active: true,
+                    created_at: chrono::Utc::now(),
+                    revoked_at: None,
+                })
+            } else {
+                Err(RepositoryError::NotFound {
+                    id: key_hash.to_string(),
+                })
+            }
         }
     }
 
@@ -955,12 +982,52 @@ mod tests {
         async fn update(&self, u: &stitchd_core::auth::User) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Ok(u.clone()) }
         async fn find_permissions_for_user(&self, _: stitchd_core::id::UserId, _: stitchd_core::id::ProjectId) -> Result<Vec<stitchd_core::user::Permission>, stitchd_db::RepositoryError> { Ok(vec![]) }
     }
+    // ---------------------------------------------------------------------------
+    // JWT test helpers — used to satisfy AuthenticatedUser extractor
+    // ---------------------------------------------------------------------------
+
+    /// A fixed token secret for all flag handler tests
+    static TEST_TOKEN_SECRET: std::sync::LazyLock<uuid::Uuid> =
+        std::sync::LazyLock::new(uuid::Uuid::new_v4);
+
+    /// Build a `User` that the `StubAuthUserRepo` will return for JWT verification
+    fn test_user() -> stitchd_core::auth::User {
+        stitchd_core::auth::User {
+            id: stitchd_core::id::UserId::from_uuid(uuid::Uuid::nil()),
+            email: "handler-test@example.com".to_string(),
+            display_name: "Handler Test User".to_string(),
+            avatar_url: None,
+            password_hash: None,
+            token_secret: *TEST_TOKEN_SECRET,
+            totp_secret: None,
+            totp_enabled: false,
+            status: stitchd_core::auth::UserStatus::Active,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Issue a JWT for the test user; returns an `Authorization: Bearer …` value
+    fn test_bearer_header() -> String {
+        let user = test_user();
+        let org_id = stitchd_core::id::OrganisationId::new();
+        let token = stitchd_core::auth::jwt::JwtEngine::issue(
+            user.id,
+            org_id,
+            &user.email,
+            stitchd_core::auth::OrgRole::OrgMember,
+            &user.token_secret,
+        )
+        .expect("test JWT issue should not fail");
+        format!("Bearer {token}")
+    }
+
     struct StubAuthUserRepo;
     #[async_trait]
     impl stitchd_db::AuthUserRepository for StubAuthUserRepo {
         async fn create(&self, e: &str, _: &str, _: Option<&str>) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: e.to_string() }) }
-        async fn find_by_email(&self, _: &str) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(None) }
-        async fn find_by_id(&self, _: stitchd_core::id::UserId) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn find_by_email(&self, _: &str) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(Some(test_user())) }
+        async fn find_by_id(&self, _: stitchd_core::id::UserId) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(Some(test_user())) }
         async fn rotate_token_secret(&self, id: stitchd_core::id::UserId) -> Result<uuid::Uuid, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn update_status(&self, id: stitchd_core::id::UserId, _: stitchd_core::auth::UserStatus) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn update_password_hash(&self, id: stitchd_core::id::UserId, _: &str) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
@@ -1086,7 +1153,7 @@ mod tests {
     }
 
     fn build_router(state: AppState) -> axum::Router {
-        crate::api::router::build_api_router().with_state(state)
+        crate::api::router::build_api_router(state.clone()).with_state(state)
     }
 
     // ---------------------------------------------------------------------------
@@ -1106,6 +1173,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/projects/{project_id}/flags"))
+                    .header("Authorization", test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1132,6 +1200,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/projects/{project_id}/flags"))
+                    .header("Authorization", test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1169,6 +1238,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/projects/{project_id}/flags"))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1197,6 +1267,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/projects/{project_id}/flags"))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1224,6 +1295,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/projects/{project_id}/flags/{flag_id}"))
+                    .header("Authorization", test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1251,6 +1323,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/projects/{project_id}/flags/{missing_id}"))
+                    .header("Authorization", test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1284,6 +1357,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/projects/{project_id}/flags/{flag_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1318,6 +1392,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/projects/{project_id}/flags/{flag_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1348,6 +1423,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/projects/{project_id}/flags/{flag_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1375,6 +1451,7 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/v1/projects/{project_id}/flags/{flag_id}"))
+                    .header("Authorization", test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1397,6 +1474,7 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/v1/projects/{project_id}/flags/{missing_id}"))
+                    .header("Authorization", test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1432,6 +1510,7 @@ mod tests {
                         "/v1/projects/{project_id}/flags/{flag_id}/variants"
                     ))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1463,6 +1542,7 @@ mod tests {
                         "/v1/projects/{project_id}/flags/{flag_id}/variants"
                     ))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1498,6 +1578,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/projects/{project_id}/flags/{flag_id}/hashing"))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&config).unwrap()))
                     .unwrap(),
             )
@@ -1528,6 +1609,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/projects/{project_id}/flags/{flag_id}/rules"))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&rules).unwrap()))
                     .unwrap(),
             )
@@ -1643,6 +1725,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/projects/{project_id}/flags/{flag_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1738,6 +1821,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/evaluate"))
                     .header("content-type", "application/json")
+                    .header("x-sdk-key", TEST_SDK_KEY_RAW)
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1801,6 +1885,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/evaluate"))
                     .header("content-type", "application/json")
+                    .header("x-sdk-key", TEST_SDK_KEY_RAW)
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )

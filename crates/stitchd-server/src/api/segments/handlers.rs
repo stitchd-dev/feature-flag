@@ -885,8 +885,8 @@ mod tests {
         #[async_trait::async_trait]
         impl stitchd_db::AuthUserRepository for StubAuthUserRepo {
             async fn create(&self, e: &str, _: &str, _: Option<&str>) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: e.to_string() }) }
-            async fn find_by_email(&self, _: &str) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(None) }
-            async fn find_by_id(&self, id: stitchd_core::id::UserId) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { let _ = id; Ok(None) }
+            async fn find_by_email(&self, _: &str) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(Some(seg_test_user())) }
+            async fn find_by_id(&self, _: stitchd_core::id::UserId) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(Some(seg_test_user())) }
             async fn rotate_token_secret(&self, id: stitchd_core::id::UserId) -> Result<uuid::Uuid, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
             async fn update_status(&self, id: stitchd_core::id::UserId, _: stitchd_core::auth::UserStatus) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
             async fn update_password_hash(&self, id: stitchd_core::id::UserId, _: &str) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
@@ -1013,7 +1013,44 @@ mod tests {
     }
 
     fn build_router(state: AppState) -> axum::Router {
-        crate::api::router::build_api_router().with_state(state)
+        crate::api::router::build_api_router(state.clone()).with_state(state)
+    }
+
+    // ---------------------------------------------------------------------------
+    // JWT test helpers — used to satisfy AuthenticatedUser extractor on admin routes
+    // ---------------------------------------------------------------------------
+
+    static SEG_TEST_TOKEN_SECRET: std::sync::LazyLock<uuid::Uuid> =
+        std::sync::LazyLock::new(uuid::Uuid::new_v4);
+
+    fn seg_test_user() -> stitchd_core::auth::User {
+        stitchd_core::auth::User {
+            id: stitchd_core::id::UserId::from_uuid(uuid::Uuid::nil()),
+            email: "seg-handler-test@example.com".to_string(),
+            display_name: "Segment Test User".to_string(),
+            avatar_url: None,
+            password_hash: None,
+            token_secret: *SEG_TEST_TOKEN_SECRET,
+            totp_secret: None,
+            totp_enabled: false,
+            status: stitchd_core::auth::UserStatus::Active,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn seg_test_bearer_header() -> String {
+        let user = seg_test_user();
+        let org_id = stitchd_core::id::OrganisationId::new();
+        let token = stitchd_core::auth::jwt::JwtEngine::issue(
+            user.id,
+            org_id,
+            &user.email,
+            stitchd_core::auth::OrgRole::OrgMember,
+            &user.token_secret,
+        )
+        .expect("test JWT issue should not fail");
+        format!("Bearer {token}")
     }
 
     // ---------------------------------------------------------------------------
@@ -1033,6 +1070,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1059,6 +1097,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1096,6 +1135,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/segments"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1124,6 +1164,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/segments"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1156,6 +1197,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/segments"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1184,6 +1226,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/segments"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1211,6 +1254,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1240,6 +1284,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1268,6 +1313,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments/{missing_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1301,6 +1347,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1330,6 +1377,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1359,6 +1407,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1386,6 +1435,7 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1408,6 +1458,7 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/v1/environments/{env_id}/segments/{missing_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1764,6 +1815,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1793,6 +1845,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )

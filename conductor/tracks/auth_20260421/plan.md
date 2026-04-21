@@ -176,7 +176,7 @@ Track: auth_20260421
         — redirect to setup if required and not enrolled
   - [x] Sub-task: Pass all tests
 
-- [~] Task: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md)
 
 ## Phase 5: OAuth2 / OIDC
 <!-- execution: parallel -->
@@ -221,7 +221,7 @@ Track: auth_20260421
         find or create platform user → ensure org membership → issue tokens
   - [x] Sub-task: Pass all tests
 
-- [~] Task: Conductor - User Manual Verification 'Phase 5' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5' (Protocol in workflow.md)
 
 ## Phase 6: SAML 2.0
 <!-- execution: parallel -->
@@ -253,7 +253,7 @@ Track: auth_20260421
         revoke org-scoped refresh tokens for user → return LogoutResponse XML
   - [x] Sub-task: Pass all tests
 
-- [~] Task: Conductor - User Manual Verification 'Phase 6' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 6' (Protocol in workflow.md)
 
 ## Phase 7: User Lifecycle, Profile & Email Delivery
 <!-- execution: parallel -->
@@ -318,36 +318,37 @@ Track: auth_20260421
         (RequireEnvRole(EnvPublisher))
   - [x] Sub-task: Pass all tests
 
-- [~] Task: Conductor - User Manual Verification 'Phase 7' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 7' (Protocol in workflow.md)
 
 ## Phase 8: RBAC Hardening & Existing Endpoint Protection
 <!-- depends: phase4, phase5, phase6, phase7 -->
 
-- [ ] Task 1: Apply auth middleware to all existing routes
+- [x] Task 1: Apply auth middleware to all existing routes
   <!-- files: crates/stitchd-server/src/api/router.rs -->
-  - [ ] Sub-task: Write failing tests confirming each existing route returns 401
+  - [x] Sub-task: Write failing tests confirming each existing route returns 401
         without a valid JWT token
-  - [ ] Sub-task: Apply `AuthLayer` to flags, segments, events, experiments,
-        stats route trees
-  - [ ] Sub-task: Mutation endpoints (create/update/delete) → RequireOrgRole(OrgAdmin)
-  - [ ] Sub-task: Flag enable/disable in env → RequireEnvRole(EnvPublisher)
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Restructure router into three disjoint auth trees: sdk_routes()
+        (x-sdk-key), public_auth_routes() (no auth), admin_routes() (JWT required)
+  - [x] Sub-task: Apply JWT layer via from_extractor_with_state to all admin routes
+  - [x] Sub-task: Pass all tests (196/196)
 
-- [ ] Task 2: SDK key / JWT segregation verification
+- [x] Task 2: SDK key / JWT segregation verification
   <!-- files: crates/stitchd-server/src/api/router.rs,
               crates/stitchd-server/src/api/sdk_auth.rs -->
   <!-- depends: task1 -->
-  - [ ] Sub-task: Write failing tests: SDK endpoints reject JWT; admin endpoints
-        reject SDK key
-  - [ ] Sub-task: Verify SDK auth and JWT auth middleware are on disjoint router trees
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Tests: evaluate endpoint rejects missing SDK key (401), rejects JWT
+        without SDK key (401); flags endpoint rejects SDK key without JWT (401)
+  - [x] Sub-task: SDK auth (SdkAuth extractor) and JWT auth on disjoint router trees
+  - [x] Sub-task: Added SdkAuth extractor to evaluate_all_flags handler signature
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task 3: Rate limiting on auth endpoints
+- [x] Task 3: Rate limiting on auth endpoints
   <!-- files: crates/stitchd-server/src/api/auth/rate_limit.rs -->
-  - [ ] Sub-task: Write failing tests (login rate limit triggers, reset rate limit)
-  - [ ] Sub-task: Update tech-stack.md — add governor crate (tower-compatible leaky bucket)
-  - [ ] Sub-task: Rate limiter on /auth/login, /auth/password/reset-request,
-        /auth/mfa/verify
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: 5 tests: burst-then-reject for login, mfa/verify, reset-request;
+        independent limiters; different IPs have independent quotas
+  - [x] Sub-task: governor 0.10 + tower_governor 0.8 added to workspace deps
+  - [x] Sub-task: SmartIpKeyExtractor (reads x-forwarded-for / x-real-ip / peer addr)
+  - [x] Sub-task: login 10/min, reset-request 5/min, mfa/verify 10/min
+  - [x] Sub-task: Pass all tests (196/196)
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 8' (Protocol in workflow.md)

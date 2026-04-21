@@ -95,11 +95,15 @@ pub struct AppState {
 /// Currently only exposes infrastructure endpoints (`/health`, `/metrics`).
 /// Feature routes will be added in subsequent tracks.
 pub fn build_router(state: AppState) -> Router {
+    // Pass a clone of state to build_api_router so the JWT middleware layer
+    // can be initialised. The outer `.with_state(state)` call then applies
+    // the same state to all routes.
+    let api_router = api::router::build_api_router(state.clone());
     Router::new()
         .route("/health", get(health_handler))
         .route("/metrics", get(metrics_handler))
         .route("/api-docs/openapi.json", get(openapi_json_handler))
-        .merge(api::router::build_api_router())
+        .merge(api_router)
         .with_state(state)
 }
 

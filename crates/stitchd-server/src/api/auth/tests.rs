@@ -523,7 +523,7 @@ fn make_state(
 }
 
 fn app_from_state(state: AppState) -> Router {
-    build_api_router().with_state(state)
+    build_api_router(state.clone()).with_state(state)
 }
 
 fn bearer(token: &str) -> String {
@@ -548,6 +548,7 @@ async fn login_success_single_org_returns_tokens() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -576,6 +577,7 @@ async fn login_wrong_password_returns_401() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -599,6 +601,7 @@ async fn login_deactivated_user_returns_403() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -625,6 +628,7 @@ async fn refresh_success_rotates_token() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(login_body.to_string()))
                 .unwrap(),
         )
@@ -695,6 +699,7 @@ async fn revoke_all_sessions_returns_204() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(login_body.to_string()))
                 .unwrap(),
         )
@@ -777,6 +782,7 @@ async fn switch_org_success_returns_new_tokens() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(login_body.to_string()))
                 .unwrap(),
         )
@@ -832,6 +838,7 @@ async fn switch_org_not_member_returns_403() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(login_body.to_string()))
                 .unwrap(),
         )
@@ -929,6 +936,7 @@ async fn mfa_setup_returns_otpauth_uri() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(login_body.to_string()))
                 .unwrap(),
         )
@@ -1008,6 +1016,7 @@ async fn mfa_confirm_valid_code_enables_mfa_and_returns_recovery_codes() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(login_body.to_string()))
                 .unwrap(),
         )
@@ -1065,6 +1074,7 @@ async fn mfa_confirm_invalid_code_returns_400() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(login_body.to_string()))
                 .unwrap(),
         )
@@ -1144,6 +1154,7 @@ async fn mfa_verify_valid_totp_returns_tokens() {
                 .method("POST")
                 .uri("/auth/mfa/verify")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(verify_body.to_string()))
                 .unwrap(),
         )
@@ -1175,6 +1186,7 @@ async fn mfa_verify_expired_challenge_returns_401() {
                 .method("POST")
                 .uri("/auth/mfa/verify")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(verify_body.to_string()))
                 .unwrap(),
         )
@@ -1224,6 +1236,7 @@ async fn mfa_disable_valid_code_returns_204() {
                 .method("POST")
                 .uri("/auth/login")
                 .header("Content-Type", "application/json")
+                .header("x-forwarded-for", "127.0.0.1")
                 .body(Body::from(login_body.to_string()))
                 .unwrap(),
         )

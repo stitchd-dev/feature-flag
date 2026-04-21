@@ -24,6 +24,7 @@ pub mod password;
 pub mod password_reset;
 pub mod profile;
 pub mod providers;
+pub mod rate_limit;
 pub mod saml;
 pub mod sessions;
 pub mod user_management;
