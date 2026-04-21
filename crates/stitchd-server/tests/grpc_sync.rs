@@ -11,10 +11,11 @@ use stitchd_core::{
 };
 use stitchd_db::{
     EnvironmentRepository, OrganisationRepository, ProjectRepository, SdkKeyRepository,
+    PgAuthUserRepository, PgOrgMembershipRepository, PgRefreshTokenRepository,
     repository::pg::{
         PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
         PgExperimentRepository, PgFlagRepository, PgOrganisationRepository, PgProjectRepository,
-        PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository,
+        PgSdkKeyRepository, PgSegmentRepository, PgUserRepository, PgVariantRepository,
     },
 };
 use stitchd_proto::flags::v1::{SyncRequest, flag_sync_service_client::FlagSyncServiceClient};
@@ -81,6 +82,10 @@ async fn setup(pool: sqlx::PgPool) -> (AppState, EnvironmentId) {
     let state = AppState {
         db: pool.clone(),
         metrics_handle,
+        user_repo: Arc::new(PgUserRepository::new(pool.clone(), audit.clone())),
+        auth_user_repo: Arc::new(PgAuthUserRepository::new(pool.clone())),
+        membership_repo: Arc::new(PgOrgMembershipRepository::new(pool.clone())),
+        refresh_token_repo: Arc::new(PgRefreshTokenRepository::new(pool.clone())),
         segment_repo: Arc::new(PgSegmentRepository::new(pool.clone(), audit.clone())),
         flag_repo: Arc::new(PgFlagRepository::new(pool.clone(), audit.clone())),
         variant_repo: Arc::new(PgVariantRepository::new(pool.clone(), audit.clone())),
