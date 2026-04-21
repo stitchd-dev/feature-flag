@@ -25,7 +25,7 @@ pub struct CreateProjectBody {
 
 #[derive(Debug, Serialize)]
 pub struct ProjectJson {
-    pub project_id:   String,
+    pub project_id: String,
     pub project_name: String,
 }
 
@@ -36,28 +36,28 @@ pub struct CreateEnvBody {
 
 #[derive(Debug, Serialize)]
 pub struct EnvJson {
-    pub environment_id:   String,
+    pub environment_id: String,
     pub environment_name: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SdkKeyJson {
     pub sdk_key_id: String,
-    pub raw_key:    String,
+    pub raw_key: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateUserBody {
-    pub email:        String,
+    pub email: String,
     pub display_name: String,
-    pub password:     String,
-    pub org_role:     Option<String>,
+    pub password: String,
+    pub org_role: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct UserJson {
-    pub user_id:      String,
-    pub email:        String,
+    pub user_id: String,
+    pub email: String,
     pub display_name: String,
 }
 
@@ -69,11 +69,23 @@ pub async fn create_project(
     Path(org_id): Path<String>,
     Json(body): Json<CreateProjectBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(CreateProjectRequest { org_id, name: body.name });
+    let req = tonic::Request::new(CreateProjectRequest {
+        org_id,
+        name: body.name,
+    });
     let mut client = state.management_client.lock().await;
-    let resp = client.create_project(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .create_project(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
-    Ok((StatusCode::CREATED, Json(ProjectJson { project_id: r.project_id, project_name: r.project_name })))
+    Ok((
+        StatusCode::CREATED,
+        Json(ProjectJson {
+            project_id: r.project_id,
+            project_name: r.project_name,
+        }),
+    ))
 }
 
 /// `POST /v1/management/projects/{project_id}/environments`
@@ -82,11 +94,23 @@ pub async fn create_environment(
     Path(project_id): Path<String>,
     Json(body): Json<CreateEnvBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(CreateEnvironmentRequest { project_id, name: body.name });
+    let req = tonic::Request::new(CreateEnvironmentRequest {
+        project_id,
+        name: body.name,
+    });
     let mut client = state.management_client.lock().await;
-    let resp = client.create_environment(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .create_environment(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
-    Ok((StatusCode::CREATED, Json(EnvJson { environment_id: r.environment_id, environment_name: r.environment_name })))
+    Ok((
+        StatusCode::CREATED,
+        Json(EnvJson {
+            environment_id: r.environment_id,
+            environment_name: r.environment_name,
+        }),
+    ))
 }
 
 /// `POST /v1/management/environments/{environment_id}/sdk-keys`
@@ -96,9 +120,18 @@ pub async fn create_sdk_key(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(CreateSdkKeyRequest { environment_id });
     let mut client = state.management_client.lock().await;
-    let resp = client.create_sdk_key(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .create_sdk_key(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
-    Ok((StatusCode::CREATED, Json(SdkKeyJson { sdk_key_id: r.sdk_key_id, raw_key: r.raw_key })))
+    Ok((
+        StatusCode::CREATED,
+        Json(SdkKeyJson {
+            sdk_key_id: r.sdk_key_id,
+            raw_key: r.raw_key,
+        }),
+    ))
 }
 
 /// `POST /v1/management/orgs/{org_id}/users`
@@ -109,15 +142,22 @@ pub async fn create_user(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(CreateUserRequest {
         org_id,
-        email:        body.email,
+        email: body.email,
         display_name: body.display_name,
-        password:     body.password,
-        org_role:     body.org_role.unwrap_or_else(|| "org_member".into()),
+        password: body.password,
+        org_role: body.org_role.unwrap_or_else(|| "org_member".into()),
     });
     let mut client = state.management_client.lock().await;
     let resp = client.create_user(req).await.map_err(GatewayError::from)?;
     let r = resp.into_inner();
-    Ok((StatusCode::CREATED, Json(UserJson { user_id: r.user_id, email: r.email, display_name: r.display_name })))
+    Ok((
+        StatusCode::CREATED,
+        Json(UserJson {
+            user_id: r.user_id,
+            email: r.email,
+            display_name: r.display_name,
+        }),
+    ))
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -126,9 +166,18 @@ pub async fn create_user(
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     use axum::routing::post;
     axum::Router::new()
-        .route("/v1/management/orgs/{org_id}/projects", post(create_project))
-        .route("/v1/management/projects/{project_id}/environments", post(create_environment))
-        .route("/v1/management/environments/{environment_id}/sdk-keys", post(create_sdk_key))
+        .route(
+            "/v1/management/orgs/{org_id}/projects",
+            post(create_project),
+        )
+        .route(
+            "/v1/management/projects/{project_id}/environments",
+            post(create_environment),
+        )
+        .route(
+            "/v1/management/environments/{environment_id}/sdk-keys",
+            post(create_sdk_key),
+        )
         .route("/v1/management/orgs/{org_id}/users", post(create_user))
         .with_state(state)
 }
@@ -136,9 +185,12 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::{Request, StatusCode}};
-    use tower::ServiceExt as _;
     use crate::tests::helpers::make_stub_state;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
 
     #[tokio::test]
     async fn create_project_returns_201_or_502() {

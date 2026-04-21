@@ -172,7 +172,10 @@ pub async fn create_experiment(
         .create_experiment(req)
         .await
         .map_err(GatewayError::from)?;
-    Ok((StatusCode::CREATED, Json(experiment_to_json(&resp.into_inner()))))
+    Ok((
+        StatusCode::CREATED,
+        Json(experiment_to_json(&resp.into_inner())),
+    ))
 }
 
 /// `GET /v1/environments/{env_id}/experiments/{experiment_id}`
@@ -293,7 +296,11 @@ pub async fn get_results(
     let inner = resp.into_inner();
     let results = ExperimentResultsJson {
         experiment_id: inner.experiment_id.clone(),
-        variant_results: inner.variant_results.iter().map(variant_result_to_json).collect(),
+        variant_results: inner
+            .variant_results
+            .iter()
+            .map(variant_result_to_json)
+            .collect(),
         computed_at_ms: inner.computed_at_ms,
     };
     Ok(Json(results))
@@ -310,7 +317,9 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
         )
         .route(
             "/v1/environments/{env_id}/experiments/{experiment_id}",
-            get(get_experiment).patch(update_experiment).delete(delete_experiment),
+            get(get_experiment)
+                .patch(update_experiment)
+                .delete(delete_experiment),
         )
         .route(
             "/v1/environments/{env_id}/experiments/{experiment_id}/results",
@@ -340,12 +349,18 @@ mod tests {
 
     #[test]
     fn experiment_status_str_draft() {
-        assert_eq!(experiment_status_str(ExperimentStatus::Draft as i32), "draft");
+        assert_eq!(
+            experiment_status_str(ExperimentStatus::Draft as i32),
+            "draft"
+        );
     }
 
     #[test]
     fn experiment_status_str_active() {
-        assert_eq!(experiment_status_str(ExperimentStatus::Active as i32), "active");
+        assert_eq!(
+            experiment_status_str(ExperimentStatus::Active as i32),
+            "active"
+        );
     }
 
     #[test]

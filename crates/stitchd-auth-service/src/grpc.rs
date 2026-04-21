@@ -8,10 +8,12 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
-use stitchd_db::{AuthUserRepository, OrgMembershipRepository, OrganisationRepository, RefreshTokenRepository, SdkKeyRepository};
+use stitchd_db::{
+    AuthUserRepository, OrgMembershipRepository, OrganisationRepository, RefreshTokenRepository,
+    SdkKeyRepository,
+};
 use stitchd_proto::auth::v1::{
-    CredentialRequest, LoginRequest, LoginResponse, RbacContext,
-    auth_service_server::AuthService,
+    CredentialRequest, LoginRequest, LoginResponse, RbacContext, auth_service_server::AuthService,
     credential_request::Credential,
 };
 
@@ -23,11 +25,12 @@ use crate::{
 };
 
 /// tonic gRPC service implementation for `AuthService`.
+#[allow(clippy::struct_field_names)]
 pub struct AuthServiceImpl {
-    auth_user_repo:     Arc<dyn AuthUserRepository>,
-    sdk_key_repo:       Arc<dyn SdkKeyRepository>,
-    membership_repo:    Arc<dyn OrgMembershipRepository>,
-    org_repo:           Arc<dyn OrganisationRepository>,
+    auth_user_repo: Arc<dyn AuthUserRepository>,
+    sdk_key_repo: Arc<dyn SdkKeyRepository>,
+    membership_repo: Arc<dyn OrgMembershipRepository>,
+    org_repo: Arc<dyn OrganisationRepository>,
     refresh_token_repo: Arc<dyn RefreshTokenRepository>,
 }
 
@@ -35,13 +38,19 @@ impl AuthServiceImpl {
     /// Create a new [`AuthServiceImpl`] backed by the given repositories.
     #[must_use]
     pub fn new(
-        auth_user_repo:     Arc<dyn AuthUserRepository>,
-        sdk_key_repo:       Arc<dyn SdkKeyRepository>,
-        membership_repo:    Arc<dyn OrgMembershipRepository>,
-        org_repo:           Arc<dyn OrganisationRepository>,
+        auth_user_repo: Arc<dyn AuthUserRepository>,
+        sdk_key_repo: Arc<dyn SdkKeyRepository>,
+        membership_repo: Arc<dyn OrgMembershipRepository>,
+        org_repo: Arc<dyn OrganisationRepository>,
         refresh_token_repo: Arc<dyn RefreshTokenRepository>,
     ) -> Self {
-        Self { auth_user_repo, sdk_key_repo, membership_repo, org_repo, refresh_token_repo }
+        Self {
+            auth_user_repo,
+            sdk_key_repo,
+            membership_repo,
+            org_repo,
+            refresh_token_repo,
+        }
     }
 }
 
@@ -94,6 +103,7 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use std::sync::Arc;
+    use stitchd_core::tenant::Organisation;
     use stitchd_core::{
         auth::{OrgMembership, OrgRole, User, UserStatus, jwt::JwtEngine},
         id::{EnvironmentId, OrganisationId, SdkKeyId, UserId},
@@ -103,7 +113,6 @@ mod tests {
         AuthUserRepository, OrgMembershipRepository, OrganisationRepository,
         RefreshTokenRepository, RepositoryError, SdkKeyRepository,
     };
-    use stitchd_core::tenant::Organisation;
 
     // ── Stub repositories ────────────────────────────────────────────────────
 
@@ -136,19 +145,11 @@ mod tests {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
-        async fn update_status(
-            &self,
-            id: UserId,
-            _: UserStatus,
-        ) -> Result<(), RepositoryError> {
+        async fn update_status(&self, id: UserId, _: UserStatus) -> Result<(), RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
-        async fn update_password_hash(
-            &self,
-            id: UserId,
-            _: &str,
-        ) -> Result<(), RepositoryError> {
+        async fn update_password_hash(&self, id: UserId, _: &str) -> Result<(), RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
@@ -175,19 +176,36 @@ mod tests {
 
     #[tonic::async_trait]
     impl OrgMembershipRepository for StubMembershipRepo {
-        async fn add_member(&self, _: UserId, _: OrganisationId, _: OrgRole) -> Result<OrgMembership, RepositoryError> {
+        async fn add_member(
+            &self,
+            _: UserId,
+            _: OrganisationId,
+            _: OrgRole,
+        ) -> Result<OrgMembership, RepositoryError> {
             Err(RepositoryError::NotFound { id: "stub".into() })
         }
-        async fn find_membership(&self, _: UserId, _: OrganisationId) -> Result<Option<OrgMembership>, RepositoryError> {
+        async fn find_membership(
+            &self,
+            _: UserId,
+            _: OrganisationId,
+        ) -> Result<Option<OrgMembership>, RepositoryError> {
             Ok(None)
         }
-        async fn list_orgs_for_user(&self, _: UserId) -> Result<Vec<OrgMembership>, RepositoryError> {
+        async fn list_orgs_for_user(
+            &self,
+            _: UserId,
+        ) -> Result<Vec<OrgMembership>, RepositoryError> {
             Ok(self.memberships.clone())
         }
         async fn remove_member(&self, _: UserId, _: OrganisationId) -> Result<(), RepositoryError> {
             Ok(())
         }
-        async fn update_role(&self, _: UserId, _: OrganisationId, _: OrgRole) -> Result<(), RepositoryError> {
+        async fn update_role(
+            &self,
+            _: UserId,
+            _: OrganisationId,
+            _: OrgRole,
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
     }
@@ -196,27 +214,53 @@ mod tests {
 
     #[tonic::async_trait]
     impl RefreshTokenRepository for StubRefreshRepo {
-        async fn create(&self, user_id: UserId, org_id: OrganisationId, _: Option<&str>, _: i64) -> Result<(stitchd_core::auth::RefreshToken, String), RepositoryError> {
+        async fn create(
+            &self,
+            user_id: UserId,
+            org_id: OrganisationId,
+            _: Option<&str>,
+            _: i64,
+        ) -> Result<(stitchd_core::auth::RefreshToken, String), RepositoryError> {
             use stitchd_core::{auth::RefreshToken, id::RefreshTokenId};
-            Ok((RefreshToken {
-                id: RefreshTokenId::new(),
-                user_id,
-                org_id,
-                token_hash: "stub".into(),
-                device_hint: None,
-                issued_at: Utc::now(),
-                expires_at: Utc::now() + chrono::Duration::days(30),
-                revoked_at: None,
-                last_used_at: None,
-            }, "stub-refresh-token".into()))
+            Ok((
+                RefreshToken {
+                    id: RefreshTokenId::new(),
+                    user_id,
+                    org_id,
+                    token_hash: "stub".into(),
+                    device_hint: None,
+                    issued_at: Utc::now(),
+                    expires_at: Utc::now() + chrono::Duration::days(30),
+                    revoked_at: None,
+                    last_used_at: None,
+                },
+                "stub-refresh-token".into(),
+            ))
         }
-        async fn find_by_hash(&self, _: &str) -> Result<Option<stitchd_core::auth::RefreshToken>, RepositoryError> { Ok(None) }
-        async fn consume(&self, id: stitchd_core::id::RefreshTokenId) -> Result<Option<stitchd_core::auth::RefreshToken>, RepositoryError> {
+        async fn find_by_hash(
+            &self,
+            _: &str,
+        ) -> Result<Option<stitchd_core::auth::RefreshToken>, RepositoryError> {
+            Ok(None)
+        }
+        async fn consume(
+            &self,
+            id: stitchd_core::id::RefreshTokenId,
+        ) -> Result<Option<stitchd_core::auth::RefreshToken>, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
-        async fn revoke(&self, _: stitchd_core::id::RefreshTokenId) -> Result<(), RepositoryError> { Ok(()) }
-        async fn revoke_all_for_user(&self, _: UserId) -> Result<(), RepositoryError> { Ok(()) }
-        async fn list_active(&self, _: UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, RepositoryError> { Ok(vec![]) }
+        async fn revoke(&self, _: stitchd_core::id::RefreshTokenId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn revoke_all_for_user(&self, _: UserId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn list_active(
+            &self,
+            _: UserId,
+        ) -> Result<Vec<stitchd_core::auth::RefreshToken>, RepositoryError> {
+            Ok(vec![])
+        }
     }
 
     struct StubOrgRepo;
@@ -235,9 +279,15 @@ mod tests {
                 is_system: false,
             })
         }
-        async fn list_all(&self) -> Result<Vec<Organisation>, RepositoryError> { Ok(vec![]) }
-        async fn create(&self, _: &Organisation) -> Result<(), RepositoryError> { Ok(()) }
-        async fn update(&self, org: &Organisation) -> Result<Organisation, RepositoryError> { Ok(org.clone()) }
+        async fn list_all(&self) -> Result<Vec<Organisation>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn create(&self, _: &Organisation) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(&self, org: &Organisation) -> Result<Organisation, RepositoryError> {
+            Ok(org.clone())
+        }
         async fn soft_delete(&self, id: OrganisationId) -> Result<(), RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
@@ -323,10 +373,7 @@ mod tests {
         (token, org_id)
     }
 
-    fn make_service(
-        user: Option<User>,
-        sdk_keys: Vec<SdkKey>,
-    ) -> AuthServiceImpl {
+    fn make_service(user: Option<User>, sdk_keys: Vec<SdkKey>) -> AuthServiceImpl {
         make_service_with_memberships(user, sdk_keys, vec![])
     }
 
@@ -337,7 +384,9 @@ mod tests {
     ) -> AuthServiceImpl {
         AuthServiceImpl::new(
             Arc::new(StubAuthUserRepo { user }),
-            Arc::new(StubSdkKeyRepo { active_keys: sdk_keys }),
+            Arc::new(StubSdkKeyRepo {
+                active_keys: sdk_keys,
+            }),
             Arc::new(StubMembershipRepo { memberships }),
             Arc::new(StubOrgRepo),
             Arc::new(StubRefreshRepo),

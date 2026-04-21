@@ -1,10 +1,6 @@
 //! Auth route handlers — login.
 
-use axum::{
-    Json,
-    extract::State,
-    response::IntoResponse,
-};
+use axum::{Json, extract::State, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -17,18 +13,18 @@ use crate::state::GatewayState;
 
 #[derive(Debug, Deserialize)]
 pub struct LoginBody {
-    pub email:    String,
+    pub email: String,
     pub password: String,
-    pub org_id:   Option<String>,
+    pub org_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct LoginJson {
-    pub access_token:  String,
+    pub access_token: String,
     pub refresh_token: String,
-    pub expires_in:    i64,
-    pub user_id:       String,
-    pub org_id:        String,
+    pub expires_in: i64,
+    pub user_id: String,
+    pub org_id: String,
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -39,19 +35,22 @@ pub async fn login(
     Json(body): Json<LoginBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(LoginRequest {
-        email:    body.email,
+        email: body.email,
         password: body.password,
-        org_id:   body.org_id.unwrap_or_default(),
+        org_id: body.org_id.unwrap_or_default(),
     });
     let mut client = state.auth_client.lock().await;
-    let resp = client.login_with_password(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .login_with_password(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
     Ok(Json(LoginJson {
-        access_token:  r.access_token,
+        access_token: r.access_token,
         refresh_token: r.refresh_token,
-        expires_in:    r.expires_in,
-        user_id:       r.user_id,
-        org_id:        r.org_id,
+        expires_in: r.expires_in,
+        user_id: r.user_id,
+        org_id: r.org_id,
     }))
 }
 
@@ -68,9 +67,12 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::{Request, StatusCode}};
-    use tower::ServiceExt as _;
     use crate::tests::helpers::make_stub_state;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
 
     #[tokio::test]
     async fn login_returns_200_or_502() {
@@ -81,7 +83,9 @@ mod tests {
                     .method("POST")
                     .uri("/v1/auth/login")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"email":"admin@example.com","password":"secret"}"#))
+                    .body(Body::from(
+                        r#"{"email":"admin@example.com","password":"secret"}"#,
+                    ))
                     .unwrap(),
             )
             .await

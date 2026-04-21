@@ -8,10 +8,7 @@ mod tests {
 
     use tonic::Request;
 
-    use stitchd_core::{
-        id::EnvironmentId,
-        segment::ContextList,
-    };
+    use stitchd_core::{id::EnvironmentId, segment::ContextList};
     use stitchd_proto::segments::v1::{
         EvaluateMembershipRequest, segmentation_service_server::SegmentationService,
     };
@@ -37,8 +34,14 @@ mod tests {
         lists.insert(
             "user".to_string(),
             ContextList {
-                include: include.iter().map(|s| s.to_string()).collect(),
-                exclude: exclude.iter().map(|s| s.to_string()).collect(),
+                include: include
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
+                exclude: exclude
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect(),
             },
         );
         lists
@@ -119,7 +122,10 @@ mod tests {
             .await
             .expect("should not error");
 
-        assert!(!resp.into_inner().is_member, "exclude must win over include");
+        assert!(
+            !resp.into_inner().is_member,
+            "exclude must win over include"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -219,7 +225,7 @@ mod tests {
     // Error paths
     // -------------------------------------------------------------------------
 
-    /// Requesting a list-based segment that does not exist returns NOT_FOUND.
+    /// Requesting a list-based segment that does not exist returns `NOT_FOUND`.
     #[tokio::test]
     async fn list_based_missing_segment_returns_not_found() {
         let repo = MockSegmentRepoForTest::new();

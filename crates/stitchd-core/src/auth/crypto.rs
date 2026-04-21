@@ -69,8 +69,8 @@ impl CryptoKey {
     /// Returns [`CryptoError::MissingEnvVar`] if the variable is absent, or
     /// [`CryptoError::InvalidKey`] if the decoded bytes are not exactly 32 bytes.
     pub fn from_env() -> Result<Self, CryptoError> {
-        let encoded = std::env::var("AUTH_ENCRYPTION_KEY")
-            .map_err(|_| CryptoError::MissingEnvVar)?;
+        let encoded =
+            std::env::var("AUTH_ENCRYPTION_KEY").map_err(|_| CryptoError::MissingEnvVar)?;
         let bytes = BASE64
             .decode(encoded.trim())
             .map_err(|e| CryptoError::InvalidKey(e.to_string()))?;

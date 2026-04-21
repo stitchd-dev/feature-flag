@@ -16,13 +16,11 @@ use tonic_health::server::health_reporter;
 use tracing::info;
 
 use stitchd_auth_service::{
-    bootstrap::seed_superadmin,
-    grpc::AuthServiceImpl,
-    management::ManagementServiceImpl,
+    bootstrap::seed_superadmin, grpc::AuthServiceImpl, management::ManagementServiceImpl,
 };
 use stitchd_db::{
-    AuthUserRepository, OrgMembershipRepository, OrganisationRepository,
-    PgAuthUserRepository, PgAuditLogger, PgEnvironmentRepository, PgOrgMembershipRepository,
+    AuthUserRepository, OrgMembershipRepository, OrganisationRepository, PgAuditLogger,
+    PgAuthUserRepository, PgEnvironmentRepository, PgOrgMembershipRepository,
     PgOrganisationRepository, PgProjectRepository, PgRefreshTokenRepository, PgSdkKeyRepository,
     RefreshTokenRepository,
 };
@@ -46,7 +44,9 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(9091_u16);
     let metrics_addr: SocketAddr = format!("0.0.0.0:{metrics_port}").parse()?;
     let builder = PrometheusBuilder::new();
-    let handle = builder.with_http_listener(metrics_addr).install_recorder()?;
+    let handle = builder
+        .with_http_listener(metrics_addr)
+        .install_recorder()?;
     info!(%metrics_addr, "Prometheus metrics endpoint ready");
     drop(handle);
 
@@ -55,26 +55,29 @@ async fn main() -> anyhow::Result<()> {
     let pool = sqlx::PgPool::connect(&database_url).await?;
 
     // Run migrations.
-    sqlx::migrate!("../stitchd-db/migrations").run(&pool).await?;
+    sqlx::migrate!("../stitchd-db/migrations")
+        .run(&pool)
+        .await?;
 
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
 
     // Repositories
-    let auth_user_repo  = Arc::new(PgAuthUserRepository::new(pool.clone()));
-    let sdk_key_repo    = Arc::new(PgSdkKeyRepository::new(pool.clone(), audit.clone()));
+    let auth_user_repo = Arc::new(PgAuthUserRepository::new(pool.clone()));
+    let sdk_key_repo = Arc::new(PgSdkKeyRepository::new(pool.clone(), audit.clone()));
     let membership_repo = Arc::new(PgOrgMembershipRepository::new(pool.clone()));
     let refresh_repo: Arc<dyn RefreshTokenRepository> =
         Arc::new(PgRefreshTokenRepository::new(pool.clone()));
-    let org_repo        = Arc::new(PgOrganisationRepository::new(pool.clone(), audit.clone()));
-    let project_repo    = Arc::new(PgProjectRepository::new(pool.clone(), audit.clone()));
-    let env_repo        = Arc::new(PgEnvironmentRepository::new(pool.clone(), audit.clone()));
+    let org_repo = Arc::new(PgOrganisationRepository::new(pool.clone(), audit.clone()));
+    let project_repo = Arc::new(PgProjectRepository::new(pool.clone(), audit.clone()));
+    let env_repo = Arc::new(PgEnvironmentRepository::new(pool.clone(), audit.clone()));
 
     // Bootstrap superadmin if configured.
     seed_superadmin(
         &(auth_user_repo.clone() as Arc<dyn AuthUserRepository>),
         &(org_repo.clone() as Arc<dyn OrganisationRepository>),
         &(membership_repo.clone() as Arc<dyn OrgMembershipRepository>),
-    ).await?;
+    )
+    .await?;
 
     let grpc_port: u16 = std::env::var("AUTH_SERVICE_PORT")
         .ok()
@@ -99,8 +102,12 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let (health_reporter, health_service) = health_reporter();
-    health_reporter.set_serving::<AuthServiceServer<AuthServiceImpl>>().await;
-    health_reporter.set_serving::<ManagementServiceServer<ManagementServiceImpl>>().await;
+    health_reporter
+        .set_serving::<AuthServiceServer<AuthServiceImpl>>()
+        .await;
+    health_reporter
+        .set_serving::<ManagementServiceServer<ManagementServiceImpl>>()
+        .await;
 
     info!(%grpc_addr, "stitchd-auth-service starting");
 

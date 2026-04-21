@@ -84,7 +84,9 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(%addr, "starting segmentation service gRPC server");
 
     let (health_reporter, health_service) = health_reporter();
-    health_reporter.set_serving::<SegmentationServiceServer<SegmentationServiceImpl>>().await;
+    health_reporter
+        .set_serving::<SegmentationServiceServer<SegmentationServiceImpl>>()
+        .await;
 
     Server::builder()
         .add_service(health_service)

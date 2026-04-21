@@ -1,4 +1,4 @@
-//! ManagementService gRPC handler — org/project/environment/SDK-key/user CRUD.
+//! [`ManagementService`](stitchd_proto::management::v1::management_service_server::ManagementService) gRPC handler — org/project/environment/SDK-key/user CRUD.
 
 use std::sync::Arc;
 
@@ -7,7 +7,10 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use stitchd_core::{
-    auth::{OrgRole, crypto::{generate_opaque_token, hash_password}},
+    auth::{
+        OrgRole,
+        crypto::{generate_opaque_token, hash_password},
+    },
     id::{EnvironmentId, OrganisationId, ProjectId, SdkKeyId},
     tenant::{Environment, Organisation, Project, SdkKey},
 };
@@ -18,19 +21,19 @@ use stitchd_db::{
 use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateEnvironmentResponse, CreateOrgRequest, CreateOrgResponse,
     CreateProjectRequest, CreateProjectResponse, CreateSdkKeyRequest, CreateSdkKeyResponse,
-    CreateUserRequest, CreateUserResponse,
-    management_service_server::ManagementService,
+    CreateUserRequest, CreateUserResponse, management_service_server::ManagementService,
 };
 
 use crate::sdk_key::hash_sdk_key;
 
-/// tonic gRPC handler for the ManagementService — org/project/environment/SDK-key/user creation.
+/// tonic gRPC handler for the [`ManagementService`](stitchd_proto::management::v1::management_service_server::ManagementService) — org/project/environment/SDK-key/user creation.
+#[allow(clippy::struct_field_names)]
 pub struct ManagementServiceImpl {
-    org_repo:        Arc<dyn OrganisationRepository>,
-    project_repo:    Arc<dyn ProjectRepository>,
-    env_repo:        Arc<dyn EnvironmentRepository>,
-    sdk_key_repo:    Arc<dyn SdkKeyRepository>,
-    user_repo:       Arc<dyn AuthUserRepository>,
+    org_repo: Arc<dyn OrganisationRepository>,
+    project_repo: Arc<dyn ProjectRepository>,
+    env_repo: Arc<dyn EnvironmentRepository>,
+    sdk_key_repo: Arc<dyn SdkKeyRepository>,
+    user_repo: Arc<dyn AuthUserRepository>,
     membership_repo: Arc<dyn OrgMembershipRepository>,
 }
 
@@ -38,17 +41,25 @@ impl ManagementServiceImpl {
     #[must_use]
     /// Create a new [`ManagementServiceImpl`].
     pub fn new(
-        org_repo:        Arc<dyn OrganisationRepository>,
-        project_repo:    Arc<dyn ProjectRepository>,
-        env_repo:        Arc<dyn EnvironmentRepository>,
-        sdk_key_repo:    Arc<dyn SdkKeyRepository>,
-        user_repo:       Arc<dyn AuthUserRepository>,
+        org_repo: Arc<dyn OrganisationRepository>,
+        project_repo: Arc<dyn ProjectRepository>,
+        env_repo: Arc<dyn EnvironmentRepository>,
+        sdk_key_repo: Arc<dyn SdkKeyRepository>,
+        user_repo: Arc<dyn AuthUserRepository>,
         membership_repo: Arc<dyn OrgMembershipRepository>,
     ) -> Self {
-        Self { org_repo, project_repo, env_repo, sdk_key_repo, user_repo, membership_repo }
+        Self {
+            org_repo,
+            project_repo,
+            env_repo,
+            sdk_key_repo,
+            user_repo,
+            membership_repo,
+        }
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_org_id(s: &str) -> Result<OrganisationId, Status> {
     Uuid::parse_str(s)
         .map(OrganisationId::from_uuid)
@@ -58,12 +69,15 @@ fn parse_org_id(s: &str) -> Result<OrganisationId, Status> {
 fn map_repo_err(e: RepositoryError) -> Status {
     match e {
         RepositoryError::NotFound { id } => Status::not_found(format!("not found: {id}")),
-        RepositoryError::UniqueViolation { .. } => Status::already_exists("resource already exists"),
+        RepositoryError::UniqueViolation { .. } => {
+            Status::already_exists("resource already exists")
+        }
         RepositoryError::InvalidState { reason } => Status::permission_denied(reason),
         other => Status::internal(other.to_string()),
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn guard_not_system_org(org: &Organisation) -> Result<(), Status> {
     if org.is_system {
         Err(Status::permission_denied(
@@ -96,7 +110,7 @@ impl ManagementService for ManagementServiceImpl {
         };
         self.org_repo.create(&org).await.map_err(map_repo_err)?;
         Ok(Response::new(CreateOrgResponse {
-            org_id:   org.id.to_string(),
+            org_id: org.id.to_string(),
             org_name: org.name,
         }))
     }
@@ -107,7 +121,11 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<CreateProjectResponse>, Status> {
         let r = request.into_inner();
         let org_id = parse_org_id(&r.org_id)?;
-        let org = self.org_repo.find_by_id(org_id).await.map_err(map_repo_err)?;
+        let org = self
+            .org_repo
+            .find_by_id(org_id)
+            .await
+            .map_err(map_repo_err)?;
         guard_not_system_org(&org)?;
         let now = Utc::now();
         let project = Project {
@@ -119,9 +137,12 @@ impl ManagementService for ManagementServiceImpl {
             deleted_at: None,
             version: 1,
         };
-        self.project_repo.create(&project).await.map_err(map_repo_err)?;
+        self.project_repo
+            .create(&project)
+            .await
+            .map_err(map_repo_err)?;
         Ok(Response::new(CreateProjectResponse {
-            project_id:   project.id.to_string(),
+            project_id: project.id.to_string(),
             project_name: project.name,
         }))
     }
@@ -147,7 +168,7 @@ impl ManagementService for ManagementServiceImpl {
         };
         self.env_repo.create(&env).await.map_err(map_repo_err)?;
         Ok(Response::new(CreateEnvironmentResponse {
-            environment_id:   env.id.to_string(),
+            environment_id: env.id.to_string(),
             environment_name: env.name,
         }))
     }
@@ -171,7 +192,10 @@ impl ManagementService for ManagementServiceImpl {
             created_at: Utc::now(),
             revoked_at: None,
         };
-        self.sdk_key_repo.create(&sdk_key).await.map_err(map_repo_err)?;
+        self.sdk_key_repo
+            .create(&sdk_key)
+            .await
+            .map_err(map_repo_err)?;
         Ok(Response::new(CreateSdkKeyResponse {
             sdk_key_id: sdk_key.id.to_string(),
             raw_key,
@@ -184,13 +208,18 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<CreateUserResponse>, Status> {
         let r = request.into_inner();
         let org_id = parse_org_id(&r.org_id)?;
-        let org = self.org_repo.find_by_id(org_id).await.map_err(map_repo_err)?;
+        let org = self
+            .org_repo
+            .find_by_id(org_id)
+            .await
+            .map_err(map_repo_err)?;
         guard_not_system_org(&org)?;
         if r.password.is_empty() {
             return Err(Status::invalid_argument("password must not be empty"));
         }
         let hash = hash_password(&r.password).map_err(|e| Status::internal(e.to_string()))?;
-        let user = self.user_repo
+        let user = self
+            .user_repo
             .create(&r.email, &r.display_name, Some(&hash))
             .await
             .map_err(map_repo_err)?;
@@ -205,8 +234,8 @@ impl ManagementService for ManagementServiceImpl {
             .map_err(map_repo_err)?;
 
         Ok(Response::new(CreateUserResponse {
-            user_id:      user.id.to_string(),
-            email:        user.email,
+            user_id: user.id.to_string(),
+            email: user.email,
             display_name: user.display_name,
         }))
     }

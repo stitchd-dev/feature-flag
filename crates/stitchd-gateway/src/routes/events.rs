@@ -74,10 +74,7 @@ pub async fn ingest_event(
         events: vec![body_to_event(&body)],
     });
     let mut client = state.event_client.lock().await;
-    let resp = client
-        .ingest_event(req)
-        .await
-        .map_err(GatewayError::from)?;
+    let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     Ok(Json(IngestResponseJson {
         accepted_count: inner.accepted_count,
@@ -94,10 +91,7 @@ pub async fn ingest_batch(
     let events = body.events.iter().map(body_to_event).collect();
     let req = tonic::Request::new(IngestRequest { events });
     let mut client = state.event_client.lock().await;
-    let resp = client
-        .ingest_event(req)
-        .await
-        .map_err(GatewayError::from)?;
+    let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     Ok(Json(IngestResponseJson {
         accepted_count: inner.accepted_count,
@@ -158,17 +152,10 @@ pub async fn delete_event_definition(
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
-
     use axum::routing::{delete, get, post, put};
     axum::Router::new()
-        .route(
-            "/v1/environments/{env_id}/events",
-            post(ingest_event),
-        )
-        .route(
-            "/v1/environments/{env_id}/events/batch",
-            post(ingest_batch),
-        )
+        .route("/v1/environments/{env_id}/events", post(ingest_event))
+        .route("/v1/environments/{env_id}/events/batch", post(ingest_batch))
         .route(
             "/v1/environments/{env_id}/event-definitions",
             get(list_event_definitions).post(create_event_definition),
@@ -335,7 +322,7 @@ mod tests {
             metric_key: "k".to_string(),
             context_type: "user".to_string(),
             context_key: "u1".to_string(),
-            value: Some(serde_json::json!(3.14f64)),
+            value: Some(serde_json::json!(std::f64::consts::PI)),
             timestamp_ms: None,
         };
         let e = body_to_event(&b);

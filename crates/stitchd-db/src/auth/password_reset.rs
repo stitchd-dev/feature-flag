@@ -114,9 +114,7 @@ impl OtpRepository for PgOtpRepository {
         .rows_affected();
 
         if affected == 0 {
-            return Err(RepositoryError::NotFound {
-                id: id.to_string(),
-            });
+            return Err(RepositoryError::NotFound { id: id.to_string() });
         }
         Ok(())
     }

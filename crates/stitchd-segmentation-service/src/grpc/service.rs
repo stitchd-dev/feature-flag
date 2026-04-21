@@ -7,14 +7,16 @@ use tonic::{Request, Response, Status};
 use stitchd_core::segment::SegmentType;
 use stitchd_db::SegmentRepository;
 use stitchd_proto::segments::v1::{
-    EvaluateMembershipRequest, EvaluateMembershipResponse, GetSegmentRequest,
-    ListSegmentsRequest, ListSegmentsResponse, MutateSegmentRequest, MutateSegmentResponse,
-    SegmentBundle, segmentation_service_server::SegmentationService,
+    EvaluateMembershipRequest, EvaluateMembershipResponse, GetSegmentRequest, ListSegmentsRequest,
+    ListSegmentsResponse, MutateSegmentRequest, MutateSegmentResponse, SegmentBundle,
+    segmentation_service_server::SegmentationService,
 };
 
 use crate::{
     error::ServiceError,
-    segment::{parse_env_id, segment_to_list_meta_proto, segment_to_list_proto, segment_to_rule_proto},
+    segment::{
+        parse_env_id, segment_to_list_meta_proto, segment_to_list_proto, segment_to_rule_proto,
+    },
 };
 
 /// Shared application state for the segmentation service.
@@ -112,8 +114,7 @@ impl SegmentationService for SegmentationServiceImpl {
                         .find_with_rules(seg.id)
                         .await
                         .map_err(|e| Status::from(ServiceError::from(e)))?;
-                    let proto =
-                        segment_to_rule_proto(seg, &def.rules).map_err(Status::from)?;
+                    let proto = segment_to_rule_proto(seg, &def.rules).map_err(Status::from)?;
                     rule_segments.push(proto);
                 }
                 SegmentType::List => {
@@ -179,9 +180,9 @@ impl SegmentationService for SegmentationServiceImpl {
             SegmentMutationKind::Delete => {
                 mutate_delete(&*self.state.segment_repo, req, env_id).await
             }
-            SegmentMutationKind::Unspecified => {
-                Err(Status::invalid_argument("mutation kind must not be UNSPECIFIED"))
-            }
+            SegmentMutationKind::Unspecified => Err(Status::invalid_argument(
+                "mutation kind must not be UNSPECIFIED",
+            )),
         }
     }
 }
@@ -344,9 +345,14 @@ async fn mutate_update(
             }))
         }
         Some(mutate_segment_request::Segment::ListSegment(l)) => {
-            repo.set_list_entries(updated.id, &l.context_type, &l.included_keys, &l.excluded_keys)
-                .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?;
+            repo.set_list_entries(
+                updated.id,
+                &l.context_type,
+                &l.included_keys,
+                &l.excluded_keys,
+            )
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
             Ok(Response::new(MutateSegmentResponse {
                 segment: Some(mutate_segment_response::Segment::ListSegment(l.clone())),
                 version: u64::try_from(updated.version).unwrap_or(0),

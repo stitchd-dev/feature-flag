@@ -65,15 +65,10 @@ impl EventDefinitionRegistry {
             version: 1,
         };
 
-        self.repo
-            .create(&def)
-            .await
-            .map_err(|e| match e {
-                RepositoryError::UniqueViolation { field } => {
-                    RegistryError::AlreadyExists(field)
-                }
-                other => RegistryError::Repository(other),
-            })?;
+        self.repo.create(&def).await.map_err(|e| match e {
+            RepositoryError::UniqueViolation { field } => RegistryError::AlreadyExists(field),
+            other => RegistryError::Repository(other),
+        })?;
 
         Ok(def)
     }
@@ -126,13 +121,10 @@ impl EventDefinitionRegistry {
         &self,
         id: EventDefinitionId,
     ) -> Result<EventDefinition, RegistryError> {
-        self.repo
-            .find_by_id(id)
-            .await
-            .map_err(|e| match e {
-                RepositoryError::NotFound { .. } => RegistryError::NotFound(id.as_uuid().to_string()),
-                other => RegistryError::Repository(other),
-            })
+        self.repo.find_by_id(id).await.map_err(|e| match e {
+            RepositoryError::NotFound { .. } => RegistryError::NotFound(id.as_uuid().to_string()),
+            other => RegistryError::Repository(other),
+        })
     }
 }
 
@@ -212,7 +204,9 @@ mod tests {
             store
                 .get(&id.as_uuid().to_string())
                 .cloned()
-                .ok_or_else(|| RepositoryError::NotFound { id: id.as_uuid().to_string() })
+                .ok_or_else(|| RepositoryError::NotFound {
+                    id: id.as_uuid().to_string(),
+                })
         }
 
         async fn find_by_key(
@@ -225,7 +219,9 @@ mod tests {
                 .values()
                 .find(|d| d.key == key && d.deleted_at.is_none())
                 .cloned()
-                .ok_or_else(|| RepositoryError::NotFound { id: key.to_string() })
+                .ok_or_else(|| RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
         }
 
         async fn list_by_environment(
@@ -244,25 +240,30 @@ mod tests {
             if let Some(ref err) = self.create_err {
                 return Err(match err {
                     RepositoryError::UniqueViolation { field } => {
-                        RepositoryError::UniqueViolation { field: field.clone() }
+                        RepositoryError::UniqueViolation {
+                            field: field.clone(),
+                        }
                     }
                     RepositoryError::NotFound { id } => {
                         RepositoryError::NotFound { id: id.clone() }
                     }
-                    _ => RepositoryError::NotFound { id: "injected".into() },
+                    _ => RepositoryError::NotFound {
+                        id: "injected".into(),
+                    },
                 });
             }
-            let mut store = self.store.lock().unwrap();
-            store.insert(def.id.as_uuid().to_string(), def.clone());
+            {
+                let mut store = self.store.lock().unwrap();
+                store.insert(def.id.as_uuid().to_string(), def.clone());
+            }
             Ok(())
         }
 
-        async fn update(
-            &self,
-            def: &EventDefinition,
-        ) -> Result<EventDefinition, RepositoryError> {
-            let mut store = self.store.lock().unwrap();
-            store.insert(def.id.as_uuid().to_string(), def.clone());
+        async fn update(&self, def: &EventDefinition) -> Result<EventDefinition, RepositoryError> {
+            {
+                let mut store = self.store.lock().unwrap();
+                store.insert(def.id.as_uuid().to_string(), def.clone());
+            }
             Ok(def.clone())
         }
 
@@ -272,7 +273,9 @@ mod tests {
                 def.deleted_at = Some(Utc::now());
                 Ok(())
             } else {
-                Err(RepositoryError::NotFound { id: id.as_uuid().to_string() })
+                Err(RepositoryError::NotFound {
+                    id: id.as_uuid().to_string(),
+                })
             }
         }
     }
@@ -345,10 +348,7 @@ mod tests {
         let registry = make_registry(MemEventDefRepo::new());
         let env_id = EnvironmentId::new();
 
-        let defs = registry
-            .list(env_id)
-            .await
-            .expect("list should succeed");
+        let defs = registry.list(env_id).await.expect("list should succeed");
         assert!(defs.is_empty());
     }
 

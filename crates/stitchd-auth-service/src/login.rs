@@ -1,26 +1,30 @@
-//! LoginWithPassword gRPC handler.
+//! [`LoginWithPassword`](stitchd_proto::auth::v1::auth_service_server::AuthService::login_with_password) gRPC handler.
 
 use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 use tracing::instrument;
 
-use stitchd_core::auth::{
-    crypto::verify_password,
-    jwt::JwtEngine,
-};
+use stitchd_core::auth::{crypto::verify_password, jwt::JwtEngine};
 use stitchd_core::id::OrganisationId;
-use uuid::Uuid;
-use stitchd_db::{AuthUserRepository, OrgMembershipRepository, OrganisationRepository, RefreshTokenRepository};
+use stitchd_db::{
+    AuthUserRepository, OrgMembershipRepository, OrganisationRepository, RefreshTokenRepository,
+};
 use stitchd_proto::auth::v1::{LoginRequest, LoginResponse};
+use uuid::Uuid;
 
 /// Authenticate email + password and issue a JWT + refresh token.
+///
+/// # Errors
+///
+/// Returns `Status::unauthenticated` for bad credentials and `Status::internal` for
+/// infrastructure failures.
 #[instrument(skip_all, fields(email = %req.get_ref().email))]
 pub async fn login_with_password(
     req: Request<LoginRequest>,
-    auth_user_repo:   &Arc<dyn AuthUserRepository>,
-    membership_repo:  &Arc<dyn OrgMembershipRepository>,
-    org_repo:         &Arc<dyn OrganisationRepository>,
+    auth_user_repo: &Arc<dyn AuthUserRepository>,
+    membership_repo: &Arc<dyn OrgMembershipRepository>,
+    org_repo: &Arc<dyn OrganisationRepository>,
     refresh_token_repo: &Arc<dyn RefreshTokenRepository>,
 ) -> Result<Response<LoginResponse>, Status> {
     let r = req.into_inner();
@@ -36,8 +40,7 @@ pub async fn login_with_password(
         .as_deref()
         .ok_or_else(|| Status::unauthenticated("password auth not configured for this user"))?;
 
-    let ok = verify_password(&r.password, hash)
-        .map_err(|e| Status::internal(e.to_string()))?;
+    let ok = verify_password(&r.password, hash).map_err(|e| Status::internal(e.to_string()))?;
     if !ok {
         return Err(Status::unauthenticated("invalid credentials"));
     }
@@ -69,7 +72,7 @@ pub async fn login_with_password(
         user.id,
         membership.org_id,
         &user.email,
-        membership.role.clone(),
+        membership.role,
         org.is_system,
         &user.token_secret,
     )

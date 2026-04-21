@@ -13,8 +13,8 @@
 pub mod invites;
 pub mod memberships;
 pub mod mfa;
-pub mod providers;
 pub mod password_reset;
+pub mod providers;
 pub mod refresh_tokens;
 pub mod users;
 
@@ -24,7 +24,7 @@ pub use mfa::{
     MfaChallengeRepository, MfaRepository, PgMfaChallengeRepository, PgMfaRepository,
     challenge_token_hash,
 };
-pub use providers::{AuthProviderRepository, PgAuthProviderRepository};
 pub use password_reset::{OtpRepository, PgOtpRepository};
+pub use providers::{AuthProviderRepository, PgAuthProviderRepository};
 pub use refresh_tokens::{PgRefreshTokenRepository, RefreshTokenRepository};
 pub use users::{AuthUserRepository, PgAuthUserRepository};

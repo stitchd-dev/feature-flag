@@ -7,12 +7,11 @@
 //! - Code exchange and email extraction
 
 use openidconnect::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken,
-    IssuerUrl, JsonWebKeySetUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, ResponseTypes, Scope, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, JsonWebKeySetUrl,
+    Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, ResponseTypes, Scope, TokenUrl,
     core::{
-        CoreAuthenticationFlow, CoreClient, CoreJwsSigningAlgorithm,
-        CoreProviderMetadata, CoreResponseType, CoreSubjectIdentifierType,
+        CoreAuthenticationFlow, CoreClient, CoreJwsSigningAlgorithm, CoreProviderMetadata,
+        CoreResponseType, CoreSubjectIdentifierType,
     },
 };
 use serde::Deserialize;
@@ -84,16 +83,13 @@ impl OidcProvider {
         client_id: &str,
         client_secret: &str,
     ) -> Result<Self, OidcError> {
-        let issuer =
-            IssuerUrl::new(issuer_url.to_string())
-                .map_err(|e| OidcError::InvalidIssuerUrl(e.to_string()))?;
+        let issuer = IssuerUrl::new(issuer_url.to_string())
+            .map_err(|e| OidcError::InvalidIssuerUrl(e.to_string()))?;
 
-        let metadata = CoreProviderMetadata::discover_async(
-            issuer,
-            openidconnect::reqwest::async_http_client,
-        )
-        .await
-        .map_err(|e| OidcError::Discovery(e.to_string()))?;
+        let metadata =
+            CoreProviderMetadata::discover_async(issuer, openidconnect::reqwest::async_http_client)
+                .await
+                .map_err(|e| OidcError::Discovery(e.to_string()))?;
 
         let client = CoreClient::from_provider_metadata(
             metadata,
@@ -118,9 +114,8 @@ impl OidcProvider {
     ) -> Result<(Url, String, String), OidcError> {
         match &self.inner {
             ProviderInner::Oidc(client) => {
-                let redirect =
-                    RedirectUrl::new(redirect_uri.to_string())
-                        .map_err(|e| OidcError::InvalidRedirectUri(e.to_string()))?;
+                let redirect = RedirectUrl::new(redirect_uri.to_string())
+                    .map_err(|e| OidcError::InvalidRedirectUri(e.to_string()))?;
                 let client = client.clone().set_redirect_uri(redirect);
 
                 let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -173,9 +168,8 @@ impl OidcProvider {
     ) -> Result<String, OidcError> {
         match &self.inner {
             ProviderInner::Oidc(client) => {
-                let redirect =
-                    RedirectUrl::new(redirect_uri.to_string())
-                        .map_err(|e| OidcError::InvalidRedirectUri(e.to_string()))?;
+                let redirect = RedirectUrl::new(redirect_uri.to_string())
+                    .map_err(|e| OidcError::InvalidRedirectUri(e.to_string()))?;
                 let client = client.clone().set_redirect_uri(redirect);
 
                 let token_response = client
@@ -187,9 +181,7 @@ impl OidcProvider {
 
                 // Extract email from the ID token claims
                 use openidconnect::TokenResponse as _;
-                let id_token = token_response
-                    .id_token()
-                    .ok_or(OidcError::MissingIdToken)?;
+                let id_token = token_response.id_token().ok_or(OidcError::MissingIdToken)?;
 
                 // Verify the token — nonce check uses the stored nonce.
                 // Since we can't pass the original nonce here, we use a
@@ -243,10 +235,9 @@ impl OidcProvider {
                     return Err(OidcError::GitHubError(format!("{err}: {desc}")));
                 }
 
-                let access_token =
-                    token_resp.access_token.ok_or_else(|| {
-                        OidcError::TokenExchange("no access_token in response".to_string())
-                    })?;
+                let access_token = token_resp.access_token.ok_or_else(|| {
+                    OidcError::TokenExchange("no access_token in response".to_string())
+                })?;
 
                 // Fetch primary email from GitHub API
                 #[derive(Deserialize)]
@@ -282,7 +273,10 @@ impl OidcProvider {
     #[must_use]
     pub fn google(client_id: &str, client_secret: &str) -> Self {
         Self {
-            inner: ProviderInner::Oidc(Box::new(build_google_client_stub(client_id, client_secret))),
+            inner: ProviderInner::Oidc(Box::new(build_google_client_stub(
+                client_id,
+                client_secret,
+            ))),
         }
     }
 
@@ -307,8 +301,7 @@ impl OidcProvider {
 fn build_google_client_stub(client_id: &str, client_secret: &str) -> CoreClient {
     let metadata = CoreProviderMetadata::new(
         IssuerUrl::new("https://accounts.google.com".to_string()).expect("valid"),
-        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
-            .expect("valid"),
+        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).expect("valid"),
         JsonWebKeySetUrl::new("https://www.googleapis.com/oauth2/v3/certs".to_string())
             .expect("valid"),
         vec![ResponseTypes::new(vec![CoreResponseType::Code])],

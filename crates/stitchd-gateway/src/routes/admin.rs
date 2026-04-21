@@ -30,22 +30,22 @@ pub struct CreateOrgBody {
 
 #[derive(Debug, Serialize)]
 pub struct OrgJson {
-    pub org_id:   String,
+    pub org_id: String,
     pub org_name: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SeedUserBody {
-    pub email:        String,
+    pub email: String,
     pub display_name: String,
-    pub password:     String,
-    pub org_role:     Option<String>,
+    pub password: String,
+    pub org_role: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct UserJson {
-    pub user_id:      String,
-    pub email:        String,
+    pub user_id: String,
+    pub email: String,
     pub display_name: String,
 }
 
@@ -60,7 +60,13 @@ pub async fn create_org(
     let mut client = state.management_client.lock().await;
     let resp = client.create_org(req).await.map_err(GatewayError::from)?;
     let r = resp.into_inner();
-    Ok((StatusCode::CREATED, Json(OrgJson { org_id: r.org_id, org_name: r.org_name })))
+    Ok((
+        StatusCode::CREATED,
+        Json(OrgJson {
+            org_id: r.org_id,
+            org_name: r.org_name,
+        }),
+    ))
 }
 
 /// `POST /v1/admin/orgs/{org_id}/users` — seed the first user into a newly created org.
@@ -71,15 +77,22 @@ pub async fn seed_user(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(CreateUserRequest {
         org_id,
-        email:        body.email,
+        email: body.email,
         display_name: body.display_name,
-        password:     body.password,
-        org_role:     body.org_role.unwrap_or_else(|| "org_admin".into()),
+        password: body.password,
+        org_role: body.org_role.unwrap_or_else(|| "org_admin".into()),
     });
     let mut client = state.management_client.lock().await;
     let resp = client.create_user(req).await.map_err(GatewayError::from)?;
     let r = resp.into_inner();
-    Ok((StatusCode::CREATED, Json(UserJson { user_id: r.user_id, email: r.email, display_name: r.display_name })))
+    Ok((
+        StatusCode::CREATED,
+        Json(UserJson {
+            user_id: r.user_id,
+            email: r.email,
+            display_name: r.display_name,
+        }),
+    ))
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -96,9 +109,12 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::{Request, StatusCode}};
-    use tower::ServiceExt as _;
     use crate::tests::helpers::make_stub_state;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
 
     #[tokio::test]
     async fn create_org_returns_201_or_502() {

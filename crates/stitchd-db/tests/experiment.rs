@@ -40,7 +40,7 @@ async fn setup_experiment_deps(pool: sqlx::PgPool) -> (EnvironmentId, RuleId) {
         deleted_at: None,
         version: 1,
         is_system: false,
-};
+    };
     org_repo.create(&org).await.unwrap();
 
     let project = Project {

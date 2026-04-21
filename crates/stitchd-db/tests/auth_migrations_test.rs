@@ -33,12 +33,10 @@ async fn test_auth_tables_exist(pool: sqlx::PgPool) {
 async fn test_users_email_unique_constraint(pool: sqlx::PgPool) {
     // Insert a user, then attempt to insert another with the same email.
     // The second insert must fail with a unique-violation error.
-    sqlx::query(
-        "INSERT INTO users (email, display_name) VALUES ('alice@example.com', 'Alice')",
-    )
-    .execute(&pool)
-    .await
-    .expect("first user insert should succeed");
+    sqlx::query("INSERT INTO users (email, display_name) VALUES ('alice@example.com', 'Alice')")
+        .execute(&pool)
+        .await
+        .expect("first user insert should succeed");
 
     let result = sqlx::query(
         "INSERT INTO users (email, display_name) VALUES ('alice@example.com', 'Alice Duplicate')",
@@ -55,12 +53,11 @@ async fn test_users_email_unique_constraint(pool: sqlx::PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn test_org_memberships_primary_key(pool: sqlx::PgPool) {
     // Set up prerequisite rows.
-    let org_id: uuid::Uuid = sqlx::query_scalar(
-        "INSERT INTO organisations (name) VALUES ('Test Org') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("org insert should succeed");
+    let org_id: uuid::Uuid =
+        sqlx::query_scalar("INSERT INTO organisations (name) VALUES ('Test Org') RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .expect("org insert should succeed");
 
     let user_id: uuid::Uuid = sqlx::query_scalar(
         "INSERT INTO users (email, display_name) VALUES ('bob@example.com', 'Bob') RETURNING id",

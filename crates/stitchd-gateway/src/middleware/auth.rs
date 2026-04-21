@@ -11,8 +11,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use stitchd_proto::auth::v1::{
-    CredentialRequest, RbacContext,
-    auth_service_client::AuthServiceClient,
+    CredentialRequest, RbacContext, auth_service_client::AuthServiceClient,
     credential_request::Credential,
 };
 use tonic::transport::Channel;
@@ -102,10 +101,7 @@ pub fn rbac_context(req: &Request) -> Option<&RbacContext> {
 /// Middleware that allows only callers whose token has `is_system = true`.
 /// Used on `/admin` routes — only superadmin (System-org users) may access them.
 /// Returns `403 Forbidden` for non-system callers.
-pub async fn require_system_org(
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_system_org(req: Request, next: Next) -> Response {
     match req.extensions().get::<RbacContext>() {
         Some(ctx) if ctx.is_system => next.run(req).await,
         _ => (
@@ -120,10 +116,7 @@ pub async fn require_system_org(
 /// Used on `/management` routes — System-org users (superadmins) must not
 /// call org-scoped management APIs.
 /// Returns `403 Forbidden` for system-org callers.
-pub async fn require_non_system_org(
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn require_non_system_org(req: Request, next: Next) -> Response {
     match req.extensions().get::<RbacContext>() {
         Some(ctx) if ctx.is_system => (
             StatusCode::FORBIDDEN,
@@ -159,9 +152,7 @@ mod tests {
     }
 
     fn req_no_auth() -> Request<axum::body::Body> {
-        Request::builder()
-            .body(axum::body::Body::empty())
-            .unwrap()
+        Request::builder().body(axum::body::Body::empty()).unwrap()
     }
 
     #[test]
@@ -192,10 +183,7 @@ mod tests {
     fn build_credential_bearer() {
         let req = req_with_bearer("tok");
         let cred = build_credential(&req).unwrap();
-        assert!(matches!(
-            cred.credential,
-            Some(Credential::BearerToken(_))
-        ));
+        assert!(matches!(cred.credential, Some(Credential::BearerToken(_))));
     }
 
     #[test]
@@ -219,10 +207,7 @@ mod tests {
             .body(axum::body::Body::empty())
             .unwrap();
         let cred = build_credential(&req).unwrap();
-        assert!(matches!(
-            cred.credential,
-            Some(Credential::BearerToken(_))
-        ));
+        assert!(matches!(cred.credential, Some(Credential::BearerToken(_))));
     }
 
     /// Build a request with an `RbacContext` extension already inserted.
@@ -240,7 +225,7 @@ mod tests {
 
     #[tokio::test]
     async fn require_system_org_rejects_non_system() {
-        use axum::{middleware::from_fn, routing::get, Router};
+        use axum::{Router, middleware::from_fn, routing::get};
         use tower::ServiceExt;
 
         let app = Router::new()
@@ -254,7 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn require_non_system_org_rejects_system() {
-        use axum::{middleware::from_fn, routing::get, Router};
+        use axum::{Router, middleware::from_fn, routing::get};
         use tower::ServiceExt;
 
         let app = Router::new()

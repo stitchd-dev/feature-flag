@@ -3,11 +3,18 @@
 //! These endpoints are called by the SDK client directly (not by human users).
 //! Authentication is via the `x-sdk-key` header validated by the Auth Service.
 
-use axum::{Json, extract::{Path, State}, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use stitchd_proto::events::v1::{Event, IngestRequest, metric_value::Value as MetricVal, MetricValue};
+use stitchd_proto::events::v1::{
+    Event, IngestRequest, MetricValue, metric_value::Value as MetricVal,
+};
 use stitchd_proto::segments::v1::EvaluateMembershipRequest;
 
 use crate::error::GatewayError;
@@ -56,13 +63,17 @@ pub struct ListCheckResponse {
 fn sdk_event_to_proto(body: &SdkEventBody) -> Event {
     let value = body.value.as_ref().and_then(|v| {
         if let Some(b) = v.as_bool() {
-            Some(MetricValue { value: Some(MetricVal::BoolValue(b)) })
+            Some(MetricValue {
+                value: Some(MetricVal::BoolValue(b)),
+            })
         } else if let Some(i) = v.as_i64() {
-            Some(MetricValue { value: Some(MetricVal::IntValue(i)) })
-        } else if let Some(f) = v.as_f64() {
-            Some(MetricValue { value: Some(MetricVal::DoubleValue(f)) })
+            Some(MetricValue {
+                value: Some(MetricVal::IntValue(i)),
+            })
         } else {
-            None
+            v.as_f64().map(|f| MetricValue {
+                value: Some(MetricVal::DoubleValue(f)),
+            })
         }
     });
     Event {
@@ -77,7 +88,7 @@ fn sdk_event_to_proto(body: &SdkEventBody) -> Event {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// `POST /v1/environments/{env_id}/evaluate`
-/// 
+///
 /// Flag evaluation endpoint for SDK clients. Returns a simple evaluated flag result.
 pub async fn evaluate(
     State(_state): State<Arc<GatewayState>>,
@@ -96,7 +107,9 @@ pub async fn ingest_event(
     Json(body): Json<SdkEventBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let event = sdk_event_to_proto(&body);
-    let req = tonic::Request::new(IngestRequest { events: vec![event] });
+    let req = tonic::Request::new(IngestRequest {
+        events: vec![event],
+    });
     let mut client = state.event_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
@@ -183,18 +196,30 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     axum::Router::new()
         .route("/v1/environments/{env_id}/evaluate", post(evaluate))
         .route("/v1/environments/{env_id}/events", post(ingest_event))
-        .route("/v1/environments/{env_id}/events/batch", post(ingest_batch_events))
-        .route("/v1/environments/{env_id}/segments/list-check", post(list_check_membership))
-        .route("/v1/environments/{env_id}/segments/list-check/batch", post(batch_list_check_membership))
+        .route(
+            "/v1/environments/{env_id}/events/batch",
+            post(ingest_batch_events),
+        )
+        .route(
+            "/v1/environments/{env_id}/segments/list-check",
+            post(list_check_membership),
+        )
+        .route(
+            "/v1/environments/{env_id}/segments/list-check/batch",
+            post(batch_list_check_membership),
+        )
         .with_state(state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::{Request, StatusCode}};
-    use tower::ServiceExt as _;
     use crate::tests::helpers::make_stub_state;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt as _;
 
     #[test]
     fn sdk_event_to_proto_bool() {
@@ -208,34 +233,58 @@ mod tests {
         let e = sdk_event_to_proto(&b);
         assert_eq!(e.metric_key, "k");
         assert_eq!(e.timestamp_ms, 1000);
-        assert!(matches!(e.value, Some(MetricValue { value: Some(MetricVal::BoolValue(true)) })));
+        assert!(matches!(
+            e.value,
+            Some(MetricValue {
+                value: Some(MetricVal::BoolValue(true))
+            })
+        ));
     }
 
     #[test]
     fn sdk_event_to_proto_int() {
         let b = SdkEventBody {
-            metric_key: "k".to_string(), context_key: "u1".to_string(),
-            context_type: "user".to_string(), value: Some(serde_json::json!(42i64)), timestamp_ms: None,
+            metric_key: "k".to_string(),
+            context_key: "u1".to_string(),
+            context_type: "user".to_string(),
+            value: Some(serde_json::json!(42i64)),
+            timestamp_ms: None,
         };
         let e = sdk_event_to_proto(&b);
-        assert!(matches!(e.value, Some(MetricValue { value: Some(MetricVal::IntValue(42)) })));
+        assert!(matches!(
+            e.value,
+            Some(MetricValue {
+                value: Some(MetricVal::IntValue(42))
+            })
+        ));
     }
 
     #[test]
     fn sdk_event_to_proto_double() {
         let b = SdkEventBody {
-            metric_key: "k".to_string(), context_key: "u1".to_string(),
-            context_type: "user".to_string(), value: Some(serde_json::json!(3.14f64)), timestamp_ms: None,
+            metric_key: "k".to_string(),
+            context_key: "u1".to_string(),
+            context_type: "user".to_string(),
+            value: Some(serde_json::json!(std::f64::consts::PI)),
+            timestamp_ms: None,
         };
         let e = sdk_event_to_proto(&b);
-        assert!(matches!(e.value, Some(MetricValue { value: Some(MetricVal::DoubleValue(_)) })));
+        assert!(matches!(
+            e.value,
+            Some(MetricValue {
+                value: Some(MetricVal::DoubleValue(_))
+            })
+        ));
     }
 
     #[test]
     fn sdk_event_to_proto_no_value() {
         let b = SdkEventBody {
-            metric_key: "k".to_string(), context_key: "u1".to_string(),
-            context_type: "user".to_string(), value: None, timestamp_ms: None,
+            metric_key: "k".to_string(),
+            context_key: "u1".to_string(),
+            context_type: "user".to_string(),
+            value: None,
+            timestamp_ms: None,
         };
         let e = sdk_event_to_proto(&b);
         assert!(e.value.is_none());
@@ -269,7 +318,9 @@ mod tests {
                     .method("POST")
                     .uri("/v1/environments/env-1/events/batch")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"[{"metric_key":"k","context_key":"u1","context_type":"user"}]"#))
+                    .body(Body::from(
+                        r#"[{"metric_key":"k","context_key":"u1","context_type":"user"}]"#,
+                    ))
                     .unwrap(),
             )
             .await
@@ -287,7 +338,9 @@ mod tests {
                     .method("POST")
                     .uri("/v1/environments/env-1/segments/list-check")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"segment_key":"s1","context_key":"u1","context_type":"user"}"#))
+                    .body(Body::from(
+                        r#"{"segment_key":"s1","context_key":"u1","context_type":"user"}"#,
+                    ))
                     .unwrap(),
             )
             .await

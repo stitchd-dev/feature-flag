@@ -48,8 +48,8 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to connect to PostgreSQL")?;
 
-    let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let clickhouse_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
 
     let ch_client = clickhouse::Client::default()
         .with_url(&clickhouse_url)
@@ -62,8 +62,9 @@ async fn main() -> anyhow::Result<()> {
     let event_def_repo: Arc<dyn stitchd_db::EventDefinitionRepository> = Arc::new(
         stitchd_db::PgEventDefinitionRepository::new(pg_pool.clone(), audit_logger.clone()),
     );
-    let sdk_key_repo: Arc<dyn stitchd_db::SdkKeyRepository> =
-        Arc::new(stitchd_db::PgSdkKeyRepository::new(pg_pool.clone(), audit_logger.clone()));
+    let sdk_key_repo: Arc<dyn stitchd_db::SdkKeyRepository> = Arc::new(
+        stitchd_db::PgSdkKeyRepository::new(pg_pool.clone(), audit_logger.clone()),
+    );
 
     let state = ServiceState {
         event_def_repo,
@@ -81,7 +82,9 @@ async fn main() -> anyhow::Result<()> {
     info!("EventIngestionService listening on {addr}");
 
     let (health_reporter, health_service) = health_reporter();
-    health_reporter.set_serving::<EventIngestionServiceServer<EventIngestionServiceImpl>>().await;
+    health_reporter
+        .set_serving::<EventIngestionServiceServer<EventIngestionServiceImpl>>()
+        .await;
 
     Server::builder()
         .add_service(health_service)

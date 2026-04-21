@@ -274,7 +274,7 @@ impl RefreshTokenRepository for PgRefreshTokenRepository {
 mod tests {
     use super::*;
 
-    /// Helper: create a minimal org and user in the DB, return (org_id, user_id).
+    /// Helper: create a minimal org and user in the DB, return (`org_id`, `user_id`).
     async fn seed_user(pool: &PgPool) -> (OrganisationId, UserId) {
         let org_id = OrganisationId::new();
         sqlx::query!(
@@ -409,7 +409,10 @@ mod tests {
         let (org_id, user_id) = seed_user(&pool).await;
 
         // Insert an already-expired token directly
-        let (_, _raw) = repo.create(user_id, org_id, Some("active"), 30).await.unwrap();
+        let (_, _raw) = repo
+            .create(user_id, org_id, Some("active"), 30)
+            .await
+            .unwrap();
 
         // Manually insert an expired token
         sqlx::query!(

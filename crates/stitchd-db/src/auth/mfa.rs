@@ -65,10 +65,7 @@ pub trait MfaRepository: Send + Sync {
 
     /// Return the raw encrypted TOTP secret bytes, or `None` if the user has not
     /// stored a TOTP secret yet.
-    async fn get_totp_secret(
-        &self,
-        user_id: UserId,
-    ) -> Result<Option<Vec<u8>>, RepositoryError>;
+    async fn get_totp_secret(&self, user_id: UserId) -> Result<Option<Vec<u8>>, RepositoryError>;
 
     /// Consume a recovery code by its Argon2id hash.
     ///
@@ -279,10 +276,7 @@ impl MfaRepository for PgMfaRepository {
         Ok(())
     }
 
-    async fn get_totp_secret(
-        &self,
-        user_id: UserId,
-    ) -> Result<Option<Vec<u8>>, RepositoryError> {
+    async fn get_totp_secret(&self, user_id: UserId) -> Result<Option<Vec<u8>>, RepositoryError> {
         let row = sqlx::query!(
             r#"SELECT totp_secret FROM users WHERE id = $1"#,
             user_id.as_uuid(),

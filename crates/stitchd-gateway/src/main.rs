@@ -56,7 +56,9 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(async {
-            signal::ctrl_c().await.expect("failed to install CTRL+C handler");
+            signal::ctrl_c()
+                .await
+                .expect("failed to install CTRL+C handler");
             info!("shutdown signal received");
         })
         .await?;

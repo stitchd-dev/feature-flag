@@ -1,10 +1,6 @@
 //! Segment domain helpers — proto mapping utilities.
 
-use stitchd_core::{
-    id::EnvironmentId,
-    rule_engine::types::Rule,
-    segment::Segment,
-};
+use stitchd_core::{id::EnvironmentId, rule_engine::types::Rule, segment::Segment};
 use stitchd_proto::segments::v1::{ListSegment, ListSegmentMeta, RuleSegment};
 
 use crate::error::ServiceError;
@@ -13,10 +9,7 @@ use crate::error::ServiceError;
 ///
 /// # Errors
 /// Returns [`ServiceError::Internal`] if rule serialisation fails.
-pub fn segment_to_rule_proto(
-    seg: &Segment,
-    rules: &[Rule],
-) -> Result<RuleSegment, ServiceError> {
+pub fn segment_to_rule_proto(seg: &Segment, rules: &[Rule]) -> Result<RuleSegment, ServiceError> {
     let rule_payload = serde_json::to_vec(rules)
         .map_err(|e| ServiceError::Internal(format!("rule serialisation: {e}")))?;
 
@@ -40,15 +33,18 @@ pub fn segment_to_list_meta_proto(seg: &Segment) -> ListSegmentMeta {
 
 /// Convert a [`Segment`] record plus list definition into a [`ListSegment`] proto message.
 #[must_use]
-pub fn segment_to_list_proto(seg: &Segment, def: &stitchd_core::segment::ListBasedSegment) -> ListSegment {
-    let (included_keys, excluded_keys) = def
-        .lists
-        .values()
-        .fold((vec![], vec![]), |(mut inc, mut exc), ctx_list| {
-            inc.extend(ctx_list.include.iter().cloned());
-            exc.extend(ctx_list.exclude.iter().cloned());
-            (inc, exc)
-        });
+pub fn segment_to_list_proto(
+    seg: &Segment,
+    def: &stitchd_core::segment::ListBasedSegment,
+) -> ListSegment {
+    let (included_keys, excluded_keys) =
+        def.lists
+            .values()
+            .fold((vec![], vec![]), |(mut inc, mut exc), ctx_list| {
+                inc.extend(ctx_list.include.iter().cloned());
+                exc.extend(ctx_list.exclude.iter().cloned());
+                (inc, exc)
+            });
 
     ListSegment {
         key: seg.key.clone(),
@@ -71,12 +67,12 @@ pub fn parse_env_id(s: &str) -> Result<EnvironmentId, ServiceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use std::collections::HashMap;
     use stitchd_core::{
         id::{EnvironmentId, SegmentId},
         segment::{ContextList, ListBasedSegment, Segment, SegmentType},
     };
-    use chrono::Utc;
 
     fn make_segment(seg_type: SegmentType) -> Segment {
         Segment {
@@ -117,14 +113,14 @@ mod tests {
         lists.insert(
             "user".to_string(),
             ContextList {
-                include: ["u1".to_string(), "u2".to_string()].into_iter().collect(),
-                exclude: ["u3".to_string()].into_iter().collect(),
+                include: ["u1".to_string(), "u2".to_string()]
+                    .iter()
+                    .cloned()
+                    .collect(),
+                exclude: std::iter::once("u3".to_string()).collect(),
             },
         );
-        let def = ListBasedSegment {
-            id: seg.id,
-            lists,
-        };
+        let def = ListBasedSegment { id: seg.id, lists };
         let proto = segment_to_list_proto(&seg, &def);
         assert_eq!(proto.key, "test-seg");
         assert!(proto.included_keys.contains(&"u1".to_string()));

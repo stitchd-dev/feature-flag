@@ -59,7 +59,9 @@ async fn main() -> anyhow::Result<()> {
     let svc = FlagServiceImpl::new(flag_repo, variant_repo, sdk_key_repo);
 
     let (health_reporter, health_service) = health_reporter();
-    health_reporter.set_serving::<FlagServiceServer<FlagServiceImpl>>().await;
+    health_reporter
+        .set_serving::<FlagServiceServer<FlagServiceImpl>>()
+        .await;
 
     info!("stitchd-flag-service listening on {addr}");
 

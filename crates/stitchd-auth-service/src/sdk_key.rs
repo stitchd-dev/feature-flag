@@ -7,7 +7,10 @@
 use std::sync::Arc;
 
 use sha2::{Digest as _, Sha256};
-use stitchd_core::{id::{EnvironmentId, SdkKeyId}, tenant::SdkKey};
+use stitchd_core::{
+    id::{EnvironmentId, SdkKeyId},
+    tenant::SdkKey,
+};
 use stitchd_db::{RepositoryError, SdkKeyRepository};
 use tonic::Status;
 
