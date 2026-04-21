@@ -20,7 +20,7 @@
 ## Phase 2: Auth Service (`stitchd-auth-service`)
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Scaffold `crates/stitchd-auth-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
+- [~] Task 1: Scaffold `crates/stitchd-auth-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
 - [ ] Task 2: Write failing unit tests for JWT credential validation gRPC handler
 - [ ] Task 3: Implement JWT validation — migrate from `stitchd-server/src/auth/`; wire to `AuthService` gRPC trait
 - [ ] Task 4: Write failing unit tests for SDK key credential validation gRPC handler
