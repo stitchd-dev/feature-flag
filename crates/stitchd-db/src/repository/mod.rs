@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use stitchd_core::{
+    auth::User,
     event::EventDefinition,
     experimentation::{Experiment, ExperimentIteration, ExperimentStatus},
     flag::Variant,
@@ -15,7 +16,7 @@ use stitchd_core::{
         RoleId, SdkKeyId, SegmentId, UserId, VariantId,
     },
     tenant::{Environment, Organisation, Project, SdkKey},
-    user::{Permission, Role, User},
+    user::{Permission, Role},
 };
 
 use crate::RepositoryError;
@@ -144,14 +145,10 @@ pub trait UserRepository: Send + Sync {
     /// Fetch a single user by ID.
     async fn find_by_id(&self, id: UserId) -> Result<User, RepositoryError>;
 
-    /// Fetch a user by email within an organisation.
-    async fn find_by_email(
-        &self,
-        email: &str,
-        organisation_id: OrganisationId,
-    ) -> Result<User, RepositoryError>;
+    /// Fetch a user by email (platform-wide — email is globally unique).
+    async fn find_by_email(&self, email: &str) -> Result<User, RepositoryError>;
 
-    /// List all non-deleted users in an organisation.
+    /// List all users who are members of an organisation.
     async fn list_by_organisation(
         &self,
         organisation_id: OrganisationId,
@@ -165,7 +162,7 @@ pub trait UserRepository: Send + Sync {
 
     /// Resolve all permissions a user has within a specific project.
     ///
-    /// Joins `user_project_roles → roles → permissions`.
+    /// Joins `user_project_roles` (new schema with direct `role` TEXT column).
     async fn find_permissions_for_user(
         &self,
         user_id: UserId,
