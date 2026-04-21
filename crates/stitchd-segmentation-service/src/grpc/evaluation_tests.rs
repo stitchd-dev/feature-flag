@@ -81,8 +81,37 @@ pub mod tests {
             seg
         }
 
+        pub fn insert_list_segment(
+            &self,
+            env_id: EnvironmentId,
+            key: &str,
+            lists: HashMap<String, ContextList>,
+        ) -> Segment {
+            let seg_id = SegmentId::new();
+            let seg = Segment {
+                id: seg_id,
+                environment_id: env_id,
+                key: key.to_string(),
+                segment_type: SegmentType::List,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                deleted_at: None,
+                version: 1,
+            };
+            let def = ListBasedSegment {
+                id: seg_id,
+                lists,
+            };
+            self.segments
+                .lock()
+                .unwrap()
+                .insert((env_id, key.to_string()), seg.clone());
+            self.list_defs.lock().unwrap().insert(seg_id, def);
+            seg
+        }
+
         #[allow(dead_code)]
-        pub fn insert_list_membership(
+        pub fn insert_list_membership_entry(
             &self,
             env_id: EnvironmentId,
             segment_key: &str,
@@ -247,16 +276,39 @@ pub mod tests {
             segment_keys: &[String],
         ) -> Result<HashMap<String, bool>, RepositoryError> {
             let memberships = self.list_memberships.lock().unwrap();
+            let segs = self.segments.lock().unwrap();
+            let list_defs = self.list_defs.lock().unwrap();
+
             let result = segment_keys
                 .iter()
                 .map(|seg_key| {
-                    let key = (
+                    // First check the explicit membership map.
+                    let explicit_key = (
                         environment_id,
                         seg_key.clone(),
                         context_type.to_string(),
                         context_key.to_string(),
                     );
-                    let is_member = *memberships.get(&key).unwrap_or(&false);
+                    if let Some(&val) = memberships.get(&explicit_key) {
+                        return (seg_key.clone(), val);
+                    }
+
+                    // Fall back to evaluating the in-memory list definition.
+                    let is_member = segs
+                        .get(&(environment_id, seg_key.clone()))
+                        .and_then(|seg| list_defs.get(&seg.id))
+                        .map(|def| {
+                            def.lists.get(context_type).map_or(false, |ctx_list| {
+                                // Exclude takes precedence over include.
+                                if ctx_list.exclude.contains(context_key) {
+                                    false
+                                } else {
+                                    ctx_list.include.contains(context_key)
+                                }
+                            })
+                        })
+                        .unwrap_or(false);
+
                     (seg_key.clone(), is_member)
                 })
                 .collect();

@@ -2,6 +2,7 @@
 
 pub mod crud_tests;
 pub mod evaluation_tests;
+pub mod list_membership_tests;
 pub mod service;
 
 pub use service::SegmentationServiceImpl;
