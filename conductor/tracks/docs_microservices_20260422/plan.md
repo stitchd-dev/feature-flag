@@ -16,25 +16,25 @@
 
 ## Phase 2: Audit & Update OpenAPI Annotations
 
-- [ ] Task 1: Inventory all gateway route handlers
-  - [ ] List all Axum routes in `stitchd-gateway/src/`
-  - [ ] For each route, record: has `#[utoipa::path]`? correct tag? correct security? correct schema?
-  - [ ] Produce checklist of routes needing new or fixed annotations
+- [x] Task 1: Inventory all gateway route handlers
+  - [x] List all Axum routes in `stitchd-gateway/src/`
+  - [x] For each route, record: has `#[utoipa::path]`? correct tag? correct security? correct schema?
+  - [x] Produce checklist of routes needing new or fixed annotations
 
-- [ ] Task 2: Add/fix annotations for SDK-key routes (flag eval, list-segment lookup)
-  - [ ] Correct `security` to use `sdk_key` scheme
-  - [ ] Correct tags to `flags` / `segments`
-  - [ ] Verify request/response schemas match current handler types
+- [x] Task 2: Add/fix annotations for SDK-key routes (flag eval, list-segment lookup)
+  - [x] Correct `security` to use `sdk_key` scheme
+  - [x] Correct tags to `flags` / `segments`
+  - [x] Verify request/response schemas match current handler types
 
-- [ ] Task 3: Add/fix annotations for JWT/admin routes
-  - [ ] Correct `security` to use `bearer_jwt` scheme
-  - [ ] Correct tags: `auth`, `flags`, `segments`, `events`, `experiments`, `admin`
-  - [ ] Ensure all endpoints added during microservice decomposition are annotated
-  - [ ] Add summaries and descriptions accurate to the microservice model
+- [x] Task 3: Add/fix annotations for JWT/admin routes
+  - [x] Correct `security` to use `bearer_jwt` scheme
+  - [x] Correct tags: `auth`, `flags`, `segments`, `events`, `experiments`, `admin`
+  - [x] Ensure all endpoints added during microservice decomposition are annotated
+  - [x] Add summaries and descriptions accurate to the microservice model
 
-- [ ] Task 4: Verify generated spec completeness
-  - [ ] Run `cargo xtask docs` — confirm `openapi.json` includes all routes
-  - [ ] Run `scripts/check_openapi_contract.py` — confirm `contract-check` passes
+- [x] Task 4: Verify generated spec completeness
+  - [x] Run `cargo xtask docs` — confirm `openapi.json` includes all routes
+  - [x] Run `scripts/check_openapi_contract.py` — confirm `contract-check` passes
 
 - [ ] Task: Conductor - User Manual Verification 'Audit & Update OpenAPI Annotations' (Protocol in workflow.md)
 
