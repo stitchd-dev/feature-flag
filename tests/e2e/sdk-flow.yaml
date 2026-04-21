@@ -1,0 +1,153 @@
+version: "1.1"
+name: SDK Flow — flag evaluation via gateway
+
+# Run against a live Docker Compose stack:
+#   docker compose up -d --wait
+#   stepci run tests/e2e/sdk-flow.yaml
+#
+# Override defaults:
+#   stepci run tests/e2e/sdk-flow.yaml \
+#     --env gateway=http://custom:8080 \
+#     --env sdk_key=my-key \
+#     --env env_id=env-abc
+
+env:
+  gateway: http://localhost:8080
+  sdk_key: test-sdk-key
+  env_id: env-test-001
+
+tests:
+  sdk_evaluate_unauthenticated:
+    name: SDK evaluate — no key returns 401
+    steps:
+      - name: Evaluate without x-sdk-key
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/evaluate
+          method: POST
+          headers:
+            Content-Type: application/json
+          json:
+              context_key: user-abc
+              context_type: user
+          check:
+            status: 401
+
+  sdk_evaluate_authenticated:
+    name: SDK evaluate — with SDK key
+    steps:
+      - name: POST evaluate with x-sdk-key
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/evaluate
+          method: POST
+          headers:
+            Content-Type: application/json
+            x-sdk-key: ${{env.sdk_key}}
+          json:
+              context_key: user-abc
+              context_type: user
+          check:
+            status:
+              - 200
+              - 502
+
+  sdk_ingest_event:
+    name: SDK ingest single event
+    steps:
+      - name: POST event with SDK key
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/events
+          method: POST
+          headers:
+            Content-Type: application/json
+            x-sdk-key: ${{env.sdk_key}}
+          json:
+              metric_key: button_click
+              context_key: user-abc
+              context_type: user
+              value: 1
+              timestamp_ms: 1714000000000
+          check:
+            status:
+              - 200
+              - 502
+
+  sdk_ingest_batch_events:
+    name: SDK ingest batch events
+    steps:
+      - name: POST batch events with SDK key
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/events/batch
+          method: POST
+          headers:
+            Content-Type: application/json
+            x-sdk-key: ${{env.sdk_key}}
+          json:
+              events:
+                - metric_key: page_view
+                  context_key: user-abc
+                  context_type: user
+                  timestamp_ms: 1714000000000
+                - metric_key: click
+                  context_key: user-abc
+                  context_type: user
+                  value: true
+                  timestamp_ms: 1714000001000
+          check:
+            status:
+              - 200
+              - 502
+
+  sdk_list_check_membership:
+    name: SDK list-check segment membership
+    steps:
+      - name: POST list-check with SDK key
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/segments/list-check
+          method: POST
+          headers:
+            Content-Type: application/json
+            x-sdk-key: ${{env.sdk_key}}
+          json:
+              segment_key: beta-users
+              context_key: user-abc
+              context_type: user
+          check:
+            status:
+              - 200
+              - 502
+
+  sdk_full_flow:
+    name: SDK full flow — evaluate then ingest event
+    steps:
+      - name: "Step 1: Evaluate flag for user context"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/evaluate
+          method: POST
+          headers:
+            Content-Type: application/json
+            x-sdk-key: ${{env.sdk_key}}
+          json:
+              context_key: user-e2e-001
+              context_type: user
+          check:
+            status:
+              - 200
+              - 502
+
+      - name: "Step 2: Ingest downstream event"
+        http:
+          url: ${{env.gateway}}/v1/environments/${{env.env_id}}/events
+          method: POST
+          headers:
+            Content-Type: application/json
+            x-sdk-key: ${{env.sdk_key}}
+          json:
+              metric_key: flag_evaluated
+              context_key: user-e2e-001
+              context_type: user
+              value: true
+              timestamp_ms: 1714000010000
+          check:
+            status:
+              - 200
+              - 502
