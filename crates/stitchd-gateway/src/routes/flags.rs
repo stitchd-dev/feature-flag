@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use stitchd_proto::flags::v1::{
     FeatureFlag, FlagHashingConfig, GetFlagRequest, ListFlagsRequest, MutateFlagRequest,
@@ -20,42 +21,42 @@ use crate::state::GatewayState;
 // ─── REST request / response types ───────────────────────────────────────────
 
 /// Request body for creating or updating a flag.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct FlagMutateRequest {
     pub key: Option<String>,
     pub enabled: Option<bool>,
-    /// Serialised flag as JSON (if present, used to build the proto FeatureFlag)
+    #[schema(value_type = Object, nullable = true)]
     pub flag: Option<serde_json::Value>,
     pub version: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct HashingConfigItem {
     pub parameter_key: String,
     pub parameter_type: String,
     pub order: i32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateHashingBody {
     pub configs: Vec<HashingConfigItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct HashingConfigJson {
     pub parameter_key: String,
     pub parameter_type: String,
     pub order: i32,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UpdateHashingResponse {
     pub flag: FlagJson,
     pub configs: Vec<HashingConfigJson>,
 }
 
 /// Lightweight JSON representation of a feature flag.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct FlagJson {
     pub key: String,
     pub enabled: bool,
@@ -71,10 +72,18 @@ fn flag_to_json(f: &FeatureFlag) -> FlagJson {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// `GET /v1/projects/{project_id}/flags`
-///
-/// Lists all flags by proxying `ListFlags` to the Flag Service.
-/// Note: the Flag Service operates on `environment_id`; we pass `project_id`
-/// as the environment identifier (callers must supply an env-scoped project_id).
+#[utoipa::path(
+    get,
+    path = "/v1/projects/{project_id}/flags",
+    tag = "flags",
+    params(("project_id" = String, Path, description = "Project / environment ID")),
+    responses(
+        (status = 200, description = "List of flags", body = Vec<FlagJson>),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_flags(
     State(state): State<Arc<GatewayState>>,
     Path(project_id): Path<String>,
@@ -89,8 +98,19 @@ pub async fn list_flags(
 }
 
 /// `POST /v1/projects/{project_id}/flags`
-///
-/// Creates a flag via `MutateFlag` (CREATE).
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{project_id}/flags",
+    tag = "flags",
+    params(("project_id" = String, Path, description = "Project / environment ID")),
+    request_body = FlagMutateRequest,
+    responses(
+        (status = 201, description = "Flag created", body = FlagJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_flag(
     State(state): State<Arc<GatewayState>>,
     Path(project_id): Path<String>,
@@ -118,6 +138,22 @@ pub async fn create_flag(
 }
 
 /// `GET /v1/projects/{project_id}/flags/{flag_id}`
+#[utoipa::path(
+    get,
+    path = "/v1/projects/{project_id}/flags/{flag_id}",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project / environment ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    responses(
+        (status = 200, description = "Flag", body = FlagJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Flag not found"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_flag(
     State(state): State<Arc<GatewayState>>,
     Path((project_id, flag_key)): Path<(String, String)>,
@@ -132,6 +168,22 @@ pub async fn get_flag(
 }
 
 /// `PUT /v1/projects/{project_id}/flags/{flag_id}`
+#[utoipa::path(
+    put,
+    path = "/v1/projects/{project_id}/flags/{flag_id}",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project / environment ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    request_body = FlagMutateRequest,
+    responses(
+        (status = 200, description = "Updated flag", body = FlagJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_flag(
     State(state): State<Arc<GatewayState>>,
     Path((project_id, flag_key)): Path<(String, String)>,
@@ -159,6 +211,21 @@ pub async fn update_flag(
 }
 
 /// `DELETE /v1/projects/{project_id}/flags/{flag_id}`
+#[utoipa::path(
+    delete,
+    path = "/v1/projects/{project_id}/flags/{flag_id}",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project / environment ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    responses(
+        (status = 204, description = "Flag deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_flag(
     State(state): State<Arc<GatewayState>>,
     Path((project_id, flag_key)): Path<(String, String)>,
@@ -179,10 +246,20 @@ pub async fn delete_flag(
 }
 
 /// `POST /v1/projects/{project_id}/flags/{flag_id}/variants`
-///
-/// Stub: the Flag Service's MutateFlag CREATE handles variant creation
-/// embedded in the FeatureFlag message. This endpoint accepts a JSON body
-/// and proxies it as an UPDATE containing the new variant.
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/variants",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project / environment ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    responses(
+        (status = 202, description = "Variant accepted for processing"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_variant(
     State(_state): State<Arc<GatewayState>>,
     Path((_project_id, _flag_key)): Path<(String, String)>,
@@ -194,6 +271,20 @@ pub async fn create_variant(
 }
 
 /// `PUT /v1/projects/{project_id}/flags/{flag_id}/rules`
+#[utoipa::path(
+    put,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/rules",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project / environment ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    responses(
+        (status = 202, description = "Rules accepted for processing"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_rules(
     State(_state): State<Arc<GatewayState>>,
     Path((_project_id, _flag_key)): Path<(String, String)>,
@@ -203,6 +294,22 @@ pub async fn update_rules(
 }
 
 /// `PUT /v1/projects/{project_id}/flags/{flag_id}/hashing`
+#[utoipa::path(
+    put,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/hashing",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project / environment ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    request_body = UpdateHashingBody,
+    responses(
+        (status = 200, description = "Updated hashing configuration", body = UpdateHashingResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_flag_hashing(
     State(state): State<Arc<GatewayState>>,
     Path((project_id, flag_key)): Path<(String, String)>,

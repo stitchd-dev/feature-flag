@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use stitchd_proto::events::v1::{Event, IngestRequest, MetricValue, metric_value};
 
@@ -15,21 +16,22 @@ use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct EventBody {
     pub metric_key: String,
     pub context_type: String,
     pub context_key: String,
+    #[schema(value_type = Object, nullable = true)]
     pub value: Option<serde_json::Value>,
     pub timestamp_ms: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct BatchEventBody {
     pub events: Vec<EventBody>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IngestResponseJson {
     pub accepted_count: u32,
     pub rejected_keys: Vec<String>,
@@ -65,6 +67,19 @@ fn body_to_event(b: &EventBody) -> Event {
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 /// `POST /v1/environments/{env_id}/events`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/events",
+    tag = "events",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body = EventBody,
+    responses(
+        (status = 200, description = "Event ingested", body = IngestResponseJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Event service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn ingest_event(
     State(state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
@@ -83,6 +98,19 @@ pub async fn ingest_event(
 }
 
 /// `POST /v1/environments/{env_id}/events/batch`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/events/batch",
+    tag = "events",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body = BatchEventBody,
+    responses(
+        (status = 200, description = "Batch ingested", body = IngestResponseJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Event service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn ingest_batch(
     State(state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
@@ -100,6 +128,17 @@ pub async fn ingest_batch(
 }
 
 /// `GET /v1/environments/{env_id}/event-definitions`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/event-definitions",
+    tag = "events",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    responses(
+        (status = 200, description = "List of event definitions"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_event_definitions(
     State(_state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
@@ -111,6 +150,17 @@ pub async fn list_event_definitions(
 }
 
 /// `POST /v1/environments/{env_id}/event-definitions`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/event-definitions",
+    tag = "events",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    responses(
+        (status = 202, description = "Event definition accepted"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_event_definition(
     State(_state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
@@ -120,6 +170,20 @@ pub async fn create_event_definition(
 }
 
 /// `GET /v1/environments/{env_id}/event-definitions/{def_id}`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/event-definitions/{def_id}",
+    tag = "events",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("def_id" = String, Path, description = "Event definition key"),
+    ),
+    responses(
+        (status = 501, description = "Not implemented"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_event_definition(
     State(_state): State<Arc<GatewayState>>,
     Path((_env_id, def_id)): Path<(String, String)>,
@@ -129,6 +193,20 @@ pub async fn get_event_definition(
 }
 
 /// `PUT /v1/environments/{env_id}/event-definitions/{def_id}`
+#[utoipa::path(
+    put,
+    path = "/v1/environments/{env_id}/event-definitions/{def_id}",
+    tag = "events",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("def_id" = String, Path, description = "Event definition key"),
+    ),
+    responses(
+        (status = 202, description = "Update accepted"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_event_definition(
     State(_state): State<Arc<GatewayState>>,
     Path((_env_id, def_id)): Path<(String, String)>,
@@ -139,6 +217,20 @@ pub async fn update_event_definition(
 }
 
 /// `DELETE /v1/environments/{env_id}/event-definitions/{def_id}`
+#[utoipa::path(
+    delete,
+    path = "/v1/environments/{env_id}/event-definitions/{def_id}",
+    tag = "events",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("def_id" = String, Path, description = "Event definition key"),
+    ),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_event_definition(
     State(_state): State<Arc<GatewayState>>,
     Path((_env_id, def_id)): Path<(String, String)>,

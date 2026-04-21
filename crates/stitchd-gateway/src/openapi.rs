@@ -12,8 +12,6 @@ use utoipa::{
 };
 
 /// Top-level OpenAPI document.
-///
-/// Routes annotated with `#[utoipa::path]` in Phase 2 will be registered here.
 #[derive(OpenApi)]
 #[openapi(
     info(
@@ -24,6 +22,105 @@ use utoipa::{
             - **SDK routes** (`/v1/environments/*/evaluate`, `/v1/environments/*/events`, \
               `/v1/environments/*/segments/list-check`) require an `x-sdk-key` header.\n\
             - **Admin / resource routes** require a `Bearer` JWT in the `Authorization` header."
+    ),
+    paths(
+        // Auth
+        crate::routes::auth::login,
+        // Admin (system-org only)
+        crate::routes::admin::create_org,
+        crate::routes::admin::seed_user,
+        // Management (non-system-org)
+        crate::routes::management::create_project,
+        crate::routes::management::create_environment,
+        crate::routes::management::create_sdk_key,
+        crate::routes::management::create_user,
+        // SDK key routes
+        crate::routes::sdk::evaluate,
+        crate::routes::sdk::ingest_event,
+        crate::routes::sdk::ingest_batch_events,
+        crate::routes::sdk::list_check_membership,
+        crate::routes::sdk::batch_list_check_membership,
+        // Flags (JWT)
+        crate::routes::flags::list_flags,
+        crate::routes::flags::create_flag,
+        crate::routes::flags::get_flag,
+        crate::routes::flags::update_flag,
+        crate::routes::flags::delete_flag,
+        crate::routes::flags::create_variant,
+        crate::routes::flags::update_rules,
+        crate::routes::flags::update_flag_hashing,
+        // Segments (JWT)
+        crate::routes::segments::list_segments,
+        crate::routes::segments::create_segment,
+        crate::routes::segments::get_segment,
+        crate::routes::segments::update_segment,
+        crate::routes::segments::delete_segment,
+        // Events (JWT)
+        crate::routes::events::ingest_event,
+        crate::routes::events::ingest_batch,
+        crate::routes::events::list_event_definitions,
+        crate::routes::events::create_event_definition,
+        crate::routes::events::get_event_definition,
+        crate::routes::events::update_event_definition,
+        crate::routes::events::delete_event_definition,
+        // Experiments (JWT)
+        crate::routes::experiments::list_experiments,
+        crate::routes::experiments::create_experiment,
+        crate::routes::experiments::get_experiment,
+        crate::routes::experiments::update_experiment,
+        crate::routes::experiments::delete_experiment,
+        crate::routes::experiments::transition_experiment,
+        crate::routes::experiments::list_iterations,
+        crate::routes::experiments::get_results,
+    ),
+    components(
+        schemas(
+            // Auth
+            crate::routes::auth::LoginBody,
+            crate::routes::auth::LoginJson,
+            // Admin
+            crate::routes::admin::CreateOrgBody,
+            crate::routes::admin::OrgJson,
+            crate::routes::admin::SeedUserBody,
+            crate::routes::admin::UserJson,
+            // Management
+            crate::routes::management::CreateProjectBody,
+            crate::routes::management::ProjectJson,
+            crate::routes::management::CreateEnvBody,
+            crate::routes::management::EnvJson,
+            crate::routes::management::SdkKeyJson,
+            crate::routes::management::CreateUserBody,
+            crate::routes::management::UserJson,
+            // SDK
+            crate::routes::sdk::EvaluateRequest,
+            crate::routes::sdk::EvaluateResponse,
+            crate::routes::sdk::SdkEventBody,
+            crate::routes::sdk::IngestResponseJson,
+            crate::routes::sdk::ListCheckRequest,
+            crate::routes::sdk::ListCheckResponse,
+            // Flags
+            crate::routes::flags::FlagMutateRequest,
+            crate::routes::flags::FlagJson,
+            crate::routes::flags::HashingConfigItem,
+            crate::routes::flags::UpdateHashingBody,
+            crate::routes::flags::HashingConfigJson,
+            crate::routes::flags::UpdateHashingResponse,
+            // Segments
+            crate::routes::segments::SegmentCreateRequest,
+            crate::routes::segments::SegmentJson,
+            // Events
+            crate::routes::events::EventBody,
+            crate::routes::events::BatchEventBody,
+            crate::routes::events::IngestResponseJson,
+            // Experiments
+            crate::routes::experiments::CreateExperimentBody,
+            crate::routes::experiments::UpdateExperimentBody,
+            crate::routes::experiments::TransitionBody,
+            crate::routes::experiments::ExperimentJson,
+            crate::routes::experiments::IterationJson,
+            crate::routes::experiments::VariantResultJson,
+            crate::routes::experiments::ExperimentResultsJson,
+        )
     ),
     modifiers(&SecurityAddon)
 )]

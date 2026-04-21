@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use stitchd_proto::experiments::v1::{
     CreateExperimentRequest, DeleteExperimentRequest, Experiment, ExperimentIteration,
@@ -20,7 +21,7 @@ use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateExperimentBody {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -28,7 +29,7 @@ pub struct CreateExperimentBody {
     pub variant_keys: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateExperimentBody {
     pub name: Option<String>,
     pub description: Option<String>,
@@ -36,13 +37,13 @@ pub struct UpdateExperimentBody {
     pub version: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct TransitionBody {
     pub new_status: String,
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IterationJson {
     pub id: String,
     pub experiment_id: String,
@@ -52,7 +53,7 @@ pub struct IterationJson {
     pub traffic_allocation: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ExperimentJson {
     pub id: String,
     pub name: String,
@@ -62,13 +63,13 @@ pub struct ExperimentJson {
     pub variant_keys: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct VariantResultJson {
     pub variant_key: String,
     pub participant_count: u64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ExperimentResultsJson {
     pub experiment_id: String,
     pub variant_results: Vec<VariantResultJson>,
@@ -128,6 +129,18 @@ fn status_from_str(s: &str) -> ExperimentStatus {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// `GET /v1/environments/{env_id}/experiments`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/experiments",
+    tag = "experiments",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    responses(
+        (status = 200, description = "List of experiments", body = Vec<ExperimentJson>),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_experiments(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<String>,
@@ -150,6 +163,19 @@ pub async fn list_experiments(
 }
 
 /// `POST /v1/environments/{env_id}/experiments`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/experiments",
+    tag = "experiments",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body = CreateExperimentBody,
+    responses(
+        (status = 201, description = "Experiment created", body = ExperimentJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_experiment(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<String>,
@@ -179,6 +205,22 @@ pub async fn create_experiment(
 }
 
 /// `GET /v1/environments/{env_id}/experiments/{experiment_id}`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/experiments/{experiment_id}",
+    tag = "experiments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+    ),
+    responses(
+        (status = 200, description = "Experiment", body = ExperimentJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Experiment not found"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_experiment(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, experiment_id)): Path<(String, String)>,
@@ -196,6 +238,22 @@ pub async fn get_experiment(
 }
 
 /// `PATCH /v1/environments/{env_id}/experiments/{experiment_id}`
+#[utoipa::path(
+    patch,
+    path = "/v1/environments/{env_id}/experiments/{experiment_id}",
+    tag = "experiments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+    ),
+    request_body = UpdateExperimentBody,
+    responses(
+        (status = 200, description = "Updated experiment", body = ExperimentJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_experiment(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, experiment_id)): Path<(String, String)>,
@@ -222,6 +280,21 @@ pub async fn update_experiment(
 }
 
 /// `DELETE /v1/environments/{env_id}/experiments/{experiment_id}`
+#[utoipa::path(
+    delete,
+    path = "/v1/environments/{env_id}/experiments/{experiment_id}",
+    tag = "experiments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+    ),
+    responses(
+        (status = 200, description = "Deleted experiment", body = ExperimentJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_experiment(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, experiment_id)): Path<(String, String)>,
@@ -239,6 +312,22 @@ pub async fn delete_experiment(
 }
 
 /// `POST /v1/environments/{env_id}/experiments/{experiment_id}/transitions`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/experiments/{experiment_id}/transitions",
+    tag = "experiments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+    ),
+    request_body = TransitionBody,
+    responses(
+        (status = 200, description = "Experiment after transition", body = ExperimentJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn transition_experiment(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, experiment_id)): Path<(String, String)>,
@@ -260,6 +349,21 @@ pub async fn transition_experiment(
 }
 
 /// `GET /v1/environments/{env_id}/experiments/{experiment_id}/iterations`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
+    tag = "experiments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+    ),
+    responses(
+        (status = 200, description = "Experiment iterations", body = Vec<IterationJson>),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_iterations(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, experiment_id)): Path<(String, String)>,
@@ -283,6 +387,22 @@ pub async fn list_iterations(
 }
 
 /// `GET /v1/environments/{env_id}/experiments/{experiment_id}/results`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/experiments/{experiment_id}/results",
+    tag = "experiments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+    ),
+    responses(
+        (status = 200, description = "Experiment results", body = ExperimentResultsJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Results not found"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_results(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, experiment_id)): Path<(String, String)>,
