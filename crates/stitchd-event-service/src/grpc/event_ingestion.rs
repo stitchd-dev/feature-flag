@@ -188,7 +188,230 @@ impl EventIngestionService for EventIngestionServiceImpl {
 
 #[cfg(test)]
 mod tests {
-    use super::hash_sdk_key;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use chrono::Utc;
+    use tonic::metadata::MetadataValue;
+
+    use stitchd_core::{
+        event::{EventDefinition, EventValueType},
+        id::{
+            EnvironmentId, EventDefinitionId, SdkKeyId,
+        },
+        tenant::SdkKey,
+    };
+    use stitchd_db::{EventDefinitionRepository, RepositoryError, SdkKeyRepository};
+    use stitchd_proto::events::v1::{
+        Event, IngestRequest,
+        metric_value::Value,
+        MetricValue,
+    };
+
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // Mock: SdkKeyRepository
+    // -----------------------------------------------------------------------
+
+    /// Simple mock SDK key repository.
+    /// `find_active_by_hash` returns the pre-loaded key if the hash matches.
+    struct MockSdkKeyRepo {
+        /// key_hash → SdkKey
+        keys: HashMap<String, SdkKey>,
+    }
+
+    impl MockSdkKeyRepo {
+        fn new_with_key(key_hash: String, env_id: EnvironmentId) -> Self {
+            let mut keys = HashMap::new();
+            let now = Utc::now();
+            keys.insert(
+                key_hash.clone(),
+                SdkKey {
+                    id: SdkKeyId::new(),
+                    environment_id: env_id,
+                    key_hash,
+                    created_at: now,
+                    revoked_at: None,
+                    is_active: true,
+                },
+            );
+            Self { keys }
+        }
+
+    }
+
+    #[async_trait]
+    impl SdkKeyRepository for MockSdkKeyRepo {
+        async fn find_by_id(&self, _id: SdkKeyId) -> Result<SdkKey, RepositoryError> {
+            Err(RepositoryError::NotFound { id: "mock".into() })
+        }
+
+        async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<SdkKey>, RepositoryError> {
+            Ok(vec![])
+        }
+
+        async fn create(&self, _key: &SdkKey) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn revoke(&self, _id: SdkKeyId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn find_active_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<SdkKey>, RepositoryError> {
+            Ok(vec![])
+        }
+
+        async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
+            self.keys
+                .get(key_hash)
+                .cloned()
+                .ok_or_else(|| RepositoryError::NotFound { id: key_hash.to_string() })
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Mock: EventDefinitionRepository
+    // -----------------------------------------------------------------------
+
+    struct MockEventDefRepo {
+        /// env_id string → list of EventDefinition
+        defs: Mutex<HashMap<String, Vec<EventDefinition>>>,
+    }
+
+    impl MockEventDefRepo {
+        fn new(env_id: EnvironmentId, defs: Vec<(String, EventValueType)>) -> Self {
+            let now = Utc::now();
+            let mut map = HashMap::new();
+            let event_defs: Vec<EventDefinition> = defs
+                .into_iter()
+                .map(|(key, value_type)| EventDefinition {
+                    id: EventDefinitionId::new(),
+                    environment_id: env_id,
+                    key,
+                    value_type,
+                    created_at: now,
+                    updated_at: now,
+                    deleted_at: None,
+                    version: 1,
+                })
+                .collect();
+            map.insert(env_id.as_uuid().to_string(), event_defs);
+            Self { defs: Mutex::new(map) }
+        }
+
+    }
+
+    #[async_trait]
+    impl EventDefinitionRepository for MockEventDefRepo {
+        async fn find_by_id(
+            &self,
+            _id: EventDefinitionId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            Err(RepositoryError::NotFound { id: "mock".into() })
+        }
+
+        async fn find_by_key(
+            &self,
+            key: &str,
+            environment_id: EnvironmentId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            let guard = self.defs.lock().unwrap();
+            guard
+                .get(&environment_id.as_uuid().to_string())
+                .and_then(|v| v.iter().find(|d| d.key == key))
+                .cloned()
+                .ok_or_else(|| RepositoryError::NotFound { id: key.to_string() })
+        }
+
+        async fn list_by_environment(
+            &self,
+            environment_id: EnvironmentId,
+        ) -> Result<Vec<EventDefinition>, RepositoryError> {
+            let guard = self.defs.lock().unwrap();
+            Ok(guard
+                .get(&environment_id.as_uuid().to_string())
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError> {
+            let mut guard = self.defs.lock().unwrap();
+            guard
+                .entry(def.environment_id.as_uuid().to_string())
+                .or_default()
+                .push(def.clone());
+            Ok(())
+        }
+
+        async fn update(
+            &self,
+            def: &EventDefinition,
+        ) -> Result<EventDefinition, RepositoryError> {
+            Ok(def.clone())
+        }
+
+        async fn soft_delete(&self, id: EventDefinitionId) -> Result<(), RepositoryError> {
+            let mut guard = self.defs.lock().unwrap();
+            for defs in guard.values_mut() {
+                defs.retain(|d| d.id != id);
+            }
+            Ok(())
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    /// Build a minimal `EventWriter` backed by a no-op ClickHouse client.
+    ///
+    /// Tests never actually write to ClickHouse; the fire-and-forget spawn
+    /// will fail silently, which is acceptable for unit tests.
+    fn noop_event_writer() -> EventWriter {
+        let client = clickhouse::Client::default().with_url("http://127.0.0.1:1");
+        EventWriter::new(client)
+    }
+
+    fn make_service(
+        env_id: EnvironmentId,
+        defs: Vec<(String, EventValueType)>,
+    ) -> EventIngestionServiceImpl {
+        let raw_key = "sk_test_key";
+        let key_hash = hash_sdk_key(raw_key);
+
+        let sdk_key_repo: Arc<dyn SdkKeyRepository> =
+            Arc::new(MockSdkKeyRepo::new_with_key(key_hash, env_id));
+        let event_def_repo: Arc<dyn EventDefinitionRepository> =
+            Arc::new(MockEventDefRepo::new(env_id, defs));
+
+        EventIngestionServiceImpl::new(ServiceState {
+            event_def_repo,
+            sdk_key_repo,
+            event_writer: noop_event_writer(),
+        })
+    }
+
+    fn make_request_with_sdk_key(events: Vec<Event>, raw_key: &str) -> Request<IngestRequest> {
+        let mut req = Request::new(IngestRequest { events });
+        req.metadata_mut().insert(
+            "x-sdk-key",
+            MetadataValue::try_from(raw_key).expect("valid ascii"),
+        );
+        req
+    }
+
+    // -----------------------------------------------------------------------
+    // hash_sdk_key unit tests
+    // -----------------------------------------------------------------------
 
     #[test]
     fn hash_sdk_key_is_deterministic() {
@@ -203,5 +426,363 @@ mod tests {
         let h1 = hash_sdk_key("sk_test_abc");
         let h2 = hash_sdk_key("sk_test_xyz");
         assert_ne!(h1, h2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Authentication tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn rejects_request_missing_sdk_key_header() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(env_id, vec![]);
+
+        // No x-sdk-key header
+        let req = Request::new(IngestRequest { events: vec![] });
+        let resp = svc.ingest_event(req).await;
+        assert!(resp.is_err());
+        let status = resp.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::Unauthenticated);
+        assert!(status.message().contains("missing x-sdk-key"));
+    }
+
+    #[tokio::test]
+    async fn rejects_request_with_invalid_sdk_key() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(env_id, vec![]);
+
+        // SDK key that is not in the repository
+        let req = make_request_with_sdk_key(vec![], "sk_bad_key");
+        let resp = svc.ingest_event(req).await;
+        assert!(resp.is_err());
+        let status = resp.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::Unauthenticated);
+        assert!(status.message().contains("invalid or revoked"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Unknown key rejection tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn rejects_event_with_unknown_metric_key() {
+        let env_id = EnvironmentId::new();
+        // Registry has "click_count" (Int) only — "unknown_metric" is not registered.
+        let svc = make_service(
+            env_id,
+            vec![("click_count".to_string(), EventValueType::Int)],
+        );
+
+        let events = vec![Event {
+            metric_key: "unknown_metric".to_string(),
+            context_type: "user".to_string(),
+            context_key: "u1".to_string(),
+            value: Some(MetricValue { value: Some(Value::IntValue(1)) }),
+            timestamp_ms: 0,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 0);
+        assert_eq!(body.rejected_keys, vec!["unknown_metric"]);
+    }
+
+    #[tokio::test]
+    async fn rejects_all_events_when_none_registered() {
+        let env_id = EnvironmentId::new();
+        // Empty registry — all events must be rejected.
+        let svc = make_service(env_id, vec![]);
+
+        let events = vec![
+            Event {
+                metric_key: "a".to_string(),
+                context_type: "user".to_string(),
+                context_key: "u1".to_string(),
+                value: Some(MetricValue { value: Some(Value::BoolValue(true)) }),
+                timestamp_ms: 0,
+            },
+            Event {
+                metric_key: "b".to_string(),
+                context_type: "user".to_string(),
+                context_key: "u2".to_string(),
+                value: Some(MetricValue { value: Some(Value::IntValue(42)) }),
+                timestamp_ms: 0,
+            },
+        ];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 0);
+        assert_eq!(body.rejected_keys.len(), 2);
+        assert!(body.rejected_keys.contains(&"a".to_string()));
+        assert!(body.rejected_keys.contains(&"b".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Type mismatch rejection tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn rejects_bool_key_with_int_value() {
+        let env_id = EnvironmentId::new();
+        // "converted" is registered as Bool, but we send an Int value.
+        let svc = make_service(
+            env_id,
+            vec![("converted".to_string(), EventValueType::Bool)],
+        );
+
+        let events = vec![Event {
+            metric_key: "converted".to_string(),
+            context_type: "user".to_string(),
+            context_key: "u1".to_string(),
+            value: Some(MetricValue { value: Some(Value::IntValue(1)) }),
+            timestamp_ms: 0,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 0);
+        assert_eq!(body.rejected_keys, vec!["converted"]);
+    }
+
+    #[tokio::test]
+    async fn rejects_int_key_with_double_value() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(
+            env_id,
+            vec![("click_count".to_string(), EventValueType::Int)],
+        );
+
+        let events = vec![Event {
+            metric_key: "click_count".to_string(),
+            context_type: "user".to_string(),
+            context_key: "u1".to_string(),
+            value: Some(MetricValue { value: Some(Value::DoubleValue(1.5)) }),
+            timestamp_ms: 0,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 0);
+        assert_eq!(body.rejected_keys, vec!["click_count"]);
+    }
+
+    #[tokio::test]
+    async fn rejects_double_key_with_bool_value() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(
+            env_id,
+            vec![("revenue".to_string(), EventValueType::Double)],
+        );
+
+        let events = vec![Event {
+            metric_key: "revenue".to_string(),
+            context_type: "user".to_string(),
+            context_key: "u1".to_string(),
+            value: Some(MetricValue { value: Some(Value::BoolValue(false)) }),
+            timestamp_ms: 0,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 0);
+        assert_eq!(body.rejected_keys, vec!["revenue"]);
+    }
+
+    #[tokio::test]
+    async fn rejects_event_with_missing_value() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(
+            env_id,
+            vec![("click_count".to_string(), EventValueType::Int)],
+        );
+
+        // value field is None (missing)
+        let events = vec![Event {
+            metric_key: "click_count".to_string(),
+            context_type: "user".to_string(),
+            context_key: "u1".to_string(),
+            value: None,
+            timestamp_ms: 0,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 0);
+        assert_eq!(body.rejected_keys, vec!["click_count"]);
+    }
+
+    #[tokio::test]
+    async fn rejects_event_with_empty_metric_value_oneof() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(
+            env_id,
+            vec![("click_count".to_string(), EventValueType::Int)],
+        );
+
+        // MetricValue present but inner oneof is None
+        let events = vec![Event {
+            metric_key: "click_count".to_string(),
+            context_type: "user".to_string(),
+            context_key: "u1".to_string(),
+            value: Some(MetricValue { value: None }),
+            timestamp_ms: 0,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 0);
+        assert_eq!(body.rejected_keys, vec!["click_count"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Successful ingestion tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn accepts_valid_bool_event() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(
+            env_id,
+            vec![("converted".to_string(), EventValueType::Bool)],
+        );
+
+        let events = vec![Event {
+            metric_key: "converted".to_string(),
+            context_type: "user".to_string(),
+            context_key: "u1".to_string(),
+            value: Some(MetricValue { value: Some(Value::BoolValue(true)) }),
+            timestamp_ms: 1_000,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 1);
+        assert!(body.rejected_keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn accepts_valid_int_event() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(
+            env_id,
+            vec![("click_count".to_string(), EventValueType::Int)],
+        );
+
+        let events = vec![Event {
+            metric_key: "click_count".to_string(),
+            context_type: "user".to_string(),
+            context_key: "u42".to_string(),
+            value: Some(MetricValue { value: Some(Value::IntValue(7)) }),
+            timestamp_ms: 2_000,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 1);
+        assert!(body.rejected_keys.is_empty());
+    }
+
+    #[tokio::test]
+    async fn accepts_valid_double_event() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(
+            env_id,
+            vec![("revenue".to_string(), EventValueType::Double)],
+        );
+
+        let events = vec![Event {
+            metric_key: "revenue".to_string(),
+            context_type: "session".to_string(),
+            context_key: "s1".to_string(),
+            value: Some(MetricValue { value: Some(Value::DoubleValue(9.99)) }),
+            timestamp_ms: 3_000,
+        }];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 1);
+        assert!(body.rejected_keys.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Mixed batch: some accepted, some rejected
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn partial_batch_accepted_and_rejected() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(
+            env_id,
+            vec![
+                ("converted".to_string(), EventValueType::Bool),
+                ("click_count".to_string(), EventValueType::Int),
+            ],
+        );
+
+        let events = vec![
+            // ✓ valid bool
+            Event {
+                metric_key: "converted".to_string(),
+                context_type: "user".to_string(),
+                context_key: "u1".to_string(),
+                value: Some(MetricValue { value: Some(Value::BoolValue(true)) }),
+                timestamp_ms: 1_000,
+            },
+            // ✗ unknown key
+            Event {
+                metric_key: "unknown".to_string(),
+                context_type: "user".to_string(),
+                context_key: "u2".to_string(),
+                value: Some(MetricValue { value: Some(Value::IntValue(1)) }),
+                timestamp_ms: 1_000,
+            },
+            // ✗ type mismatch (Int key, Double value)
+            Event {
+                metric_key: "click_count".to_string(),
+                context_type: "user".to_string(),
+                context_key: "u3".to_string(),
+                value: Some(MetricValue { value: Some(Value::DoubleValue(1.0)) }),
+                timestamp_ms: 1_000,
+            },
+            // ✓ valid int
+            Event {
+                metric_key: "click_count".to_string(),
+                context_type: "user".to_string(),
+                context_key: "u4".to_string(),
+                value: Some(MetricValue { value: Some(Value::IntValue(5)) }),
+                timestamp_ms: 2_000,
+            },
+        ];
+
+        let req = make_request_with_sdk_key(events, "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 2);
+        assert_eq!(body.rejected_keys.len(), 2);
+        assert!(body.rejected_keys.contains(&"unknown".to_string()));
+        assert!(body.rejected_keys.contains(&"click_count".to_string()));
+    }
+
+    #[tokio::test]
+    async fn empty_batch_returns_zero_counts() {
+        let env_id = EnvironmentId::new();
+        let svc = make_service(env_id, vec![]);
+
+        let req = make_request_with_sdk_key(vec![], "sk_test_key");
+        let resp = svc.ingest_event(req).await.expect("handler should not error");
+        let body = resp.into_inner();
+        assert_eq!(body.accepted_count, 0);
+        assert!(body.rejected_keys.is_empty());
     }
 }
