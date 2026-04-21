@@ -975,6 +975,18 @@ mod tests {
             async fn list_active(&self, _: stitchd_core::id::UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, RepositoryError> { Ok(vec![]) }
         }
 
+        #[async_trait]
+        impl stitchd_db::MfaRepository for NullRepo {
+            async fn create_challenge(&self, _: stitchd_core::id::UserId, _: i64) -> Result<(stitchd_core::id::MfaChallengeId, String), RepositoryError> { Err(RepositoryError::NotFound { id: "stub".to_string() }) }
+            async fn consume_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::MfaChallengeId>, RepositoryError> { Ok(None) }
+            async fn enable_totp(&self, _: stitchd_core::id::UserId, _: Vec<u8>, _: Vec<String>) -> Result<(), RepositoryError> { Ok(()) }
+            async fn disable_totp(&self, _: stitchd_core::id::UserId) -> Result<(), RepositoryError> { Ok(()) }
+            async fn get_totp_secret(&self, _: stitchd_core::id::UserId) -> Result<Option<Vec<u8>>, RepositoryError> { Ok(None) }
+            async fn consume_recovery_code(&self, _: stitchd_core::id::UserId, _: &str) -> Result<bool, RepositoryError> { Ok(false) }
+            async fn store_pending_totp_secret(&self, _: stitchd_core::id::UserId, _: Vec<u8>) -> Result<(), RepositoryError> { Ok(()) }
+            async fn get_user_id_for_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::UserId>, RepositoryError> { Ok(None) }
+        }
+
         let null = Arc::new(NullRepo);
         crate::AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -992,7 +1004,8 @@ mod tests {
             event_writer: None,
             auth_user_repo: null.clone(),
             membership_repo: null.clone(),
-            refresh_token_repo: null,
+            refresh_token_repo: null.clone(),
+            mfa_repo: null,
         }
     }
 

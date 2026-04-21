@@ -11,6 +11,7 @@ pub fn build_api_router() -> Router<AppState> {
         .nest("/auth", auth_routes())
         .nest("/v1/environments/{env_id}", environment_routes())
         .nest("/v1/projects/{project_id}/flags", flag_routes())
+        .nest("/v1/users/me/mfa", mfa_user_routes())
 }
 
 fn auth_routes() -> Router<AppState> {
@@ -24,6 +25,19 @@ fn auth_routes() -> Router<AppState> {
             get(auth::sessions::list_sessions).delete(auth::sessions::revoke_all_sessions),
         )
         .route("/sessions/{token_id}", delete(auth::sessions::revoke_session))
+        // MFA verify endpoint (no AuthenticatedUser — uses challenge token instead)
+        .route("/mfa/verify", post(auth::mfa::verify))
+}
+
+fn mfa_user_routes() -> Router<AppState> {
+    Router::new()
+        .route("/setup", post(auth::mfa::setup))
+        .route("/confirm", post(auth::mfa::confirm))
+        .route("/disable", post(auth::mfa::disable))
+        .route(
+            "/recovery-codes/regenerate",
+            post(auth::mfa::regenerate_recovery_codes),
+        )
 }
 
 fn environment_routes() -> Router<AppState> {
@@ -567,6 +581,19 @@ mod tests {
         async fn list_active(&self, _: stitchd_core::id::UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, stitchd_db::RepositoryError> { Ok(vec![]) }
     }
 
+    struct StubMfaRepo;
+    #[async_trait]
+    impl stitchd_db::MfaRepository for StubMfaRepo {
+        async fn create_challenge(&self, _: stitchd_core::id::UserId, _: i64) -> Result<(stitchd_core::id::MfaChallengeId, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: "stub".to_string() }) }
+        async fn consume_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::MfaChallengeId>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn enable_totp(&self, _: stitchd_core::id::UserId, _: Vec<u8>, _: Vec<String>) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        async fn disable_totp(&self, _: stitchd_core::id::UserId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        async fn get_totp_secret(&self, _: stitchd_core::id::UserId) -> Result<Option<Vec<u8>>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn consume_recovery_code(&self, _: stitchd_core::id::UserId, _: &str) -> Result<bool, stitchd_db::RepositoryError> { Ok(false) }
+        async fn store_pending_totp_secret(&self, _: stitchd_core::id::UserId, _: Vec<u8>) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        async fn get_user_id_for_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::UserId>, stitchd_db::RepositoryError> { Ok(None) }
+    }
+
     fn make_test_state() -> AppState {
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -578,6 +605,7 @@ mod tests {
             auth_user_repo: Arc::new(StubAuthUserRepo),
             membership_repo: Arc::new(StubMembershipRepo),
             refresh_token_repo: Arc::new(StubRefreshTokenRepo),
+            mfa_repo: Arc::new(StubMfaRepo),
             segment_repo: Arc::new(StubSegmentRepo),
             flag_repo: Arc::new(StubFlagRepo),
             variant_repo: Arc::new(StubVariantRepo),

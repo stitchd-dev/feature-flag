@@ -10,6 +10,7 @@
 //! - [`password`]: login, refresh, logout, switch-org
 //! - [`sessions`]: list sessions, revoke session, revoke all
 
+pub mod mfa;
 pub mod middleware;
 pub mod password;
 pub mod sessions;
