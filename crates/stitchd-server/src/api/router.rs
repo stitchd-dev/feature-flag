@@ -1,5 +1,5 @@
 use crate::AppState;
-use crate::api::{event_definitions, events, experiments, flags, segments};
+use crate::api::{auth, event_definitions, events, experiments, flags, segments};
 use axum::{
     Router,
     routing::{delete, get, post, put},
@@ -8,8 +8,29 @@ use axum::{
 /// Build the API router.
 pub fn build_api_router() -> Router<AppState> {
     Router::new()
+        .nest("/auth/saml", saml_routes())
         .nest("/v1/environments/{env_id}", environment_routes())
         .nest("/v1/projects/{project_id}/flags", flag_routes())
+}
+
+fn saml_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/{org_slug}/login",
+            get(auth::saml::saml_login),
+        )
+        .route(
+            "/{org_slug}/acs",
+            post(auth::saml::saml_acs),
+        )
+        .route(
+            "/{org_slug}/metadata",
+            get(auth::saml::saml_metadata),
+        )
+        .route(
+            "/{org_slug}/slo",
+            post(auth::saml::saml_slo),
+        )
 }
 
 fn environment_routes() -> Router<AppState> {
@@ -525,6 +546,7 @@ mod tests {
             results_repo: Arc::new(StubResultsRepo),
             ch_client: None,
             event_writer: None,
+            saml_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 

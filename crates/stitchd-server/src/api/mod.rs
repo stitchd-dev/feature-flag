@@ -1,5 +1,7 @@
 //! API router and handlers.
 
+/// Authentication handlers (SAML 2.0, future: password, OIDC, MFA).
+pub mod auth;
 /// Event definition registration API.
 pub mod event_definitions;
 /// Event ingestion API.

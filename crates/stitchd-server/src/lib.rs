@@ -17,7 +17,10 @@ use axum::{Json, Router, extract::State, routing::get};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
 use sqlx::PgPool;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+use stitchd_core::id::OrganisationId;
 use stitchd_db::{
     EventDefinitionRepository, ExperimentRepository, FlagRepository, SdkKeyRepository,
     SegmentRepository, VariantRepository, experiment_results::ExperimentResultsRepository,
@@ -51,6 +54,9 @@ pub struct AppState {
     pub ch_client: Option<Arc<clickhouse::Client>>,
     /// ClickHouse event writer. `None` when ClickHouse is unavailable (writes are skipped).
     pub event_writer: Option<EventWriter>,
+    /// Short-lived cache mapping SAML relay state tokens to (`OrganisationId`, issued `Instant`).
+    /// Entries are pruned on read once they exceed `SAML_STATE_TTL_SECS`.
+    pub saml_state_cache: Arc<Mutex<HashMap<String, (OrganisationId, Instant)>>>,
 }
 
 /// Build the Axum router.
@@ -159,6 +165,7 @@ mod tests {
             results_repo,
             ch_client: None,
             event_writer: None,
+            saml_state_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -557,6 +564,7 @@ mod tests {
             results_repo: Arc::new(NullResultsRepo),
             ch_client: None,
             event_writer: None,
+            saml_state_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

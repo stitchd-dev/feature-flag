@@ -885,6 +885,9 @@ mod tests {
             results_repo: Arc::new(MockResultsRepo),
             ch_client: None,
             event_writer: None,
+            saml_state_cache: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 

@@ -91,6 +91,9 @@ async fn main() -> Result<()> {
         event_writer: std::env::var("CLICKHOUSE_URL")
             .ok()
             .map(|url| EventWriter::new(clickhouse::Client::default().with_url(url))),
+        saml_state_cache: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")

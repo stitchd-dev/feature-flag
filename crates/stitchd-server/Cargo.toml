@@ -36,6 +36,8 @@ chrono = { workspace = true }
 sha2 = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
