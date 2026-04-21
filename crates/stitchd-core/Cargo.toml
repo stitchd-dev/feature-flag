@@ -22,3 +22,7 @@ siphasher = { workspace = true }
 sqlx = { workspace = true }
 murmur3 = { workspace = true }
 utoipa = { workspace = true, optional = true }
+quick-xml = { workspace = true }
+flate2 = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
