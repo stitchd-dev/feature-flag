@@ -945,6 +945,17 @@ mod tests {
         }
     }
 
+    struct MockUserRepo;
+    #[async_trait]
+    impl stitchd_db::UserRepository for MockUserRepo {
+        async fn find_by_id(&self, id: stitchd_core::id::UserId) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        async fn find_by_email(&self, e: &str) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: e.to_string() }) }
+        async fn list_by_organisation(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(vec![]) }
+        async fn create(&self, _: &stitchd_core::auth::User) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        async fn update(&self, u: &stitchd_core::auth::User) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Ok(u.clone()) }
+        async fn find_permissions_for_user(&self, _: stitchd_core::id::UserId, _: stitchd_core::id::ProjectId) -> Result<Vec<stitchd_core::user::Permission>, stitchd_db::RepositoryError> { Ok(vec![]) }
+    }
+
     // ---------------------------------------------------------------------------
     // Test helpers
     // ---------------------------------------------------------------------------
@@ -965,6 +976,7 @@ mod tests {
         AppState {
             db,
             metrics_handle: make_metrics_handle(),
+            user_repo: Arc::new(MockUserRepo),
             segment_repo: Arc::new(MockSegmentRepo),
             flag_repo,
             variant_repo,
@@ -1608,6 +1620,7 @@ mod tests {
             )
             .expect("lazy pool"),
             metrics_handle: make_metrics_handle(),
+            user_repo: Arc::new(MockUserRepo),
             segment_repo: Arc::new(MockSegmentRepo),
             flag_repo,
             variant_repo,
@@ -1658,6 +1671,7 @@ mod tests {
             )
             .expect("lazy pool"),
             metrics_handle: make_metrics_handle(),
+            user_repo: Arc::new(MockUserRepo),
             segment_repo: Arc::new(MockSegmentRepo),
             flag_repo,
             variant_repo: MockVariantRepo::new(),

@@ -935,11 +935,22 @@ mod tests {
             }
         }
 
+        #[async_trait]
+        impl stitchd_db::UserRepository for NullRepo {
+            async fn find_by_id(&self, id: stitchd_core::id::UserId) -> Result<stitchd_core::auth::User, RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn find_by_email(&self, e: &str) -> Result<stitchd_core::auth::User, RepositoryError> { Err(RepositoryError::NotFound { id: e.to_string() }) }
+            async fn list_by_organisation(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::User>, RepositoryError> { Ok(vec![]) }
+            async fn create(&self, _: &stitchd_core::auth::User) -> Result<(), RepositoryError> { Ok(()) }
+            async fn update(&self, u: &stitchd_core::auth::User) -> Result<stitchd_core::auth::User, RepositoryError> { Ok(u.clone()) }
+            async fn find_permissions_for_user(&self, _: stitchd_core::id::UserId, _: stitchd_core::id::ProjectId) -> Result<Vec<stitchd_core::user::Permission>, RepositoryError> { Ok(vec![]) }
+        }
+
         let null = Arc::new(NullRepo);
         crate::AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
                 .expect("lazy pool"),
             metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
+            user_repo: null.clone(),
             segment_repo: null.clone(),
             flag_repo: null.clone(),
             variant_repo: null.clone(),

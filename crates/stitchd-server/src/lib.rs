@@ -20,7 +20,8 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use stitchd_db::{
     EventDefinitionRepository, ExperimentRepository, FlagRepository, SdkKeyRepository,
-    SegmentRepository, VariantRepository, experiment_results::ExperimentResultsRepository,
+    SegmentRepository, UserRepository, VariantRepository,
+    experiment_results::ExperimentResultsRepository,
 };
 use stitchd_events::writer::EventWriter;
 use utoipa::OpenApi as _;
@@ -32,6 +33,8 @@ pub struct AppState {
     pub db: PgPool,
     /// Prometheus metrics handle.
     pub metrics_handle: PrometheusHandle,
+    /// Repository for platform user management and JWT auth.
+    pub user_repo: Arc<dyn UserRepository>,
     /// Repository for segment management.
     pub segment_repo: Arc<dyn SegmentRepository>,
     /// Repository for feature flag management.
@@ -147,9 +150,15 @@ mod tests {
         let results_repo = std::sync::Arc::new(
             stitchd_db::experiment_results::PgExperimentResultsRepository::new(db.clone()),
         );
+        let audit7 =
+            std::sync::Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(db.clone()));
+        let user_repo = std::sync::Arc::new(
+            stitchd_db::repository::pg::PgUserRepository::new(db.clone(), audit7),
+        );
         AppState {
             db,
             metrics_handle,
+            user_repo,
             segment_repo,
             flag_repo,
             variant_repo,
@@ -513,6 +522,49 @@ mod tests {
             }
         }
 
+        #[async_trait::async_trait]
+        impl stitchd_db::UserRepository for StubRepo {
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::UserId,
+            ) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_by_email(
+                &self,
+                email: &str,
+            ) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound {
+                    id: email.to_string(),
+                })
+            }
+            async fn list_by_organisation(
+                &self,
+                _: stitchd_core::id::OrganisationId,
+            ) -> Result<Vec<stitchd_core::auth::User>, stitchd_db::RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::auth::User,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                u: &stitchd_core::auth::User,
+            ) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> {
+                Ok(u.clone())
+            }
+            async fn find_permissions_for_user(
+                &self,
+                _: stitchd_core::id::UserId,
+                _: stitchd_core::id::ProjectId,
+            ) -> Result<Vec<stitchd_core::user::Permission>, stitchd_db::RepositoryError> {
+                Ok(vec![])
+            }
+        }
+
         struct NullResultsRepo;
         #[async_trait::async_trait]
         impl stitchd_db::experiment_results::ExperimentResultsRepository for NullResultsRepo {
@@ -548,6 +600,7 @@ mod tests {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_stub")
                 .expect("lazy pool"),
             metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
+            user_repo: stub.clone(),
             segment_repo: stub.clone(),
             flag_repo: stub.clone(),
             variant_repo: stub.clone(),

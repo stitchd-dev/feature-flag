@@ -662,9 +662,12 @@ mod tests {
             segment::{ListBasedSegment, RuleBasedSegment, Segment},
             tenant::SdkKey,
         };
+        use stitchd_core::auth::User;
+        use stitchd_core::id::{OrganisationId, UserId};
+        use stitchd_core::user::Permission;
         use stitchd_db::{
             EventDefinitionRepository, FlagRepository, RepositoryError, SdkKeyRepository,
-            SegmentRepository, VariantRepository,
+            SegmentRepository, UserRepository, VariantRepository,
         };
 
         struct NullRepo;
@@ -881,6 +884,37 @@ mod tests {
             }
         }
 
+        #[async_trait]
+        impl UserRepository for NullRepo {
+            async fn find_by_id(&self, id: UserId) -> Result<User, RepositoryError> {
+                Err(RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_by_email(&self, email: &str) -> Result<User, RepositoryError> {
+                Err(RepositoryError::NotFound {
+                    id: email.to_string(),
+                })
+            }
+            async fn list_by_organisation(
+                &self,
+                _: OrganisationId,
+            ) -> Result<Vec<User>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(&self, _: &User) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn update(&self, u: &User) -> Result<User, RepositoryError> {
+                Ok(u.clone())
+            }
+            async fn find_permissions_for_user(
+                &self,
+                _: UserId,
+                _: stitchd_core::id::ProjectId,
+            ) -> Result<Vec<Permission>, RepositoryError> {
+                Ok(vec![])
+            }
+        }
+
         let null = Arc::new(NullRepo);
         let state = crate::AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -890,7 +924,8 @@ mod tests {
             flag_repo: null.clone(),
             variant_repo: null.clone(),
             sdk_key_repo: null.clone(),
-            event_definition_repo: null,
+            event_definition_repo: null.clone(),
+            user_repo: null,
             experiment_repo,
             results_repo,
             ch_client: None,

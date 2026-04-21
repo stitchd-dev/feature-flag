@@ -675,6 +675,49 @@ mod tests {
                 Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
             }
         }
+        struct StubUserRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::UserRepository for StubUserRepo {
+            async fn find_by_id(
+                &self,
+                id: stitchd_core::id::UserId,
+            ) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn find_by_email(
+                &self,
+                email: &str,
+            ) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> {
+                Err(stitchd_db::RepositoryError::NotFound {
+                    id: email.to_string(),
+                })
+            }
+            async fn list_by_organisation(
+                &self,
+                _: stitchd_core::id::OrganisationId,
+            ) -> Result<Vec<stitchd_core::auth::User>, stitchd_db::RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _: &stitchd_core::auth::User,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                u: &stitchd_core::auth::User,
+            ) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> {
+                Ok(u.clone())
+            }
+            async fn find_permissions_for_user(
+                &self,
+                _: stitchd_core::id::UserId,
+                _: stitchd_core::id::ProjectId,
+            ) -> Result<Vec<stitchd_core::user::Permission>, stitchd_db::RepositoryError> {
+                Ok(vec![])
+            }
+        }
         struct StubResultsRepo;
         #[async_trait]
         impl stitchd_db::experiment_results::ExperimentResultsRepository for StubResultsRepo {
@@ -716,6 +759,7 @@ mod tests {
             variant_repo: Arc::new(StubVariantRepo),
             sdk_key_repo,
             event_definition_repo: Arc::new(StubEventDefinitionRepo),
+            user_repo: Arc::new(StubUserRepo),
             experiment_repo: Arc::new(StubExperimentRepo),
             results_repo: Arc::new(StubResultsRepo),
             ch_client: None,

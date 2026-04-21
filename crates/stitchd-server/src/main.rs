@@ -56,6 +56,10 @@ async fn main() -> Result<()> {
     let state = AppState {
         db: pool.clone(),
         metrics_handle,
+        user_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgUserRepository::new(
+            pool.clone(),
+            audit_logger.clone(),
+        )),
         segment_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(
             pool.clone(),
             audit_logger.clone(),

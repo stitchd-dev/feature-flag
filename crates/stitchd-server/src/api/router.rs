@@ -509,6 +509,17 @@ mod tests {
         }
     }
 
+    struct StubUserRepo;
+    #[async_trait]
+    impl stitchd_db::UserRepository for StubUserRepo {
+        async fn find_by_id(&self, id: stitchd_core::id::UserId) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        async fn find_by_email(&self, email: &str) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: email.to_string() }) }
+        async fn list_by_organisation(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(vec![]) }
+        async fn create(&self, _: &stitchd_core::auth::User) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        async fn update(&self, u: &stitchd_core::auth::User) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Ok(u.clone()) }
+        async fn find_permissions_for_user(&self, _: stitchd_core::id::UserId, _: stitchd_core::id::ProjectId) -> Result<Vec<stitchd_core::user::Permission>, stitchd_db::RepositoryError> { Ok(vec![]) }
+    }
+
     fn make_test_state() -> AppState {
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -516,6 +527,7 @@ mod tests {
         AppState {
             db,
             metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
+            user_repo: Arc::new(StubUserRepo),
             segment_repo: Arc::new(StubSegmentRepo),
             flag_repo: Arc::new(StubFlagRepo),
             variant_repo: Arc::new(StubVariantRepo),

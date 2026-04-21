@@ -1,5 +1,7 @@
 //! API router and handlers.
 
+/// JWT auth middleware extractors.
+pub mod auth;
 /// Event definition registration API.
 pub mod event_definitions;
 /// Event ingestion API.
