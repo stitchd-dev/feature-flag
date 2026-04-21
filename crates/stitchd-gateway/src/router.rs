@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use axum::{Router, middleware, routing::{get, post, put}};
+use axum::{Router, http::StatusCode, middleware, routing::{get, post, put}};
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
 use crate::routes::{admin, auth, events, experiments, flags, management, sdk, segments};
@@ -20,8 +20,9 @@ use crate::state::GatewayState;
 pub fn build_router(state: Arc<GatewayState>) -> Router {
     let auth_client = Arc::clone(&state.auth_client);
 
-    // ── Public: login (no auth required) ─────────────────────────────────────
+    // ── Public: health + login (no auth required) ────────────────────────────
     let auth_routes = Router::new()
+        .route("/health", get(|| async { StatusCode::OK }))
         .route("/v1/auth/login", post(auth::login))
         .with_state(Arc::clone(&state));
 
