@@ -86,6 +86,7 @@ async fn setup(pool: sqlx::PgPool) -> (AppState, EnvironmentId) {
         auth_user_repo: Arc::new(PgAuthUserRepository::new(pool.clone())),
         membership_repo: Arc::new(PgOrgMembershipRepository::new(pool.clone())),
         refresh_token_repo: Arc::new(PgRefreshTokenRepository::new(pool.clone())),
+        mfa_repo: Arc::new(stitchd_db::PgMfaRepository::new(pool.clone())),
         segment_repo: Arc::new(PgSegmentRepository::new(pool.clone(), audit.clone())),
         flag_repo: Arc::new(PgFlagRepository::new(pool.clone(), audit.clone())),
         variant_repo: Arc::new(PgVariantRepository::new(pool.clone(), audit.clone())),

@@ -20,8 +20,9 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use stitchd_db::{
     AuthUserRepository, EventDefinitionRepository, ExperimentRepository, FlagRepository,
-    OrgMembershipRepository, RefreshTokenRepository, SdkKeyRepository, SegmentRepository,
-    UserRepository, VariantRepository, experiment_results::ExperimentResultsRepository,
+    MfaRepository, OrgMembershipRepository, RefreshTokenRepository, SdkKeyRepository,
+    SegmentRepository, UserRepository, VariantRepository,
+    experiment_results::ExperimentResultsRepository,
 };
 use stitchd_events::writer::EventWriter;
 use utoipa::OpenApi as _;
@@ -41,6 +42,8 @@ pub struct AppState {
     pub membership_repo: Arc<dyn OrgMembershipRepository>,
     /// Refresh token repository (create, find, consume, revoke).
     pub refresh_token_repo: Arc<dyn RefreshTokenRepository>,
+    /// MFA repository (challenges, TOTP enable/disable, recovery codes).
+    pub mfa_repo: Arc<dyn MfaRepository>,
     /// Repository for segment management.
     pub segment_repo: Arc<dyn SegmentRepository>,
     /// Repository for feature flag management.
@@ -170,6 +173,9 @@ mod tests {
         let refresh_token_repo = std::sync::Arc::new(
             stitchd_db::PgRefreshTokenRepository::new(db.clone()),
         );
+        let mfa_repo = std::sync::Arc::new(
+            stitchd_db::PgMfaRepository::new(db.clone()),
+        );
         AppState {
             db,
             metrics_handle,
@@ -177,6 +183,7 @@ mod tests {
             auth_user_repo,
             membership_repo,
             refresh_token_repo,
+            mfa_repo,
             segment_repo,
             flag_repo,
             variant_repo,
@@ -682,6 +689,55 @@ mod tests {
             }
         }
 
+        struct StubMfaRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::MfaRepository for StubMfaRepo {
+            async fn create_challenge(
+                &self,
+                _: stitchd_core::id::UserId,
+                _: i64,
+            ) -> Result<(stitchd_core::id::MfaChallengeId, String), stitchd_db::RepositoryError>
+            {
+                Err(stitchd_db::RepositoryError::NotFound {
+                    id: "stub".to_string(),
+                })
+            }
+            async fn consume_challenge(
+                &self,
+                _: &str,
+            ) -> Result<Option<stitchd_core::id::MfaChallengeId>, stitchd_db::RepositoryError>
+            {
+                Ok(None)
+            }
+            async fn enable_totp(
+                &self,
+                _: stitchd_core::id::UserId,
+                _: Vec<u8>,
+                _: Vec<String>,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn disable_totp(
+                &self,
+                _: stitchd_core::id::UserId,
+            ) -> Result<(), stitchd_db::RepositoryError> {
+                Ok(())
+            }
+            async fn get_totp_secret(
+                &self,
+                _: stitchd_core::id::UserId,
+            ) -> Result<Option<Vec<u8>>, stitchd_db::RepositoryError> {
+                Ok(None)
+            }
+            async fn consume_recovery_code(
+                &self,
+                _: stitchd_core::id::UserId,
+                _: &str,
+            ) -> Result<bool, stitchd_db::RepositoryError> {
+                Ok(false)
+            }
+        }
+
         let stub = Arc::new(StubRepo);
         AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_stub")
@@ -691,6 +747,7 @@ mod tests {
             auth_user_repo: Arc::new(StubAuthUserRepo),
             membership_repo: Arc::new(StubMembershipRepo),
             refresh_token_repo: Arc::new(StubRefreshTokenRepo),
+            mfa_repo: Arc::new(StubMfaRepo),
             segment_repo: stub.clone(),
             flag_repo: stub.clone(),
             variant_repo: stub.clone(),

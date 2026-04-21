@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE mfa_recovery_codes\n            SET    used_at = now()\n            WHERE  user_id   = $1\n               AND code_hash = $2\n               AND used_at IS NULL\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8da0e8428ae65d8e83a35cc510ef1cef36bf87d476ea14cc19b118c7304b2370"
+}

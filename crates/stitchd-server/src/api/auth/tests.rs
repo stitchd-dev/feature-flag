@@ -24,7 +24,8 @@ use stitchd_core::{
     id::{OrganisationId, RefreshTokenId, UserId},
 };
 use stitchd_db::{
-    AuthUserRepository, OrgMembershipRepository, RefreshTokenRepository, RepositoryError,
+    AuthUserRepository, MfaRepository, OrgMembershipRepository, RefreshTokenRepository,
+    RepositoryError,
 };
 
 use crate::{
@@ -294,6 +295,17 @@ impl stitchd_db::experiment_results::ExperimentResultsRepository for NullResults
     async fn is_stale(&self, _: uuid::Uuid, _: uuid::Uuid) -> Result<bool, sqlx::Error> { Ok(false) }
 }
 
+struct NullMfaRepo;
+#[async_trait::async_trait]
+impl stitchd_db::MfaRepository for NullMfaRepo {
+    async fn create_challenge(&self, _: stitchd_core::id::UserId, _: i64) -> Result<(stitchd_core::id::MfaChallengeId, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: "stub".to_string() }) }
+    async fn consume_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::MfaChallengeId>, stitchd_db::RepositoryError> { Ok(None) }
+    async fn enable_totp(&self, _: stitchd_core::id::UserId, _: Vec<u8>, _: Vec<String>) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+    async fn disable_totp(&self, _: stitchd_core::id::UserId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+    async fn get_totp_secret(&self, _: stitchd_core::id::UserId) -> Result<Option<Vec<u8>>, stitchd_db::RepositoryError> { Ok(None) }
+    async fn consume_recovery_code(&self, _: stitchd_core::id::UserId, _: &str) -> Result<bool, stitchd_db::RepositoryError> { Ok(false) }
+}
+
 // ---------------------------------------------------------------------------
 // Test fixtures
 // ---------------------------------------------------------------------------
@@ -334,6 +346,7 @@ fn make_state(
         auth_user_repo: Arc::new(InMemAuthUserRepo::with_user(user.clone())),
         membership_repo: Arc::new(InMemMembershipRepo::with(user.id, org_id, role)),
         refresh_token_repo: token_repo,
+        mfa_repo: Arc::new(NullMfaRepo),
         segment_repo: null.clone(),
         flag_repo: null.clone(),
         variant_repo: null.clone(),

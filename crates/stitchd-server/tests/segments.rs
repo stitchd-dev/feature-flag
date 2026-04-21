@@ -82,6 +82,7 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
         auth_user_repo: Arc::new(PgAuthUserRepository::new(pool.clone())),
         membership_repo: Arc::new(PgOrgMembershipRepository::new(pool.clone())),
         refresh_token_repo: Arc::new(PgRefreshTokenRepository::new(pool.clone())),
+        mfa_repo: Arc::new(stitchd_db::PgMfaRepository::new(pool.clone())),
         segment_repo,
         flag_repo,
         variant_repo,

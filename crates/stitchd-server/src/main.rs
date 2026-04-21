@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
         auth_user_repo: std::sync::Arc::new(stitchd_db::PgAuthUserRepository::new(pool.clone())),
         membership_repo: std::sync::Arc::new(stitchd_db::PgOrgMembershipRepository::new(pool.clone())),
         refresh_token_repo: std::sync::Arc::new(stitchd_db::PgRefreshTokenRepository::new(pool.clone())),
+        mfa_repo: std::sync::Arc::new(stitchd_db::PgMfaRepository::new(pool.clone())),
         segment_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(
             pool.clone(),
             audit_logger.clone(),
