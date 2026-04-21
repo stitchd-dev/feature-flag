@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use stitchd_proto::experiments::v1::{
-    CreateExperimentRequest, Experiment, ExperimentStatus, GetExperimentRequest,
-    GetResultsRequest, ListExperimentsRequest, VariantResult,
+    CreateExperimentRequest, DeleteExperimentRequest, Experiment, ExperimentIteration,
+    ExperimentStatus, GetExperimentRequest, GetResultsRequest, ListExperimentsRequest,
+    ListIterationsRequest, TransitionExperimentRequest, UpdateExperimentRequest, VariantResult,
 };
 
 use crate::error::GatewayError;
@@ -25,6 +26,30 @@ pub struct CreateExperimentBody {
     pub description: Option<String>,
     pub flag_key: Option<String>,
     pub variant_keys: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateExperimentBody {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub variant_keys: Option<Vec<String>>,
+    pub version: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransitionBody {
+    pub new_status: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IterationJson {
+    pub id: String,
+    pub experiment_id: String,
+    pub iteration_number: i32,
+    pub started_at_ms: i64,
+    pub ended_at_ms: i64,
+    pub traffic_allocation: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,6 +101,27 @@ fn variant_result_to_json(v: &VariantResult) -> VariantResultJson {
     VariantResultJson {
         variant_key: v.variant_key.clone(),
         participant_count: v.participant_count,
+    }
+}
+
+fn iteration_to_json(i: &ExperimentIteration) -> IterationJson {
+    IterationJson {
+        id: i.id.clone(),
+        experiment_id: i.experiment_id.clone(),
+        iteration_number: i.iteration_number,
+        started_at_ms: i.started_at_ms,
+        ended_at_ms: i.ended_at_ms,
+        traffic_allocation: i.traffic_allocation,
+    }
+}
+
+fn status_from_str(s: &str) -> ExperimentStatus {
+    match s.to_lowercase().as_str() {
+        "draft" => ExperimentStatus::Draft,
+        "active" => ExperimentStatus::Active,
+        "paused" => ExperimentStatus::Paused,
+        "concluded" => ExperimentStatus::Concluded,
+        _ => ExperimentStatus::Unspecified,
     }
 }
 
@@ -146,13 +192,91 @@ pub async fn get_experiment(
     Ok(Json(experiment_to_json(&resp.into_inner())))
 }
 
+/// `PATCH /v1/environments/{env_id}/experiments/{experiment_id}`
+pub async fn update_experiment(
+    State(state): State<Arc<GatewayState>>,
+    Path((env_id, experiment_id)): Path<(String, String)>,
+    Json(body): Json<UpdateExperimentBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let experiment = Experiment {
+        id: experiment_id.clone(),
+        environment_id: env_id,
+        name: body.name.unwrap_or_default(),
+        description: body.description.unwrap_or_default(),
+        variant_keys: body.variant_keys.unwrap_or_default(),
+        version: body.version.unwrap_or(0),
+        ..Default::default()
+    };
+    let req = tonic::Request::new(UpdateExperimentRequest {
+        experiment: Some(experiment),
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .update_experiment(req)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(Json(experiment_to_json(&resp.into_inner())))
+}
+
 /// `DELETE /v1/environments/{env_id}/experiments/{experiment_id}`
 pub async fn delete_experiment(
-    State(_state): State<Arc<GatewayState>>,
-    Path((_env_id, _experiment_id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    // Deletion is not a first-class gRPC RPC in the proto; return 202 Accepted.
-    StatusCode::ACCEPTED
+    State(state): State<Arc<GatewayState>>,
+    Path((env_id, experiment_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(DeleteExperimentRequest {
+        environment_id: env_id,
+        experiment_id,
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .delete_experiment(req)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(Json(experiment_to_json(&resp.into_inner())))
+}
+
+/// `POST /v1/environments/{env_id}/experiments/{experiment_id}/transitions`
+pub async fn transition_experiment(
+    State(state): State<Arc<GatewayState>>,
+    Path((env_id, experiment_id)): Path<(String, String)>,
+    Json(body): Json<TransitionBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let new_status = status_from_str(&body.new_status);
+    let req = tonic::Request::new(TransitionExperimentRequest {
+        environment_id: env_id,
+        experiment_id,
+        new_status: new_status as i32,
+        reason: body.reason.unwrap_or_default(),
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .transition_experiment(req)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(Json(experiment_to_json(&resp.into_inner())))
+}
+
+/// `GET /v1/environments/{env_id}/experiments/{experiment_id}/iterations`
+pub async fn list_iterations(
+    State(state): State<Arc<GatewayState>>,
+    Path((env_id, experiment_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(ListIterationsRequest {
+        environment_id: env_id,
+        experiment_id,
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .list_iterations(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let iterations: Vec<IterationJson> = resp
+        .into_inner()
+        .iterations
+        .iter()
+        .map(iteration_to_json)
+        .collect();
+    Ok(Json(iterations))
 }
 
 /// `GET /v1/environments/{env_id}/experiments/{experiment_id}/results`
@@ -178,8 +302,7 @@ pub async fn get_results(
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
-
-    use axum::routing::{delete, get, post};
+    use axum::routing::{delete, get, patch, post};
     axum::Router::new()
         .route(
             "/v1/environments/{env_id}/experiments",
@@ -187,11 +310,19 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
         )
         .route(
             "/v1/environments/{env_id}/experiments/{experiment_id}",
-            get(get_experiment).delete(delete_experiment),
+            get(get_experiment).patch(update_experiment).delete(delete_experiment),
         )
         .route(
             "/v1/environments/{env_id}/experiments/{experiment_id}/results",
             get(get_results),
+        )
+        .route(
+            "/v1/environments/{env_id}/experiments/{experiment_id}/transitions",
+            post(transition_experiment),
+        )
+        .route(
+            "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
+            get(list_iterations),
         )
         .with_state(state)
 }
@@ -295,7 +426,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_experiment_returns_202() {
+    async fn delete_experiment_returns_200_or_502() {
         let state = make_stub_state();
         let app = test_router(state);
         let resp = app
@@ -308,7 +439,83 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn update_experiment_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/v1/environments/env-1/experiments/exp-1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"updated"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn transition_experiment_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/environments/env-1/experiments/exp-1/transitions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"new_status":"active"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn list_iterations_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/experiments/exp-1/iterations")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[test]
+    fn status_from_str_maps_known_values() {
+        assert_eq!(status_from_str("active"), ExperimentStatus::Active);
+        assert_eq!(status_from_str("paused"), ExperimentStatus::Paused);
+        assert_eq!(status_from_str("concluded"), ExperimentStatus::Concluded);
+        assert_eq!(status_from_str("unknown"), ExperimentStatus::Unspecified);
     }
 
     #[tokio::test]

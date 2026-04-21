@@ -49,6 +49,26 @@ message GetFlagDefinitionsRequest {
   string environment_id = 1;
 }
 
+// ─── Flag hashing config ──────────────────────────────────────────────────────
+
+// Controls which context parameters are used for percentage-rollout hashing.
+message FlagHashingConfig {
+  string parameter_key  = 1;
+  string parameter_type = 2;
+  int32  order          = 3;
+}
+
+message UpdateFlagHashingRequest {
+  string environment_id              = 1;
+  string flag_key                    = 2;
+  repeated FlagHashingConfig configs = 3;
+}
+
+message UpdateFlagHashingResponse {
+  FeatureFlag flag                   = 1;
+  repeated FlagHashingConfig configs = 2;
+}
+
 // ─── Flag management service ──────────────────────────────────────────────────
 
 service FlagService {
@@ -62,7 +82,8 @@ service FlagService {
   rpc MutateFlag(MutateFlagRequest) returns (MutateFlagResponse);
 
   // Server-streaming endpoint for SDK definition sync.
-  // Returns all flags for the environment as a stream of FeatureFlag messages.
-  // SDK key is supplied via gRPC metadata header `x-sdk-key`.
   rpc GetFlagDefinitions(GetFlagDefinitionsRequest) returns (stream FeatureFlag);
+
+  // Replace the hashing config for a flag (which context params drive rollout %).
+  rpc UpdateFlagHashing(UpdateFlagHashingRequest) returns (UpdateFlagHashingResponse);
 }

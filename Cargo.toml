@@ -6,10 +6,6 @@ members = [
     "crates/stitchd-events",
     "crates/stitchd-proto",
     "crates/stitchd-sdk",
-    # stitchd-server is DEPRECATED — replaced by the microservice stack (phases 2-7).
-    # Excluded from workspace builds but retained as a path dep for stitchd-sdk
-    # integration tests until those tests are migrated to the gateway + services.
-    # "crates/stitchd-server",
     "crates/xtask",
     "crates/stitchd-auth-service",
     "crates/stitchd-flag-service",
@@ -18,9 +14,6 @@ members = [
     "crates/stitchd-experimentation-service",
     "crates/stitchd-gateway",
 ]
-# stitchd-server is excluded from workspace builds (deprecated).
-# Cargo auto-includes path deps under the workspace root, so exclude overrides that.
-exclude = ["crates/stitchd-server"]
 
 [workspace.package]
 edition = "2024"

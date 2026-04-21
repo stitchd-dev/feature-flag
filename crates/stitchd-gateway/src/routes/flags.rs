@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use stitchd_proto::flags::v1::{
-    FeatureFlag, GetFlagRequest, ListFlagsRequest, MutateFlagRequest, MutationKind,
+    FeatureFlag, FlagHashingConfig, GetFlagRequest, ListFlagsRequest, MutateFlagRequest,
+    MutationKind, UpdateFlagHashingRequest,
 };
 
 use crate::error::GatewayError;
@@ -26,6 +27,31 @@ pub struct FlagMutateRequest {
     /// Serialised flag as JSON (if present, used to build the proto FeatureFlag)
     pub flag: Option<serde_json::Value>,
     pub version: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HashingConfigItem {
+    pub parameter_key: String,
+    pub parameter_type: String,
+    pub order: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateHashingBody {
+    pub configs: Vec<HashingConfigItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HashingConfigJson {
+    pub parameter_key: String,
+    pub parameter_type: String,
+    pub order: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateHashingResponse {
+    pub flag: FlagJson,
+    pub configs: Vec<HashingConfigJson>,
 }
 
 /// Lightweight JSON representation of a feature flag.
@@ -176,6 +202,51 @@ pub async fn update_rules(
     StatusCode::ACCEPTED
 }
 
+/// `PUT /v1/projects/{project_id}/flags/{flag_id}/hashing`
+pub async fn update_flag_hashing(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<UpdateHashingBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let configs: Vec<FlagHashingConfig> = body
+        .configs
+        .into_iter()
+        .map(|c| FlagHashingConfig {
+            parameter_key: c.parameter_key,
+            parameter_type: c.parameter_type,
+            order: c.order,
+        })
+        .collect();
+    let req = tonic::Request::new(UpdateFlagHashingRequest {
+        environment_id: project_id,
+        flag_key,
+        configs,
+    });
+    let mut client = state.flag_client.lock().await;
+    let resp = client
+        .update_flag_hashing(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let flag_json = inner.flag.as_ref().map(flag_to_json).unwrap_or(FlagJson {
+        key: String::new(),
+        enabled: false,
+    });
+    let configs_json: Vec<HashingConfigJson> = inner
+        .configs
+        .iter()
+        .map(|c| HashingConfigJson {
+            parameter_key: c.parameter_key.clone(),
+            parameter_type: c.parameter_type.clone(),
+            order: c.order,
+        })
+        .collect();
+    Ok(Json(UpdateHashingResponse {
+        flag: flag_json,
+        configs: configs_json,
+    }))
+}
+
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 /// Build a minimal router for unit testing.
@@ -201,6 +272,10 @@ pub fn test_router(
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/rules",
             put(update_rules),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/hashing",
+            put(update_flag_hashing),
         )
         .with_state(state)
 }
@@ -344,6 +419,30 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn update_flag_hashing_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(Arc::clone(&state), state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/v1/projects/env-1/flags/flag-key/hashing")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"configs":[{"parameter_key":"user_id","parameter_type":"string","order":0}]}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
     }
 
     // Keeps the compiler happy — make_stub_state_with_flag exported for other tests

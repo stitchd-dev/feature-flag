@@ -15,16 +15,8 @@ from pathlib import Path
 SNAPSHOT = Path(__file__).parent.parent / "docs/openapi-pre-decomposition.json"
 ROUTER   = Path(__file__).parent.parent / "crates/stitchd-gateway/src/router.rs"
 
-# Methods intentionally not yet proxied by the gateway (Phase 8 known gaps).
-# Removing an entry from this list will cause the script to exit non-zero.
-KNOWN_GAPS = {
-    # Experiment sub-resources not yet exposed by gateway
-    ("PATCH",  "/v1/environments/{env_id}/experiments/{id}"),         # update_experiment
-    ("GET",    "/v1/environments/{env_id}/experiments/{id}/iterations"),
-    ("POST",   "/v1/environments/{env_id}/experiments/{id}/transitions"),
-    # Flag hashing config — internal tuning endpoint deferred to Phase 9
-    ("PUT",    "/v1/projects/{project_id}/flags/{flag_id}/hashing"),
-}
+# All pre-decomposition routes are now proxied through the gateway.
+KNOWN_GAPS: set[tuple[str, str]] = set()
 
 
 def load_spec_routes(path: Path) -> set[tuple[str, str]]:

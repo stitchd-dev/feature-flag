@@ -19,33 +19,40 @@ message Experiment {
   string           environment_id = 2;
   string           name           = 3;
   string           description    = 4;
-  // The feature flag key this experiment is tied to.
   string           flag_key       = 5;
   ExperimentStatus status         = 6;
-  // Variant keys that are part of this experiment.
   repeated string  variant_keys   = 7;
-  // Epoch millis.
   int64            created_at_ms  = 8;
   int64            updated_at_ms  = 9;
   uint64           version        = 10;
 }
 
+// ─── Iteration (a single run of an experiment) ────────────────────────────────
+
+message ExperimentIteration {
+  string          id               = 1;
+  string          experiment_id    = 2;
+  int32           iteration_number = 3;
+  int64           started_at_ms    = 4;
+  // Zero when the iteration is still running.
+  int64           ended_at_ms      = 5;
+  repeated string metric_keys      = 6;
+  double          traffic_allocation = 7;
+}
+
 // ─── Results ──────────────────────────────────────────────────────────────────
 
 message VariantResult {
-  string variant_key     = 1;
+  string variant_key       = 1;
   uint64 participant_count = 2;
-  // Metric key → aggregated value.
   map<string, double> metric_values = 3;
-  // p-value vs control variant (null if not yet computed).
-  double p_value         = 4;
-  bool   p_value_present = 5;
+  double p_value           = 4;
+  bool   p_value_present   = 5;
 }
 
 message ExperimentResults {
   string                 experiment_id   = 1;
   repeated VariantResult variant_results = 2;
-  // Epoch millis of the latest results computation.
   int64                  computed_at_ms  = 3;
 }
 
@@ -53,6 +60,15 @@ message ExperimentResults {
 
 message CreateExperimentRequest {
   Experiment experiment = 1;
+}
+
+message UpdateExperimentRequest {
+  Experiment experiment = 1;
+}
+
+message DeleteExperimentRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
 }
 
 message GetExperimentRequest {
@@ -73,19 +89,34 @@ message GetResultsRequest {
   string experiment_id  = 2;
 }
 
+// ─── Lifecycle / transitions ──────────────────────────────────────────────────
+
+message TransitionExperimentRequest {
+  string           environment_id = 1;
+  string           experiment_id  = 2;
+  ExperimentStatus new_status     = 3;
+  // Human-readable reason for the transition (optional).
+  string           reason         = 4;
+}
+
+message ListIterationsRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+message ListIterationsResponse {
+  repeated ExperimentIteration iterations = 1;
+}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
-  // Create a new experiment.
-  // Calls Flag Service internally to verify and lock the flag state.
   rpc CreateExperiment(CreateExperimentRequest) returns (Experiment);
-
-  // Fetch a single experiment by ID.
-  rpc GetExperiment(GetExperimentRequest) returns (Experiment);
-
-  // List all experiments for an environment.
-  rpc ListExperiments(ListExperimentsRequest) returns (ListExperimentsResponse);
-
-  // Fetch pre-computed statistical results for an experiment.
-  rpc GetResults(GetResultsRequest) returns (ExperimentResults);
+  rpc GetExperiment(GetExperimentRequest)       returns (Experiment);
+  rpc ListExperiments(ListExperimentsRequest)   returns (ListExperimentsResponse);
+  rpc UpdateExperiment(UpdateExperimentRequest) returns (Experiment);
+  rpc DeleteExperiment(DeleteExperimentRequest) returns (Experiment);
+  rpc TransitionExperiment(TransitionExperimentRequest) returns (Experiment);
+  rpc ListIterations(ListIterationsRequest)     returns (ListIterationsResponse);
+  rpc GetResults(GetResultsRequest)             returns (ExperimentResults);
 }

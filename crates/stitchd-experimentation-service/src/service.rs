@@ -13,8 +13,10 @@ use stitchd_core::{
 };
 use stitchd_db::{ExperimentRepository, ExperimentResultsRepository};
 use stitchd_proto::experiments::v1::{
-    CreateExperimentRequest, ExperimentResults, GetExperimentRequest, GetResultsRequest,
-    ListExperimentsRequest, ListExperimentsResponse, VariantResult,
+    CreateExperimentRequest, DeleteExperimentRequest, ExperimentIteration as ProtoIteration,
+    ExperimentResults, GetExperimentRequest, GetResultsRequest, ListExperimentsRequest,
+    ListExperimentsResponse, ListIterationsRequest, ListIterationsResponse,
+    TransitionExperimentRequest, UpdateExperimentRequest, VariantResult,
     experimentation_service_server::ExperimentationService,
 };
 
@@ -46,6 +48,19 @@ fn core_status_to_proto(status: ExperimentStatus) -> i32 {
         ExperimentStatus::Running => ProtoStatus::Active as i32,
         ExperimentStatus::Paused => ProtoStatus::Paused as i32,
         ExperimentStatus::Stopped => ProtoStatus::Concluded as i32,
+    }
+}
+
+/// Map a core [`stitchd_core::experimentation::ExperimentIteration`] to proto.
+fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) -> ProtoIteration {
+    ProtoIteration {
+        id: i.id.to_string(),
+        experiment_id: i.experiment_id.to_string(),
+        iteration_number: i.iteration_number,
+        started_at_ms: i.started_at.timestamp_millis(),
+        ended_at_ms: i.ended_at.map_or(0, |t| t.timestamp_millis()),
+        metric_keys: i.metric_keys.clone(),
+        traffic_allocation: i.traffic_allocation,
     }
 }
 
@@ -220,6 +235,122 @@ impl ExperimentationService for ExperimentationServiceImpl {
         metrics::counter!("experimentation_service.list_experiments.ok").increment(1);
         Ok(Response::new(ListExperimentsResponse {
             experiments: protos,
+        }))
+    }
+
+    /// Update an existing experiment (name, description, variant keys).
+    #[instrument(skip(self))]
+    async fn update_experiment(
+        &self,
+        request: Request<UpdateExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
+        let req = request.into_inner();
+        let proto_exp = req.experiment.ok_or_else(|| {
+            Status::invalid_argument("experiment field is required")
+        })?;
+
+        let exp_uuid = uuid::Uuid::parse_str(&proto_exp.id)
+            .map_err(|_| Status::invalid_argument("invalid experiment id UUID"))?;
+        let exp_id = stitchd_core::id::ExperimentId::from_uuid(exp_uuid);
+
+        let mut experiment = self
+            .experiment_repo
+            .find_by_id(exp_id)
+            .await
+            .map_err(repo_err_to_status)?;
+
+        if !proto_exp.name.is_empty() {
+            experiment.name = proto_exp.name.clone();
+        }
+        if !proto_exp.description.is_empty() {
+            experiment.description = Some(proto_exp.description.clone());
+        }
+        if proto_exp.version > 0 {
+            experiment.version = i64::try_from(proto_exp.version).unwrap_or(experiment.version);
+        }
+        experiment.updated_at = chrono::Utc::now();
+
+        let updated = self
+            .experiment_repo
+            .update(&experiment)
+            .await
+            .map_err(repo_err_to_status)?;
+
+        metrics::counter!("experimentation_service.update_experiment.ok").increment(1);
+
+        let mut proto = core_to_proto(&updated);
+        proto.flag_key = proto_exp.flag_key;
+        Ok(Response::new(proto))
+    }
+
+    /// Soft-delete an experiment.
+    #[instrument(skip(self))]
+    async fn delete_experiment(
+        &self,
+        request: Request<DeleteExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
+        let req = request.into_inner();
+        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+        let exp_id = stitchd_core::id::ExperimentId::from_uuid(exp_uuid);
+
+        let experiment = self
+            .experiment_repo
+            .find_by_id(exp_id)
+            .await
+            .map_err(repo_err_to_status)?;
+
+        self.experiment_repo
+            .soft_delete(exp_id)
+            .await
+            .map_err(repo_err_to_status)?;
+
+        metrics::counter!("experimentation_service.delete_experiment.ok").increment(1);
+        Ok(Response::new(core_to_proto(&experiment)))
+    }
+
+    /// Apply a lifecycle status transition to an experiment.
+    #[instrument(skip(self))]
+    async fn transition_experiment(
+        &self,
+        request: Request<TransitionExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
+        let req = request.into_inner();
+        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+        let exp_id = stitchd_core::id::ExperimentId::from_uuid(exp_uuid);
+        let target_status = proto_status_to_core(req.new_status)?;
+
+        let updated = self
+            .experiment_repo
+            .apply_transition(exp_id, target_status, None)
+            .await
+            .map_err(repo_err_to_status)?;
+
+        metrics::counter!("experimentation_service.transition_experiment.ok").increment(1);
+        Ok(Response::new(core_to_proto(&updated)))
+    }
+
+    /// List all iterations for an experiment.
+    #[instrument(skip(self))]
+    async fn list_iterations(
+        &self,
+        request: Request<ListIterationsRequest>,
+    ) -> Result<Response<ListIterationsResponse>, Status> {
+        let req = request.into_inner();
+        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+        let exp_id = stitchd_core::id::ExperimentId::from_uuid(exp_uuid);
+
+        let iterations = self
+            .experiment_repo
+            .list_iterations(exp_id)
+            .await
+            .map_err(repo_err_to_status)?;
+
+        metrics::counter!("experimentation_service.list_iterations.ok").increment(1);
+        Ok(Response::new(ListIterationsResponse {
+            iterations: iterations.iter().map(iteration_to_proto).collect(),
         }))
     }
 

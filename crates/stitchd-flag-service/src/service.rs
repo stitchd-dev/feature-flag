@@ -11,7 +11,8 @@ use tonic::{Request, Response, Status};
 use stitchd_db::{FlagRepository, SdkKeyRepository, VariantRepository};
 use stitchd_proto::flags::v1::{
     FeatureFlag, GetFlagDefinitionsRequest, GetFlagRequest, ListFlagsRequest, ListFlagsResponse,
-    MutateFlagRequest, MutateFlagResponse, MutationKind, flag_service_server::FlagService,
+    MutateFlagRequest, MutateFlagResponse, MutationKind, UpdateFlagHashingRequest,
+    UpdateFlagHashingResponse, flag_service_server::FlagService,
 };
 
 use crate::{error::FlagServiceError, mapping};
@@ -370,6 +371,70 @@ impl FlagService for FlagServiceImpl {
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    /// Replace the hashing configuration for a flag.
+    async fn update_flag_hashing(
+        &self,
+        request: Request<UpdateFlagHashingRequest>,
+    ) -> Result<Response<UpdateFlagHashingResponse>, Status> {
+        let req = request.into_inner();
+        let env_id = parse_env_id(&req.environment_id)?;
+
+        let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let flags = self
+            .flag_repo
+            .list_by_environment(env_id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let record = flags
+            .into_iter()
+            .find(|f| f.key.as_str() == flag_key.as_str())
+            .ok_or_else(|| Status::not_found(format!("flag '{}' not found", req.flag_key)))?;
+
+        let domain_configs: Vec<stitchd_core::flag::FlagHashingConfig> = req
+            .configs
+            .iter()
+            .map(|c| stitchd_core::flag::FlagHashingConfig {
+                flag_id: record.id,
+                parameter_key: c.parameter_key.clone(),
+                parameter_type: c.parameter_type.clone(),
+                order: c.order,
+            })
+            .collect();
+
+        self.flag_repo
+            .upsert_hashing_config(record.id, &domain_configs)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let variants = self
+            .variant_repo
+            .find_by_flag(record.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let rules = self
+            .flag_repo
+            .find_rules(record.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let proto_flag = mapping::build_feature_flag_proto(&record, variants, &rules);
+
+        let proto_configs = req.configs.clone();
+        metrics::counter!("flag_service.update_flag_hashing.ok").increment(1);
+        Ok(Response::new(UpdateFlagHashingResponse {
+            flag: Some(proto_flag),
+            configs: proto_configs,
+        }))
     }
 }
 

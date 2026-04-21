@@ -47,6 +47,10 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             "/v1/projects/{project_id}/flags/{flag_id}/rules",
             put(flags::update_rules),
         )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/hashing",
+            put(flags::update_flag_hashing),
+        )
         // Segments
         .route(
             "/v1/environments/{env_id}/segments",
@@ -74,11 +78,21 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         )
         .route(
             "/v1/environments/{env_id}/experiments/{experiment_id}",
-            get(experiments::get_experiment).delete(experiments::delete_experiment),
+            get(experiments::get_experiment)
+                .patch(experiments::update_experiment)
+                .delete(experiments::delete_experiment),
         )
         .route(
             "/v1/environments/{env_id}/experiments/{experiment_id}/results",
             get(experiments::get_results),
+        )
+        .route(
+            "/v1/environments/{env_id}/experiments/{experiment_id}/transitions",
+            post(experiments::transition_experiment),
+        )
+        .route(
+            "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
+            get(experiments::list_iterations),
         )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
