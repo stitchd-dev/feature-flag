@@ -33,3 +33,5 @@ pub mod events {
         tonic::include_proto!("stitchd.events.v1");
     }
 }
+
+mod tests;
