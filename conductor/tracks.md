@@ -33,3 +33,8 @@ This file tracks all major tracks for the project.
 
 ## [x] Track: JWT / Multi-Mechanism Human Auth
 *Link: [./conductor/tracks/auth_20260421/](./conductor/tracks/auth_20260421/)*
+
+---
+
+## [ ] Track: Microservice Architecture Decomposition
+*Link: [./conductor/tracks/microservices_20260421/](./conductor/tracks/microservices_20260421/)*
