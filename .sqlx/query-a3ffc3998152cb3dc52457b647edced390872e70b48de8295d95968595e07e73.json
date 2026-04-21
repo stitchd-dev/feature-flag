@@ -1,0 +1,70 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                id,\n                user_id,\n                org_id,\n                token_hash,\n                device_hint,\n                issued_at,\n                expires_at,\n                revoked_at,\n                last_used_at\n            FROM refresh_tokens\n            WHERE user_id = $1\n              AND revoked_at IS NULL\n              AND expires_at > now()\n            ORDER BY issued_at DESC\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "org_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "token_hash",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "device_hint",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "issued_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "expires_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "last_used_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "a3ffc3998152cb3dc52457b647edced390872e70b48de8295d95968595e07e73"
+}

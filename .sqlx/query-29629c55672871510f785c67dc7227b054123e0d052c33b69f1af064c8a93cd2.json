@@ -1,22 +1,22 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM feature_flag_rules WHERE flag_id = $1 LIMIT 1",
+  "query": "SELECT user_id FROM mfa_challenges WHERE challenge_token_hash = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "user_id",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Text"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "f0a7a5f5be0192e518f394a62c34da4b78fa3b5cd9e9e50cd61b2e8540807e80"
+  "hash": "29629c55672871510f785c67dc7227b054123e0d052c33b69f1af064c8a93cd2"
 }

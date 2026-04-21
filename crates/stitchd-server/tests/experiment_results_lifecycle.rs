@@ -98,10 +98,10 @@ async fn setup_deps(pool: sqlx::PgPool) -> (EnvironmentId, RuleId) {
     }];
     flag_repo.upsert_rules(flag.id, &rules).await.unwrap();
 
-    let rule_uuid: uuid::Uuid = sqlx::query_scalar!(
+    let rule_uuid: uuid::Uuid = sqlx::query_scalar(
         "SELECT id FROM feature_flag_rules WHERE flag_id = $1 LIMIT 1",
-        flag.id.as_uuid()
     )
+    .bind(flag.id.as_uuid())
     .fetch_one(&pool)
     .await
     .unwrap();

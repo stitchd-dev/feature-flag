@@ -11,10 +11,11 @@ use stitchd_core::{
 };
 use stitchd_db::{
     EnvironmentRepository, OrganisationRepository, ProjectRepository,
+    PgAuthUserRepository, PgOrgMembershipRepository, PgRefreshTokenRepository,
     repository::pg::{
         PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
         PgExperimentRepository, PgFlagRepository, PgOrganisationRepository, PgProjectRepository,
-        PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository,
+        PgSdkKeyRepository, PgSegmentRepository, PgUserRepository, PgVariantRepository,
     },
 };
 use stitchd_server::{AppState, build_router};
@@ -75,8 +76,13 @@ async fn setup_app(pool: sqlx::PgPool) -> (axum::Router, EnvironmentId) {
     let results_repo =
         Arc::new(stitchd_db::experiment_results::PgExperimentResultsRepository::new(pool.clone()));
     let state = AppState {
-        db: pool,
+        db: pool.clone(),
         metrics_handle,
+        user_repo: Arc::new(PgUserRepository::new(pool.clone(), audit.clone())),
+        auth_user_repo: Arc::new(PgAuthUserRepository::new(pool.clone())),
+        membership_repo: Arc::new(PgOrgMembershipRepository::new(pool.clone())),
+        refresh_token_repo: Arc::new(PgRefreshTokenRepository::new(pool.clone())),
+        mfa_repo: Arc::new(stitchd_db::PgMfaRepository::new(pool.clone())),
         segment_repo,
         flag_repo,
         variant_repo,

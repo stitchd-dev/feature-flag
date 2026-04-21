@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE mfa_challenges\n            SET    used_at = now()\n            WHERE  challenge_token_hash = $1\n               AND expires_at > now()\n               AND used_at IS NULL\n            RETURNING id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3254b3692ae4fb379e7d628f6d053876058274f89f87735e9aa72e0601705c6e"
+}

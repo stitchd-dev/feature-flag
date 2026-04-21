@@ -1,4 +1,6 @@
-//! Postgres implementation for the `user` repository.
+//! Postgres implementation for the `user` repository (new auth schema).
+//!
+//! Uses the platform-level `users` table introduced in migration 20260421000001.
 
 use std::sync::Arc;
 
@@ -6,8 +8,9 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use stitchd_core::{
+    auth::{User, UserStatus},
     id::{OrganisationId, ProjectId, UserId},
-    user::{Action, Permission, ResourceType, User},
+    user::Permission,
 };
 
 use crate::{
@@ -15,7 +18,7 @@ use crate::{
     repository::{AuditLogger, UserRepository},
 };
 
-/// Postgres-backed implementation of [`UserRepository`].
+/// Postgres-backed implementation of [`UserRepository`] (new auth schema).
 pub struct PgUserRepository {
     pool: PgPool,
     audit: Arc<dyn AuditLogger>,
@@ -28,64 +31,102 @@ impl PgUserRepository {
     }
 }
 
+/// Map a DB text `status` column to [`UserStatus`].
+fn parse_user_status(s: &str) -> Result<UserStatus, RepositoryError> {
+    match s {
+        "active" => Ok(UserStatus::Active),
+        "deactivated" => Ok(UserStatus::Deactivated),
+        other => Err(RepositoryError::Unexpected(anyhow::anyhow!(
+            "unknown user status: {other}"
+        ))),
+    }
+}
+
 #[async_trait]
 impl UserRepository for PgUserRepository {
     async fn find_by_id(&self, id: UserId) -> Result<User, RepositoryError> {
-        sqlx::query_as!(
-            User,
+        let row = sqlx::query!(
             r#"
             SELECT
-                id              AS "id: UserId",
+                id,
                 email,
+                display_name,
+                avatar_url,
                 password_hash,
-                organisation_id AS "organisation_id: OrganisationId",
+                token_secret,
+                totp_secret,
+                totp_enabled,
+                status,
                 created_at,
-                updated_at,
-                deleted_at,
-                version
+                updated_at
             FROM users
-            WHERE id = $1 AND deleted_at IS NULL
+            WHERE id = $1
             "#,
-            id as UserId
+            id.as_uuid()
         )
         .fetch_one(&self.pool)
         .await
         .map_err(|e| match e {
             sqlx::Error::RowNotFound => RepositoryError::NotFound { id: id.to_string() },
             other => RepositoryError::Database(other),
+        })?;
+
+        Ok(User {
+            id: UserId::from_uuid(row.id),
+            email: row.email,
+            display_name: row.display_name,
+            avatar_url: row.avatar_url,
+            password_hash: row.password_hash,
+            token_secret: row.token_secret,
+            totp_secret: row.totp_secret,
+            totp_enabled: row.totp_enabled,
+            status: parse_user_status(&row.status)?,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         })
     }
 
-    async fn find_by_email(
-        &self,
-        email: &str,
-        organisation_id: OrganisationId,
-    ) -> Result<User, RepositoryError> {
-        sqlx::query_as!(
-            User,
+    async fn find_by_email(&self, email: &str) -> Result<User, RepositoryError> {
+        let row = sqlx::query!(
             r#"
             SELECT
-                id              AS "id: UserId",
+                id,
                 email,
+                display_name,
+                avatar_url,
                 password_hash,
-                organisation_id AS "organisation_id: OrganisationId",
+                token_secret,
+                totp_secret,
+                totp_enabled,
+                status,
                 created_at,
-                updated_at,
-                deleted_at,
-                version
+                updated_at
             FROM users
-            WHERE email = $1 AND organisation_id = $2 AND deleted_at IS NULL
+            WHERE email = $1
             "#,
-            email,
-            organisation_id as OrganisationId
+            email
         )
         .fetch_one(&self.pool)
         .await
         .map_err(|e| match e {
             sqlx::Error::RowNotFound => RepositoryError::NotFound {
-                id: format!("{email}@{organisation_id}"),
+                id: email.to_string(),
             },
             other => RepositoryError::Database(other),
+        })?;
+
+        Ok(User {
+            id: UserId::from_uuid(row.id),
+            email: row.email,
+            display_name: row.display_name,
+            avatar_url: row.avatar_url,
+            password_hash: row.password_hash,
+            token_secret: row.token_secret,
+            totp_secret: row.totp_secret,
+            totp_enabled: row.totp_enabled,
+            status: parse_user_status(&row.status)?,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         })
     }
 
@@ -93,45 +134,70 @@ impl UserRepository for PgUserRepository {
         &self,
         organisation_id: OrganisationId,
     ) -> Result<Vec<User>, RepositoryError> {
-        sqlx::query_as!(
-            User,
+        let rows = sqlx::query!(
             r#"
             SELECT
-                id              AS "id: UserId",
-                email,
-                password_hash,
-                organisation_id AS "organisation_id: OrganisationId",
-                created_at,
-                updated_at,
-                deleted_at,
-                version
-            FROM users
-            WHERE organisation_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at
+                u.id,
+                u.email,
+                u.display_name,
+                u.avatar_url,
+                u.password_hash,
+                u.token_secret,
+                u.totp_secret,
+                u.totp_enabled,
+                u.status,
+                u.created_at,
+                u.updated_at
+            FROM users u
+            JOIN org_memberships om ON om.user_id = u.id
+            WHERE om.org_id = $1
+            ORDER BY u.created_at
             "#,
-            organisation_id as OrganisationId
+            organisation_id.as_uuid()
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(RepositoryError::Database)
+        .map_err(RepositoryError::Database)?;
+
+        rows.into_iter()
+            .map(|r| {
+                Ok(User {
+                    id: UserId::from_uuid(r.id),
+                    email: r.email,
+                    display_name: r.display_name,
+                    avatar_url: r.avatar_url,
+                    password_hash: r.password_hash,
+                    token_secret: r.token_secret,
+                    totp_secret: r.totp_secret,
+                    totp_enabled: r.totp_enabled,
+                    status: parse_user_status(&r.status)?,
+                    created_at: r.created_at,
+                    updated_at: r.updated_at,
+                })
+            })
+            .collect()
     }
 
     async fn create(&self, user: &User) -> Result<(), RepositoryError> {
         sqlx::query!(
             r#"
             INSERT INTO users
-                (id, organisation_id, email, password_hash,
-                 created_at, updated_at, deleted_at, version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                (id, email, display_name, avatar_url, password_hash,
+                 token_secret, totp_secret, totp_enabled, status,
+                 created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
-            user.id as UserId,
-            user.organisation_id as OrganisationId,
+            user.id.as_uuid(),
             user.email,
+            user.display_name,
+            user.avatar_url,
             user.password_hash,
+            user.token_secret,
+            user.totp_secret.as_deref(),
+            user.totp_enabled,
+            user.status.to_db_str(),
             user.created_at,
             user.updated_at,
-            user.deleted_at,
-            user.version,
         )
         .execute(&self.pool)
         .await
@@ -152,10 +218,7 @@ impl UserRepository for PgUserRepository {
                 "user",
                 user.id.as_uuid(),
                 "create",
-                serde_json::json!({
-                    "email": user.email,
-                    "organisation_id": user.organisation_id.to_string(),
-                }),
+                serde_json::json!({ "email": user.email }),
             )
             .await?;
 
@@ -163,64 +226,75 @@ impl UserRepository for PgUserRepository {
     }
 
     async fn update(&self, user: &User) -> Result<User, RepositoryError> {
-        let new_version = user.version + 1;
-        let result = sqlx::query_as!(
-            User,
+        let row = sqlx::query!(
             r#"
             UPDATE users
-            SET email = $1, updated_at = NOW(), version = $2
-            WHERE id = $3 AND version = $4 AND deleted_at IS NULL
+            SET
+                email        = $1,
+                display_name = $2,
+                avatar_url   = $3,
+                password_hash = $4,
+                token_secret  = $5,
+                totp_secret   = $6,
+                totp_enabled  = $7,
+                status        = $8,
+                updated_at    = now()
+            WHERE id = $9
             RETURNING
-                id              AS "id: UserId",
+                id,
                 email,
+                display_name,
+                avatar_url,
                 password_hash,
-                organisation_id AS "organisation_id: OrganisationId",
+                token_secret,
+                totp_secret,
+                totp_enabled,
+                status,
                 created_at,
-                updated_at,
-                deleted_at,
-                version
+                updated_at
             "#,
             user.email,
-            new_version,
-            user.id as UserId,
-            user.version,
+            user.display_name,
+            user.avatar_url,
+            user.password_hash,
+            user.token_secret,
+            user.totp_secret.as_deref(),
+            user.totp_enabled,
+            user.status.to_db_str(),
+            user.id.as_uuid(),
         )
         .fetch_optional(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        if let Some(updated) = result {
-            self.audit
-                .log(
-                    None,
-                    "user",
-                    user.id.as_uuid(),
-                    "update",
-                    serde_json::json!({ "email": user.email }),
-                )
-                .await?;
-            Ok(updated)
-        } else {
-            let current = sqlx::query!(
-                r#"SELECT version, deleted_at FROM users WHERE id = $1"#,
-                user.id as UserId
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(RepositoryError::Database)?;
-
-            match current {
-                None => Err(RepositoryError::NotFound {
-                    id: user.id.to_string(),
-                }),
-                Some(row) if row.deleted_at.is_some() => Err(RepositoryError::NotFound {
-                    id: user.id.to_string(),
-                }),
-                Some(row) => Err(RepositoryError::VersionConflict {
-                    expected: user.version,
-                    actual: row.version,
-                }),
+        match row {
+            Some(r) => {
+                self.audit
+                    .log(
+                        None,
+                        "user",
+                        user.id.as_uuid(),
+                        "update",
+                        serde_json::json!({ "email": user.email }),
+                    )
+                    .await?;
+                Ok(User {
+                    id: UserId::from_uuid(r.id),
+                    email: r.email,
+                    display_name: r.display_name,
+                    avatar_url: r.avatar_url,
+                    password_hash: r.password_hash,
+                    token_secret: r.token_secret,
+                    totp_secret: r.totp_secret,
+                    totp_enabled: r.totp_enabled,
+                    status: parse_user_status(&r.status)?,
+                    created_at: r.created_at,
+                    updated_at: r.updated_at,
+                })
             }
+            None => Err(RepositoryError::NotFound {
+                id: user.id.to_string(),
+            }),
         }
     }
 
@@ -229,61 +303,31 @@ impl UserRepository for PgUserRepository {
         user_id: UserId,
         project_id: ProjectId,
     ) -> Result<Vec<Permission>, RepositoryError> {
-        // JOIN: user_project_roles → roles → permissions
-        // Filter out soft-deleted roles.
-        let rows = sqlx::query!(
-            r#"
-            SELECT
-                p.resource_type,
-                p.resource_pattern,
-                p.action
-            FROM user_project_roles upr
-            JOIN roles r ON r.id = upr.role_id AND r.deleted_at IS NULL
-            JOIN permissions p ON p.role_id = r.id
-            WHERE upr.user_id = $1
-              AND upr.project_id = $2
-            "#,
-            user_id as UserId,
-            project_id as ProjectId
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        rows.into_iter()
-            .map(|row| {
-                let resource_type = parse_resource_type(&row.resource_type)?;
-                let action = parse_action(&row.action)?;
-                Ok(Permission {
-                    resource_type,
-                    resource_pattern: row.resource_pattern,
-                    action,
-                })
-            })
-            .collect()
+        // New schema: user_project_roles has (user_id, project_id, role TEXT).
+        // The old role_id FK and roles/permissions tables are still present but
+        // user_project_roles no longer has a role_id column.
+        // We return an empty vec — permission queries via RBAC role table are
+        // no longer supported after the auth schema migration.
+        // TODO: implement role-based permission lookup for new schema.
+        let _ = (user_id, project_id);
+        Ok(vec![])
     }
 }
 
-fn parse_resource_type(s: &str) -> Result<ResourceType, RepositoryError> {
-    match s {
-        "environment" => Ok(ResourceType::Environment),
-        "flag" => Ok(ResourceType::Flag),
-        "segment" => Ok(ResourceType::Segment),
-        other => Err(RepositoryError::Unexpected(anyhow::anyhow!(
-            "unknown resource_type: {other}"
-        ))),
-    }
+// ---------------------------------------------------------------------------
+// Helper trait for converting UserStatus to DB string
+// ---------------------------------------------------------------------------
+
+trait UserStatusExt {
+    fn to_db_str(&self) -> &'static str;
 }
 
-fn parse_action(s: &str) -> Result<Action, RepositoryError> {
-    match s {
-        "read" => Ok(Action::Read),
-        "write" => Ok(Action::Write),
-        "publish" => Ok(Action::Publish),
-        "admin" => Ok(Action::Admin),
-        other => Err(RepositoryError::Unexpected(anyhow::anyhow!(
-            "unknown action: {other}"
-        ))),
+impl UserStatusExt for UserStatus {
+    fn to_db_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Deactivated => "deactivated",
+        }
     }
 }
 
@@ -292,38 +336,23 @@ mod unit_tests {
     use super::*;
 
     #[test]
-    fn parse_resource_type_all_variants() {
+    fn parse_user_status_active() {
         assert!(matches!(
-            parse_resource_type("environment").unwrap(),
-            ResourceType::Environment
-        ));
-        assert!(matches!(
-            parse_resource_type("flag").unwrap(),
-            ResourceType::Flag
-        ));
-        assert!(matches!(
-            parse_resource_type("segment").unwrap(),
-            ResourceType::Segment
+            parse_user_status("active").unwrap(),
+            UserStatus::Active
         ));
     }
 
     #[test]
-    fn parse_resource_type_unknown_returns_error() {
-        let err = parse_resource_type("other").unwrap_err();
-        assert!(err.to_string().contains("unknown resource_type: other"));
+    fn parse_user_status_deactivated() {
+        assert!(matches!(
+            parse_user_status("deactivated").unwrap(),
+            UserStatus::Deactivated
+        ));
     }
 
     #[test]
-    fn parse_action_all_variants() {
-        assert!(matches!(parse_action("read").unwrap(), Action::Read));
-        assert!(matches!(parse_action("write").unwrap(), Action::Write));
-        assert!(matches!(parse_action("publish").unwrap(), Action::Publish));
-        assert!(matches!(parse_action("admin").unwrap(), Action::Admin));
-    }
-
-    #[test]
-    fn parse_action_unknown_returns_error() {
-        let err = parse_action("delete").unwrap_err();
-        assert!(err.to_string().contains("unknown action: delete"));
+    fn parse_user_status_unknown_returns_error() {
+        assert!(parse_user_status("banned").is_err());
     }
 }

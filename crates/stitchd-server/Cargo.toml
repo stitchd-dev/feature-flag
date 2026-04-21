@@ -34,11 +34,22 @@ metrics-exporter-prometheus = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+jsonwebtoken = { workspace = true }
 utoipa = { workspace = true }
 utoipa-axum = { workspace = true }
+openidconnect = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+rand = { workspace = true }
+lettre = { workspace = true }
+governor = { workspace = true }
+tower_governor = { workspace = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
+totp-rs = { workspace = true }

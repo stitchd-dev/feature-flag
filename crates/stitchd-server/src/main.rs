@@ -56,6 +56,15 @@ async fn main() -> Result<()> {
     let state = AppState {
         db: pool.clone(),
         metrics_handle,
+        user_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgUserRepository::new(
+            pool.clone(),
+            audit_logger.clone(),
+        )),
+        auth_user_repo: std::sync::Arc::new(stitchd_db::PgAuthUserRepository::new(pool.clone())),
+        membership_repo: std::sync::Arc::new(stitchd_db::PgOrgMembershipRepository::new(pool.clone())),
+        refresh_token_repo: std::sync::Arc::new(stitchd_db::PgRefreshTokenRepository::new(pool.clone())),
+        mfa_repo: std::sync::Arc::new(stitchd_db::PgMfaRepository::new(pool.clone())),
+        auth_provider_repo: std::sync::Arc::new(stitchd_db::PgAuthProviderRepository::new(pool.clone())),
         segment_repo: std::sync::Arc::new(stitchd_db::repository::pg::PgSegmentRepository::new(
             pool.clone(),
             audit_logger.clone(),
@@ -91,6 +100,13 @@ async fn main() -> Result<()> {
         event_writer: std::env::var("CLICKHOUSE_URL")
             .ok()
             .map(|url| EventWriter::new(clickhouse::Client::default().with_url(url))),
+        oidc_state_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        saml_state_cache: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::new(),
+        )),
+        email_service: std::sync::Arc::new(stitchd_server::email::EmailService::from_env()),
+        invite_repo: std::sync::Arc::new(stitchd_db::PgInviteRepository::new(pool.clone())),
+        otp_repo: std::sync::Arc::new(stitchd_db::PgOtpRepository::new(pool.clone())),
     };
 
     let http_port: u16 = std::env::var("HTTP_PORT")

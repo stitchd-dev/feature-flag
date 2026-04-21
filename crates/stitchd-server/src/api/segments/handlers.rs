@@ -870,12 +870,94 @@ mod tests {
             }
         }
 
+        struct MockUserRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::UserRepository for MockUserRepo {
+            async fn find_by_id(&self, id: stitchd_core::id::UserId) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn find_by_email(&self, e: &str) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: e.to_string() }) }
+            async fn list_by_organisation(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(vec![]) }
+            async fn create(&self, _: &stitchd_core::auth::User) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+            async fn update(&self, u: &stitchd_core::auth::User) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Ok(u.clone()) }
+            async fn find_permissions_for_user(&self, _: stitchd_core::id::UserId, _: stitchd_core::id::ProjectId) -> Result<Vec<stitchd_core::user::Permission>, stitchd_db::RepositoryError> { Ok(vec![]) }
+        }
+
+        struct StubAuthUserRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::AuthUserRepository for StubAuthUserRepo {
+            async fn create(&self, e: &str, _: &str, _: Option<&str>) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: e.to_string() }) }
+            async fn find_by_email(&self, _: &str) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(Some(seg_test_user())) }
+            async fn find_by_id(&self, _: stitchd_core::id::UserId) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(Some(seg_test_user())) }
+            async fn rotate_token_secret(&self, id: stitchd_core::id::UserId) -> Result<uuid::Uuid, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn update_status(&self, id: stitchd_core::id::UserId, _: stitchd_core::auth::UserStatus) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn update_password_hash(&self, id: stitchd_core::id::UserId, _: &str) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn update_profile(&self, id: stitchd_core::id::UserId, _: &str, _: Option<&str>) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn list_org_users(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<(stitchd_core::auth::User, stitchd_core::auth::OrgRole)>, stitchd_db::RepositoryError> { Ok(vec![]) }
+        }
+        struct StubMembershipRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::OrgMembershipRepository for StubMembershipRepo {
+            async fn add_member(&self, id: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::OrgRole) -> Result<stitchd_core::auth::OrgMembership, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn find_membership(&self, _: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId) -> Result<Option<stitchd_core::auth::OrgMembership>, stitchd_db::RepositoryError> { Ok(None) }
+            async fn list_orgs_for_user(&self, _: stitchd_core::id::UserId) -> Result<Vec<stitchd_core::auth::OrgMembership>, stitchd_db::RepositoryError> { Ok(vec![]) }
+            async fn remove_member(&self, id: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn update_role(&self, id: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::OrgRole) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        }
+        struct StubRefreshTokenRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::RefreshTokenRepository for StubRefreshTokenRepo {
+            async fn create(&self, id: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId, _: Option<&str>, _: i64) -> Result<(stitchd_core::auth::RefreshToken, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn find_by_hash(&self, _: &str) -> Result<Option<stitchd_core::auth::RefreshToken>, stitchd_db::RepositoryError> { Ok(None) }
+            async fn consume(&self, id: stitchd_core::id::RefreshTokenId) -> Result<Option<stitchd_core::auth::RefreshToken>, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn revoke(&self, id: stitchd_core::id::RefreshTokenId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn revoke_all_for_user(&self, id: stitchd_core::id::UserId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn list_active(&self, _: stitchd_core::id::UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, stitchd_db::RepositoryError> { Ok(vec![]) }
+        }
+        struct StubAuthProviderRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::AuthProviderRepository for StubAuthProviderRepo {
+            async fn create(&self, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::ProviderType, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::Unexpected(anyhow::anyhow!("stub"))) }
+            async fn find_by_id(&self, _: stitchd_core::id::AuthProviderId) -> Result<Option<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> { Ok(None) }
+            async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::AuthProvider>, stitchd_db::RepositoryError> { Ok(vec![]) }
+            async fn update(&self, id: stitchd_core::id::AuthProviderId, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn delete(&self, _: stitchd_core::id::AuthProviderId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        }
+
+        struct StubMfaRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::MfaRepository for StubMfaRepo {
+            async fn create_challenge(&self, _: stitchd_core::id::UserId, _: i64) -> Result<(stitchd_core::id::MfaChallengeId, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: "stub".to_string() }) }
+            async fn consume_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::MfaChallengeId>, stitchd_db::RepositoryError> { Ok(None) }
+            async fn enable_totp(&self, _: stitchd_core::id::UserId, _: Vec<u8>, _: Vec<String>) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+            async fn disable_totp(&self, _: stitchd_core::id::UserId) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+            async fn get_totp_secret(&self, _: stitchd_core::id::UserId) -> Result<Option<Vec<u8>>, stitchd_db::RepositoryError> { Ok(None) }
+            async fn consume_recovery_code(&self, _: stitchd_core::id::UserId, _: &str) -> Result<bool, stitchd_db::RepositoryError> { Ok(false) }
+            async fn store_pending_totp_secret(&self, _: stitchd_core::id::UserId, _: Vec<u8>) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+            async fn get_user_id_for_challenge(&self, _: &str) -> Result<Option<stitchd_core::id::UserId>, stitchd_db::RepositoryError> { Ok(None) }
+        }
+        struct StubInviteRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::InviteRepository for StubInviteRepo {
+            async fn create(&self, _: stitchd_core::id::OrganisationId, _: &str, _: stitchd_core::auth::OrgRole, _: Option<stitchd_core::id::UserId>, _: i64) -> Result<(stitchd_core::auth::Invite, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: "stub".to_string() }) }
+            async fn find_by_token_hash(&self, _: &str) -> Result<Option<stitchd_core::auth::Invite>, stitchd_db::RepositoryError> { Ok(None) }
+            async fn accept(&self, id: stitchd_core::id::InviteId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+            async fn list_for_org(&self, _: stitchd_core::id::OrganisationId) -> Result<Vec<stitchd_core::auth::Invite>, stitchd_db::RepositoryError> { Ok(vec![]) }
+            async fn revoke(&self, id: stitchd_core::id::InviteId) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        }
+        struct StubOtpRepo;
+        #[async_trait::async_trait]
+        impl stitchd_db::OtpRepository for StubOtpRepo {
+            async fn create(&self, _: &str) -> Result<(uuid::Uuid, String), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: "stub".to_string() }) }
+            async fn find_valid_by_email(&self, _: &str) -> Result<Option<(uuid::Uuid, String)>, stitchd_db::RepositoryError> { Ok(None) }
+            async fn consume(&self, id: uuid::Uuid) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
+        }
+
         let db =
             sqlx::PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
                 .expect("lazy pool creation should never fail");
         AppState {
             db,
             metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
+            user_repo: Arc::new(MockUserRepo),
             segment_repo,
             flag_repo: Arc::new(MockFlagRepo),
             variant_repo: Arc::new(MockVariantRepo),
@@ -885,6 +967,18 @@ mod tests {
             results_repo: Arc::new(MockResultsRepo),
             ch_client: None,
             event_writer: None,
+            auth_user_repo: Arc::new(StubAuthUserRepo),
+            membership_repo: Arc::new(StubMembershipRepo),
+            refresh_token_repo: Arc::new(StubRefreshTokenRepo),
+            mfa_repo: Arc::new(StubMfaRepo),
+            auth_provider_repo: Arc::new(StubAuthProviderRepo),
+            oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            saml_state_cache: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            email_service: Arc::new(crate::email::EmailService::from_env()),
+            invite_repo: Arc::new(StubInviteRepo),
+            otp_repo: Arc::new(StubOtpRepo),
         }
     }
 
@@ -919,7 +1013,44 @@ mod tests {
     }
 
     fn build_router(state: AppState) -> axum::Router {
-        crate::api::router::build_api_router().with_state(state)
+        crate::api::router::build_api_router(state.clone()).with_state(state)
+    }
+
+    // ---------------------------------------------------------------------------
+    // JWT test helpers — used to satisfy AuthenticatedUser extractor on admin routes
+    // ---------------------------------------------------------------------------
+
+    static SEG_TEST_TOKEN_SECRET: std::sync::LazyLock<uuid::Uuid> =
+        std::sync::LazyLock::new(uuid::Uuid::new_v4);
+
+    fn seg_test_user() -> stitchd_core::auth::User {
+        stitchd_core::auth::User {
+            id: stitchd_core::id::UserId::from_uuid(uuid::Uuid::nil()),
+            email: "seg-handler-test@example.com".to_string(),
+            display_name: "Segment Test User".to_string(),
+            avatar_url: None,
+            password_hash: None,
+            token_secret: *SEG_TEST_TOKEN_SECRET,
+            totp_secret: None,
+            totp_enabled: false,
+            status: stitchd_core::auth::UserStatus::Active,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn seg_test_bearer_header() -> String {
+        let user = seg_test_user();
+        let org_id = stitchd_core::id::OrganisationId::new();
+        let token = stitchd_core::auth::jwt::JwtEngine::issue(
+            user.id,
+            org_id,
+            &user.email,
+            stitchd_core::auth::OrgRole::OrgMember,
+            &user.token_secret,
+        )
+        .expect("test JWT issue should not fail");
+        format!("Bearer {token}")
     }
 
     // ---------------------------------------------------------------------------
@@ -939,6 +1070,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -965,6 +1097,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1002,6 +1135,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/segments"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1030,6 +1164,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/segments"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1062,6 +1197,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/segments"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1090,6 +1226,7 @@ mod tests {
                     .method("POST")
                     .uri(format!("/v1/environments/{env_id}/segments"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1117,6 +1254,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1146,6 +1284,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1174,6 +1313,7 @@ mod tests {
                 Request::builder()
                     .method("GET")
                     .uri(format!("/v1/environments/{env_id}/segments/{missing_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1207,6 +1347,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1236,6 +1377,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1265,6 +1407,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1292,6 +1435,7 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1314,6 +1458,7 @@ mod tests {
                 Request::builder()
                     .method("DELETE")
                     .uri(format!("/v1/environments/{env_id}/segments/{missing_id}"))
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1670,6 +1815,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )
@@ -1699,6 +1845,7 @@ mod tests {
                     .method("PUT")
                     .uri(format!("/v1/environments/{env_id}/segments/{seg_id}"))
                     .header("content-type", "application/json")
+                    .header("Authorization", seg_test_bearer_header())
                     .body(Body::from(serde_json::to_vec(&body).unwrap()))
                     .unwrap(),
             )

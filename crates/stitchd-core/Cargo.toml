@@ -22,3 +22,17 @@ siphasher = { workspace = true }
 sqlx = { workspace = true }
 murmur3 = { workspace = true }
 utoipa = { workspace = true, optional = true }
+aes-gcm = { workspace = true }
+argon2 = { workspace = true }
+rand = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+jsonwebtoken = { workspace = true }
+sha2 = { workspace = true }
+totp-rs = { workspace = true }
+openidconnect = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+tokio = { workspace = true }
+quick-xml = { workspace = true }
+flate2 = { workspace = true }

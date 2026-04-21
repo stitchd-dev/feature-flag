@@ -51,6 +51,10 @@ macro_rules! define_id {
 }
 
 define_id!(OrganisationId);
+define_id!(AuthProviderId);
+define_id!(RefreshTokenId);
+define_id!(InviteId);
+define_id!(MfaChallengeId);
 define_id!(ProjectId);
 define_id!(EnvironmentId);
 define_id!(SdkKeyId);

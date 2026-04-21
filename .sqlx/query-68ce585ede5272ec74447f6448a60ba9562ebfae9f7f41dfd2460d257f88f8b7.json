@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                SELECT COUNT(*) FROM auth_providers\n                WHERE org_id = $1 AND enabled = true\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "68ce585ede5272ec74447f6448a60ba9562ebfae9f7f41dfd2460d257f88f8b7"
+}
