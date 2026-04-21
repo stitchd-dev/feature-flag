@@ -61,7 +61,7 @@
 - [x] Task 1: Scaffold `crates/stitchd-event-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure [aa931e9]
 - [x] Task 2: Write failing tests for `IngestEvent` handler — unknown key rejection, type validation [f72dcb5]
 - [x] Task 3: Implement event definition registry — migrate from `stitchd-server/src/event_definitions/`; owns `events` schema (PostgreSQL) [ac7f282]
-- [ ] Task 4: Implement `IngestEvent` gRPC handler — validate against registry, write to ClickHouse
+- [x] Task 4: Implement `IngestEvent` gRPC handler — validate against registry, write to ClickHouse [ac7f282]
 - [ ] Task 5: Wire tonic gRPC server in `main.rs` with graceful shutdown; metrics
 - [ ] Task 6: Verify >95% unit test coverage for crate
 - [ ] Task: Conductor - User Manual Verification 'Experimentation Event Service' (Protocol in workflow.md)
