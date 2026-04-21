@@ -4,6 +4,8 @@
 //! refresh tokens, auth providers, and invites.
 
 mod types;
+pub mod crypto;
+pub mod jwt;
 
 pub use types::{
     AuthProvider, EnvRole, Invite, OrgMembership, OrgRole, ProjectRole, ProviderType,
@@ -11,3 +13,5 @@ pub use types::{
 };
 
 pub use crate::id::{AuthProviderId, InviteId, MfaChallengeId, RefreshTokenId, UserId};
+pub use crypto::CryptoKey;
+pub use jwt::JwtEngine;
