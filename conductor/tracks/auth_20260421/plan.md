@@ -4,41 +4,41 @@ Track: auth_20260421
 ## Phase 1: Database Schema & Platform Identity Model
 <!-- execution: parallel -->
 
-- [ ] Task 1: PostgreSQL migrations
+- [x] Task 1: PostgreSQL migrations — b07de50
   <!-- files: crates/stitchd-db/migrations/ -->
-  - [ ] Sub-task: Write failing test asserting all new tables and columns exist post-migration
-  - [ ] Sub-task: `users` table (platform-level): id, email UNIQUE, display_name,
+  - [x] Sub-task: Write failing test asserting all new tables and columns exist post-migration
+  - [x] Sub-task: `users` table (platform-level): id, email UNIQUE, display_name,
         avatar_url, password_hash, token_secret UUID, totp_secret bytea (nullable,
         encrypted), totp_enabled, status (active|deactivated), created_at, updated_at
-  - [ ] Sub-task: `org_memberships`: user_id, org_id, role, joined_at; UNIQUE(user_id, org_id)
-  - [ ] Sub-task: `user_project_roles`: user_id, project_id, role; UNIQUE(user_id, project_id)
-  - [ ] Sub-task: `user_env_roles`: user_id, env_id, role; UNIQUE(user_id, env_id)
-  - [ ] Sub-task: `refresh_tokens`: id, user_id, org_id, token_hash, device_hint,
+  - [x] Sub-task: `org_memberships`: user_id, org_id, role, joined_at; UNIQUE(user_id, org_id)
+  - [x] Sub-task: `user_project_roles`: user_id, project_id, role; UNIQUE(user_id, project_id)
+  - [x] Sub-task: `user_env_roles`: user_id, env_id, role; UNIQUE(user_id, env_id)
+  - [x] Sub-task: `refresh_tokens`: id, user_id, org_id, token_hash, device_hint,
         issued_at, expires_at, revoked_at, last_used_at;
         INDEX(user_id, revoked_at, expires_at)
-  - [ ] Sub-task: `auth_providers`: id, org_id, provider_type (password|oidc|saml),
+  - [x] Sub-task: `auth_providers`: id, org_id, provider_type (password|oidc|saml),
         display_name, config JSONB, enabled, created_at, updated_at
-  - [ ] Sub-task: `invites`: id, org_id, email, org_role, invited_by_user_id,
+  - [x] Sub-task: `invites`: id, org_id, email, org_role, invited_by_user_id,
         token_hash, expires_at (72h), accepted_at
-  - [ ] Sub-task: `mfa_challenges`: id, user_id, challenge_token_hash, expires_at, used_at
-  - [ ] Sub-task: `mfa_recovery_codes`: id, user_id, code_hash, used_at
-  - [ ] Sub-task: `password_reset_otps`: id, email, otp_hash, expires_at, used_at
-  - [ ] Sub-task: Pass all migration tests
+  - [x] Sub-task: `mfa_challenges`: id, user_id, challenge_token_hash, expires_at, used_at
+  - [x] Sub-task: `mfa_recovery_codes`: id, user_id, code_hash, used_at
+  - [x] Sub-task: `password_reset_otps`: id, email, otp_hash, expires_at, used_at
+  - [x] Sub-task: Pass all migration tests
 
-- [ ] Task 2: Domain types in `stitchd-core`
+- [x] Task 2: Domain types in `stitchd-core` — 945d29a
   <!-- files: crates/stitchd-core/src/auth/ -->
-  - [ ] Sub-task: Write failing tests for enum parsing, role ordering, newtype serde
-  - [ ] Sub-task: `UserId`, `AuthProviderId`, `RefreshTokenId`, `InviteId`, `MfaChallengeId`
+  - [x] Sub-task: Write failing tests for enum parsing, role ordering, newtype serde
+  - [x] Sub-task: `UserId`, `AuthProviderId`, `RefreshTokenId`, `InviteId`, `MfaChallengeId`
         newtypes (macro_rules! with sqlx::Type transparent)
-  - [ ] Sub-task: `ProviderType` enum (Password|Oidc|Saml)
-  - [ ] Sub-task: `OrgRole` enum (OrgAdmin|OrgMember) with PartialOrd
-  - [ ] Sub-task: `ProjectRole` enum (ProjectAdmin|ProjectViewer) with PartialOrd
-  - [ ] Sub-task: `EnvRole` enum (EnvPublisher|EnvViewer) with PartialOrd
-  - [ ] Sub-task: `UserStatus` enum (Active|Deactivated)
-  - [ ] Sub-task: `User`, `OrgMembership`, `RefreshToken`, `AuthProvider`, `Invite` structs
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: `ProviderType` enum (Password|Oidc|Saml)
+  - [x] Sub-task: `OrgRole` enum (OrgAdmin|OrgMember) with PartialOrd
+  - [x] Sub-task: `ProjectRole` enum (ProjectAdmin|ProjectViewer) with PartialOrd
+  - [x] Sub-task: `EnvRole` enum (EnvPublisher|EnvViewer) with PartialOrd
+  - [x] Sub-task: `UserStatus` enum (Active|Deactivated)
+  - [x] Sub-task: `User`, `OrgMembership`, `RefreshToken`, `AuthProvider`, `Invite` structs
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 1' (Protocol in workflow.md)
+- [~] Task: Conductor - User Manual Verification 'Phase 1' (Protocol in workflow.md)
 
 ## Phase 2: Core Token & Crypto Engine
 <!-- depends: phase1 -->

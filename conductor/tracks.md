@@ -31,5 +31,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: JWT / Multi-Mechanism Human Auth
+## [~] Track: JWT / Multi-Mechanism Human Auth
 *Link: [./conductor/tracks/auth_20260421/](./conductor/tracks/auth_20260421/)*
