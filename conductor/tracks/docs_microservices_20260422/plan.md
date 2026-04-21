@@ -1,6 +1,6 @@
 # Plan: mdBook Docs — Microservice Architecture Update
 
-## Phase 1: Fix xtask Pipeline & Gateway Export Flag
+## Phase 1: Fix xtask Pipeline & Gateway Export Flag [checkpoint: 3c14b35]
 
 - [x] Task 1: Add `--export-openapi <path>` CLI flag to `stitchd-gateway` [4c337af]
   - [x] Add clap/CLI argument parsing for `--export-openapi` in gateway `main.rs`
