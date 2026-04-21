@@ -20,14 +20,14 @@
 ## Phase 2: Auth Service (`stitchd-auth-service`)
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Scaffold `crates/stitchd-auth-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure
-- [ ] Task 2: Write failing unit tests for JWT credential validation gRPC handler
-- [ ] Task 3: Implement JWT validation — migrate from `stitchd-server/src/auth/`; wire to `AuthService` gRPC trait
-- [ ] Task 4: Write failing unit tests for SDK key credential validation gRPC handler
-- [ ] Task 5: Implement SDK key validation — query `auth` schema via sqlx, enforce active-key constraint
-- [ ] Task 6: Build RBAC context assembly — map tenant/env/roles to `RbacContext` proto message
-- [ ] Task 7: Wire tonic gRPC server in `main.rs` with graceful shutdown; add Prometheus metrics endpoint
-- [ ] Task 8: Verify >95% unit test coverage for crate
+- [x] Task 1: Scaffold `crates/stitchd-auth-service` — `Cargo.toml`, `main.rs`, `lib.rs`, module structure [6852431]
+- [x] Task 2: Write failing unit tests for JWT credential validation gRPC handler [6852431]
+- [x] Task 3: Implement JWT validation — migrate from `stitchd-server/src/auth/`; wire to `AuthService` gRPC trait [6852431]
+- [x] Task 4: Write failing unit tests for SDK key credential validation gRPC handler [6852431]
+- [x] Task 5: Implement SDK key validation — query `auth` schema via sqlx, enforce active-key constraint [6852431]
+- [x] Task 6: Build RBAC context assembly — map tenant/env/roles to `RbacContext` proto message [6852431]
+- [x] Task 7: Wire tonic gRPC server in `main.rs` with graceful shutdown; add Prometheus metrics endpoint [6852431]
+- [x] Task 8: Verify >95% unit test coverage for crate [6852431]
 - [ ] Task: Conductor - User Manual Verification 'Auth Service' (Protocol in workflow.md)
 
 ## Phase 3: Flag Service (`stitchd-flag-service`)
