@@ -9,6 +9,7 @@ use axum::{
 pub fn build_api_router() -> Router<AppState> {
     Router::new()
         .nest("/auth", auth_routes())
+        .nest("/auth/saml", saml_routes())
         .nest("/v1/environments/{env_id}", environment_routes())
         .nest("/v1/projects/{project_id}/flags", flag_routes())
         .nest("/v1/users/me/mfa", mfa_user_routes())
@@ -59,6 +60,26 @@ fn org_routes() -> Router<AppState> {
         .route(
             "/auth-providers/{provider_id}",
             put(auth::providers::update_provider).delete(auth::providers::delete_provider),
+        )
+}
+
+fn saml_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/{org_slug}/login",
+            get(auth::saml::saml_login),
+        )
+        .route(
+            "/{org_slug}/acs",
+            post(auth::saml::saml_acs),
+        )
+        .route(
+            "/{org_slug}/metadata",
+            get(auth::saml::saml_metadata),
+        )
+        .route(
+            "/{org_slug}/slo",
+            post(auth::saml::saml_slo),
         )
 }
 
@@ -649,6 +670,7 @@ mod tests {
             ch_client: None,
             event_writer: None,
             oidc_state_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            saml_state_cache: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 

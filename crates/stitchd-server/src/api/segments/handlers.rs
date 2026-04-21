@@ -956,6 +956,9 @@ mod tests {
             mfa_repo: Arc::new(StubMfaRepo),
             auth_provider_repo: Arc::new(StubAuthProviderRepo),
             oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            saml_state_cache: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 

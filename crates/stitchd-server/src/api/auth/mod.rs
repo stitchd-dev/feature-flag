@@ -9,12 +9,19 @@
 //! Also provides HTTP handlers for password auth and session management:
 //! - [`password`]: login, refresh, logout, switch-org
 //! - [`sessions`]: list sessions, revoke session, revoke all
+//!
+//! Also exposes SAML 2.0 SP endpoints:
+//! - `GET  /auth/saml/{org_slug}/login`    — SP-initiated SSO
+//! - `POST /auth/saml/{org_slug}/acs`      — Assertion Consumer Service
+//! - `GET  /auth/saml/{org_slug}/metadata` — SP metadata XML
+//! - `POST /auth/saml/{org_slug}/slo`      — Single Logout
 
 pub mod mfa;
 pub mod middleware;
 pub mod oidc;
 pub mod password;
 pub mod providers;
+pub mod saml;
 pub mod sessions;
 
 pub use middleware::{AuthenticatedUser, RequireEnvRole, RequireOrgRole, RequireProjectRole};

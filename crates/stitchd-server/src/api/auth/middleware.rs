@@ -645,6 +645,7 @@ mod tests {
             ch_client: None,
             event_writer: None,
             oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            saml_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 

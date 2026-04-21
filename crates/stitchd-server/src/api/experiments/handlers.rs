@@ -1016,6 +1016,9 @@ mod tests {
             mfa_repo: null.clone(),
             auth_provider_repo: null,
             oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            saml_state_cache: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         }
     }
 

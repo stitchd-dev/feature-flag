@@ -1,6 +1,6 @@
 //! API router and handlers.
 
-/// JWT auth middleware extractors.
+/// Authentication handlers (JWT middleware, password, OIDC, MFA, SAML 2.0).
 pub mod auth;
 /// Event definition registration API.
 pub mod event_definitions;

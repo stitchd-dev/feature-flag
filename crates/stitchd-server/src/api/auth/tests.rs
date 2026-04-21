@@ -490,6 +490,7 @@ fn make_state(
         ch_client: None,
         event_writer: None,
         oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        saml_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     }
 }
 
@@ -728,6 +729,7 @@ async fn switch_org_success_returns_new_tokens() {
         ch_client: None,
         event_writer: None,
         oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        saml_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
     let app = app_from_state(state);
 
@@ -872,6 +874,7 @@ fn make_mfa_state(
         ch_client: None,
         event_writer: None,
         oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        saml_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     }
 }
 

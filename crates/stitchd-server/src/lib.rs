@@ -22,7 +22,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Instant,
 };
-use stitchd_core::id::AuthProviderId;
+use stitchd_core::id::{AuthProviderId, OrganisationId};
 use stitchd_db::{
     AuthProviderRepository, AuthUserRepository, EventDefinitionRepository, ExperimentRepository,
     FlagRepository, MfaRepository, OrgMembershipRepository, RefreshTokenRepository,
@@ -76,6 +76,9 @@ pub struct AppState {
     /// Short-lived OIDC state cache: state → (`pkce_verifier`, `provider_id`, `issued_at`).
     /// TTL is 10 minutes; entries are checked on use.
     pub oidc_state_cache: Arc<Mutex<OidcStateMap>>,
+    /// Short-lived cache mapping SAML relay state tokens to (`OrganisationId`, issued `Instant`).
+    /// Entries are pruned on read once they exceed `SAML_STATE_TTL_SECS`.
+    pub saml_state_cache: Arc<Mutex<HashMap<String, (OrganisationId, Instant)>>>,
 }
 
 /// Build the Axum router.
@@ -211,6 +214,7 @@ mod tests {
             ch_client: None,
             event_writer: None,
             oidc_state_cache: Arc::new(Mutex::new(HashMap::new())),
+            saml_state_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -811,6 +815,7 @@ mod tests {
             ch_client: None,
             event_writer: None,
             oidc_state_cache: Arc::new(Mutex::new(HashMap::new())),
+            saml_state_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

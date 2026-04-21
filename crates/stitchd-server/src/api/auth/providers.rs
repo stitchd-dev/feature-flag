@@ -570,6 +570,7 @@ mod tests {
             ch_client: None,
             event_writer: None,
             oidc_state_cache: Arc::new(Mutex::new(StdHashMap::new())),
+            saml_state_cache: Arc::new(Mutex::new(StdHashMap::new())),
         }
     }
 

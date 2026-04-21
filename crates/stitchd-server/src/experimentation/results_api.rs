@@ -987,6 +987,9 @@ mod tests {
             mfa_repo: Arc::new(NullMfaRepo),
             auth_provider_repo: null,
             oidc_state_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            saml_state_cache: Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
         };
 
         Router::new()
