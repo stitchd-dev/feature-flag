@@ -133,7 +133,7 @@ Track: auth_20260421
   - [x] Sub-task: POST /auth/switch-org {org_id} — validate membership → new pair
   - [x] Sub-task: Pass all tests
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 3' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3' (Protocol in workflow.md)
 
 ## Phase 4: MFA / TOTP
 <!-- execution: parallel -->
