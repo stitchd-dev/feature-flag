@@ -945,6 +945,36 @@ mod tests {
             async fn find_permissions_for_user(&self, _: stitchd_core::id::UserId, _: stitchd_core::id::ProjectId) -> Result<Vec<stitchd_core::user::Permission>, RepositoryError> { Ok(vec![]) }
         }
 
+        #[async_trait]
+        impl stitchd_db::AuthUserRepository for NullRepo {
+            async fn create(&self, e: &str, _: &str, _: Option<&str>) -> Result<stitchd_core::auth::User, RepositoryError> { Err(RepositoryError::NotFound { id: e.to_string() }) }
+            async fn find_by_email(&self, _: &str) -> Result<Option<stitchd_core::auth::User>, RepositoryError> { Ok(None) }
+            async fn find_by_id(&self, id: stitchd_core::id::UserId) -> Result<Option<stitchd_core::auth::User>, RepositoryError> { let _ = id; Ok(None) }
+            async fn rotate_token_secret(&self, id: stitchd_core::id::UserId) -> Result<uuid::Uuid, RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn update_status(&self, id: stitchd_core::id::UserId, _: stitchd_core::auth::UserStatus) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn update_password_hash(&self, id: stitchd_core::id::UserId, _: &str) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn update_profile(&self, id: stitchd_core::id::UserId, _: &str, _: Option<&str>) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+        }
+
+        #[async_trait]
+        impl stitchd_db::OrgMembershipRepository for NullRepo {
+            async fn add_member(&self, id: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::OrgRole) -> Result<stitchd_core::auth::OrgMembership, RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn find_membership(&self, _: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId) -> Result<Option<stitchd_core::auth::OrgMembership>, RepositoryError> { Ok(None) }
+            async fn list_orgs_for_user(&self, _: stitchd_core::id::UserId) -> Result<Vec<stitchd_core::auth::OrgMembership>, RepositoryError> { Ok(vec![]) }
+            async fn remove_member(&self, id: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn update_role(&self, id: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::OrgRole) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+        }
+
+        #[async_trait]
+        impl stitchd_db::RefreshTokenRepository for NullRepo {
+            async fn create(&self, id: stitchd_core::id::UserId, _: stitchd_core::id::OrganisationId, _: Option<&str>, _: i64) -> Result<(stitchd_core::auth::RefreshToken, String), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn find_by_hash(&self, _: &str) -> Result<Option<stitchd_core::auth::RefreshToken>, RepositoryError> { Ok(None) }
+            async fn consume(&self, id: stitchd_core::id::RefreshTokenId) -> Result<Option<stitchd_core::auth::RefreshToken>, RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn revoke(&self, id: stitchd_core::id::RefreshTokenId) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn revoke_all_for_user(&self, id: stitchd_core::id::UserId) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
+            async fn list_active(&self, _: stitchd_core::id::UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, RepositoryError> { Ok(vec![]) }
+        }
+
         let null = Arc::new(NullRepo);
         crate::AppState {
             db: PgPool::connect_lazy("postgres://stitchd:stitchd@localhost:5432/stitchd_test")
@@ -955,11 +985,14 @@ mod tests {
             flag_repo: null.clone(),
             variant_repo: null.clone(),
             sdk_key_repo: null.clone(),
-            event_definition_repo: null,
+            event_definition_repo: null.clone(),
             experiment_repo,
             results_repo: Arc::new(NullResultsRepo),
             ch_client: None,
             event_writer: None,
+            auth_user_repo: null.clone(),
+            membership_repo: null.clone(),
+            refresh_token_repo: null,
         }
     }
 

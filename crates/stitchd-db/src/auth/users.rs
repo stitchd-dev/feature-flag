@@ -93,7 +93,7 @@ fn parse_status(s: &str) -> Result<UserStatus, RepositoryError> {
 }
 
 /// Convert [`UserStatus`] to its DB TEXT representation.
-fn status_str(s: UserStatus) -> &'static str {
+const fn status_str(s: UserStatus) -> &'static str {
     match s {
         UserStatus::Active => "active",
         UserStatus::Deactivated => "deactivated",

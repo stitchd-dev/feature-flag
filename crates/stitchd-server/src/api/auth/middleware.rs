@@ -61,10 +61,11 @@ where
 
         // 3. Fetch user from DB to get token_secret.
         let user = app_state
-            .user_repo
+            .auth_user_repo
             .find_by_id(user_id)
             .await
-            .map_err(|_| AuthError::InvalidToken)?;
+            .map_err(|_| AuthError::InvalidToken)?
+            .ok_or(AuthError::InvalidToken)?;
 
         // 4. Verify JWT with the per-user token_secret.
         let claims = JwtEngine::verify(&token, &user.token_secret)
@@ -559,12 +560,14 @@ mod tests {
         async fn is_stale(&self, _: uuid::Uuid, _: uuid::Uuid) -> Result<bool, sqlx::Error> { Ok(false) }
     }
 
-    struct StubAuthUserRepo;
+    struct StubAuthUserRepo {
+        user: Option<User>,
+    }
     #[async_trait::async_trait]
     impl stitchd_db::AuthUserRepository for StubAuthUserRepo {
         async fn create(&self, email: &str, _: &str, _: Option<&str>) -> Result<stitchd_core::auth::User, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: email.to_string() }) }
-        async fn find_by_email(&self, _: &str) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(None) }
-        async fn find_by_id(&self, _: stitchd_core::id::UserId) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(None) }
+        async fn find_by_email(&self, _: &str) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(self.user.clone()) }
+        async fn find_by_id(&self, _: stitchd_core::id::UserId) -> Result<Option<stitchd_core::auth::User>, stitchd_db::RepositoryError> { Ok(self.user.clone()) }
         async fn rotate_token_secret(&self, id: stitchd_core::id::UserId) -> Result<uuid::Uuid, stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn update_status(&self, id: stitchd_core::id::UserId, _: stitchd_core::auth::UserStatus) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
         async fn update_password_hash(&self, id: stitchd_core::id::UserId, _: &str) -> Result<(), stitchd_db::RepositoryError> { Err(stitchd_db::RepositoryError::NotFound { id: id.to_string() }) }
@@ -603,8 +606,8 @@ mod tests {
         AppState {
             db: pool,
             metrics_handle: PrometheusBuilder::new().build_recorder().handle(),
-            user_repo: Arc::new(StubUserRepo { user }),
-            auth_user_repo: Arc::new(StubAuthUserRepo),
+            user_repo: Arc::new(StubUserRepo { user: user.clone() }),
+            auth_user_repo: Arc::new(StubAuthUserRepo { user }),
             membership_repo: Arc::new(StubMembershipRepo),
             refresh_token_repo: Arc::new(StubRefreshTokenRepo),
             segment_repo: stub.clone(),

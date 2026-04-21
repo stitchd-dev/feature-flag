@@ -88,7 +88,7 @@ fn parse_role(s: &str) -> Result<OrgRole, RepositoryError> {
 }
 
 /// Convert [`OrgRole`] to its DB TEXT representation.
-fn role_str(r: OrgRole) -> &'static str {
+const fn role_str(r: OrgRole) -> &'static str {
     match r {
         OrgRole::OrgAdmin => "org_admin",
         OrgRole::OrgMember => "org_member",

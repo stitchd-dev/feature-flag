@@ -1,5 +1,5 @@
 use crate::AppState;
-use crate::api::{event_definitions, events, experiments, flags, segments};
+use crate::api::{auth, event_definitions, events, experiments, flags, segments};
 use axum::{
     Router,
     routing::{delete, get, post, put},
@@ -8,8 +8,22 @@ use axum::{
 /// Build the API router.
 pub fn build_api_router() -> Router<AppState> {
     Router::new()
+        .nest("/auth", auth_routes())
         .nest("/v1/environments/{env_id}", environment_routes())
         .nest("/v1/projects/{project_id}/flags", flag_routes())
+}
+
+fn auth_routes() -> Router<AppState> {
+    Router::new()
+        .route("/login", post(auth::password::login))
+        .route("/refresh", post(auth::password::refresh))
+        .route("/logout", post(auth::password::logout))
+        .route("/switch-org", post(auth::password::switch_org))
+        .route(
+            "/sessions",
+            get(auth::sessions::list_sessions).delete(auth::sessions::revoke_all_sessions),
+        )
+        .route("/sessions/{token_id}", delete(auth::sessions::revoke_session))
 }
 
 fn environment_routes() -> Router<AppState> {
