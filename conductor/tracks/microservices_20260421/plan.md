@@ -109,10 +109,10 @@
 ## Phase 8: Docker Compose Wiring & End-to-End Integration
 <!-- depends: phase7 -->
 
-- [ ] Task 1: Update `docker-compose.yml` — add six service containers with port assignments and service discovery env vars
-- [ ] Task 2: Write end-to-end integration test — SDK client connects to gateway, syncs flags, evaluates a flag
-- [ ] Task 3: Write end-to-end integration test — REST client authenticates via gateway, creates flag, creates experiment
-- [ ] Task 4: Verify no existing REST API contract is broken (diff OpenAPI spec against pre-decomposition snapshot)
+- [x] Task 1: Update `docker-compose.yml` — add six service containers with port assignments and service discovery env vars [c8299b2]
+- [x] Task 2: Write end-to-end integration test — SDK client connects to gateway, syncs flags, evaluates a flag [4483c00]
+- [x] Task 3: Write end-to-end integration test — REST client authenticates via gateway, creates flag, creates experiment [4483c00]
+- [x] Task 4: Verify no existing REST API contract is broken (diff OpenAPI spec against pre-decomposition snapshot) [pending]
 - [ ] Task 5: Remove or deprecate `stitchd-server` crate from workspace
 - [ ] Task 6: Update CI workflow — build and test each service crate independently
 - [ ] Task: Conductor - User Manual Verification 'Docker Compose Wiring & End-to-End Integration' (Protocol in workflow.md)
