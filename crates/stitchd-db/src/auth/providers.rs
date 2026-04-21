@@ -76,7 +76,7 @@ impl PgAuthProviderRepository {
     }
 }
 
-/// Parse provider_type TEXT -> ProviderType
+/// Parse `provider_type` TEXT -> `ProviderType`
 fn parse_provider_type(s: &str) -> Result<ProviderType, RepositoryError> {
     match s {
         "password" => Ok(ProviderType::Password),

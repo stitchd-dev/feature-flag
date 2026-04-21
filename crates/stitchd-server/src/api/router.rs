@@ -11,6 +11,7 @@ pub fn build_api_router() -> Router<AppState> {
         .nest("/auth", auth_routes())
         .nest("/v1/environments/{env_id}", environment_routes())
         .nest("/v1/projects/{project_id}/flags", flag_routes())
+        .nest("/v1/orgs/{org_id}", org_routes())
 }
 
 fn auth_routes() -> Router<AppState> {
@@ -24,6 +25,27 @@ fn auth_routes() -> Router<AppState> {
             get(auth::sessions::list_sessions).delete(auth::sessions::revoke_all_sessions),
         )
         .route("/sessions/{token_id}", delete(auth::sessions::revoke_session))
+        // OIDC / OAuth2 authorization-code flow (unauthenticated)
+        .route(
+            "/oidc/{org_slug}/{provider_id}/authorize",
+            get(auth::oidc::authorize),
+        )
+        .route(
+            "/oidc/{org_slug}/{provider_id}/callback",
+            get(auth::oidc::callback),
+        )
+}
+
+fn org_routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/auth-providers",
+            get(auth::providers::list_providers).post(auth::providers::create_provider),
+        )
+        .route(
+            "/auth-providers/{provider_id}",
+            put(auth::providers::update_provider).delete(auth::providers::delete_provider),
+        )
 }
 
 fn environment_routes() -> Router<AppState> {

@@ -974,6 +974,7 @@ mod tests {
             async fn revoke_all_for_user(&self, id: stitchd_core::id::UserId) -> Result<(), RepositoryError> { Err(RepositoryError::NotFound { id: id.to_string() }) }
             async fn list_active(&self, _: stitchd_core::id::UserId) -> Result<Vec<stitchd_core::auth::RefreshToken>, RepositoryError> { Ok(vec![]) }
         }
+        #[async_trait]
         impl stitchd_db::AuthProviderRepository for NullRepo {
             async fn create(&self, _: stitchd_core::id::OrganisationId, _: stitchd_core::auth::ProviderType, _: &str, _: serde_json::Value, _: bool) -> Result<stitchd_core::auth::AuthProvider, RepositoryError> { Err(RepositoryError::Unexpected(anyhow::anyhow!("stub"))) }
             async fn find_by_id(&self, _: stitchd_core::id::AuthProviderId) -> Result<Option<stitchd_core::auth::AuthProvider>, RepositoryError> { Ok(None) }

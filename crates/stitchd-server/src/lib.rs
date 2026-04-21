@@ -32,6 +32,9 @@ use stitchd_db::{
 use stitchd_events::writer::EventWriter;
 use utoipa::OpenApi as _;
 
+/// Type alias for the OIDC state cache inner map: state token → (`pkce_verifier`, `provider_id`, `issued_at`).
+pub type OidcStateMap = HashMap<String, (String, AuthProviderId, Instant)>;
+
 /// Shared application state.
 #[derive(Clone)]
 pub struct AppState {
@@ -68,9 +71,9 @@ pub struct AppState {
     pub ch_client: Option<Arc<clickhouse::Client>>,
     /// ClickHouse event writer. `None` when ClickHouse is unavailable (writes are skipped).
     pub event_writer: Option<EventWriter>,
-    /// Short-lived OIDC state cache: state → (pkce_verifier, provider_id, issued_at).
+    /// Short-lived OIDC state cache: state → (`pkce_verifier`, `provider_id`, `issued_at`).
     /// TTL is 10 minutes; entries are checked on use.
-    pub oidc_state_cache: Arc<Mutex<HashMap<String, (String, AuthProviderId, Instant)>>>,
+    pub oidc_state_cache: Arc<Mutex<OidcStateMap>>,
 }
 
 /// Build the Axum router.

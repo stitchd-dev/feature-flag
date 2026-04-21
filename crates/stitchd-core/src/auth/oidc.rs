@@ -57,7 +57,7 @@ pub enum OidcError {
 
 enum ProviderInner {
     /// Standard OIDC provider backed by openidconnect crate.
-    Oidc(CoreClient),
+    Oidc(Box<CoreClient>),
     /// GitHub OAuth2 provider (no OIDC discovery).
     GitHub {
         client_id: String,
@@ -102,7 +102,7 @@ impl OidcProvider {
         );
 
         Ok(Self {
-            inner: ProviderInner::Oidc(client),
+            inner: ProviderInner::Oidc(Box::new(client)),
         })
     }
 
@@ -282,7 +282,7 @@ impl OidcProvider {
     #[must_use]
     pub fn google(client_id: &str, client_secret: &str) -> Self {
         Self {
-            inner: ProviderInner::Oidc(build_google_client_stub(client_id, client_secret)),
+            inner: ProviderInner::Oidc(Box::new(build_google_client_stub(client_id, client_secret))),
         }
     }
 
