@@ -63,3 +63,69 @@ impl From<ServiceError> for Status {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repository_not_found_maps_to_service_not_found() {
+        let repo_err = RepositoryError::NotFound {
+            id: "segment-abc".to_string(),
+        };
+        let svc_err = ServiceError::from(repo_err);
+        assert!(matches!(svc_err, ServiceError::NotFound(_)));
+        assert!(svc_err.to_string().contains("segment-abc"));
+    }
+
+    #[test]
+    fn repository_version_conflict_maps_to_service_version_conflict() {
+        let repo_err = RepositoryError::VersionConflict {
+            expected: 1,
+            actual: 3,
+        };
+        let svc_err = ServiceError::from(repo_err);
+        assert!(matches!(svc_err, ServiceError::VersionConflict { .. }));
+    }
+
+    #[test]
+    fn repository_unique_violation_maps_to_service_unique_violation() {
+        let repo_err = RepositoryError::UniqueViolation {
+            field: "key".to_string(),
+        };
+        let svc_err = ServiceError::from(repo_err);
+        assert!(matches!(svc_err, ServiceError::UniqueViolation { .. }));
+    }
+
+    #[test]
+    fn repository_other_error_maps_to_service_internal() {
+        let repo_err = RepositoryError::InvalidState {
+            reason: "experiment is running".to_string(),
+        };
+        let svc_err = ServiceError::from(repo_err);
+        assert!(matches!(svc_err, ServiceError::Internal(_)));
+    }
+
+    #[test]
+    fn service_error_display_messages() {
+        assert!(ServiceError::NotFound("x".to_string())
+            .to_string()
+            .contains("x"));
+        assert!(ServiceError::InvalidArgument("bad".to_string())
+            .to_string()
+            .contains("bad"));
+        assert!(ServiceError::Internal("oops".to_string())
+            .to_string()
+            .contains("oops"));
+        assert!(ServiceError::UniqueViolation {
+            field: "key".to_string()
+        }
+        .to_string()
+        .contains("key"));
+        let vc = ServiceError::VersionConflict {
+            expected: 1,
+            actual: 2,
+        };
+        assert!(vc.to_string().contains("1"));
+    }
+}
