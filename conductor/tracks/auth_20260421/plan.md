@@ -38,57 +38,57 @@ Track: auth_20260421
   - [x] Sub-task: `User`, `OrgMembership`, `RefreshToken`, `AuthProvider`, `Invite` structs
   - [x] Sub-task: Pass all tests
 
-- [~] Task: Conductor - User Manual Verification 'Phase 1' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1' (Protocol in workflow.md)
 
 ## Phase 2: Core Token & Crypto Engine
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Crypto primitives (`stitchd-core`)
+- [x] Task 1: Crypto primitives (`stitchd-core`) — 60edb1c
   <!-- files: crates/stitchd-core/src/auth/crypto.rs -->
-  - [ ] Sub-task: Write failing tests for AES encrypt/decrypt round-trip, Argon2id
+  - [x] Sub-task: Write failing tests for AES encrypt/decrypt round-trip, Argon2id
         hash+verify, secure random generation
-  - [ ] Sub-task: Update tech-stack.md — add aes-gcm, argon2, rand crates
-  - [ ] Sub-task: AES-256-GCM encrypt/decrypt (aes-gcm crate); `CryptoKey` loaded
+  - [x] Sub-task: Update tech-stack.md — add aes-gcm, argon2, rand crates
+  - [x] Sub-task: AES-256-GCM encrypt/decrypt (aes-gcm crate); `CryptoKey` loaded
         from `AUTH_ENCRYPTION_KEY` env var (32 bytes, base64)
-  - [ ] Sub-task: Argon2id hash + verify for passwords and recovery codes
-  - [ ] Sub-task: `generate_opaque_token() -> (raw: String, hash: String)` (32 random bytes, hex)
-  - [ ] Sub-task: `generate_otp() -> (code: String, hash: String)` (6-digit numeric)
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Argon2id hash + verify for passwords and recovery codes
+  - [x] Sub-task: `generate_opaque_token() -> (raw: String, hash: String)` (32 random bytes, hex)
+  - [x] Sub-task: `generate_otp() -> (code: String, hash: String)` (6-digit numeric)
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task 2: JWT engine (`stitchd-core`)
+- [x] Task 2: JWT engine (`stitchd-core`) — ed3956b
   <!-- files: crates/stitchd-core/src/auth/jwt.rs -->
-  - [ ] Sub-task: Write failing tests: issue+verify round-trip, expiry rejection,
+  - [x] Sub-task: Write failing tests: issue+verify round-trip, expiry rejection,
         wrong-secret rejection, stale token after secret rotation
-  - [ ] Sub-task: Update tech-stack.md — add jsonwebtoken crate
-  - [ ] Sub-task: `AccessTokenClaims` struct (user_id, org_id, email, org_role, exp, iat)
-  - [ ] Sub-task: `JwtEngine::issue(user_id, org_id, email, org_role, token_secret) -> String`
-  - [ ] Sub-task: `JwtEngine::verify(token, token_secret) -> Result<AccessTokenClaims>`
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Update tech-stack.md — add jsonwebtoken crate
+  - [x] Sub-task: `AccessTokenClaims` struct (user_id, org_id, email, org_role, exp, iat)
+  - [x] Sub-task: `JwtEngine::issue(user_id, org_id, email, org_role, token_secret) -> String`
+  - [x] Sub-task: `JwtEngine::verify(token, token_secret) -> Result<AccessTokenClaims>`
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task 3: Refresh token repository (`stitchd-db`)
+- [x] Task 3: Refresh token repository (`stitchd-db`) — 00b7bec
   <!-- files: crates/stitchd-db/src/auth/refresh_tokens.rs -->
   <!-- depends: task1 -->
-  - [ ] Sub-task: Write failing integration tests (`#[sqlx::test]`)
-  - [ ] Sub-task: `create(user_id, org_id, device_hint, ttl_days) -> (RefreshToken, raw_token)`
-  - [ ] Sub-task: `find_by_hash(hash) -> Option<RefreshToken>`
-  - [ ] Sub-task: `consume(id) -> Option<RefreshToken>` (sets revoked_at; used for rotation)
-  - [ ] Sub-task: `revoke(id)` — manual revocation
-  - [ ] Sub-task: `revoke_all_for_user(user_id)` — sign-out-all
-  - [ ] Sub-task: `list_active(user_id) -> Vec<RefreshToken>`
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: Write failing integration tests (`#[sqlx::test]`)
+  - [x] Sub-task: `create(user_id, org_id, device_hint, ttl_days) -> (RefreshToken, raw_token)`
+  - [x] Sub-task: `find_by_hash(hash) -> Option<RefreshToken>`
+  - [x] Sub-task: `consume(id) -> Option<RefreshToken>` (sets revoked_at; used for rotation)
+  - [x] Sub-task: `revoke(id)` — manual revocation
+  - [x] Sub-task: `revoke_all_for_user(user_id)` — sign-out-all
+  - [x] Sub-task: `list_active(user_id) -> Vec<RefreshToken>`
+  - [x] Sub-task: Pass all tests
 
-- [ ] Task 4: Axum auth middleware (`stitchd-server`)
+- [x] Task 4: Axum auth middleware (`stitchd-server`) — cdbf59f
   <!-- files: crates/stitchd-server/src/api/auth/middleware.rs -->
   <!-- depends: task2, task3 -->
-  - [ ] Sub-task: Write failing tests (valid token, expired, wrong secret, missing
+  - [x] Sub-task: Write failing tests (valid token, expired, wrong secret, missing
         header, deactivated user, insufficient org role, insufficient project role)
-  - [ ] Sub-task: `AuthLayer`: extracts Bearer, calls `JwtEngine::verify` (fetches
+  - [x] Sub-task: `AuthLayer`: extracts Bearer, calls `JwtEngine::verify` (fetches
         `token_secret` from user repo), injects `AuthenticatedUser` into extensions
-  - [ ] Sub-task: 401 on missing/invalid token; 403 on deactivated user
-  - [ ] Sub-task: `RequireOrgRole(OrgRole)` extractor
-  - [ ] Sub-task: `RequireProjectRole(ProjectRole)` extractor (queries `user_project_roles`)
-  - [ ] Sub-task: `RequireEnvRole(EnvRole)` extractor (queries `user_env_roles`)
-  - [ ] Sub-task: Pass all tests
+  - [x] Sub-task: 401 on missing/invalid token; 403 on deactivated user
+  - [x] Sub-task: `RequireOrgRole(OrgRole)` extractor
+  - [x] Sub-task: `RequireProjectRole(ProjectRole)` extractor (queries `user_project_roles`)
+  - [x] Sub-task: `RequireEnvRole(EnvRole)` extractor (queries `user_env_roles`)
+  - [x] Sub-task: Pass all tests
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
 
