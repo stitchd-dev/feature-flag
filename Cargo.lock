@@ -3673,6 +3673,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stitchd-auth-service"
+version = "0.1.0"
+
+[[package]]
 name = "stitchd-core"
 version = "0.1.0"
 dependencies = [
@@ -3725,6 +3729,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "stitchd-event-service"
+version = "0.1.0"
+
+[[package]]
 name = "stitchd-events"
 version = "0.1.0"
 dependencies = [
@@ -3738,6 +3746,34 @@ dependencies = [
  "tracing",
  "uuid",
 ]
+
+[[package]]
+name = "stitchd-experimentation-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "prost",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "stitchd-core",
+ "stitchd-db",
+ "stitchd-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "stitchd-flag-service"
+version = "0.1.0"
 
 [[package]]
 name = "stitchd-proto"
@@ -3776,6 +3812,10 @@ dependencies = [
  "uuid",
  "wiremock",
 ]
+
+[[package]]
+name = "stitchd-segmentation-service"
+version = "0.1.0"
 
 [[package]]
 name = "stitchd-server"
