@@ -99,40 +99,20 @@ jobs:
       - name: Verify gateway covers pre-decomposition API surface
         run: python3 scripts/check_openapi_contract.py
 
-  # ── 4. Tests ───────────────────────────────────────────────────────────────
-  # Runs only for crates affected by this push/PR (direct changes + their
-  # transitive dependents).  Skipped entirely when no testable crate changed.
+  # ── 4. Tests + Coverage ────────────────────────────────────────────────────
+  # Tarpaulin runs tests AND instruments for coverage in a single pass, so
+  # there is no separate test job.  Running them together avoids compiling the
+  # affected crates twice (once for tests, once for coverage instrumentation).
+  #
+  # All affected crates are passed to one tarpaulin invocation, producing a
+  # single cobertura.xml.  That file is then uploaded to Codecov once per
+  # affected crate flag; codecov.yml's per-flag `paths:` scoping ensures each
+  # flag only counts coverage from its own crate directory.  Unchanged crates
+  # are filled in via Codecov's carryforward feature (see codecov.yml).
   #
   # Only the infrastructure services (postgres, clickhouse) are started here.
   # The six microservice containers require built Docker images and are exercised
   # by the E2E Step CI workflows (tests/e2e/) against a live stack, not in CI.
-  test:
-    name: Tests
-    needs: detect-changes
-    if: needs.detect-changes.outputs.has-changes == 'true'
-    runs-on: ubuntu-latest
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Start infrastructure services
-        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up postgres clickhouse -d --wait --wait-timeout 120
-
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache dependencies
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run tests (${{ needs.detect-changes.outputs.crate-names }})
-        run: cargo test ${{ needs.detect-changes.outputs.test-packages }}
-
-  # ── 4. Coverage ────────────────────────────────────────────────────────────
-  # Runs tarpaulin once per affected crate and uploads each result to Codecov
-  # under its own flag.  Unchanged crates are filled in via Codecov's
-  # carryforward feature (see codecov.yml), so the global project % stays
-  # accurate even though only a subset of crates ran.
   coverage:
     name: Coverage (≥90%)
     needs: detect-changes
@@ -157,22 +137,20 @@ jobs:
         with:
           tool: cargo-tarpaulin
 
-      - name: Run coverage per affected crate
+      - name: Run tests + coverage (${{ needs.detect-changes.outputs.crate-names }})
         env:
           CRATE_NAMES: ${{ needs.detect-changes.outputs.crate-names }}
         run: |
           mkdir -p coverage
-          for crate in $CRATE_NAMES; do
-            echo "── coverage: $crate ──"
-            mkdir -p "coverage/$crate"
-            cargo tarpaulin \
-              -p "$crate" \
-              --timeout 120 \
-              --out Xml \
-              --output-dir "coverage/$crate/" \
-              --exclude-files "crates/stitchd-proto/*" \
-              --exclude-files "crates/xtask/*"
-          done
+          # Build "-p crate1 -p crate2 ..." from the space-separated crate list.
+          PKGS=$(echo "$CRATE_NAMES" | tr ' ' '\n' | sed 's/^/-p /' | xargs)
+          cargo tarpaulin \
+            $PKGS \
+            --timeout 120 \
+            --out Xml \
+            --output-dir coverage/ \
+            --exclude-files "crates/stitchd-proto/*" \
+            --exclude-files "crates/xtask/*"
 
       - name: Upload per-crate coverage to Codecov
         env:
@@ -181,16 +159,21 @@ jobs:
         run: |
           curl -Os https://uploader.codecov.io/latest/linux/codecov
           chmod +x codecov
+          xml="coverage/cobertura.xml"
+          if [ ! -f "$xml" ]; then
+            echo "No coverage report generated — skipping upload"
+            exit 0
+          fi
+          # Upload the combined XML once per affected crate flag.
+          # codecov.yml's per-flag `paths:` scoping ensures each flag only
+          # counts lines from its own crate directory.
           for crate in $CRATE_NAMES; do
-            xml="coverage/$crate/cobertura.xml"
-            if [ -f "$xml" ]; then
-              echo "── uploading: $crate (flag=$crate) ──"
-              ./codecov \
-                --token="$CODECOV_TOKEN" \
-                --file="$xml" \
-                --flag="$crate" \
-                --fail-on-error
-            fi
+            echo "── uploading: $crate (flag=$crate) ──"
+            ./codecov \
+              --token="$CODECOV_TOKEN" \
+              --file="$xml" \
+              --flag="$crate" \
+              --fail-on-error
           done
 
       - name: Upload coverage reports as artifact
