@@ -672,7 +672,9 @@ mod tests {
         existing_user: Option<User>,
         membership: Option<OrgMembership>,
     ) -> OidcLoginServiceImpl {
-        let org_id = provider.as_ref().map_or_else(OrganisationId::new, |p| p.org_id);
+        let org_id = provider
+            .as_ref()
+            .map_or_else(OrganisationId::new, |p| p.org_id);
         let membership = membership.or_else(|| {
             existing_user.as_ref().map(|u| OrgMembership {
                 user_id: u.id,

@@ -66,11 +66,7 @@ impl<T: Clone + Send + Sync + 'static> ProviderCache<T> {
     ///
     /// # Errors
     /// Propagates any error returned by `factory`.
-    pub async fn get_or_build<F, Fut, E>(
-        &self,
-        id: AuthProviderId,
-        factory: F,
-    ) -> Result<T, E>
+    pub async fn get_or_build<F, Fut, E>(&self, id: AuthProviderId, factory: F) -> Result<T, E>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, E>>,
@@ -85,7 +81,13 @@ impl<T: Clone + Send + Sync + 'static> ProviderCache<T> {
         // Cache miss or expired — build the provider
         let value = factory().await?;
         let expires_at = Instant::now() + self.ttl;
-        self.store.insert(id, CacheEntry { value: value.clone(), expires_at });
+        self.store.insert(
+            id,
+            CacheEntry {
+                value: value.clone(),
+                expires_at,
+            },
+        );
         Ok(value)
     }
 
@@ -97,10 +99,7 @@ impl<T: Clone + Send + Sync + 'static> ProviderCache<T> {
     /// Return the number of live (non-expired) entries.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.store
-            .iter()
-            .filter(|e| !e.is_expired())
-            .count()
+        self.store.iter().filter(|e| !e.is_expired()).count()
     }
 
     /// Return true if there are no live entries.
@@ -117,7 +116,10 @@ impl<T: Clone + Send + Sync + 'static> ProviderCache<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[tokio::test]
     async fn cache_hit_factory_not_called_again() {
@@ -144,13 +146,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(v1, v2);
-        assert_eq!(call_count.load(Ordering::SeqCst), 1, "factory should only be called once on a hit");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "factory should only be called once on a hit"
+        );
     }
 
     #[tokio::test]
     async fn cache_miss_after_ttl_expiry() {
-        let cache: ProviderCache<String> =
-            ProviderCache::new(Duration::from_millis(50));
+        let cache: ProviderCache<String> = ProviderCache::new(Duration::from_millis(50));
         let id = AuthProviderId::new();
         let call_count = Arc::new(AtomicUsize::new(0));
 

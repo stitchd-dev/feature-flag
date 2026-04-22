@@ -43,10 +43,35 @@ flags:
     paths:
       - crates/stitchd-sdk/
 
-  stitchd-server:
+  stitchd-gateway:
     carryforward: true
     paths:
-      - crates/stitchd-server/
+      - crates/stitchd-gateway/
+
+  stitchd-auth-service:
+    carryforward: true
+    paths:
+      - crates/stitchd-auth-service/
+
+  stitchd-flag-service:
+    carryforward: true
+    paths:
+      - crates/stitchd-flag-service/
+
+  stitchd-event-service:
+    carryforward: true
+    paths:
+      - crates/stitchd-event-service/
+
+  stitchd-experimentation-service:
+    carryforward: true
+    paths:
+      - crates/stitchd-experimentation-service/
+
+  stitchd-segmentation-service:
+    carryforward: true
+    paths:
+      - crates/stitchd-segmentation-service/
 
 ignore:
   - "crates/stitchd-proto/**"   # generated protobuf

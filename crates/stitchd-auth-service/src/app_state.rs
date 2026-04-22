@@ -6,7 +6,10 @@
 
 use std::{sync::Arc, time::Duration};
 
-use stitchd_core::{auth::{OidcProvider, saml::SamlProvider}, id::AuthProviderId};
+use stitchd_core::{
+    auth::{OidcProvider, saml::SamlProvider},
+    id::AuthProviderId,
+};
 
 use crate::provider_cache::ProviderCache;
 

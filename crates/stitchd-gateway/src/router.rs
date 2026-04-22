@@ -18,7 +18,9 @@ use axum::{
 };
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
-use crate::routes::{admin, auth, auth_providers, events, experiments, flags, management, oidc, saml, sdk, segments};
+use crate::routes::{
+    admin, auth, auth_providers, events, experiments, flags, management, oidc, saml, sdk, segments,
+};
 use crate::state::GatewayState;
 
 /// Build the full gateway `Router`.

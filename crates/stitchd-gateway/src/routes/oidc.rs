@@ -15,8 +15,7 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use stitchd_proto::auth::v1::{
-    OidcAuthorizeRequest, OidcCallbackRequest,
-    oidc_authorize_request::Scope,
+    OidcAuthorizeRequest, OidcCallbackRequest, oidc_authorize_request::Scope,
 };
 
 use crate::{error::GatewayError, state::GatewayState};
@@ -73,7 +72,10 @@ pub async fn oidc_authorize_by_provider(
         redirect_uri: body.redirect_uri,
     });
     let mut client = state.oidc_login_client.lock().await;
-    let resp = client.oidc_authorize(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .oidc_authorize(req)
+        .await
+        .map_err(GatewayError::from)?;
     let redirect_url = resp.into_inner().redirect_url;
     Ok(Json(OidcAuthorizeJson { redirect_url }))
 }
@@ -100,7 +102,10 @@ pub async fn oidc_authorize_by_org(
         redirect_uri: body.redirect_uri,
     });
     let mut client = state.oidc_login_client.lock().await;
-    let resp = client.oidc_authorize(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .oidc_authorize(req)
+        .await
+        .map_err(GatewayError::from)?;
     let redirect_url = resp.into_inner().redirect_url;
     Ok(Json(OidcAuthorizeJson { redirect_url }))
 }
@@ -133,7 +138,10 @@ pub async fn oidc_callback(
         redirect_uri: query.redirect_uri,
     });
     let mut client = state.oidc_login_client.lock().await;
-    let resp = client.oidc_callback(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .oidc_callback(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
     Ok(Json(OidcTokenJson {
         access_token: r.access_token,

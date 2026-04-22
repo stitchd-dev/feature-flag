@@ -14,10 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::auth::v1::{
-    SamlAcsRequest, SamlSsoRequest,
-    saml_sso_request::Scope,
-};
+use stitchd_proto::auth::v1::{SamlAcsRequest, SamlSsoRequest, saml_sso_request::Scope};
 
 use crate::{error::GatewayError, state::GatewayState};
 
@@ -77,9 +74,15 @@ pub async fn saml_sso_by_provider(
         acs_url: body.acs_url,
     });
     let mut client = state.saml_login_client.lock().await;
-    let resp = client.saml_sso_initiate(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .saml_sso_initiate(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
-    Ok(Json(SamlSsoJson { redirect_url: r.redirect_url, relay_state: r.relay_state }))
+    Ok(Json(SamlSsoJson {
+        redirect_url: r.redirect_url,
+        relay_state: r.relay_state,
+    }))
 }
 
 /// `POST /v1/orgs/{org_id}/auth/saml/sso`
@@ -104,9 +107,15 @@ pub async fn saml_sso_by_org(
         acs_url: body.acs_url,
     });
     let mut client = state.saml_login_client.lock().await;
-    let resp = client.saml_sso_initiate(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .saml_sso_initiate(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
-    Ok(Json(SamlSsoJson { redirect_url: r.redirect_url, relay_state: r.relay_state }))
+    Ok(Json(SamlSsoJson {
+        redirect_url: r.redirect_url,
+        relay_state: r.relay_state,
+    }))
 }
 
 /// `POST /v1/auth/saml/{provider_id}/callback`
@@ -134,7 +143,10 @@ pub async fn saml_acs_callback(
         relay_state: form.relay_state,
     });
     let mut client = state.saml_login_client.lock().await;
-    let resp = client.saml_acs_callback(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .saml_acs_callback(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
     Ok(Json(SamlTokenJson {
         access_token: r.access_token,

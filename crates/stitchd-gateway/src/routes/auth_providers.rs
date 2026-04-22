@@ -22,8 +22,8 @@ use utoipa::ToSchema;
 use stitchd_proto::auth::v1::{
     CreateAuthProviderRequest, DeleteAuthProviderRequest, GetAuthProviderRequest,
     GetSamlSpMetadataRequest, ListAuthProvidersRequest, OidcConfig as ProtoOidcConfig,
-    SamlConfig as ProtoSamlConfig, UpdateAuthProviderRequest,
-    create_auth_provider_request, update_auth_provider_request,
+    SamlConfig as ProtoSamlConfig, UpdateAuthProviderRequest, create_auth_provider_request,
+    update_auth_provider_request,
 };
 
 use crate::{error::GatewayError, state::GatewayState};
@@ -148,7 +148,11 @@ fn proto_response_to_json(p: stitchd_proto::auth::v1::AuthProviderResponse) -> A
         provider_type: p.provider_type,
         display_name: p.display_name,
         enabled: p.enabled,
-        acs_url: if p.acs_url.is_empty() { None } else { Some(p.acs_url) },
+        acs_url: if p.acs_url.is_empty() {
+            None
+        } else {
+            Some(p.acs_url)
+        },
         oidc,
         saml,
         created_at: p.created_at,
@@ -177,25 +181,37 @@ pub async fn create_auth_provider(
     Json(body): Json<CreateProviderBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let (display_name, enabled, config) = match body {
-        CreateProviderBody::Oidc { display_name, enabled, config } => (
+        CreateProviderBody::Oidc {
             display_name,
             enabled,
-            Some(create_auth_provider_request::Config::Oidc(ProtoOidcConfig {
-                issuer_url: config.issuer_url,
-                client_id: config.client_id,
-                client_secret: config.client_secret,
-                scopes: config.scopes,
-            })),
+            config,
+        } => (
+            display_name,
+            enabled,
+            Some(create_auth_provider_request::Config::Oidc(
+                ProtoOidcConfig {
+                    issuer_url: config.issuer_url,
+                    client_id: config.client_id,
+                    client_secret: config.client_secret,
+                    scopes: config.scopes,
+                },
+            )),
         ),
-        CreateProviderBody::Saml { display_name, enabled, config } => (
+        CreateProviderBody::Saml {
             display_name,
             enabled,
-            Some(create_auth_provider_request::Config::Saml(ProtoSamlConfig {
-                idp_metadata_url: config.idp_metadata_url.unwrap_or_default(),
-                idp_metadata_xml: config.idp_metadata_xml.unwrap_or_default(),
-                name_id_format: config.name_id_format.unwrap_or_default(),
-                sp_entity_id: config.sp_entity_id,
-            })),
+            config,
+        } => (
+            display_name,
+            enabled,
+            Some(create_auth_provider_request::Config::Saml(
+                ProtoSamlConfig {
+                    idp_metadata_url: config.idp_metadata_url.unwrap_or_default(),
+                    idp_metadata_xml: config.idp_metadata_xml.unwrap_or_default(),
+                    name_id_format: config.name_id_format.unwrap_or_default(),
+                    sp_entity_id: config.sp_entity_id,
+                },
+            )),
         ),
     };
 
@@ -212,7 +228,10 @@ pub async fn create_auth_provider(
         .await
         .map_err(GatewayError::from)?;
     let p = resp.into_inner().provider.unwrap();
-    Ok((axum::http::StatusCode::CREATED, Json(proto_response_to_json(p))))
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(proto_response_to_json(p)),
+    ))
 }
 
 /// `GET /v1/orgs/{org_id}/auth-providers`
@@ -293,22 +312,18 @@ pub async fn update_auth_provider(
     Json(body): Json<UpdateProviderBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let config = body.config.map(|c| match c {
-        UpdateConfigBody::Oidc(o) => {
-            update_auth_provider_request::Config::Oidc(ProtoOidcConfig {
-                issuer_url: o.issuer_url,
-                client_id: o.client_id,
-                client_secret: o.client_secret,
-                scopes: o.scopes,
-            })
-        }
-        UpdateConfigBody::Saml(s) => {
-            update_auth_provider_request::Config::Saml(ProtoSamlConfig {
-                idp_metadata_url: s.idp_metadata_url.unwrap_or_default(),
-                idp_metadata_xml: s.idp_metadata_xml.unwrap_or_default(),
-                name_id_format: s.name_id_format.unwrap_or_default(),
-                sp_entity_id: s.sp_entity_id,
-            })
-        }
+        UpdateConfigBody::Oidc(o) => update_auth_provider_request::Config::Oidc(ProtoOidcConfig {
+            issuer_url: o.issuer_url,
+            client_id: o.client_id,
+            client_secret: o.client_secret,
+            scopes: o.scopes,
+        }),
+        UpdateConfigBody::Saml(s) => update_auth_provider_request::Config::Saml(ProtoSamlConfig {
+            idp_metadata_url: s.idp_metadata_url.unwrap_or_default(),
+            idp_metadata_xml: s.idp_metadata_xml.unwrap_or_default(),
+            name_id_format: s.name_id_format.unwrap_or_default(),
+            sp_entity_id: s.sp_entity_id,
+        }),
     });
 
     let req = tonic::Request::new(UpdateAuthProviderRequest {

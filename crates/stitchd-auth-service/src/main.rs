@@ -27,19 +27,18 @@ use stitchd_auth_service::{
     saml_factory::SamlProviderFactory,
     saml_login::{LiveSamlExchanger, SamlLoginServiceImpl, SamlRelayStore},
 };
+use stitchd_core::auth::CryptoKey;
+use stitchd_db::PgAuthProviderRepository;
 use stitchd_db::{
     AuthUserRepository, OrgMembershipRepository, OrganisationRepository, PgAuditLogger,
     PgAuthUserRepository, PgEnvironmentRepository, PgOrgMembershipRepository,
     PgOrganisationRepository, PgProjectRepository, PgRefreshTokenRepository, PgSdkKeyRepository,
     RefreshTokenRepository,
 };
-use stitchd_core::auth::CryptoKey;
-use stitchd_db::PgAuthProviderRepository;
 use stitchd_proto::{
     auth::v1::{
         auth_provider_service_server::AuthProviderServiceServer,
-        auth_service_server::AuthServiceServer,
-        oidc_login_service_server::OidcLoginServiceServer,
+        auth_service_server::AuthServiceServer, oidc_login_service_server::OidcLoginServiceServer,
         saml_login_service_server::SamlLoginServiceServer,
     },
     management::v1::management_service_server::ManagementServiceServer,
@@ -131,7 +130,10 @@ async fn main() -> anyhow::Result<()> {
         auth_provider_repo.clone() as Arc<dyn stitchd_db::AuthProviderRepository>,
         crypto_key,
     ));
-    let oidc_exchanger = Arc::new(LiveOidcExchanger::new(Arc::clone(&provider_caches), oidc_factory));
+    let oidc_exchanger = Arc::new(LiveOidcExchanger::new(
+        Arc::clone(&provider_caches),
+        oidc_factory,
+    ));
     let oidc_state_store = Arc::new(OidcStateStore::new(std::time::Duration::from_secs(300)));
     let oidc_login_service = OidcLoginServiceImpl::new(
         oidc_exchanger,
@@ -143,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let saml_factory = Arc::new(SamlProviderFactory::new(
-        Arc::clone(&auth_provider_repo) as Arc<dyn stitchd_db::AuthProviderRepository>,
+        Arc::clone(&auth_provider_repo) as Arc<dyn stitchd_db::AuthProviderRepository>
     ));
     let saml_exchanger = Arc::new(LiveSamlExchanger::new(provider_caches, saml_factory));
     let saml_relay_store = Arc::new(SamlRelayStore::new(std::time::Duration::from_secs(600)));

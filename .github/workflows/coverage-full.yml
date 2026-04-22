@@ -1,0 +1,108 @@
+name: Full Coverage Baseline
+
+# Manually triggered to push a complete coverage baseline to Codecov.
+# Run this once after restructuring crates so all flags are seeded and
+# carryforward has a valid starting point for every crate.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+  SQLX_OFFLINE: true
+
+jobs:
+  coverage-full:
+    name: Coverage — All Crates
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start infrastructure services
+        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up postgres clickhouse -d --wait --wait-timeout 120
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-tarpaulin
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin
+
+      - name: Run coverage for every workspace crate
+        run: |
+          mkdir -p coverage
+
+          CRATES=(
+            stitchd-core
+            stitchd-db
+            stitchd-events
+            stitchd-sdk
+            stitchd-gateway
+            stitchd-auth-service
+            stitchd-flag-service
+            stitchd-event-service
+            stitchd-experimentation-service
+            stitchd-segmentation-service
+          )
+
+          for crate in "${CRATES[@]}"; do
+            echo "── coverage: $crate ──"
+            mkdir -p "coverage/$crate"
+            cargo tarpaulin \
+              -p "$crate" \
+              --timeout 180 \
+              --out Xml \
+              --output-dir "coverage/$crate/" \
+              --exclude-files "crates/stitchd-proto/*" \
+              --exclude-files "crates/xtask/*"
+          done
+
+      - name: Upload all crate coverage to Codecov
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          curl -Os https://uploader.codecov.io/latest/linux/codecov
+          chmod +x codecov
+
+          CRATES=(
+            stitchd-core
+            stitchd-db
+            stitchd-events
+            stitchd-sdk
+            stitchd-gateway
+            stitchd-auth-service
+            stitchd-flag-service
+            stitchd-event-service
+            stitchd-experimentation-service
+            stitchd-segmentation-service
+          )
+
+          for crate in "${CRATES[@]}"; do
+            xml="coverage/$crate/cobertura.xml"
+            if [ -f "$xml" ]; then
+              echo "── uploading: $crate (flag=$crate) ──"
+              ./codecov \
+                --token="$CODECOV_TOKEN" \
+                --file="$xml" \
+                --flag="$crate" \
+                --fail-on-error
+            else
+              echo "── skipping: $crate (no cobertura.xml — no tests?) ──"
+            fi
+          done
+
+      - name: Upload coverage reports as artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-full-report
+          path: coverage/
+          retention-days: 14
