@@ -173,4 +173,4 @@
   - [x] Sub-task: `cargo fmt --all --check`
   - [x] Sub-task: `cargo clippy --workspace --all-targets -- -D warnings`
   - [x] Sub-task: `SQLX_OFFLINE=false cargo sqlx prepare --workspace` (if new sqlx queries added)
-- [ ] Task: Conductor - User Manual Verification 'Integration Tests & Coverage' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Integration Tests & Coverage' (Protocol in workflow.md)
