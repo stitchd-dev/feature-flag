@@ -2,39 +2,39 @@
 
 ## Phase 1: Provider Cache & On-the-Fly Instantiation Layer
 
-- [~] Task 1: Write failing unit tests for `ProviderCache`
+- [x] Task 1: Write failing unit tests for `ProviderCache`
   <!-- files: crates/stitchd-auth-service/src/provider_cache.rs -->
-  - [ ] Sub-task: Test TTL expiry — entry returns None after TTL elapses
-  - [ ] Sub-task: Test cache hit — factory not called again within TTL
-  - [ ] Sub-task: Test `evict()` — entry removed immediately
-  - [ ] Sub-task: Test concurrent access (multiple tokio tasks racing on same provider_id)
-- [ ] Task 2: Implement `ProviderCache` in `stitchd-auth-service`
+  - [x] Sub-task: Test TTL expiry — entry returns None after TTL elapses
+  - [x] Sub-task: Test cache hit — factory not called again within TTL
+  - [x] Sub-task: Test `evict()` — entry removed immediately
+  - [x] Sub-task: Test concurrent access (multiple tokio tasks racing on same provider_id)
+- [x] Task 2: Implement `ProviderCache` in `stitchd-auth-service`
   <!-- files: crates/stitchd-auth-service/src/provider_cache.rs -->
   <!-- depends: task1 -->
-  - [ ] Sub-task: `DashMap<AuthProviderId, CacheEntry>` where `CacheEntry` holds built provider + expiry `Instant`
-  - [ ] Sub-task: `get_or_build(id, factory)` async — check TTL, call factory on miss, insert
-  - [ ] Sub-task: `evict(id)` — immediate removal
-  - [ ] Sub-task: `PROVIDER_CACHE_TTL_SECS` env var, default 3600
-- [ ] Task 3: Write failing tests for `OidcProviderFactory`, then implement
+  - [x] Sub-task: `DashMap<AuthProviderId, CacheEntry>` where `CacheEntry` holds built provider + expiry `Instant`
+  - [x] Sub-task: `get_or_build(id, factory)` async — check TTL, call factory on miss, insert
+  - [x] Sub-task: `evict(id)` — immediate removal
+  - [x] Sub-task: `PROVIDER_CACHE_TTL_SECS` env var, default 3600
+- [x] Task 3: Write failing tests for `OidcProviderFactory`, then implement
   <!-- files: crates/stitchd-auth-service/src/oidc_factory.rs -->
   <!-- depends: task2 -->
-  - [ ] Sub-task: Mock DB — verify `OidcProvider::from_discovery` called on cache miss only
-  - [ ] Sub-task: Load `AuthProvider` from DB via `AuthProviderRepository::find_by_id`
-  - [ ] Sub-task: Decrypt `client_secret` (existing AES-256-GCM path)
-  - [ ] Sub-task: Call `OidcProvider::from_discovery(issuer_url, client_id, decrypted_secret)`
-- [ ] Task 4: Write failing tests for `SamlProviderFactory`, then implement
+  - [x] Sub-task: Mock DB — verify `OidcProvider::from_discovery` called on cache miss only
+  - [x] Sub-task: Load `AuthProvider` from DB via `AuthProviderRepository::find_by_id`
+  - [x] Sub-task: Decrypt `client_secret` (existing AES-256-GCM path)
+  - [x] Sub-task: Call `OidcProvider::from_discovery(issuer_url, client_id, decrypted_secret)`
+- [x] Task 4: Write failing tests for `SamlProviderFactory`, then implement
   <!-- files: crates/stitchd-auth-service/src/saml_factory.rs -->
   <!-- depends: task2 -->
-  - [ ] Sub-task: Test URL fetch path — mock HTTP, verify metadata parsed correctly
-  - [ ] Sub-task: Test raw XML path — bypass HTTP, parse directly
-  - [ ] Sub-task: Load config from DB; branch on `idp_metadata_url` vs `idp_metadata_xml`
-  - [ ] Sub-task: Fetch XML via `reqwest` if URL provided
-  - [ ] Sub-task: Parse IdP metadata (SSO URL, certificate) via `stitchd-core::auth::saml`
-- [ ] Task 5: Wire `ProviderCache` onto auth-service `AppState`
+  - [x] Sub-task: Test URL fetch path — mock HTTP, verify metadata parsed correctly
+  - [x] Sub-task: Test raw XML path — bypass HTTP, parse directly
+  - [x] Sub-task: Load config from DB; branch on `idp_metadata_url` vs `idp_metadata_xml`
+  - [x] Sub-task: Fetch XML via `reqwest` if URL provided
+  - [x] Sub-task: Parse IdP metadata (SSO URL, certificate) via `stitchd-core::auth::saml`
+- [x] Task 5: Wire `ProviderCache` onto auth-service `AppState`
   <!-- files: crates/stitchd-auth-service/src/lib.rs, crates/stitchd-auth-service/src/main.rs -->
   <!-- depends: task3, task4 -->
-  - [ ] Sub-task: Add `provider_cache: Arc<ProviderCache>` to `AppState`
-  - [ ] Sub-task: Initialise in `main.rs` — zero providers loaded; no DB/network at startup
+  - [x] Sub-task: Add `provider_cache: Arc<ProviderCache>` to `AppState`
+  - [x] Sub-task: Initialise in `main.rs` — zero providers loaded; no DB/network at startup
 - [ ] Task: Conductor - User Manual Verification 'Provider Cache & On-the-Fly Instantiation Layer' (Protocol in workflow.md)
 
 ## Phase 2: Provider Management gRPC Handlers & Gateway Routes

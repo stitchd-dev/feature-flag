@@ -7,7 +7,6 @@
 use dashmap::DashMap;
 use std::{
     future::Future,
-    sync::Arc,
     time::{Duration, Instant},
 };
 use stitchd_core::id::AuthProviderId;
@@ -118,7 +117,7 @@ impl<T: Clone + Send + Sync + 'static> ProviderCache<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 
     #[tokio::test]
     async fn cache_hit_factory_not_called_again() {

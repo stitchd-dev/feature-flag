@@ -1,11 +1,12 @@
 //! Entry point for the `stitchd-auth-service` gRPC microservice.
 //!
 //! Environment variables:
-//! - `AUTH_SERVICE_PORT`    (default: `50051`) — gRPC bind port
-//! - `DATABASE_URL`         — PostgreSQL connection string (required)
-//! - `METRICS_PORT`         (default: `9091`) — Prometheus metrics port
-//! - `SUPERADMIN_EMAIL`     — seed a superadmin user on first boot
-//! - `SUPERADMIN_PASSWORD`  — plaintext password hashed with Argon2id
+//! - `AUTH_SERVICE_PORT`         (default: `50051`) — gRPC bind port
+//! - `DATABASE_URL`              — PostgreSQL connection string (required)
+//! - `METRICS_PORT`              (default: `9091`) — Prometheus metrics port
+//! - `SUPERADMIN_EMAIL`          — seed a superadmin user on first boot
+//! - `SUPERADMIN_PASSWORD`       — plaintext password hashed with Argon2id
+//! - `PROVIDER_CACHE_TTL_SECS`   (default: `3600`) — OIDC/SAML provider cache TTL
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -16,7 +17,10 @@ use tonic_health::server::health_reporter;
 use tracing::info;
 
 use stitchd_auth_service::{
-    bootstrap::seed_superadmin, grpc::AuthServiceImpl, management::ManagementServiceImpl,
+    app_state::ProviderCaches,
+    bootstrap::seed_superadmin,
+    grpc::AuthServiceImpl,
+    management::ManagementServiceImpl,
 };
 use stitchd_db::{
     AuthUserRepository, OrgMembershipRepository, OrganisationRepository, PgAuditLogger,
@@ -70,6 +74,9 @@ async fn main() -> anyhow::Result<()> {
     let org_repo = Arc::new(PgOrganisationRepository::new(pool.clone(), audit.clone()));
     let project_repo = Arc::new(PgProjectRepository::new(pool.clone(), audit.clone()));
     let env_repo = Arc::new(PgEnvironmentRepository::new(pool.clone(), audit.clone()));
+
+    // Provider caches — zero providers loaded at startup; built lazily on first login.
+    let _provider_caches = Arc::new(ProviderCaches::from_env());
 
     // Bootstrap superadmin if configured.
     seed_superadmin(
