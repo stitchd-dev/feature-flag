@@ -35,3 +35,8 @@ This file tracks all major tracks for the project.
 
 ## [x] Track: mdBook Docs — Microservice Architecture Update
 *Link: [./conductor/tracks/docs_microservices_20260422/](./conductor/tracks/docs_microservices_20260422/)*
+
+---
+
+## [ ] Track: Org-Level OIDC & SAML with On-the-Fly Provider Instantiation
+*Link: [./conductor/tracks/org_oidc_saml_20260422/](./conductor/tracks/org_oidc_saml_20260422/)*
