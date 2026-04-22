@@ -2,7 +2,7 @@
 //!
 //! Designed around an injectable `OidcExchanger` trait so that the OIDC HTTP
 //! operations (discovery + token exchange) can be replaced in unit tests
-//! without standing up a real IdP.
+//! without standing up a real `IdP`.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,11 +17,13 @@ use stitchd_core::{
     auth::{OrgRole, ProviderType, jwt::JwtEngine},
     id::{AuthProviderId, OrganisationId},
 };
-use stitchd_db::{AuthProviderRepository, AuthUserRepository, OrgMembershipRepository, RefreshTokenRepository, RepositoryError};
+use stitchd_db::{
+    AuthProviderRepository, AuthUserRepository, OrgMembershipRepository, RefreshTokenRepository,
+    RepositoryError,
+};
 use stitchd_proto::auth::v1::{
     OidcAuthorizeRequest, OidcAuthorizeResponse, OidcCallbackRequest, OidcCallbackResponse,
-    oidc_authorize_request::Scope,
-    oidc_login_service_server::OidcLoginService,
+    oidc_authorize_request::Scope, oidc_login_service_server::OidcLoginService,
 };
 
 // ---------------------------------------------------------------------------
@@ -66,8 +68,12 @@ pub struct OidcStateStore {
 }
 
 impl OidcStateStore {
+    #[must_use]
     pub fn new(ttl: Duration) -> Self {
-        Self { store: DashMap::new(), ttl }
+        Self {
+            store: DashMap::new(),
+            ttl,
+        }
     }
 
     fn insert(&self, csrf: String, provider_id: AuthProviderId, verifier: String) {
@@ -127,12 +133,14 @@ fn map_repo_err(e: RepositoryError) -> Status {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_provider_id(s: &str) -> Result<AuthProviderId, Status> {
     Uuid::parse_str(s)
         .map(AuthProviderId::from_uuid)
         .map_err(|_| Status::invalid_argument("provider_id is not a valid UUID"))
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_org_id(s: &str) -> Result<OrganisationId, Status> {
     Uuid::parse_str(s)
         .map(OrganisationId::from_uuid)
@@ -170,8 +178,10 @@ impl OidcLoginService for OidcLoginServiceImpl {
             }
         };
 
-        let (redirect_url, verifier, csrf) =
-            self.exchanger.authorize(provider_id, &req.redirect_uri).await?;
+        let (redirect_url, verifier, csrf) = self
+            .exchanger
+            .authorize(provider_id, &req.redirect_uri)
+            .await?;
 
         self.state_store.insert(csrf, provider_id, verifier);
 
@@ -196,7 +206,12 @@ impl OidcLoginService for OidcLoginServiceImpl {
 
         let email = self
             .exchanger
-            .exchange(pending.provider_id, &req.code, &pending.pkce_verifier, &req.redirect_uri)
+            .exchange(
+                pending.provider_id,
+                &req.code,
+                &pending.pkce_verifier,
+                &req.redirect_uri,
+            )
             .await?;
 
         // Look up the provider to get org_id.
@@ -277,7 +292,7 @@ pub struct LiveOidcExchanger {
 
 impl LiveOidcExchanger {
     #[must_use]
-    pub fn new(caches: Arc<ProviderCaches>, factory: Arc<OidcProviderFactory>) -> Self {
+    pub const fn new(caches: Arc<ProviderCaches>, factory: Arc<OidcProviderFactory>) -> Self {
         Self { caches, factory }
     }
 }
@@ -339,14 +354,16 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use std::sync::Arc;
+    use stitchd_core::auth::OrgMembership;
+    use stitchd_core::auth::RefreshToken;
     use stitchd_core::{
         auth::{AuthProvider, OrgRole, ProviderType, User, UserStatus},
         id::{AuthProviderId, OrganisationId, UserId},
     };
-    use stitchd_db::{AuthProviderRepository, AuthUserRepository, OrgMembershipRepository, RepositoryError};
     use stitchd_db::RefreshTokenRepository;
-    use stitchd_core::auth::OrgMembership;
-    use stitchd_core::auth::RefreshToken;
+    use stitchd_db::{
+        AuthProviderRepository, AuthUserRepository, OrgMembershipRepository, RepositoryError,
+    };
 
     // ── MockOidcExchanger ────────────────────────────────────────────────────
 
@@ -364,7 +381,11 @@ mod tests {
             _provider_id: AuthProviderId,
             _redirect_uri: &str,
         ) -> Result<(String, String, String), Status> {
-            Ok((self.redirect_url.clone(), self.verifier.clone(), self.csrf.clone()))
+            Ok((
+                self.redirect_url.clone(),
+                self.verifier.clone(),
+                self.csrf.clone(),
+            ))
         }
 
         async fn exchange(
@@ -485,10 +506,7 @@ mod tests {
             Ok(self.existing_user.clone())
         }
 
-        async fn rotate_token_secret(
-            &self,
-            id: UserId,
-        ) -> Result<uuid::Uuid, RepositoryError> {
+        async fn rotate_token_secret(&self, id: UserId) -> Result<uuid::Uuid, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
@@ -539,7 +557,12 @@ mod tests {
             org_id: OrganisationId,
             role: OrgRole,
         ) -> Result<OrgMembership, RepositoryError> {
-            Ok(OrgMembership { user_id, org_id, role, joined_at: Utc::now() })
+            Ok(OrgMembership {
+                user_id,
+                org_id,
+                role,
+                joined_at: Utc::now(),
+            })
         }
 
         async fn find_membership(
@@ -610,10 +633,7 @@ mod tests {
             Ok((rt, "raw-refresh-token".to_string()))
         }
 
-        async fn find_by_hash(
-            &self,
-            _hash: &str,
-        ) -> Result<Option<RefreshToken>, RepositoryError> {
+        async fn find_by_hash(&self, _hash: &str) -> Result<Option<RefreshToken>, RepositoryError> {
             Ok(None)
         }
 
@@ -631,10 +651,7 @@ mod tests {
             Ok(())
         }
 
-        async fn revoke_all_for_user(
-            &self,
-            _user_id: UserId,
-        ) -> Result<(), RepositoryError> {
+        async fn revoke_all_for_user(&self, _user_id: UserId) -> Result<(), RepositoryError> {
             Ok(())
         }
 
@@ -655,10 +672,7 @@ mod tests {
         existing_user: Option<User>,
         membership: Option<OrgMembership>,
     ) -> OidcLoginServiceImpl {
-        let org_id = provider
-            .as_ref()
-            .map(|p| p.org_id)
-            .unwrap_or_else(OrganisationId::new);
+        let org_id = provider.as_ref().map_or_else(OrganisationId::new, |p| p.org_id);
         let membership = membership.or_else(|| {
             existing_user.as_ref().map(|u| OrgMembership {
                 user_id: u.id,
@@ -673,7 +687,10 @@ mod tests {
             Arc::new(MockAuthUserRepo { existing_user }),
             Arc::new(MockOrgMembershipRepo { membership }),
             Arc::new(MockRefreshTokenRepo),
-            Arc::new(MockAuthProviderRepo { provider, org_providers }),
+            Arc::new(MockAuthProviderRepo {
+                provider,
+                org_providers,
+            }),
         )
     }
 
@@ -731,7 +748,10 @@ mod tests {
         let resp = svc.oidc_authorize(req).await;
         assert!(resp.is_ok(), "org-scoped authorize should succeed");
         let body = resp.unwrap().into_inner();
-        assert!(!body.redirect_url.is_empty(), "redirect_url must be non-empty");
+        assert!(
+            !body.redirect_url.is_empty(),
+            "redirect_url must be non-empty"
+        );
     }
 
     #[tokio::test]
@@ -787,8 +807,14 @@ mod tests {
         let resp = svc.oidc_callback(req).await;
         assert!(resp.is_ok(), "expected Ok, got: {resp:?}");
         let body = resp.unwrap().into_inner();
-        assert!(!body.access_token.is_empty(), "access_token must be non-empty");
-        assert!(!body.refresh_token.is_empty(), "refresh_token must be non-empty");
+        assert!(
+            !body.access_token.is_empty(),
+            "access_token must be non-empty"
+        );
+        assert!(
+            !body.refresh_token.is_empty(),
+            "refresh_token must be non-empty"
+        );
         assert_eq!(body.expires_in, 3600);
         assert!(!body.user_id.is_empty());
         assert_eq!(body.org_id, org_id.to_string());
@@ -801,7 +827,7 @@ mod tests {
         let svc = make_service(mock_exchanger(), Some(provider), vec![], None, None);
 
         let req = tonic::Request::new(OidcCallbackRequest {
-            provider_id: "".to_string(),
+            provider_id: String::new(),
             code: "code".to_string(),
             state: "unknown-state-that-was-never-inserted".to_string(),
             redirect_uri: "https://app.example.com/callback".to_string(),
@@ -826,7 +852,9 @@ mod tests {
             OidcPendingState {
                 provider_id: provider.id,
                 pkce_verifier: "verifier".to_string(),
-                expiry: Instant::now() - Duration::from_secs(1),
+                expiry: Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("1s ago is valid"),
             },
         );
 

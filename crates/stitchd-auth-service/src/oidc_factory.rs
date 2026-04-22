@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use stitchd_core::{
     auth::{CryptoKey, OidcError, OidcProvider, ProviderType},
@@ -85,7 +86,10 @@ impl OidcProviderFactory {
     /// # Errors
     /// Returns [`FactoryError`] on DB miss, wrong type, decryption failure,
     /// or OIDC discovery failure.
-    pub async fn build(&self, provider_id: AuthProviderId) -> Result<Arc<OidcProvider>, FactoryError> {
+    pub async fn build(
+        &self,
+        provider_id: AuthProviderId,
+    ) -> Result<Arc<OidcProvider>, FactoryError> {
         let record = self
             .repo
             .find_by_id(provider_id)
@@ -99,7 +103,6 @@ impl OidcProviderFactory {
         let cfg: OidcConfig = serde_json::from_value(record.config.clone())
             .map_err(|e| FactoryError::InvalidConfig(e.to_string()))?;
 
-        use base64::Engine as _;
         let enc_bytes = base64::engine::general_purpose::STANDARD
             .decode(&cfg.client_secret_enc)
             .map_err(|e| FactoryError::Decryption(format!("base64: {e}")))?;
@@ -127,7 +130,6 @@ impl OidcProviderFactory {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use base64::Engine as _;
     use stitchd_core::{
         auth::{AuthProvider, ProviderType},
         id::{AuthProviderId, OrganisationId},
@@ -203,10 +205,7 @@ mod tests {
         })
     }
 
-    fn make_provider(
-        provider_type: ProviderType,
-        config: serde_json::Value,
-    ) -> AuthProvider {
+    fn make_provider(provider_type: ProviderType, config: serde_json::Value) -> AuthProvider {
         use chrono::Utc;
         AuthProvider {
             id: AuthProviderId::new(),
@@ -239,7 +238,9 @@ mod tests {
         let config = make_oidc_config(&crypto, "https://accounts.google.com");
         let provider = make_provider(ProviderType::Saml, config);
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = OidcProviderFactory::new(repo, crypto);
         let result = factory.build(id).await;
         assert!(matches!(result, Err(FactoryError::WrongType(_))));
@@ -255,7 +256,9 @@ mod tests {
         });
         let provider = make_provider(ProviderType::Oidc, config);
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = OidcProviderFactory::new(repo, crypto);
         let result = factory.build(id).await;
         assert!(matches!(result, Err(FactoryError::Decryption(_))));
@@ -277,7 +280,9 @@ mod tests {
         });
         let provider = make_provider(ProviderType::Oidc, config);
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = OidcProviderFactory::new(repo, key_b);
         let result = factory.build(id).await;
         assert!(matches!(result, Err(FactoryError::Decryption(_))));
@@ -288,7 +293,9 @@ mod tests {
         let config = serde_json::json!({ "some_random": "fields" });
         let provider = make_provider(ProviderType::Oidc, config);
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = OidcProviderFactory::new(repo, test_crypto());
         let result = factory.build(id).await;
         assert!(matches!(result, Err(FactoryError::InvalidConfig(_))));

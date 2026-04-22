@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use stitchd_core::{
-    auth::{ProviderType, saml::{SamlConfig, SamlProvider}},
+    auth::{
+        ProviderType,
+        saml::{SamlConfig, SamlProvider},
+    },
     id::AuthProviderId,
 };
 use stitchd_db::AuthProviderRepository;
@@ -24,13 +27,13 @@ use thiserror::Error;
 /// Exactly one of `idp_metadata_url` or `idp_metadata_xml` must be set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SamlDbConfig {
-    /// HTTP URL to the IdP XML metadata document.
+    /// HTTP URL to the `IdP` XML metadata document.
     pub idp_metadata_url: Option<String>,
-    /// Raw IdP XML metadata (air-gapped IdPs).
+    /// Raw `IdP` XML metadata (air-gapped `IdPs`).
     pub idp_metadata_xml: Option<String>,
     #[serde(default = "default_name_id_format")]
     pub name_id_format: String,
-    /// Our SP entity ID (must match what is configured in the IdP).
+    /// Our SP entity ID (must match what is configured in the `IdP`).
     pub sp_entity_id: String,
 }
 
@@ -67,7 +70,7 @@ pub enum SamlFactoryError {
 // Metadata parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Extract the SingleSignOnService URL from IdP metadata XML (redirect binding).
+/// Extract the `SingleSignOnService` URL from `IdP` metadata XML (redirect binding).
 fn parse_sso_url(xml: &str) -> Option<String> {
     // Look for SingleSignOnService with HTTP-Redirect binding
     if let Some(pos) = xml.find("SingleSignOnService") {
@@ -82,7 +85,7 @@ fn parse_sso_url(xml: &str) -> Option<String> {
     None
 }
 
-/// Extract the X.509 certificate PEM from IdP metadata XML.
+/// Extract the X.509 certificate PEM from `IdP` metadata XML.
 fn parse_idp_cert(xml: &str) -> Option<String> {
     let start_tag = "<ds:X509Certificate>";
     let end_tag = "</ds:X509Certificate>";
@@ -110,7 +113,7 @@ fn parse_idp_cert(xml: &str) -> Option<String> {
     None
 }
 
-/// Extract the entityID from IdP metadata XML.
+/// Extract the `entityID` from `IdP` metadata XML.
 fn parse_entity_id(xml: &str) -> Option<String> {
     if let Some(pos) = xml.find("entityID=\"") {
         let after = &xml[pos + 10..];
@@ -132,6 +135,8 @@ pub struct SamlProviderFactory {
 }
 
 impl SamlProviderFactory {
+    /// # Panics
+    /// Panics if the `reqwest` client cannot be built (should never happen with default config).
     #[must_use]
     pub fn new(repo: Arc<dyn AuthProviderRepository>) -> Self {
         let http = reqwest::Client::builder()
@@ -150,7 +155,7 @@ impl SamlProviderFactory {
     /// Build a [`SamlProvider`] for `provider_id`.
     ///
     /// 1. Loads the `AuthProvider` row from DB
-    /// 2. Fetches IdP metadata XML from URL or uses inline XML
+    /// 2. Fetches `IdP` metadata XML from URL or uses inline XML
     /// 3. Parses SSO URL and certificate from metadata
     /// 4. Constructs [`SamlProvider`]
     ///
@@ -180,8 +185,7 @@ impl SamlProviderFactory {
             .ok_or_else(|| SamlFactoryError::MetadataParse("SSO URL not found".to_string()))?;
 
         let idp_cert = parse_idp_cert(&xml).unwrap_or_default();
-        let entity_id =
-            parse_entity_id(&xml).unwrap_or_else(|| "unknown-idp".to_string());
+        let entity_id = parse_entity_id(&xml).unwrap_or_else(|| "unknown-idp".to_string());
 
         let provider = SamlProvider::new(SamlConfig {
             entity_id,
@@ -193,10 +197,7 @@ impl SamlProviderFactory {
         Ok(Arc::new(provider))
     }
 
-    async fn fetch_metadata_xml(
-        &self,
-        cfg: &SamlDbConfig,
-    ) -> Result<String, SamlFactoryError> {
+    async fn fetch_metadata_xml(&self, cfg: &SamlDbConfig) -> Result<String, SamlFactoryError> {
         if let Some(xml) = &cfg.idp_metadata_xml {
             return Ok(xml.clone());
         }
@@ -357,7 +358,9 @@ mod tests {
     async fn returns_wrong_type_for_oidc_provider() {
         let provider = make_provider(ProviderType::Oidc, saml_inline_config());
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = SamlProviderFactory::new(repo);
         let result = factory.build(id).await;
         assert!(matches!(result, Err(SamlFactoryError::WrongType(_))));
@@ -367,14 +370,18 @@ mod tests {
     async fn raw_xml_path_parses_metadata_correctly() {
         let provider = make_provider(ProviderType::Saml, saml_inline_config());
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = SamlProviderFactory::new(repo);
         // Should succeed — no HTTP call needed
         let result = factory.build(id).await;
         assert!(
             result.is_ok(),
             "raw XML path should succeed, got err: {}",
-            result.err().map_or_else(|| "none".to_string(), |e| e.to_string())
+            result
+                .err()
+                .map_or_else(|| "none".to_string(), |e| e.to_string())
         );
     }
 
@@ -382,7 +389,9 @@ mod tests {
     async fn raw_xml_path_builds_provider_with_correct_sso_url() {
         let provider = make_provider(ProviderType::Saml, saml_inline_config());
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = SamlProviderFactory::new(repo);
         let provider = factory.build(id).await.unwrap();
         // Verify the provider can generate an authn request with the parsed SSO URL
@@ -397,8 +406,8 @@ mod tests {
 
     #[tokio::test]
     async fn url_path_fetch_is_called_when_no_inline_xml() {
-        use wiremock::{Mock, MockServer, ResponseTemplate};
         use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let mock_server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -418,13 +427,17 @@ mod tests {
         });
         let provider = make_provider(ProviderType::Saml, config);
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = SamlProviderFactory::new(repo);
         let result = factory.build(id).await;
         assert!(
             result.is_ok(),
             "URL fetch path should succeed, got err: {}",
-            result.err().map_or_else(|| "none".to_string(), |e| e.to_string())
+            result
+                .err()
+                .map_or_else(|| "none".to_string(), |e| e.to_string())
         );
     }
 
@@ -437,7 +450,9 @@ mod tests {
         });
         let provider = make_provider(ProviderType::Saml, config);
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         // Use a very short timeout to avoid waiting in tests
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_millis(100))
@@ -458,7 +473,9 @@ mod tests {
         });
         let provider = make_provider(ProviderType::Saml, config);
         let id = provider.id;
-        let repo = Arc::new(MockRepo { provider: Some(provider) });
+        let repo = Arc::new(MockRepo {
+            provider: Some(provider),
+        });
         let factory = SamlProviderFactory::new(repo);
         let result = factory.build(id).await;
         assert!(matches!(result, Err(SamlFactoryError::InvalidConfig(_))));

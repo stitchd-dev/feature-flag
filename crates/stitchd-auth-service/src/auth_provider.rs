@@ -25,8 +25,7 @@ use stitchd_proto::auth::v1::{
     GetAuthProviderResponse, GetSamlSpMetadataRequest, GetSamlSpMetadataResponse,
     ListAuthProvidersRequest, ListAuthProvidersResponse, OidcConfig as ProtoOidcConfig,
     SamlConfig as ProtoSamlConfig, UpdateAuthProviderRequest, UpdateAuthProviderResponse,
-    auth_provider_service_server::AuthProviderService,
-    create_auth_provider_request,
+    auth_provider_service_server::AuthProviderService, create_auth_provider_request,
     update_auth_provider_request,
 };
 
@@ -49,7 +48,11 @@ impl AuthProviderServiceImpl {
         crypto: Arc<CryptoKey>,
         caches: Arc<ProviderCaches>,
     ) -> Self {
-        Self { repo, crypto, caches }
+        Self {
+            repo,
+            crypto,
+            caches,
+        }
     }
 
     fn sp_base_url() -> String {
@@ -78,12 +81,14 @@ fn map_repo_err(e: RepositoryError) -> Status {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_provider_id(s: &str) -> Result<AuthProviderId, Status> {
     Uuid::parse_str(s)
         .map(AuthProviderId::from_uuid)
         .map_err(|_| Status::invalid_argument("provider_id is not a valid UUID"))
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_org_id(s: &str) -> Result<OrganisationId, Status> {
     Uuid::parse_str(s)
         .map(OrganisationId::from_uuid)
@@ -205,7 +210,13 @@ impl AuthProviderService for AuthProviderServiceImpl {
 
         let provider = self
             .repo
-            .create(org_id, provider_type, &r.display_name, config_json, r.enabled)
+            .create(
+                org_id,
+                provider_type,
+                &r.display_name,
+                config_json,
+                r.enabled,
+            )
             .await
             .map_err(map_repo_err)?;
 
@@ -228,11 +239,7 @@ impl AuthProviderService for AuthProviderServiceImpl {
         let r = req.into_inner();
         let org_id = parse_org_id(&r.org_id)?;
 
-        let providers = self
-            .repo
-            .list_for_org(org_id)
-            .await
-            .map_err(map_repo_err)?;
+        let providers = self.repo.list_for_org(org_id).await.map_err(map_repo_err)?;
 
         Ok(Response::new(ListAuthProvidersResponse {
             providers: providers
@@ -372,7 +379,7 @@ impl AuthProviderService for AuthProviderServiceImpl {
             return Err(Status::invalid_argument("provider is not a SAML provider"));
         }
 
-        let cfg: SamlDbConfig = serde_json::from_value(provider.config.clone())
+        let cfg: SamlDbConfig = serde_json::from_value(provider.config)
             .map_err(|e| Status::internal(format!("invalid SAML config: {e}")))?;
 
         let sp = SamlProvider::new(SamlConfig {
@@ -401,10 +408,7 @@ mod tests {
     use std::sync::Mutex as StdMutex;
     use stitchd_core::id::OrganisationId;
     use stitchd_db::RepositoryError;
-    use stitchd_proto::auth::v1::{
-        SamlConfig as ProtoSamlConfig,
-        create_auth_provider_request,
-    };
+    use stitchd_proto::auth::v1::{SamlConfig as ProtoSamlConfig, create_auth_provider_request};
 
     // -----------------------------------------------------------------------
     // Mock repository
@@ -488,24 +492,32 @@ mod tests {
             enabled: bool,
         ) -> Result<AuthProvider, RepositoryError> {
             let mut providers = self.providers.lock().unwrap();
-            let p = providers
+            let result = providers
                 .iter_mut()
                 .find(|p| p.id == id)
-                .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })?;
-            p.display_name = display_name.to_string();
-            p.config = config;
-            p.enabled = enabled;
-            Ok(p.clone())
+                .map(|p| {
+                    p.display_name = display_name.to_string();
+                    p.config = config;
+                    p.enabled = enabled;
+                    p.clone()
+                })
+                .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() });
+            drop(providers);
+            result
         }
 
         async fn delete(&self, id: AuthProviderId) -> Result<(), RepositoryError> {
-            let mut providers = self.providers.lock().unwrap();
-            let before = providers.len();
-            providers.retain(|p| p.id != id);
-            if providers.len() == before {
-                return Err(RepositoryError::NotFound { id: id.to_string() });
+            let found = {
+                let mut providers = self.providers.lock().unwrap();
+                let before = providers.len();
+                providers.retain(|p| p.id != id);
+                providers.len() != before
+            };
+            if found {
+                Ok(())
+            } else {
+                Err(RepositoryError::NotFound { id: id.to_string() })
             }
-            Ok(())
         }
     }
 
@@ -538,12 +550,14 @@ mod tests {
             org_id: org_id.to_string(),
             display_name: "Google OIDC".to_string(),
             enabled: true,
-            config: Some(create_auth_provider_request::Config::Oidc(ProtoOidcConfig {
-                issuer_url: "https://accounts.google.com".to_string(),
-                client_id: "client-id".to_string(),
-                client_secret: "my-secret".to_string(),
-                scopes: vec![],
-            })),
+            config: Some(create_auth_provider_request::Config::Oidc(
+                ProtoOidcConfig {
+                    issuer_url: "https://accounts.google.com".to_string(),
+                    client_id: "client-id".to_string(),
+                    client_secret: "my-secret".to_string(),
+                    scopes: vec![],
+                },
+            )),
         });
 
         let resp = svc.create_auth_provider(req).await.unwrap();
@@ -579,13 +593,15 @@ mod tests {
             org_id: org_id.to_string(),
             display_name: "Okta SAML".to_string(),
             enabled: true,
-            config: Some(create_auth_provider_request::Config::Saml(ProtoSamlConfig {
-                idp_metadata_xml: "<xml/>".to_string(),
-                idp_metadata_url: String::new(),
-                name_id_format:
-                    "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress".to_string(),
-                sp_entity_id: "https://sp.example.com".to_string(),
-            })),
+            config: Some(create_auth_provider_request::Config::Saml(
+                ProtoSamlConfig {
+                    idp_metadata_xml: "<xml/>".to_string(),
+                    idp_metadata_url: String::new(),
+                    name_id_format: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+                        .to_string(),
+                    sp_entity_id: "https://sp.example.com".to_string(),
+                },
+            )),
         });
 
         let resp = svc.create_auth_provider(req).await.unwrap();
@@ -616,12 +632,14 @@ mod tests {
             org_id: org_a.to_string(),
             display_name: "Provider A".to_string(),
             enabled: true,
-            config: Some(create_auth_provider_request::Config::Saml(ProtoSamlConfig {
-                idp_metadata_xml: "<xml/>".to_string(),
-                idp_metadata_url: String::new(),
-                name_id_format: String::new(),
-                sp_entity_id: "https://sp.example.com".to_string(),
-            })),
+            config: Some(create_auth_provider_request::Config::Saml(
+                ProtoSamlConfig {
+                    idp_metadata_xml: "<xml/>".to_string(),
+                    idp_metadata_url: String::new(),
+                    name_id_format: String::new(),
+                    sp_entity_id: "https://sp.example.com".to_string(),
+                },
+            )),
         }))
         .await
         .unwrap();
@@ -630,12 +648,14 @@ mod tests {
             org_id: org_b.to_string(),
             display_name: "Provider B".to_string(),
             enabled: true,
-            config: Some(create_auth_provider_request::Config::Saml(ProtoSamlConfig {
-                idp_metadata_xml: "<xml/>".to_string(),
-                idp_metadata_url: String::new(),
-                name_id_format: String::new(),
-                sp_entity_id: "https://sp.example.com".to_string(),
-            })),
+            config: Some(create_auth_provider_request::Config::Saml(
+                ProtoSamlConfig {
+                    idp_metadata_xml: "<xml/>".to_string(),
+                    idp_metadata_url: String::new(),
+                    name_id_format: String::new(),
+                    sp_entity_id: "https://sp.example.com".to_string(),
+                },
+            )),
         }))
         .await
         .unwrap();
@@ -667,12 +687,14 @@ mod tests {
                 org_id: org_id.to_string(),
                 display_name: "Test Provider".to_string(),
                 enabled: true,
-                config: Some(create_auth_provider_request::Config::Oidc(ProtoOidcConfig {
-                    issuer_url: "https://auth.example.com".to_string(),
-                    client_id: "cid".to_string(),
-                    client_secret: "secret".to_string(),
-                    scopes: vec![],
-                })),
+                config: Some(create_auth_provider_request::Config::Oidc(
+                    ProtoOidcConfig {
+                        issuer_url: "https://auth.example.com".to_string(),
+                        client_id: "cid".to_string(),
+                        client_secret: "secret".to_string(),
+                        scopes: vec![],
+                    },
+                )),
             }))
             .await
             .unwrap();
@@ -711,12 +733,14 @@ mod tests {
                 org_id: org_id.to_string(),
                 display_name: "Original".to_string(),
                 enabled: true,
-                config: Some(create_auth_provider_request::Config::Oidc(ProtoOidcConfig {
-                    issuer_url: "https://issuer.example.com".to_string(),
-                    client_id: "cid".to_string(),
-                    client_secret: "s3cr3t".to_string(),
-                    scopes: vec![],
-                })),
+                config: Some(create_auth_provider_request::Config::Oidc(
+                    ProtoOidcConfig {
+                        issuer_url: "https://issuer.example.com".to_string(),
+                        client_id: "cid".to_string(),
+                        client_secret: "s3cr3t".to_string(),
+                        scopes: vec![],
+                    },
+                )),
             }))
             .await
             .unwrap();
@@ -751,12 +775,14 @@ mod tests {
                 org_id: org_id.to_string(),
                 display_name: "To Delete".to_string(),
                 enabled: true,
-                config: Some(create_auth_provider_request::Config::Saml(ProtoSamlConfig {
-                    idp_metadata_xml: "<xml/>".to_string(),
-                    idp_metadata_url: String::new(),
-                    name_id_format: String::new(),
-                    sp_entity_id: "https://sp.example.com".to_string(),
-                })),
+                config: Some(create_auth_provider_request::Config::Saml(
+                    ProtoSamlConfig {
+                        idp_metadata_xml: "<xml/>".to_string(),
+                        idp_metadata_url: String::new(),
+                        name_id_format: String::new(),
+                        sp_entity_id: "https://sp.example.com".to_string(),
+                    },
+                )),
             }))
             .await
             .unwrap();
@@ -792,13 +818,15 @@ mod tests {
                 org_id: org_id.to_string(),
                 display_name: "SAML IdP".to_string(),
                 enabled: true,
-                config: Some(create_auth_provider_request::Config::Saml(ProtoSamlConfig {
-                    idp_metadata_xml: "<xml/>".to_string(),
-                    idp_metadata_url: String::new(),
-                    name_id_format:
-                        "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress".to_string(),
-                    sp_entity_id: "https://sp.stitchd.dev".to_string(),
-                })),
+                config: Some(create_auth_provider_request::Config::Saml(
+                    ProtoSamlConfig {
+                        idp_metadata_xml: "<xml/>".to_string(),
+                        idp_metadata_url: String::new(),
+                        name_id_format: "urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"
+                            .to_string(),
+                        sp_entity_id: "https://sp.stitchd.dev".to_string(),
+                    },
+                )),
             }))
             .await
             .unwrap();
@@ -811,8 +839,14 @@ mod tests {
             .await
             .unwrap();
         let xml = meta_resp.into_inner().xml;
-        assert!(xml.contains("EntityDescriptor"), "should have EntityDescriptor");
-        assert!(xml.contains("SPSSODescriptor"), "should have SPSSODescriptor");
+        assert!(
+            xml.contains("EntityDescriptor"),
+            "should have EntityDescriptor"
+        );
+        assert!(
+            xml.contains("SPSSODescriptor"),
+            "should have SPSSODescriptor"
+        );
         assert!(xml.contains("AssertionConsumerService"), "should have ACS");
     }
 }

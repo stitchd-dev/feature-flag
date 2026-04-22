@@ -6,8 +6,7 @@ use tonic::transport::Channel;
 
 use stitchd_proto::auth::v1::{
     auth_provider_service_client::AuthProviderServiceClient,
-    auth_service_client::AuthServiceClient,
-    oidc_login_service_client::OidcLoginServiceClient,
+    auth_service_client::AuthServiceClient, oidc_login_service_client::OidcLoginServiceClient,
     saml_login_service_client::SamlLoginServiceClient,
 };
 use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
@@ -128,6 +127,7 @@ impl GatewayState {
 
     /// Build a `GatewayState` from channels (used in tests).
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn from_channels(
         auth_client: AuthServiceClient<Channel>,
         flag_client: FlagServiceClient<Channel>,

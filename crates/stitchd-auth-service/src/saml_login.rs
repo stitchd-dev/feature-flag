@@ -22,8 +22,7 @@ use stitchd_db::{
 };
 use stitchd_proto::auth::v1::{
     SamlAcsRequest, SamlAcsResponse, SamlSsoRequest, SamlSsoResponse,
-    saml_login_service_server::SamlLoginService,
-    saml_sso_request::Scope,
+    saml_login_service_server::SamlLoginService, saml_sso_request::Scope,
 };
 
 // ---------------------------------------------------------------------------
@@ -33,7 +32,7 @@ use stitchd_proto::auth::v1::{
 /// Port for SAML SP operations — SSO initiation and ACS response validation.
 #[async_trait]
 pub trait SamlExchanger: Send + Sync {
-    /// Build the IdP redirect URL for SSO initiation.
+    /// Build the `IdP` redirect URL for SSO initiation.
     ///
     /// Returns `(redirect_url, relay_state)`.
     async fn initiate_sso(
@@ -43,7 +42,7 @@ pub trait SamlExchanger: Send + Sync {
         relay_state: &str,
     ) -> Result<String, Status>; // redirect_url
 
-    /// Validate a base64-encoded SAMLResponse and return the user's email.
+    /// Validate a base64-encoded `SAMLResponse` and return the user's email.
     async fn validate_response(
         &self,
         provider_id: AuthProviderId,
@@ -66,11 +65,15 @@ pub struct SamlRelayStore {
 }
 
 impl SamlRelayStore {
+    #[must_use]
     pub fn new(ttl: Duration) -> Self {
-        Self { store: DashMap::new(), ttl }
+        Self {
+            store: DashMap::new(),
+            ttl,
+        }
     }
 
-    fn insert(&self, relay_state: String, provider_id: AuthProviderId) {
+    pub fn insert(&self, relay_state: String, provider_id: AuthProviderId) {
         self.store.insert(
             relay_state,
             SamlPendingState {
@@ -118,6 +121,12 @@ impl SamlLoginServiceImpl {
         }
     }
 
+    /// Access the relay store — used in integration tests to pre-plant state.
+    #[must_use]
+    pub const fn relay_store(&self) -> &Arc<SamlRelayStore> {
+        &self.relay_store
+    }
+
     fn sp_base_url() -> String {
         std::env::var("SP_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
     }
@@ -138,12 +147,14 @@ fn map_repo_err(e: RepositoryError) -> Status {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_provider_id(s: &str) -> Result<AuthProviderId, Status> {
     Uuid::parse_str(s)
         .map(AuthProviderId::from_uuid)
         .map_err(|_| Status::invalid_argument("provider_id is not a valid UUID"))
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_org_id(s: &str) -> Result<OrganisationId, Status> {
     Uuid::parse_str(s)
         .map(OrganisationId::from_uuid)
@@ -191,7 +202,10 @@ impl SamlLoginService for SamlLoginServiceImpl {
 
         self.relay_store.insert(relay_state.clone(), provider_id);
 
-        Ok(Response::new(SamlSsoResponse { redirect_url, relay_state }))
+        Ok(Response::new(SamlSsoResponse {
+            redirect_url,
+            relay_state,
+        }))
     }
 
     #[instrument(skip_all)]
@@ -285,11 +299,11 @@ impl SamlLoginService for SamlLoginServiceImpl {
 // ---------------------------------------------------------------------------
 
 trait IfEmptyUse {
-    fn if_empty_use(self, f: impl FnOnce() -> String) -> String;
+    fn if_empty_use(self, f: impl FnOnce() -> Self) -> Self;
 }
 
 impl IfEmptyUse for String {
-    fn if_empty_use(self, f: impl FnOnce() -> String) -> String {
+    fn if_empty_use(self, f: impl FnOnce() -> Self) -> Self {
         if self.is_empty() { f() } else { self }
     }
 }
@@ -307,7 +321,7 @@ pub struct LiveSamlExchanger {
 
 impl LiveSamlExchanger {
     #[must_use]
-    pub fn new(caches: Arc<ProviderCaches>, factory: Arc<SamlProviderFactory>) -> Self {
+    pub const fn new(caches: Arc<ProviderCaches>, factory: Arc<SamlProviderFactory>) -> Self {
         Self { caches, factory }
     }
 }
@@ -368,10 +382,15 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
     use stitchd_core::{
-        auth::{AuthProvider, OrgMembership, OrgRole, ProviderType, RefreshToken, User, UserStatus},
+        auth::{
+            AuthProvider, OrgMembership, OrgRole, ProviderType, RefreshToken, User, UserStatus,
+        },
         id::{AuthProviderId, OrganisationId, RefreshTokenId, UserId},
     };
-    use stitchd_db::{AuthProviderRepository, AuthUserRepository, OrgMembershipRepository, RefreshTokenRepository, RepositoryError};
+    use stitchd_db::{
+        AuthProviderRepository, AuthUserRepository, OrgMembershipRepository,
+        RefreshTokenRepository, RepositoryError,
+    };
 
     // ── MockSamlExchanger ────────────────────────────────────────────────────
 
@@ -398,7 +417,9 @@ mod tests {
             _saml_response_b64: &str,
         ) -> Result<String, Status> {
             if self.fail_validate {
-                Err(Status::unauthenticated("SAML response invalid: bad signature"))
+                Err(Status::unauthenticated(
+                    "SAML response invalid: bad signature",
+                ))
             } else {
                 Ok(self.email.clone())
             }
@@ -517,11 +538,19 @@ mod tests {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
 
-        async fn update_status(&self, _id: UserId, _status: UserStatus) -> Result<(), RepositoryError> {
+        async fn update_status(
+            &self,
+            _id: UserId,
+            _status: UserStatus,
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
 
-        async fn update_password_hash(&self, _id: UserId, _hash: &str) -> Result<(), RepositoryError> {
+        async fn update_password_hash(
+            &self,
+            _id: UserId,
+            _hash: &str,
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
 
@@ -556,7 +585,12 @@ mod tests {
             org_id: OrganisationId,
             role: OrgRole,
         ) -> Result<OrgMembership, RepositoryError> {
-            Ok(OrgMembership { user_id, org_id, role, joined_at: Utc::now() })
+            Ok(OrgMembership {
+                user_id,
+                org_id,
+                role,
+                joined_at: Utc::now(),
+            })
         }
 
         async fn find_membership(
@@ -567,15 +601,27 @@ mod tests {
             Ok(self.membership.clone())
         }
 
-        async fn list_orgs_for_user(&self, _user_id: UserId) -> Result<Vec<OrgMembership>, RepositoryError> {
+        async fn list_orgs_for_user(
+            &self,
+            _user_id: UserId,
+        ) -> Result<Vec<OrgMembership>, RepositoryError> {
             Ok(self.membership.clone().map_or_else(Vec::new, |m| vec![m]))
         }
 
-        async fn remove_member(&self, _user_id: UserId, _org_id: OrganisationId) -> Result<(), RepositoryError> {
+        async fn remove_member(
+            &self,
+            _user_id: UserId,
+            _org_id: OrganisationId,
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
 
-        async fn update_role(&self, _user_id: UserId, _org_id: OrganisationId, _role: OrgRole) -> Result<(), RepositoryError> {
+        async fn update_role(
+            &self,
+            _user_id: UserId,
+            _org_id: OrganisationId,
+            _role: OrgRole,
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
     }
@@ -611,7 +657,10 @@ mod tests {
             Ok(None)
         }
 
-        async fn consume(&self, _id: RefreshTokenId) -> Result<Option<RefreshToken>, RepositoryError> {
+        async fn consume(
+            &self,
+            _id: RefreshTokenId,
+        ) -> Result<Option<RefreshToken>, RepositoryError> {
             Ok(None)
         }
 
@@ -623,7 +672,10 @@ mod tests {
             Ok(())
         }
 
-        async fn list_active(&self, _user_id: UserId) -> Result<Vec<RefreshToken>, RepositoryError> {
+        async fn list_active(
+            &self,
+            _user_id: UserId,
+        ) -> Result<Vec<RefreshToken>, RepositoryError> {
             Ok(vec![])
         }
     }
@@ -637,10 +689,7 @@ mod tests {
         existing_user: Option<User>,
         membership: Option<OrgMembership>,
     ) -> SamlLoginServiceImpl {
-        let org_id = provider
-            .as_ref()
-            .map(|p| p.org_id)
-            .unwrap_or_else(OrganisationId::new);
+        let org_id = provider.as_ref().map_or_else(OrganisationId::new, |p| p.org_id);
         let membership = membership.or_else(|| {
             existing_user.as_ref().map(|u| OrgMembership {
                 user_id: u.id,
@@ -655,7 +704,10 @@ mod tests {
             Arc::new(MockAuthUserRepo { existing_user }),
             Arc::new(MockOrgMembershipRepo { membership }),
             Arc::new(MockRefreshTokenRepo),
-            Arc::new(MockAuthProviderRepo { provider, org_providers }),
+            Arc::new(MockAuthProviderRepo {
+                provider,
+                org_providers,
+            }),
         )
     }
 
@@ -708,7 +760,7 @@ mod tests {
 
         let req = tonic::Request::new(SamlSsoRequest {
             scope: Some(Scope::OrgId(org_id.to_string())),
-            acs_url: "".to_string(),
+            acs_url: String::new(),
         });
 
         let resp = svc.saml_sso_initiate(req).await;
@@ -723,7 +775,7 @@ mod tests {
 
         let req = tonic::Request::new(SamlSsoRequest {
             scope: Some(Scope::OrgId(org_id.to_string())),
-            acs_url: "".to_string(),
+            acs_url: String::new(),
         });
 
         let resp = svc.saml_sso_initiate(req).await;
@@ -765,8 +817,14 @@ mod tests {
         let resp = svc.saml_acs_callback(req).await;
         assert!(resp.is_ok(), "expected Ok, got: {resp:?}");
         let body = resp.unwrap().into_inner();
-        assert!(!body.access_token.is_empty(), "access_token must be non-empty");
-        assert!(!body.refresh_token.is_empty(), "refresh_token must be non-empty");
+        assert!(
+            !body.access_token.is_empty(),
+            "access_token must be non-empty"
+        );
+        assert!(
+            !body.refresh_token.is_empty(),
+            "refresh_token must be non-empty"
+        );
         assert_eq!(body.expires_in, 3600);
         assert_eq!(body.org_id, org_id.to_string());
     }
@@ -810,7 +868,7 @@ mod tests {
         let svc = make_service(mock_exchanger(), Some(provider), vec![], None, None);
 
         let req = tonic::Request::new(SamlAcsRequest {
-            provider_id: "".to_string(),
+            provider_id: String::new(),
             saml_response_b64: "anything".to_string(),
             relay_state: "relay-that-was-never-issued".to_string(),
         });
@@ -833,7 +891,9 @@ mod tests {
             "expired-relay".to_string(),
             SamlPendingState {
                 provider_id: provider.id,
-                expiry: Instant::now() - Duration::from_secs(1),
+                expiry: Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("1s ago is valid"),
             },
         );
 

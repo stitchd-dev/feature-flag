@@ -153,24 +153,24 @@
 ## Phase 5: Integration Tests & Coverage
 <!-- depends: phase3, phase4 -->
 
-- [ ] Task 1: OIDC integration tests (mocked IdP)
+- [x] Task 1: OIDC integration tests (mocked IdP)
   <!-- files: crates/stitchd-auth-service/tests/oidc_integration.rs -->
-  - [ ] Sub-task: Use `wiremock` to mock OIDC discovery + token endpoints
-  - [ ] Sub-task: Full flow: create provider → authorize → mock callback → JWT verified
-  - [ ] Sub-task: Assert cache hit on second authorize (no re-discovery)
-- [ ] Task 2: SAML integration tests (mocked IdP)
+  - [x] Sub-task: Use `wiremock` to mock OIDC discovery + token endpoints
+  - [x] Sub-task: Full flow: create provider → authorize → mock callback → JWT verified
+  - [x] Sub-task: Assert cache hit on second authorize (no re-discovery)
+- [x] Task 2: SAML integration tests (mocked IdP)
   <!-- files: crates/stitchd-auth-service/tests/saml_integration.rs -->
-  - [ ] Sub-task: Mock IdP metadata XML (inline fixture)
-  - [ ] Sub-task: Full flow: create provider → SSO initiate → mock signed ACS → JWT verified
-- [ ] Task 3: Coverage gate
+  - [x] Sub-task: Mock IdP metadata XML (inline fixture)
+  - [x] Sub-task: Full flow: create provider → SSO initiate → mock signed ACS → JWT verified
+- [x] Task 3: Coverage gate
   <!-- files: — -->
   <!-- depends: task1, task2 -->
-  - [ ] Sub-task: `cargo tarpaulin -p stitchd-auth-service` — verify ≥90%; fix gaps
-  - [ ] Sub-task: `cargo tarpaulin -p stitchd-gateway` — verify ≥90%; fix gaps
-- [ ] Task 4: Final quality gate
+  - [x] Sub-task: `cargo tarpaulin -p stitchd-auth-service` — verify ≥90%; fix gaps
+  - [x] Sub-task: `cargo tarpaulin -p stitchd-gateway` — verify ≥90%; fix gaps
+- [x] Task 4: Final quality gate
   <!-- files: — -->
   <!-- depends: task3 -->
-  - [ ] Sub-task: `cargo fmt --all --check`
-  - [ ] Sub-task: `cargo clippy --workspace --all-targets -- -D warnings`
-  - [ ] Sub-task: `SQLX_OFFLINE=false cargo sqlx prepare --workspace` (if new sqlx queries added)
+  - [x] Sub-task: `cargo fmt --all --check`
+  - [x] Sub-task: `cargo clippy --workspace --all-targets -- -D warnings`
+  - [x] Sub-task: `SQLX_OFFLINE=false cargo sqlx prepare --workspace` (if new sqlx queries added)
 - [ ] Task: Conductor - User Manual Verification 'Integration Tests & Coverage' (Protocol in workflow.md)
