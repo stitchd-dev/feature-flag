@@ -9,21 +9,24 @@ The only network calls after startup are for list-based segment membership check
 sequenceDiagram
     participant App
     participant SDK as stitchd-sdk
-    participant Server as stitchd-server
+    participant GW as stitchd-gateway<br/>gRPC :50050
+    participant FS as stitchd-flag-service<br/>gRPC :50052
     participant PG as PostgreSQL
 
     App->>SDK: SdkClient::init(config)
-    SDK->>Server: gRPC SyncDefinitions (stream)
-    Server->>PG: load flag + segment definitions
-    PG-->>Server: definitions
-    Server-->>SDK: FlagDefinitions snapshot
+    SDK->>GW: gRPC SyncDefinitions (stream)<br/>metadata: x-sdk-key: sdk_live_...
+    GW->>FS: ValidateSdkKey + proxy SyncDefinitions
+    FS->>PG: load flag + segment definitions
+    PG-->>FS: definitions
+    FS-->>GW: FlagDefinitions snapshot (stream)
+    GW-->>SDK: FlagDefinitions snapshot
     SDK->>SDK: cache in DefinitionCache (Arc<RwLock>)
     SDK-->>App: Arc<SdkClient> ready
 ```
 
 After `init`, the SDK holds a complete copy of all flag definitions in memory. The gRPC
-stream remains open and the server pushes incremental updates whenever a flag or segment
-changes — no polling interval.
+stream remains open and `flag-service` pushes incremental updates whenever a flag or
+segment changes — no polling interval.
 
 ## Per-Request Evaluation
 
@@ -31,7 +34,8 @@ changes — no polling interval.
 sequenceDiagram
     participant App
     participant SDK as stitchd-sdk
-    participant Server as stitchd-server
+    participant GW as stitchd-gateway<br/>REST :8080
+    participant SS as stitchd-segmentation-service
 
     App->>SDK: evaluate("flag-key", &ctx)
     SDK->>SDK: read DefinitionCache (lock-free read)
@@ -47,8 +51,10 @@ sequenceDiagram
         alt Cache hit
             SDK-->>App: variant (cache)
         else Cache miss
-            SDK->>Server: REST GET /list-segment-check
-            Server-->>SDK: membership boolean
+            SDK->>GW: REST GET /v1/environments/{env}/list-segment-check
+            GW->>SS: gRPC CheckMembership
+            SS-->>GW: MembershipResponse
+            GW-->>SDK: membership boolean
             SDK->>SDK: populate LFU cache
             SDK-->>App: variant
         end

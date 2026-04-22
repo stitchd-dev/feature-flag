@@ -7,10 +7,21 @@ substitutes for the other — the split is intentional.
 
 ```mermaid
 graph LR
-    Server[stitchd-server]
-    Server -->|config reads/writes\nsqlx| PG[(PostgreSQL\nconfig store)]
-    Server -->|event writes\nupcoming| CH[(ClickHouse\nevents store)]
-    SDK[stitchd-sdk] -->|list-segment membership\nREST| Server
+    GW[stitchd-gateway]
+    FS[stitchd-flag-service]
+    SS[stitchd-segmentation-service]
+    AS[stitchd-auth-service]
+    XS[stitchd-experimentation-service]
+    ES[stitchd-event-service]
+
+    FS -->|config reads/writes\nsqlx| PG[(PostgreSQL\nconfig store)]
+    SS -->|config reads\nsqlx| PG
+    AS -->|config reads/writes\nsqlx| PG
+    XS -->|config reads/writes\nsqlx| PG
+    ES -->|event writes| CH[(ClickHouse\nevents store)]
+
+    SDK[stitchd-sdk] -->|list-segment membership\nREST| GW
+    GW -->|gRPC| SS
 ```
 
 ## PostgreSQL — Configuration Store
@@ -30,7 +41,7 @@ with the standard sqlx connection pool.
 
 All writes go through `stitchd-db` which enforces tenant isolation via parameterized queries.
 
-**Migration tool:** [sqlx-cli](https://github.com/launchbahq/sqlx) — run `sqlx migrate run` before starting the server.
+**Migration tool:** [sqlx-cli](https://github.com/launchbahq/sqlx) — run `sqlx migrate run` before starting the services.
 
 ## ClickHouse — Events Store *(Upcoming)*
 

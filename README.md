@@ -28,14 +28,19 @@ A production-ready feature flag and experimentation platform built in Rust. Supp
 
 ```
 crates/
-  stitchd-core/     # Domain models, rule engine, hashing, ID types
-  stitchd-db/       # PostgreSQL repositories (sqlx)
-  stitchd-events/   # ClickHouse event ingestion (WIP)
-  stitchd-proto/    # Protobuf definitions for gRPC services
-  stitchd-sdk/      # Rust server-side SDK
-  stitchd-server/   # HTTP + gRPC server binary
-  xtask/            # Build tool (mdbook docs generation)
-docs/               # mdbook source — published to GitHub Pages
+  stitchd-core/                 # Domain models, rule engine, hashing, ID types
+  stitchd-db/                   # PostgreSQL + ClickHouse repositories (sqlx)
+  stitchd-events/               # ClickHouse event ingestion library
+  stitchd-proto/                # Protobuf definitions and tonic stubs for all gRPC services
+  stitchd-sdk/                  # Rust server-side SDK (in-process flag evaluation)
+  stitchd-gateway/              # REST + gRPC gateway — single entry point for all clients
+  stitchd-auth-service/         # Authentication & management gRPC service (:50051)
+  stitchd-flag-service/         # Flag definitions, evaluation, SDK sync gRPC service (:50052)
+  stitchd-segmentation-service/ # Segment membership gRPC service (:50053)
+  stitchd-event-service/        # Experimentation event ingestion gRPC service (:50054)
+  stitchd-experimentation-service/ # Experiment management gRPC service (:50055)
+  xtask/                        # Build tool (mdBook docs generation)
+docs/                           # mdBook source — published to GitHub Pages
 ```
 
 ---
@@ -55,18 +60,26 @@ docs/               # mdbook source — published to GitHub Pages
 # 1. Copy environment config
 cp .env.example .env
 
-# 2. Start PostgreSQL (or point .env at an existing instance)
-docker run -d \
-  -e POSTGRES_USER=stitchd \
-  -e POSTGRES_PASSWORD=stitchd \
-  -e POSTGRES_DB=stitchd \
-  -p 5432:5432 postgres:16
+# 2. Start all services (PostgreSQL, ClickHouse, and all microservices)
+docker-compose up -d
 
-# 3. Build and run the server
-cargo run -p stitchd-server
+# 3. (Optional) Run individual services against local databases
+#    Each service reads DATABASE_URL from the environment.
+cargo run -p stitchd-gateway
 ```
 
-The HTTP admin API is available at `http://localhost:8080` and the gRPC flag sync service at `localhost:50051`.
+The REST admin/SDK API is available at `http://localhost:8080`.
+The gRPC flag sync service for SDKs is at `localhost:50050` (proxied by the gateway to `flag-service`).
+
+Internal service ports (not normally exposed to clients directly):
+
+| Service | Default Port |
+|---------|-------------|
+| `stitchd-auth-service` | `50051` |
+| `stitchd-flag-service` | `50052` |
+| `stitchd-segmentation-service` | `50053` |
+| `stitchd-event-service` | `50054` |
+| `stitchd-experimentation-service` | `50055` |
 
 ---
 
@@ -86,23 +99,23 @@ use stitchd_sdk::{SdkClient, SdkConfig, Context, EvaluationContext};
 
 #[tokio::main]
 async fn main() {
-    let config = SdkConfig::builder()
-        .sdk_key("sdk-key-here")
-        .server_url("http://localhost:50051")
-        .build();
+    let config = SdkConfig::new(
+        "http://localhost:50050",  // gRPC flag-sync endpoint (gateway)
+        "http://localhost:8080",   // REST endpoint for list-segment checks (gateway)
+        "sdk_live_...",            // SDK key from the admin API
+    );
 
     // Initializes definitions and starts background polling
     let client = SdkClient::init(config).await.expect("SDK init failed");
 
     // Evaluate a flag for a user context
-    let context = EvaluationContext::new(
-        Context::user("user-123")
-            .attribute("country", "US")
-            .build(),
-    );
+    let ctx = EvaluationContext {
+        contexts: vec![Context::new("user", "user-123")],
+    };
 
-    let variant = client.evaluate("my-feature-flag", &context).await;
-    println!("Flag value: {:?}", variant);
+    if let Some(variant) = client.evaluate("my-feature-flag", &ctx).await.expect("evaluation failed") {
+        println!("Flag value: {:?}", variant);
+    }
 }
 ```
 
@@ -113,22 +126,34 @@ See the [SDK documentation](https://stitchd-dev.github.io/feature-flag/sdk/quick
 ## Architecture
 
 ```
-┌─────────────────┐    gRPC flag sync    ┌──────────────────┐
-│  stitchd-server │ ──────────────────── │  stitchd-sdk     │
-│  (HTTP + gRPC)  │                      │  (in-process     │
-│                 │    REST (segments)   │   evaluation)    │
-│  ┌───────────┐  │ ──────────────────── │                  │
-│  │ PostgreSQL│  │                      └──────────────────┘
-│  └───────────┘  │
-│  ┌────────────┐ │
-│  │ ClickHouse │ │  ← event metrics (WIP)
-│  └────────────┘ │
-└─────────────────┘
+                      ┌──────────────────────────────────────────┐
+                      │           stitchd-gateway                │
+  Admin / SDK ───────▶│  REST :8080   |   gRPC FlagSync :50050   │
+                      └─────┬──────────────────────┬────────────┘
+                            │ gRPC                 │ gRPC (proxy)
+           ┌────────────────┼──────────────────────┼──────────────┐
+           ▼                ▼                       ▼              ▼
+  auth-service         flag-service        segmentation-    event-service
+  :50051               :50052 (+ FlagSync) service :50053   :50054
+  (Auth + Mgmt)        (Flags, Variants,   (Segment         (Event
+                        SDK sync)           membership)      ingestion)
+           │                │                       │              │
+           └───────────────────────────────────────────────────────┘
+                            │ sqlx                  │ ClickHouse
+                     ┌──────┴──────┐         ┌──────┴──────┐
+                     │ PostgreSQL  │         │ ClickHouse  │
+                     │ (config)    │         │ (events)    │
+                     └─────────────┘         └─────────────┘
+
+  stitchd-sdk (in your app)
+    ├── gRPC SyncDefinitions ──▶ gateway :50050 ──▶ flag-service
+    └── REST list-segment check ▶ gateway :8080  ──▶ segmentation-service
 ```
 
-- Flag definitions are stored in PostgreSQL and streamed to SDKs via gRPC.
-- Rule-based segments are evaluated entirely in-process; list-based segments are resolved via REST with an LFU cache.
-- The admin REST API exposes full CRUD operations and an OpenAPI schema at `/api-docs/openapi.json`.
+- All external traffic enters through `stitchd-gateway`; backend services are not exposed directly.
+- Flag definitions are stored in PostgreSQL and streamed to SDKs via gRPC; evaluation happens in-process in the SDK.
+- List-based segment membership is resolved via REST with an LFU cache in the SDK to minimise round-trips.
+- ClickHouse handles experiment event ingestion separately from the configuration path.
 
 For a deeper dive see [Architecture Overview](https://stitchd-dev.github.io/feature-flag/architecture/).
 
@@ -154,17 +179,65 @@ Coverage is enforced at **90%** in CI and reported to [Codecov](https://codecov.
 
 ### Environment Variables
 
+#### Gateway (`stitchd-gateway`)
+
 | Variable | Default | Description |
 |---|---|---|
-| `HTTP_PORT` | `8080` | Admin REST API port |
-| `GRPC_PORT` | `50051` | gRPC flag sync port |
-| `DATABASE_URL` | — | PostgreSQL connection string |
-| `CLICKHOUSE_URL` | — | ClickHouse connection string |
-| `JWT_SECRET` | — | Secret for JWT signing |
-| `RUST_LOG` | `info` | Log filter (e.g. `debug,sqlx=warn`) |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | OpenTelemetry collector endpoint |
+| `GATEWAY_PORT` | `8080` | REST API listen port |
+| `METRICS_PORT` | `9080` | Prometheus metrics port |
+| `AUTH_SERVICE_ADDR` | `http://localhost:50051` | Auth service gRPC address |
+| `FLAG_SERVICE_ADDR` | `http://localhost:50052` | Flag service gRPC address |
+| `SEGMENTATION_SERVICE_ADDR` | `http://localhost:50053` | Segmentation service gRPC address |
+| `EVENT_SERVICE_ADDR` | `http://localhost:50054` | Event service gRPC address |
+| `EXPERIMENTATION_SERVICE_ADDR` | `http://localhost:50055` | Experimentation service gRPC address |
 
-See `.env.example` for a complete list.
+#### Auth Service (`stitchd-auth-service`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `AUTH_SERVICE_PORT` | `50051` | gRPC listen port |
+| `DATABASE_URL` | — | PostgreSQL connection string (required) |
+| `JWT_SECRET` | — | Secret for JWT signing (required) |
+| `SUPERADMIN_EMAIL` | — | Seed superadmin email on first boot |
+| `SUPERADMIN_PASSWORD` | — | Seed superadmin password (hashed with Argon2id) |
+
+#### Flag Service (`stitchd-flag-service`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `FLAG_SERVICE_PORT` | `50052` | gRPC listen port |
+| `DATABASE_URL` | — | PostgreSQL connection string (required) |
+
+#### Segmentation Service (`stitchd-segmentation-service`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `SEGMENTATION_SERVICE_PORT` | `50053` | gRPC listen port |
+| `DATABASE_URL` | — | PostgreSQL connection string (required) |
+
+#### Event Service (`stitchd-event-service`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `EVENT_SERVICE_PORT` | `50054` | gRPC listen port |
+| `DATABASE_URL` | — | PostgreSQL connection string (required) |
+| `CLICKHOUSE_URL` | — | ClickHouse HTTP connection string (required) |
+
+#### Experimentation Service (`stitchd-experimentation-service`)
+
+| Variable | Default | Description |
+|---|---|---|
+| `EXPERIMENTATION_SERVICE_PORT` | `50055` | gRPC listen port |
+| `DATABASE_URL` | — | PostgreSQL connection string (required) |
+| `FLAG_SERVICE_ADDR` | `http://localhost:50052` | Flag service gRPC address |
+
+#### All Services
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUST_LOG` | `info` | Log filter (e.g. `debug,sqlx=warn`) |
+
+See `.env.example` and `docker-compose.yml` for a complete reference.
 
 ---
 
