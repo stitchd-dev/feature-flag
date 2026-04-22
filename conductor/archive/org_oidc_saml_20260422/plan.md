@@ -79,75 +79,75 @@
 <!-- depends: phase2 -->
 <!-- execution: parallel -->
 
-- [ ] Task 1: Write failing tests for OIDC login handlers
+- [x] Task 1: Write failing tests for OIDC login handlers
   <!-- files: crates/stitchd-auth-service/src/oidc_login.rs -->
-  - [ ] Sub-task: `OidcAuthorize` (provider-scoped) — returns redirect URL; CSRF state stored
-  - [ ] Sub-task: `OidcAuthorize` (org-scoped) — picks first enabled OIDC provider
-  - [ ] Sub-task: `OidcCallback` valid — code exchange issues JWT + refresh token
-  - [ ] Sub-task: `OidcCallback` invalid CSRF state — rejected
-  - [ ] Sub-task: `OidcCallback` expired state — rejected
-- [ ] Task 2: Add proto messages for OIDC login
+  - [x] Sub-task: `OidcAuthorize` (provider-scoped) — returns redirect URL; CSRF state stored
+  - [x] Sub-task: `OidcAuthorize` (org-scoped) — picks first enabled OIDC provider
+  - [x] Sub-task: `OidcCallback` valid — code exchange issues JWT + refresh token
+  - [x] Sub-task: `OidcCallback` invalid CSRF state — rejected
+  - [x] Sub-task: `OidcCallback` expired state — rejected
+- [x] Task 2: Add proto messages for OIDC login
   <!-- files: proto/auth/v1/oidc_login.proto, crates/stitchd-proto/src/lib.rs -->
-  - [ ] Sub-task: `OidcAuthorizeRequest` (provider_id xor org_id, redirect_uri)
-  - [ ] Sub-task: `OidcAuthorizeResponse` (redirect_url)
-  - [ ] Sub-task: `OidcCallbackRequest` (provider_id, code, state)
-  - [ ] Sub-task: `OidcCallbackResponse` (access_token, refresh_token, expires_in, user_id, org_id)
-  - [ ] Sub-task: Regenerate prost bindings
-- [ ] Task 3: Implement OIDC pending-state store
-  <!-- files: crates/stitchd-auth-service/src/oidc_state.rs -->
-  - [ ] Sub-task: `DashMap<String, OidcPendingState>` (pkce_verifier, provider_id, expiry)
-  - [ ] Sub-task: 5-minute TTL; expired entries rejected at callback
-- [ ] Task 4: Implement OIDC authorize + callback handlers
+  - [x] Sub-task: `OidcAuthorizeRequest` (provider_id xor org_id, redirect_uri)
+  - [x] Sub-task: `OidcAuthorizeResponse` (redirect_url)
+  - [x] Sub-task: `OidcCallbackRequest` (provider_id, code, state)
+  - [x] Sub-task: `OidcCallbackResponse` (access_token, refresh_token, expires_in, user_id, org_id)
+  - [x] Sub-task: Regenerate prost bindings
+- [x] Task 3: Implement OIDC pending-state store
+  <!-- files: crates/stitchd-auth-service/src/oidc_login.rs -->
+  - [x] Sub-task: `DashMap<String, OidcPendingState>` (pkce_verifier, provider_id, expiry)
+  - [x] Sub-task: 5-minute TTL; expired entries rejected at callback
+- [x] Task 4: Implement OIDC authorize + callback handlers
   <!-- files: crates/stitchd-auth-service/src/oidc_login.rs -->
   <!-- depends: task1, task2, task3 -->
-  - [ ] Sub-task: Load `OidcProvider` from `ProviderCache`
-  - [ ] Sub-task: Call `provider.authorization_url(redirect_uri)` → (url, verifier, state)
-  - [ ] Sub-task: Store `OidcPendingState` keyed on state; org-scoped variant
-  - [ ] Sub-task: Callback: validate + consume state; `exchange_code`; find-or-create user; issue JWT
-- [ ] Task 5: Add gateway REST routes for OIDC
+  - [x] Sub-task: Load `OidcProvider` from `ProviderCache`
+  - [x] Sub-task: Call `provider.authorization_url(redirect_uri)` → (url, verifier, state)
+  - [x] Sub-task: Store `OidcPendingState` keyed on state; org-scoped variant
+  - [x] Sub-task: Callback: validate + consume state; `exchange_code`; find-or-create user; issue JWT
+- [x] Task 5: Add gateway REST routes for OIDC
   <!-- files: crates/stitchd-gateway/src/routes/oidc.rs -->
   <!-- depends: task4 -->
-  - [ ] Sub-task: `POST /v1/auth/oidc/{provider_id}/authorize`
-  - [ ] Sub-task: `POST /v1/orgs/{org_id}/auth/oidc/authorize`
-  - [ ] Sub-task: `GET  /v1/auth/oidc/{provider_id}/callback`
-  - [ ] Sub-task: utoipa OpenAPI annotations
+  - [x] Sub-task: `POST /v1/auth/oidc/{provider_id}/authorize`
+  - [x] Sub-task: `POST /v1/orgs/{org_id}/auth/oidc/authorize`
+  - [x] Sub-task: `GET  /v1/auth/oidc/{provider_id}/callback`
+  - [x] Sub-task: utoipa OpenAPI annotations
 - [ ] Task: Conductor - User Manual Verification 'OIDC Login Flow' (Protocol in workflow.md)
 
 ## Phase 4: SAML Login Flow
 <!-- depends: phase2 -->
 <!-- execution: parallel -->
 
-- [ ] Task 1: Write failing tests for SAML login handlers
+- [x] Task 1: Write failing tests for SAML login handlers
   <!-- files: crates/stitchd-auth-service/src/saml_login.rs -->
-  - [ ] Sub-task: `SamlSsoInitiate` (provider-scoped) — returns IdP redirect URL
-  - [ ] Sub-task: `SamlSsoInitiate` (org-scoped) — picks first enabled SAML provider
-  - [ ] Sub-task: `SamlAcsCallback` valid — signed assertion issues JWT + refresh token
-  - [ ] Sub-task: `SamlAcsCallback` invalid signature — rejected
-  - [ ] Sub-task: `SamlAcsCallback` replayed RelayState — rejected
-- [ ] Task 2: Add proto messages for SAML login
+  - [x] Sub-task: `SamlSsoInitiate` (provider-scoped) — returns IdP redirect URL
+  - [x] Sub-task: `SamlSsoInitiate` (org-scoped) — picks first enabled SAML provider
+  - [x] Sub-task: `SamlAcsCallback` valid — signed assertion issues JWT + refresh token
+  - [x] Sub-task: `SamlAcsCallback` invalid signature — rejected
+  - [x] Sub-task: `SamlAcsCallback` replayed RelayState — rejected
+- [x] Task 2: Add proto messages for SAML login
   <!-- files: proto/auth/v1/saml_login.proto, crates/stitchd-proto/src/lib.rs -->
-  - [ ] Sub-task: `SamlSsoRequest` (provider_id xor org_id), `SamlSsoResponse` (redirect_url, relay_state)
-  - [ ] Sub-task: `SamlAcsRequest` (provider_id, saml_response_b64, relay_state)
-  - [ ] Sub-task: `SamlAcsResponse` (access_token, refresh_token, expires_in, user_id, org_id)
-  - [ ] Sub-task: Regenerate prost bindings
-- [ ] Task 3: Implement SAML RelayState store
-  <!-- files: crates/stitchd-auth-service/src/saml_state.rs -->
-  - [ ] Sub-task: `DashMap<String, SamlPendingState>` (provider_id, expiry); 10-minute TTL
-- [ ] Task 4: Implement SAML SSO initiation + ACS callback handlers
+  - [x] Sub-task: `SamlSsoRequest` (provider_id xor org_id), `SamlSsoResponse` (redirect_url, relay_state)
+  - [x] Sub-task: `SamlAcsRequest` (provider_id, saml_response_b64, relay_state)
+  - [x] Sub-task: `SamlAcsResponse` (access_token, refresh_token, expires_in, user_id, org_id)
+  - [x] Sub-task: Regenerate prost bindings
+- [x] Task 3: Implement SAML RelayState store
+  <!-- files: crates/stitchd-auth-service/src/saml_login.rs -->
+  - [x] Sub-task: `DashMap<String, SamlPendingState>` (provider_id, expiry); 10-minute TTL
+- [x] Task 4: Implement SAML SSO initiation + ACS callback handlers
   <!-- files: crates/stitchd-auth-service/src/saml_login.rs -->
   <!-- depends: task1, task2, task3 -->
-  - [ ] Sub-task: Load SAML processor from `ProviderCache`
-  - [ ] Sub-task: Generate AuthnRequest XML; deflate + base64; build IdP redirect URL; store RelayState
-  - [ ] Sub-task: Org-scoped SSO variant
-  - [ ] Sub-task: ACS: validate RelayState; decode SAMLResponse; verify signature; extract NameID
-  - [ ] Sub-task: Find-or-create user by email; issue JWT + refresh token
-- [ ] Task 5: Add gateway REST routes for SAML
+  - [x] Sub-task: Load SAML processor from `ProviderCache`
+  - [x] Sub-task: Generate AuthnRequest XML; deflate + base64; build IdP redirect URL; store RelayState
+  - [x] Sub-task: Org-scoped SSO variant
+  - [x] Sub-task: ACS: validate RelayState; decode SAMLResponse; verify signature; extract NameID
+  - [x] Sub-task: Find-or-create user by email; issue JWT + refresh token
+- [x] Task 5: Add gateway REST routes for SAML
   <!-- files: crates/stitchd-gateway/src/routes/saml.rs -->
   <!-- depends: task4 -->
-  - [ ] Sub-task: `POST /v1/auth/saml/{provider_id}/sso`
-  - [ ] Sub-task: `POST /v1/orgs/{org_id}/auth/saml/sso`
-  - [ ] Sub-task: `POST /v1/auth/saml/{provider_id}/callback` (ACS — form-encoded body)
-  - [ ] Sub-task: utoipa OpenAPI annotations
+  - [x] Sub-task: `POST /v1/auth/saml/{provider_id}/sso`
+  - [x] Sub-task: `POST /v1/orgs/{org_id}/auth/saml/sso`
+  - [x] Sub-task: `POST /v1/auth/saml/{provider_id}/callback` (ACS — form-encoded body)
+  - [x] Sub-task: utoipa OpenAPI annotations
 - [ ] Task: Conductor - User Manual Verification 'SAML Login Flow' (Protocol in workflow.md)
 
 ## Phase 5: Integration Tests & Coverage

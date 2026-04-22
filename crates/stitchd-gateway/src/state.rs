@@ -8,6 +8,7 @@ use stitchd_proto::auth::v1::{
     auth_provider_service_client::AuthProviderServiceClient,
     auth_service_client::AuthServiceClient,
     oidc_login_service_client::OidcLoginServiceClient,
+    saml_login_service_client::SamlLoginServiceClient,
 };
 use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
@@ -34,6 +35,8 @@ pub struct GatewayState {
     pub auth_provider_client: Arc<Mutex<AuthProviderServiceClient<Channel>>>,
     /// OIDC login service gRPC client (hosted on the auth-service port).
     pub oidc_login_client: Arc<Mutex<OidcLoginServiceClient<Channel>>>,
+    /// SAML login service gRPC client (hosted on the auth-service port).
+    pub saml_login_client: Arc<Mutex<SamlLoginServiceClient<Channel>>>,
 }
 
 impl GatewayState {
@@ -66,11 +69,17 @@ impl GatewayState {
             .await
             .map_err(|e| anyhow::anyhow!("connect to Auth Provider Service: {e}"))?;
 
-        let oidc_login_channel = Channel::from_shared(auth_addr)
+        let oidc_login_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid OIDC Login Service URI: {e}"))?
             .connect()
             .await
             .map_err(|e| anyhow::anyhow!("connect to OIDC Login Service: {e}"))?;
+
+        let saml_login_channel = Channel::from_shared(auth_addr)
+            .map_err(|e| anyhow::anyhow!("invalid SAML Login Service URI: {e}"))?
+            .connect()
+            .await
+            .map_err(|e| anyhow::anyhow!("connect to SAML Login Service: {e}"))?;
 
         let flag_channel = Channel::from_shared(flag_addr)
             .map_err(|e| anyhow::anyhow!("invalid Flag Service URI: {e}"))?
@@ -111,6 +120,9 @@ impl GatewayState {
             oidc_login_client: Arc::new(Mutex::new(OidcLoginServiceClient::new(
                 oidc_login_channel,
             ))),
+            saml_login_client: Arc::new(Mutex::new(SamlLoginServiceClient::new(
+                saml_login_channel,
+            ))),
         })
     }
 
@@ -125,6 +137,7 @@ impl GatewayState {
         management_client: ManagementServiceClient<Channel>,
         auth_provider_client: AuthProviderServiceClient<Channel>,
         oidc_login_client: OidcLoginServiceClient<Channel>,
+        saml_login_client: SamlLoginServiceClient<Channel>,
     ) -> Self {
         Self {
             auth_client: Arc::new(Mutex::new(auth_client)),
@@ -135,6 +148,7 @@ impl GatewayState {
             management_client: Arc::new(Mutex::new(management_client)),
             auth_provider_client: Arc::new(Mutex::new(auth_provider_client)),
             oidc_login_client: Arc::new(Mutex::new(oidc_login_client)),
+            saml_login_client: Arc::new(Mutex::new(saml_login_client)),
         }
     }
 }

@@ -24,6 +24,8 @@ use stitchd_auth_service::{
     management::ManagementServiceImpl,
     oidc_factory::OidcProviderFactory,
     oidc_login::{LiveOidcExchanger, OidcLoginServiceImpl, OidcStateStore},
+    saml_factory::SamlProviderFactory,
+    saml_login::{LiveSamlExchanger, SamlLoginServiceImpl, SamlRelayStore},
 };
 use stitchd_db::{
     AuthUserRepository, OrgMembershipRepository, OrganisationRepository, PgAuditLogger,
@@ -38,6 +40,7 @@ use stitchd_proto::{
         auth_provider_service_server::AuthProviderServiceServer,
         auth_service_server::AuthServiceServer,
         oidc_login_service_server::OidcLoginServiceServer,
+        saml_login_service_server::SamlLoginServiceServer,
     },
     management::v1::management_service_server::ManagementServiceServer,
 };
@@ -128,13 +131,27 @@ async fn main() -> anyhow::Result<()> {
         auth_provider_repo.clone() as Arc<dyn stitchd_db::AuthProviderRepository>,
         crypto_key,
     ));
-    let oidc_exchanger = Arc::new(LiveOidcExchanger::new(provider_caches, oidc_factory));
+    let oidc_exchanger = Arc::new(LiveOidcExchanger::new(Arc::clone(&provider_caches), oidc_factory));
     let oidc_state_store = Arc::new(OidcStateStore::new(std::time::Duration::from_secs(300)));
     let oidc_login_service = OidcLoginServiceImpl::new(
         oidc_exchanger,
         oidc_state_store,
-        auth_user_repo,
-        membership_repo,
+        Arc::clone(&auth_user_repo) as Arc<dyn stitchd_db::AuthUserRepository>,
+        Arc::clone(&membership_repo) as Arc<dyn stitchd_db::OrgMembershipRepository>,
+        Arc::clone(&refresh_repo),
+        Arc::clone(&auth_provider_repo) as Arc<dyn stitchd_db::AuthProviderRepository>,
+    );
+
+    let saml_factory = Arc::new(SamlProviderFactory::new(
+        Arc::clone(&auth_provider_repo) as Arc<dyn stitchd_db::AuthProviderRepository>,
+    ));
+    let saml_exchanger = Arc::new(LiveSamlExchanger::new(provider_caches, saml_factory));
+    let saml_relay_store = Arc::new(SamlRelayStore::new(std::time::Duration::from_secs(600)));
+    let saml_login_service = SamlLoginServiceImpl::new(
+        saml_exchanger,
+        saml_relay_store,
+        auth_user_repo as Arc<dyn stitchd_db::AuthUserRepository>,
+        membership_repo as Arc<dyn stitchd_db::OrgMembershipRepository>,
         refresh_repo,
         auth_provider_repo as Arc<dyn stitchd_db::AuthProviderRepository>,
     );
@@ -155,6 +172,7 @@ async fn main() -> anyhow::Result<()> {
         .add_service(ManagementServiceServer::new(mgmt_service))
         .add_service(AuthProviderServiceServer::new(auth_provider_service))
         .add_service(OidcLoginServiceServer::new(oidc_login_service))
+        .add_service(SamlLoginServiceServer::new(saml_login_service))
         .serve_with_shutdown(grpc_addr, async {
             signal::ctrl_c()
                 .await

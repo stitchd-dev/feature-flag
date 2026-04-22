@@ -18,7 +18,7 @@ use axum::{
 };
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
-use crate::routes::{admin, auth, auth_providers, events, experiments, flags, management, oidc, sdk, segments};
+use crate::routes::{admin, auth, auth_providers, events, experiments, flags, management, oidc, saml, sdk, segments};
 use crate::state::GatewayState;
 
 /// Build the full gateway `Router`.
@@ -37,6 +37,15 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route(
             "/v1/auth/oidc/{provider_id}/callback",
             get(oidc::oidc_callback),
+        )
+        // SAML: provider-scoped SSO initiate + ACS callback (public — IdP posts here)
+        .route(
+            "/v1/auth/saml/{provider_id}/sso",
+            post(saml::saml_sso_by_provider),
+        )
+        .route(
+            "/v1/auth/saml/{provider_id}/callback",
+            post(saml::saml_acs_callback),
         )
         .with_state(Arc::clone(&state));
 
@@ -190,6 +199,11 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route(
             "/v1/orgs/{org_id}/auth/oidc/authorize",
             post(oidc::oidc_authorize_by_org),
+        )
+        // Org-scoped SAML SSO initiate
+        .route(
+            "/v1/orgs/{org_id}/auth/saml/sso",
+            post(saml::saml_sso_by_org),
         )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_non_system_org))

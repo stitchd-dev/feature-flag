@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package stitchd.auth.v1;
+
+// ─── SAML SSO initiate ───────────────────────────────────────────────────────
+
+message SamlSsoRequest {
+  // Exactly one of provider_id / org_id must be set.
+  oneof scope {
+    string provider_id = 1;
+    string org_id      = 2;
+  }
+  // ACS URL that the IdP should POST the assertion back to.
+  string acs_url = 3;
+}
+
+message SamlSsoResponse {
+  // IdP redirect URL with deflated+base64+URL-encoded SAMLRequest.
+  string redirect_url = 1;
+  // RelayState value that will be returned by the IdP in the ACS callback.
+  string relay_state  = 2;
+}
+
+// ─── SAML ACS callback ───────────────────────────────────────────────────────
+
+message SamlAcsRequest {
+  string provider_id        = 1;
+  // Base64-encoded SAMLResponse from the IdP.
+  string saml_response_b64  = 2;
+  // RelayState returned by the IdP — must match a stored pending state.
+  string relay_state        = 3;
+}
+
+message SamlAcsResponse {
+  string access_token  = 1;
+  string refresh_token = 2;
+  int64  expires_in    = 3;
+  string user_id       = 4;
+  string org_id        = 5;
+}
+
+// ─── Service ──────────────────────────────────────────────────────────────────
+
+service SamlLoginService {
+  rpc SamlSsoInitiate(SamlSsoRequest) returns (SamlSsoResponse);
+  rpc SamlAcsCallback(SamlAcsRequest) returns (SamlAcsResponse);
+}
