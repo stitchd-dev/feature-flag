@@ -91,6 +91,7 @@ jobs:
               echo "── uploading: $crate (flag=$crate) ──"
               ./codecov \
                 --token="$CODECOV_TOKEN" \
+                --slug="$GITHUB_REPOSITORY" \
                 --file="$xml" \
                 --flag="$crate" \
                 --fail-on-error
