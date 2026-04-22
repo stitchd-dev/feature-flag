@@ -18,17 +18,26 @@ use axum::{
 };
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
-use crate::routes::{admin, auth, auth_providers, events, experiments, flags, management, sdk, segments};
+use crate::routes::{admin, auth, auth_providers, events, experiments, flags, management, oidc, sdk, segments};
 use crate::state::GatewayState;
 
 /// Build the full gateway `Router`.
 pub fn build_router(state: Arc<GatewayState>) -> Router {
     let auth_client = Arc::clone(&state.auth_client);
 
-    // ── Public: health + login (no auth required) ────────────────────────────
+    // ── Public: health + login + OIDC flows (no auth required) ──────────────
     let auth_routes = Router::new()
         .route("/health", get(|| async { StatusCode::OK }))
         .route("/v1/auth/login", post(auth::login))
+        // OIDC: provider-scoped authorize + callback (public — redirected from IdP)
+        .route(
+            "/v1/auth/oidc/{provider_id}/authorize",
+            post(oidc::oidc_authorize_by_provider),
+        )
+        .route(
+            "/v1/auth/oidc/{provider_id}/callback",
+            get(oidc::oidc_callback),
+        )
         .with_state(Arc::clone(&state));
 
     // ── Superadmin-only routes (JWT + system-org check) ───────────────────────
@@ -161,7 +170,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             auth_middleware,
         ));
 
-    // ── Auth-provider management routes (JWT + non-system-org) ───────────────
+    // ── Auth-provider management + org-scoped OIDC (JWT + non-system-org) ───
     let auth_provider_routes = Router::new()
         .route(
             "/v1/orgs/{org_id}/auth-providers",
@@ -176,6 +185,11 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route(
             "/v1/orgs/{org_id}/auth-providers/{id}/saml/metadata",
             get(auth_providers::get_saml_sp_metadata),
+        )
+        // Org-scoped OIDC authorize requires the user to be authenticated (picking their org's IdP)
+        .route(
+            "/v1/orgs/{org_id}/auth/oidc/authorize",
+            post(oidc::oidc_authorize_by_org),
         )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_non_system_org))

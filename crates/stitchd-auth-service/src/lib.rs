@@ -21,6 +21,7 @@ pub mod jwt;
 pub mod login;
 pub mod management;
 pub mod oidc_factory;
+pub mod oidc_login;
 pub mod provider_cache;
 pub mod rbac;
 pub mod saml_factory;

@@ -6,6 +6,7 @@ use tonic::transport::Channel;
 use stitchd_proto::auth::v1::{
     auth_provider_service_client::AuthProviderServiceClient,
     auth_service_client::AuthServiceClient,
+    oidc_login_service_client::OidcLoginServiceClient,
 };
 use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
@@ -32,8 +33,11 @@ pub fn make_stub_state() -> Arc<GatewayState> {
     let auth_provider = AuthProviderServiceClient::new(
         Channel::from_static("http://127.0.0.1:7").connect_lazy(),
     );
+    let oidc_login = OidcLoginServiceClient::new(
+        Channel::from_static("http://127.0.0.1:8").connect_lazy(),
+    );
     Arc::new(GatewayState::from_channels(
-        auth, flag, seg, event, exp, mgmt, auth_provider,
+        auth, flag, seg, event, exp, mgmt, auth_provider, oidc_login,
     ))
 }
 

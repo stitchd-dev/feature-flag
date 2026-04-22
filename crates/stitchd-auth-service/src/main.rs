@@ -22,6 +22,8 @@ use stitchd_auth_service::{
     bootstrap::seed_superadmin,
     grpc::AuthServiceImpl,
     management::ManagementServiceImpl,
+    oidc_factory::OidcProviderFactory,
+    oidc_login::{LiveOidcExchanger, OidcLoginServiceImpl, OidcStateStore},
 };
 use stitchd_db::{
     AuthUserRepository, OrgMembershipRepository, OrganisationRepository, PgAuditLogger,
@@ -35,6 +37,7 @@ use stitchd_proto::{
     auth::v1::{
         auth_provider_service_server::AuthProviderServiceServer,
         auth_service_server::AuthServiceServer,
+        oidc_login_service_server::OidcLoginServiceServer,
     },
     management::v1::management_service_server::ManagementServiceServer,
 };
@@ -105,20 +108,35 @@ async fn main() -> anyhow::Result<()> {
         sdk_key_repo.clone(),
         membership_repo.clone(),
         org_repo.clone() as Arc<dyn OrganisationRepository>,
-        refresh_repo,
+        refresh_repo.clone(),
     );
     let mgmt_service = ManagementServiceImpl::new(
         org_repo,
         project_repo,
         env_repo,
         sdk_key_repo,
-        auth_user_repo,
-        membership_repo,
+        auth_user_repo.clone(),
+        membership_repo.clone(),
     );
     let auth_provider_service = AuthProviderServiceImpl::new(
-        auth_provider_repo,
+        auth_provider_repo.clone(),
+        Arc::clone(&crypto_key),
+        provider_caches.clone(),
+    );
+
+    let oidc_factory = Arc::new(OidcProviderFactory::new(
+        auth_provider_repo.clone() as Arc<dyn stitchd_db::AuthProviderRepository>,
         crypto_key,
-        provider_caches,
+    ));
+    let oidc_exchanger = Arc::new(LiveOidcExchanger::new(provider_caches, oidc_factory));
+    let oidc_state_store = Arc::new(OidcStateStore::new(std::time::Duration::from_secs(300)));
+    let oidc_login_service = OidcLoginServiceImpl::new(
+        oidc_exchanger,
+        oidc_state_store,
+        auth_user_repo,
+        membership_repo,
+        refresh_repo,
+        auth_provider_repo as Arc<dyn stitchd_db::AuthProviderRepository>,
     );
 
     let (health_reporter, health_service) = health_reporter();
@@ -136,6 +154,7 @@ async fn main() -> anyhow::Result<()> {
         .add_service(AuthServiceServer::new(auth_service))
         .add_service(ManagementServiceServer::new(mgmt_service))
         .add_service(AuthProviderServiceServer::new(auth_provider_service))
+        .add_service(OidcLoginServiceServer::new(oidc_login_service))
         .serve_with_shutdown(grpc_addr, async {
             signal::ctrl_c()
                 .await

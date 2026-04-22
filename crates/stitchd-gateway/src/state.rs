@@ -7,6 +7,7 @@ use tonic::transport::Channel;
 use stitchd_proto::auth::v1::{
     auth_provider_service_client::AuthProviderServiceClient,
     auth_service_client::AuthServiceClient,
+    oidc_login_service_client::OidcLoginServiceClient,
 };
 use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
@@ -31,6 +32,8 @@ pub struct GatewayState {
     pub management_client: Arc<Mutex<ManagementServiceClient<Channel>>>,
     /// Auth provider CRUD service gRPC client (hosted on the auth-service port).
     pub auth_provider_client: Arc<Mutex<AuthProviderServiceClient<Channel>>>,
+    /// OIDC login service gRPC client (hosted on the auth-service port).
+    pub oidc_login_client: Arc<Mutex<OidcLoginServiceClient<Channel>>>,
 }
 
 impl GatewayState {
@@ -57,11 +60,17 @@ impl GatewayState {
             .await
             .map_err(|e| anyhow::anyhow!("connect to Management Service: {e}"))?;
 
-        let auth_provider_channel = Channel::from_shared(auth_addr)
+        let auth_provider_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid Auth Provider Service URI: {e}"))?
             .connect()
             .await
             .map_err(|e| anyhow::anyhow!("connect to Auth Provider Service: {e}"))?;
+
+        let oidc_login_channel = Channel::from_shared(auth_addr)
+            .map_err(|e| anyhow::anyhow!("invalid OIDC Login Service URI: {e}"))?
+            .connect()
+            .await
+            .map_err(|e| anyhow::anyhow!("connect to OIDC Login Service: {e}"))?;
 
         let flag_channel = Channel::from_shared(flag_addr)
             .map_err(|e| anyhow::anyhow!("invalid Flag Service URI: {e}"))?
@@ -99,6 +108,9 @@ impl GatewayState {
             auth_provider_client: Arc::new(Mutex::new(AuthProviderServiceClient::new(
                 auth_provider_channel,
             ))),
+            oidc_login_client: Arc::new(Mutex::new(OidcLoginServiceClient::new(
+                oidc_login_channel,
+            ))),
         })
     }
 
@@ -112,6 +124,7 @@ impl GatewayState {
         experimentation_client: ExperimentationServiceClient<Channel>,
         management_client: ManagementServiceClient<Channel>,
         auth_provider_client: AuthProviderServiceClient<Channel>,
+        oidc_login_client: OidcLoginServiceClient<Channel>,
     ) -> Self {
         Self {
             auth_client: Arc::new(Mutex::new(auth_client)),
@@ -121,6 +134,7 @@ impl GatewayState {
             experimentation_client: Arc::new(Mutex::new(experimentation_client)),
             management_client: Arc::new(Mutex::new(management_client)),
             auth_provider_client: Arc::new(Mutex::new(auth_provider_client)),
+            oidc_login_client: Arc::new(Mutex::new(oidc_login_client)),
         }
     }
 }

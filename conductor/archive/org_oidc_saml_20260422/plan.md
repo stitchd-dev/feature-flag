@@ -39,40 +39,40 @@
 
 ## Phase 2: Provider Management gRPC Handlers & Gateway Routes
 
-- [ ] Task 1: Write failing tests for provider management gRPC handlers
+- [x] Task 1: Write failing tests for provider management gRPC handlers
   <!-- files: crates/stitchd-auth-service/src/management.rs -->
-  - [ ] Sub-task: `CreateProvider` OIDC — encrypts secret, persists, returns with ACS URL for SAML
-  - [ ] Sub-task: `CreateProvider` SAML — validates metadata URL or XML before persist
-  - [ ] Sub-task: `ListProviders` — returns correct org's providers; secrets absent
-  - [ ] Sub-task: `GetProvider` — secret field redacted
-  - [ ] Sub-task: `UpdateProvider` — repo updated, cache entry evicted
-  - [ ] Sub-task: `DeleteProvider` — last-enabled constraint enforced; cache evicted
-- [ ] Task 2: Add proto messages for provider management
+  - [x] Sub-task: `CreateProvider` OIDC — encrypts secret, persists, returns with ACS URL for SAML
+  - [x] Sub-task: `CreateProvider` SAML — validates metadata URL or XML before persist
+  - [x] Sub-task: `ListProviders` — returns correct org's providers; secrets absent
+  - [x] Sub-task: `GetProvider` — secret field redacted
+  - [x] Sub-task: `UpdateProvider` — repo updated, cache entry evicted
+  - [x] Sub-task: `DeleteProvider` — last-enabled constraint enforced; cache evicted
+- [x] Task 2: Add proto messages for provider management
   <!-- files: proto/auth/v1/management.proto, crates/stitchd-proto/src/lib.rs -->
-  - [ ] Sub-task: `OidcConfig`, `SamlConfig` config message types
-  - [ ] Sub-task: `AuthProviderResponse` (config redacted variant)
-  - [ ] Sub-task: `CreateAuthProviderRequest/Response`, `List/Get/Update/Delete` variants
-  - [ ] Sub-task: `GetSamlSpMetadataRequest/Response`
-  - [ ] Sub-task: Regenerate prost bindings (`cargo build -p stitchd-proto`)
-- [ ] Task 3: Implement gRPC handlers in `management.rs`
+  - [x] Sub-task: `OidcConfig`, `SamlConfig` config message types
+  - [x] Sub-task: `AuthProviderResponse` (config redacted variant)
+  - [x] Sub-task: `CreateAuthProviderRequest/Response`, `List/Get/Update/Delete` variants
+  - [x] Sub-task: `GetSamlSpMetadataRequest/Response`
+  - [x] Sub-task: Regenerate prost bindings (`cargo build -p stitchd-proto`)
+- [x] Task 3: Implement gRPC handlers in `management.rs`
   <!-- files: crates/stitchd-auth-service/src/management.rs -->
   <!-- depends: task1, task2 -->
-  - [ ] Sub-task: `create_auth_provider` — encrypt secret, repo create, return ACS URL
-  - [ ] Sub-task: `list_auth_providers` + `get_auth_provider` — repo read, redact secrets
-  - [ ] Sub-task: `update_auth_provider` — repo update + `cache.evict(id)`
-  - [ ] Sub-task: `delete_auth_provider` — repo delete + `cache.evict(id)`
-  - [ ] Sub-task: `get_saml_sp_metadata` — load provider from cache, emit SP XML
-- [ ] Task 4: Add gateway REST routes for provider management
+  - [x] Sub-task: `create_auth_provider` — encrypt secret, repo create, return ACS URL
+  - [x] Sub-task: `list_auth_providers` + `get_auth_provider` — repo read, redact secrets
+  - [x] Sub-task: `update_auth_provider` — repo update + `cache.evict(id)`
+  - [x] Sub-task: `delete_auth_provider` — repo delete + `cache.evict(id)`
+  - [x] Sub-task: `get_saml_sp_metadata` — load provider from cache, emit SP XML
+- [x] Task 4: Add gateway REST routes for provider management
   <!-- files: crates/stitchd-gateway/src/routes/auth_providers.rs -->
   <!-- depends: task3 -->
-  - [ ] Sub-task: `POST   /v1/orgs/{org_id}/auth-providers`
-  - [ ] Sub-task: `GET    /v1/orgs/{org_id}/auth-providers`
-  - [ ] Sub-task: `GET    /v1/orgs/{org_id}/auth-providers/{id}`
-  - [ ] Sub-task: `PUT    /v1/orgs/{org_id}/auth-providers/{id}`
-  - [ ] Sub-task: `DELETE /v1/orgs/{org_id}/auth-providers/{id}`
-  - [ ] Sub-task: `GET    /v1/orgs/{org_id}/auth-providers/{id}/saml/metadata`
-  - [ ] Sub-task: RBAC guard — Org Admin required for all management routes
-  - [ ] Sub-task: utoipa OpenAPI annotations
+  - [x] Sub-task: `POST   /v1/orgs/{org_id}/auth-providers`
+  - [x] Sub-task: `GET    /v1/orgs/{org_id}/auth-providers`
+  - [x] Sub-task: `GET    /v1/orgs/{org_id}/auth-providers/{id}`
+  - [x] Sub-task: `PUT    /v1/orgs/{org_id}/auth-providers/{id}`
+  - [x] Sub-task: `DELETE /v1/orgs/{org_id}/auth-providers/{id}`
+  - [x] Sub-task: `GET    /v1/orgs/{org_id}/auth-providers/{id}/saml/metadata`
+  - [x] Sub-task: RBAC guard — Org Admin required for all management routes
+  - [x] Sub-task: utoipa OpenAPI annotations
 - [ ] Task: Conductor - User Manual Verification 'Provider Management gRPC Handlers & Gateway Routes' (Protocol in workflow.md)
 
 ## Phase 3: OIDC Login Flow

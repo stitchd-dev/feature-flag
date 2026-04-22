@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package stitchd.auth.v1;
+
+// ─── OIDC authorize ───────────────────────────────────────────────────────────
+
+message OidcAuthorizeRequest {
+  // Exactly one of provider_id / org_id must be set.
+  oneof scope {
+    string provider_id = 1;
+    string org_id      = 2;
+  }
+  string redirect_uri = 3;
+}
+
+message OidcAuthorizeResponse {
+  // The URL to redirect the user-agent to.
+  string redirect_url = 1;
+}
+
+// ─── OIDC callback ────────────────────────────────────────────────────────────
+
+message OidcCallbackRequest {
+  string provider_id  = 1;
+  string code         = 2;
+  // CSRF state value returned by the IdP — must match a stored pending state.
+  string state        = 3;
+  string redirect_uri = 4;
+}
+
+message OidcCallbackResponse {
+  string access_token  = 1;
+  string refresh_token = 2;
+  int64  expires_in    = 3;
+  string user_id       = 4;
+  string org_id        = 5;
+}
+
+// ─── Service ──────────────────────────────────────────────────────────────────
+
+service OidcLoginService {
+  rpc OidcAuthorize(OidcAuthorizeRequest) returns (OidcAuthorizeResponse);
+  rpc OidcCallback(OidcCallbackRequest)  returns (OidcCallbackResponse);
+}
