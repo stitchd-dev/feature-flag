@@ -4,7 +4,10 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
-use stitchd_proto::auth::v1::auth_service_client::AuthServiceClient;
+use stitchd_proto::auth::v1::{
+    auth_provider_service_client::AuthProviderServiceClient,
+    auth_service_client::AuthServiceClient,
+};
 use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
@@ -26,6 +29,8 @@ pub struct GatewayState {
     pub experimentation_client: Arc<Mutex<ExperimentationServiceClient<Channel>>>,
     /// Management service gRPC client (hosted on the auth-service port).
     pub management_client: Arc<Mutex<ManagementServiceClient<Channel>>>,
+    /// Auth provider CRUD service gRPC client (hosted on the auth-service port).
+    pub auth_provider_client: Arc<Mutex<AuthProviderServiceClient<Channel>>>,
 }
 
 impl GatewayState {
@@ -46,11 +51,17 @@ impl GatewayState {
             .await
             .map_err(|e| anyhow::anyhow!("connect to Auth Service: {e}"))?;
 
-        let mgmt_channel = Channel::from_shared(auth_addr)
+        let mgmt_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid Management Service URI: {e}"))?
             .connect()
             .await
             .map_err(|e| anyhow::anyhow!("connect to Management Service: {e}"))?;
+
+        let auth_provider_channel = Channel::from_shared(auth_addr)
+            .map_err(|e| anyhow::anyhow!("invalid Auth Provider Service URI: {e}"))?
+            .connect()
+            .await
+            .map_err(|e| anyhow::anyhow!("connect to Auth Provider Service: {e}"))?;
 
         let flag_channel = Channel::from_shared(flag_addr)
             .map_err(|e| anyhow::anyhow!("invalid Flag Service URI: {e}"))?
@@ -85,6 +96,9 @@ impl GatewayState {
                 exp_channel,
             ))),
             management_client: Arc::new(Mutex::new(ManagementServiceClient::new(mgmt_channel))),
+            auth_provider_client: Arc::new(Mutex::new(AuthProviderServiceClient::new(
+                auth_provider_channel,
+            ))),
         })
     }
 
@@ -97,6 +111,7 @@ impl GatewayState {
         event_client: EventIngestionServiceClient<Channel>,
         experimentation_client: ExperimentationServiceClient<Channel>,
         management_client: ManagementServiceClient<Channel>,
+        auth_provider_client: AuthProviderServiceClient<Channel>,
     ) -> Self {
         Self {
             auth_client: Arc::new(Mutex::new(auth_client)),
@@ -105,6 +120,7 @@ impl GatewayState {
             event_client: Arc::new(Mutex::new(event_client)),
             experimentation_client: Arc::new(Mutex::new(experimentation_client)),
             management_client: Arc::new(Mutex::new(management_client)),
+            auth_provider_client: Arc::new(Mutex::new(auth_provider_client)),
         }
     }
 }

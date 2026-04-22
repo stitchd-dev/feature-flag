@@ -18,7 +18,7 @@ use axum::{
 };
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
-use crate::routes::{admin, auth, events, experiments, flags, management, sdk, segments};
+use crate::routes::{admin, auth, auth_providers, events, experiments, flags, management, sdk, segments};
 use crate::state::GatewayState;
 
 /// Build the full gateway `Router`.
@@ -157,6 +157,29 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
+            Arc::clone(&auth_client),
+            auth_middleware,
+        ));
+
+    // ── Auth-provider management routes (JWT + non-system-org) ───────────────
+    let auth_provider_routes = Router::new()
+        .route(
+            "/v1/orgs/{org_id}/auth-providers",
+            get(auth_providers::list_auth_providers).post(auth_providers::create_auth_provider),
+        )
+        .route(
+            "/v1/orgs/{org_id}/auth-providers/{id}",
+            get(auth_providers::get_auth_provider)
+                .put(auth_providers::update_auth_provider)
+                .delete(auth_providers::delete_auth_provider),
+        )
+        .route(
+            "/v1/orgs/{org_id}/auth-providers/{id}/saml/metadata",
+            get(auth_providers::get_saml_sp_metadata),
+        )
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn(require_non_system_org))
+        .layer(middleware::from_fn_with_state(
             auth_client,
             auth_middleware,
         ));
@@ -167,6 +190,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .merge(mgmt_routes)
         .merge(sdk_routes)
         .merge(resource_routes)
+        .merge(auth_provider_routes)
 }
 
 #[cfg(test)]
@@ -258,6 +282,21 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn auth_providers_without_auth_returns_401() {
+        let app = build_router(make_stub_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/orgs/org-1/auth-providers")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

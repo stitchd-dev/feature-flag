@@ -14,6 +14,7 @@
 #![warn(clippy::pedantic, clippy::nursery)]
 
 pub mod app_state;
+pub mod auth_provider;
 pub mod bootstrap;
 pub mod grpc;
 pub mod jwt;

@@ -18,6 +18,7 @@ use tracing::info;
 
 use stitchd_auth_service::{
     app_state::ProviderCaches,
+    auth_provider::AuthProviderServiceImpl,
     bootstrap::seed_superadmin,
     grpc::AuthServiceImpl,
     management::ManagementServiceImpl,
@@ -28,8 +29,13 @@ use stitchd_db::{
     PgOrganisationRepository, PgProjectRepository, PgRefreshTokenRepository, PgSdkKeyRepository,
     RefreshTokenRepository,
 };
+use stitchd_core::auth::CryptoKey;
+use stitchd_db::PgAuthProviderRepository;
 use stitchd_proto::{
-    auth::v1::auth_service_server::AuthServiceServer,
+    auth::v1::{
+        auth_provider_service_server::AuthProviderServiceServer,
+        auth_service_server::AuthServiceServer,
+    },
     management::v1::management_service_server::ManagementServiceServer,
 };
 
@@ -76,7 +82,9 @@ async fn main() -> anyhow::Result<()> {
     let env_repo = Arc::new(PgEnvironmentRepository::new(pool.clone(), audit.clone()));
 
     // Provider caches — zero providers loaded at startup; built lazily on first login.
-    let _provider_caches = Arc::new(ProviderCaches::from_env());
+    let provider_caches = Arc::new(ProviderCaches::from_env());
+    let auth_provider_repo = Arc::new(PgAuthProviderRepository::new(pool.clone()));
+    let crypto_key = Arc::new(CryptoKey::from_env().expect("AUTH_ENCRYPTION_KEY must be set"));
 
     // Bootstrap superadmin if configured.
     seed_superadmin(
@@ -107,6 +115,11 @@ async fn main() -> anyhow::Result<()> {
         auth_user_repo,
         membership_repo,
     );
+    let auth_provider_service = AuthProviderServiceImpl::new(
+        auth_provider_repo,
+        crypto_key,
+        provider_caches,
+    );
 
     let (health_reporter, health_service) = health_reporter();
     health_reporter
@@ -122,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
         .add_service(health_service)
         .add_service(AuthServiceServer::new(auth_service))
         .add_service(ManagementServiceServer::new(mgmt_service))
+        .add_service(AuthProviderServiceServer::new(auth_provider_service))
         .serve_with_shutdown(grpc_addr, async {
             signal::ctrl_c()
                 .await

@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package stitchd.auth.v1;
+
+// ─── Shared config types ──────────────────────────────────────────────────────
+
+message OidcConfig {
+  string issuer_url    = 1;
+  string client_id     = 2;
+  // Plaintext on create/update; redacted (empty) on read.
+  string client_secret = 3;
+  repeated string scopes = 4;
+}
+
+message SamlConfig {
+  // Exactly one of the following must be set.
+  string idp_metadata_url = 1;
+  string idp_metadata_xml = 2;
+  string name_id_format   = 3;
+  string sp_entity_id     = 4;
+}
+
+// ─── Provider response ────────────────────────────────────────────────────────
+
+// A redacted provider record (secrets never returned in read responses).
+message AuthProviderResponse {
+  string   id           = 1;
+  string   org_id       = 2;
+  string   provider_type = 3;  // "oidc" | "saml"
+  string   display_name = 4;
+  bool     enabled      = 5;
+  string   created_at   = 6;  // RFC3339
+  string   updated_at   = 7;  // RFC3339
+  // ACS URL is returned on create for SAML providers.
+  string   acs_url      = 8;
+
+  oneof config {
+    OidcConfig oidc = 10;
+    SamlConfig saml = 11;
+  }
+}
+
+// ─── Create ───────────────────────────────────────────────────────────────────
+
+message CreateAuthProviderRequest {
+  string org_id       = 1;
+  string display_name = 2;
+  bool   enabled      = 3;
+
+  oneof config {
+    OidcConfig oidc = 10;
+    SamlConfig saml = 11;
+  }
+}
+
+message CreateAuthProviderResponse {
+  AuthProviderResponse provider = 1;
+}
+
+// ─── List ─────────────────────────────────────────────────────────────────────
+
+message ListAuthProvidersRequest {
+  string org_id = 1;
+}
+
+message ListAuthProvidersResponse {
+  repeated AuthProviderResponse providers = 1;
+}
+
+// ─── Get ──────────────────────────────────────────────────────────────────────
+
+message GetAuthProviderRequest {
+  string provider_id = 1;
+}
+
+message GetAuthProviderResponse {
+  AuthProviderResponse provider = 1;
+}
+
+// ─── Update ───────────────────────────────────────────────────────────────────
+
+message UpdateAuthProviderRequest {
+  string provider_id  = 1;
+  string display_name = 2;
+  bool   enabled      = 3;
+
+  oneof config {
+    OidcConfig oidc = 10;
+    SamlConfig saml = 11;
+  }
+}
+
+message UpdateAuthProviderResponse {
+  AuthProviderResponse provider = 1;
+}
+
+// ─── Delete ───────────────────────────────────────────────────────────────────
+
+message DeleteAuthProviderRequest {
+  string provider_id = 1;
+}
+
+message DeleteAuthProviderResponse {}
+
+// ─── SP Metadata ─────────────────────────────────────────────────────────────
+
+message GetSamlSpMetadataRequest {
+  string provider_id = 1;
+}
+
+message GetSamlSpMetadataResponse {
+  // Well-formed SAML SP EntityDescriptor XML.
+  string xml = 1;
+}
+
+// ─── Service ─────────────────────────────────────────────────────────────────
+
+service AuthProviderService {
+  rpc CreateAuthProvider(CreateAuthProviderRequest)
+      returns (CreateAuthProviderResponse);
+  rpc ListAuthProviders(ListAuthProvidersRequest)
+      returns (ListAuthProvidersResponse);
+  rpc GetAuthProvider(GetAuthProviderRequest)
+      returns (GetAuthProviderResponse);
+  rpc UpdateAuthProvider(UpdateAuthProviderRequest)
+      returns (UpdateAuthProviderResponse);
+  rpc DeleteAuthProvider(DeleteAuthProviderRequest)
+      returns (DeleteAuthProviderResponse);
+  rpc GetSamlSpMetadata(GetSamlSpMetadataRequest)
+      returns (GetSamlSpMetadataResponse);
+}

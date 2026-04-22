@@ -3,7 +3,10 @@
 use std::sync::Arc;
 use tonic::transport::Channel;
 
-use stitchd_proto::auth::v1::auth_service_client::AuthServiceClient;
+use stitchd_proto::auth::v1::{
+    auth_provider_service_client::AuthProviderServiceClient,
+    auth_service_client::AuthServiceClient,
+};
 use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
@@ -26,8 +29,11 @@ pub fn make_stub_state() -> Arc<GatewayState> {
     );
     let mgmt =
         ManagementServiceClient::new(Channel::from_static("http://127.0.0.1:6").connect_lazy());
+    let auth_provider = AuthProviderServiceClient::new(
+        Channel::from_static("http://127.0.0.1:7").connect_lazy(),
+    );
     Arc::new(GatewayState::from_channels(
-        auth, flag, seg, event, exp, mgmt,
+        auth, flag, seg, event, exp, mgmt, auth_provider,
     ))
 }
 
