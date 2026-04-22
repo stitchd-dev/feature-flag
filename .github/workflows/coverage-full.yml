@@ -36,34 +36,25 @@ jobs:
         with:
           tool: cargo-tarpaulin
 
-      - name: Run coverage for every workspace crate
+      - name: Run tests + coverage — all crates
         run: |
           mkdir -p coverage
-
-          CRATES=(
-            stitchd-core
-            stitchd-db
-            stitchd-events
-            stitchd-sdk
-            stitchd-gateway
-            stitchd-auth-service
-            stitchd-flag-service
-            stitchd-event-service
-            stitchd-experimentation-service
-            stitchd-segmentation-service
-          )
-
-          for crate in "${CRATES[@]}"; do
-            echo "── coverage: $crate ──"
-            mkdir -p "coverage/$crate"
-            cargo tarpaulin \
-              -p "$crate" \
-              --timeout 180 \
-              --out Xml \
-              --output-dir "coverage/$crate/" \
-              --exclude-files "crates/stitchd-proto/*" \
-              --exclude-files "crates/xtask/*"
-          done
+          cargo tarpaulin \
+            -p stitchd-core \
+            -p stitchd-db \
+            -p stitchd-events \
+            -p stitchd-sdk \
+            -p stitchd-gateway \
+            -p stitchd-auth-service \
+            -p stitchd-flag-service \
+            -p stitchd-event-service \
+            -p stitchd-experimentation-service \
+            -p stitchd-segmentation-service \
+            --timeout 180 \
+            --out Xml \
+            --output-dir coverage/ \
+            --exclude-files "crates/stitchd-proto/*" \
+            --exclude-files "crates/xtask/*"
 
       - name: Upload all crate coverage to Codecov
         env:
@@ -71,33 +62,33 @@ jobs:
         run: |
           curl -Os https://uploader.codecov.io/latest/linux/codecov
           chmod +x codecov
-
-          CRATES=(
-            stitchd-core
-            stitchd-db
-            stitchd-events
-            stitchd-sdk
-            stitchd-gateway
-            stitchd-auth-service
-            stitchd-flag-service
-            stitchd-event-service
-            stitchd-experimentation-service
+          xml="coverage/cobertura.xml"
+          if [ ! -f "$xml" ]; then
+            echo "No coverage report generated — skipping upload"
+            exit 1
+          fi
+          # Upload the combined XML once per crate flag.
+          # codecov.yml's per-flag `paths:` scoping ensures each flag only
+          # counts lines from its own crate directory.
+          for crate in \
+            stitchd-core \
+            stitchd-db \
+            stitchd-events \
+            stitchd-sdk \
+            stitchd-gateway \
+            stitchd-auth-service \
+            stitchd-flag-service \
+            stitchd-event-service \
+            stitchd-experimentation-service \
             stitchd-segmentation-service
-          )
-
-          for crate in "${CRATES[@]}"; do
-            xml="coverage/$crate/cobertura.xml"
-            if [ -f "$xml" ]; then
-              echo "── uploading: $crate (flag=$crate) ──"
-              ./codecov \
-                --token="$CODECOV_TOKEN" \
-                --slug="$GITHUB_REPOSITORY" \
-                --file="$xml" \
-                --flag="$crate" \
-                --fail-on-error
-            else
-              echo "── skipping: $crate (no cobertura.xml — no tests?) ──"
-            fi
+          do
+            echo "── uploading: $crate (flag=$crate) ──"
+            ./codecov \
+              --token="$CODECOV_TOKEN" \
+              --slug="$GITHUB_REPOSITORY" \
+              --file="$xml" \
+              --flag="$crate" \
+              --fail-on-error
           done
 
       - name: Upload coverage reports as artifact
