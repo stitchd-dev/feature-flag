@@ -175,9 +175,10 @@ fn build_grpc_readme(chapters: &[(String, String)]) -> String {
 
     // Domain groups: Auth & Identity
     md.push_str("## Auth & Identity\n\n");
-    for (file, title) in chapters.iter().filter(|(f, _)| {
-        f.starts_with("auth_") || f.starts_with("management_")
-    }) {
+    for (file, title) in chapters
+        .iter()
+        .filter(|(f, _)| f.starts_with("auth_") || f.starts_with("management_"))
+    {
         md.push_str(&format!("- [{}]({})\n", title, file));
     }
     md.push('\n');
