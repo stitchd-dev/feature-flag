@@ -3,6 +3,7 @@
 use axum::{Json, extract::State, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use stitchd_proto::auth::v1::LoginRequest;
 
@@ -11,14 +12,14 @@ use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct LoginBody {
     pub email: String,
     pub password: String,
     pub org_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct LoginJson {
     pub access_token: String,
     pub refresh_token: String,
@@ -30,6 +31,17 @@ pub struct LoginJson {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// `POST /v1/auth/login`
+#[utoipa::path(
+    post,
+    path = "/v1/auth/login",
+    tag = "auth",
+    request_body = LoginBody,
+    responses(
+        (status = 200, description = "Login successful", body = LoginJson),
+        (status = 401, description = "Invalid credentials"),
+        (status = 502, description = "Auth service unavailable"),
+    )
+)]
 pub async fn login(
     State(state): State<Arc<GatewayState>>,
     Json(body): Json<LoginBody>,

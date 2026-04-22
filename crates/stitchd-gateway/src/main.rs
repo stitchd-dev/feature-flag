@@ -15,7 +15,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::signal;
 use tracing::info;
 
-use stitchd_gateway::{router::build_router, state::GatewayState};
+use stitchd_gateway::{openapi::export_to_file, router::build_router, state::GatewayState};
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
@@ -23,6 +23,17 @@ fn env_or(key: &str, default: &str) -> String {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Handle `--export-openapi <path>` before any server setup.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--export-openapi") {
+        let path = args.get(pos + 1).map(String::as_str).unwrap_or_else(|| {
+            eprintln!("error: --export-openapi requires a path argument");
+            std::process::exit(1);
+        });
+        export_to_file(path);
+        return Ok(());
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

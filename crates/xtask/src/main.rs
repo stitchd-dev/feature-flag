@@ -91,29 +91,52 @@ fn generate_grpc_docs(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Replace the `# gRPC / Protobuf Reference` section in SUMMARY.md with
-/// one entry per generated chapter file so each appears in the sidebar.
+/// Replace the `# Internal gRPC Services` section in SUMMARY.md with
+/// domain-grouped entries (Auth & Identity, Flag & Segmentation, Events & Experimentation).
 fn patch_summary_grpc(root: &Path, chapters: &[(String, String)]) -> Result<()> {
     let summary_path = root.join("docs/src/SUMMARY.md");
     let content =
         std::fs::read_to_string(&summary_path).context("failed to read docs/src/SUMMARY.md")?;
 
-    // Build the replacement gRPC section
-    let mut new_section = String::from("# gRPC / Protobuf Reference\n\n");
+    // Categorise chapters by domain prefix
+    let mut auth_identity: Vec<&(String, String)> = Vec::new();
+    let mut flag_segmentation: Vec<&(String, String)> = Vec::new();
+    let mut events_experimentation: Vec<&(String, String)> = Vec::new();
+
+    for chapter in chapters {
+        let file = &chapter.0;
+        if file.starts_with("auth_") || file.starts_with("management_") {
+            auth_identity.push(chapter);
+        } else if file.starts_with("flags_")
+            || file.starts_with("segments_")
+            || file.starts_with("common_")
+        {
+            flag_segmentation.push(chapter);
+        } else {
+            // events_, experiments_, and anything else
+            events_experimentation.push(chapter);
+        }
+    }
+
+    // Build the replacement section — domain-ordered flat list under the README
+    let mut new_section = String::from("# Internal gRPC Services\n\n");
     new_section.push_str("- [gRPC Services](./grpc/README.md)\n");
-    for (file, title) in chapters {
+    for (file, title) in auth_identity
+        .iter()
+        .chain(flag_segmentation.iter())
+        .chain(events_experimentation.iter())
+    {
         new_section.push_str(&format!("  - [{title}](./grpc/{file})\n"));
     }
     new_section.push('\n'); // blank line before next section
 
-    // Locate the gRPC section by its heading and replace until the next `#` heading
-    let grpc_heading = "# gRPC / Protobuf Reference";
+    // Locate the section by its heading and replace until the next `#` heading
+    let grpc_heading = "# Internal gRPC Services";
     if let Some(start) = content.find(grpc_heading) {
-        // Find the next top-level heading after this one
         let after = &content[start + grpc_heading.len()..];
         let end_offset = after
             .find("\n# ")
-            .map(|p| start + grpc_heading.len() + p + 1) // keep the newline before next `#`
+            .map(|p| start + grpc_heading.len() + p + 1)
             .unwrap_or(content.len());
 
         let new_content = format!(
@@ -146,13 +169,40 @@ fn collect_proto_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
 
 fn build_grpc_readme(chapters: &[(String, String)]) -> String {
     let mut md = String::new();
-    md.push_str("# gRPC / Protobuf Reference\n\n");
+    md.push_str("# Internal gRPC Services\n\n");
     md.push_str("Auto-generated from `.proto` files in the `proto/` directory.\n");
     md.push_str("Run `cargo xtask docs` to regenerate.\n\n");
-    md.push_str("## Services & Messages\n\n");
-    for (file, title) in chapters {
+
+    // Domain groups: Auth & Identity
+    md.push_str("## Auth & Identity\n\n");
+    for (file, title) in chapters.iter().filter(|(f, _)| {
+        f.starts_with("auth_") || f.starts_with("management_")
+    }) {
         md.push_str(&format!("- [{}]({})\n", title, file));
     }
+    md.push('\n');
+
+    // Flag & Segmentation
+    md.push_str("## Flag & Segmentation\n\n");
+    for (file, title) in chapters.iter().filter(|(f, _)| {
+        f.starts_with("flags_") || f.starts_with("segments_") || f.starts_with("common_")
+    }) {
+        md.push_str(&format!("- [{}]({})\n", title, file));
+    }
+    md.push('\n');
+
+    // Events & Experimentation
+    md.push_str("## Events & Experimentation\n\n");
+    for (file, title) in chapters.iter().filter(|(f, _)| {
+        !f.starts_with("auth_")
+            && !f.starts_with("management_")
+            && !f.starts_with("flags_")
+            && !f.starts_with("segments_")
+            && !f.starts_with("common_")
+    }) {
+        md.push_str(&format!("- [{}]({})\n", title, file));
+    }
+
     md
 }
 
@@ -468,19 +518,19 @@ fn export_openapi(root: &Path) -> Result<()> {
 
     println!("Exporting OpenAPI JSON → {}", out_path.display());
 
-    // Build the server binary first (no-op if already up to date).
+    // Build the gateway binary first (no-op if already up to date).
     let build_status = Command::new("cargo")
-        .args(["build", "-p", "stitchd-server"])
+        .args(["build", "-p", "stitchd-gateway"])
         .current_dir(root)
         .status()
-        .context("failed to run `cargo build -p stitchd-server`")?;
+        .context("failed to run `cargo build -p stitchd-gateway`")?;
     anyhow::ensure!(
         build_status.success(),
         "`cargo build` exited with {build_status}"
     );
 
     // Run the binary with --export-openapi <path>.
-    let binary = root.join("target/debug/stitchd-server");
+    let binary = root.join("target/debug/stitchd-gateway");
     let export_status = Command::new(&binary)
         .args(["--export-openapi", out_path.to_str().unwrap()])
         .current_dir(root)
@@ -488,7 +538,7 @@ fn export_openapi(root: &Path) -> Result<()> {
         .with_context(|| format!("failed to run `{}`", binary.display()))?;
     anyhow::ensure!(
         export_status.success(),
-        "`stitchd-server --export-openapi` exited with {export_status}"
+        "`stitchd-gateway --export-openapi` exited with {export_status}"
     );
 
     Ok(())

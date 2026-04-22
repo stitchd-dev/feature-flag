@@ -15,6 +15,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest};
 
@@ -23,18 +24,18 @@ use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateOrgBody {
     pub name: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct OrgJson {
     pub org_id: String,
     pub org_name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SeedUserBody {
     pub email: String,
     pub display_name: String,
@@ -42,7 +43,7 @@ pub struct SeedUserBody {
     pub org_role: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct UserJson {
     pub user_id: String,
     pub email: String,
@@ -52,6 +53,19 @@ pub struct UserJson {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// `POST /v1/admin/orgs`
+#[utoipa::path(
+    post,
+    path = "/v1/admin/orgs",
+    tag = "admin",
+    request_body = CreateOrgBody,
+    responses(
+        (status = 201, description = "Organisation created", body = OrgJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — caller is not a system-org member"),
+        (status = 502, description = "Management service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_org(
     State(state): State<Arc<GatewayState>>,
     Json(body): Json<CreateOrgBody>,
@@ -70,6 +84,20 @@ pub async fn create_org(
 }
 
 /// `POST /v1/admin/orgs/{org_id}/users` — seed the first user into a newly created org.
+#[utoipa::path(
+    post,
+    path = "/v1/admin/orgs/{org_id}/users",
+    tag = "admin",
+    params(("org_id" = String, Path, description = "Organisation ID")),
+    request_body = SeedUserBody,
+    responses(
+        (status = 201, description = "User seeded", body = UserJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — caller is not a system-org member"),
+        (status = 502, description = "Management service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn seed_user(
     State(state): State<Arc<GatewayState>>,
     Path(org_id): Path<String>,

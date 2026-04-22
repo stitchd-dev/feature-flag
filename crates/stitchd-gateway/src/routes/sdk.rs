@@ -11,6 +11,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use stitchd_proto::events::v1::{
     Event, IngestRequest, MetricValue, metric_value::Value as MetricVal,
@@ -22,40 +23,41 @@ use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct EvaluateRequest {
     pub context_key: String,
     pub context_type: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct EvaluateResponse {
     pub evaluated: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SdkEventBody {
     pub metric_key: String,
     pub context_key: String,
     pub context_type: String,
+    #[schema(value_type = Object, nullable = true)]
     pub value: Option<serde_json::Value>,
     pub timestamp_ms: Option<i64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct IngestResponseJson {
     pub accepted_count: u32,
     pub rejected_keys: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ListCheckRequest {
     pub segment_key: String,
     pub context_key: String,
     pub context_type: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ListCheckResponse {
     pub is_member: bool,
 }
@@ -90,6 +92,18 @@ fn sdk_event_to_proto(body: &SdkEventBody) -> Event {
 /// `POST /v1/environments/{env_id}/evaluate`
 ///
 /// Flag evaluation endpoint for SDK clients. Returns a simple evaluated flag result.
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/evaluate",
+    tag = "flags",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body = EvaluateRequest,
+    responses(
+        (status = 200, description = "Evaluation result", body = EvaluateResponse),
+        (status = 401, description = "Invalid or missing SDK key"),
+    ),
+    security(("sdk_key" = []))
+)]
 pub async fn evaluate(
     State(_state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
@@ -101,6 +115,19 @@ pub async fn evaluate(
 }
 
 /// `POST /v1/environments/{env_id}/events`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/events",
+    tag = "events",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body = SdkEventBody,
+    responses(
+        (status = 202, description = "Event accepted", body = IngestResponseJson),
+        (status = 401, description = "Invalid or missing SDK key"),
+        (status = 502, description = "Event service unavailable"),
+    ),
+    security(("sdk_key" = []))
+)]
 pub async fn ingest_event(
     State(state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
@@ -123,6 +150,19 @@ pub async fn ingest_event(
 }
 
 /// `POST /v1/environments/{env_id}/events/batch`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/events/batch",
+    tag = "events",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body(content = Vec<SdkEventBody>, description = "Batch of events"),
+    responses(
+        (status = 202, description = "Events accepted", body = IngestResponseJson),
+        (status = 401, description = "Invalid or missing SDK key"),
+        (status = 502, description = "Event service unavailable"),
+    ),
+    security(("sdk_key" = []))
+)]
 pub async fn ingest_batch_events(
     State(state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
@@ -143,6 +183,19 @@ pub async fn ingest_batch_events(
 }
 
 /// `POST /v1/environments/{env_id}/segments/list-check`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/segments/list-check",
+    tag = "segments",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body = ListCheckRequest,
+    responses(
+        (status = 200, description = "Membership result", body = ListCheckResponse),
+        (status = 401, description = "Invalid or missing SDK key"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("sdk_key" = []))
+)]
 pub async fn list_check_membership(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<String>,
@@ -165,6 +218,19 @@ pub async fn list_check_membership(
 }
 
 /// `POST /v1/environments/{env_id}/segments/list-check/batch`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/segments/list-check/batch",
+    tag = "segments",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body(content = Vec<ListCheckRequest>, description = "Batch of membership checks"),
+    responses(
+        (status = 200, description = "Membership results", body = Vec<ListCheckResponse>),
+        (status = 401, description = "Invalid or missing SDK key"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("sdk_key" = []))
+)]
 pub async fn batch_list_check_membership(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<String>,

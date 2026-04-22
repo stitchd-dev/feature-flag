@@ -8,6 +8,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use utoipa::ToSchema;
 
 use stitchd_proto::segments::v1::{
     GetSegmentRequest, ListSegmentsRequest, MutateSegmentRequest, SegmentMutationKind,
@@ -18,22 +19,35 @@ use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct SegmentCreateRequest {
     pub key: Option<String>,
     pub context_type: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SegmentJson {
     pub key: String,
     pub context_type: String,
+    #[schema(value_type = String)]
     pub kind: &'static str,
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 /// `GET /v1/environments/{env_id}/segments`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/segments",
+    tag = "segments",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    responses(
+        (status = 200, description = "List of segments", body = Vec<SegmentJson>),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn list_segments(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<String>,
@@ -67,6 +81,19 @@ pub async fn list_segments(
 }
 
 /// `POST /v1/environments/{env_id}/segments`
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{env_id}/segments",
+    tag = "segments",
+    params(("env_id" = String, Path, description = "Environment ID")),
+    request_body = SegmentCreateRequest,
+    responses(
+        (status = 201, description = "Segment created", body = SegmentJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn create_segment(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<String>,
@@ -117,6 +144,22 @@ pub async fn create_segment(
 }
 
 /// `GET /v1/environments/{env_id}/segments/{segment_key}`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{env_id}/segments/{segment_id}",
+    tag = "segments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("segment_id" = String, Path, description = "Segment key"),
+    ),
+    responses(
+        (status = 200, description = "Segment", body = SegmentJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Segment not found"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn get_segment(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, segment_key)): Path<(String, String)>,
@@ -148,6 +191,22 @@ pub async fn get_segment(
 }
 
 /// `PUT /v1/environments/{env_id}/segments/{segment_key}`
+#[utoipa::path(
+    put,
+    path = "/v1/environments/{env_id}/segments/{segment_id}",
+    tag = "segments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("segment_id" = String, Path, description = "Segment key"),
+    ),
+    request_body = SegmentCreateRequest,
+    responses(
+        (status = 200, description = "Updated segment", body = SegmentJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn update_segment(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, segment_key)): Path<(String, String)>,
@@ -198,6 +257,21 @@ pub async fn update_segment(
 }
 
 /// `DELETE /v1/environments/{env_id}/segments/{segment_key}`
+#[utoipa::path(
+    delete,
+    path = "/v1/environments/{env_id}/segments/{segment_id}",
+    tag = "segments",
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+        ("segment_id" = String, Path, description = "Segment key"),
+    ),
+    responses(
+        (status = 204, description = "Segment deleted"),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
 pub async fn delete_segment(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, segment_key)): Path<(String, String)>,
