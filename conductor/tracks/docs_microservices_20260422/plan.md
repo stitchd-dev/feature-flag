@@ -90,7 +90,7 @@
   <!-- files: docs/src/gateway/openapi.md -->
   <!-- depends: task1 -->
 
-- [ ] Task: Conductor - User Manual Verification 'SUMMARY.md Restructure & Gateway Doc Pages' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'SUMMARY.md Restructure & Gateway Doc Pages' (Protocol in workflow.md)
 
 ## Phase 4: Service Coordination Flows
 <!-- execution: sequential -->
@@ -107,7 +107,7 @@
   - (already included in Phase 3 SUMMARY restructure under `# Service Coordination Flows`)
   <!-- files: docs/src/SUMMARY.md -->
 
-- [ ] Task: Conductor - User Manual Verification 'Service Coordination Flows' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Service Coordination Flows' (Protocol in workflow.md)
 
 ## Phase 5: Internal gRPC Service Pages
 <!-- execution: parallel -->
@@ -142,7 +142,7 @@
   <!-- files: docs/src/internal/events-experimentation/experimentation-service.md -->
   <!-- depends: task1 -->
 
-- [ ] Task: Conductor - User Manual Verification 'Internal gRPC Service Pages' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Internal gRPC Service Pages' (Protocol in workflow.md)
 
 ## Phase 6: Final Build Verification
 <!-- depends: phase3, phase4, phase5 -->
@@ -156,4 +156,4 @@
   - All sections present: gateway/, internal/auth/, internal/flag-segmentation/,
     internal/events-experimentation/, architecture/service-flows.html
 
-- [ ] Task: Conductor - User Manual Verification 'Final Build Verification' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Final Build Verification' (Protocol in workflow.md)
