@@ -113,32 +113,32 @@
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task 1: Create domain-grouped directory structure under `docs/src/internal/`
-  - [ ] `docs/src/internal/auth/`, `docs/src/internal/flag-segmentation/`, `docs/src/internal/events-experimentation/`
+- [x] Task 1: Create domain-grouped directory structure under `docs/src/internal/`
+  - [x] `docs/src/internal/auth/`, `docs/src/internal/flag-segmentation/`, `docs/src/internal/events-experimentation/`
   <!-- files: docs/src/internal/ -->
 
-- [ ] Task 2: Write Auth & Identity page — `stitchd-auth-service`
-  - [ ] Responsibility, port, all RPCs, key message fields, auth requirements
+- [x] Task 2: Write Auth & Identity page — `stitchd-auth-service`
+  - [x] Responsibility, port, all RPCs, key message fields, auth requirements
   <!-- files: docs/src/internal/auth/auth-service.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 3: Write Flag service page — `stitchd-flag-service`
-  - [ ] Responsibility, port, all RPCs, key message fields, auth requirements
+- [x] Task 3: Write Flag service page — `stitchd-flag-service`
+  - [x] Responsibility, port, all RPCs, key message fields, auth requirements
   <!-- files: docs/src/internal/flag-segmentation/flag-service.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 4: Write Segmentation service page — `stitchd-segmentation-service`
-  - [ ] Responsibility, port, all RPCs, key message fields, auth requirements
+- [x] Task 4: Write Segmentation service page — `stitchd-segmentation-service`
+  - [x] Responsibility, port, all RPCs, key message fields, auth requirements
   <!-- files: docs/src/internal/flag-segmentation/segmentation-service.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 5: Write Event service page — `stitchd-event-service`
-  - [ ] Responsibility, port, all RPCs, key message fields, auth requirements
+- [x] Task 5: Write Event service page — `stitchd-event-service`
+  - [x] Responsibility, port, all RPCs, key message fields, auth requirements
   <!-- files: docs/src/internal/events-experimentation/event-service.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 6: Write Experimentation service page — `stitchd-experimentation-service`
-  - [ ] Responsibility, port, all RPCs, key message fields, auth requirements
+- [x] Task 6: Write Experimentation service page — `stitchd-experimentation-service`
+  - [x] Responsibility, port, all RPCs, key message fields, auth requirements
   <!-- files: docs/src/internal/events-experimentation/experimentation-service.md -->
   <!-- depends: task1 -->
 
