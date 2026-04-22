@@ -4,17 +4,31 @@
 
 ---
 
-# REST API Reference
+# Public / Gateway Endpoints
 
-- [REST API](./api/rest.md)
+- [Overview](./gateway/overview.md)
+- [SDK APIs](./gateway/sdk-api.md)
+- [Gateway gRPC](./gateway/grpc.md)
+- [Human JWT APIs](./gateway/admin-api.md)
+- [OpenAPI Spec](./gateway/openapi.md)
 
-# gRPC / Protobuf Reference
+# Internal gRPC Services
 
 - [gRPC Services](./grpc/README.md)
-  - [Context](./grpc/common_v1_context.md)
-  - [Event](./grpc/events_v1_event.md)
+  - [Auth Service](./grpc/auth_v1_auth_service.md)
+  - [Management Service](./grpc/management_v1_management_service.md)
+  - [Flag Service](./grpc/flags_v1_flag_service.md)
   - [Flag Sync](./grpc/flags_v1_flag_sync.md)
+  - [Common Context](./grpc/common_v1_context.md)
   - [Segment](./grpc/segments_v1_segment.md)
+  - [Segmentation Service](./grpc/segments_v1_segmentation_service.md)
+  - [Event](./grpc/events_v1_event.md)
+  - [Event Service](./grpc/events_v1_event_service.md)
+  - [Experimentation Service](./grpc/experiments_v1_experimentation_service.md)
+
+# Service Coordination Flows
+
+- [Service Flows](./architecture/service-flows.md)
 
 # Rust SDK
 

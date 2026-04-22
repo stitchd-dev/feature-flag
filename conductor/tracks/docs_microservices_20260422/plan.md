@@ -42,51 +42,51 @@
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task 1: Create `docs/src/gateway/` directory and stub all pages
-  - [ ] `overview.md`, `sdk-api.md`, `grpc.md`, `admin-api.md`, `openapi.md`
+- [x] Task 1: Create `docs/src/gateway/` directory and stub all pages
+  - [x] `overview.md`, `sdk-api.md`, `grpc.md`, `admin-api.md`, `openapi.md`
   <!-- files: docs/src/gateway/overview.md, docs/src/gateway/sdk-api.md, docs/src/gateway/grpc.md, docs/src/gateway/admin-api.md, docs/src/gateway/openapi.md -->
 
-- [ ] Task 2: Rewrite `docs/src/SUMMARY.md` to new section order
-  - [ ] Section 2: Public / Gateway Endpoints (Overview, SDK APIs, Gateway gRPC, Human JWT APIs, OpenAPI Spec)
-  - [ ] Section 3: Internal gRPC Services (domain-grouped: Auth & Identity, Flag & Segmentation, Events & Experimentation)
-  - [ ] Section 4: Service Coordination Flows (link to service-flows.md)
-  - [ ] Retain sections 5–7: Rust SDK, Deployment, Architecture
+- [x] Task 2: Rewrite `docs/src/SUMMARY.md` to new section order
+  - [x] Section 2: Public / Gateway Endpoints (Overview, SDK APIs, Gateway gRPC, Human JWT APIs, OpenAPI Spec)
+  - [x] Section 3: Internal gRPC Services (domain-grouped: Auth & Identity, Flag & Segmentation, Events & Experimentation)
+  - [x] Section 4: Service Coordination Flows (link to service-flows.md)
+  - [x] Retain sections 5–7: Rust SDK, Deployment, Architecture
   <!-- files: docs/src/SUMMARY.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 3: Update `patch_summary_grpc()` in `crates/xtask/src/main.rs`
-  - [ ] Emit domain-grouped gRPC entries instead of flat per-file listing
-  - [ ] Groups: Auth & Identity | Flag & Segmentation | Events & Experimentation
+- [x] Task 3: Update `patch_summary_grpc()` in `crates/xtask/src/main.rs`
+  - [x] Emit domain-grouped gRPC entries instead of flat per-file listing
+  - [x] Groups: Auth & Identity | Flag & Segmentation | Events & Experimentation
   <!-- files: crates/xtask/src/main.rs -->
 
-- [ ] Task 4: Write `docs/src/gateway/overview.md`
-  - [ ] Gateway role, port, routing rules
-  - [ ] Auth header matrix (which routes accept SDK key vs JWT)
-  - [ ] Error envelope format
-  - [ ] "What's New" — endpoints added since the monolith
+- [x] Task 4: Write `docs/src/gateway/overview.md`
+  - [x] Gateway role, port, routing rules
+  - [x] Auth header matrix (which routes accept SDK key vs JWT)
+  - [x] Error envelope format
+  - [x] "What's New" — endpoints added since the monolith
   <!-- files: docs/src/gateway/overview.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 5: Write `docs/src/gateway/sdk-api.md`
-  - [ ] REST endpoints authenticated via `x-sdk-key`
-  - [ ] Auth model, error envelope, rate limits
+- [x] Task 5: Write `docs/src/gateway/sdk-api.md`
+  - [x] REST endpoints authenticated via `x-sdk-key`
+  - [x] Auth model, error envelope, rate limits
   <!-- files: docs/src/gateway/sdk-api.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 6: Write `docs/src/gateway/grpc.md`
-  - [ ] gRPC interface exposed by the gateway (definition-sync passthrough)
-  - [ ] Service name, RPCs, `x-sdk-key` metadata auth, streaming behaviour
+- [x] Task 6: Write `docs/src/gateway/grpc.md`
+  - [x] gRPC interface exposed by the gateway (definition-sync passthrough)
+  - [x] Service name, RPCs, `x-sdk-key` metadata auth, streaming behaviour
   <!-- files: docs/src/gateway/grpc.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 7: Write `docs/src/gateway/admin-api.md`
-  - [ ] JWT-authenticated REST endpoints for Admin UI consumers
-  - [ ] Swagger UI embed (rendered from `openapi.json`)
+- [x] Task 7: Write `docs/src/gateway/admin-api.md`
+  - [x] JWT-authenticated REST endpoints for Admin UI consumers
+  - [x] Swagger UI embed (rendered from `openapi.json`)
   <!-- files: docs/src/gateway/admin-api.md -->
   <!-- depends: task1 -->
 
-- [ ] Task 8: Write `docs/src/gateway/openapi.md`
-  - [ ] How to regenerate spec, link to raw `openapi.json`
+- [x] Task 8: Write `docs/src/gateway/openapi.md`
+  - [x] How to regenerate spec, link to raw `openapi.json`
   <!-- files: docs/src/gateway/openapi.md -->
   <!-- depends: task1 -->
 
