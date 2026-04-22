@@ -96,14 +96,15 @@
 <!-- execution: sequential -->
 <!-- depends: -->
 
-- [ ] Task 1: Write `docs/src/architecture/service-flows.md`
-  - [ ] Flag Evaluation Mermaid sequence diagram
-  - [ ] Event Ingestion Mermaid sequence diagram
-  - [ ] Definition Sync Mermaid sequence diagram
-  - [ ] Human Auth Mermaid sequence diagram
+- [x] Task 1: Write `docs/src/architecture/service-flows.md`
+  - [x] Flag Evaluation Mermaid sequence diagram
+  - [x] Event Ingestion Mermaid sequence diagram
+  - [x] Definition Sync Mermaid sequence diagram
+  - [x] Human Auth Mermaid sequence diagram
   <!-- files: docs/src/architecture/service-flows.md -->
 
-- [ ] Task 2: Add `service-flows.md` entry to `docs/src/SUMMARY.md` under Architecture
+- [x] Task 2: Add `service-flows.md` entry to `docs/src/SUMMARY.md` under Architecture
+  - (already included in Phase 3 SUMMARY restructure under `# Service Coordination Flows`)
   <!-- files: docs/src/SUMMARY.md -->
 
 - [ ] Task: Conductor - User Manual Verification 'Service Coordination Flows' (Protocol in workflow.md)
