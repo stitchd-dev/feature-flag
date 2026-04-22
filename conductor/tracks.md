@@ -30,13 +30,7 @@ This file tracks all major tracks for the project.
 <!-- Archived: stats_20260420 (Experiment Statistical Analysis) -->
 <!-- Archived: auth_20260421 (JWT / Multi-Mechanism Human Auth) -->
 <!-- Archived: microservices_20260421 (Microservice Architecture Decomposition) -->
+<!-- Archived: docs_microservices_20260422 (mdBook Docs — Microservice Architecture Update) -->
+<!-- Archived: org_oidc_saml_20260422 (Org-Level OIDC & SAML with On-the-Fly Provider Instantiation) -->
 
 ---
-
-## [x] Track: mdBook Docs — Microservice Architecture Update
-*Link: [./conductor/tracks/docs_microservices_20260422/](./conductor/tracks/docs_microservices_20260422/)*
-
----
-
-## [ ] Track: Org-Level OIDC & SAML with On-the-Fly Provider Instantiation
-*Link: [./conductor/tracks/org_oidc_saml_20260422/](./conductor/tracks/org_oidc_saml_20260422/)*
