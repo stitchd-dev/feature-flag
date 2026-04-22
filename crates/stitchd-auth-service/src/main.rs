@@ -1,11 +1,12 @@
 //! Entry point for the `stitchd-auth-service` gRPC microservice.
 //!
 //! Environment variables:
-//! - `AUTH_SERVICE_PORT`    (default: `50051`) — gRPC bind port
-//! - `DATABASE_URL`         — PostgreSQL connection string (required)
-//! - `METRICS_PORT`         (default: `9091`) — Prometheus metrics port
-//! - `SUPERADMIN_EMAIL`     — seed a superadmin user on first boot
-//! - `SUPERADMIN_PASSWORD`  — plaintext password hashed with Argon2id
+//! - `AUTH_SERVICE_PORT`         (default: `50051`) — gRPC bind port
+//! - `DATABASE_URL`              — PostgreSQL connection string (required)
+//! - `METRICS_PORT`              (default: `9091`) — Prometheus metrics port
+//! - `SUPERADMIN_EMAIL`          — seed a superadmin user on first boot
+//! - `SUPERADMIN_PASSWORD`       — plaintext password hashed with Argon2id
+//! - `PROVIDER_CACHE_TTL_SECS`   (default: `3600`) — OIDC/SAML provider cache TTL
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -16,7 +17,15 @@ use tonic_health::server::health_reporter;
 use tracing::info;
 
 use stitchd_auth_service::{
-    bootstrap::seed_superadmin, grpc::AuthServiceImpl, management::ManagementServiceImpl,
+    app_state::ProviderCaches,
+    auth_provider::AuthProviderServiceImpl,
+    bootstrap::seed_superadmin,
+    grpc::AuthServiceImpl,
+    management::ManagementServiceImpl,
+    oidc_factory::OidcProviderFactory,
+    oidc_login::{LiveOidcExchanger, OidcLoginServiceImpl, OidcStateStore},
+    saml_factory::SamlProviderFactory,
+    saml_login::{LiveSamlExchanger, SamlLoginServiceImpl, SamlRelayStore},
 };
 use stitchd_db::{
     AuthUserRepository, OrgMembershipRepository, OrganisationRepository, PgAuditLogger,
@@ -24,8 +33,15 @@ use stitchd_db::{
     PgOrganisationRepository, PgProjectRepository, PgRefreshTokenRepository, PgSdkKeyRepository,
     RefreshTokenRepository,
 };
+use stitchd_core::auth::CryptoKey;
+use stitchd_db::PgAuthProviderRepository;
 use stitchd_proto::{
-    auth::v1::auth_service_server::AuthServiceServer,
+    auth::v1::{
+        auth_provider_service_server::AuthProviderServiceServer,
+        auth_service_server::AuthServiceServer,
+        oidc_login_service_server::OidcLoginServiceServer,
+        saml_login_service_server::SamlLoginServiceServer,
+    },
     management::v1::management_service_server::ManagementServiceServer,
 };
 
@@ -71,6 +87,11 @@ async fn main() -> anyhow::Result<()> {
     let project_repo = Arc::new(PgProjectRepository::new(pool.clone(), audit.clone()));
     let env_repo = Arc::new(PgEnvironmentRepository::new(pool.clone(), audit.clone()));
 
+    // Provider caches — zero providers loaded at startup; built lazily on first login.
+    let provider_caches = Arc::new(ProviderCaches::from_env());
+    let auth_provider_repo = Arc::new(PgAuthProviderRepository::new(pool.clone()));
+    let crypto_key = Arc::new(CryptoKey::from_env().expect("AUTH_ENCRYPTION_KEY must be set"));
+
     // Bootstrap superadmin if configured.
     seed_superadmin(
         &(auth_user_repo.clone() as Arc<dyn AuthUserRepository>),
@@ -90,15 +111,49 @@ async fn main() -> anyhow::Result<()> {
         sdk_key_repo.clone(),
         membership_repo.clone(),
         org_repo.clone() as Arc<dyn OrganisationRepository>,
-        refresh_repo,
+        refresh_repo.clone(),
     );
     let mgmt_service = ManagementServiceImpl::new(
         org_repo,
         project_repo,
         env_repo,
         sdk_key_repo,
-        auth_user_repo,
-        membership_repo,
+        auth_user_repo.clone(),
+        membership_repo.clone(),
+    );
+    let auth_provider_service = AuthProviderServiceImpl::new(
+        auth_provider_repo.clone(),
+        Arc::clone(&crypto_key),
+        provider_caches.clone(),
+    );
+
+    let oidc_factory = Arc::new(OidcProviderFactory::new(
+        auth_provider_repo.clone() as Arc<dyn stitchd_db::AuthProviderRepository>,
+        crypto_key,
+    ));
+    let oidc_exchanger = Arc::new(LiveOidcExchanger::new(Arc::clone(&provider_caches), oidc_factory));
+    let oidc_state_store = Arc::new(OidcStateStore::new(std::time::Duration::from_secs(300)));
+    let oidc_login_service = OidcLoginServiceImpl::new(
+        oidc_exchanger,
+        oidc_state_store,
+        Arc::clone(&auth_user_repo) as Arc<dyn stitchd_db::AuthUserRepository>,
+        Arc::clone(&membership_repo) as Arc<dyn stitchd_db::OrgMembershipRepository>,
+        Arc::clone(&refresh_repo),
+        Arc::clone(&auth_provider_repo) as Arc<dyn stitchd_db::AuthProviderRepository>,
+    );
+
+    let saml_factory = Arc::new(SamlProviderFactory::new(
+        Arc::clone(&auth_provider_repo) as Arc<dyn stitchd_db::AuthProviderRepository>,
+    ));
+    let saml_exchanger = Arc::new(LiveSamlExchanger::new(provider_caches, saml_factory));
+    let saml_relay_store = Arc::new(SamlRelayStore::new(std::time::Duration::from_secs(600)));
+    let saml_login_service = SamlLoginServiceImpl::new(
+        saml_exchanger,
+        saml_relay_store,
+        auth_user_repo as Arc<dyn stitchd_db::AuthUserRepository>,
+        membership_repo as Arc<dyn stitchd_db::OrgMembershipRepository>,
+        refresh_repo,
+        auth_provider_repo as Arc<dyn stitchd_db::AuthProviderRepository>,
     );
 
     let (health_reporter, health_service) = health_reporter();
@@ -115,6 +170,9 @@ async fn main() -> anyhow::Result<()> {
         .add_service(health_service)
         .add_service(AuthServiceServer::new(auth_service))
         .add_service(ManagementServiceServer::new(mgmt_service))
+        .add_service(AuthProviderServiceServer::new(auth_provider_service))
+        .add_service(OidcLoginServiceServer::new(oidc_login_service))
+        .add_service(SamlLoginServiceServer::new(saml_login_service))
         .serve_with_shutdown(grpc_addr, async {
             signal::ctrl_c()
                 .await
