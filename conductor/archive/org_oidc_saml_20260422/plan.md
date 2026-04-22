@@ -2,7 +2,7 @@
 
 ## Phase 1: Provider Cache & On-the-Fly Instantiation Layer
 
-- [ ] Task 1: Write failing unit tests for `ProviderCache`
+- [~] Task 1: Write failing unit tests for `ProviderCache`
   <!-- files: crates/stitchd-auth-service/src/provider_cache.rs -->
   - [ ] Sub-task: Test TTL expiry — entry returns None after TTL elapses
   - [ ] Sub-task: Test cache hit — factory not called again within TTL

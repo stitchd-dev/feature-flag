@@ -18,5 +18,6 @@ pub mod grpc;
 pub mod jwt;
 pub mod login;
 pub mod management;
+pub mod provider_cache;
 pub mod rbac;
 pub mod sdk_key;

@@ -32,6 +32,11 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+dashmap = { workspace = true }
+reqwest = { workspace = true }
+base64 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+wiremock = { workspace = true }
+futures = { workspace = true }
