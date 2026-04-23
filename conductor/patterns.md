@@ -46,6 +46,11 @@ Reusable patterns discovered during development. Read this before starting new w
 
 - Axum router integration tests: use `tower::ServiceExt::oneshot` to send a single request through the router without starting a real TCP server. Add `tower` as a `[dev-dependencies]` entry. (from: scaffold_20260411, 2026-04-11)
 - **Isolated DB Testing:** `#[sqlx::test(migrations = "./migrations")]` is the idiomatic way to run fast, isolated database tests with automatic migration handling in SQLx 0.8. (from: domain_20260411, 2026-04-11)
+- **`cargo sqlx prepare` skips `#[cfg(test)]`:** Test-only queries are NOT captured by `cargo sqlx prepare` (which runs `cargo check`, not `cargo test`). Always compile tests against a live `DATABASE_URL`, never `SQLX_OFFLINE=true`. (from: scheduled_stats_20260423, archived 2026-04-23)
+- **`cargo sqlx prepare` deletes cached test queries:** Re-running `cargo sqlx prepare` may remove previously-cached test-only query entries. Verify test compilation with a live DB after every `prepare` run. (from: scheduled_stats_20260423, archived 2026-04-23)
+- **`sqlx::query_as` for new tables:** New repository modules should use `sqlx::query_as::<_, Row>(r"...")` raw strings instead of `sqlx::query!` macros to avoid offline compilation failures when the `.sqlx` cache hasn't been populated for a new table yet. (from: scheduled_stats_20260423, archived 2026-04-23)
+- **Local `DATABASE_URL` for `#[sqlx::test]`:** Use `postgresql://stitchd:stitchd@localhost:5432/stitchd` (TCP). Socket-auth URLs (e.g. `postgresql://vishal@localhost/stitchd`) fail because `#[sqlx::test]` always connects over TCP. (from: scheduled_stats_20260423, archived 2026-04-23)
+- **Test env-var isolation:** Config tests and sqlx tests share the same binary. Use `--test-threads=1` and an `EnvGuard` RAII wrapper to prevent env-var contamination across test cases. (from: scheduled_stats_20260423, archived 2026-04-23)
 
 ---
-Last refreshed: 2026-04-22
+Last refreshed: 2026-04-23
