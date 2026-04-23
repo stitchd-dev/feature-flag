@@ -78,6 +78,7 @@ jobs:
   #
   # Fix when this fails: run the following locally and commit the .sqlx/ changes:
   #   cargo sqlx prepare --workspace -- --all-targets
+  # Note: --check must come before -- so sqlx-cli sees it, not cargo check.
   sqlx-check:
     name: SQLx Cache Check
     runs-on: ubuntu-latest
@@ -105,7 +106,7 @@ jobs:
         run: sqlx migrate run --source crates/stitchd-db/migrations
 
       - name: Verify SQLx offline cache is current (all targets incl. tests)
-        run: cargo sqlx prepare --workspace -- --all-targets --check
+        run: cargo sqlx prepare --workspace --check -- --all-targets
 
   # ── 3. Linting ─────────────────────────────────────────────────────────────
   clippy:
