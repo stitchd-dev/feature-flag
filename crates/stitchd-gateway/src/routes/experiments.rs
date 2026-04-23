@@ -74,6 +74,9 @@ pub struct ExperimentResultsJson {
     pub experiment_id: String,
     pub variant_results: Vec<VariantResultJson>,
     pub computed_at_ms: i64,
+    pub is_stale: bool,
+    pub next_run_at_ms: i64,
+    pub computation_status: String,
 }
 
 fn experiment_status_str(status: i32) -> String {
@@ -422,6 +425,9 @@ pub async fn get_results(
             .map(variant_result_to_json)
             .collect(),
         computed_at_ms: inner.computed_at_ms,
+        is_stale: inner.is_stale,
+        next_run_at_ms: inner.next_run_at_ms,
+        computation_status: inner.computation_status.clone(),
     };
     Ok(Json(results))
 }

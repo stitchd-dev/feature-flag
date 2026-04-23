@@ -11,7 +11,7 @@ use stitchd_core::{
     experimentation::{Experiment, ExperimentStatus},
     id::{EnvironmentId, ExperimentId},
 };
-use stitchd_db::{ExperimentRepository, ExperimentResultsRepository};
+use stitchd_db::{ExperimentRepository, ExperimentResultsRepository, StatsScheduleRepository};
 use stitchd_proto::experiments::v1::{
     CreateExperimentRequest, DeleteExperimentRequest, ExperimentIteration as ProtoIteration,
     ExperimentResults, GetExperimentRequest, GetResultsRequest, ListExperimentsRequest,
@@ -83,9 +83,13 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
 // ---------------------------------------------------------------------------
 
 /// The gRPC `ExperimentationService` implementation.
+/// Staleness threshold: results are stale if last_computed_at is older than this.
+const STALE_AFTER_SECS: i64 = 3600; // 60 minutes
+
 pub struct ExperimentationServiceImpl {
     experiment_repo: Arc<dyn ExperimentRepository>,
     results_repo: Arc<dyn ExperimentResultsRepository>,
+    schedule_repo: Arc<dyn StatsScheduleRepository>,
     /// Optional Flag Service client. When `None`, flag verification is skipped.
     flag_client: Option<FlagClient>,
 }
@@ -96,11 +100,13 @@ impl ExperimentationServiceImpl {
     pub fn new(
         experiment_repo: Arc<dyn ExperimentRepository>,
         results_repo: Arc<dyn ExperimentResultsRepository>,
+        schedule_repo: Arc<dyn StatsScheduleRepository>,
         flag_client: Option<FlagClient>,
     ) -> Self {
         Self {
             experiment_repo,
             results_repo,
+            schedule_repo,
             flag_client,
         }
     }
@@ -413,11 +419,38 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
         let variant_results: Vec<VariantResult> = by_variant.into_values().collect();
 
+        // Fetch schedule for staleness metadata.
+        let schedule = self
+            .schedule_repo
+            .get_schedule_for_experiment(exp_id_uuid)
+            .await
+            .map_err(|e| Status::internal(format!("schedule database error: {e}")))?;
+
+        let (is_stale, next_run_at_ms, computation_status) = match &schedule {
+            None => (true, 0i64, String::new()),
+            Some(s) => {
+                let stale = s.last_computed_at.map_or(true, |t| {
+                    Utc::now().signed_duration_since(t).num_seconds() > STALE_AFTER_SECS
+                });
+                let next_run = s.next_run_at.map_or(0, |t| t.timestamp_millis());
+                let status = match s.computation_status {
+                    stitchd_db::ComputationStatus::Ready => "ready",
+                    stitchd_db::ComputationStatus::Computing => "computing",
+                    stitchd_db::ComputationStatus::NeverComputed => "never_computed",
+                }
+                .to_string();
+                (stale, next_run, status)
+            }
+        };
+
         metrics::counter!("experimentation_service.get_results.ok").increment(1);
         Ok(Response::new(ExperimentResults {
             experiment_id: req.experiment_id,
             variant_results,
             computed_at_ms: latest_computed_at_ms,
+            is_stale,
+            next_run_at_ms,
+            computation_status,
         }))
     }
 }
@@ -458,7 +491,8 @@ mod tests {
         id::{EnvironmentId, ExperimentId, RuleId},
     };
     use stitchd_db::experiment_results::{ExperimentResultRow, UpsertResultRow};
-    use stitchd_db::{ExperimentResultsRepository, RepositoryError};
+    use stitchd_db::stats_schedule::{StatsScheduleRow, UpsertStatsSchedule};
+    use stitchd_db::{ComputationStatus, ExperimentResultsRepository, RepositoryError, StatsScheduleRepository};
     use uuid::Uuid;
 
     // -----------------------------------------------------------------------
@@ -656,6 +690,60 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Stub schedule repos
+    // -----------------------------------------------------------------------
+
+    /// Returns `None` — simulates an experiment that has never been scheduled.
+    struct NoScheduleRepo;
+
+    #[async_trait]
+    impl StatsScheduleRepository for NoScheduleRepo {
+        async fn upsert_schedule(
+            &self,
+            _input: &UpsertStatsSchedule,
+        ) -> Result<StatsScheduleRow, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+
+        async fn get_schedule_for_experiment(
+            &self,
+            _experiment_id: Uuid,
+        ) -> Result<Option<StatsScheduleRow>, sqlx::Error> {
+            Ok(None)
+        }
+    }
+
+    /// Returns a schedule row with `last_computed_at` set to the given timestamp.
+    struct FixedScheduleRepo {
+        last_computed_at: Option<chrono::DateTime<Utc>>,
+        next_run_at: Option<chrono::DateTime<Utc>>,
+        status: ComputationStatus,
+    }
+
+    #[async_trait]
+    impl StatsScheduleRepository for FixedScheduleRepo {
+        async fn upsert_schedule(
+            &self,
+            _input: &UpsertStatsSchedule,
+        ) -> Result<StatsScheduleRow, sqlx::Error> {
+            Err(sqlx::Error::RowNotFound)
+        }
+
+        async fn get_schedule_for_experiment(
+            &self,
+            _experiment_id: Uuid,
+        ) -> Result<Option<StatsScheduleRow>, sqlx::Error> {
+            Ok(Some(StatsScheduleRow {
+                experiment_id: Uuid::new_v4(),
+                last_computed_at: self.last_computed_at,
+                next_run_at: self.next_run_at,
+                computation_status: self.status.clone(),
+                updated_at: Utc::now(),
+            }))
+        }
+    }
+
     fn make_result_row(
         experiment_id: Uuid,
         variant_key: &str,
@@ -681,6 +769,7 @@ mod tests {
         ExperimentationServiceImpl::new(
             Arc::new(AlwaysSucceedRepo { env_id }),
             Arc::new(EmptyResultsRepo),
+            Arc::new(NoScheduleRepo),
             None,
         )
     }
@@ -916,6 +1005,7 @@ mod tests {
         let svc = ExperimentationServiceImpl::new(
             Arc::new(NotFoundRepo),
             Arc::new(EmptyResultsRepo),
+            Arc::new(NoScheduleRepo),
             None,
         );
         let env_id = EnvironmentId::new();
@@ -975,6 +1065,7 @@ mod tests {
         let svc = ExperimentationServiceImpl::new(
             Arc::new(NotFoundRepo),
             Arc::new(EmptyResultsRepo),
+            Arc::new(NoScheduleRepo),
             None,
         );
         let exp_id = ExperimentId::new();
@@ -1021,6 +1112,7 @@ mod tests {
         let svc = ExperimentationServiceImpl::new(
             Arc::new(NotFoundRepo),
             Arc::new(EmptyResultsRepo),
+            Arc::new(NoScheduleRepo),
             None,
         );
         let req = tonic::Request::new(ListExperimentsRequest {
@@ -1076,6 +1168,7 @@ mod tests {
         let svc = ExperimentationServiceImpl::new(
             Arc::new(AlwaysSucceedRepo { env_id }),
             Arc::new(ResultsWithDataRepo { rows }),
+            Arc::new(NoScheduleRepo),
             None,
         );
         let req = tonic::Request::new(GetResultsRequest {
@@ -1091,6 +1184,122 @@ mod tests {
         for vr in &resp.variant_results {
             assert!(vr.p_value_present);
             assert!((vr.p_value - 0.04).abs() < 1e-9);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Staleness tests (Phase 5)
+    // -----------------------------------------------------------------------
+
+    /// Task 1: Results come from the PostgreSQL results_repo — no ClickHouse involved.
+    #[tokio::test]
+    async fn test_get_results_reads_from_postgres_not_clickhouse() {
+        let (env_id, _) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        let rows = vec![make_result_row(exp_id, "control", "checkout", 50)];
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(ResultsWithDataRepo { rows }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id.to_string(),
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+        assert_eq!(resp.variant_results.len(), 1);
+        assert_eq!(resp.variant_results[0].variant_key, "control");
+    }
+
+    /// Task 2a: is_stale = true when no schedule row exists (never computed).
+    #[tokio::test]
+    async fn test_get_results_is_stale_when_never_scheduled() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id); // uses NoScheduleRepo
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id.to_string(),
+            experiment_id: Uuid::new_v4().to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+        assert!(resp.is_stale);
+        assert_eq!(resp.computation_status, "");
+    }
+
+    /// Task 2b: is_stale = true when last_computed_at is >60 min ago.
+    #[tokio::test]
+    async fn test_get_results_is_stale_when_last_computed_over_60_min_ago() {
+        let (env_id, _) = env_uuid();
+        let old_computed = Utc::now() - chrono::Duration::minutes(61);
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyResultsRepo),
+            Arc::new(FixedScheduleRepo {
+                last_computed_at: Some(old_computed),
+                next_run_at: None,
+                status: ComputationStatus::Ready,
+            }),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id.to_string(),
+            experiment_id: Uuid::new_v4().to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+        assert!(resp.is_stale, "should be stale when last_computed_at is >60 min ago");
+        assert_eq!(resp.computation_status, "ready");
+    }
+
+    /// Task 2c: is_stale = false when last_computed_at is recent (<60 min ago).
+    #[tokio::test]
+    async fn test_get_results_not_stale_when_recently_computed() {
+        let (env_id, _) = env_uuid();
+        let next_run = Utc::now() + chrono::Duration::minutes(30);
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyResultsRepo),
+            Arc::new(FixedScheduleRepo {
+                last_computed_at: Some(Utc::now() - chrono::Duration::minutes(5)),
+                next_run_at: Some(next_run),
+                status: ComputationStatus::Ready,
+            }),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id.to_string(),
+            experiment_id: Uuid::new_v4().to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+        assert!(!resp.is_stale, "should not be stale when recently computed");
+        assert_eq!(resp.next_run_at_ms, next_run.timestamp_millis());
+        assert_eq!(resp.computation_status, "ready");
+    }
+
+    /// Task 2d: computation_status maps all enum variants correctly.
+    #[tokio::test]
+    async fn test_get_results_computation_status_maps_correctly() {
+        let (env_id, _) = env_uuid();
+        for (status, expected_str) in [
+            (ComputationStatus::Ready, "ready"),
+            (ComputationStatus::Computing, "computing"),
+            (ComputationStatus::NeverComputed, "never_computed"),
+        ] {
+            let svc = ExperimentationServiceImpl::new(
+                Arc::new(AlwaysSucceedRepo { env_id }),
+                Arc::new(EmptyResultsRepo),
+                Arc::new(FixedScheduleRepo {
+                    last_computed_at: Some(Utc::now()),
+                    next_run_at: None,
+                    status,
+                }),
+                None,
+            );
+            let req = tonic::Request::new(GetResultsRequest {
+                environment_id: env_id.to_string(),
+                experiment_id: Uuid::new_v4().to_string(),
+            });
+            let resp = svc.get_results(req).await.unwrap().into_inner();
+            assert_eq!(resp.computation_status, expected_str);
         }
     }
 

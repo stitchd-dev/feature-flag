@@ -51,9 +51,12 @@ message VariantResult {
 }
 
 message ExperimentResults {
-  string                 experiment_id   = 1;
-  repeated VariantResult variant_results = 2;
-  int64                  computed_at_ms  = 3;
+  string                 experiment_id      = 1;
+  repeated VariantResult variant_results    = 2;
+  int64                  computed_at_ms     = 3;
+  bool                   is_stale           = 4;
+  int64                  next_run_at_ms     = 5;
+  string                 computation_status = 6;
 }
 
 // ─── CRUD requests ────────────────────────────────────────────────────────────
