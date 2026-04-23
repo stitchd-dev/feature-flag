@@ -73,6 +73,11 @@ flags:
     paths:
       - crates/stitchd-segmentation-service/
 
+  stitchd-stats-service:
+    carryforward: true
+    paths:
+      - crates/stitchd-stats-service/
+
 ignore:
   - "crates/stitchd-proto/**"   # generated protobuf
   - "crates/xtask/**"           # build tool

@@ -50,6 +50,7 @@ jobs:
             -p stitchd-event-service \
             -p stitchd-experimentation-service \
             -p stitchd-segmentation-service \
+            -p stitchd-stats-service \
             --timeout 180 \
             --out Xml \
             --output-dir coverage/ \
@@ -80,7 +81,8 @@ jobs:
             stitchd-flag-service \
             stitchd-event-service \
             stitchd-experimentation-service \
-            stitchd-segmentation-service
+            stitchd-segmentation-service \
+            stitchd-stats-service
           do
             echo "── uploading: $crate (flag=$crate) ──"
             ./codecov \

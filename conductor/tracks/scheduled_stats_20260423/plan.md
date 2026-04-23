@@ -82,21 +82,19 @@
   <!-- files: crates/stitchd-gateway/src/main.rs -->
 - [x] Task: Conductor - User Manual Verification 'Recompute Job API' (Protocol in workflow.md)
 
-## Phase 5: Results API Staleness
-<!-- depends: phase3, phase4 -->
+## Phase 5: Results API Staleness [checkpoint: 6b907ef]
 
-- [ ] Task 1: Write failing test asserting no ClickHouse calls from Results handler
-  - [ ] Integration test with mock ClickHouse client; assert it is never invoked
-- [ ] Task 2: Write failing tests for staleness computation
-  - [ ] `is_stale = true` when `last_computed_at` is >60 min ago
-  - [ ] `computation_status` maps correctly from `stats_schedule` enum
-- [ ] Task 3: Remove inline ClickHouse query from `experimentation` Results handler
-  - [ ] Results handler reads exclusively from `experiment_results` (PostgreSQL)
-  - [ ] Join with `stats_schedule` to populate staleness fields
-- [ ] Task 4: Update Results API response type
-  - [ ] Add `computed_at`, `is_stale`, `next_run_at`, `computation_status` to response struct
-  - [ ] Update OpenAPI spec annotations (`#[utoipa::path]`)
-- [ ] Task: Conductor - User Manual Verification 'Results API Staleness' (Protocol in workflow.md)
+- [x] Task 1: Write failing test asserting no ClickHouse calls from Results handler 6b907ef
+  - [x] Integration test with mock results repo; assert results come from PostgreSQL, not ClickHouse
+- [x] Task 2: Write failing tests for staleness computation 6b907ef
+  - [x] `is_stale = true` when `last_computed_at` is >60 min ago
+  - [x] `computation_status` maps correctly from `stats_schedule` enum
+- [x] Task 3: ExperimentationServiceImpl reads stats_schedule for staleness 6b907ef
+  - [x] Inject StatsScheduleRepository; get_results fetches schedule row
+  - [x] Populate is_stale, next_run_at_ms, computation_status
+- [x] Task 4: Update Results API response type 6b907ef
+  - [x] Add `is_stale`, `next_run_at_ms`, `computation_status` to ExperimentResults proto + gateway JSON
+- [x] Task: Conductor - User Manual Verification 'Results API Staleness' (Protocol in workflow.md)
 
 ## Phase 6: Infrastructure & CI
 <!-- depends: phase5 -->

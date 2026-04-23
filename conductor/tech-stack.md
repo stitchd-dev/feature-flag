@@ -81,7 +81,25 @@ Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous m
 | `utoipa` + `utoipa-axum` | OpenAPI 3.1 spec generation from `#[utoipa::path]` annotations on Axum routes |
 | `protoc-gen-doc` | Generates Markdown from `.proto` files into `docs/src/grpc/` |
 
+## Scheduler Pattern (stitchd-stats-service)
+
+`tokio::time::interval` drives the 60-minute stats computation loop:
+
+```rust
+let mut ticker = tokio::time::interval(scheduler_interval);
+loop {
+    ticker.tick().await;          // first tick fires immediately
+    // fetch running experiments, spawn per-experiment compute tasks
+}
+```
+
+Key invariants:
+- `ticker.tick()` fires once immediately on entry, then every `scheduler_interval`
+- `chrono::Duration` is NOT `std::time::Duration`; convert via `.to_std().unwrap()`
+- On-demand recompute is handled by the gRPC `TriggerRecompute` RPC (spawns a task, returns job_id)
+- `stats_schedule.last_computed_at` is the authoritative staleness signal; results are stale when it is >60 min old or absent
+
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
 - ClickHouse 24+ for events, experiment data, metric aggregations
-- Docker Compose orchestrates all six service containers with health-checked dependencies
+- Docker Compose orchestrates all seven service containers with health-checked dependencies

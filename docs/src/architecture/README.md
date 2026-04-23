@@ -61,6 +61,7 @@ graph TB
 | `stitchd-segmentation-service` | Segment membership evaluation and list-segment checks | Binary |
 | `stitchd-event-service` | Experiment event ingestion, forwarded to ClickHouse | Binary |
 | `stitchd-experimentation-service` | Experiment CRUD and result aggregation | Binary |
+| `stitchd-stats-service` | Scheduled statistics computation (60-min loop), on-demand recompute jobs, `stats_jobs` + `stats_schedule` management | Binary |
 | `stitchd-sdk` | Server-side Rust SDK — in-process flag evaluation | Library |
 | `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types | Library |
 | `stitchd-db` | Database access layer (sqlx repositories + ClickHouse) | Library |
