@@ -69,10 +69,49 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all --check
 
-  # ── 2. Linting ─────────────────────────────────────────────────────────────
+  # ── 2. SQLx offline cache integrity ──────────────────────────────────────────
+  # Verifies the committed .sqlx query cache covers every sqlx::query! call,
+  # including those inside #[cfg(test)] blocks (-- --all-targets is required).
+  # A stale cache produces cryptic SQLX_OFFLINE compile errors in the clippy
+  # and coverage jobs.  This job surfaces the real cause up front with a clear
+  # message.
+  #
+  # Fix when this fails: run the following locally and commit the .sqlx/ changes:
+  #   cargo sqlx prepare --workspace -- --all-targets
+  sqlx-check:
+    name: SQLx Cache Check
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
+      SQLX_OFFLINE: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start postgres
+        run: POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_DB=stitchd_test docker compose up postgres -d --wait --wait-timeout 120
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install sqlx-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: sqlx-cli
+
+      - name: Run migrations
+        run: sqlx migrate run --source crates/stitchd-db/migrations
+
+      - name: Verify SQLx offline cache is current (all targets incl. tests)
+        run: cargo sqlx prepare --workspace -- --all-targets --check
+
+  # ── 3. Linting ─────────────────────────────────────────────────────────────
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    needs: sqlx-check
     steps:
       - uses: actions/checkout@v4
 
@@ -87,7 +126,7 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-  # ── 3. API contract check ──────────────────────────────────────────────────
+  # ── 4. API contract check ──────────────────────────────────────────────────
   # Ensures no REST routes present in the pre-decomposition OpenAPI snapshot
   # are silently dropped by the gateway (exits non-zero on unexpected gaps).
   contract-check:
@@ -99,7 +138,7 @@ jobs:
       - name: Verify gateway covers pre-decomposition API surface
         run: python3 scripts/check_openapi_contract.py
 
-  # ── 4. Tests + Coverage ────────────────────────────────────────────────────
+  # ── 5. Tests + Coverage ────────────────────────────────────────────────────
   # Tarpaulin runs tests AND instruments for coverage in a single pass, so
   # there is no separate test job.  Running them together avoids compiling the
   # affected crates twice (once for tests, once for coverage instrumentation).
@@ -185,7 +224,7 @@ jobs:
           path: coverage/
           retention-days: 7
 
-  # ── 5. Docs build ──────────────────────────────────────────────────────────
+  # ── 6. Docs build ──────────────────────────────────────────────────────────
   docs-build:
     name: Docs Build
     runs-on: ubuntu-latest
@@ -207,7 +246,7 @@ jobs:
         with:
           path: docs/book/
 
-  # ── 6. Deploy to GitHub Pages ───────────────────────────────────────────────
+  # ── 7. Deploy to GitHub Pages ───────────────────────────────────────────────
   docs-deploy:
     name: Deploy Docs to GitHub Pages
     needs: docs-build
