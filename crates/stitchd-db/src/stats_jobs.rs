@@ -88,7 +88,7 @@ pub struct PgStatsJobRepository {
 impl PgStatsJobRepository {
     /// Construct a new repository bound to `pool`.
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
+    pub const fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -178,7 +178,7 @@ mod tests {
 
     /// Create a job and assert it starts in Pending status.
     ///
-    /// NOTE: This test will fail at runtime with "relation stats_jobs does not
+    /// NOTE: This test will fail at runtime with "relation `stats_jobs` does not
     /// exist" until the migration is added in Task 3 (Red phase of TDD).
     #[sqlx::test(migrations = "./migrations")]
     async fn test_create_job(pool: sqlx::PgPool) {
@@ -199,7 +199,7 @@ mod tests {
 
     /// Create a job then fetch it by id; verify returned fields match.
     ///
-    /// NOTE: This test will fail at runtime with "relation stats_jobs does not
+    /// NOTE: This test will fail at runtime with "relation `stats_jobs` does not
     /// exist" until the migration is added in Task 3 (Red phase of TDD).
     #[sqlx::test(migrations = "./migrations")]
     async fn test_get_job(pool: sqlx::PgPool) {
@@ -224,7 +224,7 @@ mod tests {
 
     /// Fetch a non-existent UUID; verify None is returned.
     ///
-    /// NOTE: This test will fail at runtime with "relation stats_jobs does not
+    /// NOTE: This test will fail at runtime with "relation `stats_jobs` does not
     /// exist" until the migration is added in Task 3 (Red phase of TDD).
     #[sqlx::test(migrations = "./migrations")]
     async fn test_get_job_not_found(pool: sqlx::PgPool) {
@@ -238,9 +238,9 @@ mod tests {
         assert!(result.is_none());
     }
 
-    /// Create a job then update it to Running; verify started_at is set.
+    /// Create a job then update it to Running; verify `started_at` is set.
     ///
-    /// NOTE: This test will fail at runtime with "relation stats_jobs does not
+    /// NOTE: This test will fail at runtime with "relation `stats_jobs` does not
     /// exist" until the migration is added in Task 3 (Red phase of TDD).
     #[sqlx::test(migrations = "./migrations")]
     async fn test_update_job_status_to_running(pool: sqlx::PgPool) {
@@ -258,14 +258,17 @@ mod tests {
             .expect("update_job_status should succeed");
 
         assert_eq!(updated.status, StatsJobStatus::Running);
-        assert!(updated.started_at.is_some(), "started_at should be set when transitioning to Running");
+        assert!(
+            updated.started_at.is_some(),
+            "started_at should be set when transitioning to Running"
+        );
         assert!(updated.completed_at.is_none());
         assert!(updated.error.is_none());
     }
 
-    /// Create → Running → Completed; verify completed_at is set.
+    /// Create → Running → Completed; verify `completed_at` is set.
     ///
-    /// NOTE: This test will fail at runtime with "relation stats_jobs does not
+    /// NOTE: This test will fail at runtime with "relation `stats_jobs` does not
     /// exist" until the migration is added in Task 3 (Red phase of TDD).
     #[sqlx::test(migrations = "./migrations")]
     async fn test_update_job_status_to_completed(pool: sqlx::PgPool) {
@@ -288,13 +291,16 @@ mod tests {
 
         assert_eq!(completed.status, StatsJobStatus::Completed);
         assert!(completed.started_at.is_some());
-        assert!(completed.completed_at.is_some(), "completed_at should be set when transitioning to Completed");
+        assert!(
+            completed.completed_at.is_some(),
+            "completed_at should be set when transitioning to Completed"
+        );
         assert!(completed.error.is_none());
     }
 
     /// Create → Running → Failed with error message; verify error is stored.
     ///
-    /// NOTE: This test will fail at runtime with "relation stats_jobs does not
+    /// NOTE: This test will fail at runtime with "relation `stats_jobs` does not
     /// exist" until the migration is added in Task 3 (Red phase of TDD).
     #[sqlx::test(migrations = "./migrations")]
     async fn test_update_job_status_to_failed(pool: sqlx::PgPool) {
@@ -312,17 +318,16 @@ mod tests {
 
         let error_message = "connection timeout after 30s".to_string();
         let failed = repo
-            .update_job_status(
-                job.id,
-                StatsJobStatus::Failed,
-                Some(error_message.clone()),
-            )
+            .update_job_status(job.id, StatsJobStatus::Failed, Some(error_message.clone()))
             .await
             .expect("transition to Failed should succeed");
 
         assert_eq!(failed.status, StatsJobStatus::Failed);
         assert!(failed.started_at.is_some());
-        assert!(failed.completed_at.is_some(), "completed_at should be set when transitioning to Failed");
+        assert!(
+            failed.completed_at.is_some(),
+            "completed_at should be set when transitioning to Failed"
+        );
         assert_eq!(
             failed.error.as_deref(),
             Some(error_message.as_str()),

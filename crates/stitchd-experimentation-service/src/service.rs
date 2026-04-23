@@ -429,7 +429,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
         let (is_stale, next_run_at_ms, computation_status) = match &schedule {
             None => (true, 0i64, String::new()),
             Some(s) => {
-                let stale = s.last_computed_at.map_or(true, |t| {
+                let stale = s.last_computed_at.is_none_or(|t| {
                     Utc::now().signed_duration_since(t).num_seconds() > STALE_AFTER_SECS
                 });
                 let next_run = s.next_run_at.map_or(0, |t| t.timestamp_millis());
@@ -492,7 +492,9 @@ mod tests {
     };
     use stitchd_db::experiment_results::{ExperimentResultRow, UpsertResultRow};
     use stitchd_db::stats_schedule::{StatsScheduleRow, UpsertStatsSchedule};
-    use stitchd_db::{ComputationStatus, ExperimentResultsRepository, RepositoryError, StatsScheduleRepository};
+    use stitchd_db::{
+        ComputationStatus, ExperimentResultsRepository, RepositoryError, StatsScheduleRepository,
+    };
     use uuid::Uuid;
 
     // -----------------------------------------------------------------------
@@ -1246,7 +1248,10 @@ mod tests {
             experiment_id: Uuid::new_v4().to_string(),
         });
         let resp = svc.get_results(req).await.unwrap().into_inner();
-        assert!(resp.is_stale, "should be stale when last_computed_at is >60 min ago");
+        assert!(
+            resp.is_stale,
+            "should be stale when last_computed_at is >60 min ago"
+        );
         assert_eq!(resp.computation_status, "ready");
     }
 

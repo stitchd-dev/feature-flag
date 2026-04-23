@@ -26,6 +26,9 @@ license = "MIT"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
+# Test utilities
+serial_test = { version = "3" }
+
 # Web / gRPC
 axum = { version = "0.8", features = ["macros"] }
 tonic = { version = "0.13" }

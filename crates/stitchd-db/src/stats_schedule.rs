@@ -87,7 +87,7 @@ pub struct PgStatsScheduleRepository {
 impl PgStatsScheduleRepository {
     /// Construct a new repository bound to `pool`.
     #[must_use]
-    pub fn new(pool: PgPool) -> Self {
+    pub const fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -175,15 +175,13 @@ mod tests {
         tenant::{Environment, Organisation, Project},
     };
 
-    /// Create a minimal org → project → env → flag → rule → experiment chain.
-    /// Returns the experiment's UUID, which satisfies the FK on `stats_schedule`.
-    async fn setup_experiment(pool: sqlx::PgPool) -> Uuid {
+    /// Build the org → project → env → flag → rule chain; return (`env_id`, `flag_rule_id`).
+    async fn build_env_context(pool: &sqlx::PgPool) -> (EnvironmentId, RuleId) {
         let audit = Arc::new(PgAuditLogger::new(pool.clone()));
         let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
         let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
         let env_repo = PgEnvironmentRepository::new(pool.clone(), audit.clone());
         let flag_repo = PgFlagRepository::new(pool.clone(), audit.clone());
-        let exp_repo = PgExperimentRepository::new(pool.clone(), audit.clone());
 
         let org = Organisation {
             id: OrganisationId::new(),
@@ -247,14 +245,23 @@ mod tests {
             "SELECT id FROM feature_flag_rules WHERE flag_id = $1 LIMIT 1",
             flag.id.as_uuid()
         )
-        .fetch_one(&pool)
+        .fetch_one(pool)
         .await
         .unwrap();
-        let flag_rule_id = RuleId::from_uuid(rule_uuid);
+
+        (env.id, RuleId::from_uuid(rule_uuid))
+    }
+
+    /// Create a minimal org → project → env → flag → rule → experiment chain.
+    /// Returns the experiment's UUID, which satisfies the FK on `stats_schedule`.
+    async fn setup_experiment(pool: sqlx::PgPool) -> Uuid {
+        let (env_id, flag_rule_id) = build_env_context(&pool).await;
+        let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+        let exp_repo = PgExperimentRepository::new(pool.clone(), audit);
 
         let exp = Experiment {
             id: ExperimentId::new(),
-            environment_id: env.id,
+            environment_id: env_id,
             flag_rule_id,
             name: "Sched Test Experiment".into(),
             description: None,
@@ -274,10 +281,7 @@ mod tests {
         exp.id.as_uuid()
     }
 
-    fn make_upsert(
-        experiment_id: Uuid,
-        status: ComputationStatus,
-    ) -> UpsertStatsSchedule {
+    fn make_upsert(experiment_id: Uuid, status: ComputationStatus) -> UpsertStatsSchedule {
         UpsertStatsSchedule {
             experiment_id,
             last_computed_at: None,
@@ -286,7 +290,7 @@ mod tests {
         }
     }
 
-    /// Upserting for a new experiment_id should create a row with the correct status.
+    /// Upserting for a new `experiment_id` should create a row with the correct status.
     #[sqlx::test(migrations = "./migrations")]
     async fn test_upsert_schedule_creates_new(pool: sqlx::PgPool) {
         let experiment_id = setup_experiment(pool.clone()).await;
@@ -304,7 +308,7 @@ mod tests {
         assert!(row.next_run_at.is_none());
     }
 
-    /// Upserting twice for the same experiment_id should update the row.
+    /// Upserting twice for the same `experiment_id` should update the row.
     #[sqlx::test(migrations = "./migrations")]
     async fn test_upsert_schedule_updates_existing(pool: sqlx::PgPool) {
         let experiment_id = setup_experiment(pool.clone()).await;

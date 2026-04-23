@@ -18,11 +18,8 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use stitchd_proto::stats::v1::stats_service_server::StatsServiceServer;
 use stitchd_stats_service::{
-    config::StatsConfig,
-    grpc::service::StatsServiceImpl,
-    results_writer::write_results,
-    schedule_updater::update_schedule_after_run,
-    scheduler::fetch_running_experiments,
+    config::StatsConfig, grpc::service::StatsServiceImpl, results_writer::write_results,
+    schedule_updater::update_schedule_after_run, scheduler::fetch_running_experiments,
 };
 
 #[tokio::main]
@@ -67,7 +64,15 @@ async fn main() -> anyhow::Result<()> {
                             let computed_at = chrono::Utc::now();
                             // Stats computation is deferred to Phase 3 full implementation.
                             // For scaffold: just update the schedule to record that we ran.
-                            if let Err(e) = write_results(&pool, exp.experiment_id, exp.iteration_id, computed_at, &[]).await {
+                            if let Err(e) = write_results(
+                                &pool,
+                                exp.experiment_id,
+                                exp.iteration_id,
+                                computed_at,
+                                &[],
+                            )
+                            .await
+                            {
                                 warn!(experiment_id = %exp.experiment_id, "Failed to write results: {e}");
                                 return;
                             }
@@ -75,7 +80,8 @@ async fn main() -> anyhow::Result<()> {
                                 &pool,
                                 exp.experiment_id,
                                 computed_at,
-                                Duration::from_std(scheduler_interval).unwrap_or(Duration::hours(1)),
+                                Duration::from_std(scheduler_interval)
+                                    .unwrap_or(Duration::hours(1)),
                             )
                             .await
                             {

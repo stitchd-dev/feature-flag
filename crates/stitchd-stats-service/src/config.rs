@@ -28,8 +28,8 @@ impl StatsConfig {
         let database_url = std::env::var("DATABASE_URL")
             .map_err(|_| anyhow::anyhow!("DATABASE_URL environment variable is required"))?;
 
-        let clickhouse_url = std::env::var("CLICKHOUSE_URL")
-            .unwrap_or_else(|_| "http://localhost:8123".to_string());
+        let clickhouse_url =
+            std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
 
         let clickhouse_db =
             std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());

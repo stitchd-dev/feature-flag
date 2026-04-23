@@ -19,7 +19,9 @@ pub struct RunningExperiment {
 /// Fetch all running experiments together with their active iteration from PostgreSQL.
 ///
 /// Only returns experiments with `status = 'running'` and an active (non-ended) iteration.
-pub async fn fetch_running_experiments(pool: &PgPool) -> Result<Vec<RunningExperiment>, sqlx::Error> {
+pub async fn fetch_running_experiments(
+    pool: &PgPool,
+) -> Result<Vec<RunningExperiment>, sqlx::Error> {
     sqlx::query_as::<_, RunningExperimentRow>(
         r"
         SELECT
@@ -159,13 +161,12 @@ mod tests {
         }];
         flag_repo.upsert_rules(flag.id, &rules).await.unwrap();
 
-        let rule_uuid: uuid::Uuid = sqlx::query_scalar(
-            "SELECT id FROM feature_flag_rules WHERE flag_id = $1 LIMIT 1",
-        )
-        .bind(flag.id.as_uuid())
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let rule_uuid: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM feature_flag_rules WHERE flag_id = $1 LIMIT 1")
+                .bind(flag.id.as_uuid())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let flag_rule_id = RuleId::from_uuid(rule_uuid);
 
         (env.id, flag_rule_id)
@@ -226,7 +227,10 @@ mod tests {
         assert_eq!(results.len(), 1, "running experiment should appear");
         assert_eq!(results[0].experiment_id, exp.id.as_uuid());
         assert!(!results[0].metric_keys.is_empty());
-        assert!(results[0].ended_at.is_none(), "active iteration has no ended_at");
+        assert!(
+            results[0].ended_at.is_none(),
+            "active iteration has no ended_at"
+        );
     }
 
     #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]

@@ -203,13 +203,12 @@ mod tests {
             .await
             .unwrap();
 
-        let next_run: DateTime<Utc> = sqlx::query_scalar(
-            "SELECT next_run_at FROM stats_schedule WHERE experiment_id = $1",
-        )
-        .bind(exp_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let next_run: DateTime<Utc> =
+            sqlx::query_scalar("SELECT next_run_at FROM stats_schedule WHERE experiment_id = $1")
+                .bind(exp_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
 
         let expected = computed_at + interval;
         assert_eq!(

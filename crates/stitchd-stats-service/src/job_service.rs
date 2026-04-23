@@ -13,8 +13,7 @@ pub async fn create_recompute_job(
     experiment_id: Uuid,
 ) -> Result<StatsJobRow, sqlx::Error> {
     let repo = PgStatsJobRepository::new(pool.clone());
-    repo.create_job(&CreateStatsJob { experiment_id })
-        .await
+    repo.create_job(&CreateStatsJob { experiment_id }).await
 }
 
 /// Fetch the current status of a job by its ID.
@@ -22,9 +21,7 @@ pub async fn create_recompute_job(
 /// Returns `Err(sqlx::Error::RowNotFound)` when the job does not exist.
 pub async fn get_job_status(pool: &PgPool, job_id: Uuid) -> Result<StatsJobRow, sqlx::Error> {
     let repo = PgStatsJobRepository::new(pool.clone());
-    repo.get_job(job_id)
-        .await?
-        .ok_or(sqlx::Error::RowNotFound)
+    repo.get_job(job_id).await?.ok_or(sqlx::Error::RowNotFound)
 }
 
 /// Transition a job to `running`.
@@ -67,10 +64,20 @@ mod tests {
             .await
             .expect("create_recompute_job should succeed");
 
-        assert_eq!(job.status, StatsJobStatus::Pending, "initial status must be pending");
+        assert_eq!(
+            job.status,
+            StatsJobStatus::Pending,
+            "initial status must be pending"
+        );
         assert_eq!(job.experiment_id, Some(exp_id), "experiment_id must be set");
-        assert!(job.started_at.is_none(), "started_at must be null initially");
-        assert!(job.completed_at.is_none(), "completed_at must be null initially");
+        assert!(
+            job.started_at.is_none(),
+            "started_at must be null initially"
+        );
+        assert!(
+            job.completed_at.is_none(),
+            "completed_at must be null initially"
+        );
         assert!(job.error.is_none());
     }
 
@@ -103,7 +110,10 @@ mod tests {
 
         let fetched = get_job_status(&pool, created.id).await.unwrap();
         assert_eq!(fetched.status, StatsJobStatus::Running);
-        assert!(fetched.started_at.is_some(), "started_at must be set after running transition");
+        assert!(
+            fetched.started_at.is_some(),
+            "started_at must be set after running transition"
+        );
     }
 
     #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]

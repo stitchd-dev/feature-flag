@@ -25,13 +25,6 @@ pub use experiment_results::{
     ExperimentResultRow, ExperimentResultsRepository, PgExperimentResultsRepository,
     UpsertResultRow,
 };
-pub use stats_jobs::{
-    CreateStatsJob, PgStatsJobRepository, StatsJobRepository, StatsJobRow, StatsJobStatus,
-};
-pub use stats_schedule::{
-    ComputationStatus, PgStatsScheduleRepository, StatsScheduleRepository, StatsScheduleRow,
-    UpsertStatsSchedule,
-};
 pub use repository::{
     AuditLogger, EnvironmentRepository, EventDefinitionRepository, ExperimentRepository,
     FlagRepository, OrganisationRepository, ProjectRepository, RoleRepository, SdkKeyRepository,
@@ -42,6 +35,13 @@ pub use repository::{
         PgRoleRepository, PgSdkKeyRepository, PgSegmentRepository, PgUserRepository,
         PgVariantRepository,
     },
+};
+pub use stats_jobs::{
+    CreateStatsJob, PgStatsJobRepository, StatsJobRepository, StatsJobRow, StatsJobStatus,
+};
+pub use stats_schedule::{
+    ComputationStatus, PgStatsScheduleRepository, StatsScheduleRepository, StatsScheduleRow,
+    UpsertStatsSchedule,
 };
 
 /// Membership result for a single evaluation context (batch list-check responses).

@@ -116,6 +116,7 @@ impl<T: Clone + Send + Sync + 'static> ProviderCache<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -253,6 +254,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn from_env_defaults_to_3600_secs() {
         // PROVIDER_CACHE_TTL_SECS not set → default 3600 s TTL
         let cache: ProviderCache<String> = ProviderCache::from_env();
@@ -260,6 +262,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn from_env_reads_env_var() {
         // SAFETY: test-only, single-threaded context for env mutation
         unsafe { std::env::set_var("PROVIDER_CACHE_TTL_SECS", "120") };

@@ -37,8 +37,7 @@ pub fn make_stub_state() -> Arc<GatewayState> {
         OidcLoginServiceClient::new(Channel::from_static("http://127.0.0.1:8").connect_lazy());
     let saml_login =
         SamlLoginServiceClient::new(Channel::from_static("http://127.0.0.1:9").connect_lazy());
-    let stats =
-        StatsServiceClient::new(Channel::from_static("http://127.0.0.1:10").connect_lazy());
+    let stats = StatsServiceClient::new(Channel::from_static("http://127.0.0.1:10").connect_lazy());
     Arc::new(GatewayState::from_channels(
         auth,
         flag,

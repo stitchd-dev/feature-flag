@@ -89,9 +89,7 @@ mod tests {
         },
     };
 
-    async fn setup_running_experiment(
-        pool: sqlx::PgPool,
-    ) -> (Uuid, Uuid) {
+    async fn setup_running_experiment(pool: sqlx::PgPool) -> (Uuid, Uuid) {
         let audit = Arc::new(PgAuditLogger::new(pool.clone()));
         let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
         let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());

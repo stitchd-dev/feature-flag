@@ -41,3 +41,4 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 wiremock = { workspace = true }
 futures = { workspace = true }
+serial_test = { workspace = true }

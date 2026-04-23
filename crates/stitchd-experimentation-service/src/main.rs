@@ -17,7 +17,9 @@ use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use stitchd_db::{PgAuditLogger, PgExperimentRepository, PgExperimentResultsRepository, PgStatsScheduleRepository};
+use stitchd_db::{
+    PgAuditLogger, PgExperimentRepository, PgExperimentResultsRepository, PgStatsScheduleRepository,
+};
 use stitchd_experimentation_service::{
     flag_client::FlagClient, service::ExperimentationServiceImpl,
 };
@@ -77,7 +79,8 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
     tracing::info!(addr = %addr, "Experimentation Service listening");
 
-    let svc = ExperimentationServiceImpl::new(experiment_repo, results_repo, schedule_repo, flag_client);
+    let svc =
+        ExperimentationServiceImpl::new(experiment_repo, results_repo, schedule_repo, flag_client);
 
     let (health_reporter, health_service) = health_reporter();
     health_reporter
