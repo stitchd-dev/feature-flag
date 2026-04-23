@@ -7,12 +7,18 @@ use std::net::SocketAddr;
 
 use anyhow::Context as _;
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
+use chrono::Duration;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::signal;
-use tracing::info;
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-use stitchd_stats_service::config::StatsConfig;
+use stitchd_stats_service::{
+    config::StatsConfig,
+    results_writer::write_results,
+    schedule_updater::update_schedule_after_run,
+    scheduler::fetch_running_experiments,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,6 +35,53 @@ async fn main() -> anyhow::Result<()> {
     let prometheus_handle = PrometheusBuilder::new()
         .install_recorder()
         .context("Failed to install Prometheus metrics recorder")?;
+
+    // ── Database connections ──────────────────────────────────────────────────
+    let pg_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&config.database_url)
+        .await
+        .context("Failed to connect to PostgreSQL")?;
+
+    // ── Scheduler loop ────────────────────────────────────────────────────────
+    let scheduler_pool = pg_pool.clone();
+    let scheduler_interval = config.scheduler_interval;
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(scheduler_interval);
+        loop {
+            ticker.tick().await;
+            match fetch_running_experiments(&scheduler_pool).await {
+                Err(e) => {
+                    error!("Failed to fetch running experiments: {e}");
+                    continue;
+                }
+                Ok(experiments) => {
+                    for exp in experiments {
+                        let pool = scheduler_pool.clone();
+                        tokio::spawn(async move {
+                            let computed_at = chrono::Utc::now();
+                            // Stats computation is deferred to Phase 3 full implementation.
+                            // For scaffold: just update the schedule to record that we ran.
+                            if let Err(e) = write_results(&pool, exp.experiment_id, exp.iteration_id, computed_at, &[]).await {
+                                warn!(experiment_id = %exp.experiment_id, "Failed to write results: {e}");
+                                return;
+                            }
+                            if let Err(e) = update_schedule_after_run(
+                                &pool,
+                                exp.experiment_id,
+                                computed_at,
+                                Duration::from_std(scheduler_interval).unwrap_or(Duration::hours(1)),
+                            )
+                            .await
+                            {
+                                warn!(experiment_id = %exp.experiment_id, "Failed to update schedule: {e}");
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    });
 
     // ── Axum HTTP server (health + metrics) ──────────────────────────────────
     let app = Router::new()

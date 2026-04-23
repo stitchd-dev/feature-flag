@@ -31,6 +31,11 @@ Patterns, gotchas, and context discovered during implementation.
 - The org identifier type is `OrganisationId` (not `OrgId`) — check `crates/stitchd-core/src/id.rs` before use.
 - **ID Newtypes:** Use `macro_rules!` to define repetitive UUID-based newtypes with `sqlx::Type(transparent)`.
 
+### Local Test Database
+- Correct DATABASE_URL for local `#[sqlx::test]` runs: `postgresql://stitchd:stitchd@localhost:5432/stitchd`
+- `postgresql://vishal@localhost/stitchd` fails with `password authentication failed` because `#[sqlx::test]` uses TCP, not socket auth.
+- Config tests and sqlx tests share the same binary; use `--test-threads=1` and `EnvGuard` RAII to prevent env-var contamination across tests.
+
 ---
 
 ## [2026-04-23] - Phase 1: Database Schema & Repository Layer

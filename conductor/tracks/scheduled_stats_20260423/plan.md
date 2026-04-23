@@ -37,27 +37,27 @@
 - [x] Task 4: Implement `StatsConfig` parsing to pass tests a0c5e45
 - [x] Task: Conductor - User Manual Verification 'Stats Service Scaffold' (Protocol in workflow.md)
 
-## Phase 3: Core Scheduler & ClickHouse Query
+## Phase 3: Core Scheduler & ClickHouse Query [checkpoint: pending]
 
-- [ ] Task 1: Write failing tests for `fetch_running_experiments`
+- [x] Task 1: Write failing tests for `fetch_running_experiments`
   <!-- files: crates/stitchd-stats-service/src/scheduler.rs -->
-  - [ ] Assert only experiments with `status = running` are returned
-- [ ] Task 2: Write failing tests for time-bounded ClickHouse event query
+  - [x] Assert only experiments with `status = running` are returned
+- [x] Task 2: Write failing tests for time-bounded ClickHouse event query
   <!-- files: crates/stitchd-stats-service/src/clickhouse_query.rs -->
-  - [ ] Assert lower bound = `iteration.started_at`
-  - [ ] Assert upper bound = `iteration.ended_at` when present, else `NOW()`
-- [ ] Task 3: Write failing tests for results writer
+  - [x] Assert lower bound = `iteration.started_at`
+  - [x] Assert upper bound = `iteration.ended_at` when present, else `NOW()`
+- [x] Task 3: Write failing tests for results writer
   <!-- files: crates/stitchd-stats-service/src/results_writer.rs -->
-  - [ ] Assert upsert to `experiment_results` with correct `experiment_id` + `iteration_id`
-- [ ] Task 4: Write failing tests for post-run `stats_schedule` update
+  - [x] Assert upsert to `experiment_results` with correct `experiment_id` + `iteration_id`
+- [x] Task 4: Write failing tests for post-run `stats_schedule` update
   <!-- files: crates/stitchd-stats-service/src/schedule_updater.rs -->
-  - [ ] Assert `last_computed_at`, `next_run_at`, `computation_status` updated on success
-- [ ] Task 5: Implement 60-minute scheduler loop (`tokio::time::interval`)
-  - [ ] Iterate all running experiments; spawn task per experiment
-- [ ] Task 6: Implement `fetch_running_experiments` (PostgreSQL query)
-- [ ] Task 7: Implement time-bounded ClickHouse event query
-- [ ] Task 8: Implement results writer (upsert to `experiment_results`)
-- [ ] Task 9: Implement `stats_schedule` post-run updater
+  - [x] Assert `last_computed_at`, `next_run_at`, `computation_status` updated on success
+- [x] Task 5: Implement 60-minute scheduler loop (`tokio::time::interval`)
+  - [x] Iterate all running experiments; spawn task per experiment
+- [x] Task 6: Implement `fetch_running_experiments` (PostgreSQL query)
+- [x] Task 7: Implement time-bounded ClickHouse event query
+- [x] Task 8: Implement results writer (upsert to `experiment_results`)
+- [x] Task 9: Implement `stats_schedule` post-run updater
 - [ ] Task: Conductor - User Manual Verification 'Core Scheduler & ClickHouse Query' (Protocol in workflow.md)
 
 ## Phase 4: Recompute Job API
