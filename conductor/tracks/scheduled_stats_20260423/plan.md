@@ -96,17 +96,14 @@
   - [x] Add `is_stale`, `next_run_at_ms`, `computation_status` to ExperimentResults proto + gateway JSON
 - [x] Task: Conductor - User Manual Verification 'Results API Staleness' (Protocol in workflow.md)
 
-## Phase 6: Infrastructure & CI
-<!-- depends: phase5 -->
+## Phase 6: Infrastructure & CI [checkpoint: eef1738]
 
-- [ ] Task 1: Add `stitchd-stats-service` to `docker-compose.yml`
-  - [ ] `depends_on: [postgres, clickhouse]` with health checks
-  - [ ] Environment variable block for postgres DSN, ClickHouse URL, interval
-- [ ] Task 2: Add stats crate to CI coverage config
-  - [ ] Add `stitchd-stats-service` to cargo-tarpaulin flags in CI workflow
-- [ ] Task 3: Update `tech-stack.md` with `tokio::time::interval` scheduler pattern
-  - [ ] Add entry to Key Dependencies / Architecture notes
-- [ ] Task 4: Update mdBook docs (architecture page, API reference)
-  - [ ] Add stats service to service table
-  - [ ] Document `/recompute` and `/jobs/{id}` endpoints
-- [ ] Task: Conductor - User Manual Verification 'Infrastructure & CI' (Protocol in workflow.md)
+- [x] Task 1: Add `stitchd-stats-service` to `docker-compose.yml` eef1738
+  - [x] `depends_on: [postgres, clickhouse]` with health checks
+  - [x] Environment variable block for postgres DSN, ClickHouse URL, interval
+- [x] Task 2: Add stats crate to CI coverage config eef1738
+  - [x] Add `stitchd-stats-service` to cargo-tarpaulin flags in coverage-full.yml + codecov.yml
+- [x] Task 3: Update `tech-stack.md` with `tokio::time::interval` scheduler pattern eef1738
+- [x] Task 4: Update mdBook docs (architecture page) eef1738
+  - [x] Add stats service to service table in architecture/README.md
+- [x] Task: Conductor - User Manual Verification 'Infrastructure & CI' (Protocol in workflow.md)
