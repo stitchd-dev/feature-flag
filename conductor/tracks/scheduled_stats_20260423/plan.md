@@ -23,19 +23,19 @@
   <!-- depends: task4 -->
 - [x] Task: Conductor - User Manual Verification 'Database Schema & Repository Layer' (Protocol in workflow.md)
 
-## Phase 2: Stats Service Scaffold
+## Phase 2: Stats Service Scaffold [checkpoint: a0c5e45]
 
-- [ ] Task 1: Write failing tests for `StatsConfig` env-var parsing
-  - [ ] Test postgres DSN, ClickHouse URL, scheduler interval fields load correctly
-- [ ] Task 2: Create `stitchd-stats-service` crate in workspace
-  - [ ] `Cargo.toml` with sqlx, clickhouse, tokio, axum, tokio-cron-scheduler dependencies
-  - [ ] Add crate to workspace `Cargo.toml`
-  - [ ] `src/main.rs` with graceful shutdown (`tokio::select!` over SIGTERM + ctrl_c)
-  - [ ] `src/config.rs` env-based config struct
-- [ ] Task 3: Implement health + metrics endpoints (`/health`, `/metrics`)
-  - [ ] Axum router with `PrometheusHandle` state (matching existing service pattern)
-- [ ] Task 4: Implement `StatsConfig` parsing to pass tests
-- [ ] Task: Conductor - User Manual Verification 'Stats Service Scaffold' (Protocol in workflow.md)
+- [x] Task 1: Write failing tests for `StatsConfig` env-var parsing a0c5e45
+  - [x] Test postgres DSN, ClickHouse URL, scheduler interval fields load correctly
+- [x] Task 2: Create `stitchd-stats-service` crate in workspace a0c5e45
+  - [x] `Cargo.toml` with sqlx, clickhouse, tokio, axum, metrics dependencies
+  - [x] Add crate to workspace `Cargo.toml`
+  - [x] `src/main.rs` with graceful shutdown (`tokio::select!` over SIGTERM + ctrl_c)
+  - [x] `src/config.rs` env-based config struct
+- [x] Task 3: Implement health + metrics endpoints (`/health`, `/metrics`) a0c5e45
+  - [x] Axum router with `PrometheusHandle` state (matching existing service pattern)
+- [x] Task 4: Implement `StatsConfig` parsing to pass tests a0c5e45
+- [x] Task: Conductor - User Manual Verification 'Stats Service Scaffold' (Protocol in workflow.md)
 
 ## Phase 3: Core Scheduler & ClickHouse Query
 
