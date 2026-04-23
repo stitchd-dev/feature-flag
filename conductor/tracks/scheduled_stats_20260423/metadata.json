@@ -1,0 +1,13 @@
+{
+  "track_id": "scheduled_stats_20260423",
+  "type": "feature",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-04-23T00:00:00Z",
+  "updated_at": "2026-04-23T00:00:00Z",
+  "description": "New stats microservice for scheduled experiment result computation — replaces on-demand ClickHouse queries with a 60-minute periodic scheduler; Results API reads from pre-computed PostgreSQL table with staleness metadata",
+  "git_branch": "track/scheduled_stats_20260423",
+  "worktree_path": ".worktrees/scheduled_stats_20260423"
+}

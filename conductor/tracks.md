@@ -34,3 +34,6 @@ This file tracks all major tracks for the project.
 <!-- Archived: org_oidc_saml_20260422 (Org-Level OIDC & SAML with On-the-Fly Provider Instantiation) -->
 
 ---
+
+## [ ] Track: Scheduled Stats Processing Microservice
+*Link: [./conductor/tracks/scheduled_stats_20260423/](./conductor/tracks/scheduled_stats_20260423/)*
