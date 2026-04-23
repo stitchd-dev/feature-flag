@@ -2,6 +2,7 @@
 //!
 //! Runs a periodic scheduler computing experiment results for all running experiments.
 //! Exposes health and Prometheus metrics on `STATS_HTTP_PORT` (default: 9200).
+//! Exposes gRPC `StatsService` on `STATS_GRPC_PORT` (default: 50056).
 
 use std::net::SocketAddr;
 
@@ -10,11 +11,15 @@ use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, rou
 use chrono::Duration;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::signal;
+use tonic::transport::Server;
+use tonic_health::server::health_reporter;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
+use stitchd_proto::stats::v1::stats_service_server::StatsServiceServer;
 use stitchd_stats_service::{
     config::StatsConfig,
+    grpc::service::StatsServiceImpl,
     results_writer::write_results,
     schedule_updater::update_schedule_after_run,
     scheduler::fetch_running_experiments,
@@ -82,6 +87,28 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+
+    // ── gRPC server ───────────────────────────────────────────────────────────
+    let grpc_addr = SocketAddr::from(([0, 0, 0, 0], config.grpc_port));
+    info!("StatsService gRPC listening on {grpc_addr}");
+
+    let (health_reporter, health_service) = health_reporter();
+    health_reporter
+        .set_serving::<StatsServiceServer<StatsServiceImpl>>()
+        .await;
+
+    let stats_svc = StatsServiceImpl::new(pg_pool.clone());
+
+    tokio::spawn(
+        Server::builder()
+            .add_service(health_service)
+            .add_service(StatsServiceServer::new(stats_svc))
+            .serve_with_shutdown(grpc_addr, async {
+                // Shut down gRPC when the main process receives a signal.
+                // We use a simple channel-less approach: just wait for ctrl_c.
+                let _ = tokio::signal::ctrl_c().await;
+            }),
+    );
 
     // ── Axum HTTP server (health + metrics) ──────────────────────────────────
     let app = Router::new()

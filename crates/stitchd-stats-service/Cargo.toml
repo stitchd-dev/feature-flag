@@ -13,6 +13,10 @@ path = "src/main.rs"
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
 stitchd-db = { path = "../stitchd-db" }
+stitchd-proto = { path = "../stitchd-proto" }
+tonic = { workspace = true }
+tonic-health = { workspace = true }
+prost = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 sqlx = { workspace = true }

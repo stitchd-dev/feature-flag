@@ -13,6 +13,7 @@ use stitchd_proto::experiments::v1::experimentation_service_client::Experimentat
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::management::v1::management_service_client::ManagementServiceClient;
 use stitchd_proto::segments::v1::segmentation_service_client::SegmentationServiceClient;
+use stitchd_proto::stats::v1::stats_service_client::StatsServiceClient;
 
 use crate::state::GatewayState;
 
@@ -36,6 +37,8 @@ pub fn make_stub_state() -> Arc<GatewayState> {
         OidcLoginServiceClient::new(Channel::from_static("http://127.0.0.1:8").connect_lazy());
     let saml_login =
         SamlLoginServiceClient::new(Channel::from_static("http://127.0.0.1:9").connect_lazy());
+    let stats =
+        StatsServiceClient::new(Channel::from_static("http://127.0.0.1:10").connect_lazy());
     Arc::new(GatewayState::from_channels(
         auth,
         flag,
@@ -46,6 +49,7 @@ pub fn make_stub_state() -> Arc<GatewayState> {
         auth_provider,
         oidc_login,
         saml_login,
+        stats,
     ))
 }
 

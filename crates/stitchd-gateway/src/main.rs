@@ -8,6 +8,7 @@
 //! - `SEGMENTATION_SERVICE_ADDR` (default: `http://localhost:50053`)
 //! - `EVENT_SERVICE_ADDR` (default: `http://localhost:50054`)
 //! - `EXPERIMENTATION_SERVICE_ADDR` (default: `http://localhost:50055`)
+//! - `STATS_SERVICE_ADDR` (default: `http://localhost:50056`)
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -54,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         env_or("SEGMENTATION_SERVICE_ADDR", "http://localhost:50053"),
         env_or("EVENT_SERVICE_ADDR", "http://localhost:50054"),
         env_or("EXPERIMENTATION_SERVICE_ADDR", "http://localhost:50055"),
+        env_or("STATS_SERVICE_ADDR", "http://localhost:50056"),
     )
     .await?;
 

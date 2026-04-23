@@ -15,6 +15,8 @@ pub struct StatsConfig {
     pub scheduler_interval: Duration,
     /// Port for the Axum health/metrics HTTP server (`STATS_HTTP_PORT`, default: 9200).
     pub http_port: u16,
+    /// Port for the gRPC server (`STATS_GRPC_PORT`, default: 50056).
+    pub grpc_port: u16,
 }
 
 impl StatsConfig {
@@ -42,12 +44,18 @@ impl StatsConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(9200);
 
+        let grpc_port: u16 = std::env::var("STATS_GRPC_PORT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50056);
+
         Ok(Self {
             database_url,
             clickhouse_url,
             clickhouse_db,
             scheduler_interval: Duration::from_secs(scheduler_interval_secs),
             http_port,
+            grpc_port,
         })
     }
 }

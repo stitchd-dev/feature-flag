@@ -72,6 +72,9 @@ use utoipa::{
         crate::routes::experiments::transition_experiment,
         crate::routes::experiments::list_iterations,
         crate::routes::experiments::get_results,
+        // Stats recompute
+        crate::routes::stats::trigger_recompute,
+        crate::routes::stats::get_job_status,
     ),
     components(
         schemas(
@@ -120,6 +123,9 @@ use utoipa::{
             crate::routes::experiments::IterationJson,
             crate::routes::experiments::VariantResultJson,
             crate::routes::experiments::ExperimentResultsJson,
+            // Stats
+            crate::routes::stats::RecomputeJobJson,
+            crate::routes::stats::JobStatusJson,
         )
     ),
     modifiers(&SecurityAddon)
