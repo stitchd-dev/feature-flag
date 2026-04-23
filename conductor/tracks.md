@@ -32,8 +32,4 @@ This file tracks all major tracks for the project.
 <!-- Archived: microservices_20260421 (Microservice Architecture Decomposition) -->
 <!-- Archived: docs_microservices_20260422 (mdBook Docs — Microservice Architecture Update) -->
 <!-- Archived: org_oidc_saml_20260422 (Org-Level OIDC & SAML with On-the-Fly Provider Instantiation) -->
-
----
-
-## [x] Track: Scheduled Stats Processing Microservice
-*Link: [./conductor/tracks/scheduled_stats_20260423/](./conductor/tracks/scheduled_stats_20260423/)*
+<!-- Archived: scheduled_stats_20260423 (Scheduled Stats Processing Microservice) -->
