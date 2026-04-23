@@ -1,27 +1,27 @@
 # Implementation Plan: scheduled_stats_20260423
 
-## Phase 1: Database Schema & Repository Layer
+## Phase 1: Database Schema & Repository Layer [checkpoint: 81b8cc9]
 <!-- execution: parallel -->
 
-- [ ] Task 1: Write failing tests for `stats_jobs` repository
+- [x] Task 1: Write failing tests for `stats_jobs` repository 14264e9
   <!-- files: crates/stitchd-db/src/stats_jobs.rs -->
-  - [ ] Define `StatsJob` domain type and `StatsJobStatus` enum (`pending|running|completed|failed`)
-  - [ ] Test `create_job`, `get_job`, `update_job_status` repository methods
-- [ ] Task 2: Write failing tests for `stats_schedule` repository
+  - [x] Define `StatsJob` domain type and `StatsJobStatus` enum (`pending|running|completed|failed`)
+  - [x] Test `create_job`, `get_job`, `update_job_status` repository methods
+- [x] Task 2: Write failing tests for `stats_schedule` repository d88e2c6
   <!-- files: crates/stitchd-db/src/stats_schedule.rs -->
-  - [ ] Define `StatsSchedule` domain type and `ComputationStatus` enum (`ready|computing|never_computed`)
-  - [ ] Test `upsert_schedule`, `get_schedule_for_experiment` repository methods
-- [ ] Task 3: Create PostgreSQL migrations
+  - [x] Define `StatsSchedule` domain type and `ComputationStatus` enum (`ready|computing|never_computed`)
+  - [x] Test `upsert_schedule`, `get_schedule_for_experiment` repository methods
+- [x] Task 3: Create PostgreSQL migrations 8df78c5
   <!-- files: crates/stitchd-db/migrations/ -->
   <!-- depends: task1, task2 -->
-  - [ ] `stats_jobs(id, experiment_id, status, created_at, started_at, completed_at, error)`
-  - [ ] `stats_schedule(experiment_id PK, last_computed_at, next_run_at, computation_status)`
-- [ ] Task 4: Implement repository methods to pass tests
+  - [x] `stats_jobs(id, experiment_id, status, created_at, started_at, completed_at, error)`
+  - [x] `stats_schedule(experiment_id PK, last_computed_at, next_run_at, computation_status)`
+- [x] Task 4: Implement repository methods to pass tests ebca93e
   <!-- files: crates/stitchd-db/src/stats_jobs.rs, crates/stitchd-db/src/stats_schedule.rs -->
   <!-- depends: task3 -->
-- [ ] Task 5: Run `SQLX_OFFLINE=false cargo sqlx prepare --workspace` to update offline cache
+- [x] Task 5: Run `SQLX_OFFLINE=false cargo sqlx prepare --workspace` to update offline cache 67089a4
   <!-- depends: task4 -->
-- [ ] Task: Conductor - User Manual Verification 'Database Schema & Repository Layer' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Database Schema & Repository Layer' (Protocol in workflow.md)
 
 ## Phase 2: Stats Service Scaffold
 
