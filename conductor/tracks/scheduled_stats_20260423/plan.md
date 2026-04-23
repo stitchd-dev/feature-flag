@@ -37,7 +37,7 @@
 - [x] Task 4: Implement `StatsConfig` parsing to pass tests a0c5e45
 - [x] Task: Conductor - User Manual Verification 'Stats Service Scaffold' (Protocol in workflow.md)
 
-## Phase 3: Core Scheduler & ClickHouse Query [checkpoint: pending]
+## Phase 3: Core Scheduler & ClickHouse Query [checkpoint: aba205d]
 
 - [x] Task 1: Write failing tests for `fetch_running_experiments`
   <!-- files: crates/stitchd-stats-service/src/scheduler.rs -->
@@ -58,30 +58,29 @@
 - [x] Task 7: Implement time-bounded ClickHouse event query
 - [x] Task 8: Implement results writer (upsert to `experiment_results`)
 - [x] Task 9: Implement `stats_schedule` post-run updater
-- [ ] Task: Conductor - User Manual Verification 'Core Scheduler & ClickHouse Query' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Core Scheduler & ClickHouse Query' (Protocol in workflow.md)
 
-## Phase 4: Recompute Job API
-<!-- depends: phase2 -->
+## Phase 4: Recompute Job API [checkpoint: ed6cc2a]
 
-- [ ] Task 1: Write failing tests for job service
+- [x] Task 1: Write failing tests for job service ed6cc2a
   <!-- files: crates/stitchd-stats-service/src/job_service.rs -->
-  - [ ] `create_recompute_job` returns job with status `pending` and a job_id
-  - [ ] `get_job_status` returns current status from `stats_jobs`
-- [ ] Task 2: Define proto for `StatsService` gRPC
-  <!-- files: crates/stitchd-proto/proto/stats.proto -->
-  - [ ] `TriggerRecompute(TriggerRecomputeRequest) → TriggerRecomputeResponse {job_id, status, created_at}`
-  - [ ] `GetJobStatus(GetJobStatusRequest) → GetJobStatusResponse {job_id, status, started_at, completed_at, error}`
-- [ ] Task 3: Implement gRPC service handler in `stitchd-stats-service`
+  - [x] `create_recompute_job` returns job with status `pending` and a job_id
+  - [x] `get_job_status` returns current status from `stats_jobs`
+- [x] Task 2: Define proto for `StatsService` gRPC ed6cc2a
+  <!-- files: proto/stats/v1/stats_service.proto -->
+  - [x] `TriggerRecompute(TriggerRecomputeRequest) → TriggerRecomputeResponse {job_id, status, created_at}`
+  - [x] `GetJobStatus(GetJobStatusRequest) → GetJobStatusResponse {job_id, status, started_at, completed_at, error}`
+- [x] Task 3: Implement gRPC service handler in `stitchd-stats-service` ed6cc2a
   <!-- files: crates/stitchd-stats-service/src/grpc/service.rs -->
-  - [ ] `TriggerRecompute` — inserts job row (`pending`), spawns background task, returns job_id
-  - [ ] `GetJobStatus` — reads from `stats_jobs`, returns current status
-- [ ] Task 4: Add gateway routes (with OpenAPI annotations)
+  - [x] `TriggerRecompute` — inserts job row (`pending`), spawns background task, returns job_id
+  - [x] `GetJobStatus` — reads from `stats_jobs`, returns current status
+- [x] Task 4: Add gateway routes (with OpenAPI annotations) ed6cc2a
   <!-- files: crates/stitchd-gateway/src/routes/stats.rs -->
-  - [ ] `POST /experiments/{id}/recompute` → stats gRPC → 202 with `{job_id, status, created_at}`
-  - [ ] `GET /jobs/{job_id}` → stats gRPC → job status response
-- [ ] Task 5: Register stats gRPC client in gateway startup + config
-  <!-- files: crates/stitchd-gateway/src/main.rs, crates/stitchd-gateway/src/config.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Recompute Job API' (Protocol in workflow.md)
+  - [x] `POST /experiments/{id}/recompute` → stats gRPC → 202 with `{job_id, status, created_at}`
+  - [x] `GET /jobs/{job_id}` → stats gRPC → job status response
+- [x] Task 5: Register stats gRPC client in gateway startup + config ed6cc2a
+  <!-- files: crates/stitchd-gateway/src/main.rs -->
+- [x] Task: Conductor - User Manual Verification 'Recompute Job API' (Protocol in workflow.md)
 
 ## Phase 5: Results API Staleness
 <!-- depends: phase3, phase4 -->
