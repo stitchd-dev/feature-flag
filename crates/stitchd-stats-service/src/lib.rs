@@ -1,0 +1,9 @@
+//! `stitchd-stats-service` — Scheduled Statistics Processing Service.
+
+pub mod clickhouse_query;
+pub mod config;
+pub mod grpc;
+pub mod job_service;
+pub mod results_writer;
+pub mod schedule_updater;
+pub mod scheduler;

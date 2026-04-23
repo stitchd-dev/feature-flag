@@ -14,6 +14,7 @@ use stitchd_proto::experiments::v1::experimentation_service_client::Experimentat
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::management::v1::management_service_client::ManagementServiceClient;
 use stitchd_proto::segments::v1::segmentation_service_client::SegmentationServiceClient;
+use stitchd_proto::stats::v1::stats_service_client::StatsServiceClient;
 
 /// Shared state injected into every Axum handler via `State<Arc<GatewayState>>`.
 #[derive(Clone)]
@@ -36,6 +37,8 @@ pub struct GatewayState {
     pub oidc_login_client: Arc<Mutex<OidcLoginServiceClient<Channel>>>,
     /// SAML login service gRPC client (hosted on the auth-service port).
     pub saml_login_client: Arc<Mutex<SamlLoginServiceClient<Channel>>>,
+    /// Stats service gRPC client.
+    pub stats_client: Arc<Mutex<StatsServiceClient<Channel>>>,
 }
 
 impl GatewayState {
@@ -49,6 +52,7 @@ impl GatewayState {
         segmentation_addr: String,
         event_addr: String,
         experimentation_addr: String,
+        stats_addr: String,
     ) -> Result<Self, anyhow::Error> {
         let auth_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid Auth Service URI: {e}"))?
@@ -104,6 +108,12 @@ impl GatewayState {
             .await
             .map_err(|e| anyhow::anyhow!("connect to Experimentation Service: {e}"))?;
 
+        let stats_channel = Channel::from_shared(stats_addr)
+            .map_err(|e| anyhow::anyhow!("invalid Stats Service URI: {e}"))?
+            .connect()
+            .await
+            .map_err(|e| anyhow::anyhow!("connect to Stats Service: {e}"))?;
+
         Ok(Self {
             auth_client: Arc::new(Mutex::new(AuthServiceClient::new(auth_channel))),
             flag_client: Arc::new(Mutex::new(FlagServiceClient::new(flag_channel))),
@@ -122,6 +132,7 @@ impl GatewayState {
             saml_login_client: Arc::new(Mutex::new(SamlLoginServiceClient::new(
                 saml_login_channel,
             ))),
+            stats_client: Arc::new(Mutex::new(StatsServiceClient::new(stats_channel))),
         })
     }
 
@@ -138,6 +149,7 @@ impl GatewayState {
         auth_provider_client: AuthProviderServiceClient<Channel>,
         oidc_login_client: OidcLoginServiceClient<Channel>,
         saml_login_client: SamlLoginServiceClient<Channel>,
+        stats_client: StatsServiceClient<Channel>,
     ) -> Self {
         Self {
             auth_client: Arc::new(Mutex::new(auth_client)),
@@ -149,6 +161,7 @@ impl GatewayState {
             auth_provider_client: Arc::new(Mutex::new(auth_provider_client)),
             oidc_login_client: Arc::new(Mutex::new(oidc_login_client)),
             saml_login_client: Arc::new(Mutex::new(saml_login_client)),
+            stats_client: Arc::new(Mutex::new(stats_client)),
         }
     }
 }

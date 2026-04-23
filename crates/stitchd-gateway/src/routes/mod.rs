@@ -11,3 +11,4 @@ pub mod oidc;
 pub mod saml;
 pub mod sdk;
 pub mod segments;
+pub mod stats;

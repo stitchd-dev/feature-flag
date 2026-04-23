@@ -10,6 +10,8 @@ pub mod clickhouse;
 pub mod error;
 pub mod experiment_results;
 pub mod repository;
+pub mod stats_jobs;
+pub mod stats_schedule;
 
 pub use auth::{
     AuthProviderRepository, AuthUserRepository, InviteRepository, MfaChallengeRepository,
@@ -22,6 +24,13 @@ pub use error::RepositoryError;
 pub use experiment_results::{
     ExperimentResultRow, ExperimentResultsRepository, PgExperimentResultsRepository,
     UpsertResultRow,
+};
+pub use stats_jobs::{
+    CreateStatsJob, PgStatsJobRepository, StatsJobRepository, StatsJobRow, StatsJobStatus,
+};
+pub use stats_schedule::{
+    ComputationStatus, PgStatsScheduleRepository, StatsScheduleRepository, StatsScheduleRow,
+    UpsertStatsSchedule,
 };
 pub use repository::{
     AuditLogger, EnvironmentRepository, EventDefinitionRepository, ExperimentRepository,

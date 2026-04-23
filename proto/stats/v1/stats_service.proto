@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package stitchd.stats.v1;
+
+// ─── Recompute Job API ────────────────────────────────────────────────────────
+
+message TriggerRecomputeRequest {
+  // UUID of the experiment to recompute stats for.
+  string experiment_id = 1;
+}
+
+message TriggerRecomputeResponse {
+  // UUID of the created stats job.
+  string job_id    = 1;
+  // Initial status — always "pending".
+  string status    = 2;
+  // Milliseconds since Unix epoch when the job was created.
+  int64  created_at_ms = 3;
+}
+
+message GetJobStatusRequest {
+  // UUID of the stats job to query.
+  string job_id = 1;
+}
+
+message GetJobStatusResponse {
+  string job_id         = 1;
+  string status         = 2;
+  // Zero when the job has not yet started.
+  int64  started_at_ms  = 3;
+  // Zero when the job has not yet completed.
+  int64  completed_at_ms = 4;
+  // Empty unless the job status is "failed".
+  string error          = 5;
+}
+
+// ─── StatsService ─────────────────────────────────────────────────────────────
+
+service StatsService {
+  // Trigger an out-of-band stats recompute for an experiment.
+  // Returns immediately with a job_id; poll GetJobStatus to track progress.
+  rpc TriggerRecompute(TriggerRecomputeRequest) returns (TriggerRecomputeResponse);
+
+  // Query the status of a previously triggered recompute job.
+  rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
+}

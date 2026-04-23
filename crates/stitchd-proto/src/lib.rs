@@ -55,4 +55,11 @@ pub mod management {
     }
 }
 
+/// Stats recompute job service.
+pub mod stats {
+    pub mod v1 {
+        tonic::include_proto!("stitchd.stats.v1");
+    }
+}
+
 mod tests;

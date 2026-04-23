@@ -20,6 +20,7 @@ use axum::{
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
 use crate::routes::{
     admin, auth, auth_providers, events, experiments, flags, management, oidc, saml, sdk, segments,
+    stats,
 };
 use crate::state::GatewayState;
 
@@ -175,6 +176,12 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
             get(experiments::list_iterations),
         )
+        // Stats recompute
+        .route(
+            "/v1/experiments/{experiment_id}/recompute",
+            post(stats::trigger_recompute),
+        )
+        .route("/v1/jobs/{job_id}", get(stats::get_job_status))
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&auth_client),

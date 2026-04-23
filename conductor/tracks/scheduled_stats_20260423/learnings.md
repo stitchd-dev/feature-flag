@@ -31,6 +31,21 @@ Patterns, gotchas, and context discovered during implementation.
 - The org identifier type is `OrganisationId` (not `OrgId`) — check `crates/stitchd-core/src/id.rs` before use.
 - **ID Newtypes:** Use `macro_rules!` to define repetitive UUID-based newtypes with `sqlx::Type(transparent)`.
 
+### Local Test Database
+- Correct DATABASE_URL for local `#[sqlx::test]` runs: `postgresql://stitchd:stitchd@localhost:5432/stitchd`
+- `postgresql://vishal@localhost/stitchd` fails with `password authentication failed` because `#[sqlx::test]` uses TCP, not socket auth.
+- Config tests and sqlx tests share the same binary; use `--test-threads=1` and `EnvGuard` RAII to prevent env-var contamination across tests.
+
 ---
 
-<!-- Learnings from implementation will be appended below -->
+## [2026-04-23] - Phase 1: Database Schema & Repository Layer
+
+- **Implemented:** `stats_jobs` and `stats_schedule` tables + full repository layer (types, traits, Pg implementations, tests).
+- **Files changed:** `crates/stitchd-db/migrations/20260423000001_stats_tables.sql`, `src/stats_jobs.rs`, `src/stats_schedule.rs`, `src/lib.rs`, `.sqlx/`
+- **Learnings:**
+  - Gotchas: `stats_schedule.experiment_id` FK to `experiments.id` — tests require full `setup_experiment()` chain (org→project→env→flag→rule→experiment), matching the pattern in `experiment_results.rs`.
+  - Gotchas: `sqlx::query!` macros inside `#[cfg(test)]` blocks are NOT captured by `cargo sqlx prepare` (which runs `cargo check`, skipping test code). Always run tests with a live `DATABASE_URL`, not `SQLX_OFFLINE=true`.
+  - Gotchas: `cargo sqlx prepare` may delete previously-cached test-only queries. Verify test compilation with a live DB after running prepare.
+  - Patterns: New repository modules use raw `sqlx::query_as::<_, Row>(r"...")` strings (not `sqlx::query!`) to avoid compile-time cache issues for new tables.
+
+---
