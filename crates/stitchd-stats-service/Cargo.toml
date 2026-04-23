@@ -1,0 +1,29 @@
+[package]
+name = "stitchd-stats-service"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "stitchd-stats-service"
+path = "src/main.rs"
+
+[dependencies]
+stitchd-db = { path = "../stitchd-db" }
+tokio = { workspace = true }
+axum = { workspace = true }
+sqlx = { workspace = true }
+clickhouse = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -13,6 +13,7 @@ members = [
     "crates/stitchd-event-service",
     "crates/stitchd-experimentation-service",
     "crates/stitchd-gateway",
+    "crates/stitchd-stats-service",
 ]
 
 [workspace.package]

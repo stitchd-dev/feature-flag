@@ -3692,6 +3692,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "stitchd-stats-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "chrono",
+ "clickhouse",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "serde",
+ "sqlx",
+ "stitchd-db",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "stringprep"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
