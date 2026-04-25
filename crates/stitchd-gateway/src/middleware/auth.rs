@@ -238,6 +238,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn require_system_org_allows_system() {
+        use axum::{Router, middleware::from_fn, routing::get};
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .layer(from_fn(require_system_org));
+
+        let req = req_with_rbac(true);
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn require_non_system_org_rejects_system() {
         use axum::{Router, middleware::from_fn, routing::get};
         use tower::ServiceExt;
@@ -249,5 +263,85 @@ mod tests {
         let req = req_with_rbac(true);
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn require_non_system_org_allows_non_system() {
+        use axum::{Router, middleware::from_fn, routing::get};
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .layer(from_fn(require_non_system_org));
+
+        let req = req_with_rbac(false);
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn require_non_system_org_rejects_missing_context() {
+        use axum::{Router, middleware::from_fn, routing::get};
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .layer(from_fn(require_non_system_org));
+
+        let req = req_no_auth();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn rbac_context_returns_none_when_absent() {
+        let req = req_no_auth();
+        assert!(rbac_context(&req).is_none());
+    }
+
+    #[test]
+    fn rbac_context_returns_some_when_present() {
+        let mut req = req_no_auth();
+        req.extensions_mut().insert(RbacContext {
+            is_system: false,
+            ..Default::default()
+        });
+        assert!(rbac_context(&req).is_some());
+    }
+
+    #[tokio::test]
+    async fn auth_middleware_no_credential_returns_401() {
+        use axum::{Router, middleware::from_fn_with_state, routing::get};
+        use tonic::transport::Channel;
+        use tower::ServiceExt;
+
+        let auth_client = Arc::new(Mutex::new(AuthServiceClient::new(
+            Channel::from_static("http://127.0.0.1:1").connect_lazy(),
+        )));
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .route_layer(from_fn_with_state(auth_client, auth_middleware));
+
+        let req = req_no_auth();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn auth_middleware_bearer_grpc_error_returns_401() {
+        use axum::{Router, middleware::from_fn_with_state, routing::get};
+        use tonic::transport::Channel;
+        use tower::ServiceExt;
+
+        let auth_client = Arc::new(Mutex::new(AuthServiceClient::new(
+            Channel::from_static("http://127.0.0.1:1").connect_lazy(),
+        )));
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .route_layer(from_fn_with_state(auth_client, auth_middleware));
+
+        let req = req_with_bearer("mytoken");
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 }

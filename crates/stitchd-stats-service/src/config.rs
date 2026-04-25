@@ -63,9 +63,8 @@ impl StatsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
-    /// Save and restore DATABASE_URL around a config test to avoid poisoning
-    /// the env for subsequent `#[sqlx::test]` tests.
     struct EnvGuard {
         key: &'static str,
         original: Option<String>,
@@ -80,7 +79,7 @@ mod tests {
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
-            // SAFETY: single-threaded test binary with --test-threads=1
+            // SAFETY: serial ensures no other thread reads these vars concurrently.
             unsafe {
                 match &self.original {
                     Some(v) => std::env::set_var(self.key, v),
@@ -91,9 +90,9 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_requires_database_url() {
         let _g = EnvGuard::new("DATABASE_URL");
-        // SAFETY: single-threaded test binary with --test-threads=1
         unsafe { std::env::remove_var("DATABASE_URL") };
         let result = StatsConfig::from_env();
         assert!(result.is_err(), "should fail without DATABASE_URL");
@@ -104,21 +103,19 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_loads_database_url() {
         let _g = EnvGuard::new("DATABASE_URL");
-        // SAFETY: single-threaded test binary with --test-threads=1
-        unsafe {
-            std::env::set_var("DATABASE_URL", "postgresql://test:test@localhost/test");
-        }
+        unsafe { std::env::set_var("DATABASE_URL", "postgresql://test:test@localhost/test") };
         let config = StatsConfig::from_env().expect("should load with DATABASE_URL set");
         assert_eq!(config.database_url, "postgresql://test:test@localhost/test");
     }
 
     #[test]
+    #[serial]
     fn test_config_defaults_clickhouse_url() {
         let _g_db = EnvGuard::new("DATABASE_URL");
         let _g_ch = EnvGuard::new("CLICKHOUSE_URL");
-        // SAFETY: single-threaded test binary with --test-threads=1
         unsafe {
             std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
             std::env::remove_var("CLICKHOUSE_URL");
@@ -128,10 +125,10 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_loads_clickhouse_url() {
         let _g_db = EnvGuard::new("DATABASE_URL");
         let _g_ch = EnvGuard::new("CLICKHOUSE_URL");
-        // SAFETY: single-threaded test binary with --test-threads=1
         unsafe {
             std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
             std::env::set_var("CLICKHOUSE_URL", "http://clickhouse:8123");
@@ -141,10 +138,10 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_defaults_scheduler_interval() {
         let _g_db = EnvGuard::new("DATABASE_URL");
         let _g_si = EnvGuard::new("STATS_SCHEDULER_INTERVAL_SECS");
-        // SAFETY: single-threaded test binary with --test-threads=1
         unsafe {
             std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
             std::env::remove_var("STATS_SCHEDULER_INTERVAL_SECS");
@@ -154,10 +151,10 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_loads_scheduler_interval() {
         let _g_db = EnvGuard::new("DATABASE_URL");
         let _g_si = EnvGuard::new("STATS_SCHEDULER_INTERVAL_SECS");
-        // SAFETY: single-threaded test binary with --test-threads=1
         unsafe {
             std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
             std::env::set_var("STATS_SCHEDULER_INTERVAL_SECS", "120");
@@ -167,10 +164,10 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_config_defaults_http_port() {
         let _g_db = EnvGuard::new("DATABASE_URL");
         let _g_hp = EnvGuard::new("STATS_HTTP_PORT");
-        // SAFETY: single-threaded test binary with --test-threads=1
         unsafe {
             std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
             std::env::remove_var("STATS_HTTP_PORT");

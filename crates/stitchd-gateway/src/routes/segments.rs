@@ -391,6 +391,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_segment_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/v1/environments/env-1/segments/my-seg")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"context_type":"user"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
     async fn delete_segment_returns_204_or_502() {
         let state = make_stub_state();
         let app = test_router(state);

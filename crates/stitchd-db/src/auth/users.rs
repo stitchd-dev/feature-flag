@@ -541,4 +541,90 @@ mod tests {
             Some("https://example.com/avatar.png")
         );
     }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn update_status_unknown_user_returns_not_found(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool);
+        let err = repo
+            .update_status(UserId::new(), UserStatus::Deactivated)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RepositoryError::NotFound { .. }));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn update_password_hash_unknown_user_returns_not_found(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool);
+        let err = repo
+            .update_password_hash(UserId::new(), "hash")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RepositoryError::NotFound { .. }));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn update_profile_unknown_user_returns_not_found(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool);
+        let err = repo
+            .update_profile(UserId::new(), "Name", None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RepositoryError::NotFound { .. }));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_org_users_returns_members(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool.clone());
+        let org_id = seed_org(&pool).await;
+
+        let user = repo
+            .create("orgmember@example.com", "Member", None)
+            .await
+            .unwrap();
+
+        sqlx::query!(
+            "INSERT INTO org_memberships (user_id, org_id, role) VALUES ($1, $2, 'org_member')",
+            user.id.as_uuid(),
+            org_id.as_uuid(),
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let members = repo.list_org_users(org_id).await.unwrap();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].0.id, user.id);
+        assert_eq!(members[0].1, stitchd_core::auth::OrgRole::OrgMember);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_org_users_includes_admin_role(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool.clone());
+        let org_id = seed_org(&pool).await;
+
+        let admin = repo
+            .create("orgadmin@example.com", "Admin", None)
+            .await
+            .unwrap();
+
+        sqlx::query!(
+            "INSERT INTO org_memberships (user_id, org_id, role) VALUES ($1, $2, 'org_admin')",
+            admin.id.as_uuid(),
+            org_id.as_uuid(),
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let members = repo.list_org_users(org_id).await.unwrap();
+        assert_eq!(members[0].1, stitchd_core::auth::OrgRole::OrgAdmin);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn list_org_users_empty_for_org_with_no_members(pool: PgPool) {
+        let repo = PgAuthUserRepository::new(pool.clone());
+        let org_id = seed_org(&pool).await;
+        let members = repo.list_org_users(org_id).await.unwrap();
+        assert!(members.is_empty());
+    }
 }

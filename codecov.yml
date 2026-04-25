@@ -1,5 +1,5 @@
 comment:
-  layout: "reach,diff,flags,files"
+  layout: "reach,diff,files"
   behavior: default
 
 coverage:
@@ -8,76 +8,14 @@ coverage:
   status:
     project:
       default:
-        # Global project coverage (combined across all flags via carryforward)
-        # must stay at or above 90%.
         target: 90%
         threshold: 1%        # tolerate ≤1% noise between commits
     patch:
       default:
-        # New lines introduced in a PR must also meet 90%.
         target: 90%
         threshold: 1%
-
-# Per-crate flags with carryforward enabled.
-# When only a subset of crates is tested in a given push, Codecov reaches
-# back to the most recent successful upload for each flag to fill in the
-# unchanged crates, keeping the global project % accurate.
-flags:
-  stitchd-core:
-    carryforward: true
-    paths:
-      - crates/stitchd-core/
-
-  stitchd-db:
-    carryforward: true
-    paths:
-      - crates/stitchd-db/
-
-  stitchd-events:
-    carryforward: true
-    paths:
-      - crates/stitchd-events/
-
-  stitchd-sdk:
-    carryforward: true
-    paths:
-      - crates/stitchd-sdk/
-
-  stitchd-gateway:
-    carryforward: true
-    paths:
-      - crates/stitchd-gateway/
-
-  stitchd-auth-service:
-    carryforward: true
-    paths:
-      - crates/stitchd-auth-service/
-
-  stitchd-flag-service:
-    carryforward: true
-    paths:
-      - crates/stitchd-flag-service/
-
-  stitchd-event-service:
-    carryforward: true
-    paths:
-      - crates/stitchd-event-service/
-
-  stitchd-experimentation-service:
-    carryforward: true
-    paths:
-      - crates/stitchd-experimentation-service/
-
-  stitchd-segmentation-service:
-    carryforward: true
-    paths:
-      - crates/stitchd-segmentation-service/
-
-  stitchd-stats-service:
-    carryforward: true
-    paths:
-      - crates/stitchd-stats-service/
 
 ignore:
   - "crates/stitchd-proto/**"   # generated protobuf
   - "crates/xtask/**"           # build tool
+  - "**/main.rs"                # binary entry points — startup wiring only

@@ -545,6 +545,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn flag_to_json_maps_fields() {
+        let f = FeatureFlag {
+            key: "my-flag".to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        let j = flag_to_json(&f);
+        assert_eq!(j.key, "my-flag");
+        assert!(j.enabled);
+    }
+
+    #[tokio::test]
+    async fn update_flag_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(Arc::clone(&state), state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/v1/projects/env-1/flags/my-flag")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"enabled":false,"version":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
     // Keeps the compiler happy — make_stub_state_with_flag exported for other tests
     #[allow(dead_code)]
     fn _use_with_flag() {

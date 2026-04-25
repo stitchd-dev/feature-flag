@@ -289,4 +289,46 @@ mod tests {
             resp.status()
         );
     }
+
+    #[tokio::test]
+    async fn create_environment_returns_201_or_502() {
+        let app = test_router(make_stub_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/management/projects/proj-1/environments")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"staging"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::CREATED || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_sdk_key_returns_201_or_502() {
+        let app = test_router(make_stub_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/management/environments/env-1/sdk-keys")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::CREATED || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
 }

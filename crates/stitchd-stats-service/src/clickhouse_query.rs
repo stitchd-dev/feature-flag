@@ -128,6 +128,17 @@ mod tests {
         assert_eq!(recovered, started_at);
     }
 
+    #[tokio::test]
+    async fn test_fetch_empty_metric_keys_returns_empty_without_db() {
+        // The function short-circuits before touching ClickHouse when metric_keys is empty.
+        let client = clickhouse::Client::default();
+        let env_id = uuid::Uuid::new_v4();
+        let started_at = Utc::now() - Duration::hours(1);
+        let result = fetch_event_aggregates(&client, env_id, &[], started_at, None).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
     #[test]
     fn test_upper_bound_is_strictly_after_lower_when_ended() {
         let started_at = Utc.with_ymd_and_hms(2026, 4, 1, 0, 0, 0).unwrap();

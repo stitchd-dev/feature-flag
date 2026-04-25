@@ -34,3 +34,4 @@ chrono = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 sqlx = { workspace = true }
+serial_test = { workspace = true }

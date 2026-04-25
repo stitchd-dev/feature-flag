@@ -89,6 +89,29 @@ impl EventValue {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn value_type_bool_returns_bool() {
+        assert_eq!(EventValue::Bool(true).value_type(), EventValueType::Bool);
+    }
+
+    #[test]
+    fn value_type_int_returns_int() {
+        assert_eq!(EventValue::Int(42).value_type(), EventValueType::Int);
+    }
+
+    #[test]
+    fn value_type_double_returns_double() {
+        assert_eq!(
+            EventValue::Double(3.14).value_type(),
+            EventValueType::Double
+        );
+    }
+}
+
 /// Payload for a single event ingestion request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

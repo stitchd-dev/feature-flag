@@ -660,6 +660,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_experiment_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/experiments/exp-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[test]
+    fn iteration_to_json_maps_fields() {
+        let i = ExperimentIteration {
+            id: "iter-1".to_string(),
+            experiment_id: "exp-1".to_string(),
+            iteration_number: 2,
+            started_at_ms: 1000,
+            ended_at_ms: 2000,
+            traffic_allocation: 0.5,
+            ..Default::default()
+        };
+        let j = iteration_to_json(&i);
+        assert_eq!(j.id, "iter-1");
+        assert_eq!(j.experiment_id, "exp-1");
+        assert_eq!(j.iteration_number, 2);
+        assert_eq!(j.started_at_ms, 1000);
+        assert_eq!(j.ended_at_ms, 2000);
+    }
+
+    #[tokio::test]
     async fn get_results_returns_200_404_or_502() {
         let state = make_stub_state();
         let app = test_router(state);

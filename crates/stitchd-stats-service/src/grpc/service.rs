@@ -80,6 +80,89 @@ impl StatsService for StatsServiceImpl {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
+    async fn trigger_recompute_invalid_uuid_returns_invalid_argument(pool: PgPool) {
+        let svc = StatsServiceImpl::new(pool);
+        let req = Request::new(TriggerRecomputeRequest {
+            experiment_id: "not-a-uuid".to_string(),
+        });
+        let err = svc.trigger_recompute(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
+    async fn trigger_recompute_valid_uuid_returns_pending_job(pool: PgPool) {
+        let svc = StatsServiceImpl::new(pool);
+        let req = Request::new(TriggerRecomputeRequest {
+            experiment_id: Uuid::new_v4().to_string(),
+        });
+        let resp = svc.trigger_recompute(req).await.unwrap().into_inner();
+        assert_eq!(resp.status, "pending");
+        assert!(!resp.job_id.is_empty());
+        assert!(resp.created_at_ms > 0);
+    }
+
+    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
+    async fn get_job_status_invalid_uuid_returns_invalid_argument(pool: PgPool) {
+        let svc = StatsServiceImpl::new(pool);
+        let req = Request::new(GetJobStatusRequest {
+            job_id: "bad-uuid".to_string(),
+        });
+        let err = svc.get_job_status(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
+    async fn get_job_status_unknown_job_returns_not_found(pool: PgPool) {
+        let svc = StatsServiceImpl::new(pool);
+        let req = Request::new(GetJobStatusRequest {
+            job_id: Uuid::new_v4().to_string(),
+        });
+        let err = svc.get_job_status(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
+    async fn get_job_status_returns_status_for_existing_job(pool: PgPool) {
+        let svc = StatsServiceImpl::new(pool);
+        let exp_id = Uuid::new_v4().to_string();
+        let trigger = svc
+            .trigger_recompute(Request::new(TriggerRecomputeRequest {
+                experiment_id: exp_id,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let resp = svc
+            .get_job_status(Request::new(GetJobStatusRequest {
+                job_id: trigger.job_id,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!resp.status.is_empty());
+    }
+
+    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
+    async fn run_recompute_transitions_job_to_completed(pool: PgPool) {
+        let exp_id = Uuid::new_v4();
+        let job = crate::job_service::create_recompute_job(&pool, exp_id)
+            .await
+            .unwrap();
+        run_recompute(pool.clone(), job.id, exp_id).await;
+        let status_row = crate::job_service::get_job_status(&pool, job.id)
+            .await
+            .unwrap();
+        assert!(format!("{:?}", status_row.status).to_lowercase().contains("completed"));
+    }
+}
+
 /// Background recompute task — runs stats for a single experiment and updates job status.
 async fn run_recompute(pool: PgPool, job_id: Uuid, _experiment_id: Uuid) {
     if let Err(e) = job_service::mark_running(&pool, job_id).await {

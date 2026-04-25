@@ -396,3 +396,172 @@ impl MfaChallengeRepository for PgMfaChallengeRepository {
 pub fn challenge_token_hash(raw: &str) -> String {
     PgMfaRepository::token_hash(raw)
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    async fn seed_user(pool: &PgPool) -> UserId {
+        let user_id = UserId::new();
+        sqlx::query!(
+            "INSERT INTO users (id, email, display_name, status, created_at, updated_at) \
+             VALUES ($1, $2, $3, 'active', now(), now())",
+            user_id.as_uuid(),
+            format!("mfa-{}@example.com", user_id.as_uuid()),
+            "MFA Test User",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        user_id
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn create_challenge_returns_id_and_raw_token(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        let (challenge_id, raw_token) = repo.create_challenge(user_id, 300).await.unwrap();
+        assert!(!raw_token.is_empty());
+        assert_ne!(challenge_id.as_uuid(), uuid::Uuid::nil());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn consume_challenge_returns_id_for_valid_token(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        let (challenge_id, raw_token) = repo.create_challenge(user_id, 300).await.unwrap();
+        let token_hash = challenge_token_hash(&raw_token);
+        let consumed = repo.consume_challenge(&token_hash).await.unwrap();
+        assert_eq!(consumed, Some(challenge_id));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn consume_challenge_returns_none_for_already_used_token(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        let (_, raw_token) = repo.create_challenge(user_id, 300).await.unwrap();
+        let token_hash = challenge_token_hash(&raw_token);
+        repo.consume_challenge(&token_hash).await.unwrap();
+        let second = repo.consume_challenge(&token_hash).await.unwrap();
+        assert_eq!(second, None);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn consume_challenge_returns_none_for_unknown_token(pool: PgPool) {
+        let repo = PgMfaRepository::new(pool);
+        let result = repo.consume_challenge("deadbeef").await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn get_user_id_for_challenge_returns_user(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        let (_, raw_token) = repo.create_challenge(user_id, 300).await.unwrap();
+        let token_hash = challenge_token_hash(&raw_token);
+        let found = repo.get_user_id_for_challenge(&token_hash).await.unwrap();
+        assert_eq!(found, Some(user_id));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn get_user_id_for_challenge_returns_none_for_unknown(pool: PgPool) {
+        let repo = PgMfaRepository::new(pool);
+        let found = repo.get_user_id_for_challenge("unknown").await.unwrap();
+        assert_eq!(found, None);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn store_pending_totp_secret_persists_bytes(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        let secret = vec![1u8, 2, 3, 4];
+        repo.store_pending_totp_secret(user_id, secret.clone())
+            .await
+            .unwrap();
+        let retrieved = repo.get_totp_secret(user_id).await.unwrap();
+        assert_eq!(retrieved, Some(secret));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn get_totp_secret_returns_none_when_not_set(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        let result = repo.get_totp_secret(user_id).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn enable_totp_sets_secret_and_stores_recovery_codes(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        let secret = vec![0xAA, 0xBB, 0xCC];
+        let codes = vec!["hash1".to_string(), "hash2".to_string()];
+        repo.enable_totp(user_id, secret.clone(), codes).await.unwrap();
+        let retrieved = repo.get_totp_secret(user_id).await.unwrap();
+        assert_eq!(retrieved, Some(secret));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn disable_totp_clears_secret(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        repo.enable_totp(user_id, vec![1, 2, 3], vec!["h1".to_string()])
+            .await
+            .unwrap();
+        repo.disable_totp(user_id).await.unwrap();
+        let result = repo.get_totp_secret(user_id).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn consume_recovery_code_returns_true_for_unused_code(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        repo.enable_totp(user_id, vec![1], vec!["recovhash".to_string()])
+            .await
+            .unwrap();
+        let consumed = repo.consume_recovery_code(user_id, "recovhash").await.unwrap();
+        assert!(consumed);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn consume_recovery_code_returns_false_when_already_used(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaRepository::new(pool);
+        repo.enable_totp(user_id, vec![1], vec!["h".to_string()])
+            .await
+            .unwrap();
+        repo.consume_recovery_code(user_id, "h").await.unwrap();
+        let second = repo.consume_recovery_code(user_id, "h").await.unwrap();
+        assert!(!second);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn legacy_create_challenge_returns_hash_and_token(pool: PgPool) {
+        let user_id = seed_user(&pool).await;
+        let repo = PgMfaChallengeRepository::new(pool);
+        let (token_hash, raw_token) = repo.create_challenge(user_id, 300).await.unwrap();
+        assert!(!token_hash.is_empty());
+        assert!(!raw_token.is_empty());
+        assert_ne!(token_hash, raw_token);
+    }
+
+    #[test]
+    fn token_hash_is_deterministic() {
+        let raw = "aabbccdd";
+        assert_eq!(challenge_token_hash(raw), challenge_token_hash(raw));
+    }
+
+    #[test]
+    fn token_hash_of_non_hex_falls_back_to_string_bytes() {
+        let raw = "not-hex!";
+        let hash = challenge_token_hash(raw);
+        assert!(!hash.is_empty());
+        assert_eq!(hash.len(), 64); // sha256 hex is 64 chars
+    }
+}

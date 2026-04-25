@@ -395,6 +395,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ingest_event_returns_202_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/environments/env-1/events")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"metric_key":"k","context_key":"u1","context_type":"user"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::ACCEPTED || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
     async fn list_check_returns_200_or_502() {
         let state = make_stub_state();
         let app = test_router(state);
@@ -406,6 +430,26 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         r#"{"segment_key":"s1","context_key":"u1","context_type":"user"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY);
+    }
+
+    #[tokio::test]
+    async fn batch_list_check_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/environments/env-1/segments/list-check/batch")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"[{"segment_key":"s1","context_key":"u1","context_type":"user"}]"#,
                     ))
                     .unwrap(),
             )

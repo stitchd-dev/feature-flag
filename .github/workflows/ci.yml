@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  actions: write   # needed by detect-changes to query run history and cancel in-progress runs
+  actions: write   # needed for cancel-in-progress concurrency
 
 # Cancel any in-progress run for the same branch/PR the moment a newer push
 # arrives.  PRs and branch pushes each get their own concurrency group so they
@@ -25,35 +25,6 @@ env:
   SQLX_OFFLINE: true
 
 jobs:
-  # ── 0. Changed-crate detection ─────────────────────────────────────────────
-  # Runs before tests and coverage to compute which workspace crates (and their
-  # transitive dependents) are affected by this push/PR.  fmt, clippy, and docs
-  # always run at workspace level and are not gated on this output.
-  detect-changes:
-    name: Detect Changed Crates
-    runs-on: ubuntu-latest
-    outputs:
-      test-packages: ${{ steps.compute.outputs.test-packages }}
-      crate-names:   ${{ steps.compute.outputs.crate-names }}
-      has-changes:   ${{ steps.compute.outputs.has-changes }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # Need full history to diff against the previous push/PR base.
-          fetch-depth: 0
-
-      - name: Compute affected crates
-        id: compute
-        env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          BEFORE:   ${{ github.event.before }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.sha }}
-          BRANCH:   ${{ github.ref_name }}
-          WORKFLOW: ci.yml
-          GH_TOKEN: ${{ github.token }}
-        run: python3 .github/scripts/affected_crates.py
-
   # ── 1. Formatting ──────────────────────────────────────────────────────────
   fmt:
     name: Rustfmt
@@ -140,23 +111,15 @@ jobs:
         run: python3 scripts/check_openapi_contract.py
 
   # ── 5. Tests + Coverage ────────────────────────────────────────────────────
-  # Tarpaulin runs tests AND instruments for coverage in a single pass, so
-  # there is no separate test job.  Running them together avoids compiling the
-  # affected crates twice (once for tests, once for coverage instrumentation).
-  #
-  # All affected crates are passed to one tarpaulin invocation, producing a
-  # single cobertura.xml.  That file is then uploaded to Codecov once per
-  # affected crate flag; codecov.yml's per-flag `paths:` scoping ensures each
-  # flag only counts coverage from its own crate directory.  Unchanged crates
-  # are filled in via Codecov's carryforward feature (see codecov.yml).
+  # cargo-llvm-cov runs tests AND instruments for coverage in a single pass
+  # across the entire workspace, producing a single cobertura.xml uploaded to
+  # Codecov.  llvm-tools-preview is required by cargo-llvm-cov.
   #
   # Only the infrastructure services (postgres, clickhouse) are started here.
   # The six microservice containers require built Docker images and are exercised
   # by the E2E Step CI workflows (tests/e2e/) against a live stack, not in CI.
   coverage:
     name: Coverage (≥90%)
-    needs: detect-changes
-    if: needs.detect-changes.outputs.has-changes == 'true'
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
@@ -168,34 +131,31 @@ jobs:
 
       - name: Install stable toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-tarpaulin
+      - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-tarpaulin
+          tool: cargo-llvm-cov
 
-      - name: Run tests + coverage (${{ needs.detect-changes.outputs.crate-names }})
-        env:
-          CRATE_NAMES: ${{ needs.detect-changes.outputs.crate-names }}
+      - name: Run tests + coverage (workspace)
         run: |
           mkdir -p coverage
-          # Build "-p crate1 -p crate2 ..." from the space-separated crate list.
-          PKGS=$(echo "$CRATE_NAMES" | tr ' ' '\n' | sed 's/^/-p /' | xargs)
-          cargo tarpaulin \
-            $PKGS \
-            --timeout 120 \
-            --out Xml \
-            --output-dir coverage/ \
-            --exclude-files "crates/stitchd-proto/*" \
-            --exclude-files "crates/xtask/*"
+          cargo llvm-cov \
+            --workspace \
+            --exclude stitchd-proto \
+            --exclude xtask \
+            --ignore-filename-regex 'main\.rs' \
+            --cobertura \
+            --output-path coverage/cobertura.xml
 
-      - name: Upload per-crate coverage to Codecov
+      - name: Upload coverage to Codecov
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-          CRATE_NAMES:   ${{ needs.detect-changes.outputs.crate-names }}
         run: |
           curl -Os https://uploader.codecov.io/latest/linux/codecov
           chmod +x codecov
@@ -204,18 +164,11 @@ jobs:
             echo "No coverage report generated — skipping upload"
             exit 0
           fi
-          # Upload the combined XML once per affected crate flag.
-          # codecov.yml's per-flag `paths:` scoping ensures each flag only
-          # counts lines from its own crate directory.
-          for crate in $CRATE_NAMES; do
-            echo "── uploading: $crate (flag=$crate) ──"
-            ./codecov \
-              --token="$CODECOV_TOKEN" \
-              --slug="$GITHUB_REPOSITORY" \
-              --file="$xml" \
-              --flag="$crate" \
-              --fail-on-error
-          done
+          ./codecov \
+            --token="$CODECOV_TOKEN" \
+            --slug="$GITHUB_REPOSITORY" \
+            --file="$xml" \
+            --fail-on-error
 
       - name: Upload coverage reports as artifact
         uses: actions/upload-artifact@v4

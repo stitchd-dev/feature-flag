@@ -3746,6 +3746,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "serial_test",
  "sqlx",
  "stitchd-core",
  "stitchd-db",
