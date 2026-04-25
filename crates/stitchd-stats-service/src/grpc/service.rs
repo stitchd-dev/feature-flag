@@ -80,6 +80,23 @@ impl StatsService for StatsServiceImpl {
     }
 }
 
+/// Background recompute task — runs stats for a single experiment and updates job status.
+async fn run_recompute(pool: PgPool, job_id: Uuid, _experiment_id: Uuid) {
+    if let Err(e) = job_service::mark_running(&pool, job_id).await {
+        tracing::error!(%job_id, "failed to mark job running: {e}");
+        return;
+    }
+
+    // Full stats computation is wired in Phase 3 scheduler. Here we mark complete.
+    match job_service::mark_completed(&pool, job_id).await {
+        Ok(_) => tracing::info!(%job_id, "recompute job completed"),
+        Err(e) => {
+            tracing::error!(%job_id, "failed to mark job completed: {e}");
+            let _ = job_service::mark_failed(&pool, job_id, e.to_string()).await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,22 +181,5 @@ mod tests {
                 .to_lowercase()
                 .contains("completed")
         );
-    }
-}
-
-/// Background recompute task — runs stats for a single experiment and updates job status.
-async fn run_recompute(pool: PgPool, job_id: Uuid, _experiment_id: Uuid) {
-    if let Err(e) = job_service::mark_running(&pool, job_id).await {
-        tracing::error!(%job_id, "failed to mark job running: {e}");
-        return;
-    }
-
-    // Full stats computation is wired in Phase 3 scheduler. Here we mark complete.
-    match job_service::mark_completed(&pool, job_id).await {
-        Ok(_) => tracing::info!(%job_id, "recompute job completed"),
-        Err(e) => {
-            tracing::error!(%job_id, "failed to mark job completed: {e}");
-            let _ = job_service::mark_failed(&pool, job_id, e.to_string()).await;
-        }
     }
 }

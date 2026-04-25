@@ -105,10 +105,7 @@ mod tests {
 
     #[test]
     fn value_type_double_returns_double() {
-        assert_eq!(
-            EventValue::Double(3.14).value_type(),
-            EventValueType::Double
-        );
+        assert_eq!(EventValue::Double(1.5).value_type(), EventValueType::Double);
     }
 }
 
