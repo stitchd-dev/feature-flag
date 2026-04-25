@@ -103,7 +103,10 @@ async fn find_by_key_not_found_returns_error(pool: sqlx::PgPool) {
 async fn soft_delete_not_found_returns_error(pool: sqlx::PgPool) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgEventDefinitionRepository::new(pool, audit);
-    let err = repo.soft_delete(EventDefinitionId::new()).await.unwrap_err();
+    let err = repo
+        .soft_delete(EventDefinitionId::new())
+        .await
+        .unwrap_err();
     assert!(matches!(err, RepositoryError::NotFound { .. }));
 }
 

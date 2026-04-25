@@ -501,7 +501,9 @@ mod tests {
         let repo = PgMfaRepository::new(pool);
         let secret = vec![0xAA, 0xBB, 0xCC];
         let codes = vec!["hash1".to_string(), "hash2".to_string()];
-        repo.enable_totp(user_id, secret.clone(), codes).await.unwrap();
+        repo.enable_totp(user_id, secret.clone(), codes)
+            .await
+            .unwrap();
         let retrieved = repo.get_totp_secret(user_id).await.unwrap();
         assert_eq!(retrieved, Some(secret));
     }
@@ -525,7 +527,10 @@ mod tests {
         repo.enable_totp(user_id, vec![1], vec!["recovhash".to_string()])
             .await
             .unwrap();
-        let consumed = repo.consume_recovery_code(user_id, "recovhash").await.unwrap();
+        let consumed = repo
+            .consume_recovery_code(user_id, "recovhash")
+            .await
+            .unwrap();
         assert!(consumed);
     }
 

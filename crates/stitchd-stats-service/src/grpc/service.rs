@@ -159,7 +159,11 @@ mod tests {
         let status_row = crate::job_service::get_job_status(&pool, job.id)
             .await
             .unwrap();
-        assert!(format!("{:?}", status_row.status).to_lowercase().contains("completed"));
+        assert!(
+            format!("{:?}", status_row.status)
+                .to_lowercase()
+                .contains("completed")
+        );
     }
 }
 
