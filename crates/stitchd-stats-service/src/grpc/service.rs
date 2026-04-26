@@ -146,19 +146,17 @@ mod tests {
 
     #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
     async fn get_job_status_returns_status_for_existing_job(pool: PgPool) {
-        let svc = StatsServiceImpl::new(pool);
-        let exp_id = Uuid::new_v4().to_string();
-        let trigger = svc
-            .trigger_recompute(Request::new(TriggerRecomputeRequest {
-                experiment_id: exp_id,
-            }))
+        // Create the job directly to avoid spawning a background task (which can
+        // hold pool connections past test teardown and break subsequent test setup).
+        let exp_id = Uuid::new_v4();
+        let job = crate::job_service::create_recompute_job(&pool, exp_id)
             .await
-            .unwrap()
-            .into_inner();
+            .unwrap();
 
+        let svc = StatsServiceImpl::new(pool);
         let resp = svc
             .get_job_status(Request::new(GetJobStatusRequest {
-                job_id: trigger.job_id,
+                job_id: job.id.to_string(),
             }))
             .await
             .unwrap()
