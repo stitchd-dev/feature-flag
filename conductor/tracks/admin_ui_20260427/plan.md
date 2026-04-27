@@ -27,36 +27,36 @@
 
 ## Phase 2: App Shell & Navigation
 
-- [ ] Task: Implement Tweaks system
+- [x] Task: Implement Tweaks system (1f86aca)
   - Sub: `useTweaks` hook with `localStorage` persistence
   - Sub: `TweaksPanel` component (theme, nav style, flags layout, flag detail layout, exp viz, density, accent)
   - Sub: Wire `data-theme` and `--accent` CSS var to tweaks state
 
-- [ ] Task: Implement Sidebar navigation component
+- [x] Task: Implement Sidebar navigation component (1f86aca)
   - Sub: Brand mark + org switcher + env pill
   - Sub: Search input (focuses ⌘K)
   - Sub: Project nav items (Dashboard, Flags, Segments, Experiments, Events)
   - Sub: Admin nav items (Environments, Members, Audit, Super Admin)
   - Sub: User footer (avatar, name, email, notifications)
 
-- [ ] Task: Implement Rail and Top bar nav variants
+- [x] Task: Implement Rail and Top bar nav variants (1f86aca)
   - Sub: Rail: icon-only sidebar, tooltip labels on hover
   - Sub: Topbar: full horizontal nav bar
   - Sub: `data-nav="sidebar|rail|topbar"` on `.app-shell` drives layout via CSS
 
-- [ ] Task: Implement ⌘K Command Palette
+- [x] Task: Implement ⌘K Command Palette (1f86aca)
   - Sub: `CommandPalette` component (overlay + input + grouped results)
   - Sub: Keyboard shortcut listener (⌘K / Ctrl+K, Escape)
   - Sub: Navigation items + flag quick-jump
 
-- [ ] Task: Set up React Router with all 13 routes
+- [x] Task: Set up React Router with all 13 routes (1f86aca)
   - Sub: `/login`, `/`, `/flags`, `/flags/:key`
   - Sub: `/segments`, `/segments/:key`
   - Sub: `/experiments`, `/experiments/:key`
   - Sub: `/events`, `/environments`, `/members`, `/audit`, `/super-admin`
   - Sub: Protected route wrapper (redirects to `/login` if no JWT)
 
-- [ ] Task: Conductor - User Manual Verification 'App Shell & Navigation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'App Shell & Navigation' (Protocol in workflow.md)
 
 ## Phase 3: Authentication
 
