@@ -2,28 +2,28 @@
 
 ## Phase 1: Project Scaffold & Design System
 
-- [ ] Task: Scaffold Vite + React 18 + TypeScript project in `admin/`
+- [x] Task: Scaffold Vite + React 18 + TypeScript project in `admin/` (29cfc8d)
   - Sub: `npm create vite@latest admin -- --template react-ts`
   - Sub: Install deps: `react-router-dom`, `axios`
   - Sub: Configure `vite.config.ts` with dev proxy `/api → http://localhost:8080`
   - Sub: Set up `.env.example` with `VITE_API_BASE_URL`
   - Sub: Copy font imports (Archivo, Inter, JetBrains Mono) from prototype
 
-- [ ] Task: Implement CSS design system from `styles.css` prototype
+- [x] Task: Implement CSS design system from `styles.css` prototype (29cfc8d)
   - Sub: Port all CSS custom properties (colors, spacing, typography, shadows) to `src/styles/tokens.css`
   - Sub: Port component classes (card, table, badge, btn, input, toggle, mono-key, type-pill, variant-bar, sparkline, sidebar, topbar) to `src/styles/`
   - Sub: Implement `data-theme="light|dark"` switching on `<html>`
   - Sub: Implement `data-density="comfortable|compact"` body attribute
   - Sub: Verify tokens match the prototype's light and dark palettes exactly
 
-- [ ] Task: Port shared UI primitives to TypeScript components
+- [x] Task: Port shared UI primitives to TypeScript components (29cfc8d)
   - Sub: `Icon` + `I` icon map → `src/components/icons.tsx`
   - Sub: `StitchdMark` brand component
   - Sub: `Sparkline` SVG component
   - Sub: `VariantBar` component
   - Sub: `PageHeader` component (breadcrumbs, title, subtitle, actions slot)
 
-- [ ] Task: Conductor - User Manual Verification 'Project Scaffold & Design System' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Project Scaffold & Design System' (Protocol in workflow.md)
 
 ## Phase 2: App Shell & Navigation
 
