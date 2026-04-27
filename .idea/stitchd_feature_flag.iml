@@ -14,6 +14,12 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/xtask/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-events/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-core/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-auth-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-event-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-experimentation-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-flag-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-gateway/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/stitchd-segmentation-service/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
