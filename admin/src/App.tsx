@@ -7,10 +7,14 @@ import { TweaksPanel } from './shell/TweaksPanel'
 import { ProtectedRoute } from './shell/ProtectedRoute'
 import { LoginPage } from './pages/Login'
 import { OidcCallbackPage } from './pages/OidcCallback'
+import { FlagsList } from './pages/flags/FlagsList'
+import { FlagDetail } from './pages/flags/FlagDetail'
+import { SegmentsList } from './pages/segments/SegmentsList'
+import { SegmentDetail } from './pages/segments/SegmentDetail'
+import { ExperimentsList } from './pages/experiments/ExperimentsList'
+import { ExperimentDetail } from './pages/experiments/ExperimentDetail'
 import {
-  Dashboard, FlagsList, FlagDetail,
-  SegmentsList, SegmentDetail,
-  ExperimentsList, ExperimentDetail,
+  Dashboard,
   EventsRegistry, Environments, Members, AuditLog, SuperAdmin,
 } from './pages/stubs'
 import { I } from './components/icons'
