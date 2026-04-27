@@ -60,28 +60,28 @@
 
 ## Phase 3: Authentication
 
-- [ ] Task: Implement API client with auth
+- [x] Task: Implement API client with auth (071fcbf)
   - Sub: `src/lib/api.ts` — axios instance with `VITE_API_BASE_URL` base URL
   - Sub: Request interceptor: inject `Authorization: Bearer <token>` from `localStorage`
   - Sub: Response interceptor: on 401, clear token and redirect to `/login`
 
-- [ ] Task: Implement Login screen
+- [x] Task: Implement Login screen (071fcbf)
   - Sub: Port `LoginScreen` from prototype to TypeScript
   - Sub: Left panel: brand + tagline + docker compose code block
   - Sub: Right panel: card with Password / OIDC / SAML tab switcher
 
-- [ ] Task: Wire Password login to gateway
+- [x] Task: Wire Password login to gateway (071fcbf)
   - Sub: `POST /auth/login` with email + password
   - Sub: Store JWT in `localStorage` on success
   - Sub: Navigate to `/` on success, show error on failure
 
-- [ ] Task: Wire OIDC login flow
+- [x] Task: Wire OIDC login flow (071fcbf)
   - Sub: `GET /auth/oidc/authorize` → redirect to IdP
   - Sub: `/auth/callback` route: exchange code for JWT, store, redirect to `/`
 
-- [ ] Task: Implement SAML initiation (redirect only; callback handled by IdP)
+- [x] Task: Implement SAML initiation (redirect only; callback handled by IdP) (071fcbf)
 
-- [ ] Task: Conductor - User Manual Verification 'Authentication' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Authentication' (Protocol in workflow.md)
 
 ## Phase 4: Flags Screens
 <!-- depends: -->
