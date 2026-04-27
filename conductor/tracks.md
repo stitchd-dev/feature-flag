@@ -33,3 +33,8 @@ This file tracks all major tracks for the project.
 <!-- Archived: docs_microservices_20260422 (mdBook Docs — Microservice Architecture Update) -->
 <!-- Archived: org_oidc_saml_20260422 (Org-Level OIDC & SAML with On-the-Fly Provider Instantiation) -->
 <!-- Archived: scheduled_stats_20260423 (Scheduled Stats Processing Microservice) -->
+
+---
+
+## [ ] Track: Stitchd Admin UI — Standalone Vite + React admin console
+*Link: [./conductor/tracks/admin_ui_20260427/](./conductor/tracks/admin_ui_20260427/)*

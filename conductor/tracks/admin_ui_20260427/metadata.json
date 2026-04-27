@@ -1,0 +1,13 @@
+{
+  "track_id": "admin_ui_20260427",
+  "type": "feature",
+  "status": "new",
+  "priority": "critical",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-04-27T00:00:00Z",
+  "updated_at": "2026-04-27T00:00:00Z",
+  "description": "Standalone Vite + React admin UI for the Stitchd feature flag and experimentation platform. 13 screens, real auth, core screens wired to gateway APIs.",
+  "git_branch": "track/admin_ui_20260427",
+  "worktree_path": ".worktrees/admin_ui_20260427"
+}
