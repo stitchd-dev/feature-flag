@@ -13,12 +13,11 @@ import { SegmentsList } from './pages/segments/SegmentsList'
 import { SegmentDetail } from './pages/segments/SegmentDetail'
 import { ExperimentsList } from './pages/experiments/ExperimentsList'
 import { ExperimentDetail } from './pages/experiments/ExperimentDetail'
+import { Dashboard } from './pages/Dashboard'
 import {
-  Dashboard,
   EventsRegistry, Environments, Members, AuditLog, SuperAdmin,
 } from './pages/stubs'
 import { I } from './components/icons'
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- used in TweaksPanel button below
 
 function AppShell() {
   const { tweaks, setTweak } = useTweaks()

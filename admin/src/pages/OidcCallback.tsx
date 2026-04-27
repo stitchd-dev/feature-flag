@@ -19,22 +19,22 @@ export function OidcCallbackPage() {
   useEffect(() => {
     const code = searchParams.get('code')
     const state = searchParams.get('state') // provider_id is embedded in state by gateway
-    if (!code || !state) {
-      setError('Missing code or state in callback URL')
-      return
-    }
     // The gateway callback URL is GET /v1/auth/oidc/{provider_id}/callback?code=…&state=…
     // state param contains provider_id encoded by the gateway
-    api
-      .get<CallbackResponse>(`/v1/auth/oidc/${state}/callback`, { params: { code, state } })
-      .then(({ data }) => {
+    const exchange = async () => {
+      if (!code || !state) {
+        setError('Missing code or state in callback URL')
+        return
+      }
+      try {
+        const { data } = await api.get<CallbackResponse>(`/v1/auth/oidc/${state}/callback`, { params: { code, state } })
         auth.setToken(data.access_token)
         navigate('/', { replace: true })
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : 'OIDC callback failed'
-        setError(msg)
-      })
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'OIDC callback failed')
+      }
+    }
+    void exchange()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) {

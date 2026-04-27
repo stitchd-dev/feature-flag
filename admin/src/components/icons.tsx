@@ -29,9 +29,10 @@ export function Icon({
   )
 }
 
-type I = (props: IconProps) => React.ReactElement
+type IconRenderer = (props: IconProps) => React.ReactElement
 
-export const I: Record<string, I> = {
+// eslint-disable-next-line react-refresh/only-export-components
+export const I: Record<string, IconRenderer> = {
   flag: (p) => <Icon {...p}><path d="M4 21V4M4 4h12l-2 4 2 4H4" /></Icon>,
   segment: (p) => <Icon {...p}><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v6a3 3 0 0 0 3 3h6"/></Icon>,
   beaker: (p) => <Icon {...p}><path d="M9 3v6L4 19a2 2 0 0 0 2 3h12a2 2 0 0 0 2-3l-5-10V3M8 3h8M7 14h10"/></Icon>,
