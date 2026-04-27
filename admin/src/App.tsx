@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, useNavigate, Outlet } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
 import { useTweaks } from './hooks/useTweaks'
 import { Sidebar, TopbarNav } from './shell/Sidebar'
 import { CommandPalette } from './shell/CommandPalette'
 import { TweaksPanel } from './shell/TweaksPanel'
 import { ProtectedRoute } from './shell/ProtectedRoute'
+import { LoginPage } from './pages/Login'
+import { OidcCallbackPage } from './pages/OidcCallback'
 import {
   Dashboard, FlagsList, FlagDetail,
   SegmentsList, SegmentDetail,
@@ -12,32 +14,7 @@ import {
   EventsRegistry, Environments, Members, AuditLog, SuperAdmin,
 } from './pages/stubs'
 import { I } from './components/icons'
-import { StitchdMark } from './components/primitives'
-
-// Login screen — wired in Phase 3, stub for now
-function LoginPage() {
-  const navigate = useNavigate()
-  return (
-    <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg)' }}>
-      <div className="card" style={{ width: 400, padding: 32, textAlign: 'center' }}>
-        <StitchdMark size={48} radius={12} />
-        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 26, margin: '16px 0 8px', letterSpacing: '-0.02em' }}>Sign in to Stitchd</div>
-        <div style={{ color: 'var(--fg-muted)', fontSize: 13, marginBottom: 24 }}>Feature flags &amp; experiments, self-hosted.</div>
-        <button
-          className="btn primary lg"
-          style={{ width: '100%' }}
-          onClick={() => {
-            localStorage.setItem('stitchd_jwt', 'dev-token')
-            navigate('/')
-          }}
-        >
-          Continue (dev mode) <I.arrowRight size={14} />
-        </button>
-        <div style={{ marginTop: 12, fontSize: 12, color: 'var(--fg-subtle)' }}>Real auth implemented in Phase 3</div>
-      </div>
-    </div>
-  )
-}
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- used in TweaksPanel button below
 
 function AppShell() {
   const { tweaks, setTweak } = useTweaks()
@@ -86,6 +63,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/auth/callback" element={<OidcCallbackPage />} />
         <Route element={<ProtectedRoute />}>
           <Route element={<AppShell />}>
             <Route path="/" element={<Dashboard />} />
