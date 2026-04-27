@@ -36,5 +36,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Stitchd Admin UI — Standalone Vite + React admin console
+## [x] Track: Stitchd Admin UI — Standalone Vite + React admin console
 *Link: [./conductor/tracks/admin_ui_20260427/](./conductor/tracks/admin_ui_20260427/)*

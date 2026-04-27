@@ -147,12 +147,12 @@
 ## Phase 6: Secondary Screens & Final Polish
 <!-- depends: phase4, phase5 -->
 
-- [ ] Task: Implement Dashboard screen (`/`) — mock data
+- [x] Task: Implement Dashboard screen (`/`) — mock data (0ab5b24)
   <!-- files: src/pages/Dashboard.tsx -->
   - Sub: Stat cards with sparklines (evaluations, active flags, experiments, p95 latency)
   - Sub: Recent flags table + experiments sidebar + service health list
 
-- [ ] Task: Implement secondary screens — mock data
+- [x] Task: Implement secondary screens — mock data (0ab5b24)
   <!-- files: src/pages/EventsRegistry.tsx, src/pages/Environments.tsx, src/pages/Members.tsx, src/pages/AuditLog.tsx, src/pages/SuperAdmin.tsx -->
   - Sub: Events Registry (`/events`)
   - Sub: Environments & SDK Keys (`/environments`)
@@ -160,11 +160,11 @@
   - Sub: Audit Log (`/audit`)
   - Sub: Super Admin (`/super-admin`)
 
-- [ ] Task: Final integration pass
+- [x] Task: Final integration pass (0ab5b24)
   <!-- files: src/lib/api.ts, src/App.tsx -->
   - Sub: Verify all API-wired screens handle loading, error, and empty states
   - Sub: Confirm JWT flow end-to-end (login → protected route → 401 refresh)
   - Sub: `vite build` produces clean `dist/` with no TypeScript errors
   - Sub: ESLint + Prettier pass with zero errors
 
-- [ ] Task: Conductor - User Manual Verification 'Secondary Screens & Final Polish' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Secondary Screens & Final Polish' (Protocol in workflow.md)
