@@ -86,7 +86,7 @@
 ## Phase 4: Flags Screens
 <!-- depends: -->
 
-- [ ] Task: Implement Flags list screen (`/flags`)
+- [x] Task: Implement Flags list screen (`/flags`) (03ff6e5)
   <!-- files: src/pages/flags/FlagsList.tsx, src/pages/flags/FlagCard.tsx, src/pages/flags/FlagsGrouped.tsx -->
   - Sub: Port table, cards, and grouped-by-segment layouts from prototype
   - Sub: Layout switcher (table/cards/grouped icons)
@@ -95,45 +95,45 @@
   - Sub: `GET /flags?env=production` — wire to API
   - Sub: Loading + empty states
 
-- [ ] Task: Implement Flag Detail screen (`/flags/:key`)
+- [x] Task: Implement Flag Detail screen (`/flags/:key`) (03ff6e5)
   <!-- files: src/pages/flags/FlagDetail.tsx, src/pages/flags/tabs/ -->
   - Sub: Port tab structure: Targeting, Variants, Evaluations, Experiments, SDK Snippet, History
   - Sub: `GET /flags/:key` — wire to API
   - Sub: Stacked / Side-by-side layout from Tweaks
   - Sub: Staged changes banner
 
-- [ ] Task: Implement Rule Targeting tree
+- [x] Task: Implement Rule Targeting tree (03ff6e5)
   <!-- files: src/components/targeting/RuleTree.tsx, src/components/targeting/RuleHeader.tsx -->
   - Sub: Recursive `RuleTree` component (AND/OR/NOT groups + clause leaves + segment refs)
   - Sub: Context type header pills (single- and multi-context with MULTI-CONTEXT badge)
   - Sub: Clause `ctx:` qualifier tag for multi-context rules
   - Sub: Color-coded group borders (blue AND / purple OR / red NOT)
 
-- [ ] Task: Implement Variants tab + Evaluations sparkline tab
+- [x] Task: Implement Variants tab + Evaluations sparkline tab (03ff6e5)
   <!-- files: src/pages/flags/tabs/VariantsTab.tsx, src/pages/flags/tabs/EvaluationsTab.tsx -->
 
-- [ ] Task: Conductor - User Manual Verification 'Flags Screens' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Flags Screens' (Protocol in workflow.md)
 
 ## Phase 5: Segments & Experiments Screens
 <!-- depends: -->
 
-- [ ] Task: Implement Segments list screen (`/segments`)
+- [x] Task: Implement Segments list screen (`/segments`) (03ff6e5)
   <!-- files: src/pages/segments/SegmentsList.tsx -->
   - Sub: Port table from prototype
   - Sub: `GET /segments` — wire to API
 
-- [ ] Task: Implement Segment Detail screen (`/segments/:key`)
+- [x] Task: Implement Segment Detail screen (`/segments/:key`) (03ff6e5)
   <!-- files: src/pages/segments/SegmentDetail.tsx -->
   - Sub: Rule-based view: condition tree (read-only)
   - Sub: List-based view: include/exclude key lists
   - Sub: `GET /segments/:key` — wire to API
 
-- [ ] Task: Implement Experiments list screen (`/experiments`)
+- [x] Task: Implement Experiments list screen (`/experiments`) (03ff6e5)
   <!-- files: src/pages/experiments/ExperimentsList.tsx -->
   - Sub: Port table with state filter tabs (running / draft / stopped / completed)
   - Sub: `GET /experiments` — wire to API
 
-- [ ] Task: Implement Experiment Detail screen (`/experiments/:key`)
+- [x] Task: Implement Experiment Detail screen (`/experiments/:key`) (03ff6e5)
   <!-- files: src/pages/experiments/ExperimentDetail.tsx, src/components/experiments/FrequentistViz.tsx, src/components/experiments/BayesianViz.tsx, src/components/experiments/PairwiseMatrix.tsx -->
   - Sub: `GET /experiments/:key` + `GET /experiments/:key/results` — wire to API
   - Sub: Frequentist viz: CI band chart, p-value, power per arm
@@ -142,7 +142,7 @@
   - Sub: Auto viz selection (experiment model field); Tweaks override
   - Sub: "Ready to ship" banner at ≥95% confidence
 
-- [ ] Task: Conductor - User Manual Verification 'Segments & Experiments Screens' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Segments & Experiments Screens' (Protocol in workflow.md)
 
 ## Phase 6: Secondary Screens & Final Polish
 <!-- depends: phase4, phase5 -->
