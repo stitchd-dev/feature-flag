@@ -33,8 +33,14 @@ export function LoginPage() {
     try {
       if (method === 'password') {
         const res = await loginWithPassword(email, password, orgId || undefined)
-        auth.setToken(res.access_token)
-        navigate('/')
+        const isSystem = auth.decodeIsSystem(res.access_token)
+        auth.setSession({ token: res.access_token, orgId: res.org_id, isSystem, userId: res.user_id })
+        if (isSystem) {
+          navigate('/superadmin')
+        } else {
+          auth.addOrgToHistory({ orgId: res.org_id, orgName: res.org_id })
+          navigate(`/org/${res.org_id}`)
+        }
       } else if (method === 'oidc') {
         const res = await initiateOidc(orgId)
         window.location.href = res.redirect_url
