@@ -37,3 +37,8 @@ This file tracks all major tracks for the project.
 ---
 
 <!-- Archived: admin_ui_20260427 (Stitchd Admin UI — Standalone Vite + React admin console) -->
+
+---
+
+## [ ] Track: Admin UI — Multi-Tenant Routing & API Integration
+*Link: [./conductor/tracks/admin_ui_multitenant_20260428/](./conductor/tracks/admin_ui_multitenant_20260428/)*
