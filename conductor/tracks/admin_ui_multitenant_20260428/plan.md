@@ -5,32 +5,15 @@
 
 ## Phase 1: Auth Foundation & Route Restructure
 
-- [ ] Task 1.1: Extend `auth.ts` — JWT decode utility, session storage for `org_id` + `is_system`
-  - Decode JWT payload client-side (base64, no verify — verification is server-side)
-  - `auth.setSession({ token, orgId, isSystem })` — stores token + org_id + is_system in localStorage
-  - `auth.getSession()` → `{ token, orgId, isSystem } | null`
-  - `auth.clearSession()`
+- [x] Task 1.1: Extend `auth.ts` — JWT decode utility, session storage for `org_id` + `is_system` [3cb9025]
 
-- [ ] Task 1.2: Update `api.ts` login flow — store full session post-login
-  - Update `loginWithPassword` caller to call `auth.setSession()` with decoded payload
-  - Add `getOrgId()` + `isSystem()` helpers exported from `auth.ts`
-  - Update 401 interceptor to call `auth.clearSession()` before redirect
+- [x] Task 1.2: Update `api.ts` login flow — store full session post-login [3cb9025]
 
-- [ ] Task 1.3: Route guards — `SuperAdminGuard` and `OrgGuard` components
-  - `SuperAdminGuard`: no token → `/login`; token + `is_system=false` → `/org/:orgId`
-  - `OrgGuard`: no token → `/login`; token + `is_system=true` → `/superadmin`
-  - Both live in `admin/src/shell/guards.tsx`
+- [x] Task 1.3: Route guards — `SuperAdminGuard` and `OrgGuard` components [c7ef460]
 
-- [ ] Task 1.4: Restructure `App.tsx` routing
-  - `/superadmin/*` nested under `<SuperAdminGuard>`
-  - `/org/:orgId/*` nested under `<OrgGuard>`
-  - `/login` + `/auth/callback` remain public
-  - Flat routes (`/flags`, `/segments`, etc.) removed
+- [x] Task 1.4: Restructure `App.tsx` routing [c7ef460]
 
-- [ ] Task 1.5: Update `LoginPage` — post-login redirect based on `is_system`
-  - After successful login + `auth.setSession()`, read `isSystem`
-  - `isSystem=true` → `navigate('/superadmin')`
-  - `isSystem=false` → `navigate('/org/${orgId}')`
+- [x] Task 1.5: Update `LoginPage` — post-login redirect based on `is_system` [c7ef460]
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Auth Foundation & Route Restructure' (Protocol in workflow.md)
 
