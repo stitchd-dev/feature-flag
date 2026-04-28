@@ -12,12 +12,12 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// On 401, clear token and redirect to login
+// On 401, clear session and redirect to login
 api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err.response?.status === 401) {
-      auth.clearToken()
+      auth.clearSession()
       window.location.href = '/login'
     }
     return Promise.reject(err)
