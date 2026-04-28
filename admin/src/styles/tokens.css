@@ -1,0 +1,129 @@
+/* ============================================
+   Stitchd Admin — Design tokens & globals
+   ============================================ */
+
+:root {
+  /* --- Brand --- */
+  --brand-orange: #F0461F;
+  --brand-orange-soft: #FF6B3D;
+  --brand-orange-deep: #C8361A;
+  --brand-gradient: linear-gradient(135deg, #FF6B3D 0%, #F0461F 50%, #C8361A 100%);
+
+  /* Light theme (default) */
+  --bg: #FAFAF7;
+  --bg-elev: #FFFFFF;
+  --bg-sunken: #F2F1EC;
+  --bg-hover: #EFEEE8;
+  --bg-active: #E6E5DD;
+  --surface: #FFFFFF;
+  --surface-2: #F7F6F1;
+
+  --border: #E5E3DA;
+  --border-strong: #D2CFC2;
+  --border-faint: #EFEDE5;
+
+  --fg: #131418;
+  --fg-muted: #5C5E66;
+  --fg-subtle: #8B8D96;
+  --fg-faint: #B3B5BC;
+  --fg-on-accent: #FFFFFF;
+
+  --accent: var(--brand-orange);
+  --accent-soft: rgba(240, 70, 31, 0.10);
+  --accent-softer: rgba(240, 70, 31, 0.05);
+  --accent-strong: var(--brand-orange-deep);
+
+  --success: #117A3D;
+  --success-bg: rgba(17, 122, 61, 0.08);
+  --warning: #B8761A;
+  --warning-bg: rgba(184, 118, 26, 0.10);
+  --danger: #C42B1C;
+  --danger-bg: rgba(196, 43, 28, 0.08);
+  --info: #1F6FBF;
+  --info-bg: rgba(31, 111, 191, 0.08);
+
+  --shadow-xs: 0 1px 0 rgba(15,17,22,0.04);
+  --shadow-sm: 0 1px 2px rgba(15,17,22,0.06), 0 1px 0 rgba(15,17,22,0.03);
+  --shadow-md: 0 4px 12px rgba(15,17,22,0.06), 0 1px 2px rgba(15,17,22,0.04);
+  --shadow-lg: 0 12px 32px rgba(15,17,22,0.10), 0 2px 6px rgba(15,17,22,0.04);
+
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --font-display: "Archivo", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+[data-theme="dark"] {
+  --bg: #0C0D10;
+  --bg-elev: #131418;
+  --bg-sunken: #08090B;
+  --bg-hover: #1A1C20;
+  --bg-active: #22252A;
+  --surface: #131418;
+  --surface-2: #181A1F;
+
+  --border: #25282E;
+  --border-strong: #353941;
+  --border-faint: #1B1D22;
+
+  --fg: #ECECEC;
+  --fg-muted: #A4A6AC;
+  --fg-subtle: #777A82;
+  --fg-faint: #4F5258;
+  --fg-on-accent: #FFFFFF;
+
+  --accent: #FF7A52;
+  --accent-soft: rgba(255, 122, 82, 0.14);
+  --accent-softer: rgba(255, 122, 82, 0.07);
+  --accent-strong: #FF6B3D;
+
+  --success: #3DD68C;
+  --success-bg: rgba(61, 214, 140, 0.10);
+  --warning: #E6B14F;
+  --warning-bg: rgba(230, 177, 79, 0.12);
+  --danger: #F26B5E;
+  --danger-bg: rgba(242, 107, 94, 0.10);
+  --info: #5BAEF5;
+  --info-bg: rgba(91, 174, 245, 0.10);
+
+  --shadow-xs: 0 1px 0 rgba(0,0,0,0.30);
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.40), 0 1px 0 rgba(0,0,0,0.30);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.40), 0 1px 2px rgba(0,0,0,0.30);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.50), 0 2px 6px rgba(0,0,0,0.30);
+}
+
+/* ============================================
+   Base resets & global styles
+   ============================================ */
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+button { font-family: inherit; cursor: pointer; }
+input, textarea, select { font-family: inherit; }
+a { color: inherit; text-decoration: none; }
+code, pre, .mono { font-family: var(--font-mono); }
+
+/* Density modifier */
+body[data-density="compact"] {
+  font-size: 13px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); }
