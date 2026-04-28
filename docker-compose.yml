@@ -250,6 +250,19 @@ services:
       retries: 5
       start_period: 15s
 
+  admin:
+    build:
+      context: ./admin
+    container_name: stitchd-admin
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    networks:
+      - stitchd
+    depends_on:
+      gateway:
+        condition: service_healthy
+
 volumes:
   postgres_data:
     driver: local
