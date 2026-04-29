@@ -53,7 +53,7 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Test env-var isolation:** Config tests and sqlx tests share the same binary. Use `--test-threads=1` and an `EnvGuard` RAII wrapper to prevent env-var contamination across test cases. (from: scheduled_stats_20260423, archived 2026-04-23)
 
 ---
-Last refreshed: 2026-04-23
+Last refreshed: 2026-04-29
 
 ## Frontend (Admin UI) Patterns
 
@@ -62,3 +62,7 @@ Last refreshed: 2026-04-23
 - **react-refresh ESLint rule:** Files that export both components and non-component values (maps, constants, type aliases) trigger `react-refresh/only-export-components`. Fix by either moving the non-component export to a separate file, or adding `// eslint-disable-next-line react-refresh/only-export-components` on that export line. (from: admin_ui_20260427, archived 2026-04-28)
 - **TypeScript CLI in Vite projects:** Never run `npx tsc` — it resolves to a stray `tsc` package (2.0.x). Always use `node_modules/.bin/tsc --noEmit -p tsconfig.app.json` with the full absolute path to the admin directory as CWD. (from: admin_ui_20260427, archived 2026-04-28)
 - **Vite dev proxy for gateway:** Admin UI uses `vite.config.ts` server proxy: `/api → http://localhost:8080` with `changeOrigin: true` and path rewrite stripping the `/api` prefix. Set `VITE_API_BASE_URL` in `.env` for production builds pointing directly at the gateway. (from: admin_ui_20260427, archived 2026-04-28)
+- **`useParams` vs `pathname` for route context disambiguation:** `useParams` fires `orgId` on both `/org/:orgId` and `/superadmin/orgs/:orgId`. Use `location.pathname.startsWith('/org/')` to distinguish superadmin from org context when computing nav items, guards, or section-scoped behaviour. (from: admin_ui_multitenant_20260428, archived 2026-04-29)
+- **Seamless org switching via dedicated RPC:** For JWT-scoped org auth, implement a `SwitchOrg` RPC that validates the current token, verifies target-org membership, and issues a fresh JWT — no password re-entry. The response intentionally omits `user_id`; callers must preserve it from the existing session to avoid corrupting the session store. (from: admin_ui_multitenant_20260428, archived 2026-04-29)
+- **Multi-tenant user seeding (find-or-create):** Users are globally unique by email. Seeding a user into an org uses find-or-create semantics: look up by email first; if found, just add the org membership (idempotent on duplicate); only create a new record when the email doesn't exist. Do NOT drop the unique email constraint. (from: admin_ui_multitenant_20260428, archived 2026-04-29)
+- **ListUserOrgs should filter system orgs:** The `ListUserOrgs` RPC (and the gateway route it backs) must exclude system-org entries (`is_system=true`) to prevent the internal "System" org from appearing in user-facing org-switcher dropdowns. (from: admin_ui_multitenant_20260428, archived 2026-04-29)
