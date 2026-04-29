@@ -24,6 +24,7 @@ cd "$ROOT"
 DATABASE_URL="$DB" \
   AUTH_SERVICE_PORT=50051 \
   JWT_SECRET=dev-secret-change-in-prod \
+  AUTH_ENCRYPTION_KEY="${AUTH_ENCRYPTION_KEY:-AHUcvKJupUZCXEURBeHgauui0kb2udDKYUZRmwoz0yQ=}" \
   SUPERADMIN_EMAIL=admin@stitchd.io \
   SUPERADMIN_PASSWORD=changeme \
   RUST_LOG=info \
