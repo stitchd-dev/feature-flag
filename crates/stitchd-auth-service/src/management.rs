@@ -135,9 +135,27 @@ impl ManagementService for ManagementServiceImpl {
             is_system: false,
         };
         self.org_repo.create(&org).await.map_err(map_repo_err)?;
+
+        // Auto-create a default project so new orgs are immediately usable.
+        let default_project = Project {
+            id: ProjectId::new(),
+            organisation_id: org.id,
+            name: "Default".to_string(),
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+            version: 1,
+        };
+        self.project_repo
+            .create(&default_project)
+            .await
+            .map_err(map_repo_err)?;
+
         Ok(Response::new(CreateOrgResponse {
             org_id: org.id.to_string(),
             org_name: org.name,
+            project_id: default_project.id.to_string(),
+            project_name: default_project.name,
         }))
     }
 
@@ -450,7 +468,7 @@ mod tests {
         ProjectRepository, RepositoryError, SdkKeyRepository,
     };
     use stitchd_proto::management::v1::{
-        DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest,
+        CreateOrgRequest, DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest,
         ListProjectsRequest, ListSdkKeysRequest, RenameEnvironmentRequest, RenameProjectRequest,
         RevokeSdkKeyRequest,
     };
@@ -757,6 +775,36 @@ mod tests {
             created_at: Utc::now(),
             revoked_at: None,
         }
+    }
+
+    // ── create_org ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn create_org_also_creates_default_project() {
+        let svc = make_svc(vec![], vec![], vec![]);
+
+        let resp = svc
+            .create_org(Request::new(CreateOrgRequest {
+                name: "Acme".into(),
+            }))
+            .await
+            .unwrap();
+
+        let inner = resp.into_inner();
+        assert!(!inner.org_id.is_empty());
+        assert_eq!(inner.org_name, "Acme");
+        assert!(!inner.project_id.is_empty());
+        assert_eq!(inner.project_name, "Default");
+    }
+
+    #[tokio::test]
+    async fn create_org_empty_name_returns_error() {
+        let svc = make_svc(vec![], vec![], vec![]);
+        let err = svc
+            .create_org(Request::new(CreateOrgRequest { name: "  ".into() }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
     // ── list_projects ────────────────────────────────────────────────────────
