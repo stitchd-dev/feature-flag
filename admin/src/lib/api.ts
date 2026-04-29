@@ -92,3 +92,125 @@ export async function switchOrg(orgId: string): Promise<SwitchOrgResponse> {
   const { data } = await api.post<SwitchOrgResponse>('/v1/auth/switch-org', { org_id: orgId })
   return data
 }
+
+// ─── Permissions ─────────────────────────────────────────────────────────────
+
+export interface PermissionsResponse {
+  roles: string[]
+  permissions: string[]
+}
+
+export async function getMyPermissions(): Promise<PermissionsResponse> {
+  const { data } = await api.get<PermissionsResponse>('/v1/auth/me/permissions')
+  return data
+}
+
+// ─── Projects ────────────────────────────────────────────────────────────────
+
+export interface ProjectSummary {
+  project_id: string
+  project_name: string
+  created_at: string
+}
+
+export async function listProjects(orgId: string): Promise<ProjectSummary[]> {
+  const { data } = await api.get<{ projects: ProjectSummary[] }>(
+    `/v1/management/orgs/${orgId}/projects`,
+  )
+  return data.projects
+}
+
+export interface CreateProjectResponse {
+  project_id: string
+  project_name: string
+}
+
+export async function createProject(
+  orgId: string,
+  name: string,
+): Promise<CreateProjectResponse> {
+  const { data } = await api.post<CreateProjectResponse>(
+    `/v1/management/orgs/${orgId}/projects`,
+    { name },
+  )
+  return data
+}
+
+export async function renameProject(projectId: string, name: string): Promise<void> {
+  await api.patch(`/v1/management/projects/${projectId}`, { name })
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  await api.delete(`/v1/management/projects/${projectId}`)
+}
+
+// ─── Environments ─────────────────────────────────────────────────────────────
+
+export interface EnvironmentSummary {
+  environment_id: string
+  environment_name: string
+  created_at: string
+}
+
+export async function listEnvironments(projectId: string): Promise<EnvironmentSummary[]> {
+  const { data } = await api.get<{ environments: EnvironmentSummary[] }>(
+    `/v1/management/projects/${projectId}/environments`,
+  )
+  return data.environments
+}
+
+export interface CreateEnvironmentResponse {
+  environment_id: string
+  environment_name: string
+}
+
+export async function createEnvironment(
+  projectId: string,
+  name: string,
+): Promise<CreateEnvironmentResponse> {
+  const { data } = await api.post<CreateEnvironmentResponse>(
+    `/v1/management/projects/${projectId}/environments`,
+    { name },
+  )
+  return data
+}
+
+export async function renameEnvironment(environmentId: string, name: string): Promise<void> {
+  await api.patch(`/v1/management/environments/${environmentId}`, { name })
+}
+
+export async function deleteEnvironment(environmentId: string): Promise<void> {
+  await api.delete(`/v1/management/environments/${environmentId}`)
+}
+
+// ─── SDK Keys ─────────────────────────────────────────────────────────────────
+
+export interface SdkKeySummary {
+  sdk_key_id: string
+  is_active: boolean
+  created_at: string
+  revoked_at: string | null
+}
+
+export async function listSdkKeys(environmentId: string): Promise<SdkKeySummary[]> {
+  const { data } = await api.get<{ sdk_keys: SdkKeySummary[] }>(
+    `/v1/management/environments/${environmentId}/sdk-keys`,
+  )
+  return data.sdk_keys
+}
+
+export interface CreateSdkKeyResponse {
+  sdk_key_id: string
+  raw_key: string
+}
+
+export async function createSdkKey(environmentId: string): Promise<CreateSdkKeyResponse> {
+  const { data } = await api.post<CreateSdkKeyResponse>(
+    `/v1/management/environments/${environmentId}/sdk-keys`,
+  )
+  return data
+}
+
+export async function revokeSdkKey(environmentId: string, sdkKeyId: string): Promise<void> {
+  await api.delete(`/v1/management/environments/${environmentId}/sdk-keys/${sdkKeyId}`)
+}
