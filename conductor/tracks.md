@@ -40,5 +40,4 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [~] Track: Admin UI — Multi-Tenant Routing & API Integration
-*Link: [./conductor/tracks/admin_ui_multitenant_20260428/](./conductor/tracks/admin_ui_multitenant_20260428/)*
+<!-- Archived: admin_ui_multitenant_20260428 (Admin UI — Multi-Tenant Routing & API Integration) -->

@@ -1,7 +1,7 @@
 {
   "track_id": "admin_ui_multitenant_20260428",
   "type": "feature",
-  "status": "new",
+  "status": "complete",
   "priority": "high",
   "depends_on": [],
   "estimated_hours": null,
