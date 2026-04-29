@@ -21,7 +21,12 @@ use stitchd_db::{
 use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateEnvironmentResponse, CreateOrgRequest, CreateOrgResponse,
     CreateProjectRequest, CreateProjectResponse, CreateSdkKeyRequest, CreateSdkKeyResponse,
-    CreateUserRequest, CreateUserResponse, management_service_server::ManagementService,
+    CreateUserRequest, CreateUserResponse, DeleteEnvironmentRequest, DeleteEnvironmentResponse,
+    DeleteProjectRequest, DeleteProjectResponse, EnvironmentSummary, ListEnvironmentsRequest,
+    ListEnvironmentsResponse, ListProjectsRequest, ListProjectsResponse, ListSdkKeysRequest,
+    ListSdkKeysResponse, ProjectSummary, RenameEnvironmentRequest, RenameEnvironmentResponse,
+    RenameProjectRequest, RenameProjectResponse, RevokeSdkKeyRequest, RevokeSdkKeyResponse,
+    SdkKeySummary, management_service_server::ManagementService,
 };
 
 use crate::sdk_key::hash_sdk_key;
@@ -64,6 +69,27 @@ fn parse_org_id(s: &str) -> Result<OrganisationId, Status> {
     Uuid::parse_str(s)
         .map(OrganisationId::from_uuid)
         .map_err(|_| Status::invalid_argument("org_id is not a valid UUID"))
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_project_id(s: &str) -> Result<ProjectId, Status> {
+    Uuid::parse_str(s)
+        .map(ProjectId::from_uuid)
+        .map_err(|_| Status::invalid_argument("project_id is not a valid UUID"))
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_env_id(s: &str) -> Result<EnvironmentId, Status> {
+    Uuid::parse_str(s)
+        .map(EnvironmentId::from_uuid)
+        .map_err(|_| Status::invalid_argument("environment_id is not a valid UUID"))
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_sdk_key_id(s: &str) -> Result<SdkKeyId, Status> {
+    Uuid::parse_str(s)
+        .map(SdkKeyId::from_uuid)
+        .map_err(|_| Status::invalid_argument("sdk_key_id is not a valid UUID"))
 }
 
 fn map_repo_err(e: RepositoryError) -> Status {
@@ -217,13 +243,12 @@ impl ManagementService for ManagementServiceImpl {
 
         // Find-or-create: reuse an existing platform user so the same person
         // can be a member of multiple organisations with different roles.
-        let user = match self.user_repo.find_by_email(&r.email).await.map_err(map_repo_err)? {
-            Some(existing) => {
+        let user =
+            if let Some(existing) = self.user_repo.find_by_email(&r.email).await.map_err(map_repo_err)? {
                 // User already exists on the platform — just add the org
                 // membership below. No password or profile changes.
                 existing
-            }
-            None => {
+            } else {
                 // New user: password is required.
                 if r.password.is_empty() {
                     return Err(Status::invalid_argument("password must not be empty for a new user"));
@@ -233,8 +258,7 @@ impl ManagementService for ManagementServiceImpl {
                     .create(&r.email, &r.display_name, Some(&hash))
                     .await
                     .map_err(map_repo_err)?
-            }
-        };
+            };
 
         let role = match r.org_role.as_str() {
             "org_admin" => OrgRole::OrgAdmin,
@@ -243,12 +267,10 @@ impl ManagementService for ManagementServiceImpl {
 
         // add_member has a unique constraint on (user_id, org_id) — treat a
         // duplicate as an idempotent success so callers can re-seed safely.
-        match self.membership_repo.add_member(user.id, org_id, role).await {
-            Ok(_) => {}
-            Err(RepositoryError::UniqueViolation { .. }) => {
-                // Already a member of this org — no-op.
+        if let Err(e) = self.membership_repo.add_member(user.id, org_id, role).await {
+            if !matches!(e, RepositoryError::UniqueViolation { .. }) {
+                return Err(map_repo_err(e));
             }
-            Err(e) => return Err(map_repo_err(e)),
         }
 
         Ok(Response::new(CreateUserResponse {
@@ -256,6 +278,160 @@ impl ManagementService for ManagementServiceImpl {
             email: user.email,
             display_name: user.display_name,
         }))
+    }
+
+    async fn list_projects(
+        &self,
+        request: Request<ListProjectsRequest>,
+    ) -> Result<Response<ListProjectsResponse>, Status> {
+        let r = request.into_inner();
+        let org_id = parse_org_id(&r.org_id)?;
+        let projects = self
+            .project_repo
+            .list_by_organisation(org_id)
+            .await
+            .map_err(map_repo_err)?;
+        let summaries = projects
+            .into_iter()
+            .map(|p| ProjectSummary {
+                project_id: p.id.to_string(),
+                project_name: p.name,
+                created_at: p.created_at.to_rfc3339(),
+            })
+            .collect();
+        Ok(Response::new(ListProjectsResponse { projects: summaries }))
+    }
+
+    async fn rename_project(
+        &self,
+        request: Request<RenameProjectRequest>,
+    ) -> Result<Response<RenameProjectResponse>, Status> {
+        let r = request.into_inner();
+        if r.name.trim().is_empty() {
+            return Err(Status::invalid_argument("project name must not be empty"));
+        }
+        let project_id = parse_project_id(&r.project_id)?;
+        let mut project = self
+            .project_repo
+            .find_by_id(project_id)
+            .await
+            .map_err(map_repo_err)?;
+        project.name = r.name.trim().to_string();
+        project.updated_at = Utc::now();
+        project.version += 1;
+        self.project_repo
+            .update(&project)
+            .await
+            .map_err(map_repo_err)?;
+        Ok(Response::new(RenameProjectResponse {}))
+    }
+
+    async fn delete_project(
+        &self,
+        request: Request<DeleteProjectRequest>,
+    ) -> Result<Response<DeleteProjectResponse>, Status> {
+        let r = request.into_inner();
+        let project_id = parse_project_id(&r.project_id)?;
+        self.project_repo
+            .soft_delete(project_id)
+            .await
+            .map_err(map_repo_err)?;
+        Ok(Response::new(DeleteProjectResponse {}))
+    }
+
+    async fn list_environments(
+        &self,
+        request: Request<ListEnvironmentsRequest>,
+    ) -> Result<Response<ListEnvironmentsResponse>, Status> {
+        let r = request.into_inner();
+        let project_id = parse_project_id(&r.project_id)?;
+        let envs = self
+            .env_repo
+            .list_by_project(project_id)
+            .await
+            .map_err(map_repo_err)?;
+        let summaries = envs
+            .into_iter()
+            .map(|e| EnvironmentSummary {
+                environment_id: e.id.to_string(),
+                environment_name: e.name,
+                created_at: e.created_at.to_rfc3339(),
+            })
+            .collect();
+        Ok(Response::new(ListEnvironmentsResponse {
+            environments: summaries,
+        }))
+    }
+
+    async fn rename_environment(
+        &self,
+        request: Request<RenameEnvironmentRequest>,
+    ) -> Result<Response<RenameEnvironmentResponse>, Status> {
+        let r = request.into_inner();
+        if r.name.trim().is_empty() {
+            return Err(Status::invalid_argument(
+                "environment name must not be empty",
+            ));
+        }
+        let env_id = parse_env_id(&r.environment_id)?;
+        let mut env = self.env_repo.find_by_id(env_id).await.map_err(map_repo_err)?;
+        env.name = r.name.trim().to_string();
+        env.updated_at = Utc::now();
+        env.version += 1;
+        self.env_repo.update(&env).await.map_err(map_repo_err)?;
+        Ok(Response::new(RenameEnvironmentResponse {}))
+    }
+
+    async fn delete_environment(
+        &self,
+        request: Request<DeleteEnvironmentRequest>,
+    ) -> Result<Response<DeleteEnvironmentResponse>, Status> {
+        let r = request.into_inner();
+        let env_id = parse_env_id(&r.environment_id)?;
+        self.env_repo
+            .soft_delete(env_id)
+            .await
+            .map_err(map_repo_err)?;
+        Ok(Response::new(DeleteEnvironmentResponse {}))
+    }
+
+    async fn list_sdk_keys(
+        &self,
+        request: Request<ListSdkKeysRequest>,
+    ) -> Result<Response<ListSdkKeysResponse>, Status> {
+        let r = request.into_inner();
+        let env_id = parse_env_id(&r.environment_id)?;
+        let keys = self
+            .sdk_key_repo
+            .list_by_environment(env_id)
+            .await
+            .map_err(map_repo_err)?;
+        let summaries = keys
+            .into_iter()
+            .map(|k| SdkKeySummary {
+                sdk_key_id: k.id.to_string(),
+                is_active: k.is_active,
+                created_at: k.created_at.to_rfc3339(),
+                revoked_at: k.revoked_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
+            })
+            .collect();
+        Ok(Response::new(ListSdkKeysResponse { sdk_keys: summaries }))
+    }
+
+    async fn revoke_sdk_key(
+        &self,
+        request: Request<RevokeSdkKeyRequest>,
+    ) -> Result<Response<RevokeSdkKeyResponse>, Status> {
+        let r = request.into_inner();
+        let key_id = parse_sdk_key_id(&r.sdk_key_id)?;
+        self.sdk_key_repo.revoke(key_id).await.map_err(|e| match e {
+            // min-1-active constraint
+            RepositoryError::UniqueViolation { .. } => Status::failed_precondition(
+                "cannot revoke the last active SDK key for an environment",
+            ),
+            other => map_repo_err(other),
+        })?;
+        Ok(Response::new(RevokeSdkKeyResponse {}))
     }
 }
 
