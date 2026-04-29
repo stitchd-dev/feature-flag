@@ -38,8 +38,12 @@ pub struct OrgJson {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct SeedUserBody {
     pub email: String,
-    pub display_name: String,
-    pub password: String,
+    /// Optional for existing users — omit or send null/empty when adding a
+    /// platform user who already has a display name.
+    pub display_name: Option<String>,
+    /// Optional for existing users — omit or send null/empty. The backend
+    /// skips user creation and just adds the org membership.
+    pub password: Option<String>,
     pub org_role: Option<String>,
 }
 
@@ -106,8 +110,8 @@ pub async fn seed_user(
     let req = tonic::Request::new(CreateUserRequest {
         org_id,
         email: body.email,
-        display_name: body.display_name,
-        password: body.password,
+        display_name: body.display_name.unwrap_or_default(),
+        password: body.password.unwrap_or_default(),
         org_role: body.org_role.unwrap_or_else(|| "org_admin".into()),
     });
     let mut client = state.management_client.lock().await;
