@@ -1,6 +1,8 @@
 import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { I } from '../components/icons'
 import { StitchdMark } from '../components/primitives'
+import { OrgSwitcher } from './OrgSwitcher'
+import { auth } from '../lib/auth'
 
 const SUPERADMIN_NAV = [
   { id: 'orgs', path: '/superadmin/orgs', label: 'Organisations', icon: 'home' },
@@ -56,14 +58,7 @@ export function Sidebar({ onCmdK }: SidebarProps) {
 
       {orgId && (
         <>
-          <div className="org-switcher">
-            <div className="org-avatar">AC</div>
-            <div className="org-meta">
-              <div className="org-name">Acme Cloud</div>
-              <div className="org-sub">{orgId} · production</div>
-            </div>
-            <I.chevronDown size={14} className="org-chevron" />
-          </div>
+          <OrgSwitcher currentOrgId={orgId} />
 
           <div className="env-pill" onClick={() => navigate(envPath)}>
             <span className="env-dot" />
@@ -123,12 +118,12 @@ export function Sidebar({ onCmdK }: SidebarProps) {
       )}
 
       <div className="sidebar-footer">
-        <div className="user-avatar">PR</div>
+        <div className="user-avatar">{(() => { const s = auth.getSession(); return s ? s.userId.slice(0, 2).toUpperCase() : '??' })()}</div>
         <div className="user-meta">
-          <div className="user-name">Priya Reddy</div>
-          <div className="user-email">priya@stitchd.dev</div>
+          <div className="user-name">{auth.isSystem() ? 'Super Admin' : 'Org User'}</div>
+          <div className="user-email" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{auth.getSession()?.userId ?? '—'}</div>
         </div>
-        <button className="icon-btn" title="Notifications"><I.bell size={14} /></button>
+        <button className="icon-btn" title="Sign out" onClick={() => { auth.clearSession(); window.location.href = '/login' }}><I.lock size={14} /></button>
       </div>
     </aside>
   )
