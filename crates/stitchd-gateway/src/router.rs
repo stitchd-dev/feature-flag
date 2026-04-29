@@ -14,7 +14,7 @@ use axum::{
     Router,
     http::StatusCode,
     middleware,
-    routing::{get, post, put},
+    routing::{delete, get, patch, post, put},
 };
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
@@ -69,15 +69,27 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
     let mgmt_routes = Router::new()
         .route(
             "/v1/management/orgs/{org_id}/projects",
-            post(management::create_project),
+            get(management::list_projects).post(management::create_project),
+        )
+        .route(
+            "/v1/management/projects/{project_id}",
+            patch(management::rename_project).delete(management::delete_project),
         )
         .route(
             "/v1/management/projects/{project_id}/environments",
-            post(management::create_environment),
+            get(management::list_environments).post(management::create_environment),
+        )
+        .route(
+            "/v1/management/environments/{environment_id}",
+            patch(management::rename_environment).delete(management::delete_environment),
         )
         .route(
             "/v1/management/environments/{environment_id}/sdk-keys",
-            post(management::create_sdk_key),
+            get(management::list_sdk_keys).post(management::create_sdk_key),
+        )
+        .route(
+            "/v1/management/environments/{environment_id}/sdk-keys/{sdk_key_id}",
+            delete(management::revoke_sdk_key),
         )
         .route(
             "/v1/management/orgs/{org_id}/users",
@@ -114,6 +126,8 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
 
     // ── JWT-authenticated resource routes ─────────────────────────────────────
     let resource_routes = Router::new()
+        // Auth context
+        .route("/v1/auth/me/permissions", get(auth::get_my_permissions))
         // Flags
         .route(
             "/v1/projects/{project_id}/flags",
