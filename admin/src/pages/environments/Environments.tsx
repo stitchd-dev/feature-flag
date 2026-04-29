@@ -378,11 +378,13 @@ export function Environments() {
         {envsLoading ? (
           <div style={{ fontSize: 12, color: 'var(--fg-subtle)', padding: '8px 0' }}>Loading environments…</div>
         ) : envs.length === 0 && !creatingEnv ? (
-          <div className="card" style={{ padding: 32, textAlign: 'center', color: 'var(--fg-muted)', fontSize: 13 }}>
-            No environments yet.{' '}
+          <div className="empty">
+            <div className="empty-icon"><I.key size={20} /></div>
+            <div className="empty-title">No environments yet</div>
+            <div className="empty-desc">Environments isolate your flags and SDK keys across stages like production and staging.</div>
             {canCreate && (
-              <button className="link-btn" onClick={() => { setCreatingEnv(true); setTimeout(() => newEnvRef.current?.focus(), 0) }}>
-                Create one
+              <button className="btn primary" style={{ marginTop: 8 }} onClick={() => { setCreatingEnv(true); setTimeout(() => newEnvRef.current?.focus(), 0) }}>
+                <I.plus size={13} /> New environment
               </button>
             )}
           </div>
