@@ -450,7 +450,9 @@ mod tests {
         ProjectRepository, RepositoryError, SdkKeyRepository,
     };
     use stitchd_proto::management::v1::{
-        ListEnvironmentsRequest, ListProjectsRequest, ListSdkKeysRequest, RevokeSdkKeyRequest,
+        DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest,
+        ListProjectsRequest, ListSdkKeysRequest, RenameEnvironmentRequest, RenameProjectRequest,
+        RevokeSdkKeyRequest,
     };
     use tonic::Request;
 
@@ -515,8 +517,8 @@ mod tests {
         async fn update(&self, p: &Project) -> Result<Project, RepositoryError> {
             Ok(p.clone())
         }
-        async fn soft_delete(&self, id: ProjectId) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound { id: id.to_string() })
+        async fn soft_delete(&self, _id: ProjectId) -> Result<(), RepositoryError> {
+            Ok(())
         }
     }
 
@@ -550,8 +552,8 @@ mod tests {
         async fn update(&self, e: &Environment) -> Result<Environment, RepositoryError> {
             Ok(e.clone())
         }
-        async fn soft_delete(&self, id: EnvironmentId) -> Result<(), RepositoryError> {
-            Err(RepositoryError::NotFound { id: id.to_string() })
+        async fn soft_delete(&self, _id: EnvironmentId) -> Result<(), RepositoryError> {
+            Ok(())
         }
     }
 
@@ -924,6 +926,163 @@ mod tests {
         let err = svc
             .revoke_sdk_key(Request::new(RevokeSdkKeyRequest {
                 sdk_key_id: "not-a-uuid".into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // ── rename_project ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rename_project_succeeds() {
+        let org_id = OrganisationId::new();
+        let project = make_project(org_id);
+        let svc = make_svc(vec![project.clone()], vec![], vec![]);
+
+        let result = svc
+            .rename_project(Request::new(RenameProjectRequest {
+                project_id: project.id.to_string(),
+                name: "new-name".into(),
+            }))
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rename_project_empty_name_returns_error() {
+        let org_id = OrganisationId::new();
+        let project = make_project(org_id);
+        let svc = make_svc(vec![project.clone()], vec![], vec![]);
+
+        let err = svc
+            .rename_project(Request::new(RenameProjectRequest {
+                project_id: project.id.to_string(),
+                name: "   ".into(),
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn rename_project_invalid_id_returns_error() {
+        let svc = make_svc(vec![], vec![], vec![]);
+        let err = svc
+            .rename_project(Request::new(RenameProjectRequest {
+                project_id: "not-a-uuid".into(),
+                name: "new-name".into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // ── delete_project ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_project_succeeds() {
+        let org_id = OrganisationId::new();
+        let project = make_project(org_id);
+        let svc = make_svc(vec![project.clone()], vec![], vec![]);
+
+        let result = svc
+            .delete_project(Request::new(DeleteProjectRequest {
+                project_id: project.id.to_string(),
+            }))
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn delete_project_invalid_id_returns_error() {
+        let svc = make_svc(vec![], vec![], vec![]);
+        let err = svc
+            .delete_project(Request::new(DeleteProjectRequest {
+                project_id: "not-a-uuid".into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // ── rename_environment ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn rename_environment_succeeds() {
+        let org_id = OrganisationId::new();
+        let project = make_project(org_id);
+        let env = make_env(project.id);
+        let svc = make_svc(vec![project], vec![env.clone()], vec![]);
+
+        let result = svc
+            .rename_environment(Request::new(RenameEnvironmentRequest {
+                environment_id: env.id.to_string(),
+                name: "staging".into(),
+            }))
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rename_environment_empty_name_returns_error() {
+        let org_id = OrganisationId::new();
+        let project = make_project(org_id);
+        let env = make_env(project.id);
+        let svc = make_svc(vec![project], vec![env.clone()], vec![]);
+
+        let err = svc
+            .rename_environment(Request::new(RenameEnvironmentRequest {
+                environment_id: env.id.to_string(),
+                name: "".into(),
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn rename_environment_invalid_id_returns_error() {
+        let svc = make_svc(vec![], vec![], vec![]);
+        let err = svc
+            .rename_environment(Request::new(RenameEnvironmentRequest {
+                environment_id: "not-a-uuid".into(),
+                name: "staging".into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // ── delete_environment ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn delete_environment_succeeds() {
+        let org_id = OrganisationId::new();
+        let project = make_project(org_id);
+        let env = make_env(project.id);
+        let svc = make_svc(vec![project], vec![env.clone()], vec![]);
+
+        let result = svc
+            .delete_environment(Request::new(DeleteEnvironmentRequest {
+                environment_id: env.id.to_string(),
+            }))
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn delete_environment_invalid_id_returns_error() {
+        let svc = make_svc(vec![], vec![], vec![]);
+        let err = svc
+            .delete_environment(Request::new(DeleteEnvironmentRequest {
+                environment_id: "not-a-uuid".into(),
             }))
             .await
             .unwrap_err();
