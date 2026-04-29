@@ -83,13 +83,13 @@
 <!-- execution: sequential -->
 <!-- depends: phase3 -->
 
-- [ ] Task 1: Build ProjectPicker component — lists all org projects, highlights
+- [x] Task 1: Build ProjectPicker component — lists all org projects, highlights
   selected, inline create/rename/delete with RBAC gating and confirmation dialogs
-  <!-- files: admin/src/shell/ProjectPicker.tsx -->
+  <!-- files: admin/src/shell/ProjectPicker.tsx --> [09482ef]
 
-- [ ] Task 2: Wire ProjectPicker into the shell Sidebar alongside the org switcher;
+- [x] Task 2: Wire ProjectPicker into the shell Sidebar alongside the org switcher;
   update OrgContext to load the project list on mount
-  <!-- files: admin/src/shell/Sidebar.tsx, admin/src/context/OrgContext.tsx -->
+  <!-- files: admin/src/shell/Sidebar.tsx, admin/src/context/OrgContext.tsx --> [09482ef]
 
 - [ ] Task: Conductor - User Manual Verification 'Frontend — Project Picker Component' (Protocol in workflow.md)
 
@@ -97,30 +97,30 @@
 <!-- execution: sequential -->
 <!-- depends: phase2, phase4 -->
 
-- [ ] Task 1: Extract Environments into its own file; remove all mock-data imports
-  <!-- files: admin/src/pages/environments/Environments.tsx, admin/src/pages/stubs.tsx -->
+- [x] Task 1: Extract Environments into its own file; remove all mock-data imports
+  <!-- files: admin/src/pages/environments/Environments.tsx, admin/src/pages/stubs.tsx --> [adde4ac]
 
-- [ ] Task 2: Wire environment list to real API; implement inline rename and
+- [x] Task 2: Wire environment list to real API; implement inline rename and
   delete with confirmation dialog
-  <!-- files: admin/src/pages/environments/Environments.tsx -->
+  <!-- files: admin/src/pages/environments/Environments.tsx --> [adde4ac]
 
-- [ ] Task 3: Wire SDK keys table to real API; implement create-key flow
+- [x] Task 3: Wire SDK keys table to real API; implement create-key flow
   (show raw key once on creation) and revoke with confirmation
-  <!-- files: admin/src/pages/environments/Environments.tsx -->
+  <!-- files: admin/src/pages/environments/Environments.tsx --> [adde4ac]
 
-- [ ] Task 4: Apply RBAC disabled states with tooltips to all mutating actions
+- [x] Task 4: Apply RBAC disabled states with tooltips to all mutating actions
   (New environment, Rename, Delete, New key, Revoke) using usePermissions()
-  <!-- files: admin/src/pages/environments/Environments.tsx -->
+  <!-- files: admin/src/pages/environments/Environments.tsx --> [adde4ac]
 
-- [ ] Task 5: Implement section-level lock overlay for users with no
+- [x] Task 5: Implement section-level lock overlay for users with no
   environment:read permission
-  <!-- files: admin/src/pages/environments/Environments.tsx -->
+  <!-- files: admin/src/pages/environments/Environments.tsx --> [adde4ac]
 
-- [ ] Task 6: Empty state — no project selected; show prompt with
+- [x] Task 6: Empty state — no project selected; show prompt with
   ProjectPicker CTA and inline create-project shortcut
-  <!-- files: admin/src/pages/environments/Environments.tsx -->
+  <!-- files: admin/src/pages/environments/Environments.tsx --> [adde4ac]
 
-- [ ] Task 7: Update App.tsx to import from new file path
-  <!-- files: admin/src/App.tsx -->
+- [x] Task 7: Update App.tsx to import from new file path
+  <!-- files: admin/src/App.tsx --> [adde4ac]
 
 - [ ] Task: Conductor - User Manual Verification 'Frontend — Environments Page & RBAC UI' (Protocol in workflow.md)
