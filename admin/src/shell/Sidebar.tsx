@@ -37,16 +37,21 @@ export function Sidebar({ onCmdK }: SidebarProps) {
   const location = useLocation()
   const { orgId } = useParams<{ orgId: string }>()
 
-  const navItems = orgId ? getOrgNav(orgId) : SUPERADMIN_NAV
-  const adminItems = orgId ? getOrgAdmin(orgId) : []
+  // Only treat orgId as an org context when we're under /org/:orgId.
+  // /superadmin/orgs/:orgId also captures orgId but must show the superadmin nav.
+  const isOrgSection = location.pathname.startsWith('/org/')
+  const activeOrgId = isOrgSection ? orgId : undefined
+
+  const navItems = activeOrgId ? getOrgNav(activeOrgId) : SUPERADMIN_NAV
+  const adminItems = activeOrgId ? getOrgAdmin(activeOrgId) : []
 
   function isActive(path: string) {
-    if (orgId && path === `/org/${orgId}`) return location.pathname === `/org/${orgId}`
-    if (!orgId && path === '/') return location.pathname === '/'
+    if (activeOrgId && path === `/org/${activeOrgId}`) return location.pathname === `/org/${activeOrgId}`
+    if (!activeOrgId && path === '/') return location.pathname === '/'
     return location.pathname.startsWith(path)
   }
 
-  const envPath = orgId ? `/org/${orgId}/environments` : '/superadmin'
+  const envPath = activeOrgId ? `/org/${activeOrgId}/environments` : '/superadmin'
 
   return (
     <aside className="sidebar">
@@ -56,9 +61,9 @@ export function Sidebar({ onCmdK }: SidebarProps) {
         <div style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--fg-subtle)', padding: '2px 5px', border: '1px solid var(--border)', borderRadius: 3 }}>v0.9</div>
       </div>
 
-      {orgId && (
+      {activeOrgId && (
         <>
-          <OrgSwitcher currentOrgId={orgId} />
+          <OrgSwitcher currentOrgId={activeOrgId} />
 
           <div className="env-pill" onClick={() => navigate(envPath)}>
             <span className="env-dot" />
@@ -134,12 +139,15 @@ export function TopbarNav() {
   const location = useLocation()
   const { orgId } = useParams<{ orgId: string }>()
 
-  const navItems = orgId ? getOrgNav(orgId) : SUPERADMIN_NAV
-  const adminItems = orgId ? getOrgAdmin(orgId) : []
+  const isOrgSection = location.pathname.startsWith('/org/')
+  const activeOrgId = isOrgSection ? orgId : undefined
+
+  const navItems = activeOrgId ? getOrgNav(activeOrgId) : SUPERADMIN_NAV
+  const adminItems = activeOrgId ? getOrgAdmin(activeOrgId) : []
 
   function isActive(path: string) {
-    if (orgId && path === `/org/${orgId}`) return location.pathname === `/org/${orgId}`
-    if (!orgId && path === '/') return location.pathname === '/'
+    if (activeOrgId && path === `/org/${activeOrgId}`) return location.pathname === `/org/${activeOrgId}`
+    if (!activeOrgId && path === '/') return location.pathname === '/'
     return location.pathname.startsWith(path)
   }
 
