@@ -41,3 +41,8 @@ This file tracks all major tracks for the project.
 ---
 
 <!-- Archived: admin_ui_multitenant_20260428 (Admin UI — Multi-Tenant Routing & API Integration) -->
+
+---
+
+## [ ] Track: Environments & SDK Keys — Full-Stack Functional UI with RBAC
+*Link: [./conductor/tracks/env_sdk_rbac_20260429/](./conductor/tracks/env_sdk_rbac_20260429/)*

@@ -1,0 +1,13 @@
+{
+  "track_id": "env_sdk_rbac_20260429",
+  "type": "feature",
+  "status": "new",
+  "priority": "critical",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-04-29T00:00:00Z",
+  "updated_at": "2026-04-29T00:00:00Z",
+  "description": "Make the whole UI of Environments & SDK Keys functional with greying out sections if user doesn't have permission — RBAC-compliant UI",
+  "git_branch": "track/env_sdk_rbac_20260429",
+  "worktree_path": ".worktrees/env_sdk_rbac_20260429"
+}
