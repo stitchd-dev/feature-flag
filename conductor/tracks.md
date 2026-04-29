@@ -44,5 +44,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Environments & SDK Keys — Full-Stack Functional UI with RBAC
+## [x] Track: Environments & SDK Keys — Full-Stack Functional UI with RBAC
 *Link: [./conductor/tracks/env_sdk_rbac_20260429/](./conductor/tracks/env_sdk_rbac_20260429/)*
