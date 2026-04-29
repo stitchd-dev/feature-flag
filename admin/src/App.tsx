@@ -17,8 +17,9 @@ import { ExperimentsList } from './pages/experiments/ExperimentsList'
 import { ExperimentDetail } from './pages/experiments/ExperimentDetail'
 import { OrgsList, OrgDetail, SeedUser } from './pages/superadmin'
 import {
-  EventsRegistry, Environments, Members, AuditLog,
+  EventsRegistry, Members, AuditLog,
 } from './pages/stubs'
+import { Environments } from './pages/environments/Environments'
 import { I } from './components/icons'
 
 function AppShell() {

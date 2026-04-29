@@ -9,8 +9,11 @@ message CreateOrgRequest {
 }
 
 message CreateOrgResponse {
-  string org_id   = 1;
-  string org_name = 2;
+  string org_id        = 1;
+  string org_name      = 2;
+  // The default project auto-created with the org.
+  string project_id    = 3;
+  string project_name  = 4;
 }
 
 // ─── Project ──────────────────────────────────────────────────────────────────
@@ -25,6 +28,33 @@ message CreateProjectResponse {
   string project_name = 2;
 }
 
+message ListProjectsRequest {
+  string org_id = 1;
+}
+
+message ProjectSummary {
+  string project_id   = 1;
+  string project_name = 2;
+  string created_at   = 3;
+}
+
+message ListProjectsResponse {
+  repeated ProjectSummary projects = 1;
+}
+
+message RenameProjectRequest {
+  string project_id = 1;
+  string name       = 2;
+}
+
+message RenameProjectResponse {}
+
+message DeleteProjectRequest {
+  string project_id = 1;
+}
+
+message DeleteProjectResponse {}
+
 // ─── Environment ─────────────────────────────────────────────────────────────
 
 message CreateEnvironmentRequest {
@@ -37,6 +67,33 @@ message CreateEnvironmentResponse {
   string environment_name = 2;
 }
 
+message ListEnvironmentsRequest {
+  string project_id = 1;
+}
+
+message EnvironmentSummary {
+  string environment_id   = 1;
+  string environment_name = 2;
+  string created_at       = 3;
+}
+
+message ListEnvironmentsResponse {
+  repeated EnvironmentSummary environments = 1;
+}
+
+message RenameEnvironmentRequest {
+  string environment_id = 1;
+  string name           = 2;
+}
+
+message RenameEnvironmentResponse {}
+
+message DeleteEnvironmentRequest {
+  string environment_id = 1;
+}
+
+message DeleteEnvironmentResponse {}
+
 // ─── SDK Key ──────────────────────────────────────────────────────────────────
 
 message CreateSdkKeyRequest {
@@ -48,6 +105,27 @@ message CreateSdkKeyResponse {
   // The raw key — only returned on creation, never stored in plaintext.
   string raw_key     = 2;
 }
+
+message ListSdkKeysRequest {
+  string environment_id = 1;
+}
+
+message SdkKeySummary {
+  string sdk_key_id    = 1;
+  bool   is_active     = 2;
+  string created_at    = 3;
+  string revoked_at    = 4;
+}
+
+message ListSdkKeysResponse {
+  repeated SdkKeySummary sdk_keys = 1;
+}
+
+message RevokeSdkKeyRequest {
+  string sdk_key_id = 1;
+}
+
+message RevokeSdkKeyResponse {}
 
 // ─── User ─────────────────────────────────────────────────────────────────────
 
@@ -69,9 +147,26 @@ message CreateUserResponse {
 // ─── Management service ───────────────────────────────────────────────────────
 
 service ManagementService {
+  // Org
   rpc CreateOrg(CreateOrgRequest)               returns (CreateOrgResponse);
+
+  // Project
   rpc CreateProject(CreateProjectRequest)       returns (CreateProjectResponse);
+  rpc ListProjects(ListProjectsRequest)         returns (ListProjectsResponse);
+  rpc RenameProject(RenameProjectRequest)       returns (RenameProjectResponse);
+  rpc DeleteProject(DeleteProjectRequest)       returns (DeleteProjectResponse);
+
+  // Environment
   rpc CreateEnvironment(CreateEnvironmentRequest) returns (CreateEnvironmentResponse);
+  rpc ListEnvironments(ListEnvironmentsRequest)   returns (ListEnvironmentsResponse);
+  rpc RenameEnvironment(RenameEnvironmentRequest) returns (RenameEnvironmentResponse);
+  rpc DeleteEnvironment(DeleteEnvironmentRequest) returns (DeleteEnvironmentResponse);
+
+  // SDK Key
   rpc CreateSdkKey(CreateSdkKeyRequest)         returns (CreateSdkKeyResponse);
+  rpc ListSdkKeys(ListSdkKeysRequest)           returns (ListSdkKeysResponse);
+  rpc RevokeSdkKey(RevokeSdkKeyRequest)         returns (RevokeSdkKeyResponse);
+
+  // User
   rpc CreateUser(CreateUserRequest)             returns (CreateUserResponse);
 }

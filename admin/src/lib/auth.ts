@@ -13,6 +13,8 @@ export interface Session {
   orgId: string
   isSystem: boolean
   userId: string
+  roles: string[]
+  permissions: string[]
 }
 
 export interface OrgHistoryEntry {
@@ -20,7 +22,7 @@ export interface OrgHistoryEntry {
   orgName: string
 }
 
-function decodeJwtPayload(token: string): Record<string, unknown> {
+export function decodeJwtPayload(token: string): Record<string, unknown> {
   try {
     const parts = token.split('.')
     if (parts.length !== 3) return {}
@@ -68,6 +70,19 @@ export const auth = {
   decodeIsSystem: (token: string): boolean => {
     const payload = decodeJwtPayload(token)
     return payload['is_system'] === true
+  },
+
+  // Decode JWT and extract roles/permissions arrays from custom claims
+  decodeRoles: (token: string): string[] => {
+    const payload = decodeJwtPayload(token)
+    return Array.isArray(payload['roles']) ? (payload['roles'] as string[]) : []
+  },
+
+  decodePermissions: (token: string): string[] => {
+    const payload = decodeJwtPayload(token)
+    return Array.isArray(payload['permissions'])
+      ? (payload['permissions'] as string[])
+      : []
   },
 
   // Org history for the org switcher

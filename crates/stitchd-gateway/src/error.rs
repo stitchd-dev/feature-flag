@@ -23,6 +23,10 @@ pub enum GatewayError {
     #[error("bad request: {0}")]
     BadRequest(String),
 
+    /// A precondition was not met (e.g. revoke last active SDK key).
+    #[error("conflict: {0}")]
+    Conflict(String),
+
     /// A gRPC transport or internal error.
     #[error("upstream error: {0}")]
     Upstream(String),
@@ -39,6 +43,7 @@ impl From<tonic::Status> for GatewayError {
             tonic::Code::PermissionDenied => GatewayError::Unauthorized(s.message().to_string()),
             tonic::Code::NotFound => GatewayError::NotFound(s.message().to_string()),
             tonic::Code::InvalidArgument => GatewayError::BadRequest(s.message().to_string()),
+            tonic::Code::FailedPrecondition => GatewayError::Conflict(s.message().to_string()),
             _ => GatewayError::Upstream(s.message().to_string()),
         }
     }
@@ -50,6 +55,7 @@ impl IntoResponse for GatewayError {
             GatewayError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
             GatewayError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             GatewayError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            GatewayError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             GatewayError::Upstream(m) => (StatusCode::BAD_GATEWAY, m.clone()),
             GatewayError::InvalidBody(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
         };

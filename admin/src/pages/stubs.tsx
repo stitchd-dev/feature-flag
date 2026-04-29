@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { PageHeader } from '../components/primitives'
 import { I } from '../components/icons'
-import { EVENTS, ENVIRONMENTS, SDK_KEYS, MEMBERS, AUDIT } from '../lib/mockData'
+import { EVENTS, MEMBERS, AUDIT } from '../lib/mockData'
 
 // ─── Events Registry ─────────────────────────────────────────────────────────
 
@@ -40,77 +40,6 @@ export function EventsRegistry() {
                   <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{e.volume30d}</td>
                   <td style={{ color: 'var(--fg-muted)' }}>{e.lastSeen}</td>
                   <td><code style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{e.schema}</code></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </>
-  )
-}
-
-// ─── Environments & SDK Keys ──────────────────────────────────────────────────
-
-export function Environments() {
-  return (
-    <>
-      <PageHeader
-        crumbs={['stitchd-app', 'Environments']}
-        title="Environments & SDK Keys"
-        subtitle="Each environment scopes its own rules, segments, experiments and SDK keys. Min 1 active key per environment."
-        actions={<button className="btn primary"><I.plus size={14} /> New environment</button>}
-      />
-      <div className="page-body">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, marginBottom: 18 }}>
-          {ENVIRONMENTS.map((e) => (
-            <div key={e.key} className="card" style={{ padding: 16, position: 'relative', overflow: 'hidden' }}>
-              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: e.color }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <span className="env-dot" style={{ background: e.color, boxShadow: `0 0 0 3px ${e.color}22` }} />
-                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 14 }}>{e.name}</span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: 12 }}>
-                {[['Flags', String(e.flags)], ['Active keys', String(e.keys)], ['Eval p95', e.latencyP95], ['Rate', e.evalRate]].map(([label, val]) => (
-                  <div key={label}>
-                    <div style={{ color: 'var(--fg-muted)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 16 }}>{val}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title"><I.key size={14} /> SDK Keys</div>
-            <button className="btn primary sm"><I.plus size={12} /> New key</button>
-          </div>
-          <table className="table">
-            <thead>
-              <tr><th>Key</th><th>Environment</th><th>Created</th><th>Last used</th><th>Status</th><th>Created by</th><th></th></tr>
-            </thead>
-            <tbody>
-              {SDK_KEYS.map((k) => (
-                <tr key={k.id}>
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <I.key size={13} stroke="var(--fg-subtle)" />
-                      <span className="mono-key">{k.id}</span>
-                      <button className="icon-btn"><I.copy size={12} /></button>
-                    </div>
-                  </td>
-                  <td><span className="badge">{k.env}</span></td>
-                  <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)' }}>{k.created}</td>
-                  <td style={{ color: 'var(--fg-muted)' }}>{k.lastUsed}</td>
-                  <td>
-                    <span className={`badge ${k.status === 'active' ? 'success' : 'warning'}`}>
-                      <span className="dot" />
-                      {k.status}
-                    </span>
-                  </td>
-                  <td>{k.by}</td>
-                  <td><button className="btn sm danger">Revoke</button></td>
                 </tr>
               ))}
             </tbody>

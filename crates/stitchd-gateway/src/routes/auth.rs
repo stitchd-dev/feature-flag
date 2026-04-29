@@ -1,11 +1,11 @@
 //! Auth route handlers — login, org listing, org switching.
 
-use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
+use axum::{Json, extract::{Extension, State}, http::HeaderMap, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::auth::v1::{ListUserOrgsRequest, LoginRequest, SwitchOrgRequest};
+use stitchd_proto::auth::v1::{ListUserOrgsRequest, LoginRequest, RbacContext, SwitchOrgRequest};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -146,13 +146,33 @@ pub async fn switch_org(
     }))
 }
 
+#[derive(Debug, Serialize)]
+pub struct PermissionsJson {
+    pub roles: Vec<String>,
+    pub permissions: Vec<String>,
+}
+
+/// `GET /v1/auth/me/permissions`
+///
+/// Returns the roles and permissions embedded in the caller's validated JWT.
+/// Requires `auth_middleware` to have injected an [`RbacContext`] extension.
+pub async fn get_my_permissions(
+    Extension(rbac): Extension<RbacContext>,
+) -> impl IntoResponse {
+    Json(PermissionsJson {
+        roles: rbac.roles,
+        permissions: rbac.permissions,
+    })
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
-    use axum::routing::post;
+    use axum::routing::{get, post};
     axum::Router::new()
         .route("/v1/auth/login", post(login))
+        .route("/v1/auth/me/permissions", get(get_my_permissions))
         .with_state(state)
 }
 
@@ -165,6 +185,61 @@ mod tests {
         http::{Request, StatusCode},
     };
     use tower::ServiceExt as _;
+
+    #[tokio::test]
+    async fn get_my_permissions_with_rbac_context_returns_200() {
+        use axum::body::to_bytes;
+        use stitchd_proto::auth::v1::RbacContext;
+
+        // Build a router that inserts RbacContext via an extension layer
+        let state = make_stub_state();
+        let app = axum::Router::new()
+            .route("/v1/auth/me/permissions", axum::routing::get(get_my_permissions))
+            .layer(axum::Extension(RbacContext {
+                roles: vec!["org_admin".to_string()],
+                permissions: vec!["project:create".to_string()],
+                is_system: false,
+                ..Default::default()
+            }))
+            .with_state(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/auth/me/permissions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["roles"][0], "org_admin");
+        assert_eq!(json["permissions"][0], "project:create");
+    }
+
+    #[tokio::test]
+    async fn get_my_permissions_without_rbac_context_returns_500() {
+        let state = make_stub_state();
+        let app = axum::Router::new()
+            .route("/v1/auth/me/permissions", axum::routing::get(get_my_permissions))
+            .with_state(state);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/auth/me/permissions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Axum returns 500 when an Extension extractor finds nothing
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 
     #[tokio::test]
     async fn login_returns_200_or_502() {
