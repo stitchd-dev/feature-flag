@@ -3,6 +3,7 @@ import { I } from '../components/icons'
 import { StitchdMark } from '../components/primitives'
 import { OrgSwitcher } from './OrgSwitcher'
 import { ProjectPicker } from './ProjectPicker'
+import { EnvSwitcher } from './EnvSwitcher'
 import { auth } from '../lib/auth'
 
 const SUPERADMIN_NAV = [
@@ -52,8 +53,6 @@ export function Sidebar({ onCmdK }: SidebarProps) {
     return location.pathname.startsWith(path)
   }
 
-  const envPath = activeOrgId ? `/org/${activeOrgId}/environments` : '/superadmin'
-
   return (
     <aside className="sidebar">
       <div className="sidebar-brand">
@@ -66,11 +65,7 @@ export function Sidebar({ onCmdK }: SidebarProps) {
         <>
           <OrgSwitcher currentOrgId={activeOrgId} />
           <ProjectPicker />
-          <div className="env-pill" onClick={() => navigate(envPath)}>
-            <span className="env-dot" />
-            <span className="env-name">production</span>
-            <span className="env-switch">switch</span>
-          </div>
+          <EnvSwitcher />
         </>
       )}
 
