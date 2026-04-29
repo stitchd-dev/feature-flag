@@ -1,11 +1,11 @@
-//! Auth route handlers — login.
+//! Auth route handlers — login, org listing, org switching.
 
-use axum::{Json, extract::State, response::IntoResponse};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::auth::v1::LoginRequest;
+use stitchd_proto::auth::v1::{ListUserOrgsRequest, LoginRequest, SwitchOrgRequest};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -62,6 +62,86 @@ pub async fn login(
         refresh_token: r.refresh_token,
         expires_in: r.expires_in,
         user_id: r.user_id,
+        org_id: r.org_id,
+    }))
+}
+
+// ─── Org helpers ─────────────────────────────────────────────────────────────
+
+fn extract_bearer(headers: &HeaderMap) -> Result<String, GatewayError> {
+    let val = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| GatewayError::Unauthorized("missing Authorization header".to_string()))?;
+    let token = val
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| GatewayError::Unauthorized("expected Bearer token".to_string()))?
+        .to_string();
+    Ok(token)
+}
+
+#[derive(Debug, Serialize)]
+pub struct OrgEntryJson {
+    pub org_id: String,
+    pub org_name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SwitchOrgBody {
+    pub org_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SwitchOrgJson {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: i64,
+    pub org_id: String,
+}
+
+/// `GET /v1/auth/me/orgs`
+pub async fn list_user_orgs(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, GatewayError> {
+    let token = extract_bearer(&headers)?;
+    let req = tonic::Request::new(ListUserOrgsRequest {
+        current_token: token,
+    });
+    let mut client = state.auth_client.lock().await;
+    let resp = client.list_user_orgs(req).await.map_err(GatewayError::from)?;
+    let orgs: Vec<OrgEntryJson> = resp
+        .into_inner()
+        .orgs
+        .into_iter()
+        .map(|e| OrgEntryJson {
+            org_id: e.org_id,
+            org_name: e.org_name,
+            role: e.role,
+        })
+        .collect();
+    Ok(Json(orgs))
+}
+
+/// `POST /v1/auth/switch-org`
+pub async fn switch_org(
+    State(state): State<Arc<GatewayState>>,
+    headers: HeaderMap,
+    Json(body): Json<SwitchOrgBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let token = extract_bearer(&headers)?;
+    let req = tonic::Request::new(SwitchOrgRequest {
+        current_token: token,
+        target_org_id: body.org_id,
+    });
+    let mut client = state.auth_client.lock().await;
+    let resp = client.switch_org(req).await.map_err(GatewayError::from)?;
+    let r = resp.into_inner();
+    Ok(Json(SwitchOrgJson {
+        access_token: r.access_token,
+        refresh_token: r.refresh_token,
+        expires_in: r.expires_in,
         org_id: r.org_id,
     }))
 }

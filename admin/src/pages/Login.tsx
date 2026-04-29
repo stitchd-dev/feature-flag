@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { I } from '../components/icons'
 import { StitchdMark } from '../components/primitives'
-import { loginWithPassword, initiateOidc, initiateSaml } from '../lib/api'
+import { loginWithPassword, initiateOidc, initiateSaml, listUserOrgs } from '../lib/api'
 import { auth } from '../lib/auth'
 
 type AuthMethod = 'password' | 'oidc' | 'saml'
@@ -35,6 +35,13 @@ export function LoginPage() {
         const res = await loginWithPassword(email, password, orgId || undefined)
         const isSystem = auth.decodeIsSystem(res.access_token)
         auth.setSession({ token: res.access_token, orgId: res.org_id, isSystem, userId: res.user_id })
+        // Fetch org list for seamless switching — non-blocking
+        try {
+          const orgs = await listUserOrgs()
+          auth.setOrgs(orgs)
+        } catch {
+          auth.setOrgs([])
+        }
         if (isSystem) {
           navigate('/superadmin')
         } else {

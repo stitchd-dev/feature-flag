@@ -66,3 +66,21 @@ export async function initiateSaml(orgId: string): Promise<{ redirect_url: strin
   )
   return data
 }
+
+// ─── Org switching ────────────────────────────────────────────────────────────
+
+export interface OrgEntry {
+  org_id: string
+  org_name: string
+  role: string
+}
+
+export async function listUserOrgs(): Promise<OrgEntry[]> {
+  const { data } = await api.get<OrgEntry[]>('/v1/auth/me/orgs')
+  return data
+}
+
+export async function switchOrg(orgId: string): Promise<LoginResponse> {
+  const { data } = await api.post<LoginResponse>('/v1/auth/switch-org', { org_id: orgId })
+  return data
+}

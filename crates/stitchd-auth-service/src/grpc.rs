@@ -12,9 +12,12 @@ use stitchd_db::{
     AuthUserRepository, OrgMembershipRepository, OrganisationRepository, RefreshTokenRepository,
     SdkKeyRepository,
 };
+use stitchd_core::auth::{OrgRole, jwt::JwtEngine};
+use stitchd_core::id::OrganisationId;
 use stitchd_proto::auth::v1::{
-    CredentialRequest, LoginRequest, LoginResponse, RbacContext, auth_service_server::AuthService,
-    credential_request::Credential,
+    CredentialRequest, ListUserOrgsRequest, ListUserOrgsResponse, LoginRequest, LoginResponse,
+    RbacContext, SwitchOrgRequest, SwitchOrgResponse, UserOrgEntry,
+    auth_service_server::AuthService, credential_request::Credential,
 };
 
 use crate::{
@@ -95,6 +98,117 @@ impl AuthService for AuthServiceImpl {
             &self.refresh_token_repo,
         )
         .await
+    }
+
+    async fn switch_org(
+        &self,
+        request: Request<SwitchOrgRequest>,
+    ) -> Result<Response<SwitchOrgResponse>, Status> {
+        let r = request.into_inner();
+
+        // Validate current token to identify the user.
+        let validated = validate_bearer_token(&r.current_token, &self.auth_user_repo)
+            .await
+            .map_err(Status::from)?;
+        let user = validated.user;
+
+        // Parse the target org ID.
+        let target_org_id = OrganisationId::from_uuid(
+            uuid::Uuid::parse_str(&r.target_org_id)
+                .map_err(|_| Status::invalid_argument("target_org_id is not a valid UUID"))?,
+        );
+
+        // Find the membership for the target org.
+        let orgs = self
+            .membership_repo
+            .list_orgs_for_user(user.id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        let membership = orgs
+            .into_iter()
+            .find(|m| m.org_id == target_org_id)
+            .ok_or_else(|| Status::permission_denied("not a member of that organisation"))?;
+
+        // Look up the org to get is_system.
+        let org = self
+            .org_repo
+            .find_by_id(membership.org_id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        // Issue new JWT.
+        let access_token = JwtEngine::issue(
+            user.id,
+            membership.org_id,
+            &user.email,
+            membership.role,
+            org.is_system,
+            &user.token_secret,
+        )
+        .map_err(|e| Status::internal(e.to_string()))?;
+
+        // Create a new refresh token.
+        let (_rt, raw_refresh) = self
+            .refresh_token_repo
+            .create(user.id, membership.org_id, None, 30)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        Ok(Response::new(SwitchOrgResponse {
+            access_token,
+            refresh_token: raw_refresh,
+            expires_in: 3600,
+            org_id: membership.org_id.to_string(),
+        }))
+    }
+
+    async fn list_user_orgs(
+        &self,
+        request: Request<ListUserOrgsRequest>,
+    ) -> Result<Response<ListUserOrgsResponse>, Status> {
+        let r = request.into_inner();
+
+        // Validate current token to identify the user.
+        let validated = validate_bearer_token(&r.current_token, &self.auth_user_repo)
+            .await
+            .map_err(Status::from)?;
+        let user = validated.user;
+
+        // Fetch all memberships.
+        let memberships = self
+            .membership_repo
+            .list_orgs_for_user(user.id)
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
+
+        // Map each membership to a UserOrgEntry, filtering out system orgs.
+        let mut entries = Vec::new();
+        for m in memberships {
+            let org = self
+                .org_repo
+                .find_by_id(m.org_id)
+                .await
+                .map_err(|e| Status::internal(e.to_string()))?;
+
+            // Skip system orgs.
+            if org.is_system {
+                continue;
+            }
+
+            let role_str = match m.role {
+                OrgRole::OrgAdmin => "org_admin".to_string(),
+                OrgRole::OrgMember => "member".to_string(),
+            };
+
+            entries.push(UserOrgEntry {
+                org_id: m.org_id.to_string(),
+                org_name: org.name,
+                role: role_str,
+            });
+        }
+
+        Ok(Response::new(ListUserOrgsResponse { orgs: entries }))
     }
 }
 

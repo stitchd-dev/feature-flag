@@ -51,6 +51,34 @@ message LoginResponse {
   string org_id        = 5;
 }
 
+// ─── Org switching ────────────────────────────────────────────────────────────
+
+message SwitchOrgRequest {
+  string current_token = 1;
+  string target_org_id = 2;
+}
+
+message SwitchOrgResponse {
+  string access_token  = 1;
+  string refresh_token = 2;
+  int64  expires_in    = 3;
+  string org_id        = 4;
+}
+
+message UserOrgEntry {
+  string org_id   = 1;
+  string org_name = 2;
+  string role     = 3;
+}
+
+message ListUserOrgsRequest {
+  string current_token = 1;
+}
+
+message ListUserOrgsResponse {
+  repeated UserOrgEntry orgs = 1;
+}
+
 // ─── Auth service ─────────────────────────────────────────────────────────────
 
 service AuthService {
@@ -60,4 +88,10 @@ service AuthService {
 
   // Authenticates an email + password credential and issues a JWT.
   rpc LoginWithPassword(LoginRequest) returns (LoginResponse);
+
+  // Switches the current user to a different org, issuing a new JWT.
+  rpc SwitchOrg(SwitchOrgRequest) returns (SwitchOrgResponse);
+
+  // Lists all orgs the current user is a member of (excluding System orgs).
+  rpc ListUserOrgs(ListUserOrgsRequest) returns (ListUserOrgsResponse);
 }

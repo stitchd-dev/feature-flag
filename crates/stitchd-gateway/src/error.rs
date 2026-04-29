@@ -36,6 +36,7 @@ impl From<tonic::Status> for GatewayError {
     fn from(s: tonic::Status) -> Self {
         match s.code() {
             tonic::Code::Unauthenticated => GatewayError::Unauthorized(s.message().to_string()),
+            tonic::Code::PermissionDenied => GatewayError::Unauthorized(s.message().to_string()),
             tonic::Code::NotFound => GatewayError::NotFound(s.message().to_string()),
             tonic::Code::InvalidArgument => GatewayError::BadRequest(s.message().to_string()),
             _ => GatewayError::Upstream(s.message().to_string()),

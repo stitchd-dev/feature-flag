@@ -1,5 +1,12 @@
 const SESSION_KEY = 'stitchd_session'
 const ORG_HISTORY_KEY = 'stitchd_org_history'
+const ORG_LIST_KEY = 'stitchd_org_list'
+
+export interface OrgEntry {
+  org_id: string
+  org_name: string
+  role: string
+}
 
 export interface Session {
   token: string
@@ -78,5 +85,20 @@ export const auth = {
     const history = auth.getOrgHistory()
     const filtered = history.filter((h) => h.orgId !== entry.orgId)
     localStorage.setItem(ORG_HISTORY_KEY, JSON.stringify([entry, ...filtered].slice(0, 10)))
+  },
+
+  // Org list from server (used for seamless switching)
+  setOrgs: (orgs: OrgEntry[]): void => {
+    localStorage.setItem(ORG_LIST_KEY, JSON.stringify(orgs))
+  },
+
+  getOrgs: (): OrgEntry[] => {
+    try {
+      const raw = localStorage.getItem(ORG_LIST_KEY)
+      if (!raw) return []
+      return JSON.parse(raw) as OrgEntry[]
+    } catch {
+      return []
+    }
   },
 }
