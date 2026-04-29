@@ -60,14 +60,19 @@ export function OrgSwitcher({ currentOrgId, currentOrgName }: OrgSwitcherProps) 
     try {
       const res = await switchOrg(orgId)
       const isSystem = auth.decodeIsSystem(res.access_token)
-      auth.setSession({ token: res.access_token, orgId: res.org_id, isSystem, userId: res.user_id })
+      // Preserve userId from current session — SwitchOrgResponse has no user_id field
+      const currentUserId = auth.getSession()?.userId ?? ''
+      auth.setSession({ token: res.access_token, orgId: res.org_id, isSystem, userId: currentUserId })
+      // Refresh the org list with the new token context
+      auth.setOrgs(auth.getOrgs())
       if (isSystem) {
         navigate('/superadmin')
       } else {
         navigate(`/org/${res.org_id}`)
       }
-    } catch {
-      // Swallow — user remains on current org
+    } catch (err) {
+      console.error('org switch failed', err)
+      // User stays on current org — no crash
     } finally {
       setSwitchingOrgId(null)
     }

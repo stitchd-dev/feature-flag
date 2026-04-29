@@ -80,7 +80,15 @@ export async function listUserOrgs(): Promise<OrgEntry[]> {
   return data
 }
 
-export async function switchOrg(orgId: string): Promise<LoginResponse> {
-  const { data } = await api.post<LoginResponse>('/v1/auth/switch-org', { org_id: orgId })
+export interface SwitchOrgResponse {
+  access_token: string
+  refresh_token: string
+  expires_in: number
+  org_id: string
+  // user_id is intentionally absent — the caller preserves it from the current session
+}
+
+export async function switchOrg(orgId: string): Promise<SwitchOrgResponse> {
+  const { data } = await api.post<SwitchOrgResponse>('/v1/auth/switch-org', { org_id: orgId })
   return data
 }
