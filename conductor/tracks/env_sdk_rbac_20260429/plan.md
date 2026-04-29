@@ -91,7 +91,7 @@
   update OrgContext to load the project list on mount
   <!-- files: admin/src/shell/Sidebar.tsx, admin/src/context/OrgContext.tsx --> [09482ef]
 
-- [ ] Task: Conductor - User Manual Verification 'Frontend — Project Picker Component' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Frontend — Project Picker Component' (Protocol in workflow.md)
 
 ## Phase 5: Frontend — Environments Page & RBAC UI
 <!-- execution: sequential -->
@@ -123,4 +123,4 @@
 - [x] Task 7: Update App.tsx to import from new file path
   <!-- files: admin/src/App.tsx --> [adde4ac]
 
-- [ ] Task: Conductor - User Manual Verification 'Frontend — Environments Page & RBAC UI' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Frontend — Environments Page & RBAC UI' (Protocol in workflow.md)
