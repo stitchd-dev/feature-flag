@@ -10,25 +10,32 @@ use stitchd_proto::auth::v1::RbacContext;
 use crate::jwt::ValidatedJwt;
 use crate::sdk_key::SdkKeyContext;
 
+const ORG_ADMIN_PERMISSIONS: &[&str] = &[
+    "project:create",
+    "project:rename",
+    "project:delete",
+    "environment:read",
+    "environment:create",
+    "environment:rename",
+    "environment:delete",
+    "sdk_key:create",
+    "sdk_key:revoke",
+];
+
+const ORG_MEMBER_PERMISSIONS: &[&str] = &["environment:read"];
+
 /// Assemble an [`RbacContext`] from a validated JWT.
-///
-/// For JWT-authenticated callers:
-/// - `tenant_id` — the organisation ID extracted from the token.
-/// - `environment_id` — empty string (JWT does not scope to a single env).
-/// - `roles` — derived from `org_role` claim.
-/// - `permissions` — empty (resolved downstream by policy).
-/// - `subject` — the user's UUID string.
 #[must_use]
 pub fn rbac_context_from_jwt(validated: &ValidatedJwt) -> RbacContext {
-    let role_str = match validated.org_role {
-        OrgRole::OrgAdmin => "org_admin",
-        OrgRole::OrgMember => "org_member",
+    let (role_str, perms) = match validated.org_role {
+        OrgRole::OrgAdmin => ("org_admin", ORG_ADMIN_PERMISSIONS),
+        OrgRole::OrgMember => ("org_member", ORG_MEMBER_PERMISSIONS),
     };
     RbacContext {
         tenant_id: validated.org_id.clone(),
         environment_id: String::new(),
         roles: vec![role_str.to_string()],
-        permissions: vec![],
+        permissions: perms.iter().map(|s| s.to_string()).collect(),
         subject: validated.user.id.to_string(),
         is_system: validated.is_system,
     }
@@ -94,7 +101,7 @@ mod tests {
         assert_eq!(ctx.environment_id, "");
         assert_eq!(ctx.subject, validated.user.id.to_string());
         assert!(!ctx.roles.is_empty());
-        assert!(ctx.permissions.is_empty());
+        assert!(!ctx.permissions.is_empty());
     }
 
     #[test]
