@@ -1,7 +1,21 @@
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
-import { SEGMENTS, FLAGS } from '../../lib/mockData'
+import { useOrgContext } from '../../context/OrgContext'
+import { api } from '../../lib/api'
+
+interface SegmentResponse {
+  segment_id: string
+  environment_id: string
+  key: string
+  name: string
+  description: string
+  segment_type: string // "rule_based" | "list_based"
+  version: number
+  created_at: string
+  updated_at: string
+}
 
 const RULE_RULES = [
   [['context.type', '==', 'user'], ['plan', 'in', '[pro, enterprise]']],
@@ -20,17 +34,62 @@ const LIST_ENTRIES = [
 export function SegmentDetail() {
   const { key } = useParams<{ key: string }>()
   const navigate = useNavigate()
-  const seg = SEGMENTS.find((s) => s.key === key) ?? SEGMENTS[0]
-  const usedByFlags = FLAGS.filter((f) => f.segments.includes(seg.key))
+  const { envId, orgId } = useOrgContext()
+  const [segment, setSegment] = useState<SegmentResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!envId || !key) return
+    setLoading(true)
+    setError(null)
+    api.get<SegmentResponse>(`/v1/environments/${envId}/segments/${key}`)
+      .then(({ data }) => setSegment(data))
+      .catch((err) => setError(err?.response?.data?.message ?? err.message ?? 'Failed to load segment'))
+      .finally(() => setLoading(false))
+  }, [envId, key])
+
+  if (!envId) {
+    return (
+      <div className="page-body">
+        <div style={{ padding: '12px 16px', background: 'var(--warning-bg)', border: '1px solid rgba(184,118,26,0.35)', borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
+          No environment selected — set an environment ID in environments settings
+        </div>
+      </div>
+    )
+  }
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+        <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading segment…</span>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="page-body">
+        <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 8, color: 'var(--danger)', fontSize: 13 }}>
+          <I.alert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          {error}
+        </div>
+      </div>
+    )
+  }
+
+  if (!segment) return null
+
+  const isRuleBased = segment.segment_type === 'rule_based'
 
   return (
     <>
       <PageHeader
-        crumbs={[<a key="1" onClick={() => navigate('/segments')} style={{ cursor: 'pointer' }}>Segments</a>, seg.key]}
-        title={seg.key}
+        crumbs={[<a key="1" onClick={() => navigate(`/org/${orgId}/segments`)} style={{ cursor: 'pointer' }}>Segments</a>, segment.key]}
+        title={segment.key}
         mono
-        subtitle={seg.name}
-        badge={<span className={`badge ${seg.type === 'rule' ? 'info' : ''}`}>{seg.type === 'rule' ? 'rule-based' : 'list-based'}</span>}
+        subtitle={segment.name}
+        badge={<span className={`badge ${isRuleBased ? 'info' : ''}`}>{isRuleBased ? 'rule-based' : 'list-based'}</span>}
         actions={
           <>
             <button className="btn"><I.copy size={13} /> Duplicate</button>
@@ -41,28 +100,25 @@ export function SegmentDetail() {
       <div className="page-body">
         <div className="stat-grid" style={{ marginBottom: 18 }}>
           <div className="stat">
-            <div className="stat-label">Members</div>
-            <div className="stat-value">{seg.members.toLocaleString()}</div>
-            <div className="stat-delta up">+24 this week</div>
+            <div className="stat-label">Type</div>
+            <div className="stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: 20 }}>{isRuleBased ? 'rule' : 'list'}</div>
           </div>
           <div className="stat">
-            <div className="stat-label">Context type</div>
-            <div className="stat-value" style={{ fontFamily: 'var(--font-mono)', fontSize: 20 }}>{seg.contextType}</div>
+            <div className="stat-label">Version</div>
+            <div className="stat-value">v{segment.version}</div>
           </div>
           <div className="stat">
-            <div className="stat-label">Used by</div>
-            <div className="stat-value">{seg.usedBy}</div>
-            <div className="stat-delta">flags & rules</div>
+            <div className="stat-label">Created</div>
+            <div className="stat-value" style={{ fontSize: 18 }}>{new Date(segment.created_at).toLocaleDateString()}</div>
           </div>
           <div className="stat">
-            <div className="stat-label">Last evaluated</div>
-            <div className="stat-value" style={{ fontSize: 18 }}>3s ago</div>
-            <div className="stat-delta">11K evals/min</div>
+            <div className="stat-label">Updated</div>
+            <div className="stat-value" style={{ fontSize: 18 }}>{new Date(segment.updated_at).toLocaleDateString()}</div>
           </div>
         </div>
 
         <div className="split-2-third">
-          {seg.type === 'rule' ? (
+          {isRuleBased ? (
             <div className="card">
               <div className="card-header">
                 <div className="card-title"><I.toggle size={14} /> Rule definition</div>
@@ -118,18 +174,23 @@ export function SegmentDetail() {
 
           <div className="stack">
             <div className="card">
-              <div className="card-header"><div className="card-title">Used by</div></div>
-              <div className="card-body" style={{ padding: 0 }}>
-                {usedByFlags.length === 0 && (
-                  <div style={{ padding: '16px 18px', color: 'var(--fg-faint)', fontSize: 13 }}>No flags reference this segment.</div>
-                )}
-                {usedByFlags.map((f) => (
-                  <div key={f.key} style={{ padding: '10px 18px', borderBottom: '1px solid var(--border-faint)', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={() => navigate(`/flags/${f.key}`)}>
-                    <span className={`toggle ${f.state === 'on' ? 'on' : ''}`} style={{ transform: 'scale(0.75)' }} />
-                    <span className="mono-key">{f.key}</span>
-                    <span className={`type-pill ${f.type}`} style={{ marginLeft: 'auto' }}>{f.type}</span>
-                  </div>
-                ))}
+              <div className="card-header"><div className="card-title">Details</div></div>
+              <div className="card-body">
+                <div style={{ fontSize: 12, lineHeight: 1.8 }}>
+                  {segment.description && (
+                    <div style={{ marginBottom: 10, color: 'var(--fg-muted)' }}>{segment.description}</div>
+                  )}
+                  {[
+                    ['Segment ID', segment.segment_id],
+                    ['Environment', segment.environment_id],
+                    ['Version', `v${segment.version}`],
+                  ].map(([k, v]) => (
+                    <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: 'var(--fg-muted)' }}>{k}</span>
+                      <span className="mono-key" style={{ fontSize: 11 }}>{v}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="card">
@@ -139,7 +200,7 @@ export function SegmentDetail() {
               </div>
               <div className="card-body">
                 <pre className="code">{`{
-  "_type": "${seg.contextType}",
+  "_type": "user",
   "key": "u_8421",
   "parameters": {
     "plan": "pro",

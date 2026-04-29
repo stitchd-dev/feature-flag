@@ -5,6 +5,7 @@ import { Sidebar, TopbarNav } from './shell/Sidebar'
 import { CommandPalette } from './shell/CommandPalette'
 import { TweaksPanel } from './shell/TweaksPanel'
 import { SuperAdminGuard, OrgGuard } from './shell/guards'
+import { OrgProvider } from './context/OrgContext'
 import { LoginPage } from './pages/Login'
 import { OidcCallbackPage } from './pages/OidcCallback'
 import { OrgDashboard } from './pages/OrgDashboard'
@@ -61,6 +62,14 @@ function AppShell() {
   )
 }
 
+function OrgShell() {
+  return (
+    <OrgProvider>
+      <AppShell />
+    </OrgProvider>
+  )
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -81,7 +90,7 @@ export default function App() {
 
         {/* Per-org section — is_system=false only */}
         <Route element={<OrgGuard />}>
-          <Route element={<AppShell />}>
+          <Route element={<OrgShell />}>
             <Route path="/org/:orgId" element={<OrgDashboard />} />
             <Route path="/org/:orgId/flags" element={<FlagsList />} />
             <Route path="/org/:orgId/flags/:key" element={<FlagDetail />} />

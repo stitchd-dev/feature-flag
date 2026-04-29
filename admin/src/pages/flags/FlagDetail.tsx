@@ -1,10 +1,25 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
 import { PageHeader, VariantBar } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { FLAGS, EXPERIMENTS } from '../../lib/mockData'
 import type { Flag } from '../../lib/mockData'
+import { useOrgContext } from '../../context/OrgContext'
+import { api } from '../../lib/api'
+
+interface FlagResponse {
+  flag_id: string
+  project_id: string
+  key: string
+  name: string
+  description: string
+  flag_type: string
+  status: string
+  version: number
+  created_at: string
+  updated_at: string
+}
 
 // ─── Rule tree types ────────────────────────────────────────────────────────
 
@@ -391,21 +406,65 @@ export function FlagDetail() {
   const { key } = useParams<{ key: string }>()
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
-  const flag = FLAGS.find((f) => f.key === key) ?? FLAGS[0]
+  const { projectId, orgId } = useOrgContext()
+  const [apiFlag, setApiFlag] = useState<FlagResponse | null>(null)
+  const [apiLoading, setApiLoading] = useState(false)
+  const [apiError, setApiError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!projectId || !key) return
+    setApiLoading(true)
+    setApiError(null)
+    api.get<FlagResponse>(`/v1/projects/${projectId}/flags/${key}`)
+      .then(({ data }) => setApiFlag(data))
+      .catch((err) => setApiError(err?.response?.data?.message ?? err.message ?? 'Failed to load flag'))
+      .finally(() => setApiLoading(false))
+  }, [projectId, key])
+
+  // Fall back to mock data when API data isn't available yet
+  const mockFlag = FLAGS.find((f) => f.key === key) ?? FLAGS[0]
+  const flag = mockFlag
   const [tab, setTab] = useState<Tab>('targeting')
-  const [enabled, setEnabled] = useState(flag.state === 'on')
+  const [enabled, setEnabled] = useState(apiFlag ? apiFlag.status === 'enabled' : flag.state === 'on')
   const layout = tweaks.flagDetailLayout
+
+  useEffect(() => {
+    if (apiFlag) setEnabled(apiFlag.status === 'enabled')
+  }, [apiFlag])
+
+  const displayName = apiFlag?.name ?? flag.name
+  const displayKey = apiFlag?.key ?? flag.key
+  const displayType = apiFlag?.flag_type ?? flag.type
+
+  if (apiLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+        <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading flag…</span>
+      </div>
+    )
+  }
+
+  if (apiError) {
+    return (
+      <div className="page-body">
+        <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 8, color: 'var(--danger)', fontSize: 13 }}>
+          <I.alert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          {apiError}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>
       <PageHeader
-        crumbs={[<a key="1" onClick={() => navigate('/flags')} style={{ cursor: 'pointer' }}>Flags</a>, flag.key]}
-        title={flag.key}
+        crumbs={[<a key="1" onClick={() => navigate(`/org/${orgId}/flags`)} style={{ cursor: 'pointer' }}>Flags</a>, displayKey]}
+        title={displayKey}
         mono
-        subtitle={`${flag.name} — ${flag.owner} team`}
+        subtitle={`${displayName} — ${flag.owner} team`}
         badge={
           <>
-            <span className={`type-pill ${flag.type}`} style={{ fontSize: 11, padding: '2px 7px' }}>{flag.type}</span>
+            <span className={`type-pill ${displayType}`} style={{ fontSize: 11, padding: '2px 7px' }}>{displayType}</span>
             {flag.staged && <span className="badge warning">staged changes</span>}
           </>
         }
