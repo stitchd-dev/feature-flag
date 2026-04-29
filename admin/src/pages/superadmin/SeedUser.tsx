@@ -1,3 +1,15 @@
+/**
+ * SeedUser — two-mode form for adding users to an organisation.
+ *
+ * "Add existing" — enter an email that already has a platform account.
+ *   The backend finds the user and adds them to the org (no password needed).
+ *
+ * "Create new" — full form; creates a new platform user and adds them.
+ *
+ * The same endpoint (POST /v1/admin/orgs/:orgId/users) handles both: if the
+ * email is known the backend reuses the existing record; if not it requires a
+ * password to create a fresh one.
+ */
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../lib/api'
@@ -5,7 +17,7 @@ import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import type { StoredOrg } from './OrgsList'
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── helpers ───────────────────────────────────────────────────────────────────
 const ORGS_KEY = 'stitchd_admin_orgs'
 
 function getStoredOrg(orgId: string): StoredOrg | null {
@@ -13,9 +25,7 @@ function getStoredOrg(orgId: string): StoredOrg | null {
     const raw = localStorage.getItem(ORGS_KEY)
     if (!raw) return null
     return (JSON.parse(raw) as StoredOrg[]).find((o) => o.org_id === orgId) ?? null
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
 interface CreatedUser {
@@ -24,47 +34,68 @@ interface CreatedUser {
   display_name: string
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+type Mode = 'existing' | 'new'
+type OrgRole = 'org_admin' | 'member'
+
+const ROLE_OPTIONS: { value: OrgRole; label: string; desc: string }[] = [
+  { value: 'org_admin', label: 'Org Admin', desc: 'Can manage flags, experiments, members' },
+  { value: 'member',    label: 'Member',    desc: 'Read-only access' },
+]
+
+// ── component ─────────────────────────────────────────────────────────────────
 
 export function SeedUser() {
   const { orgId } = useParams<{ orgId: string }>()
   const navigate = useNavigate()
-
   const [org, setOrg] = useState<StoredOrg | null>(null)
+  const [mode, setMode] = useState<Mode>('existing')
 
-  const [email, setEmail] = useState('')
+  // shared
+  const [email, setEmail]     = useState('')
+  const [orgRole, setOrgRole] = useState<OrgRole>('org_admin')
+  // create-new only
   const [displayName, setDisplayName] = useState('')
-  const [password, setPassword] = useState('')
-  const [orgRole, setOrgRole] = useState<'org_admin' | 'member'>('org_admin')
-  const [showPassword, setShowPassword] = useState(false)
+  const [password, setPassword]       = useState('')
+  const [showPw, setShowPw]           = useState(false)
 
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [created, setCreated] = useState<CreatedUser | null>(null)
+  const [loading, setLoading]   = useState(false)
+  const [error, setError]       = useState<string | null>(null)
+  const [result, setResult]     = useState<CreatedUser | null>(null)
 
-  useEffect(() => {
-    if (orgId) setOrg(getStoredOrg(orgId))
-  }, [orgId])
+  useEffect(() => { if (orgId) setOrg(getStoredOrg(orgId)) }, [orgId])
+
+  // reset state when switching mode
+  function switchMode(m: Mode) {
+    setMode(m)
+    setError(null)
+    setResult(null)
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!orgId) return
     setLoading(true)
     setError(null)
-    setCreated(null)
+    setResult(null)
+
     try {
-      const { data: res } = await api.post<CreatedUser>(`/v1/admin/orgs/${orgId}/users`, {
-        email: email.trim(),
-        display_name: displayName.trim(),
-        password,
-        org_role: orgRole,
-      })
-      setCreated(res)
-      setEmail('')
-      setDisplayName('')
-      setPassword('')
+      const body: Record<string, string> = { email: email.trim(), org_role: orgRole }
+      if (mode === 'new') {
+        body.display_name = displayName.trim()
+        body.password     = password
+      }
+      const { data } = await api.post<CreatedUser>(`/v1/admin/orgs/${orgId}/users`, body)
+      setResult(data)
+      setEmail(''); setDisplayName(''); setPassword('')
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to create user')
+      // If backend says "password required" the user doesn't exist → nudge to create-new
+      const msg: string = (err as { response?: { data?: { message?: string } } })
+        ?.response?.data?.message ?? (err instanceof Error ? err.message : 'Request failed')
+      if (mode === 'existing' && msg.toLowerCase().includes('password')) {
+        setError(`No platform account found for "${email.trim()}". Switch to Create New to register them first.`)
+      } else {
+        setError(msg)
+      }
     } finally {
       setLoading(false)
     }
@@ -74,7 +105,7 @@ export function SeedUser() {
     <div className="page-content">
       <PageHeader
         title="Seed User"
-        subtitle={org ? `Create the first user for "${org.org_name}"` : 'Create the first user for this organisation'}
+        subtitle={org ? `Add a user to "${org.org_name}"` : 'Add a user to this organisation'}
         actions={
           <button className="btn" onClick={() => navigate(`/superadmin/orgs/${orgId}`)}>
             ← Back to Org
@@ -83,38 +114,64 @@ export function SeedUser() {
       />
 
       {/* Success banner */}
-      {created && (
-        <div className="card" style={{ padding: 20, marginBottom: 24, border: '1px solid var(--success, #22c55e)', background: 'var(--success-bg, #f0fdf4)' }}>
+      {result && (
+        <div className="card" style={{ padding: 20, marginBottom: 24, border: '1px solid #22c55e', background: '#f0fdf4' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-            <I.check size={18} style={{ color: 'var(--success, #22c55e)' }} />
-            <span style={{ fontWeight: 600, color: 'var(--success, #16a34a)' }}>User created successfully!</span>
+            <I.check size={18} style={{ color: '#16a34a' }} />
+            <span style={{ fontWeight: 600, color: '#16a34a' }}>
+              {mode === 'existing' ? 'User added to organisation!' : 'User created and added!'}
+            </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '6px 0', fontSize: 13 }}>
             <span style={{ color: 'var(--fg-muted)' }}>User ID</span>
-            <span className="mono-key">{created.user_id}</span>
+            <span className="mono-key">{result.user_id}</span>
             <span style={{ color: 'var(--fg-muted)' }}>Email</span>
-            <span>{created.email}</span>
+            <span>{result.email}</span>
             <span style={{ color: 'var(--fg-muted)' }}>Name</span>
-            <span>{created.display_name}</span>
+            <span>{result.display_name}</span>
           </div>
           <div style={{ marginTop: 14, display: 'flex', gap: 8 }}>
-            <button
-              className="btn primary sm"
-              onClick={() => navigate(`/superadmin/orgs/${orgId}`)}
-            >
+            <button className="btn primary sm" onClick={() => navigate(`/superadmin/orgs/${orgId}`)}>
               Back to Org
             </button>
-            <button className="btn sm" onClick={() => setCreated(null)}>
-              Create Another User
+            <button className="btn sm" onClick={() => setResult(null)}>
+              Add Another
             </button>
           </div>
         </div>
       )}
 
-      {/* Form */}
-      {!created && (
-        <div className="card" style={{ padding: 24, maxWidth: 520 }}>
+      {!result && (
+        <div className="card" style={{ padding: 24, maxWidth: 540 }}>
+
+          {/* Mode tabs */}
+          <div style={{ display: 'flex', gap: 0, marginBottom: 24, border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+            {(['existing', 'new'] as Mode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => switchMode(m)}
+                style={{
+                  flex: 1, padding: '9px 0', fontSize: 13, fontWeight: 500,
+                  background: mode === m ? 'var(--accent)' : 'transparent',
+                  color: mode === m ? '#fff' : 'var(--fg-muted)',
+                  border: 'none', cursor: 'pointer', transition: 'background 0.15s',
+                }}
+              >
+                {m === 'existing' ? '＋ Add Existing User' : '✦ Create New User'}
+              </button>
+            ))}
+          </div>
+
+          {/* Mode description */}
+          <p style={{ fontSize: 12, color: 'var(--fg-muted)', marginBottom: 20, marginTop: -8 }}>
+            {mode === 'existing'
+              ? 'The user already has a Stitchd account. Enter their email to grant them access to this org.'
+              : 'Create a brand-new platform account and add them to this org in one step.'}
+          </p>
+
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+            {/* Email — shared */}
             <div>
               <label className="field-label">Email *</label>
               <input
@@ -124,72 +181,97 @@ export function SeedUser() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="user@example.com"
                 required
-                disabled={loading}
                 autoFocus
-              />
-            </div>
-
-            <div>
-              <label className="field-label">Display Name *</label>
-              <input
-                className="input"
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                placeholder="Jane Smith"
-                required
                 disabled={loading}
               />
             </div>
 
+            {/* Create-new only fields */}
+            {mode === 'new' && (
+              <>
+                <div>
+                  <label className="field-label">Display Name *</label>
+                  <input
+                    className="input"
+                    type="text"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder="Jane Smith"
+                    required
+                    disabled={loading}
+                  />
+                </div>
+
+                <div>
+                  <label className="field-label">Password *</label>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      className="input"
+                      type={showPw ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Minimum 8 characters"
+                      required
+                      minLength={8}
+                      disabled={loading}
+                      style={{ paddingRight: 40 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPw((v) => !v)}
+                      style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)' }}
+                    >
+                      {showPw ? <I.eyeOff size={14} /> : <I.eye size={14} />}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* Role — shared */}
             <div>
-              <label className="field-label">Password *</label>
-              <div style={{ position: 'relative' }}>
-                <input
-                  className="input"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Minimum 8 characters"
-                  required
-                  minLength={8}
-                  disabled={loading}
-                  style={{ paddingRight: 40 }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)' }}
-                >
-                  {showPassword ? <I.eyeOff size={14} /> : <I.eye size={14} />}
-                </button>
+              <label className="field-label">Role in this Organisation</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6 }}>
+                {ROLE_OPTIONS.map((opt) => (
+                  <label
+                    key={opt.value}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      padding: '10px 14px', borderRadius: 8, cursor: 'pointer',
+                      border: `1px solid ${orgRole === opt.value ? 'var(--accent)' : 'var(--border)'}`,
+                      background: orgRole === opt.value ? 'color-mix(in srgb, var(--accent) 6%, transparent)' : 'transparent',
+                      transition: 'border-color 0.15s, background 0.15s',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="orgRole"
+                      value={opt.value}
+                      checked={orgRole === opt.value}
+                      onChange={() => setOrgRole(opt.value)}
+                      style={{ accentColor: 'var(--accent)' }}
+                    />
+                    <div>
+                      <div style={{ fontWeight: 500, fontSize: 13 }}>{opt.label}</div>
+                      <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{opt.desc}</div>
+                    </div>
+                  </label>
+                ))}
               </div>
             </div>
 
-            <div>
-              <label className="field-label">Org Role</label>
-              <select
-                className="input"
-                value={orgRole}
-                onChange={(e) => setOrgRole(e.target.value as 'org_admin' | 'member')}
-                disabled={loading}
-              >
-                <option value="org_admin">org_admin (can manage flags, experiments, users)</option>
-                <option value="member">member (read-only)</option>
-              </select>
-            </div>
-
-            {error && (
-              <div className="alert error">{error}</div>
-            )}
+            {error && <div className="alert error">{error}</div>}
 
             <div style={{ display: 'flex', gap: 8, paddingTop: 4 }}>
               <button
                 className="btn primary"
                 type="submit"
-                disabled={loading || !email.trim() || !displayName.trim() || !password}
+                disabled={loading || !email.trim() || (mode === 'new' && (!displayName.trim() || !password))}
+                style={{ flex: 1 }}
               >
-                {loading ? 'Creating…' : <><I.plus size={14} /> Create User</>}
+                {loading
+                  ? (mode === 'existing' ? 'Adding…' : 'Creating…')
+                  : (mode === 'existing' ? 'Add to Organisation' : 'Create & Add')}
               </button>
               <button
                 className="btn"
@@ -200,6 +282,7 @@ export function SeedUser() {
                 Cancel
               </button>
             </div>
+
           </form>
         </div>
       )}
