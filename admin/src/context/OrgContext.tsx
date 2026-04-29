@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, ReactNode } from 'react'
+import { createContext, useContext, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
 import { auth } from '../lib/auth'
 

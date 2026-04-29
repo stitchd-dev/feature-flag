@@ -94,7 +94,7 @@ export function Sidebar({ onCmdK }: SidebarProps) {
               >
                 <Ic size={16} className="sidebar-icon" />
                 <span>{item.label}</span>
-                {item.badge && <span className="sidebar-badge">{item.badge}</span>}
+                {'badge' in item && (item as { badge?: string }).badge && <span className="sidebar-badge">{(item as { badge?: string }).badge}</span>}
               </button>
             )
           })}
