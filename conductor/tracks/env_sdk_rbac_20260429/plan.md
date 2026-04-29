@@ -27,29 +27,29 @@
   of environment with active experiments)
   <!-- files: crates/stitchd-auth-service/src/management.rs --> [8f8e407]
 
-- [ ] Task: Conductor - User Manual Verification 'Backend — Proto Extensions & Management Service' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Backend — Proto Extensions & Management Service' (Protocol in workflow.md)
 
 ## Phase 2: Backend — Gateway Routes & Permissions API
 <!-- execution: sequential -->
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Write failing tests for all 8 new management route handlers
-  <!-- files: crates/stitchd-gateway/src/routes/management.rs -->
+- [x] Task 1: Write failing tests for all 8 new management route handlers
+  <!-- files: crates/stitchd-gateway/src/routes/management.rs --> [cc5bb7e]
 
-- [ ] Task 2: Implement 8 new handlers in management.rs
+- [x] Task 2: Implement 8 new handlers in management.rs
   (GET projects, PATCH/DELETE project, GET environments, PATCH/DELETE
   environment, GET sdk-keys, DELETE sdk-key)
-  <!-- files: crates/stitchd-gateway/src/routes/management.rs -->
+  <!-- files: crates/stitchd-gateway/src/routes/management.rs --> [cc5bb7e]
 
-- [ ] Task 3: Write failing test for GET /v1/auth/me/permissions
-  <!-- files: crates/stitchd-gateway/src/routes/auth.rs -->
+- [x] Task 3: Write failing test for GET /v1/auth/me/permissions
+  <!-- files: crates/stitchd-gateway/src/routes/auth.rs --> [cc5bb7e]
 
-- [ ] Task 4: Implement GET /v1/auth/me/permissions — extract RbacContext from
+- [x] Task 4: Implement GET /v1/auth/me/permissions — extract RbacContext from
   request extension, return roles + permissions as JSON
-  <!-- files: crates/stitchd-gateway/src/routes/auth.rs -->
+  <!-- files: crates/stitchd-gateway/src/routes/auth.rs --> [cc5bb7e]
 
-- [ ] Task 5: Register all new routes in router.rs under mgmt_routes
-  <!-- files: crates/stitchd-gateway/src/router.rs -->
+- [x] Task 5: Register all new routes in router.rs under mgmt_routes
+  <!-- files: crates/stitchd-gateway/src/router.rs --> [cc5bb7e]
 
 - [ ] Task: Conductor - User Manual Verification 'Backend — Gateway Routes & Permissions API' (Protocol in workflow.md)
 
@@ -57,25 +57,25 @@
 <!-- execution: sequential -->
 <!-- depends: -->
 
-- [ ] Task 1: Extend Session type and decodeJwtPayload to extract and store
+- [x] Task 1: Extend Session type and decodeJwtPayload to extract and store
   roles + permissions claims from JWT on login
-  <!-- files: admin/src/lib/auth.ts -->
+  <!-- files: admin/src/lib/auth.ts --> [ac47dcd]
 
-- [ ] Task 2: Add typed API functions for all new endpoints (listProjects,
+- [x] Task 2: Add typed API functions for all new endpoints (listProjects,
   listEnvironments, listSdkKeys, createEnvironment, renameEnvironment,
   deleteEnvironment, createSdkKey, revokeSdkKey, renameProject, deleteProject,
   getMyPermissions)
-  <!-- files: admin/src/lib/api.ts -->
+  <!-- files: admin/src/lib/api.ts --> [ac47dcd]
 
-- [ ] Task 3: Define permission constant strings and Action type
+- [x] Task 3: Define permission constant strings and Action type
   (e.g. "project:create", "project:rename", "project:delete",
   "environment:create", "environment:rename", "environment:delete",
   "sdk_key:create", "sdk_key:revoke", "environment:read")
-  <!-- files: admin/src/lib/permissions.ts -->
+  <!-- files: admin/src/lib/permissions.ts --> [ac47dcd]
 
-- [ ] Task 4: Implement usePermissions() hook — seeds from Session on mount,
+- [x] Task 4: Implement usePermissions() hook — seeds from Session on mount,
   fetches /v1/auth/me/permissions for authoritative view, exposes can(action)
-  <!-- files: admin/src/hooks/usePermissions.ts -->
+  <!-- files: admin/src/hooks/usePermissions.ts --> [ac47dcd]
 
 - [ ] Task: Conductor - User Manual Verification 'Frontend — Permissions Layer' (Protocol in workflow.md)
 
