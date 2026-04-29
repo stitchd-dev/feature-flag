@@ -4,28 +4,28 @@
 <!-- execution: sequential -->
 <!-- depends: -->
 
-- [ ] Task 1: Extend `management_service.proto` — add 8 new request/response
+- [x] Task 1: Extend `management_service.proto` — add 8 new request/response
   message types and RPC definitions (ListProjects, ListEnvironments,
   ListSdkKeys, RevokeSdkKey, RenameProject, DeleteProject, RenameEnvironment,
   DeleteEnvironment)
-  <!-- files: proto/management/v1/management_service.proto -->
+  <!-- files: proto/management/v1/management_service.proto --> [38e37f3]
 
-- [ ] Task 2: Write failing tests for the 4 List + RevokeSdkKey RPCs in the
+- [x] Task 2: Write failing tests for the 4 List + RevokeSdkKey RPCs in the
   management service crate
-  <!-- files: crates/stitchd-auth-service/tests/management_list.rs -->
+  <!-- files: crates/stitchd-auth-service/tests/management_list.rs --> [d1ab9ae]
 
-- [ ] Task 3: Implement ListProjects, ListEnvironments, ListSdkKeys,
+- [x] Task 3: Implement ListProjects, ListEnvironments, ListSdkKeys,
   RevokeSdkKey against the existing DB layer
-  <!-- files: crates/stitchd-auth-service/src/management.rs -->
+  <!-- files: crates/stitchd-auth-service/src/management.rs --> [8f8e407]
 
-- [ ] Task 4: Write failing tests for RenameProject, DeleteProject,
+- [x] Task 4: Write failing tests for RenameProject, DeleteProject,
   RenameEnvironment, DeleteEnvironment RPCs
-  <!-- files: crates/stitchd-auth-service/tests/management_mutate.rs -->
+  <!-- files: crates/stitchd-auth-service/src/management.rs --> [fc405cb]
 
-- [ ] Task 5: Implement RenameProject, DeleteProject, RenameEnvironment,
+- [x] Task 5: Implement RenameProject, DeleteProject, RenameEnvironment,
   DeleteEnvironment (enforce constraints: min-1-active SDK key, no delete
   of environment with active experiments)
-  <!-- files: crates/stitchd-auth-service/src/management.rs -->
+  <!-- files: crates/stitchd-auth-service/src/management.rs --> [8f8e407]
 
 - [ ] Task: Conductor - User Manual Verification 'Backend — Proto Extensions & Management Service' (Protocol in workflow.md)
 
