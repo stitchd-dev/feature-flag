@@ -34,7 +34,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // ── Metrics ─────────────────────────────────────────────────────────────
+    let metrics_port: u16 = std::env::var("EXPERIMENTATION_METRICS_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(9055);
+    let metrics_addr: SocketAddr = format!("0.0.0.0:{metrics_port}").parse().unwrap();
     PrometheusBuilder::new()
+        .with_http_listener(metrics_addr)
         .install()
         .context("install Prometheus metrics recorder")?;
 
