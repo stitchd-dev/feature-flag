@@ -1,10 +1,38 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { EXPERIMENTS } from '../../lib/mockData'
 import type { Experiment } from '../../lib/mockData'
+import { useOrgContext } from '../../context/OrgContext'
+import { api } from '../../lib/api'
+
+interface ExperimentResponse {
+  experiment_id: string
+  environment_id: string
+  key: string
+  name: string
+  description: string
+  flag_key: string
+  status: string
+  model: string
+  primary_metric: string
+  variants: number
+  started_at: string | null
+  ended_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface ExperimentResults {
+  experiment_id: string
+  computed_at: string
+  lift: string
+  confidence: number
+  samples: number
+  remaining: string
+}
 
 type Tab = 'results' | 'config' | 'metrics' | 'events'
 
@@ -365,31 +393,83 @@ export function ExperimentDetail() {
   const { key } = useParams<{ key: string }>()
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
+  const { envId, orgId } = useOrgContext()
+  const [apiExp, setApiExp] = useState<ExperimentResponse | null>(null)
+  const [apiResults, setApiResults] = useState<ExperimentResults | null>(null)
+  const [apiLoading, setApiLoading] = useState(false)
+  const [apiError, setApiError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!envId || !key) return
+    setApiLoading(true)
+    setApiError(null)
+    api.get<ExperimentResponse>(`/v1/environments/${envId}/experiments/${key}`)
+      .then(({ data }) => {
+        setApiExp(data)
+        return api.get<ExperimentResults>(`/v1/environments/${envId}/experiments/${key}/results`)
+          .then(({ data: results }) => setApiResults(results))
+          .catch(() => { /* results may not exist yet */ })
+      })
+      .catch((err) => setApiError(err?.response?.data?.message ?? err.message ?? 'Failed to load experiment'))
+      .finally(() => setApiLoading(false))
+  }, [envId, key])
+
+  // Fall back to mock data while API data loads
   const exp = EXPERIMENTS.find((e) => e.key === key) ?? EXPERIMENTS[0]
   const [tab, setTab] = useState<Tab>('results')
   const [vizOverride, setVizOverride] = useState<'auto' | 'frequentist' | 'bayesian'>(tweaks.expViz)
 
   const useBayesian =
     vizOverride === 'bayesian' ||
-    (vizOverride === 'auto' && exp.model === 'Bayesian') ||
+    (vizOverride === 'auto' && (apiExp?.model === 'bayesian' || exp.model === 'Bayesian')) ||
     (vizOverride !== 'frequentist' && tweaks.expViz === 'bayesian')
+
+  const displayName = apiExp?.name ?? exp.name
+  const displayKey = apiExp?.key ?? exp.key
+  const displayStatus = apiExp?.status ?? exp.state
+  const displayLift = apiResults?.lift ?? exp.lift
+  const displayConfidence = apiResults?.confidence ?? exp.confidence
+  const displaySamples = apiResults ? String(apiResults.samples) : exp.samples
+  const displayRemaining = apiResults?.remaining ?? exp.remaining
+  const displayModel = apiExp?.model ?? exp.model
+  const displayFlag = apiExp?.flag_key ?? exp.flag
+  const displayStarted = apiExp?.started_at ? new Date(apiExp.started_at).toLocaleDateString() : exp.started
+
+  if (apiLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+        <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading experiment…</span>
+      </div>
+    )
+  }
+
+  if (apiError) {
+    return (
+      <div className="page-body">
+        <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 8, color: 'var(--danger)', fontSize: 13 }}>
+          <I.alert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+          {apiError}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>
       <PageHeader
-        crumbs={[<a key="1" onClick={() => navigate('/experiments')} style={{ cursor: 'pointer' }}>Experiments</a>, exp.key]}
-        title={exp.name}
-        subtitle={`Bound to flag ${exp.flag} · ${exp.model} model · started ${exp.started}`}
-        badge={<span className={`badge ${exp.state === 'running' ? 'info' : 'success'}`}>{exp.state}</span>}
+        crumbs={[<a key="1" onClick={() => navigate(`/org/${orgId}/experiments`)} style={{ cursor: 'pointer' }}>Experiments</a>, displayKey]}
+        title={displayName}
+        subtitle={`Bound to flag ${displayFlag} · ${displayModel} model · started ${displayStarted}`}
+        badge={<span className={`badge ${displayStatus === 'running' ? 'info' : 'success'}`}>{displayStatus}</span>}
         actions={
           <>
-            {exp.state === 'running' && (
+            {displayStatus === 'running' && (
               <>
                 <button className="btn"><I.refresh size={13} /> Recompute</button>
                 <button className="btn danger"><I.pause size={13} /> Stop</button>
               </>
             )}
-            {exp.state === 'running' && exp.confidence >= 95 && (
+            {displayStatus === 'running' && displayConfidence >= 95 && (
               <button className="btn primary"><I.rocket size={13} /> Ship winner</button>
             )}
           </>
@@ -421,10 +501,10 @@ export function ExperimentDetail() {
             </div>
 
             <div className="stat-grid" style={{ marginBottom: 14 }}>
-              <div className="stat"><div className="stat-label">Lift (relative)</div><div className="stat-value" style={{ color: 'var(--success)' }}>{exp.lift}</div><div className="stat-delta">vs control</div></div>
-              <div className="stat"><div className="stat-label">{useBayesian ? 'P(variant > control)' : 'P-value'}</div><div className="stat-value">{useBayesian ? `${exp.confidence}%` : '0.0023'}</div><div className="stat-delta">{useBayesian ? 'Bayesian posterior' : 'two-sided'}</div></div>
-              <div className="stat"><div className="stat-label">Samples</div><div className="stat-value">{exp.samples}</div><div className="stat-delta">control + {exp.variants - 1} variant{exp.variants > 2 ? 's' : ''}</div></div>
-              <div className="stat"><div className="stat-label">Time remaining</div><div className="stat-value" style={{ fontSize: 22 }}>{exp.remaining}</div><div className="stat-delta">{exp.remaining === 'ready' ? 'min sample size reached' : 'of 14d'}</div></div>
+              <div className="stat"><div className="stat-label">Lift (relative)</div><div className="stat-value" style={{ color: 'var(--success)' }}>{displayLift}</div><div className="stat-delta">vs control</div></div>
+              <div className="stat"><div className="stat-label">{useBayesian ? 'P(variant > control)' : 'P-value'}</div><div className="stat-value">{useBayesian ? `${displayConfidence}%` : '0.0023'}</div><div className="stat-delta">{useBayesian ? 'Bayesian posterior' : 'two-sided'}</div></div>
+              <div className="stat"><div className="stat-label">Samples</div><div className="stat-value">{displaySamples}</div><div className="stat-delta">control + {exp.variants - 1} variant{exp.variants > 2 ? 's' : ''}</div></div>
+              <div className="stat"><div className="stat-label">Time remaining</div><div className="stat-value" style={{ fontSize: 22 }}>{displayRemaining}</div><div className="stat-delta">{displayRemaining === 'ready' ? 'min sample size reached' : 'of 14d'}</div></div>
             </div>
 
             {useBayesian ? <BayesianViz exp={exp} /> : <FrequentistViz />}

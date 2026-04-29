@@ -28,8 +28,10 @@ export function OidcCallbackPage() {
       }
       try {
         const { data } = await api.get<CallbackResponse>(`/v1/auth/oidc/${state}/callback`, { params: { code, state } })
-        auth.setToken(data.access_token)
-        navigate('/', { replace: true })
+        const isSystem = auth.decodeIsSystem(data.access_token)
+        auth.setSession({ token: data.access_token, orgId: data.org_id, isSystem, userId: data.user_id })
+        if (isSystem) navigate('/superadmin', { replace: true })
+        else navigate(`/org/${data.org_id}`, { replace: true })
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : 'OIDC callback failed')
       }
