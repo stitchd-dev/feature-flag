@@ -9,7 +9,16 @@ export function EnvSwitcher() {
   const [open, setOpen] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
 
-  const currentEnv = environments.find((e) => e.environment_id === envId)
+  // Fall back to first env if stored envId doesn't match (e.g. after project switch)
+  const currentEnv = environments.find((e) => e.environment_id === envId) ?? environments[0]
+
+  // Sync envId when the fallback kicks in
+  useEffect(() => {
+    if (currentEnv && currentEnv.environment_id !== envId) {
+      setEnvId(currentEnv.environment_id)
+    }
+  }, [currentEnv, envId, setEnvId])
+
   const displayName = currentEnv?.environment_name
     ?? (envsLoading ? 'Loading…' : projectId ? 'No environment' : 'No project')
 
@@ -28,11 +37,11 @@ export function EnvSwitcher() {
       <div
         className="env-pill"
         style={{ cursor: 'pointer', userSelect: 'none' }}
-        onClick={() => { if (environments.length > 1) setOpen((v) => !v); else navigate(envPath) }}
+        onClick={() => { if (environments.length > 0) setOpen((v) => !v); else navigate(envPath) }}
       >
         <span className="env-dot" />
         <span className="env-name" style={{ flex: 1 }}>{displayName}</span>
-        {environments.length > 1
+        {environments.length > 0
           ? <I.chevronDown size={12} style={{ color: 'var(--fg-subtle)', transform: open ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }} />
           : <span className="env-switch" onClick={(e) => { e.stopPropagation(); navigate(envPath) }}>manage</span>
         }
@@ -67,7 +76,7 @@ export function EnvSwitcher() {
           })}
           <button
             className="sidebar-link"
-            style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '9px 14px', borderTop: '1px solid var(--border)', color: 'var(--fg-muted)', fontSize: 13, background: 'none', border: 'none', cursor: 'pointer', borderTop: '1px solid var(--border)' }}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '9px 14px', color: 'var(--fg-muted)', fontSize: 13, background: 'none', border: 'none', borderTop: '1px solid var(--border)', cursor: 'pointer' }}
             onClick={() => { setOpen(false); navigate(envPath) }}
           >
             <I.key size={13} />
