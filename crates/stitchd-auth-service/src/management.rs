@@ -214,24 +214,42 @@ impl ManagementService for ManagementServiceImpl {
             .await
             .map_err(map_repo_err)?;
         guard_not_system_org(&org)?;
-        if r.password.is_empty() {
-            return Err(Status::invalid_argument("password must not be empty"));
-        }
-        let hash = hash_password(&r.password).map_err(|e| Status::internal(e.to_string()))?;
-        let user = self
-            .user_repo
-            .create(&r.email, &r.display_name, Some(&hash))
-            .await
-            .map_err(map_repo_err)?;
+
+        // Find-or-create: reuse an existing platform user so the same person
+        // can be a member of multiple organisations with different roles.
+        let user = match self.user_repo.find_by_email(&r.email).await.map_err(map_repo_err)? {
+            Some(existing) => {
+                // User already exists on the platform — just add the org
+                // membership below. No password or profile changes.
+                existing
+            }
+            None => {
+                // New user: password is required.
+                if r.password.is_empty() {
+                    return Err(Status::invalid_argument("password must not be empty for a new user"));
+                }
+                let hash = hash_password(&r.password).map_err(|e| Status::internal(e.to_string()))?;
+                self.user_repo
+                    .create(&r.email, &r.display_name, Some(&hash))
+                    .await
+                    .map_err(map_repo_err)?
+            }
+        };
 
         let role = match r.org_role.as_str() {
             "org_admin" => OrgRole::OrgAdmin,
             _ => OrgRole::OrgMember,
         };
-        self.membership_repo
-            .add_member(user.id, org_id, role)
-            .await
-            .map_err(map_repo_err)?;
+
+        // add_member has a unique constraint on (user_id, org_id) — treat a
+        // duplicate as an idempotent success so callers can re-seed safely.
+        match self.membership_repo.add_member(user.id, org_id, role).await {
+            Ok(_) => {}
+            Err(RepositoryError::UniqueViolation { .. }) => {
+                // Already a member of this org — no-op.
+            }
+            Err(e) => return Err(map_repo_err(e)),
+        }
 
         Ok(Response::new(CreateUserResponse {
             user_id: user.id.to_string(),
