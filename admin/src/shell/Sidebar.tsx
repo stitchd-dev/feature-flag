@@ -2,6 +2,7 @@ import { useNavigate, useLocation, useParams } from 'react-router-dom'
 import { I } from '../components/icons'
 import { StitchdMark } from '../components/primitives'
 import { OrgSwitcher } from './OrgSwitcher'
+import { ProjectPicker } from './ProjectPicker'
 import { auth } from '../lib/auth'
 
 const SUPERADMIN_NAV = [
@@ -64,7 +65,7 @@ export function Sidebar({ onCmdK }: SidebarProps) {
       {activeOrgId && (
         <>
           <OrgSwitcher currentOrgId={activeOrgId} />
-
+          <ProjectPicker />
           <div className="env-pill" onClick={() => navigate(envPath)}>
             <span className="env-dot" />
             <span className="env-name">production</span>

@@ -51,7 +51,7 @@
 - [x] Task 5: Register all new routes in router.rs under mgmt_routes
   <!-- files: crates/stitchd-gateway/src/router.rs --> [cc5bb7e]
 
-- [ ] Task: Conductor - User Manual Verification 'Backend — Gateway Routes & Permissions API' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Backend — Gateway Routes & Permissions API' (Protocol in workflow.md)
 
 ## Phase 3: Frontend — Permissions Layer
 <!-- execution: sequential -->
@@ -77,7 +77,7 @@
   fetches /v1/auth/me/permissions for authoritative view, exposes can(action)
   <!-- files: admin/src/hooks/usePermissions.ts --> [ac47dcd]
 
-- [ ] Task: Conductor - User Manual Verification 'Frontend — Permissions Layer' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Frontend — Permissions Layer' (Protocol in workflow.md)
 
 ## Phase 4: Frontend — Project Picker Component
 <!-- execution: sequential -->

@@ -1,6 +1,8 @@
-import { createContext, useContext, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
+import type { ProjectSummary } from '../lib/api'
+import { listProjects } from '../lib/api'
 import { auth } from '../lib/auth'
 
 interface OrgContextValue {
@@ -9,6 +11,9 @@ interface OrgContextValue {
   envId: string | null
   setProjectId: (id: string) => void
   setEnvId: (id: string) => void
+  projects: ProjectSummary[]
+  projectsLoading: boolean
+  refreshProjects: () => void
 }
 
 const OrgContext = createContext<OrgContextValue | null>(null)
@@ -20,6 +25,8 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   const resolvedOrgId = orgId ?? auth.getOrgId() ?? ''
   const [projectId, setProjectIdState] = useState<string | null>(() => localStorage.getItem(PROJECT_KEY))
   const [envId, setEnvIdState] = useState<string | null>(() => localStorage.getItem(ENV_KEY))
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [projectsLoading, setProjectsLoading] = useState(false)
 
   const setProjectId = (id: string) => {
     localStorage.setItem(PROJECT_KEY, id)
@@ -30,8 +37,21 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     setEnvIdState(id)
   }
 
+  const refreshProjects = useCallback(() => {
+    if (!resolvedOrgId) return
+    setProjectsLoading(true)
+    listProjects(resolvedOrgId)
+      .then((p) => setProjects(p))
+      .catch(() => setProjects([]))
+      .finally(() => setProjectsLoading(false))
+  }, [resolvedOrgId])
+
+  useEffect(() => {
+    refreshProjects()
+  }, [refreshProjects])
+
   return (
-    <OrgContext.Provider value={{ orgId: resolvedOrgId, projectId, envId, setProjectId, setEnvId }}>
+    <OrgContext.Provider value={{ orgId: resolvedOrgId, projectId, envId, setProjectId, setEnvId, projects, projectsLoading, refreshProjects }}>
       {children}
     </OrgContext.Provider>
   )
