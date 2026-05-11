@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { auth } from '../../lib/auth'
-import { getOrg, listOrgUsers } from '../../lib/api'
+import { getOrg, listOrgUsers, removeOrgUser } from '../../lib/api'
 import type { OrgSummary, OrgUserSummary } from '../../lib/api'
 
 // ─── Tab type ─────────────────────────────────────────────────────────────────
@@ -16,19 +16,39 @@ function UsersTab({ orgId, orgName }: { orgId: string; orgName: string }) {
   const [users, setUsers] = useState<OrgUserSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)   // user pending confirm
+  const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    const controller = new AbortController()
+  function load(signal?: AbortSignal) {
     setLoading(true)
     setError(null)
-    listOrgUsers(orgId, controller.signal)
+    listOrgUsers(orgId, signal)
       .then(setUsers)
       .catch((err: unknown) => {
         if ((err as { name?: string }).name !== 'CanceledError') setError('Failed to load users')
       })
       .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    const controller = new AbortController()
+    load(controller.signal)
     return () => controller.abort()
-  }, [orgId])
+  }, [orgId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleRemove(userId: string) {
+    setBusy(true)
+    setError(null)
+    try {
+      await removeOrgUser(orgId, userId)
+      setRemovingId(null)
+      load()
+    } catch {
+      setError('Failed to remove user')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <div className="stack">
@@ -56,6 +76,9 @@ function UsersTab({ orgId, orgName }: { orgId: string; orgName: string }) {
             </Link>
           </div>
         ) : (
+          {error && (
+            <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--danger)' }}>{error}</div>
+          )}
           <table className="table">
             <thead>
               <tr>
@@ -63,6 +86,7 @@ function UsersTab({ orgId, orgName }: { orgId: string; orgName: string }) {
                 <th>Email</th>
                 <th>Role</th>
                 <th>Joined</th>
+                <th style={{ width: 100 }} />
               </tr>
             </thead>
             <tbody>
@@ -88,6 +112,34 @@ function UsersTab({ orgId, orgName }: { orgId: string; orgName: string }) {
                   </td>
                   <td style={{ fontSize: 12, color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>
                     {new Date(u.created_at).toLocaleDateString()}
+                  </td>
+                  <td>
+                    {removingId === u.user_id ? (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>Remove?</span>
+                        <button
+                          className="btn sm danger"
+                          disabled={busy}
+                          onClick={() => void handleRemove(u.user_id)}
+                        >
+                          Confirm
+                        </button>
+                        <button
+                          className="btn sm"
+                          disabled={busy}
+                          onClick={() => setRemovingId(null)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        className="btn sm danger"
+                        onClick={() => setRemovingId(u.user_id)}
+                      >
+                        <I.trash size={12} /> Remove
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

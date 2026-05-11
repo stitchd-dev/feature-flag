@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest, GetOrgRequest, ListOrgUsersRequest, ListOrgsRequest};
+use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest, GetOrgRequest, ListOrgUsersRequest, ListOrgsRequest, RemoveOrgUserRequest};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -164,6 +164,19 @@ pub async fn get_org(
         org_name: r.org_name,
         created_at: Some(r.created_at),
     }))
+}
+
+/// `DELETE /v1/admin/orgs/{org_id}/users/{user_id}`
+pub async fn remove_org_user(
+    State(state): State<Arc<GatewayState>>,
+    Path((org_id, user_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let mut client = state.management_client.lock().await;
+    client
+        .remove_org_user(tonic::Request::new(RemoveOrgUserRequest { org_id, user_id }))
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `GET /v1/admin/orgs/{org_id}/users`

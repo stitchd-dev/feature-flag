@@ -246,6 +246,10 @@ export async function listOrgUsers(orgId: string, signal?: AbortSignal): Promise
   return data.users
 }
 
+export async function removeOrgUser(orgId: string, userId: string): Promise<void> {
+  await api.delete(`/v1/admin/orgs/${orgId}/users/${userId}`)
+}
+
 export async function createOrg(name: string): Promise<OrgSummary> {
   const { data } = await api.post<{ org_id: string; org_name: string; created_at?: string }>(
     '/v1/admin/orgs',

@@ -172,6 +172,13 @@ message ListOrgUsersRequest {
   string org_id = 1;
 }
 
+message RemoveOrgUserRequest {
+  string org_id  = 1;
+  string user_id = 2;
+}
+
+message RemoveOrgUserResponse {}
+
 message OrgUserSummary {
   string user_id      = 1;
   string email        = 2;
@@ -212,4 +219,5 @@ service ManagementService {
   // User
   rpc CreateUser(CreateUserRequest)             returns (CreateUserResponse);
   rpc ListOrgUsers(ListOrgUsersRequest)         returns (ListOrgUsersResponse);
+  rpc RemoveOrgUser(RemoveOrgUserRequest)       returns (RemoveOrgUserResponse);
 }

@@ -27,7 +27,8 @@ use stitchd_proto::management::v1::{
     ListOrgUsersResponse, ListOrgsRequest, ListOrgsResponse, ListProjectsRequest,
     ListProjectsResponse, ListSdkKeysRequest, ListSdkKeysResponse, OrgSummary, OrgUserSummary,
     ProjectSummary, RenameEnvironmentRequest, RenameEnvironmentResponse, RenameProjectRequest,
-    RenameProjectResponse, RevokeSdkKeyRequest, RevokeSdkKeyResponse, SdkKeySummary,
+    RenameProjectResponse, RemoveOrgUserRequest, RemoveOrgUserResponse, RevokeSdkKeyRequest,
+    RevokeSdkKeyResponse, SdkKeySummary,
     management_service_server::ManagementService,
 };
 
@@ -71,6 +72,13 @@ fn parse_org_id(s: &str) -> Result<OrganisationId, Status> {
     Uuid::parse_str(s)
         .map(OrganisationId::from_uuid)
         .map_err(|_| Status::invalid_argument("org_id is not a valid UUID"))
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_user_id(s: &str) -> Result<stitchd_core::id::UserId, Status> {
+    Uuid::parse_str(s)
+        .map(stitchd_core::id::UserId::from_uuid)
+        .map_err(|_| Status::invalid_argument("user_id is not a valid UUID"))
 }
 
 #[allow(clippy::result_large_err)]
@@ -511,6 +519,20 @@ impl ManagementService for ManagementServiceImpl {
             })
             .collect();
         Ok(Response::new(ListOrgUsersResponse { users }))
+    }
+
+    async fn remove_org_user(
+        &self,
+        request: Request<RemoveOrgUserRequest>,
+    ) -> Result<Response<RemoveOrgUserResponse>, Status> {
+        let r = request.into_inner();
+        let org_id = parse_org_id(&r.org_id)?;
+        let user_id = parse_user_id(&r.user_id)?;
+        self.membership_repo
+            .remove_member(user_id, org_id)
+            .await
+            .map_err(map_repo_err)?;
+        Ok(Response::new(RemoveOrgUserResponse {}))
     }
 }
 

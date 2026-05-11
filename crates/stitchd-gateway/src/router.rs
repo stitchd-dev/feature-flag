@@ -59,6 +59,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route("/v1/admin/orgs", get(admin::list_orgs).post(admin::create_org))
         .route("/v1/admin/orgs/{org_id}", get(admin::get_org))
         .route("/v1/admin/orgs/{org_id}/users", get(admin::list_org_users).post(admin::seed_user))
+        .route("/v1/admin/orgs/{org_id}/users/{user_id}", delete(admin::remove_org_user))
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_system_org))
         .layer(middleware::from_fn_with_state(
