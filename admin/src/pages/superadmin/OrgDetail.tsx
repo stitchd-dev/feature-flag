@@ -76,6 +76,7 @@ function UsersTab({ orgId, orgName }: { orgId: string; orgName: string }) {
             </Link>
           </div>
         ) : (
+          <>
           {error && (
             <div style={{ padding: '8px 16px', fontSize: 12, color: 'var(--danger)' }}>{error}</div>
           )}
@@ -145,6 +146,7 @@ function UsersTab({ orgId, orgName }: { orgId: string; orgName: string }) {
               ))}
             </tbody>
           </table>
+          </>
         )}
       </div>
     </div>
