@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { auth } from '../../lib/auth'
-import { listOrgs, listOrgUsers } from '../../lib/api'
+import { getOrg, listOrgUsers } from '../../lib/api'
 import type { OrgSummary, OrgUserSummary } from '../../lib/api'
 
 // ─── Tab type ─────────────────────────────────────────────────────────────────
@@ -17,19 +17,18 @@ function UsersTab({ orgId, orgName }: { orgId: string; orgName: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchUsers = useCallback(async () => {
+  useEffect(() => {
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
-    try {
-      setUsers(await listOrgUsers(orgId))
-    } catch {
-      setError('Failed to load users')
-    } finally {
-      setLoading(false)
-    }
+    listOrgUsers(orgId, controller.signal)
+      .then(setUsers)
+      .catch((err: unknown) => {
+        if ((err as { name?: string }).name !== 'CanceledError') setError('Failed to load users')
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
   }, [orgId])
-
-  useEffect(() => { void fetchUsers() }, [fetchUsers])
 
   return (
     <div className="stack">
@@ -71,10 +70,7 @@ function UsersTab({ orgId, orgName }: { orgId: string; orgName: string }) {
                 <tr key={u.user_id}>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                      <div
-                        className="user-avatar"
-                        style={{ width: 28, height: 28, fontSize: 11, flexShrink: 0 }}
-                      >
+                      <div className="user-avatar" style={{ width: 28, height: 28, fontSize: 11, flexShrink: 0 }}>
                         {(u.display_name || u.email).slice(0, 2).toUpperCase()}
                       </div>
                       <span style={{ fontWeight: 500, fontSize: 13 }}>
@@ -121,7 +117,7 @@ function OverviewTab({ org, orgId }: { org: OrgSummary; orgId: string }) {
       <div className="stat-grid">
         <div className="stat">
           <div className="stat-label">Organisation ID</div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 600, marginTop: 6, wordBreak: 'break-all' }}>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, marginTop: 6, wordBreak: 'break-all', color: 'var(--fg)' }}>
             {org.org_id}
           </div>
         </div>
@@ -133,7 +129,7 @@ function OverviewTab({ org, orgId }: { org: OrgSummary; orgId: string }) {
         </div>
         <div className="stat">
           <div className="stat-label">Created</div>
-          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 500, marginTop: 6, color: 'var(--fg-muted)' }}>
+          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 500, marginTop: 6, color: 'var(--fg-muted)' }}>
             {org.created_at ? new Date(org.created_at).toLocaleString() : '—'}
           </div>
         </div>
@@ -144,8 +140,8 @@ function OverviewTab({ org, orgId }: { org: OrgSummary; orgId: string }) {
         <div className="card-header">
           <span className="card-title">Actions</span>
         </div>
-        <div className="card-body" style={{ padding: 0 }}>
-          {/* Seed user */}
+        <div>
+          {/* Add user */}
           <div className="row-between" style={{ padding: '16px 18px', borderBottom: '1px solid var(--border-faint)' }}>
             <div>
               <div style={{ fontWeight: 500, fontSize: 13, marginBottom: 3 }}>Add User</div>
@@ -195,7 +191,7 @@ function OverviewTab({ org, orgId }: { org: OrgSummary; orgId: string }) {
             <p style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 20 }}>
               You are about to leave the superadmin session. To access{' '}
               <strong>{org.org_name}</strong>, you'll need to re-authenticate
-              using an org user account — use the credentials of a user you added to this org.
+              using an org user account.
             </p>
             <div style={{ display: 'flex', gap: 10 }}>
               <button className="btn primary" style={{ flex: 1 }} onClick={confirmSwitch}>
@@ -220,22 +216,19 @@ export function OrgDetail() {
   const [notFound, setNotFound] = useState(false)
   const [tab, setTab] = useState<Tab>('overview')
 
-  const fetchOrg = useCallback(async () => {
+  useEffect(() => {
     if (!orgId) return
+    const controller = new AbortController()
     setLoading(true)
-    try {
-      const orgs = await listOrgs()
-      const found = orgs.find((o) => o.org_id === orgId) ?? null
-      setOrg(found)
-      setNotFound(!found)
-    } catch {
-      setNotFound(true)
-    } finally {
-      setLoading(false)
-    }
+    setNotFound(false)
+    getOrg(orgId, controller.signal)
+      .then(setOrg)
+      .catch((err: unknown) => {
+        if ((err as { name?: string }).name !== 'CanceledError') setNotFound(true)
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
   }, [orgId])
-
-  useEffect(() => { void fetchOrg() }, [fetchOrg])
 
   if (loading) {
     return (
@@ -276,15 +269,12 @@ export function OrgDetail() {
         ]}
         title={org.org_name}
         subtitle={`org_id: ${org.org_id}`}
-        mono={false}
         actions={
           <div className="row">
             <Link to={`/superadmin/orgs/${orgId}/users`}>
               <button className="btn primary"><I.plus size={14} /> Add User</button>
             </Link>
-            <button className="btn" onClick={() => navigate('/superadmin/orgs')}>
-              ← Orgs
-            </button>
+            <button className="btn" onClick={() => navigate('/superadmin/orgs')}>← Orgs</button>
           </div>
         }
       />
@@ -292,16 +282,10 @@ export function OrgDetail() {
       <div className="page-body">
         {/* Tab bar */}
         <div className="tabs">
-          <button
-            className={`tab ${tab === 'overview' ? 'active' : ''}`}
-            onClick={() => setTab('overview')}
-          >
+          <button className={`tab ${tab === 'overview' ? 'active' : ''}`} onClick={() => setTab('overview')}>
             <I.home size={13} /> Overview
           </button>
-          <button
-            className={`tab ${tab === 'users' ? 'active' : ''}`}
-            onClick={() => setTab('users')}
-          >
+          <button className={`tab ${tab === 'users' ? 'active' : ''}`} onClick={() => setTab('users')}>
             <I.users size={13} /> Users
           </button>
         </div>

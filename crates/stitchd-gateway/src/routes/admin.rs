@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest, ListOrgUsersRequest, ListOrgsRequest};
+use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest, GetOrgRequest, ListOrgUsersRequest, ListOrgsRequest};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -146,6 +146,24 @@ pub async fn seed_user(
             display_name: r.display_name,
         }),
     ))
+}
+
+/// `GET /v1/admin/orgs/{org_id}`
+pub async fn get_org(
+    State(state): State<Arc<GatewayState>>,
+    Path(org_id): Path<String>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let mut client = state.management_client.lock().await;
+    let resp = client
+        .get_org(tonic::Request::new(GetOrgRequest { org_id }))
+        .await
+        .map_err(GatewayError::from)?;
+    let r = resp.into_inner();
+    Ok(Json(OrgJson {
+        org_id: r.org_id,
+        org_name: r.org_name,
+        created_at: Some(r.created_at),
+    }))
 }
 
 /// `GET /v1/admin/orgs/{org_id}/users`

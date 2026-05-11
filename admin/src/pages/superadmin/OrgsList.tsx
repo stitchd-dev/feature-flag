@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { createOrg, listOrgs } from '../../lib/api'
 import type { OrgSummary } from '../../lib/api'
@@ -14,18 +14,17 @@ export function OrgsList() {
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchOrgs = useCallback(async () => {
+  useEffect(() => {
+    const controller = new AbortController()
     setLoading(true)
-    try {
-      setOrgs(await listOrgs())
-    } catch {
-      setError('Failed to load organisations')
-    } finally {
-      setLoading(false)
-    }
+    listOrgs(controller.signal)
+      .then(setOrgs)
+      .catch((err: unknown) => {
+        if ((err as { name?: string }).name !== 'CanceledError') setError('Failed to load organisations')
+      })
+      .finally(() => setLoading(false))
+    return () => controller.abort()
   }, [])
-
-  useEffect(() => { void fetchOrgs() }, [fetchOrgs])
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault()
@@ -36,7 +35,9 @@ export function OrgsList() {
       await createOrg(name.trim())
       setName('')
       setShowForm(false)
-      await fetchOrgs()
+      // Re-fetch the list after creating
+      const updated = await listOrgs()
+      setOrgs(updated)
     } catch {
       setError('Failed to create organisation')
     } finally {

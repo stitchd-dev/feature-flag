@@ -223,9 +223,14 @@ export interface OrgSummary {
   created_at: string | null
 }
 
-export async function listOrgs(): Promise<OrgSummary[]> {
-  const { data } = await api.get<{ orgs: OrgSummary[] }>('/v1/admin/orgs')
+export async function listOrgs(signal?: AbortSignal): Promise<OrgSummary[]> {
+  const { data } = await api.get<{ orgs: OrgSummary[] }>('/v1/admin/orgs', { signal })
   return data.orgs
+}
+
+export async function getOrg(orgId: string, signal?: AbortSignal): Promise<OrgSummary> {
+  const { data } = await api.get<OrgSummary>(`/v1/admin/orgs/${orgId}`, { signal })
+  return data
 }
 
 export interface OrgUserSummary {
@@ -236,8 +241,8 @@ export interface OrgUserSummary {
   created_at: string
 }
 
-export async function listOrgUsers(orgId: string): Promise<OrgUserSummary[]> {
-  const { data } = await api.get<{ users: OrgUserSummary[] }>(`/v1/admin/orgs/${orgId}/users`)
+export async function listOrgUsers(orgId: string, signal?: AbortSignal): Promise<OrgUserSummary[]> {
+  const { data } = await api.get<{ users: OrgUserSummary[] }>(`/v1/admin/orgs/${orgId}/users`, { signal })
   return data.users
 }
 

@@ -22,12 +22,12 @@ use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateEnvironmentResponse, CreateOrgRequest, CreateOrgResponse,
     CreateProjectRequest, CreateProjectResponse, CreateSdkKeyRequest, CreateSdkKeyResponse,
     CreateUserRequest, CreateUserResponse, DeleteEnvironmentRequest, DeleteEnvironmentResponse,
-    DeleteProjectRequest, DeleteProjectResponse, EnvironmentSummary, ListEnvironmentsRequest,
-    ListEnvironmentsResponse, ListOrgUsersRequest, ListOrgUsersResponse, ListOrgsRequest,
-    ListOrgsResponse, ListProjectsRequest, ListProjectsResponse, ListSdkKeysRequest,
-    ListSdkKeysResponse, OrgSummary, OrgUserSummary, ProjectSummary, RenameEnvironmentRequest,
-    RenameEnvironmentResponse, RenameProjectRequest, RenameProjectResponse, RevokeSdkKeyRequest,
-    RevokeSdkKeyResponse, SdkKeySummary,
+    DeleteProjectRequest, DeleteProjectResponse, EnvironmentSummary, GetOrgRequest,
+    GetOrgResponse, ListEnvironmentsRequest, ListEnvironmentsResponse, ListOrgUsersRequest,
+    ListOrgUsersResponse, ListOrgsRequest, ListOrgsResponse, ListProjectsRequest,
+    ListProjectsResponse, ListSdkKeysRequest, ListSdkKeysResponse, OrgSummary, OrgUserSummary,
+    ProjectSummary, RenameEnvironmentRequest, RenameEnvironmentResponse, RenameProjectRequest,
+    RenameProjectResponse, RevokeSdkKeyRequest, RevokeSdkKeyResponse, SdkKeySummary,
     management_service_server::ManagementService,
 };
 
@@ -176,6 +176,22 @@ impl ManagementService for ManagementServiceImpl {
             })
             .collect();
         Ok(Response::new(ListOrgsResponse { orgs }))
+    }
+
+    async fn get_org(
+        &self,
+        request: Request<GetOrgRequest>,
+    ) -> Result<Response<GetOrgResponse>, Status> {
+        let org_id = parse_org_id(&request.into_inner().org_id)?;
+        let org = self.org_repo.find_by_id(org_id).await.map_err(map_repo_err)?;
+        if org.is_system {
+            return Err(Status::not_found("org not found"));
+        }
+        Ok(Response::new(GetOrgResponse {
+            org_id: org.id.to_string(),
+            org_name: org.name,
+            created_at: org.created_at.to_rfc3339(),
+        }))
     }
 
     async fn create_project(
