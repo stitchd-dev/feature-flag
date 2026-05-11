@@ -228,6 +228,19 @@ export async function listOrgs(): Promise<OrgSummary[]> {
   return data.orgs
 }
 
+export interface OrgUserSummary {
+  user_id: string
+  email: string
+  display_name: string
+  role: string
+  created_at: string
+}
+
+export async function listOrgUsers(orgId: string): Promise<OrgUserSummary[]> {
+  const { data } = await api.get<{ users: OrgUserSummary[] }>(`/v1/admin/orgs/${orgId}/users`)
+  return data.users
+}
+
 export async function createOrg(name: string): Promise<OrgSummary> {
   const { data } = await api.post<{ org_id: string; org_name: string; created_at?: string }>(
     '/v1/admin/orgs',

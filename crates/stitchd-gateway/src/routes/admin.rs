@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest, ListOrgsRequest};
+use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest, ListOrgUsersRequest, ListOrgsRequest};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -58,6 +58,20 @@ pub struct UserJson {
     pub user_id: String,
     pub email: String,
     pub display_name: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrgUserJson {
+    pub user_id: String,
+    pub email: String,
+    pub display_name: String,
+    pub role: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ListOrgUsersJson {
+    pub users: Vec<OrgUserJson>,
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -132,6 +146,31 @@ pub async fn seed_user(
             display_name: r.display_name,
         }),
     ))
+}
+
+/// `GET /v1/admin/orgs/{org_id}/users`
+pub async fn list_org_users(
+    State(state): State<Arc<GatewayState>>,
+    Path(org_id): Path<String>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let mut client = state.management_client.lock().await;
+    let resp = client
+        .list_org_users(tonic::Request::new(ListOrgUsersRequest { org_id }))
+        .await
+        .map_err(GatewayError::from)?;
+    let users = resp
+        .into_inner()
+        .users
+        .into_iter()
+        .map(|u| OrgUserJson {
+            user_id: u.user_id,
+            email: u.email,
+            display_name: u.display_name,
+            role: u.role,
+            created_at: u.created_at,
+        })
+        .collect();
+    Ok(Json(ListOrgUsersJson { users }))
 }
 
 /// `GET /v1/admin/orgs`

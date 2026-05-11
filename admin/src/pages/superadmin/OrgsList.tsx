@@ -45,101 +45,136 @@ export function OrgsList() {
   }
 
   return (
-    <div className="page-content">
+    <>
       <PageHeader
+        crumbs={['Superadmin']}
         title="Organisations"
         subtitle="Manage customer organisations on the Stitchd platform"
         actions={
-          <button className="btn primary" onClick={() => { setShowForm((v) => !v); setError(null) }}>
+          <button
+            className="btn primary"
+            onClick={() => { setShowForm((v) => !v); setError(null) }}
+          >
             <I.plus size={14} /> New Organisation
           </button>
         }
       />
 
-      {showForm && (
-        <div className="card" style={{ marginBottom: 24, padding: 20 }}>
-          <div className="card-title" style={{ marginBottom: 12 }}>Create Organisation</div>
-          <form onSubmit={handleCreate} style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
-            <div style={{ flex: 1 }}>
-              <label className="field-label">Organisation Name</label>
-              <input
-                className="input"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Acme Corp"
-                autoFocus
-                disabled={creating}
-                required
-              />
+      <div className="page-body">
+        {/* Inline create form */}
+        {showForm && (
+          <div className="card" style={{ marginBottom: 16 }}>
+            <div className="card-header">
+              <span className="card-title"><I.home size={13} /> Create Organisation</span>
             </div>
-            <button className="btn primary" type="submit" disabled={creating || !name.trim()}>
-              {creating ? 'Creating…' : 'Create'}
-            </button>
-            <button className="btn" type="button" onClick={() => setShowForm(false)} disabled={creating}>
-              Cancel
-            </button>
-          </form>
-          {error && <div className="alert error" style={{ marginTop: 10 }}>{error}</div>}
-        </div>
-      )}
+            <div className="card-body">
+              <form onSubmit={handleCreate} style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+                <div style={{ flex: 1 }}>
+                  <label className="label">Organisation name</label>
+                  <input
+                    className="input"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g. Acme Corp"
+                    autoFocus
+                    disabled={creating}
+                    required
+                  />
+                </div>
+                <button className="btn primary" type="submit" disabled={creating || !name.trim()}>
+                  {creating ? 'Creating…' : 'Create'}
+                </button>
+                <button className="btn" type="button" onClick={() => { setShowForm(false); setError(null) }} disabled={creating}>
+                  Cancel
+                </button>
+              </form>
+              {error && (
+                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger)', padding: '6px 10px', background: 'var(--danger-bg)', borderRadius: 6 }}>
+                  {error}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-      {loading ? (
-        <div style={{ fontSize: 13, color: 'var(--fg-muted)', padding: '32px 0', textAlign: 'center' }}>
-          Loading organisations…
-        </div>
-      ) : orgs.length === 0 ? (
-        <div className="empty">
-          <div className="empty-icon"><I.home size={20} /></div>
-          <div className="empty-title">No organisations yet</div>
-          <div className="empty-desc">Create your first organisation to get started.</div>
-          <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowForm(true)}>
-            <I.plus size={14} /> New Organisation
-          </button>
-        </div>
-      ) : (
-        <div className="card">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>ID</th>
-                <th>Created</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {orgs.map((org) => (
-                <tr
-                  key={org.org_id}
-                  className="row-clickable"
-                  onClick={() => navigate(`/superadmin/orgs/${org.org_id}`)}
-                >
-                  <td>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div className="org-avatar" style={{ width: 28, height: 28, fontSize: 11, borderRadius: 6 }}>
-                        {org.org_name.slice(0, 2).toUpperCase()}
-                      </div>
-                      <span style={{ fontWeight: 500 }}>{org.org_name}</span>
-                    </div>
-                  </td>
-                  <td><span className="mono-key">{org.org_id}</span></td>
-                  <td style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
-                    {org.created_at ? new Date(org.created_at).toLocaleDateString() : '—'}
-                  </td>
-                  <td>
-                    <button
-                      className="btn sm"
-                      onClick={(e) => { e.stopPropagation(); navigate(`/superadmin/orgs/${org.org_id}`) }}
-                    >
-                      Manage
-                    </button>
-                  </td>
+        {loading ? (
+          <div className="card">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} style={{ padding: '14px 16px', borderBottom: '1px solid var(--border-faint)', display: 'flex', gap: 12, alignItems: 'center' }}>
+                <div className="skel" style={{ width: 28, height: 28, borderRadius: 6, flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div className="skel" style={{ width: 140, marginBottom: 6 }} />
+                  <div className="skel" style={{ width: 220, height: 10 }} />
+                </div>
+                <div className="skel" style={{ width: 60, height: 26, borderRadius: 6 }} />
+              </div>
+            ))}
+          </div>
+        ) : orgs.length === 0 ? (
+          <div className="empty">
+            <div className="empty-icon"><I.home size={20} /></div>
+            <div className="empty-title">No organisations yet</div>
+            <div className="empty-desc">Create your first organisation to onboard a customer team.</div>
+            <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowForm(true)}>
+              <I.plus size={14} /> New Organisation
+            </button>
+          </div>
+        ) : (
+          <div className="card">
+            <div className="card-header">
+              <span className="card-title">
+                <I.home size={13} /> All Organisations
+              </span>
+              <span className="badge">
+                {orgs.length} {orgs.length === 1 ? 'org' : 'orgs'}
+              </span>
+            </div>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>ID</th>
+                  <th>Created</th>
+                  <th style={{ width: 80 }} />
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
+              </thead>
+              <tbody>
+                {orgs.map((org) => (
+                  <tr
+                    key={org.org_id}
+                    className="row-clickable"
+                    onClick={() => navigate(`/superadmin/orgs/${org.org_id}`)}
+                  >
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div
+                          className="org-avatar"
+                          style={{ width: 28, height: 28, fontSize: 11, borderRadius: 6, flexShrink: 0 }}
+                        >
+                          {org.org_name.slice(0, 2).toUpperCase()}
+                        </div>
+                        <span style={{ fontWeight: 600, fontSize: 13 }}>{org.org_name}</span>
+                      </div>
+                    </td>
+                    <td><span className="mono-key">{org.org_id}</span></td>
+                    <td style={{ color: 'var(--fg-muted)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+                      {org.created_at ? new Date(org.created_at).toLocaleDateString() : '—'}
+                    </td>
+                    <td>
+                      <button
+                        className="btn sm"
+                        onClick={(e) => { e.stopPropagation(); navigate(`/superadmin/orgs/${org.org_id}`) }}
+                      >
+                        Manage
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
   )
 }

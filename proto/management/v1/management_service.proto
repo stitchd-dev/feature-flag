@@ -158,6 +158,22 @@ message CreateUserResponse {
   string display_name = 3;
 }
 
+message ListOrgUsersRequest {
+  string org_id = 1;
+}
+
+message OrgUserSummary {
+  string user_id      = 1;
+  string email        = 2;
+  string display_name = 3;
+  string role         = 4;
+  string created_at   = 5;
+}
+
+message ListOrgUsersResponse {
+  repeated OrgUserSummary users = 1;
+}
+
 // ─── Management service ───────────────────────────────────────────────────────
 
 service ManagementService {
@@ -184,4 +200,5 @@ service ManagementService {
 
   // User
   rpc CreateUser(CreateUserRequest)             returns (CreateUserResponse);
+  rpc ListOrgUsers(ListOrgUsersRequest)         returns (ListOrgUsersResponse);
 }

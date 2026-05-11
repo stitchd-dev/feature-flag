@@ -23,10 +23,11 @@ use stitchd_proto::management::v1::{
     CreateProjectRequest, CreateProjectResponse, CreateSdkKeyRequest, CreateSdkKeyResponse,
     CreateUserRequest, CreateUserResponse, DeleteEnvironmentRequest, DeleteEnvironmentResponse,
     DeleteProjectRequest, DeleteProjectResponse, EnvironmentSummary, ListEnvironmentsRequest,
-    ListEnvironmentsResponse, ListOrgsRequest, ListOrgsResponse, ListProjectsRequest,
-    ListProjectsResponse, ListSdkKeysRequest, ListSdkKeysResponse, OrgSummary, ProjectSummary,
-    RenameEnvironmentRequest, RenameEnvironmentResponse, RenameProjectRequest,
-    RenameProjectResponse, RevokeSdkKeyRequest, RevokeSdkKeyResponse, SdkKeySummary,
+    ListEnvironmentsResponse, ListOrgUsersRequest, ListOrgUsersResponse, ListOrgsRequest,
+    ListOrgsResponse, ListProjectsRequest, ListProjectsResponse, ListSdkKeysRequest,
+    ListSdkKeysResponse, OrgSummary, OrgUserSummary, ProjectSummary, RenameEnvironmentRequest,
+    RenameEnvironmentResponse, RenameProjectRequest, RenameProjectResponse, RevokeSdkKeyRequest,
+    RevokeSdkKeyResponse, SdkKeySummary,
     management_service_server::ManagementService,
 };
 
@@ -468,6 +469,32 @@ impl ManagementService for ManagementServiceImpl {
             other => map_repo_err(other),
         })?;
         Ok(Response::new(RevokeSdkKeyResponse {}))
+    }
+
+    async fn list_org_users(
+        &self,
+        request: Request<ListOrgUsersRequest>,
+    ) -> Result<Response<ListOrgUsersResponse>, Status> {
+        let org_id = parse_org_id(&request.into_inner().org_id)?;
+        let users = self
+            .user_repo
+            .list_org_users(org_id)
+            .await
+            .map_err(map_repo_err)?;
+        let users = users
+            .into_iter()
+            .map(|(u, role)| OrgUserSummary {
+                user_id: u.id.to_string(),
+                email: u.email,
+                display_name: u.display_name,
+                role: match role {
+                    OrgRole::OrgAdmin => "org_admin".into(),
+                    OrgRole::OrgMember => "org_member".into(),
+                },
+                created_at: u.created_at.to_rfc3339(),
+            })
+            .collect();
+        Ok(Response::new(ListOrgUsersResponse { users }))
     }
 }
 
