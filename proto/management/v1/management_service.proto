@@ -127,6 +127,20 @@ message RevokeSdkKeyRequest {
 
 message RevokeSdkKeyResponse {}
 
+// ─── Org list (superadmin) ────────────────────────────────────────────────────
+
+message ListOrgsRequest {}
+
+message OrgSummary {
+  string org_id     = 1;
+  string org_name   = 2;
+  string created_at = 3;
+}
+
+message ListOrgsResponse {
+  repeated OrgSummary orgs = 1;
+}
+
 // ─── User ─────────────────────────────────────────────────────────────────────
 
 message CreateUserRequest {
@@ -149,6 +163,7 @@ message CreateUserResponse {
 service ManagementService {
   // Org
   rpc CreateOrg(CreateOrgRequest)               returns (CreateOrgResponse);
+  rpc ListOrgs(ListOrgsRequest)                 returns (ListOrgsResponse);
 
   // Project
   rpc CreateProject(CreateProjectRequest)       returns (CreateProjectResponse);

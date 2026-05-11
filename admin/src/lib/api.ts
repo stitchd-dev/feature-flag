@@ -214,3 +214,38 @@ export async function createSdkKey(environmentId: string): Promise<CreateSdkKeyR
 export async function revokeSdkKey(environmentId: string, sdkKeyId: string): Promise<void> {
   await api.delete(`/v1/management/environments/${environmentId}/sdk-keys/${sdkKeyId}`)
 }
+
+// ─── Superadmin — Orgs ───────────────────────────────────────────────────────
+
+export interface OrgSummary {
+  org_id: string
+  org_name: string
+  created_at: string | null
+}
+
+export async function listOrgs(): Promise<OrgSummary[]> {
+  const { data } = await api.get<{ orgs: OrgSummary[] }>('/v1/admin/orgs')
+  return data.orgs
+}
+
+export async function createOrg(name: string): Promise<OrgSummary> {
+  const { data } = await api.post<{ org_id: string; org_name: string; created_at?: string }>(
+    '/v1/admin/orgs',
+    { name },
+  )
+  return { org_id: data.org_id, org_name: data.org_name, created_at: data.created_at ?? null }
+}
+
+export interface SeedUserResponse {
+  user_id: string
+  email: string
+  display_name: string
+}
+
+export async function seedUser(
+  orgId: string,
+  body: { email: string; display_name?: string; password?: string; org_role?: string },
+): Promise<SeedUserResponse> {
+  const { data } = await api.post<SeedUserResponse>(`/v1/admin/orgs/${orgId}/users`, body)
+  return data
+}

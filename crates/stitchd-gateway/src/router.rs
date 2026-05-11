@@ -56,7 +56,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
 
     // ── Superadmin-only routes (JWT + system-org check) ───────────────────────
     let admin_routes = Router::new()
-        .route("/v1/admin/orgs", post(admin::create_org))
+        .route("/v1/admin/orgs", get(admin::list_orgs).post(admin::create_org))
         .route("/v1/admin/orgs/{org_id}/users", post(admin::seed_user))
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_system_org))

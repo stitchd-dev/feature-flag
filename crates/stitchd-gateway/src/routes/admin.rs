@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest};
+use stitchd_proto::management::v1::{CreateOrgRequest, CreateUserRequest, ListOrgsRequest};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -33,6 +33,12 @@ pub struct CreateOrgBody {
 pub struct OrgJson {
     pub org_id: String,
     pub org_name: String,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ListOrgsJson {
+    pub orgs: Vec<OrgJson>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -83,6 +89,7 @@ pub async fn create_org(
         Json(OrgJson {
             org_id: r.org_id,
             org_name: r.org_name,
+            created_at: None,
         }),
     ))
 }
@@ -127,13 +134,35 @@ pub async fn seed_user(
     ))
 }
 
+/// `GET /v1/admin/orgs`
+pub async fn list_orgs(
+    State(state): State<Arc<GatewayState>>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let mut client = state.management_client.lock().await;
+    let resp = client
+        .list_orgs(tonic::Request::new(ListOrgsRequest {}))
+        .await
+        .map_err(GatewayError::from)?;
+    let orgs = resp
+        .into_inner()
+        .orgs
+        .into_iter()
+        .map(|o| OrgJson {
+            org_id: o.org_id,
+            org_name: o.org_name,
+            created_at: Some(o.created_at),
+        })
+        .collect();
+    Ok(Json(ListOrgsJson { orgs }))
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
-    use axum::routing::post;
+    use axum::routing::{get, post};
     axum::Router::new()
-        .route("/v1/admin/orgs", post(create_org))
+        .route("/v1/admin/orgs", get(list_orgs).post(create_org))
         .route("/v1/admin/orgs/{org_id}/users", post(seed_user))
         .with_state(state)
 }

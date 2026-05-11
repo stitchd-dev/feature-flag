@@ -1,35 +1,37 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { auth } from '../../lib/auth'
-import type { StoredOrg } from './OrgsList'
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const ORGS_KEY = 'stitchd_admin_orgs'
-
-function getStoredOrg(orgId: string): StoredOrg | null {
-  try {
-    const raw = localStorage.getItem(ORGS_KEY)
-    if (!raw) return null
-    const orgs = JSON.parse(raw) as StoredOrg[]
-    return orgs.find((o) => o.org_id === orgId) ?? null
-  } catch {
-    return null
-  }
-}
+import { listOrgs } from '../../lib/api'
+import type { OrgSummary } from '../../lib/api'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function OrgDetail() {
   const { orgId } = useParams<{ orgId: string }>()
   const navigate = useNavigate()
-  const [org, setOrg] = useState<StoredOrg | null>(null)
+  const [org, setOrg] = useState<OrgSummary | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [notFound, setNotFound] = useState(false)
   const [showSwitchModal, setShowSwitchModal] = useState(false)
 
-  useEffect(() => {
-    if (orgId) setOrg(getStoredOrg(orgId))
+  const fetchOrg = useCallback(async () => {
+    if (!orgId) return
+    setLoading(true)
+    try {
+      const orgs = await listOrgs()
+      const found = orgs.find((o) => o.org_id === orgId) ?? null
+      setOrg(found)
+      setNotFound(!found)
+    } catch {
+      setNotFound(true)
+    } finally {
+      setLoading(false)
+    }
   }, [orgId])
+
+  useEffect(() => { void fetchOrg() }, [fetchOrg])
 
   /** Clear the superadmin session and go to login so the user re-authenticates as an org member. */
   function confirmSwitch() {
@@ -39,16 +41,26 @@ export function OrgDetail() {
     navigate(`/login?hint_org=${orgId}`)
   }
 
-  if (!org) {
+  if (loading) {
     return (
       <div className="page-content">
         <PageHeader title="Organisation" />
-        <div className="empty-state">
-          <div className="empty-title">Organisation not found in local cache</div>
-          <div className="empty-sub">
-            The org may have been created in another session. Go back to the orgs list to see all cached organisations.
-          </div>
-          <button className="btn" style={{ marginTop: 16 }} onClick={() => navigate('/superadmin/orgs')}>
+        <div style={{ fontSize: 13, color: 'var(--fg-muted)', padding: '32px 0', textAlign: 'center' }}>
+          Loading…
+        </div>
+      </div>
+    )
+  }
+
+  if (notFound || !org) {
+    return (
+      <div className="page-content">
+        <PageHeader title="Organisation" />
+        <div className="empty">
+          <div className="empty-icon"><I.home size={20} /></div>
+          <div className="empty-title">Organisation not found</div>
+          <div className="empty-desc">This organisation may have been deleted or you may not have access.</div>
+          <button className="btn primary" style={{ marginTop: 8 }} onClick={() => navigate('/superadmin/orgs')}>
             ← Back to Organisations
           </button>
         </div>
@@ -87,7 +99,7 @@ export function OrgDetail() {
         </div>
         <div className="card" style={{ padding: 20 }}>
           <div style={{ fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>Created</div>
-          <div style={{ fontSize: 13 }}>{new Date(org.created_at).toLocaleString()}</div>
+          <div style={{ fontSize: 13 }}>{org.created_at ? new Date(org.created_at).toLocaleString() : '—'}</div>
         </div>
       </div>
 
@@ -147,7 +159,7 @@ export function OrgDetail() {
 
             <p style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 20 }}>
               You are about to leave the superadmin session. To access{' '}
-              <strong>{org?.org_name}</strong>, you'll need to re-authenticate
+              <strong>{org.org_name}</strong>, you'll need to re-authenticate
               using an org user account — use the credentials of a user you
               seeded into this org.
             </p>

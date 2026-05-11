@@ -23,10 +23,11 @@ use stitchd_proto::management::v1::{
     CreateProjectRequest, CreateProjectResponse, CreateSdkKeyRequest, CreateSdkKeyResponse,
     CreateUserRequest, CreateUserResponse, DeleteEnvironmentRequest, DeleteEnvironmentResponse,
     DeleteProjectRequest, DeleteProjectResponse, EnvironmentSummary, ListEnvironmentsRequest,
-    ListEnvironmentsResponse, ListProjectsRequest, ListProjectsResponse, ListSdkKeysRequest,
-    ListSdkKeysResponse, ProjectSummary, RenameEnvironmentRequest, RenameEnvironmentResponse,
-    RenameProjectRequest, RenameProjectResponse, RevokeSdkKeyRequest, RevokeSdkKeyResponse,
-    SdkKeySummary, management_service_server::ManagementService,
+    ListEnvironmentsResponse, ListOrgsRequest, ListOrgsResponse, ListProjectsRequest,
+    ListProjectsResponse, ListSdkKeysRequest, ListSdkKeysResponse, OrgSummary, ProjectSummary,
+    RenameEnvironmentRequest, RenameEnvironmentResponse, RenameProjectRequest,
+    RenameProjectResponse, RevokeSdkKeyRequest, RevokeSdkKeyResponse, SdkKeySummary,
+    management_service_server::ManagementService,
 };
 
 use crate::sdk_key::hash_sdk_key;
@@ -157,6 +158,23 @@ impl ManagementService for ManagementServiceImpl {
             project_id: default_project.id.to_string(),
             project_name: default_project.name,
         }))
+    }
+
+    async fn list_orgs(
+        &self,
+        _request: Request<ListOrgsRequest>,
+    ) -> Result<Response<ListOrgsResponse>, Status> {
+        let all = self.org_repo.list_all().await.map_err(map_repo_err)?;
+        let orgs = all
+            .into_iter()
+            .filter(|o| !o.is_system)
+            .map(|o| OrgSummary {
+                org_id: o.id.to_string(),
+                org_name: o.name,
+                created_at: o.created_at.to_rfc3339(),
+            })
+            .collect();
+        Ok(Response::new(ListOrgsResponse { orgs }))
     }
 
     async fn create_project(

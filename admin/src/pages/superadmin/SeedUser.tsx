@@ -12,21 +12,9 @@
  */
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api } from '../../lib/api'
+import { api, listOrgs } from '../../lib/api'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
-import type { StoredOrg } from './OrgsList'
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-const ORGS_KEY = 'stitchd_admin_orgs'
-
-function getStoredOrg(orgId: string): StoredOrg | null {
-  try {
-    const raw = localStorage.getItem(ORGS_KEY)
-    if (!raw) return null
-    return (JSON.parse(raw) as StoredOrg[]).find((o) => o.org_id === orgId) ?? null
-  } catch { return null }
-}
 
 interface CreatedUser {
   user_id: string
@@ -47,7 +35,7 @@ const ROLE_OPTIONS: { value: OrgRole; label: string; desc: string }[] = [
 export function SeedUser() {
   const { orgId } = useParams<{ orgId: string }>()
   const navigate = useNavigate()
-  const [org, setOrg] = useState<StoredOrg | null>(null)
+  const [orgName, setOrgName] = useState<string | null>(null)
   const [mode, setMode] = useState<Mode>('existing')
 
   // shared
@@ -62,7 +50,13 @@ export function SeedUser() {
   const [error, setError]       = useState<string | null>(null)
   const [result, setResult]     = useState<CreatedUser | null>(null)
 
-  useEffect(() => { if (orgId) setOrg(getStoredOrg(orgId)) }, [orgId])
+  useEffect(() => {
+    if (!orgId) return
+    listOrgs().then((orgs) => {
+      const found = orgs.find((o) => o.org_id === orgId)
+      if (found) setOrgName(found.org_name)
+    }).catch(() => { /* non-critical — subtitle just stays generic */ })
+  }, [orgId])
 
   // reset state when switching mode
   function switchMode(m: Mode) {
@@ -105,7 +99,7 @@ export function SeedUser() {
     <div className="page-content">
       <PageHeader
         title="Seed User"
-        subtitle={org ? `Add a user to "${org.org_name}"` : 'Add a user to this organisation'}
+        subtitle={orgName ? `Add a user to "${orgName}"` : 'Add a user to this organisation'}
         actions={
           <button className="btn" onClick={() => navigate(`/superadmin/orgs/${orgId}`)}>
             ← Back to Org

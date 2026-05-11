@@ -35,7 +35,7 @@ pub fn rbac_context_from_jwt(validated: &ValidatedJwt) -> RbacContext {
         tenant_id: validated.org_id.clone(),
         environment_id: String::new(),
         roles: vec![role_str.to_string()],
-        permissions: perms.iter().map(|s| s.to_string()).collect(),
+        permissions: perms.iter().map(std::string::ToString::to_string).collect(),
         subject: validated.user.id.to_string(),
         is_system: validated.is_system,
     }
