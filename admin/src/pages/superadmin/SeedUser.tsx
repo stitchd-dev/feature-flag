@@ -12,7 +12,7 @@
  */
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { api, listOrgs } from '../../lib/api'
+import { api, getOrg } from '../../lib/api'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 
@@ -52,10 +52,11 @@ export function SeedUser() {
 
   useEffect(() => {
     if (!orgId) return
-    listOrgs().then((orgs) => {
-      const found = orgs.find((o) => o.org_id === orgId)
-      if (found) setOrgName(found.org_name)
-    }).catch(() => { /* non-critical — subtitle just stays generic */ })
+    const controller = new AbortController()
+    getOrg(orgId, controller.signal)
+      .then((org) => setOrgName(org.org_name))
+      .catch(() => { /* non-critical — subtitle stays generic */ })
+    return () => controller.abort()
   }, [orgId])
 
   // reset state when switching mode
