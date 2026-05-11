@@ -1,5 +1,5 @@
 # Project Workflow
-<!-- Last refreshed: 2026-04-22 -->
+<!-- Last refreshed: 2026-05-11 -->
 
 ## Guiding Principles
 
@@ -194,6 +194,24 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # Build docs site (protoc-gen-doc → OpenAPI → rustdoc → mdbook)
 cargo run --manifest-path crates/xtask/Cargo.toml -- docs
+```
+
+### Admin UI (Frontend — `admin/` directory)
+```bash
+# Install dependencies
+cd admin && npm install
+
+# Start dev server (proxies /api → gateway on :8080)
+npm run dev
+
+# Type-check (NEVER use npx tsc — resolves to stray tsc 2.0.x package)
+node_modules/.bin/tsc --noEmit -p tsconfig.app.json
+
+# Lint
+npm run lint
+
+# Production build
+npm run build
 ```
 
 ### Before Committing

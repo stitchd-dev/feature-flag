@@ -1,6 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
-<!-- Last refreshed: 2026-04-22 -->
+<!-- Last refreshed: 2026-05-11 -->
 
 # Product Guide
 
@@ -58,7 +58,8 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 | Server-side Rust SDK | ✅ Complete |
 | Human Auth (JWT, Password, OIDC, SAML, MFA, Invites, Rate Limiting) | ✅ Complete |
 | Microservice decomposition (6 services + gateway) | ✅ Complete |
-| Admin UI | ⬜ Deferred (separate project) |
+| Admin UI (Superadmin + Org Management) | 🔄 In Progress |
+| Admin UI — Environments & SDK Keys RBAC | ✅ Complete |
 
 ## Modules
 

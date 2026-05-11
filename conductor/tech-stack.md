@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-04-22 -->
+<!-- Last refreshed: 2026-05-11 -->
 
 ## Architecture
 
@@ -13,6 +13,7 @@ The system is decomposed into six Cargo workspace crates, each a standalone gRPC
 | `stitchd-segmentation-service` | Segment CRUD; rule-based + list-based membership evaluation |
 | `stitchd-event-service` | Event definition registry; ClickHouse ingestion gRPC |
 | `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from PostgreSQL |
+| `stitchd-stats-service` | Scheduled stats computation (60-min interval); writes pre-aggregated experiment results to PostgreSQL `experiment_results` table |
 
 Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous monolith) has been removed.
 
@@ -33,6 +34,22 @@ Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous m
 | Email Delivery | lettre 0.11 (SMTP); offline link fallback when SMTP unconfigured |
 | Rate Limiting | governor 0.10 + tower_governor 0.8; SmartIpKeyExtractor (x-forwarded-for / x-real-ip / peer) |
 | Observability | OpenTelemetry (0.28) + Prometheus (metrics-exporter-prometheus 0.16) |
+
+## Admin UI (Frontend)
+
+Located in `admin/` at the workspace root. Built with:
+
+| Layer | Technology |
+|---|---|
+| Framework | React 19 |
+| Routing | React Router v7 (`react-router-dom ^7`) |
+| Build Tool | Vite 8 |
+| Language | TypeScript 6 (`verbatimModuleSyntax: true` — requires `import type` for type-only imports) |
+| HTTP Client | Axios |
+| Dev Proxy | Vite server proxy: `/api → http://localhost:8080` (strips `/api` prefix, `changeOrigin: true`) |
+| Linting | ESLint with `eslint-plugin-react-hooks` + `eslint-plugin-react-refresh` |
+
+Auth model: JWT decoded client-side (base64 payload only) to extract `is_system`. `org_id` comes from the login response body. Superadmin users (`is_system=true`) use `/superadmin/*` routes; org users use `/org/:orgId/*`.
 
 ## Client SDK
 

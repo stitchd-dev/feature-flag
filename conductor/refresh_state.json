@@ -1,25 +1,20 @@
 {
-  "last_refreshed": "2026-04-22T00:00:00Z",
+  "last_refreshed": "2026-05-11T00:00:00Z",
   "scope": "all",
   "changes": {
     "tech-stack.md": [
-      "Added Architecture section documenting 6-microservice decomposition (stitchd-server removed)",
-      "Added all auth/crypto/email/rate-limiting dependencies from auth_20260421 track",
-      "Added Docker Compose infrastructure note",
-      "Updated coverage threshold to ≥90%"
+      "Added stitchd-stats-service to Architecture table",
+      "Added Admin UI (Frontend) section — React 19, React Router v7, Vite 8, TypeScript 6, Axios, dev proxy pattern"
     ],
     "product.md": [
-      "Added internal microservice architecture note under Deployment Model",
-      "Added Implementation Status table reflecting current completion state"
+      "Updated Implementation Status: Admin UI split into 'In Progress' (Superadmin + Org Management) and 'Complete' (Environments & SDK Keys RBAC)"
     ],
     "workflow.md": [
-      "Fixed coverage threshold from >95% to ≥90% (matches CI)",
-      "Replaced generic Development Commands placeholder with real Rust/Cargo commands",
-      "Added CI environment notes (SQLX_OFFLINE, contract-check, tarpaulin per-crate)"
+      "Added Admin UI (Frontend) dev commands section — npm dev, tsc type-check, lint, build"
     ],
-    "patterns.md": [
-      "Added Auth Patterns section with 4 new patterns from auth_20260421",
-      "Updated last refreshed date"
+    "beads": [
+      "Closed feature-flag-ut2.2, ut2.4, ut2.5 — completed in env_sdk_rbac_20260429 but left open",
+      "Closed feature-flag-ut2 epic — all 5 phases done, track archived 2026-04-29"
     ]
   }
 }
