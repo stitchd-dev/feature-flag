@@ -16,6 +16,22 @@ import { RuleList } from '../../components/rules/RuleList'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Returns an error string if the raw value doesn't match the flag type, null if valid. */
+function validateVariantValue(raw: string, flagType: string): string | null {
+  if (flagType === 'bool') return null
+  if (flagType === 'int') {
+    if (!/^-?\d+$/.test(raw.trim())) return 'Must be a whole number (e.g. 42)'
+  }
+  if (flagType === 'double') {
+    const n = Number(raw.trim())
+    if (raw.trim() === '' || isNaN(n) || !isFinite(n)) return 'Must be a decimal number (e.g. 3.14)'
+  }
+  if (flagType === 'json') {
+    try { JSON.parse(raw.trim()) } catch { return 'Must be valid JSON (e.g. {"key": "value"})' }
+  }
+  return null
+}
+
 function parseRuleState(raw: { condition: unknown; output: unknown }): RuleState {
   return {
     _localId: localId(),
@@ -80,6 +96,7 @@ function VariantsPanel({
   const { projectId } = useOrgContext()
   const [editing, setEditing] = useState(false)
   const [variants, setVariants] = useState<{ key: string; value: string }[]>([])
+  const [variantErrors, setVariantErrors] = useState<(string | null)[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -87,7 +104,9 @@ function VariantsPanel({
   const isBool = flag.flag_type === 'bool'
 
   function startEdit() {
-    setVariants(flag.variants.map((v) => ({ key: v.key, value: formatVariantValue(v.value) })))
+    const initial = flag.variants.map((v) => ({ key: v.key, value: formatVariantValue(v.value) }))
+    setVariants(initial)
+    setVariantErrors(initial.map(() => null))
     setEditing(true)
     setError(null)
   }
@@ -95,10 +114,12 @@ function VariantsPanel({
   function cancel() {
     setEditing(false)
     setError(null)
+    setVariantErrors([])
   }
 
   function addVariant() {
     setVariants([...variants, { key: '', value: '' }])
+    setVariantErrors([...variantErrors, null])
   }
 
   function removeVariant(i: number) {
@@ -114,6 +135,7 @@ function VariantsPanel({
       return
     }
     setVariants(variants.filter((_, j) => j !== i))
+    setVariantErrors(variantErrors.filter((_, j) => j !== i))
     setError(null)
   }
 
@@ -121,6 +143,19 @@ function VariantsPanel({
     if (!projectId) return
     const validVariants = variants.filter((v) => v.key.trim())
     if (validVariants.length === 0) { setError('At least one variant is required'); return }
+
+    // Duplicate key check
+    const keys = validVariants.map((v) => v.key.trim())
+    if (new Set(keys).size !== keys.length) { setError('Variant keys must be unique'); return }
+
+    // Type-specific value validation
+    const errs = variants.map((v) => validateVariantValue(v.value, flag.flag_type))
+    if (errs.some(Boolean)) {
+      setVariantErrors(errs)
+      setError('Fix the highlighted variant values before saving')
+      return
+    }
+
     setSaving(true)
     setError(null)
     try {
@@ -177,26 +212,50 @@ function VariantsPanel({
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {variants.map((v, i) => (
-              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <div style={{ width: 10, height: 10, borderRadius: 3, background: VARIANT_PALETTE[i % VARIANT_PALETTE.length], flexShrink: 0 }} />
-                <input className="input" style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                  placeholder="name" value={v.key}
-                  onChange={(e) => setVariants(variants.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} />
-                {isBool ? (
-                  // Bool flags: value is fixed, shown as read-only chip
-                  <span style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', padding: '0 8px' }}>
-                    = {v.value}
-                  </span>
-                ) : (
-                  <input className="input" style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                    placeholder="value" value={v.value}
-                    onChange={(e) => setVariants(variants.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
-                )}
-                {!isBool && (
-                  <button className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
-                    disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
-                    <I.x size={12} />
-                  </button>
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 3, background: VARIANT_PALETTE[i % VARIANT_PALETTE.length], flexShrink: 0 }} />
+                  <input className="input" style={{ width: 110, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                    placeholder="name" value={v.key}
+                    onChange={(e) => setVariants(variants.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} />
+                  {isBool ? (
+                    // Bool flags: value is fixed, shown as read-only chip
+                    <span style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', padding: '0 8px' }}>
+                      = {v.value}
+                    </span>
+                  ) : (
+                    <input
+                      className="input"
+                      style={{
+                        flex: 1,
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 12,
+                        borderColor: variantErrors[i] ? 'var(--danger)' : undefined,
+                      }}
+                      placeholder={
+                        flag.flag_type === 'json' ? '{}' :
+                        flag.flag_type === 'int' ? '42' :
+                        flag.flag_type === 'double' ? '3.14' : 'value'
+                      }
+                      value={v.value}
+                      onChange={(e) => {
+                        const next = variants.map((x, j) => j === i ? { ...x, value: e.target.value } : x)
+                        setVariants(next)
+                        setVariantErrors(next.map((x) => validateVariantValue(x.value, flag.flag_type)))
+                      }}
+                    />
+                  )}
+                  {!isBool && (
+                    <button className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
+                      disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
+                      <I.x size={12} />
+                    </button>
+                  )}
+                </div>
+                {variantErrors[i] && (
+                  <div style={{ fontSize: 11, color: 'var(--danger)', paddingLeft: 130 }}>
+                    {variantErrors[i]}
+                  </div>
                 )}
               </div>
             ))}

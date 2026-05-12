@@ -29,6 +29,22 @@ function parseVariantValue(raw: string, type: FlagType): unknown {
   return raw
 }
 
+/** Returns an error string if the raw value doesn't match the flag type, or null if valid. */
+function validateVariantValue(raw: string, type: FlagType): string | null {
+  if (type === 'bool') return null // dropdown — always valid
+  if (type === 'int') {
+    if (!/^-?\d+$/.test(raw.trim())) return 'Must be a whole number (e.g. 42)'
+  }
+  if (type === 'double') {
+    const n = Number(raw.trim())
+    if (raw.trim() === '' || isNaN(n) || !isFinite(n)) return 'Must be a decimal number (e.g. 3.14)'
+  }
+  if (type === 'json') {
+    try { JSON.parse(raw.trim()) } catch { return 'Must be valid JSON (e.g. {"key": "value"})' }
+  }
+  return null
+}
+
 interface Props {
   onClose: () => void
 }
@@ -45,15 +61,18 @@ export function CreateFlagModal({ onClose }: Props) {
   const [variants, setVariants] = useState<VariantInput[]>(DEFAULT_VARIANTS.bool)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Per-row value validation errors (index → message | null)
+  const [variantErrors, setVariantErrors] = useState<(string | null)[]>([null, null])
 
   // Auto-generate key from name unless user edited it manually
   useEffect(() => {
     if (!keyEdited) setKey(slugify(name))
   }, [name, keyEdited])
 
-  // Reset variants when flag type changes
+  // Reset variants and errors when flag type changes
   useEffect(() => {
     setVariants(DEFAULT_VARIANTS[flagType].map((v) => ({ ...v })))
+    setVariantErrors(DEFAULT_VARIANTS[flagType].map(() => null))
   }, [flagType])
 
   function setVariantKey(i: number, val: string) {
@@ -61,16 +80,21 @@ export function CreateFlagModal({ onClose }: Props) {
   }
 
   function setVariantValue(i: number, val: string) {
-    setVariants(variants.map((v, j) => j === i ? { ...v, value: val } : v))
+    const next = variants.map((v, j) => j === i ? { ...v, value: val } : v)
+    setVariants(next)
+    // Validate on change so the user sees errors while typing
+    setVariantErrors(next.map((v) => validateVariantValue(v.value, flagType)))
   }
 
   function addVariant() {
     setVariants([...variants, { key: '', value: '' }])
+    setVariantErrors([...variantErrors, null])
   }
 
   function removeVariant(i: number) {
     if (variants.length <= 1) return
     setVariants(variants.filter((_, j) => j !== i))
+    setVariantErrors(variantErrors.filter((_, j) => j !== i))
   }
 
   async function submit(e: React.FormEvent) {
@@ -78,6 +102,21 @@ export function CreateFlagModal({ onClose }: Props) {
     if (!projectId) return
     if (!name.trim()) { setError('Name is required'); return }
     if (!key.trim()) { setError('Key is required'); return }
+
+    const validVariants = variants.filter((v) => v.key.trim())
+
+    // Duplicate key check
+    const keys = validVariants.map((v) => v.key.trim())
+    if (new Set(keys).size !== keys.length) {
+      setError('Variant keys must be unique')
+      return
+    }
+
+    // Type-specific value validation
+    for (const v of validVariants) {
+      const err = validateVariantValue(v.value, flagType)
+      if (err) { setError(`Variant "${v.key}": ${err}`); return }
+    }
 
     setSaving(true)
     setError(null)
@@ -88,9 +127,7 @@ export function CreateFlagModal({ onClose }: Props) {
         description: description.trim(),
         enabled: false,
         value_type: flagType,
-        variants: variants
-          .filter((v) => v.key.trim())
-          .map((v) => ({ key: v.key.trim(), value: parseVariantValue(v.value, flagType) })),
+        variants: validVariants.map((v) => ({ key: v.key.trim(), value: parseVariantValue(v.value, flagType) })),
       }
       const { data } = await api.post<AdminFlagResponse>(`/v1/projects/${projectId}/flags`, body)
       onClose()
@@ -164,26 +201,41 @@ export function CreateFlagModal({ onClose }: Props) {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {variants.map((v, i) => (
-                <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input className="input" style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                    placeholder="key" value={v.key}
-                    onChange={(e) => setVariantKey(i, e.target.value)} />
-                  {flagType === 'bool' ? (
-                    <select className="input" style={{ flex: 1, fontSize: 12 }}
-                      value={v.value} onChange={(e) => setVariantValue(i, e.target.value)}>
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  ) : (
-                    <input className="input" style={{ flex: 1, fontFamily: flagType !== 'json' ? 'var(--font-mono)' : undefined, fontSize: 12 }}
-                      placeholder={flagType === 'json' ? '{}' : 'value'}
-                      value={v.value}
-                      onChange={(e) => setVariantValue(i, e.target.value)} />
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input className="input" style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                      placeholder="name" value={v.key}
+                      onChange={(e) => setVariantKey(i, e.target.value)} />
+                    {flagType === 'bool' ? (
+                      <select className="input" style={{ flex: 1, fontSize: 12 }}
+                        value={v.value} onChange={(e) => setVariantValue(i, e.target.value)}>
+                        <option value="true">true</option>
+                        <option value="false">false</option>
+                      </select>
+                    ) : (
+                      <input
+                        className="input"
+                        style={{
+                          flex: 1,
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: 12,
+                          borderColor: variantErrors[i] ? 'var(--danger)' : undefined,
+                        }}
+                        placeholder={flagType === 'json' ? '{}' : flagType === 'int' ? '42' : flagType === 'double' ? '3.14' : 'value'}
+                        value={v.value}
+                        onChange={(e) => setVariantValue(i, e.target.value)}
+                      />
+                    )}
+                    <button type="button" className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
+                      disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
+                      <I.x size={12} />
+                    </button>
+                  </div>
+                  {variantErrors[i] && (
+                    <div style={{ fontSize: 11, color: 'var(--danger)', paddingLeft: 128 }}>
+                      {variantErrors[i]}
+                    </div>
                   )}
-                  <button type="button" className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
-                    disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
-                    <I.x size={12} />
-                  </button>
                 </div>
               ))}
             </div>
