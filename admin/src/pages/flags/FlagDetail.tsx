@@ -1,10 +1,15 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useBlocker } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
+import { useToast } from '../../hooks/useToast'
+import { usePermissions } from '../../hooks/usePermissions'
 import { PageHeader, VariantBar } from '../../components/primitives'
 import { I } from '../../components/icons'
+import { ToastContainer } from '../../components/ToastContainer'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
+import { PERMISSIONS } from '../../lib/permissions'
 import type { AdminFlagResponse, VariantJson } from '../../lib/types'
 import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
 import { localId, allocationSum } from '../../lib/ruleTypes'
@@ -34,26 +39,28 @@ function parseValue(raw: string, flagType: string): unknown {
   return raw
 }
 
-// ─── Toast ────────────────────────────────────────────────────────────────────
+function extractMessage(err: unknown): string {
+  return (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message
+    ?? (err as { message?: string })?.message
+    ?? 'Unknown error'
+}
 
-function Toast({ message, kind, onDismiss }: { message: string; kind: 'success' | 'error'; onDismiss: () => void }) {
-  useEffect(() => {
-    const t = setTimeout(onDismiss, 3500)
-    return () => clearTimeout(t)
-  }, [onDismiss])
+function isConflict(err: unknown): boolean {
+  return (err as { response?: { status?: number } })?.response?.status === 409
+}
+
+// ─── LockOverlay ──────────────────────────────────────────────────────────────
+
+function LockOverlay() {
   return (
-    <div style={{
-      position: 'fixed', bottom: 72, right: 20, zIndex: 300,
-      padding: '10px 16px', borderRadius: 8, fontSize: 13, maxWidth: 340,
-      background: kind === 'success' ? 'var(--success-bg)' : 'var(--danger-bg)',
-      border: `1px solid ${kind === 'success' ? 'rgba(17,122,61,0.3)' : 'rgba(196,43,28,0.3)'}`,
-      color: kind === 'success' ? 'var(--success)' : 'var(--danger)',
-      boxShadow: 'var(--shadow-md)',
-      display: 'flex', alignItems: 'center', gap: 8,
-    }}>
-      {kind === 'success' ? <I.check size={14} /> : <I.alert size={14} />}
-      {message}
-      <button className="icon-btn" style={{ marginLeft: 'auto' }} onClick={onDismiss}><I.x size={12} /></button>
+    <div className="page-body">
+      <div className="card" style={{ padding: 48, textAlign: 'center' }}>
+        <I.lock size={28} stroke="var(--fg-subtle)" style={{ marginBottom: 12 }} />
+        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>Access restricted</div>
+        <div style={{ color: 'var(--fg-muted)', fontSize: 13 }}>
+          You do not have permission to view feature flags.
+        </div>
+      </div>
     </div>
   )
 }
@@ -63,10 +70,12 @@ function Toast({ message, kind, onDismiss }: { message: string; kind: 'success' 
 const VARIANT_PALETTE = ['#F0461F', '#5BAEF5', '#3DD68C', '#A892FF', '#E6B14F']
 
 function VariantsPanel({
-  flag, onSaved,
+  flag, canWrite, onSaved, onConflict,
 }: {
   flag: AdminFlagResponse
+  canWrite: boolean
   onSaved: (updated: AdminFlagResponse) => void
+  onConflict: () => void
 }) {
   const { projectId } = useOrgContext()
   const [editing, setEditing] = useState(false)
@@ -120,7 +129,8 @@ function VariantsPanel({
       setEditing(false)
       onSaved(data)
     } catch (err: unknown) {
-      setError((err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to save variants')
+      if (isConflict(err)) { onConflict(); return }
+      setError(extractMessage(err))
     } finally {
       setSaving(false)
     }
@@ -135,7 +145,7 @@ function VariantsPanel({
       <div className="card-header">
         <div className="card-title"><I.layers size={14} /> Variants</div>
         {!editing
-          ? <button className="btn sm" onClick={startEdit}><I.pencil size={12} /> Edit</button>
+          ? canWrite && <button className="btn sm" onClick={startEdit}><I.pencil size={12} /> Edit</button>
           : <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn sm" onClick={cancel}>Cancel</button>
               <button className="btn primary sm" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>
@@ -207,10 +217,13 @@ function validateRules(rules: RuleState[]): string | null {
 }
 
 function TargetingPanel({
-  flag, onSaved,
+  flag, canWrite, onSaved, onConflict, onDirtyChange,
 }: {
   flag: AdminFlagResponse
+  canWrite: boolean
   onSaved: (updated: AdminFlagResponse) => void
+  onConflict: () => void
+  onDirtyChange: (dirty: boolean) => void
 }) {
   const { projectId } = useOrgContext()
   const [rules, setRules] = useState<RuleState[]>(() => flag.rules.map(parseRuleState))
@@ -222,7 +235,10 @@ function TargetingPanel({
 
   function updateRules(next: RuleState[]) {
     setRules(next)
-    setDirty(true)
+    if (!dirty) {
+      setDirty(true)
+      onDirtyChange(true)
+    }
   }
 
   async function saveRules() {
@@ -238,9 +254,11 @@ function TargetingPanel({
       }
       const { data } = await api.put<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${flag.key}/rules`, body)
       setDirty(false)
+      onDirtyChange(false)
       onSaved(data)
     } catch (err: unknown) {
-      setError((err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to save rules')
+      if (isConflict(err)) { onConflict(); return }
+      setError(extractMessage(err))
     } finally {
       setSaving(false)
     }
@@ -250,7 +268,7 @@ function TargetingPanel({
     <div className="card">
       <div className="card-header">
         <div className="card-title"><I.toggle size={14} /> Targeting rules</div>
-        {dirty && (
+        {dirty && canWrite && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 600 }}>Unsaved changes</span>
             <button className="btn primary sm" disabled={saving} onClick={saveRules}>
@@ -265,11 +283,16 @@ function TargetingPanel({
             {error}
           </div>
         )}
+        {!canWrite && (
+          <div style={{ padding: '8px 12px', background: 'var(--bg-sunken)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, color: 'var(--fg-muted)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <I.lock size={12} /> View-only — you do not have permission to edit rules.
+          </div>
+        )}
         <RuleList
           rules={rules}
           variants={variantKeys}
           defaultVariantKey={flag.default_variant_key}
-          onChange={updateRules}
+          onChange={canWrite ? updateRules : () => undefined}
         />
       </div>
     </div>
@@ -360,37 +383,12 @@ let value = client.evaluate::<${typeMap[flag.flag_type] ?? flag.flag_type}>(
 // ─── FlagHistory ──────────────────────────────────────────────────────────────
 
 function FlagHistory() {
-  const events = [
-    { t: 'now', who: 'you', what: 'loaded flag history', kind: 'info' },
-  ]
   return (
     <div className="card">
       <div className="empty" style={{ padding: '32px 24px' }}>
         <div className="empty-icon"><I.history size={20} /></div>
         <div className="empty-title">History coming soon</div>
         <div className="empty-desc">Audit log will show all flag mutations here.</div>
-      </div>
-      {events.length === 0 && null}
-    </div>
-  )
-}
-
-// ─── ArchiveConfirm ───────────────────────────────────────────────────────────
-
-function ArchiveConfirm({ flagKey, onConfirm, onCancel }: { flagKey: string; onConfirm: () => void; onCancel: () => void }) {
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} onClick={onCancel} />
-      <div className="card" style={{ position: 'relative', width: 400, zIndex: 1, padding: 24 }}>
-        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Archive flag?</div>
-        <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 20 }}>
-          Flag <span className="mono-key">{flagKey}</span> will be archived and excluded from evaluations.
-          You can restore it later with <code>?include_archived=true</code>.
-        </div>
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-          <button className="btn" onClick={onCancel}>Cancel</button>
-          <button className="btn danger" onClick={onConfirm}>Archive</button>
-        </div>
       </div>
     </div>
   )
@@ -399,11 +397,12 @@ function ArchiveConfirm({ flagKey, onConfirm, onCancel }: { flagKey: string; onC
 // ─── MetadataEditor (inline edit) ────────────────────────────────────────────
 
 function MetadataEditor({
-  flag,
-  onSaved,
+  flag, canWrite, onSaved, onConflict,
 }: {
   flag: AdminFlagResponse
+  canWrite: boolean
   onSaved: (updated: AdminFlagResponse) => void
+  onConflict: () => void
 }) {
   const { projectId } = useOrgContext()
   const [editing, setEditing] = useState(false)
@@ -437,7 +436,8 @@ function MetadataEditor({
       setEditing(false)
       onSaved(data)
     } catch (err: unknown) {
-      setError((err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to save')
+      if (isConflict(err)) { onConflict(); return }
+      setError(extractMessage(err))
     } finally {
       setSaving(false)
     }
@@ -449,7 +449,7 @@ function MetadataEditor({
         <span style={{ fontSize: 13, color: 'var(--fg-muted)' }}>
           {flag.name}{flag.description ? ` — ${flag.description}` : ''}
         </span>
-        <button className="icon-btn" onClick={startEdit}><I.pencil size={12} /></button>
+        {canWrite && <button className="icon-btn" onClick={startEdit}><I.pencil size={12} /></button>}
       </div>
     )
   }
@@ -478,15 +478,24 @@ export function FlagDetail() {
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
   const { projectId, orgId } = useOrgContext()
+  const { can, loading: permLoading } = usePermissions()
+  const { toasts, toast, dismiss } = useToast()
+
   const [flag, setFlag] = useState<AdminFlagResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('targeting')
   const [enabled, setEnabled] = useState(false)
   const [togglingEnabled, setTogglingEnabled] = useState(false)
-  const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' } | null>(null)
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false)
+  const [rulesDirty, setRulesDirty] = useState(false)
   const layout = tweaks.flagDetailLayout
+
+  const canRead = can(PERMISSIONS.FLAG_READ)
+  const canWrite = can(PERMISSIONS.FLAG_WRITE)
+
+  // Unsaved-changes blocker
+  const blocker = useBlocker(rulesDirty)
 
   useEffect(() => {
     if (!projectId || !key) return
@@ -501,12 +510,23 @@ export function FlagDetail() {
       .finally(() => setLoading(false))
   }, [projectId, key])
 
-  function showToast(message: string, kind: 'success' | 'error') {
-    setToast({ message, kind })
+  function handleConflict() {
+    toast('Flag was modified by someone else — refresh to reload', 'error', {
+      label: 'Refresh',
+      onClick: () => {
+        setFlag(null)
+        setLoading(true)
+        if (!projectId || !key) return
+        api.get<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${key}`)
+          .then(({ data }) => { setFlag(data); setEnabled(data.enabled) })
+          .catch(() => setLoadError('Failed to reload'))
+          .finally(() => setLoading(false))
+      },
+    })
   }
 
   async function toggleEnabled() {
-    if (!flag || !projectId || togglingEnabled) return
+    if (!flag || !projectId || togglingEnabled || !canWrite) return
     const next = !enabled
     setEnabled(next)
     setTogglingEnabled(true)
@@ -519,8 +539,8 @@ export function FlagDetail() {
       setEnabled(data.enabled)
     } catch (err: unknown) {
       setEnabled(!next)
-      const message = (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to update flag'
-      showToast(message, 'error')
+      if (isConflict(err)) { handleConflict(); return }
+      toast(extractMessage(err), 'error')
     } finally {
       setTogglingEnabled(false)
     }
@@ -531,21 +551,22 @@ export function FlagDetail() {
     setShowArchiveConfirm(false)
     try {
       await api.post(`/v1/projects/${projectId}/flags/${flag.key}/archive`, {})
-      showToast('Flag archived', 'success')
+      toast('Flag archived', 'success')
       setTimeout(() => navigate(`/org/${orgId}/flags`), 1200)
     } catch (err: unknown) {
-      const message = (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to archive flag'
-      showToast(message, 'error')
+      toast(extractMessage(err), 'error')
     }
   }
 
-  if (loading) {
+  if (permLoading || loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
-        <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading flag…</span>
+        <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading…</span>
       </div>
     )
   }
+
+  if (!permLoading && !canRead) return <LockOverlay />
 
   if (loadError || !flag) {
     return (
@@ -564,20 +585,33 @@ export function FlagDetail() {
         crumbs={[<a key="1" onClick={() => navigate(`/org/${orgId}/flags`)} style={{ cursor: 'pointer' }}>Flags</a>, flag.key]}
         title={flag.key}
         mono
-        subtitle={<MetadataEditor flag={flag} onSaved={(updated) => { setFlag(updated); showToast('Saved', 'success') }} />}
+        subtitle={
+          <MetadataEditor
+            flag={flag}
+            canWrite={canWrite}
+            onSaved={(updated) => { setFlag(updated); toast('Saved', 'success') }}
+            onConflict={handleConflict}
+          />
+        }
         badge={
           <span className={`type-pill ${flag.flag_type}`} style={{ fontSize: 11, padding: '2px 7px' }}>{flag.flag_type}</span>
         }
         actions={
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', border: '1px solid var(--border-strong)', borderRadius: 6, background: 'var(--surface)', opacity: togglingEnabled ? 0.6 : 1 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px',
+              border: '1px solid var(--border-strong)', borderRadius: 6, background: 'var(--surface)',
+              opacity: togglingEnabled || !canWrite ? 0.6 : 1,
+            }}>
               <span style={{ fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{enabled ? 'Enabled' : 'Disabled'}</span>
-              <button className={`toggle lg ${enabled ? 'on' : ''}`} onClick={toggleEnabled} />
+              <button className={`toggle lg ${enabled ? 'on' : ''}`} onClick={toggleEnabled} disabled={!canWrite} />
             </div>
             <button className="btn" onClick={() => { navigator.clipboard.writeText(flag.key) }}><I.copy size={13} /> Copy key</button>
-            <button className="btn" style={{ color: 'var(--danger)' }} onClick={() => setShowArchiveConfirm(true)}>
-              <I.archive size={13} /> Archive
-            </button>
+            {canWrite && (
+              <button className="btn" style={{ color: 'var(--danger)' }} onClick={() => setShowArchiveConfirm(true)}>
+                <I.archive size={13} /> Archive
+              </button>
+            )}
           </>
         }
       />
@@ -602,24 +636,55 @@ export function FlagDetail() {
 
         {tab === 'targeting' && (
           <div className={layout === 'side' ? 'split-2' : 'stack'}>
-            <TargetingPanel flag={flag} onSaved={(updated) => { setFlag(updated); showToast('Rules saved', 'success') }} />
-            <VariantsPanel flag={flag} onSaved={(updated) => { setFlag(updated); showToast('Variants saved', 'success') }} />
+            <TargetingPanel
+              flag={flag}
+              canWrite={canWrite}
+              onSaved={(updated) => { setFlag(updated); setRulesDirty(false); toast('Rules saved', 'success') }}
+              onConflict={handleConflict}
+              onDirtyChange={setRulesDirty}
+            />
+            <VariantsPanel
+              flag={flag}
+              canWrite={canWrite}
+              onSaved={(updated) => { setFlag(updated); toast('Variants saved', 'success') }}
+              onConflict={handleConflict}
+            />
           </div>
         )}
         {tab === 'variants' && (
-          <VariantsPanel flag={flag} onSaved={(updated) => { setFlag(updated); showToast('Variants saved', 'success') }} />
+          <VariantsPanel
+            flag={flag}
+            canWrite={canWrite}
+            onSaved={(updated) => { setFlag(updated); toast('Variants saved', 'success') }}
+            onConflict={handleConflict}
+          />
         )}
         {tab === 'evals' && <EvalPanel />}
         {tab === 'code' && <SdkSnippet flag={flag} />}
         {tab === 'history' && <FlagHistory />}
       </div>
 
-      {toast && <Toast message={toast.message} kind={toast.kind} onDismiss={() => setToast(null)} />}
+      <ToastContainer toasts={toasts} onDismiss={dismiss} />
+
       {showArchiveConfirm && (
-        <ArchiveConfirm
-          flagKey={flag.key}
+        <ConfirmDialog
+          title="Archive flag?"
+          message={`Flag "${flag.key}" will be archived and excluded from evaluations. You can restore it with ?include_archived=true.`}
+          confirmLabel="Archive"
+          confirmDanger
           onConfirm={archiveFlag}
           onCancel={() => setShowArchiveConfirm(false)}
+        />
+      )}
+
+      {blocker.state === 'blocked' && (
+        <ConfirmDialog
+          title="Unsaved changes"
+          message="You have unsaved rule changes. Leave anyway?"
+          confirmLabel="Leave"
+          confirmDanger
+          onConfirm={() => blocker.proceed()}
+          onCancel={() => blocker.reset()}
         />
       )}
     </>

@@ -1,12 +1,31 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
+import { usePermissions } from '../../hooks/usePermissions'
 import { PageHeader, VariantBar, Sparkline } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
+import { PERMISSIONS } from '../../lib/permissions'
 import type { AdminFlagResponse } from '../../lib/types'
 import { CreateFlagModal } from './CreateFlagModal'
+
+type FlagTypeFilter = 'all' | 'bool' | 'string' | 'int' | 'double' | 'json'
+
+function LockOverlay() {
+  return (
+    <>
+      <PageHeader crumbs={['Flags']} title="Feature Flags" subtitle="Manage feature flags for your project." />
+      <div className="page-body">
+        <div className="card" style={{ padding: 48, textAlign: 'center' }}>
+          <I.lock size={28} stroke="var(--fg-subtle)" style={{ marginBottom: 12 }} />
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>Access restricted</div>
+          <div style={{ color: 'var(--fg-muted)', fontSize: 13 }}>You do not have permission to view feature flags.</div>
+        </div>
+      </div>
+    </>
+  )
+}
 
 function Toggle({ on, onClick }: { on: boolean; onClick: (e: React.MouseEvent) => void }) {
   return <span className={`toggle ${on ? 'on' : ''}`} onClick={onClick} />
@@ -68,14 +87,19 @@ export function FlagsList() {
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
   const { projectId, orgId } = useOrgContext()
+  const { can, loading: permLoading } = usePermissions()
   const [layout, setLayout] = useState<'table' | 'cards' | 'grouped'>(tweaks.flagsLayout)
   const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState<FlagTypeFilter>('all')
   const [showArchived, setShowArchived] = useState(false)
   const [flags, setFlags] = useState<AdminFlagResponse[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [optimisticEnabled, setOptimisticEnabled] = useState<Map<string, boolean>>(new Map())
   const [showCreate, setShowCreate] = useState(false)
+
+  const canRead = can(PERMISSIONS.FLAG_READ)
+  const canWrite = can(PERMISSIONS.FLAG_WRITE)
 
   useEffect(() => {
     if (!projectId) return
@@ -108,12 +132,16 @@ export function FlagsList() {
 
   const displayFlags = flags.map((f) => ({ ...f, enabled: optimisticEnabled.get(f.key) ?? f.enabled }))
 
-  const filtered = displayFlags.filter((f) =>
-    !search || f.key.includes(search) || f.name.toLowerCase().includes(search.toLowerCase())
-  )
+  const filtered = displayFlags.filter((f) => {
+    if (search && !f.key.includes(search) && !f.name.toLowerCase().includes(search.toLowerCase())) return false
+    if (typeFilter !== 'all' && f.flag_type !== typeFilter) return false
+    return true
+  })
 
   const onCount = filtered.filter((f) => f.enabled).length
   const offCount = filtered.filter((f) => !f.enabled).length
+
+  if (!permLoading && !canRead) return <LockOverlay />
 
   if (!projectId) {
     return (
@@ -147,14 +175,21 @@ export function FlagsList() {
         subtitle={`${flags.length} flags. First-true rule wins; flag types are immutable after creation.`}
         actions={
           <>
-            <button className="btn"><I.filter size={13} /> Filters</button>
             <button
               className={`btn ${showArchived ? 'active' : ''}`}
               onClick={() => setShowArchived((v) => !v)}
             >
               <I.archive size={13} /> {showArchived ? 'Hide archived' : 'Show archived'}
             </button>
-            <button className="btn primary" onClick={() => setShowCreate(true)}><I.plus size={14} /> New flag</button>
+            <button
+              className="btn primary"
+              disabled={!canWrite}
+              title={canWrite ? undefined : 'No permission to create flags'}
+              style={{ opacity: canWrite ? 1 : 0.35 }}
+              onClick={() => canWrite && setShowCreate(true)}
+            >
+              <I.plus size={14} /> New flag
+            </button>
           </>
         }
       />
@@ -174,8 +209,8 @@ export function FlagsList() {
 
         {!loading && !error && (
           <>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
-              <div className="search-input" style={{ maxWidth: 320 }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              <div className="search-input" style={{ maxWidth: 280 }}>
                 <I.search size={14} />
                 <input
                   className="input"
@@ -183,6 +218,19 @@ export function FlagsList() {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
+              </div>
+              {/* Type filter chips */}
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {(['all', 'bool', 'string', 'int', 'double', 'json'] as const).map((t) => (
+                  <button
+                    key={t}
+                    className={`btn sm ${typeFilter === t ? 'active' : ''}`}
+                    style={{ fontFamily: t !== 'all' ? 'var(--font-mono)' : undefined }}
+                    onClick={() => setTypeFilter(t)}
+                  >
+                    {t}
+                  </button>
+                ))}
               </div>
               <div style={{ display: 'flex', gap: 4, padding: 3, background: 'var(--bg-sunken)', borderRadius: 8, border: '1px solid var(--border)' }}>
                 {([['table', I.list], ['cards', I.grid], ['grouped', I.layers]] as const).map(([k, Ic]) => (

@@ -10,6 +10,8 @@ export const PERMISSIONS = {
   ENVIRONMENT_DELETE: 'environment:delete',
   SDK_KEY_CREATE: 'sdk_key:create',
   SDK_KEY_REVOKE: 'sdk_key:revoke',
+  FLAG_READ: 'flag:read',
+  FLAG_WRITE: 'flag:write',
 } as const
 
 export type Action = (typeof PERMISSIONS)[keyof typeof PERMISSIONS]
