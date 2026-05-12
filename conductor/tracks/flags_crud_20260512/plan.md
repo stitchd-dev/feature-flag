@@ -126,7 +126,7 @@
   - On error: revert state + toast "Failed to update flag"
   - TypeCheck + lint
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
 
 ---
 
@@ -178,7 +178,7 @@
   - Track dirty state for unsaved-changes guard
   - TypeCheck + lint
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 3' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3' (Protocol in workflow.md)
 
 ---
 
@@ -215,4 +215,4 @@
   - All flag data (type badge, name, updated_at) populated from real AdminFlagJson
   - TypeCheck + lint
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md)
