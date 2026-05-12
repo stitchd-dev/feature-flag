@@ -185,35 +185,34 @@
 ## Phase 4: Frontend — UX Polish & RBAC
 <!-- depends: phase2, phase3 -->
 
-- [ ] Task 1: Unsaved-changes guard
-  - Use React Router v7 `useBlocker` in FlagDetail when `isDirty` is true
-  - Show confirmation modal before navigating away: "Unsaved changes — leave
-    anyway?"
+- [x] Task 1: Unsaved-changes guard
+  - FlagDetail: useBlocker (React Router v7) blocks navigation when rulesDirty=true
+  - Shows ConfirmDialog "Unsaved changes — Leave anyway?" with proceed/reset
 
-- [ ] Task 2: Reusable ConfirmDialog + Toast system
-  - `ConfirmDialog` component (modal with message, confirm/cancel)
-  - `useToast` hook + `ToastContainer` in Sidebar/App root
-  - Wire all destructive actions and API errors to these primitives
+- [x] Task 2: Reusable ConfirmDialog + Toast system
+  - `ConfirmDialog` component (modal with message, confirm/cancel, danger variant)
+  - `useToast` hook + `ToastContainer` with action button support + auto-dismiss
+  - All destructive actions and API errors wired to these primitives in FlagDetail
 
-- [ ] Task 3: Empty state for no-rules flag
-  - When `rules.length === 0`, show a centered prompt card:
+- [x] Task 3: Empty state for no-rules flag
+  - RuleList shows centered prompt card when rules.length === 0:
     "No targeting rules yet. All contexts will receive the default variant."
     with an "Add first rule" CTA
 
-- [ ] Task 4: RBAC gating
-  - Wrap create/edit/archive/clone/save-rules actions with `usePermissions()`
-  - `flag:write` missing → buttons disabled + opacity 0.35
-  - No `flag:read` → render LockOverlay over the flags section
-  - Follow existing RBAC gating pattern from env_sdk_rbac track
+- [x] Task 4: RBAC gating
+  - permissions.ts: FLAG_READ + FLAG_WRITE added
+  - FlagsList: LockOverlay when !flag:read; New Flag btn disabled + opacity 0.35
+  - FlagDetail: LockOverlay when !flag:read; toggle/edit/archive/save-rules
+    all gated on flag:write; read-only notice in targeting panel
 
-- [ ] Task 5: Optimistic concurrency conflict handling
-  - When API returns 409/ABORTED (version mismatch), show toast:
-    "Flag was modified by someone else — refresh to reload"
-  - Offer a "Refresh" action in the toast that reloads the flag
+- [x] Task 5: Optimistic concurrency conflict handling
+  - All mutating calls check isConflict(err) for HTTP 409
+  - On conflict: error toast "Flag was modified by someone else — refresh to reload"
+    with inline "Refresh" action that reloads the flag without full navigation
 
-- [ ] Task 6: FlagsList enhancements
-  - Populate `flag_type` badge, `name`, `updated_at` from real AdminFlagJson data
-  - Filter bar: type filter chips (bool/string/int/double/json/all)
+- [x] Task 6: FlagsList enhancements
+  - Type filter chips: all/bool/string/int/double/json with active state
+  - All flag data (type badge, name, updated_at) populated from real AdminFlagJson
   - TypeCheck + lint
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md)
