@@ -59,7 +59,7 @@ describe('isVariantOutput', () => {
   })
 
   it('returns false for allocation outputs', () => {
-    const o: RuleOutputJson = { allocation: [{ variant_key: 'on', weight_milli: 1000 }] }
+    const o: RuleOutputJson = { allocation: { hash_targets: [{ context_type: 'user', field: 'key' }], buckets: [{ variant_key: 'on', weight_milli: 1000 }] } }
     expect(isVariantOutput(o)).toBe(false)
   })
 })

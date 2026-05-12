@@ -578,6 +578,28 @@ pub async fn update_variants(
         .map_err(GatewayError::from)?
         .into_inner();
 
+    // Boolean flags: only variant keys (names) may change; values must stay true/false.
+    if current.value_type == (stitchd_proto::flags::v1::FlagValueType::Bool as i32) {
+        if body.variants.len() != 2 {
+            return Err(GatewayError::BadRequest(
+                "Boolean flags must have exactly 2 variants".to_string(),
+            ));
+        }
+        let has_true = body
+            .variants
+            .iter()
+            .any(|v| matches!(v.value, serde_json::Value::Bool(true)));
+        let has_false = body
+            .variants
+            .iter()
+            .any(|v| matches!(v.value, serde_json::Value::Bool(false)));
+        if !has_true || !has_false {
+            return Err(GatewayError::BadRequest(
+                "Boolean flag variants must have values true and false".to_string(),
+            ));
+        }
+    }
+
     // Build an Update mutation carrying the new variant list.
     let proto_variants = body
         .variants

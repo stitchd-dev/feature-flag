@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams, useBlocker } from 'react-router-dom'
-import { useTweaks } from '../../hooks/useTweaks'
 import { useToast } from '../../hooks/useToast'
 import { usePermissions } from '../../hooks/usePermissions'
 import { PageHeader } from '../../components/primitives'
@@ -84,6 +83,9 @@ function VariantsPanel({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Bool flags: only names (keys) are editable — values are always true/false.
+  const isBool = flag.flag_type === 'bool'
+
   function startEdit() {
     setVariants(flag.variants.map((v) => ({ key: v.key, value: formatVariantValue(v.value) })))
     setEditing(true)
@@ -150,6 +152,11 @@ function VariantsPanel({
         }
       </div>
       <div style={{ padding: 14 }}>
+        {isBool && (
+          <div style={{ padding: '6px 10px', background: 'var(--bg-sunken)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11, color: 'var(--fg-muted)', marginBottom: 10 }}>
+            Boolean flag — values are fixed (<code style={{ fontFamily: 'var(--font-mono)' }}>true</code> / <code style={{ fontFamily: 'var(--font-mono)' }}>false</code>). Only names are editable.
+          </div>
+        )}
         {error && (
           <div style={{ padding: '8px 12px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 12, marginBottom: 10 }}>
             {error}
@@ -173,18 +180,29 @@ function VariantsPanel({
               <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <div style={{ width: 10, height: 10, borderRadius: 3, background: VARIANT_PALETTE[i % VARIANT_PALETTE.length], flexShrink: 0 }} />
                 <input className="input" style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                  placeholder="key" value={v.key}
+                  placeholder="name" value={v.key}
                   onChange={(e) => setVariants(variants.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} />
-                <input className="input" style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                  placeholder="value" value={v.value}
-                  onChange={(e) => setVariants(variants.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
-                <button className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
-                  disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
-                  <I.x size={12} />
-                </button>
+                {isBool ? (
+                  // Bool flags: value is fixed, shown as read-only chip
+                  <span style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--fg-muted)', padding: '0 8px' }}>
+                    = {v.value}
+                  </span>
+                ) : (
+                  <input className="input" style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                    placeholder="value" value={v.value}
+                    onChange={(e) => setVariants(variants.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
+                )}
+                {!isBool && (
+                  <button className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
+                    disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
+                    <I.x size={12} />
+                  </button>
+                )}
               </div>
             ))}
-            <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={addVariant}><I.plus size={11} /> Add variant</button>
+            {!isBool && (
+              <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={addVariant}><I.plus size={11} /> Add variant</button>
+            )}
           </div>
         )}
 
@@ -514,7 +532,6 @@ type Tab = 'targeting' | 'variants' | 'evals' | 'code' | 'history'
 export function FlagDetail() {
   const { key } = useParams<{ key: string }>()
   const navigate = useNavigate()
-  const { tweaks } = useTweaks()
   const { projectId, orgId } = useOrgContext()
   const { can, loading: permLoading } = usePermissions()
   const { toasts, toast, dismiss } = useToast()
@@ -527,7 +544,6 @@ export function FlagDetail() {
   const [togglingEnabled, setTogglingEnabled] = useState(false)
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false)
   const [rulesDirty, setRulesDirty] = useState(false)
-  const layout = tweaks.flagDetailLayout
 
   const canRead = can(PERMISSIONS.FLAG_READ)
   const canWrite = can(PERMISSIONS.FLAG_WRITE)

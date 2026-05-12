@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { I } from '../icons'
 import { RuleCard } from './RuleCard'
 import { PercentageRolloutEditor } from './PercentageRolloutEditor'
-import type { RuleState, RuleOutputJson, ConditionExpr, AllocationOutput, AllocationBucket } from '../../lib/ruleTypes'
+import type { RuleState, RuleOutputJson, ConditionExpr, AllocationOutput } from '../../lib/ruleTypes'
 import { defaultCondition, defaultOutput, localId, isVariantOutput, defaultAllocationOutput } from '../../lib/ruleTypes'
 
 interface Props {
