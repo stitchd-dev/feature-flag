@@ -188,6 +188,8 @@ impl FlagService for FlagServiceImpl {
                     id: stitchd_core::id::FlagId::new(),
                     project_id: stitchd_core::id::ProjectId::from_uuid(uuid::Uuid::nil()), // placeholder — env owns scope
                     key: flag_key,
+                    name: String::new(),
+                    description: String::new(),
                     value_type,
                     enabled: flag_proto.enabled,
                     default_variant_id: None,
@@ -697,6 +699,8 @@ mod tests {
             id: FlagId::new(),
             project_id: ProjectId::new(),
             key: FlagKey::new("test-flag").unwrap(),
+            name: String::new(),
+            description: String::new(),
             value_type: FlagValueType::Bool,
             enabled: true,
             default_variant_id: None,

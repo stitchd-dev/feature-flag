@@ -45,6 +45,8 @@ async fn test_flag_hashing_and_rules(pool: sqlx::PgPool) {
         id: FlagId::new(),
         project_id: project.id,
         key: FlagKey::new("rule-flag").unwrap(),
+        name: String::new(),
+        description: String::new(),
         value_type: FlagValueType::Bool,
         enabled: true,
         default_variant_id: None,

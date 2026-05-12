@@ -335,6 +335,8 @@ mod tests {
             id: FlagId::new(),
             project_id: project.id,
             key: FlagKey::new("res-flag").unwrap(),
+            name: String::new(),
+            description: String::new(),
             value_type: FlagValueType::Bool,
             enabled: true,
             default_variant_id: None,

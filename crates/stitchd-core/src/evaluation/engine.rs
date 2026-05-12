@@ -125,6 +125,8 @@ mod tests {
             id: flag_id,
             project_id,
             key: FlagKey::new("test-flag").unwrap(),
+            name: String::new(),
+            description: String::new(),
             value_type: FlagValueType::Bool,
             enabled: true,
             default_variant_id: Some(v2_id),
