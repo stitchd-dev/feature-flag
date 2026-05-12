@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { I } from '../icons'
-import { RuleCard, OutputEditor } from './RuleCard'
+import { RuleCard } from './RuleCard'
 import { PercentageRolloutEditor } from './PercentageRolloutEditor'
-import type { RuleState, RuleOutputJson, ConditionExpr, AllocationBucket } from '../../lib/ruleTypes'
-import { defaultCondition, defaultOutput, localId, isVariantOutput } from '../../lib/ruleTypes'
+import type { RuleState, RuleOutputJson, ConditionExpr, AllocationOutput, AllocationBucket } from '../../lib/ruleTypes'
+import { defaultCondition, defaultOutput, localId, isVariantOutput, defaultAllocationOutput } from '../../lib/ruleTypes'
 
 interface Props {
   rules: RuleState[]
@@ -253,16 +253,22 @@ function CatchAllReadOnly({ output }: { output: RuleOutputJson }) {
       </div>
     )
   }
-  const allocation = (output as { allocation: AllocationBucket[] }).allocation
+  const { hash_targets, buckets } = (output as { allocation: AllocationOutput }).allocation
+  const targetSummary = hash_targets.map((t) => `${t.context_type}.${t.field}`).join(', ')
   return (
-    <div style={{ fontSize: 12, color: 'var(--fg-muted)', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-      <span>Percentage rollout:</span>
-      {allocation.map((b) => (
-        <span key={b.variant_key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <span className="badge accent">{b.variant_key}</span>
-          <span>{(b.weight_milli / 10).toFixed(1)}%</span>
-        </span>
-      ))}
+    <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+        <span>Percentage rollout:</span>
+        {buckets.map((b) => (
+          <span key={b.variant_key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span className="badge accent">{b.variant_key}</span>
+            <span>{(b.weight_milli / 10).toFixed(1)}%</span>
+          </span>
+        ))}
+      </div>
+      <div style={{ color: 'var(--fg-subtle)', fontSize: 11 }}>
+        hash by: {targetSummary || '—'}
+      </div>
     </div>
   )
 }
@@ -292,12 +298,7 @@ function CatchAllOutputEditor({
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
           <input
             type="radio" name={radioName} checked={!isVariant}
-            onChange={() => onChange({
-              allocation: variants.map((v, i) => ({
-                variant_key: v,
-                weight_milli: i === 0 ? Math.floor(1000 / variants.length) + (1000 % variants.length) : Math.floor(1000 / variants.length),
-              })),
-            })}
+            onChange={() => onChange({ allocation: defaultAllocationOutput(variants) })}
           />
           Percentage rollout
         </label>
@@ -314,9 +315,9 @@ function CatchAllOutputEditor({
         </select>
       ) : (
         <PercentageRolloutEditor
-          buckets={(output as { allocation: AllocationBucket[] }).allocation}
+          value={(output as { allocation: AllocationOutput }).allocation}
           variants={variants}
-          onChange={(buckets) => onChange({ allocation: buckets })}
+          onChange={(alloc) => onChange({ allocation: alloc })}
         />
       )}
     </div>

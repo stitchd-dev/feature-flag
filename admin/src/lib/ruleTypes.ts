@@ -45,9 +45,50 @@ export interface AllocationBucket {
   weight_milli: number
 }
 
+/**
+ * One input to the percentage hash.
+ * `field === "key"` → hash Context.key.
+ * Any other string → hash Context.parameters[field].
+ */
+export interface HashTarget {
+  context_type: string
+  field: string // "key" or a parameter name
+}
+
+export interface AllocationOutput {
+  /** At least one target required. Default: user.key. */
+  hash_targets: HashTarget[]
+  /** Must sum to 1000 (= 100%). */
+  buckets: AllocationBucket[]
+}
+
 export type RuleOutputJson =
   | { variant_key: string }
-  | { allocation: AllocationBucket[] }
+  | { allocation: AllocationOutput }
+
+/**
+ * Normalise legacy wire format (allocation as bare array) to the current
+ * object format. Call this when parsing rules received from the backend.
+ */
+export function normalizeOutput(raw: unknown): RuleOutputJson {
+  if (!raw || typeof raw !== 'object') return { variant_key: '' }
+  const o = raw as Record<string, unknown>
+  if ('variant_key' in o) return { variant_key: String(o.variant_key ?? '') }
+  if ('allocation' in o) {
+    const alloc = o.allocation
+    if (Array.isArray(alloc)) {
+      // Legacy: bare array — migrate to object form with user.key as default target
+      return {
+        allocation: {
+          hash_targets: [{ context_type: 'user', field: 'key' }],
+          buckets: alloc as AllocationBucket[],
+        },
+      }
+    }
+    return { allocation: alloc as AllocationOutput }
+  }
+  return { variant_key: '' }
+}
 
 // ─── Working rule state (for the rule builder UI) ───────────────────────────
 
@@ -78,6 +119,19 @@ export function isVariantOutput(o: RuleOutputJson): o is { variant_key: string }
 /** Sum of weight_milli values in an allocation output. Should equal 1000. */
 export function allocationSum(buckets: AllocationBucket[]): number {
   return buckets.reduce((s, b) => s + b.weight_milli, 0)
+}
+
+/** Build a default AllocationOutput for the given variant list. */
+export function defaultAllocationOutput(variants: string[]): AllocationOutput {
+  const each = Math.floor(1000 / Math.max(variants.length, 1))
+  const leftover = 1000 - each * variants.length
+  return {
+    hash_targets: [{ context_type: 'user', field: 'key' }],
+    buckets: variants.map((v, i) => ({
+      variant_key: v,
+      weight_milli: each + (i === 0 ? leftover : 0),
+    })),
+  }
 }
 
 /** Create a default leaf condition for a new rule. */
@@ -112,4 +166,9 @@ export function defaultCatchAll(variantKey: string): RuleState {
     condition: { And: [] },
     output: { variant_key: variantKey },
   }
+}
+
+/** True when output is a percentage allocation (not single variant). */
+export function isAllocationOutput(o: RuleOutputJson): o is { allocation: AllocationOutput } {
+  return 'allocation' in o
 }

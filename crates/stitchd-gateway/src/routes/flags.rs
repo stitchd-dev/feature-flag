@@ -153,17 +153,35 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
     let output = match &r.output {
         Some(Output::VariantKey(k)) => serde_json::json!({ "variant_key": k }),
         Some(Output::Allocation(alloc)) => {
+            // Serialise context_hash_specs → hash_targets array for the UI.
+            // Each entry becomes { context_type, field } where field is "key"
+            // (empty parameter_names) or the parameter name.
+            let mut hash_targets: Vec<serde_json::Value> = Vec::new();
+            for (ctx_type, spec) in &alloc.context_hash_specs {
+                if spec.parameter_names.is_empty() {
+                    hash_targets.push(serde_json::json!({
+                        "context_type": ctx_type,
+                        "field": "key"
+                    }));
+                } else {
+                    for param in &spec.parameter_names {
+                        hash_targets.push(serde_json::json!({
+                            "context_type": ctx_type,
+                            "field": param
+                        }));
+                    }
+                }
+            }
+            // Default to user.key when no targets are stored (legacy data).
+            if hash_targets.is_empty() {
+                hash_targets.push(serde_json::json!({ "context_type": "user", "field": "key" }));
+            }
             let buckets: Vec<_> = alloc
                 .buckets
                 .iter()
-                .map(|b| {
-                    serde_json::json!({
-                        "variant_key": b.variant_key,
-                        "weight_milli": b.weight_milli
-                    })
-                })
+                .map(|b| serde_json::json!({ "variant_key": b.variant_key, "weight_milli": b.weight_milli }))
                 .collect();
-            serde_json::json!({ "allocation": buckets })
+            serde_json::json!({ "allocation": { "hash_targets": hash_targets, "buckets": buckets } })
         }
         None => serde_json::Value::Null,
     };
@@ -597,7 +615,9 @@ pub async fn update_variants(
 pub struct RuleBody {
     /// ConditionExpr as a JSON value.
     pub condition: serde_json::Value,
-    /// Output: `{"variant_key": "..."}`  or  `{"allocation": [{"variant_key": "...", "weight_milli": N}]}`
+    /// Output:
+    /// - `{"variant_key": "..."}`
+    /// - `{"allocation": {"hash_targets": [{"context_type": "user", "field": "key"}], "buckets": [...]}}`
     pub output: serde_json::Value,
 }
 
@@ -610,15 +630,23 @@ pub struct ReplaceRulesBody {
 
 fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::FlagRule {
     use stitchd_proto::flags::v1::{
-        AllocationBucket, PercentageAllocation, flag_rule::Output,
+        AllocationBucket, ContextHashSpec, PercentageAllocation, flag_rule::Output,
     };
 
     let rule_payload = serde_json::to_vec(&r.condition).unwrap_or_default();
 
     let output = if let Some(key) = r.output.get("variant_key").and_then(|v| v.as_str()) {
         Some(Output::VariantKey(key.to_string()))
-    } else if let Some(buckets_val) = r.output.get("allocation") {
-        let buckets = buckets_val
+    } else if let Some(alloc_val) = r.output.get("allocation") {
+        // New format: { "allocation": { "hash_targets": [...], "buckets": [...] } }
+        // Legacy format: { "allocation": [...] }  (bare array — treated as user.key)
+        let (hash_targets_val, buckets_val) = if alloc_val.is_array() {
+            (None, alloc_val)
+        } else {
+            (alloc_val.get("hash_targets"), alloc_val.get("buckets").unwrap_or(&serde_json::Value::Null))
+        };
+
+        let buckets: Vec<AllocationBucket> = buckets_val
             .as_array()
             .into_iter()
             .flatten()
@@ -629,8 +657,30 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
                 })
             })
             .collect();
+
+        // Build context_hash_specs from hash_targets array.
+        // Each target: { context_type, field } where field=="key" → empty parameter_names.
+        let mut context_hash_specs: std::collections::HashMap<String, ContextHashSpec> =
+            std::collections::HashMap::new();
+        if let Some(targets) = hash_targets_val.and_then(|v| v.as_array()) {
+            for target in targets {
+                let ctx_type = target.get("context_type").and_then(|v| v.as_str()).unwrap_or("user");
+                let field = target.get("field").and_then(|v| v.as_str()).unwrap_or("key");
+                let spec = context_hash_specs.entry(ctx_type.to_string()).or_insert_with(|| ContextHashSpec {
+                    parameter_names: Vec::new(),
+                });
+                if field != "key" {
+                    spec.parameter_names.push(field.to_string());
+                }
+            }
+        }
+        // Default to user.key when no targets provided.
+        if context_hash_specs.is_empty() {
+            context_hash_specs.insert("user".to_string(), ContextHashSpec { parameter_names: Vec::new() });
+        }
+
         Some(Output::Allocation(PercentageAllocation {
-            context_hash_specs: Default::default(),
+            context_hash_specs,
             buckets,
         }))
     } else {

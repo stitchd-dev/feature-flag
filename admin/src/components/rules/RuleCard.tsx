@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { I } from '../icons'
 import { ConditionClauseEditor } from './ConditionClauseEditor'
 import { PercentageRolloutEditor } from './PercentageRolloutEditor'
-import type { ConditionExpr, Condition, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
-import { exprKey, isVariantOutput, localId, defaultCondition } from '../../lib/ruleTypes'
+import type { ConditionExpr, Condition, RuleOutputJson, AllocationOutput } from '../../lib/ruleTypes'
+import { exprKey, isVariantOutput, localId, defaultCondition, defaultAllocationOutput } from '../../lib/ruleTypes'
 
 // ─── ConditionExprEditor (recursive) ─────────────────────────────────────────
 
@@ -142,18 +142,19 @@ export function OutputEditor({
   onChange: (o: RuleOutputJson) => void
 }) {
   const isVariant = isVariantOutput(output)
+  const radioName = `output-${localId()}`
 
   return (
     <div>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="radio" name={`output-${localId()}`} checked={isVariant}
+          <input type="radio" name={radioName} checked={isVariant}
             onChange={() => onChange({ variant_key: variants[0] ?? '' })} />
           Serve variant
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="radio" name={`output-${localId()}`} checked={!isVariant}
-            onChange={() => onChange({ allocation: variants.slice(0, 2).map((v, i) => ({ variant_key: v, weight_milli: i === 0 ? 500 : 500 })) })} />
+          <input type="radio" name={radioName} checked={!isVariant}
+            onChange={() => onChange({ allocation: defaultAllocationOutput(variants) })} />
           Percentage rollout
         </label>
       </div>
@@ -166,9 +167,9 @@ export function OutputEditor({
         </select>
       ) : (
         <PercentageRolloutEditor
-          buckets={(output as { allocation: AllocationBucket[] }).allocation}
+          value={(output as { allocation: AllocationOutput }).allocation}
           variants={variants}
-          onChange={(buckets) => onChange({ allocation: buckets })}
+          onChange={(alloc) => onChange({ allocation: alloc })}
         />
       )}
     </div>
@@ -202,7 +203,7 @@ export function RuleCard({ index, condition, output, variants, onChange, onDelet
         <div style={{ flex: 1, fontSize: 13, color: 'var(--fg-muted)' }}>
           {isVariantOutput(output)
             ? <span>→ <span className="badge accent">{(output as { variant_key: string }).variant_key}</span></span>
-            : <span>→ percentage rollout ({(output as { allocation: AllocationBucket[] }).allocation.length} variants)</span>
+            : <span>→ percentage rollout ({(output as { allocation: AllocationOutput }).allocation.buckets.length} variants)</span>
           }
         </div>
         <button className="icon-btn" onClick={() => setExpanded((v) => !v)}>

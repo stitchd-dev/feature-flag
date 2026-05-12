@@ -12,7 +12,7 @@ import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
 import type { AdminFlagResponse, VariantJson } from '../../lib/types'
 import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
-import { localId, allocationSum, isCatchAll, defaultCatchAll } from '../../lib/ruleTypes'
+import { localId, allocationSum, isCatchAll, defaultCatchAll, normalizeOutput } from '../../lib/ruleTypes'
 import { RuleList } from '../../components/rules/RuleList'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -21,7 +21,8 @@ function parseRuleState(raw: { condition: unknown; output: unknown }): RuleState
   return {
     _localId: localId(),
     condition: raw.condition as ConditionExpr,
-    output: raw.output as RuleOutputJson,
+    // normalizeOutput migrates legacy bare-array allocation to the new object form
+    output: normalizeOutput(raw.output),
   }
 }
 
@@ -102,9 +103,9 @@ function VariantsPanel({
     if (variants.length <= 1) return
     const removed = variants[i].key
     const usedInRules = flag.rules.some((r) => {
-      const o = r.output as { variant_key?: string; allocation?: AllocationBucket[] }
+      const o = r.output as { variant_key?: string; allocation?: { buckets?: AllocationBucket[] } }
       if (o.variant_key === removed) return true
-      return o.allocation?.some((b) => b.variant_key === removed) ?? false
+      return o.allocation?.buckets?.some((b) => b.variant_key === removed) ?? false
     })
     if (usedInRules) {
       setError(`Variant "${removed}" is referenced in a rule — remove it from rules first.`)
@@ -205,13 +206,17 @@ function VariantsPanel({
 
 // ─── TargetingPanel (rule builder) ───────────────────────────────────────────
 
-function validateRules(rules: RuleState[]): string | null {
+function validateRules(rules: RuleState[], catchAllOutput?: RuleOutputJson): string | null {
   for (let i = 0; i < rules.length; i++) {
     const o = rules[i].output
     if ('allocation' in o) {
-      const sum = allocationSum((o as { allocation: AllocationBucket[] }).allocation)
+      const sum = allocationSum((o as { allocation: { buckets: AllocationBucket[] } }).allocation.buckets)
       if (sum !== 1000) return `Rule ${i + 1}: allocation must sum to 100% (currently ${(sum / 10).toFixed(1)}%)`
     }
+  }
+  if (catchAllOutput && 'allocation' in catchAllOutput) {
+    const sum = allocationSum((catchAllOutput as { allocation: { buckets: AllocationBucket[] } }).allocation.buckets)
+    if (sum !== 1000) return `Default catch-all: allocation must sum to 100% (currently ${(sum / 10).toFixed(1)}%)`
   }
   return null
 }
@@ -263,7 +268,7 @@ function TargetingPanel({
   }
 
   async function saveRules() {
-    const err = validateRules(rules)
+    const err = validateRules(rules, catchAllOutput)
     if (err) { setError(err); return }
     if (!projectId) return
     setSaving(true)
