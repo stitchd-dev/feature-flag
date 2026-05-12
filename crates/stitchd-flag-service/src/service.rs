@@ -345,8 +345,9 @@ impl FlagService for FlagServiceImpl {
                 if !flag_proto.description.is_empty() {
                     record.description = flag_proto.description.clone();
                 }
-                record.version += 1;
-                record.updated_at = chrono::Utc::now();
+                // Do NOT increment version here — the repo's update() does
+                // `new_version = flag.version + 1` and `WHERE version = flag.version`,
+                // so flag.version must remain the current stored value.
 
                 let updated = self
                     .flag_repo
