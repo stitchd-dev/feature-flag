@@ -29,6 +29,13 @@ pub enum RepositoryError {
         field: String,
     },
 
+    /// A foreign key constraint was violated (referenced entity does not exist).
+    #[error("foreign key violation on constraint: {constraint}")]
+    ForeignKeyViolation {
+        /// Name of the FK constraint that was violated.
+        constraint: String,
+    },
+
     /// The operation is not permitted given the entity's current state.
     #[error("invalid state: {reason}")]
     InvalidState {

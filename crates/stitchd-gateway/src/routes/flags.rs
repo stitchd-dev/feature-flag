@@ -282,7 +282,8 @@ pub async fn list_flags(
     Query(query): Query<ListFlagsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListFlagsRequest {
-        environment_id: project_id,
+        environment_id: String::new(),
+        project_id,
         include_archived: query.include_archived,
     });
     let mut client = state.flag_client.lock().await;
@@ -336,7 +337,8 @@ pub async fn create_flag(
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
-        environment_id: project_id,
+        environment_id: String::new(),
+        project_id,
         kind: MutationKind::Create as i32,
         flag: Some(flag),
         version: 0,
@@ -374,7 +376,8 @@ pub async fn get_flag(
     Path((project_id, flag_key)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(GetFlagRequest {
-        environment_id: project_id,
+        environment_id: String::new(),
+        project_id,
         flag_key,
     });
     let mut client = state.flag_client.lock().await;
@@ -412,7 +415,8 @@ pub async fn update_flag(
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
-        environment_id: project_id,
+        environment_id: String::new(),
+        project_id,
         kind: MutationKind::Update as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
@@ -453,7 +457,8 @@ pub async fn delete_flag(
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
-        environment_id: project_id,
+        environment_id: String::new(),
+        project_id,
         kind: MutationKind::Delete as i32,
         flag: Some(flag),
         version: 0,
@@ -492,7 +497,8 @@ pub async fn archive_flag(
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
-        environment_id: project_id,
+        environment_id: String::new(),
+        project_id,
         kind: MutationKind::Archive as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
@@ -540,7 +546,8 @@ pub async fn update_variants(
 ) -> Result<impl IntoResponse, GatewayError> {
     // First fetch the current flag to get its metadata (enabled, name, etc.).
     let get_req = tonic::Request::new(GetFlagRequest {
-        environment_id: project_id.clone(),
+        environment_id: String::new(),
+        project_id: project_id.clone(),
         flag_key: flag_key.clone(),
     });
     let mut client = state.flag_client.lock().await;
@@ -566,7 +573,8 @@ pub async fn update_variants(
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
-        environment_id: project_id,
+        environment_id: String::new(),
+        project_id,
         kind: MutationKind::Update as i32,
         flag: Some(flag),
         version: body.version,
@@ -658,7 +666,8 @@ pub async fn update_rules(
 ) -> Result<impl IntoResponse, GatewayError> {
     // Fetch current flag to carry over metadata.
     let get_req = tonic::Request::new(GetFlagRequest {
-        environment_id: project_id.clone(),
+        environment_id: String::new(),
+        project_id: project_id.clone(),
         flag_key: flag_key.clone(),
     });
     let mut client = state.flag_client.lock().await;
@@ -685,7 +694,8 @@ pub async fn update_rules(
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
-        environment_id: project_id,
+        environment_id: String::new(),
+        project_id,
         kind: MutationKind::Update as i32,
         flag: Some(flag),
         version: body.version,

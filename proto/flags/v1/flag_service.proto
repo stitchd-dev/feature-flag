@@ -9,11 +9,15 @@ import "flags/v1/flag_sync.proto";
 message GetFlagRequest {
   string environment_id = 1;
   string flag_key       = 2;
+  // Project-scoped admin reads set this instead of environment_id.
+  string project_id     = 3;
 }
 
 message ListFlagsRequest {
   string environment_id  = 1;
   bool   include_archived = 2;
+  // Project-scoped admin reads set this instead of environment_id.
+  string project_id      = 3;
 }
 
 message ListFlagsResponse {
@@ -37,6 +41,9 @@ message MutateFlagRequest {
   // Optimistic-locking version — required for UPDATE / DELETE / ARCHIVE.
   // Server rejects with ABORTED if stored version differs.
   uint64        version        = 4;
+  // Project-scoped admin operations set this instead of environment_id.
+  // When present the service uses project-level repository methods directly.
+  string        project_id     = 5;
 }
 
 message MutateFlagResponse {

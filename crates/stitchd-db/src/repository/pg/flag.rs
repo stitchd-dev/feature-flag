@@ -16,6 +16,26 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
+// DB error mapping helper
+// ---------------------------------------------------------------------------
+
+/// Map a sqlx database error to a typed [`RepositoryError`], distinguishing
+/// unique violations (23505) from foreign-key violations (23503).
+fn map_db_err(e: sqlx::Error) -> RepositoryError {
+    if let sqlx::Error::Database(ref dbe) = e {
+        if let Some(constraint) = dbe.constraint() {
+            let code = dbe.code().map(|c| c.into_owned()).unwrap_or_default();
+            return match code.as_str() {
+                "23505" => RepositoryError::UniqueViolation { field: constraint.to_string() },
+                "23503" => RepositoryError::ForeignKeyViolation { constraint: constraint.to_string() },
+                _ => RepositoryError::Database(e),
+            };
+        }
+    }
+    RepositoryError::Database(e)
+}
+
+// ---------------------------------------------------------------------------
 // Type-conversion helpers
 // ---------------------------------------------------------------------------
 
@@ -224,6 +244,44 @@ impl FlagRepository for PgFlagRepository {
             .collect()
     }
 
+    async fn list_by_project_all(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<FlagRecord>, RepositoryError> {
+        let rows = sqlx::query(
+            r"
+            SELECT id, project_id, key, name, description, value_type, enabled,
+                   default_variant_id, created_at, updated_at, deleted_at, version
+            FROM feature_flags
+            WHERE project_id = $1
+            ORDER BY created_at
+            ",
+        )
+        .bind(project_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        rows.into_iter()
+            .map(|row| {
+                assemble_flag(
+                    row.get("id"),
+                    row.get("project_id"),
+                    row.get("key"),
+                    row.get("name"),
+                    row.get("description"),
+                    row.get::<String, _>("value_type").as_str(),
+                    row.get("enabled"),
+                    row.get("default_variant_id"),
+                    row.get("created_at"),
+                    row.get("updated_at"),
+                    row.get("deleted_at"),
+                    row.get("version"),
+                )
+            })
+            .collect()
+    }
+
     async fn list_by_environment(
         &self,
         environment_id: EnvironmentId,
@@ -328,16 +386,7 @@ impl FlagRepository for PgFlagRepository {
         .bind(flag.version)
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            if let sqlx::Error::Database(ref dbe) = e {
-                if let Some(constraint) = dbe.constraint() {
-                    return RepositoryError::UniqueViolation {
-                        field: constraint.to_string(),
-                    };
-                }
-            }
-            RepositoryError::Database(e)
-        })?;
+        .map_err(map_db_err)?;
 
         self.audit
             .log(
@@ -670,16 +719,7 @@ impl VariantRepository for PgVariantRepository {
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            if let sqlx::Error::Database(ref dbe) = e {
-                if let Some(constraint) = dbe.constraint() {
-                    return RepositoryError::UniqueViolation {
-                        field: constraint.to_string(),
-                    };
-                }
-            }
-            RepositoryError::Database(e)
-        })?;
+        .map_err(map_db_err)?;
 
         self.audit
             .log(
@@ -784,16 +824,7 @@ impl VariantRepository for PgVariantRepository {
             .bind(value)
             .execute(&mut *tx)
             .await
-            .map_err(|e| {
-                if let sqlx::Error::Database(ref dbe) = e {
-                    if let Some(c) = dbe.constraint() {
-                        return RepositoryError::UniqueViolation {
-                            field: c.to_string(),
-                        };
-                    }
-                }
-                RepositoryError::Database(e)
-            })?;
+            .map_err(map_db_err)?;
         }
 
         tx.commit().await.map_err(RepositoryError::Database)?;

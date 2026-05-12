@@ -70,6 +70,17 @@ fn parse_env_id(s: &str) -> Result<stitchd_core::id::EnvironmentId, Status> {
         .map_err(|_| Status::invalid_argument("invalid environment_id"))
 }
 
+/// Parse a string as a [`ProjectId`] via UUID. Returns `None` when the string is empty.
+#[allow(clippy::result_large_err)]
+fn parse_project_id(s: &str) -> Result<Option<stitchd_core::id::ProjectId>, Status> {
+    if s.is_empty() {
+        return Ok(None);
+    }
+    uuid::Uuid::parse_str(s)
+        .map(|u| Some(stitchd_core::id::ProjectId::from_uuid(u)))
+        .map_err(|_| Status::invalid_argument("invalid project_id"))
+}
+
 /// SHA-256 hash of a raw SDK key (same function as used in stitchd-server).
 pub(crate) fn hash_sdk_key(raw: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -88,23 +99,32 @@ impl FlagService for FlagServiceImpl {
         request: Request<GetFlagRequest>,
     ) -> Result<Response<FeatureFlag>, Status> {
         let req = request.into_inner();
-        let env_id = parse_env_id(&req.environment_id)?;
+        let project_id = parse_project_id(&req.project_id)?;
 
         let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        // We need project_id for find_by_key; work around by listing by environment and filtering
-        let flags = self
-            .flag_repo
-            .list_by_environment(env_id)
-            .await
-            .map_err(FlagServiceError::from)
-            .map_err(Status::from)?;
-
-        let record = flags
-            .into_iter()
-            .find(|f| f.key.as_str() == flag_key.as_str())
-            .ok_or_else(|| Status::not_found(format!("flag '{}' not found", req.flag_key)))?;
+        let record = if let Some(pid) = project_id {
+            // Admin path: direct project-scoped lookup.
+            self.flag_repo
+                .find_by_key(&flag_key, pid)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?
+        } else {
+            // SDK path: resolve via environment.
+            let env_id = parse_env_id(&req.environment_id)?;
+            let flags = self
+                .flag_repo
+                .list_by_environment(env_id)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?;
+            flags
+                .into_iter()
+                .find(|f| f.key.as_str() == flag_key.as_str())
+                .ok_or_else(|| Status::not_found(format!("flag '{}' not found", req.flag_key)))?
+        };
 
         let variants = self
             .variant_repo
@@ -129,20 +149,39 @@ impl FlagService for FlagServiceImpl {
         request: Request<ListFlagsRequest>,
     ) -> Result<Response<ListFlagsResponse>, Status> {
         let req = request.into_inner();
-        let env_id = parse_env_id(&req.environment_id)?;
+        let project_id = parse_project_id(&req.project_id)?;
 
-        let flag_records = if req.include_archived {
-            self.flag_repo
-                .list_by_environment_all(env_id)
-                .await
-                .map_err(FlagServiceError::from)
-                .map_err(Status::from)?
+        let flag_records = if let Some(pid) = project_id {
+            // Admin path: project-scoped list.
+            if req.include_archived {
+                self.flag_repo
+                    .list_by_project_all(pid)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            } else {
+                self.flag_repo
+                    .list_by_project(pid)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            }
         } else {
-            self.flag_repo
-                .list_by_environment(env_id)
-                .await
-                .map_err(FlagServiceError::from)
-                .map_err(Status::from)?
+            // SDK path: environment-scoped list.
+            let env_id = parse_env_id(&req.environment_id)?;
+            if req.include_archived {
+                self.flag_repo
+                    .list_by_environment_all(env_id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            } else {
+                self.flag_repo
+                    .list_by_environment(env_id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            }
         };
 
         let mut proto_flags = Vec::with_capacity(flag_records.len());
@@ -172,7 +211,13 @@ impl FlagService for FlagServiceImpl {
         request: Request<MutateFlagRequest>,
     ) -> Result<Response<MutateFlagResponse>, Status> {
         let req = request.into_inner();
-        let env_id = parse_env_id(&req.environment_id)?;
+        let project_id = parse_project_id(&req.project_id)?;
+        // Only parsed when project_id is absent (SDK/env-scoped path).
+        let env_id_result = if project_id.is_none() {
+            Some(parse_env_id(&req.environment_id)?)
+        } else {
+            None
+        };
 
         let flag_proto = req
             .flag
@@ -181,8 +226,33 @@ impl FlagService for FlagServiceImpl {
         let kind = MutationKind::try_from(req.kind)
             .map_err(|_| Status::invalid_argument("unknown mutation kind"))?;
 
+        /// Fetch the flag list for lookup — project path or env path.
+        macro_rules! fetch_flag_list {
+            ($self:expr, $project_id:expr, $env_id:expr) => {
+                if let Some(pid) = $project_id {
+                    $self
+                        .flag_repo
+                        .list_by_project(pid)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?
+                } else {
+                    $self
+                        .flag_repo
+                        .list_by_environment($env_id.expect("env_id required"))
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?
+                }
+            };
+        }
+
         match kind {
             MutationKind::Create => {
+                let pid = project_id.ok_or_else(|| {
+                    Status::invalid_argument("project_id is required for flag creation")
+                })?;
+
                 let flag_key = stitchd_core::id::FlagKey::new(flag_proto.key.clone())
                     .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
@@ -193,7 +263,7 @@ impl FlagService for FlagServiceImpl {
 
                 let record = stitchd_core::flag::FlagRecord {
                     id: stitchd_core::id::FlagId::new(),
-                    project_id: stitchd_core::id::ProjectId::from_uuid(uuid::Uuid::nil()), // placeholder — env owns scope
+                    project_id: pid,
                     key: flag_key,
                     name: flag_proto.name.clone(),
                     description: flag_proto.description.clone(),
@@ -249,12 +319,7 @@ impl FlagService for FlagServiceImpl {
                 }))
             }
             MutationKind::Update => {
-                let flags = self
-                    .flag_repo
-                    .list_by_environment(env_id)
-                    .await
-                    .map_err(FlagServiceError::from)
-                    .map_err(Status::from)?;
+                let flags = fetch_flag_list!(self, project_id, env_id_result);
 
                 let mut record = flags
                     .into_iter()
@@ -354,12 +419,7 @@ impl FlagService for FlagServiceImpl {
                 }))
             }
             MutationKind::Delete | MutationKind::Archive => {
-                let flags = self
-                    .flag_repo
-                    .list_by_environment(env_id)
-                    .await
-                    .map_err(FlagServiceError::from)
-                    .map_err(Status::from)?;
+                let flags = fetch_flag_list!(self, project_id, env_id_result);
 
                 let record = flags
                     .into_iter()

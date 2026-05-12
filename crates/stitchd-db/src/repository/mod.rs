@@ -219,6 +219,12 @@ pub trait FlagRepository: Send + Sync {
         project_id: ProjectId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
 
+    /// List all flags in a project including soft-deleted (archived) ones.
+    async fn list_by_project_all(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
+
     /// List all non-deleted flags in an environment.
     async fn list_by_environment(
         &self,
