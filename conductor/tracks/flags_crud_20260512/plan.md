@@ -47,7 +47,7 @@
   - Implement `create_flag` to forward all fields via `MutateFlagRequest`
   - Run: `cargo test -p stitchd-gateway`
 
-- [~] Task 5: Implement update_variants handler
+- [x] Task 5: Implement update_variants handler
   - Write failing test: PUT /variants replaces variant list on flag
   - The handler must: GET current flag, replace variants list, call MutateFlag(Update)
   - Understand flag service update semantics (does MutateFlag replace all variants?
@@ -56,7 +56,7 @@
   - Input: `{variants: [{key, value}], version}`
   - Run: `cargo test -p stitchd-gateway`
 
-- [ ] Task 6: Implement update_rules handler
+- [~] Task 6: Implement update_rules handler
   - Write failing test: PUT /rules replaces rule list on flag
   - Input JSON: `{rules: [{condition: <ConditionExpr JSON>, output: {variant_key}
     | {allocation: [{variant_key, weight_milli}]}}, ...], version}`

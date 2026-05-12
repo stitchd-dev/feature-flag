@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 
 use stitchd_core::{
+    id::{FlagId, RuleId, VariantId},
     rule_engine::types::{RuleOutput, TargetField},
     variants::VariantValue,
 };
@@ -55,6 +56,71 @@ pub fn domain_variant_to_proto(v: stitchd_core::flag::Variant) -> ProtoVariant {
         },
     });
     ProtoVariant { key: v.key, value }
+}
+
+/// Convert a proto [`ProtoFlagRule`] back to a domain [`stitchd_core::flag::FlagRule`].
+///
+/// The rule payload is JSON-encoded `ConditionExpr`; the output maps from
+/// variant key or percentage allocation back to domain types.
+/// Returns `None` if deserialization of the condition or output fails.
+#[must_use]
+pub fn proto_flag_rule_to_domain(
+    flag_id: FlagId,
+    rule_index: i32,
+    proto: &ProtoFlagRule,
+    variant_map: &HashMap<String, VariantId>,
+) -> Option<stitchd_core::flag::FlagRule> {
+    use stitchd_core::rule_engine::types::{
+        ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField,
+    };
+    use stitchd_proto::flags::v1::flag_rule::Output;
+
+    let condition: ConditionExpr = serde_json::from_slice(&proto.rule_payload).ok()?;
+
+    let output = match &proto.output {
+        Some(Output::VariantKey(key)) => {
+            let vid = variant_map.get(key).copied()?;
+            RuleOutput::Variant(vid)
+        }
+        Some(Output::Allocation(alloc)) => {
+            let mut targets: Vec<PercentageTarget> = Vec::new();
+            for (ctx_type, spec) in &alloc.context_hash_specs {
+                if spec.parameter_names.is_empty() {
+                    targets.push(PercentageTarget {
+                        context_type: ctx_type.clone(),
+                        field: TargetField::Key,
+                    });
+                } else {
+                    for param in &spec.parameter_names {
+                        targets.push(PercentageTarget {
+                            context_type: ctx_type.clone(),
+                            field: TargetField::Parameter(param.clone()),
+                        });
+                    }
+                }
+            }
+            let weights = alloc
+                .buckets
+                .iter()
+                .filter_map(|b| {
+                    let vid = variant_map.get(&b.variant_key).copied()?;
+                    Some((vid, b.weight_milli))
+                })
+                .collect();
+            RuleOutput::Percentage { targets, weights }
+        }
+        None => return None,
+    };
+
+    Some(stitchd_core::flag::FlagRule {
+        flag_id,
+        rule_index,
+        rule: Rule {
+            id: RuleId::new(),
+            condition,
+            output,
+        },
+    })
 }
 
 /// Convert a domain `FlagValueType` to the proto [`ProtoFlagValueType`].

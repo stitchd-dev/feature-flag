@@ -304,6 +304,33 @@ impl FlagService for FlagServiceImpl {
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
 
+                // Replace rules if the request includes a non-empty list.
+                if !flag_proto.rules.is_empty() {
+                    let variant_key_to_id: std::collections::HashMap<_, _> = variants
+                        .iter()
+                        .map(|v| (v.key.clone(), v.id))
+                        .collect();
+                    let domain_rules: Vec<_> = flag_proto
+                        .rules
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, r)| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            mapping::proto_flag_rule_to_domain(
+                                updated.id,
+                                i as i32,
+                                r,
+                                &variant_key_to_id,
+                            )
+                        })
+                        .collect();
+                    self.flag_repo
+                        .upsert_rules(updated.id, &domain_rules)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                }
+
                 let rules = self
                     .flag_repo
                     .find_rules(updated.id)

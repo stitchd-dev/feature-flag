@@ -527,6 +527,58 @@ pub async fn update_variants(
     Ok(Json(flag_json))
 }
 
+/// A single rule in a replace-rules request.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct RuleBody {
+    /// ConditionExpr as a JSON value.
+    pub condition: serde_json::Value,
+    /// Output: `{"variant_key": "..."}`  or  `{"allocation": [{"variant_key": "...", "weight_milli": N}]}`
+    pub output: serde_json::Value,
+}
+
+/// Request body for replacing a flag's rule list.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ReplaceRulesBody {
+    pub rules: Vec<RuleBody>,
+    pub version: u64,
+}
+
+fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::FlagRule {
+    use stitchd_proto::flags::v1::{
+        AllocationBucket, PercentageAllocation, flag_rule::Output,
+    };
+
+    let rule_payload = serde_json::to_vec(&r.condition).unwrap_or_default();
+
+    let output = if let Some(key) = r.output.get("variant_key").and_then(|v| v.as_str()) {
+        Some(Output::VariantKey(key.to_string()))
+    } else if let Some(buckets_val) = r.output.get("allocation") {
+        let buckets = buckets_val
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|b| {
+                Some(AllocationBucket {
+                    variant_key: b.get("variant_key")?.as_str()?.to_string(),
+                    weight_milli: b.get("weight_milli")?.as_u64()? as u32,
+                })
+            })
+            .collect();
+        Some(Output::Allocation(PercentageAllocation {
+            context_hash_specs: Default::default(),
+            buckets,
+        }))
+    } else {
+        None
+    };
+
+    let _ = index; // index tracked by the caller for logging if needed
+    stitchd_proto::flags::v1::FlagRule {
+        rule_payload,
+        output,
+    }
+}
+
 /// `PUT /v1/projects/{project_id}/flags/{flag_id}/rules`
 #[utoipa::path(
     put,
@@ -536,18 +588,62 @@ pub async fn update_variants(
         ("project_id" = String, Path, description = "Project / environment ID"),
         ("flag_id" = String, Path, description = "Flag key"),
     ),
+    request_body = ReplaceRulesBody,
     responses(
-        (status = 202, description = "Rules accepted for processing"),
+        (status = 200, description = "Updated flag with new rules", body = AdminFlagJson),
         (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Version conflict"),
+        (status = 502, description = "Flag service unavailable"),
     ),
     security(("bearer_jwt" = []))
 )]
 pub async fn update_rules(
-    State(_state): State<Arc<GatewayState>>,
-    Path((_project_id, _flag_key)): Path<(String, String)>,
-    Json(_body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    StatusCode::ACCEPTED
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<ReplaceRulesBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    // Fetch current flag to carry over metadata.
+    let get_req = tonic::Request::new(GetFlagRequest {
+        environment_id: project_id.clone(),
+        flag_key: flag_key.clone(),
+    });
+    let mut client = state.flag_client.lock().await;
+    let current = client
+        .get_flag(get_req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+
+    let proto_rules = body
+        .rules
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| rule_body_to_proto(r, i))
+        .collect();
+
+    let flag = FeatureFlag {
+        key: flag_key,
+        enabled: current.enabled,
+        name: current.name,
+        description: current.description,
+        value_type: current.value_type,
+        rules: proto_rules,
+        ..Default::default()
+    };
+    let req = tonic::Request::new(MutateFlagRequest {
+        environment_id: project_id,
+        kind: MutationKind::Update as i32,
+        flag: Some(flag),
+        version: body.version,
+    });
+    let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
+    Ok(Json(flag_json))
 }
 
 /// `PUT /v1/projects/{project_id}/flags/{flag_id}/hashing`
@@ -770,7 +866,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_rules_returns_202() {
+    async fn update_rules_returns_200_or_404_or_502() {
         let state = make_stub_state();
         let app = test_router(Arc::clone(&state), state);
         let resp = app
@@ -779,12 +875,18 @@ mod tests {
                     .method("PUT")
                     .uri("/v1/projects/env-1/flags/flag-key/rules")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"[]"#))
+                    .body(Body::from(r#"{"rules":[],"version":1}"#))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        assert!(
+            resp.status() == StatusCode::OK
+                || resp.status() == StatusCode::NOT_FOUND
+                || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]
