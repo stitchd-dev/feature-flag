@@ -20,11 +20,23 @@ use crate::state::GatewayState;
 
 // ─── REST request / response types ───────────────────────────────────────────
 
+/// A variant value in a create/update request.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct VariantBody {
+    pub key: String,
+    pub value: serde_json::Value,
+}
+
 /// Request body for creating or updating a flag.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct FlagMutateRequest {
     pub key: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
     pub enabled: Option<bool>,
+    /// Value type: "bool" | "int" | "double" | "string" | "json"
+    pub value_type: Option<String>,
+    pub variants: Option<Vec<VariantBody>>,
     #[schema(value_type = Object, nullable = true)]
     pub flag: Option<serde_json::Value>,
     pub version: Option<u64>,
@@ -150,6 +162,40 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
     RuleJson { condition, output }
 }
 
+fn parse_value_type(s: &str) -> stitchd_proto::flags::v1::FlagValueType {
+    use stitchd_proto::flags::v1::FlagValueType;
+    match s {
+        "bool" => FlagValueType::Bool,
+        "int" => FlagValueType::Int,
+        "double" => FlagValueType::Double,
+        "string" | "str" => FlagValueType::String,
+        "json" => FlagValueType::Json,
+        _ => FlagValueType::Unspecified,
+    }
+}
+
+fn variant_body_to_proto(v: VariantBody) -> stitchd_proto::flags::v1::Variant {
+    use stitchd_proto::flags::v1::{VariantValue, variant_value::Value};
+    let value = match &v.value {
+        serde_json::Value::Bool(b) => Some(Value::BoolValue(*b)),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Some(Value::IntValue(i))
+            } else if let Some(d) = n.as_f64() {
+                Some(Value::DoubleValue(d))
+            } else {
+                None
+            }
+        }
+        serde_json::Value::String(s) => Some(Value::StringValue(s.clone())),
+        other => Some(Value::JsonValue(other.to_string())),
+    };
+    stitchd_proto::flags::v1::Variant {
+        key: v.key,
+        value: Some(VariantValue { value }),
+    }
+}
+
 fn flag_value_type_str(t: i32) -> &'static str {
     use stitchd_proto::flags::v1::FlagValueType;
     match FlagValueType::try_from(t).unwrap_or(FlagValueType::Unspecified) {
@@ -260,9 +306,24 @@ pub async fn create_flag(
     Path(project_id): Path<String>,
     Json(body): Json<FlagMutateRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let proto_value_type = body
+        .value_type
+        .as_deref()
+        .map(parse_value_type)
+        .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Bool);
+    let variants = body
+        .variants
+        .unwrap_or_default()
+        .into_iter()
+        .map(variant_body_to_proto)
+        .collect();
     let flag = FeatureFlag {
         key: body.key.unwrap_or_default(),
+        name: body.name.unwrap_or_default(),
+        description: body.description.unwrap_or_default(),
         enabled: body.enabled.unwrap_or(false),
+        value_type: proto_value_type as i32,
+        variants,
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
@@ -336,6 +397,8 @@ pub async fn update_flag(
 ) -> Result<impl IntoResponse, GatewayError> {
     let flag = FeatureFlag {
         key: flag_key,
+        name: body.name.unwrap_or_default(),
+        description: body.description.unwrap_or_default(),
         enabled: body.enabled.unwrap_or(false),
         ..Default::default()
     };

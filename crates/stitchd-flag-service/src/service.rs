@@ -253,6 +253,12 @@ impl FlagService for FlagServiceImpl {
                 }
 
                 record.enabled = flag_proto.enabled;
+                if !flag_proto.name.is_empty() {
+                    record.name = flag_proto.name.clone();
+                }
+                if !flag_proto.description.is_empty() {
+                    record.description = flag_proto.description.clone();
+                }
                 record.version += 1;
                 record.updated_at = chrono::Utc::now();
 
@@ -916,6 +922,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 0,
         });
@@ -940,6 +947,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 0,
         });
@@ -970,6 +978,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 1, // matches initial version
         });
@@ -1002,6 +1011,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 99, // wrong version
         });
@@ -1032,6 +1042,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 1,
         });
@@ -1061,6 +1072,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 42, // wrong
         });
@@ -1091,6 +1103,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 1,
         });
@@ -1112,6 +1125,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 0,
         });
@@ -1134,6 +1148,7 @@ mod tests {
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 1,
         });

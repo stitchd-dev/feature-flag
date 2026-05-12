@@ -28,7 +28,7 @@
   - Update `build_feature_flag_proto` in `mapping.rs` to populate name/description
   - Run: `cargo test -p stitchd-flag-service`
 
-- [ ] Task 3: Admin gateway response type + wired GET endpoints
+- [x] Task 3: Admin gateway response type + wired GET endpoints
   - Write failing test: GET flag returns AdminFlagJson shape
   - Add `AdminFlagJson` struct in `routes/flags.rs`:
     `{flag_id, key, name, description, flag_type, enabled, status, version,
@@ -40,7 +40,7 @@
   - Update `list_flags` handler to return `Vec<AdminFlagJson>`
   - Run: `cargo test -p stitchd-gateway`
 
-- [ ] Task 4: Implement create_flag with full fields
+- [~] Task 4: Implement create_flag with full fields
   - Write failing test: POST flag with name/description/value_type/variants → 201
   - Update `FlagMutateRequest` to include `name`, `description`, `value_type`,
     `variants: Option<Vec<VariantBody>>`
