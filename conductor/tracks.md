@@ -29,5 +29,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Feature Flags Full CRUD + Rule Builder
+## [x] Track: Feature Flags Full CRUD + Rule Builder
 *Link: [./conductor/tracks/flags_crud_20260512/](./conductor/tracks/flags_crud_20260512/)*

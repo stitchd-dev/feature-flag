@@ -1,5 +1,12 @@
 import { useState, useEffect } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom'
+import {
+  createBrowserRouter,
+  RouterProvider,
+  Routes,
+  Route,
+  Navigate,
+  Outlet,
+} from 'react-router-dom'
 import { useTweaks } from './hooks/useTweaks'
 import { Sidebar, TopbarNav } from './shell/Sidebar'
 import { CommandPalette } from './shell/CommandPalette'
@@ -71,44 +78,50 @@ function OrgShell() {
   )
 }
 
-export default function App() {
+function AppRoutes() {
   return (
-    <BrowserRouter>
-      <Routes>
-        {/* Public */}
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/auth/callback" element={<OidcCallbackPage />} />
+    <Routes>
+      {/* Public */}
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/auth/callback" element={<OidcCallbackPage />} />
 
-        {/* Superadmin section — is_system=true only */}
-        <Route element={<SuperAdminGuard />}>
-          <Route element={<AppShell />}>
-            <Route path="/superadmin" element={<Navigate to="/superadmin/orgs" replace />} />
-            <Route path="/superadmin/orgs" element={<OrgsList />} />
-            <Route path="/superadmin/orgs/:orgId" element={<OrgDetail />} />
-            <Route path="/superadmin/orgs/:orgId/users" element={<SeedUser />} />
-          </Route>
+      {/* Superadmin section — is_system=true only */}
+      <Route element={<SuperAdminGuard />}>
+        <Route element={<AppShell />}>
+          <Route path="/superadmin" element={<Navigate to="/superadmin/orgs" replace />} />
+          <Route path="/superadmin/orgs" element={<OrgsList />} />
+          <Route path="/superadmin/orgs/:orgId" element={<OrgDetail />} />
+          <Route path="/superadmin/orgs/:orgId/users" element={<SeedUser />} />
         </Route>
+      </Route>
 
-        {/* Per-org section — is_system=false only */}
-        <Route element={<OrgGuard />}>
-          <Route element={<OrgShell />}>
-            <Route path="/org/:orgId" element={<OrgDashboard />} />
-            <Route path="/org/:orgId/flags" element={<FlagsList />} />
-            <Route path="/org/:orgId/flags/:key" element={<FlagDetail />} />
-            <Route path="/org/:orgId/segments" element={<SegmentsList />} />
-            <Route path="/org/:orgId/segments/:key" element={<SegmentDetail />} />
-            <Route path="/org/:orgId/experiments" element={<ExperimentsList />} />
-            <Route path="/org/:orgId/experiments/:key" element={<ExperimentDetail />} />
-            <Route path="/org/:orgId/events" element={<EventsRegistry />} />
-            <Route path="/org/:orgId/environments" element={<Environments />} />
-            <Route path="/org/:orgId/members" element={<Members />} />
-            <Route path="/org/:orgId/audit" element={<AuditLog />} />
-          </Route>
+      {/* Per-org section — is_system=false only */}
+      <Route element={<OrgGuard />}>
+        <Route element={<OrgShell />}>
+          <Route path="/org/:orgId" element={<OrgDashboard />} />
+          <Route path="/org/:orgId/flags" element={<FlagsList />} />
+          <Route path="/org/:orgId/flags/:key" element={<FlagDetail />} />
+          <Route path="/org/:orgId/segments" element={<SegmentsList />} />
+          <Route path="/org/:orgId/segments/:key" element={<SegmentDetail />} />
+          <Route path="/org/:orgId/experiments" element={<ExperimentsList />} />
+          <Route path="/org/:orgId/experiments/:key" element={<ExperimentDetail />} />
+          <Route path="/org/:orgId/events" element={<EventsRegistry />} />
+          <Route path="/org/:orgId/environments" element={<Environments />} />
+          <Route path="/org/:orgId/members" element={<Members />} />
+          <Route path="/org/:orgId/audit" element={<AuditLog />} />
         </Route>
+      </Route>
 
-        {/* Catch-all → login */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
-    </BrowserRouter>
+      {/* Catch-all → login */}
+      <Route path="*" element={<Navigate to="/login" replace />} />
+    </Routes>
   )
+}
+
+const router = createBrowserRouter([
+  { path: '*', element: <AppRoutes /> },
+])
+
+export default function App() {
+  return <RouterProvider router={router} />
 }

@@ -70,6 +70,17 @@ fn parse_env_id(s: &str) -> Result<stitchd_core::id::EnvironmentId, Status> {
         .map_err(|_| Status::invalid_argument("invalid environment_id"))
 }
 
+/// Parse a string as a [`ProjectId`] via UUID. Returns `None` when the string is empty.
+#[allow(clippy::result_large_err)]
+fn parse_project_id(s: &str) -> Result<Option<stitchd_core::id::ProjectId>, Status> {
+    if s.is_empty() {
+        return Ok(None);
+    }
+    uuid::Uuid::parse_str(s)
+        .map(|u| Some(stitchd_core::id::ProjectId::from_uuid(u)))
+        .map_err(|_| Status::invalid_argument("invalid project_id"))
+}
+
 /// SHA-256 hash of a raw SDK key (same function as used in stitchd-server).
 pub(crate) fn hash_sdk_key(raw: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -88,23 +99,32 @@ impl FlagService for FlagServiceImpl {
         request: Request<GetFlagRequest>,
     ) -> Result<Response<FeatureFlag>, Status> {
         let req = request.into_inner();
-        let env_id = parse_env_id(&req.environment_id)?;
+        let project_id = parse_project_id(&req.project_id)?;
 
         let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-        // We need project_id for find_by_key; work around by listing by environment and filtering
-        let flags = self
-            .flag_repo
-            .list_by_environment(env_id)
-            .await
-            .map_err(FlagServiceError::from)
-            .map_err(Status::from)?;
-
-        let record = flags
-            .into_iter()
-            .find(|f| f.key.as_str() == flag_key.as_str())
-            .ok_or_else(|| Status::not_found(format!("flag '{}' not found", req.flag_key)))?;
+        let record = if let Some(pid) = project_id {
+            // Admin path: direct project-scoped lookup.
+            self.flag_repo
+                .find_by_key(&flag_key, pid)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?
+        } else {
+            // SDK path: resolve via environment.
+            let env_id = parse_env_id(&req.environment_id)?;
+            let flags = self
+                .flag_repo
+                .list_by_environment(env_id)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?;
+            flags
+                .into_iter()
+                .find(|f| f.key.as_str() == flag_key.as_str())
+                .ok_or_else(|| Status::not_found(format!("flag '{}' not found", req.flag_key)))?
+        };
 
         let variants = self
             .variant_repo
@@ -129,14 +149,40 @@ impl FlagService for FlagServiceImpl {
         request: Request<ListFlagsRequest>,
     ) -> Result<Response<ListFlagsResponse>, Status> {
         let req = request.into_inner();
-        let env_id = parse_env_id(&req.environment_id)?;
+        let project_id = parse_project_id(&req.project_id)?;
 
-        let flag_records = self
-            .flag_repo
-            .list_by_environment(env_id)
-            .await
-            .map_err(FlagServiceError::from)
-            .map_err(Status::from)?;
+        let flag_records = if let Some(pid) = project_id {
+            // Admin path: project-scoped list.
+            if req.include_archived {
+                self.flag_repo
+                    .list_by_project_all(pid)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            } else {
+                self.flag_repo
+                    .list_by_project(pid)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            }
+        } else {
+            // SDK path: environment-scoped list.
+            let env_id = parse_env_id(&req.environment_id)?;
+            if req.include_archived {
+                self.flag_repo
+                    .list_by_environment_all(env_id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            } else {
+                self.flag_repo
+                    .list_by_environment(env_id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            }
+        };
 
         let mut proto_flags = Vec::with_capacity(flag_records.len());
         for record in &flag_records {
@@ -165,7 +211,13 @@ impl FlagService for FlagServiceImpl {
         request: Request<MutateFlagRequest>,
     ) -> Result<Response<MutateFlagResponse>, Status> {
         let req = request.into_inner();
-        let env_id = parse_env_id(&req.environment_id)?;
+        let project_id = parse_project_id(&req.project_id)?;
+        // Only parsed when project_id is absent (SDK/env-scoped path).
+        let env_id_result = if project_id.is_none() {
+            Some(parse_env_id(&req.environment_id)?)
+        } else {
+            None
+        };
 
         let flag_proto = req
             .flag
@@ -174,8 +226,33 @@ impl FlagService for FlagServiceImpl {
         let kind = MutationKind::try_from(req.kind)
             .map_err(|_| Status::invalid_argument("unknown mutation kind"))?;
 
+        /// Fetch the flag list for lookup — project path or env path.
+        macro_rules! fetch_flag_list {
+            ($self:expr, $project_id:expr, $env_id:expr) => {
+                if let Some(pid) = $project_id {
+                    $self
+                        .flag_repo
+                        .list_by_project(pid)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?
+                } else {
+                    $self
+                        .flag_repo
+                        .list_by_environment($env_id.expect("env_id required"))
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?
+                }
+            };
+        }
+
         match kind {
             MutationKind::Create => {
+                let pid = project_id.ok_or_else(|| {
+                    Status::invalid_argument("project_id is required for flag creation")
+                })?;
+
                 let flag_key = stitchd_core::id::FlagKey::new(flag_proto.key.clone())
                     .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
@@ -186,8 +263,10 @@ impl FlagService for FlagServiceImpl {
 
                 let record = stitchd_core::flag::FlagRecord {
                     id: stitchd_core::id::FlagId::new(),
-                    project_id: stitchd_core::id::ProjectId::from_uuid(uuid::Uuid::nil()), // placeholder — env owns scope
+                    project_id: pid,
                     key: flag_key,
+                    name: flag_proto.name.clone(),
+                    description: flag_proto.description.clone(),
                     value_type,
                     enabled: flag_proto.enabled,
                     default_variant_id: None,
@@ -202,6 +281,20 @@ impl FlagService for FlagServiceImpl {
                     .await
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
+
+                // Persist variants supplied in the creation request.
+                let domain_variants: Vec<_> = flag_proto
+                    .variants
+                    .iter()
+                    .filter_map(|v| mapping::proto_variant_to_domain(v.clone()))
+                    .collect();
+                if !domain_variants.is_empty() {
+                    self.variant_repo
+                        .replace_all_for_flag(record.id, &domain_variants)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                }
 
                 let variants = self
                     .variant_repo
@@ -226,12 +319,7 @@ impl FlagService for FlagServiceImpl {
                 }))
             }
             MutationKind::Update => {
-                let flags = self
-                    .flag_repo
-                    .list_by_environment(env_id)
-                    .await
-                    .map_err(FlagServiceError::from)
-                    .map_err(Status::from)?;
+                let flags = fetch_flag_list!(self, project_id, env_id_result);
 
                 let mut record = flags
                     .into_iter()
@@ -251,8 +339,35 @@ impl FlagService for FlagServiceImpl {
                 }
 
                 record.enabled = flag_proto.enabled;
-                record.version += 1;
-                record.updated_at = chrono::Utc::now();
+                if !flag_proto.name.is_empty() {
+                    record.name = flag_proto.name.clone();
+                }
+                if !flag_proto.description.is_empty() {
+                    record.description = flag_proto.description.clone();
+                }
+                // Resolve default_variant_key → variant ID when provided.
+                if !flag_proto.default_variant_key.is_empty() {
+                    let variants_for_lookup = self
+                        .variant_repo
+                        .find_by_flag(record.id)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                    let variant_id = variants_for_lookup
+                        .iter()
+                        .find(|v| v.key == flag_proto.default_variant_key)
+                        .map(|v| v.id)
+                        .ok_or_else(|| {
+                            Status::not_found(format!(
+                                "variant '{}' not found",
+                                flag_proto.default_variant_key
+                            ))
+                        })?;
+                    record.default_variant_id = Some(variant_id);
+                }
+                // Do NOT increment version here — the repo's update() does
+                // `new_version = flag.version + 1` and `WHERE version = flag.version`,
+                // so flag.version must remain the current stored value.
 
                 let updated = self
                     .flag_repo
@@ -261,12 +376,53 @@ impl FlagService for FlagServiceImpl {
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
 
+                // Replace variants if the request includes a non-empty list.
+                if !flag_proto.variants.is_empty() {
+                    let domain_variants: Vec<_> = flag_proto
+                        .variants
+                        .iter()
+                        .filter_map(|v| mapping::proto_variant_to_domain(v.clone()))
+                        .collect();
+                    self.variant_repo
+                        .replace_all_for_flag(updated.id, &domain_variants)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                }
+
                 let variants = self
                     .variant_repo
                     .find_by_flag(updated.id)
                     .await
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
+
+                // Replace rules if the request includes a non-empty list.
+                if !flag_proto.rules.is_empty() {
+                    let variant_key_to_id: std::collections::HashMap<_, _> = variants
+                        .iter()
+                        .map(|v| (v.key.clone(), v.id))
+                        .collect();
+                    let domain_rules: Vec<_> = flag_proto
+                        .rules
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, r)| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            mapping::proto_flag_rule_to_domain(
+                                updated.id,
+                                i as i32,
+                                r,
+                                &variant_key_to_id,
+                            )
+                        })
+                        .collect();
+                    self.flag_repo
+                        .upsert_rules(updated.id, &domain_rules)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                }
 
                 let rules = self
                     .flag_repo
@@ -284,12 +440,7 @@ impl FlagService for FlagServiceImpl {
                 }))
             }
             MutationKind::Delete | MutationKind::Archive => {
-                let flags = self
-                    .flag_repo
-                    .list_by_environment(env_id)
-                    .await
-                    .map_err(FlagServiceError::from)
-                    .map_err(Status::from)?;
+                let flags = fetch_flag_list!(self, project_id, env_id_result);
 
                 let record = flags
                     .into_iter()
@@ -519,10 +670,38 @@ mod tests {
             &self,
             _project_id: ProjectId,
         ) -> Result<Vec<FlagRecord>, RepositoryError> {
+            Ok(self
+                .flags
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|f| f.deleted_at.is_none())
+                .cloned()
+                .collect())
+        }
+
+        async fn list_by_project_all(
+            &self,
+            _project_id: ProjectId,
+        ) -> Result<Vec<FlagRecord>, RepositoryError> {
             Ok(self.flags.lock().unwrap().clone())
         }
 
         async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<FlagRecord>, RepositoryError> {
+            Ok(self
+                .flags
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|f| f.deleted_at.is_none())
+                .cloned()
+                .collect())
+        }
+
+        async fn list_by_environment_all(
             &self,
             _environment_id: EnvironmentId,
         ) -> Result<Vec<FlagRecord>, RepositoryError> {
@@ -621,6 +800,14 @@ mod tests {
         async fn delete(&self, _id: VariantId) -> Result<(), RepositoryError> {
             Ok(())
         }
+
+        async fn replace_all_for_flag(
+            &self,
+            _flag_id: FlagId,
+            _variants: &[stitchd_core::flag::Variant],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
     }
 
     struct StubSdkKeyRepo {
@@ -697,6 +884,8 @@ mod tests {
             id: FlagId::new(),
             project_id: ProjectId::new(),
             key: FlagKey::new("test-flag").unwrap(),
+            name: String::new(),
+            description: String::new(),
             value_type: FlagValueType::Bool,
             enabled: true,
             default_variant_id: None,
@@ -811,6 +1000,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(GetFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             flag_key: "nonexistent-flag".to_string(),
         });
         let result = svc.get_flag(req).await;
@@ -831,6 +1021,7 @@ mod tests {
 
         let req = Request::new(GetFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             flag_key: flag_key.clone(),
         });
         let result = svc.get_flag(req).await;
@@ -844,6 +1035,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(GetFlagRequest {
             environment_id: "not-a-uuid".to_string(),
+            project_id: String::new(),
             flag_key: "my-flag".to_string(),
         });
         let result = svc.get_flag(req).await;
@@ -854,8 +1046,9 @@ mod tests {
     #[tokio::test]
     async fn list_flags_returns_empty_for_empty_environment() {
         let svc = make_service_empty();
-        let req = Request::new(ListFlagsRequest {
+        let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_ok());
@@ -877,8 +1070,9 @@ mod tests {
             StubSdkKeyRepo::empty(),
         );
 
-        let req = Request::new(ListFlagsRequest {
+        let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_ok());
@@ -888,8 +1082,9 @@ mod tests {
     #[tokio::test]
     async fn list_flags_returns_invalid_argument_for_bad_env_id() {
         let svc = make_service_empty();
-        let req = Request::new(ListFlagsRequest {
+        let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: "bad-uuid".to_string(),
+            project_id: String::new(),
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_err());
@@ -903,13 +1098,17 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: ProjectId::new().to_string(),
             kind: MutationKind::Create as i32,
             flag: Some(FeatureFlag {
                 key: "new-flag".to_string(),
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 0,
         });
@@ -925,13 +1124,17 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Create as i32,
             flag: Some(FeatureFlag {
                 key: "".to_string(),
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 0,
         });
@@ -953,13 +1156,17 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: flag_key.clone(),
+                name: String::new(),
+                description: String::new(),
                 enabled: false,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 1, // matches initial version
         });
@@ -983,13 +1190,17 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
+                name: String::new(),
+                description: String::new(),
                 enabled: false,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 99, // wrong version
         });
@@ -1011,13 +1222,17 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Delete as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 1,
         });
@@ -1038,13 +1253,17 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Delete as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 42, // wrong
         });
@@ -1066,13 +1285,17 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Archive as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 1,
         });
@@ -1085,13 +1308,17 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Unspecified as i32,
             flag: Some(FeatureFlag {
                 key: "some-flag".to_string(),
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 0,
         });
@@ -1105,13 +1332,17 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: "nonexistent".to_string(),
+                name: String::new(),
+                description: String::new(),
                 enabled: false,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
                 rules: vec![],
+                ..Default::default()
             }),
             version: 1,
         });
@@ -1125,6 +1356,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Create as i32,
             flag: None,
             version: 0,

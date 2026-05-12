@@ -71,12 +71,21 @@ enum FlagValueType {
 }
 
 message FeatureFlag {
-  string         key        = 1;
-  bool           enabled    = 2;
-  FlagValueType  value_type = 3;
-  repeated Variant variants = 4;
+  string         key                = 1;
+  bool           enabled            = 2;
+  FlagValueType  value_type         = 3;
+  repeated Variant variants         = 4;
   // Evaluated in order; first match wins. Last rule is the default fallback.
-  repeated FlagRule rules   = 5;
+  repeated FlagRule rules           = 5;
+  string         name               = 6;
+  string         description        = 7;
+  // Admin metadata — populated by FlagService admin RPCs, empty in SDK sync.
+  string         flag_id            = 8;  // UUID of the flag record
+  uint64         version            = 9;  // optimistic-concurrency version
+  string         default_variant_key = 10; // key of the default variant, if set
+  int64          created_at_ms      = 11; // epoch milliseconds
+  int64          updated_at_ms      = 12; // epoch milliseconds
+  bool           archived           = 13; // true when soft-deleted
 }
 
 // --- SDK sync service ---

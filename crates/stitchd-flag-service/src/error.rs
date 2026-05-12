@@ -42,6 +42,9 @@ impl From<stitchd_db::RepositoryError> for FlagServiceError {
             stitchd_db::RepositoryError::UniqueViolation { field } => {
                 Self::Conflict(format!("unique violation on field: {field}"))
             }
+            stitchd_db::RepositoryError::ForeignKeyViolation { constraint } => {
+                Self::InvalidArgument(format!("referenced entity does not exist: {constraint}"))
+            }
             other => Self::Internal(other.to_string()),
         }
     }

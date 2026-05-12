@@ -219,8 +219,20 @@ pub trait FlagRepository: Send + Sync {
         project_id: ProjectId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
 
+    /// List all flags in a project including soft-deleted (archived) ones.
+    async fn list_by_project_all(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
+
     /// List all non-deleted flags in an environment.
     async fn list_by_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
+
+    /// List flags in an environment, optionally including archived (soft-deleted) ones.
+    async fn list_by_environment_all(
         &self,
         environment_id: EnvironmentId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
@@ -282,6 +294,13 @@ pub trait VariantRepository: Send + Sync {
 
     /// Delete a variant permanently (variants don't soft-delete).
     async fn delete(&self, id: VariantId) -> Result<(), RepositoryError>;
+
+    /// Replace all variants for a flag atomically (delete all, then insert).
+    async fn replace_all_for_flag(
+        &self,
+        flag_id: FlagId,
+        variants: &[Variant],
+    ) -> Result<(), RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

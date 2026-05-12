@@ -70,6 +70,8 @@ async fn setup_experiment_deps(pool: sqlx::PgPool) -> (EnvironmentId, RuleId) {
         id: FlagId::new(),
         project_id: project.id,
         key: FlagKey::new("exp-flag").unwrap(),
+        name: String::new(),
+        description: String::new(),
         value_type: FlagValueType::Bool,
         enabled: true,
         default_variant_id: None,

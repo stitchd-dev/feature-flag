@@ -22,6 +22,10 @@ pub struct FlagRecord {
     pub project_id: ProjectId,
     /// URL-safe string key (unique within the project).
     pub key: FlagKey,
+    /// Human-readable display name.
+    pub name: String,
+    /// Optional description visible in the admin UI.
+    pub description: String,
     /// The type every variant value must match.
     pub value_type: FlagValueType,
     /// Whether evaluation is active (`true`) or the flag always returns its default.

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 
 use stitchd_core::{
+    id::{FlagId, RuleId, VariantId},
     rule_engine::types::{RuleOutput, TargetField},
     variants::VariantValue,
 };
@@ -12,6 +13,27 @@ use stitchd_proto::flags::v1::{
     FlagValueType as ProtoFlagValueType, PercentageAllocation, Variant as ProtoVariant,
     VariantValue as ProtoVariantValue, variant_value::Value as ProtoVariantValueInner,
 };
+
+/// Convert a proto [`ProtoVariant`] to a domain [`stitchd_core::flag::Variant`].
+///
+/// Returns `None` if the variant value is missing or cannot be parsed.
+#[must_use]
+pub fn proto_variant_to_domain(v: ProtoVariant) -> Option<stitchd_core::flag::Variant> {
+    let value = match v.value?.value? {
+        ProtoVariantValueInner::BoolValue(b) => VariantValue::BoolValue(b),
+        ProtoVariantValueInner::IntValue(i) => VariantValue::IntValue(i),
+        ProtoVariantValueInner::DoubleValue(d) => VariantValue::DoubleValue(d),
+        ProtoVariantValueInner::StringValue(s) => VariantValue::StrValue(s),
+        ProtoVariantValueInner::JsonValue(s) => {
+            VariantValue::JsonValue(serde_json::from_str(&s).ok()?)
+        }
+    };
+    Some(stitchd_core::flag::Variant {
+        id: stitchd_core::id::VariantId::new(),
+        key: v.key,
+        value,
+    })
+}
 
 /// Convert a domain [`stitchd_core::flag::Variant`] to the proto [`ProtoVariant`].
 #[must_use]
@@ -34,6 +56,71 @@ pub fn domain_variant_to_proto(v: stitchd_core::flag::Variant) -> ProtoVariant {
         },
     });
     ProtoVariant { key: v.key, value }
+}
+
+/// Convert a proto [`ProtoFlagRule`] back to a domain [`stitchd_core::flag::FlagRule`].
+///
+/// The rule payload is JSON-encoded `ConditionExpr`; the output maps from
+/// variant key or percentage allocation back to domain types.
+/// Returns `None` if deserialization of the condition or output fails.
+#[must_use]
+pub fn proto_flag_rule_to_domain(
+    flag_id: FlagId,
+    rule_index: i32,
+    proto: &ProtoFlagRule,
+    variant_map: &HashMap<String, VariantId>,
+) -> Option<stitchd_core::flag::FlagRule> {
+    use stitchd_core::rule_engine::types::{
+        ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField,
+    };
+    use stitchd_proto::flags::v1::flag_rule::Output;
+
+    let condition: ConditionExpr = serde_json::from_slice(&proto.rule_payload).ok()?;
+
+    let output = match &proto.output {
+        Some(Output::VariantKey(key)) => {
+            let vid = variant_map.get(key).copied()?;
+            RuleOutput::Variant(vid)
+        }
+        Some(Output::Allocation(alloc)) => {
+            let mut targets: Vec<PercentageTarget> = Vec::new();
+            for (ctx_type, spec) in &alloc.context_hash_specs {
+                if spec.parameter_names.is_empty() {
+                    targets.push(PercentageTarget {
+                        context_type: ctx_type.clone(),
+                        field: TargetField::Key,
+                    });
+                } else {
+                    for param in &spec.parameter_names {
+                        targets.push(PercentageTarget {
+                            context_type: ctx_type.clone(),
+                            field: TargetField::Parameter(param.clone()),
+                        });
+                    }
+                }
+            }
+            let weights = alloc
+                .buckets
+                .iter()
+                .filter_map(|b| {
+                    let vid = variant_map.get(&b.variant_key).copied()?;
+                    Some((vid, b.weight_milli))
+                })
+                .collect();
+            RuleOutput::Percentage { targets, weights }
+        }
+        None => return None,
+    };
+
+    Some(stitchd_core::flag::FlagRule {
+        flag_id,
+        rule_index,
+        rule: Rule {
+            id: RuleId::new(),
+            condition,
+            output,
+        },
+    })
 }
 
 /// Convert a domain `FlagValueType` to the proto [`ProtoFlagValueType`].
@@ -112,6 +199,11 @@ pub fn build_feature_flag_proto(
 ) -> FeatureFlag {
     let variant_key_map: HashMap<_, _> = variants.iter().map(|v| (v.id, v.key.clone())).collect();
 
+    let default_variant_key = record
+        .default_variant_id
+        .and_then(|id| variant_key_map.get(&id).cloned())
+        .unwrap_or_default();
+
     let proto_variants = variants
         .into_iter()
         .map(domain_variant_to_proto)
@@ -128,6 +220,14 @@ pub fn build_feature_flag_proto(
         value_type: domain_value_type_to_proto(record.value_type) as i32,
         variants: proto_variants,
         rules: proto_rules,
+        name: record.name.clone(),
+        description: record.description.clone(),
+        flag_id: record.id.to_string(),
+        version: record.version as u64,
+        default_variant_key,
+        created_at_ms: record.created_at.timestamp_millis(),
+        updated_at_ms: record.updated_at.timestamp_millis(),
+        archived: record.deleted_at.is_some(),
     }
 }
 
@@ -346,5 +446,36 @@ mod tests {
         } else {
             panic!("expected Allocation output");
         }
+    }
+
+    #[test]
+    fn build_feature_flag_proto_includes_name_and_description() {
+        use stitchd_core::{
+            flag::FlagRecord,
+            id::{FlagId, ProjectId},
+            id::FlagKey,
+        };
+
+        let record = FlagRecord {
+            id: FlagId::new(),
+            project_id: ProjectId::new(),
+            key: FlagKey::new("my-flag").unwrap(),
+            name: "My Flag".to_string(),
+            description: "A flag for testing".to_string(),
+            value_type: DomainFVT::Bool,
+            enabled: true,
+            default_variant_id: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+
+        let proto = build_feature_flag_proto(&record, vec![], &[]);
+
+        assert_eq!(proto.key, "my-flag");
+        assert_eq!(proto.name, "My Flag");
+        assert_eq!(proto.description, "A flag for testing");
+        assert!(proto.enabled);
     }
 }

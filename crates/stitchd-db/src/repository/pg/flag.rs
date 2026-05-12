@@ -16,6 +16,26 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
+// DB error mapping helper
+// ---------------------------------------------------------------------------
+
+/// Map a sqlx database error to a typed [`RepositoryError`], distinguishing
+/// unique violations (23505) from foreign-key violations (23503).
+fn map_db_err(e: sqlx::Error) -> RepositoryError {
+    if let sqlx::Error::Database(ref dbe) = e {
+        if let Some(constraint) = dbe.constraint() {
+            let code = dbe.code().map(|c| c.into_owned()).unwrap_or_default();
+            return match code.as_str() {
+                "23505" => RepositoryError::UniqueViolation { field: constraint.to_string() },
+                "23503" => RepositoryError::ForeignKeyViolation { constraint: constraint.to_string() },
+                _ => RepositoryError::Database(e),
+            };
+        }
+    }
+    RepositoryError::Database(e)
+}
+
+// ---------------------------------------------------------------------------
 // Type-conversion helpers
 // ---------------------------------------------------------------------------
 
@@ -48,6 +68,8 @@ fn assemble_flag(
     id: uuid::Uuid,
     project_id: uuid::Uuid,
     key: String,
+    name: String,
+    description: String,
     value_type: &str,
     enabled: bool,
     default_variant_id: Option<uuid::Uuid>,
@@ -64,6 +86,8 @@ fn assemble_flag(
         id: FlagId::from_uuid(id),
         project_id: ProjectId::from_uuid(project_id),
         key,
+        name,
+        description,
         value_type,
         enabled,
         default_variant_id: default_variant_id.map(VariantId::from_uuid),
@@ -112,8 +136,8 @@ impl FlagRepository for PgFlagRepository {
     async fn find_by_id(&self, id: FlagId) -> Result<FlagRecord, RepositoryError> {
         let row = sqlx::query(
             r"
-            SELECT id, project_id, key, value_type, enabled, default_variant_id,
-                   created_at, updated_at, deleted_at, version
+            SELECT id, project_id, key, name, description, value_type, enabled,
+                   default_variant_id, created_at, updated_at, deleted_at, version
             FROM feature_flags
             WHERE id = $1 AND deleted_at IS NULL
             ",
@@ -130,6 +154,8 @@ impl FlagRepository for PgFlagRepository {
             row.get("id"),
             row.get("project_id"),
             row.get("key"),
+            row.get("name"),
+            row.get("description"),
             row.get::<String, _>("value_type").as_str(),
             row.get("enabled"),
             row.get("default_variant_id"),
@@ -147,8 +173,8 @@ impl FlagRepository for PgFlagRepository {
     ) -> Result<FlagRecord, RepositoryError> {
         let row = sqlx::query(
             r"
-            SELECT id, project_id, key, value_type, enabled, default_variant_id,
-                   created_at, updated_at, deleted_at, version
+            SELECT id, project_id, key, name, description, value_type, enabled,
+                   default_variant_id, created_at, updated_at, deleted_at, version
             FROM feature_flags
             WHERE key = $1 AND project_id = $2 AND deleted_at IS NULL
             ",
@@ -168,6 +194,8 @@ impl FlagRepository for PgFlagRepository {
             row.get("id"),
             row.get("project_id"),
             row.get("key"),
+            row.get("name"),
+            row.get("description"),
             row.get::<String, _>("value_type").as_str(),
             row.get("enabled"),
             row.get("default_variant_id"),
@@ -184,8 +212,8 @@ impl FlagRepository for PgFlagRepository {
     ) -> Result<Vec<FlagRecord>, RepositoryError> {
         let rows = sqlx::query(
             r"
-            SELECT id, project_id, key, value_type, enabled, default_variant_id,
-                   created_at, updated_at, deleted_at, version
+            SELECT id, project_id, key, name, description, value_type, enabled,
+                   default_variant_id, created_at, updated_at, deleted_at, version
             FROM feature_flags
             WHERE project_id = $1 AND deleted_at IS NULL
             ORDER BY created_at
@@ -202,6 +230,46 @@ impl FlagRepository for PgFlagRepository {
                     row.get("id"),
                     row.get("project_id"),
                     row.get("key"),
+                    row.get("name"),
+                    row.get("description"),
+                    row.get::<String, _>("value_type").as_str(),
+                    row.get("enabled"),
+                    row.get("default_variant_id"),
+                    row.get("created_at"),
+                    row.get("updated_at"),
+                    row.get("deleted_at"),
+                    row.get("version"),
+                )
+            })
+            .collect()
+    }
+
+    async fn list_by_project_all(
+        &self,
+        project_id: ProjectId,
+    ) -> Result<Vec<FlagRecord>, RepositoryError> {
+        let rows = sqlx::query(
+            r"
+            SELECT id, project_id, key, name, description, value_type, enabled,
+                   default_variant_id, created_at, updated_at, deleted_at, version
+            FROM feature_flags
+            WHERE project_id = $1
+            ORDER BY created_at
+            ",
+        )
+        .bind(project_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        rows.into_iter()
+            .map(|row| {
+                assemble_flag(
+                    row.get("id"),
+                    row.get("project_id"),
+                    row.get("key"),
+                    row.get("name"),
+                    row.get("description"),
                     row.get::<String, _>("value_type").as_str(),
                     row.get("enabled"),
                     row.get("default_variant_id"),
@@ -220,7 +288,8 @@ impl FlagRepository for PgFlagRepository {
     ) -> Result<Vec<FlagRecord>, RepositoryError> {
         let rows = sqlx::query(
             r"
-            SELECT ff.id, ff.project_id, ff.key, ff.value_type, ff.enabled, ff.default_variant_id,
+            SELECT ff.id, ff.project_id, ff.key, ff.name, ff.description, ff.value_type,
+                   ff.enabled, ff.default_variant_id,
                    ff.created_at, ff.updated_at, ff.deleted_at, ff.version
             FROM feature_flags ff
             JOIN environments env ON ff.project_id = env.project_id
@@ -239,6 +308,48 @@ impl FlagRepository for PgFlagRepository {
                     row.get("id"),
                     row.get("project_id"),
                     row.get("key"),
+                    row.get("name"),
+                    row.get("description"),
+                    row.get::<String, _>("value_type").as_str(),
+                    row.get("enabled"),
+                    row.get("default_variant_id"),
+                    row.get("created_at"),
+                    row.get("updated_at"),
+                    row.get("deleted_at"),
+                    row.get("version"),
+                )
+            })
+            .collect()
+    }
+
+    async fn list_by_environment_all(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<FlagRecord>, RepositoryError> {
+        let rows = sqlx::query(
+            r"
+            SELECT ff.id, ff.project_id, ff.key, ff.name, ff.description, ff.value_type,
+                   ff.enabled, ff.default_variant_id,
+                   ff.created_at, ff.updated_at, ff.deleted_at, ff.version
+            FROM feature_flags ff
+            JOIN environments env ON ff.project_id = env.project_id
+            WHERE env.id = $1 AND env.deleted_at IS NULL
+            ORDER BY ff.created_at
+            ",
+        )
+        .bind(environment_id.as_uuid())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        rows.into_iter()
+            .map(|row| {
+                assemble_flag(
+                    row.get("id"),
+                    row.get("project_id"),
+                    row.get("key"),
+                    row.get("name"),
+                    row.get("description"),
                     row.get::<String, _>("value_type").as_str(),
                     row.get("enabled"),
                     row.get("default_variant_id"),
@@ -256,14 +367,16 @@ impl FlagRepository for PgFlagRepository {
         sqlx::query(
             r"
             INSERT INTO feature_flags
-                (id, project_id, key, value_type, enabled, default_variant_id,
+                (id, project_id, key, name, description, value_type, enabled, default_variant_id,
                  created_at, updated_at, deleted_at, version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ",
         )
         .bind(flag.id.as_uuid())
         .bind(flag.project_id.as_uuid())
         .bind(flag.key.as_str())
+        .bind(&flag.name)
+        .bind(&flag.description)
         .bind(value_type)
         .bind(flag.enabled)
         .bind(flag.default_variant_id.map(|id| id.as_uuid()))
@@ -273,16 +386,7 @@ impl FlagRepository for PgFlagRepository {
         .bind(flag.version)
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            if let sqlx::Error::Database(ref dbe) = e {
-                if let Some(constraint) = dbe.constraint() {
-                    return RepositoryError::UniqueViolation {
-                        field: constraint.to_string(),
-                    };
-                }
-            }
-            RepositoryError::Database(e)
-        })?;
+        .map_err(map_db_err)?;
 
         self.audit
             .log(
@@ -307,14 +411,16 @@ impl FlagRepository for PgFlagRepository {
         let result = sqlx::query(
             r"
             UPDATE feature_flags
-            SET key = $1, value_type = $2, enabled = $3, default_variant_id = $4,
-                updated_at = NOW(), version = $5
-            WHERE id = $6 AND version = $7 AND deleted_at IS NULL
-            RETURNING id, project_id, key, value_type, enabled, default_variant_id,
-                      created_at, updated_at, deleted_at, version
+            SET key = $1, name = $2, description = $3, value_type = $4, enabled = $5,
+                default_variant_id = $6, updated_at = NOW(), version = $7
+            WHERE id = $8 AND version = $9 AND deleted_at IS NULL
+            RETURNING id, project_id, key, name, description, value_type, enabled,
+                      default_variant_id, created_at, updated_at, deleted_at, version
             ",
         )
         .bind(flag.key.as_str())
+        .bind(&flag.name)
+        .bind(&flag.description)
         .bind(value_type)
         .bind(flag.enabled)
         .bind(flag.default_variant_id.map(|id| id.as_uuid()))
@@ -330,6 +436,8 @@ impl FlagRepository for PgFlagRepository {
                 row.get("id"),
                 row.get("project_id"),
                 row.get("key"),
+                row.get("name"),
+                row.get("description"),
                 row.get::<String, _>("value_type").as_str(),
                 row.get("enabled"),
                 row.get("default_variant_id"),
@@ -611,16 +719,7 @@ impl VariantRepository for PgVariantRepository {
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            if let sqlx::Error::Database(ref dbe) = e {
-                if let Some(constraint) = dbe.constraint() {
-                    return RepositoryError::UniqueViolation {
-                        field: constraint.to_string(),
-                    };
-                }
-            }
-            RepositoryError::Database(e)
-        })?;
+        .map_err(map_db_err)?;
 
         self.audit
             .log(
@@ -693,6 +792,50 @@ impl VariantRepository for PgVariantRepository {
                 id.as_uuid(),
                 "delete",
                 serde_json::json!({}),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn replace_all_for_flag(
+        &self,
+        flag_id: FlagId,
+        variants: &[Variant],
+    ) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
+
+        sqlx::query("DELETE FROM variants WHERE flag_id = $1")
+            .bind(flag_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+
+        for v in variants {
+            let value = serde_json::to_value(&v.value).map_err(|e| {
+                RepositoryError::Unexpected(anyhow::anyhow!("cannot serialise variant value: {e}"))
+            })?;
+            sqlx::query(
+                "INSERT INTO variants (id, flag_id, key, value) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(v.id.as_uuid())
+            .bind(flag_id.as_uuid())
+            .bind(&v.key)
+            .bind(value)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_db_err)?;
+        }
+
+        tx.commit().await.map_err(RepositoryError::Database)?;
+
+        self.audit
+            .log(
+                None,
+                "variant",
+                flag_id.as_uuid(),
+                "replace_all",
+                serde_json::json!({ "count": variants.len() }),
             )
             .await?;
 
@@ -790,6 +933,8 @@ mod unit_tests {
             id,
             project_id,
             "my-flag".to_string(),
+            "My Flag".to_string(),
+            "A test flag".to_string(),
             "bool",
             true,
             None,
@@ -800,6 +945,7 @@ mod unit_tests {
         )
         .unwrap();
         assert_eq!(flag.key.as_str(), "my-flag");
+        assert_eq!(flag.name, "My Flag");
         assert!(flag.enabled);
     }
 
@@ -812,6 +958,8 @@ mod unit_tests {
             id,
             project_id,
             "my-flag".to_string(),
+            String::new(),
+            String::new(),
             "badtype",
             true,
             None,
@@ -833,6 +981,8 @@ mod unit_tests {
             id,
             project_id,
             String::new(), // empty key should fail
+            String::new(),
+            String::new(),
             "bool",
             true,
             None,
