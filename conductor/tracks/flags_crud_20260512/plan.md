@@ -20,7 +20,7 @@
   - Update flag service DB repository queries to read/write name + description
   - Update `MutateFlagRequest` flow in `service.rs` to persist name/description
 
-- [~] Task 2: Extend proto + mapping for full admin flag data
+- [x] Task 2: Extend proto + mapping for full admin flag data
   - Write failing test: `build_feature_flag_proto` includes name/description
   - Add `name` and `description` string fields to `FeatureFlag` in
     `proto/flags/v1/flag_sync.proto`

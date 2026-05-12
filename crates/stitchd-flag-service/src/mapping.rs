@@ -112,6 +112,11 @@ pub fn build_feature_flag_proto(
 ) -> FeatureFlag {
     let variant_key_map: HashMap<_, _> = variants.iter().map(|v| (v.id, v.key.clone())).collect();
 
+    let default_variant_key = record
+        .default_variant_id
+        .and_then(|id| variant_key_map.get(&id).cloned())
+        .unwrap_or_default();
+
     let proto_variants = variants
         .into_iter()
         .map(domain_variant_to_proto)
@@ -130,6 +135,12 @@ pub fn build_feature_flag_proto(
         rules: proto_rules,
         name: record.name.clone(),
         description: record.description.clone(),
+        flag_id: record.id.to_string(),
+        version: record.version as u64,
+        default_variant_key,
+        created_at_ms: record.created_at.timestamp_millis(),
+        updated_at_ms: record.updated_at.timestamp_millis(),
+        archived: record.deleted_at.is_some(),
     }
 }
 

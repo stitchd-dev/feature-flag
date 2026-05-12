@@ -51,7 +51,7 @@ pub struct HashingConfigJson {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct UpdateHashingResponse {
-    pub flag: FlagJson,
+    pub flag: AdminFlagJson,
     pub configs: Vec<HashingConfigJson>,
 }
 
@@ -62,10 +62,149 @@ pub struct FlagJson {
     pub enabled: bool,
 }
 
+#[cfg(test)]
 fn flag_to_json(f: &FeatureFlag) -> FlagJson {
     FlagJson {
         key: f.key.clone(),
         enabled: f.enabled,
+    }
+}
+
+/// Variant as returned in admin API responses.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VariantJson {
+    pub key: String,
+    pub value: serde_json::Value,
+}
+
+/// Rule as returned in admin API responses.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RuleJson {
+    /// Decoded ConditionExpr JSON.
+    pub condition: serde_json::Value,
+    /// Rule output — `{"variant_key": "..."}` or `{"allocation": [...]}`.
+    pub output: serde_json::Value,
+}
+
+/// Full admin representation of a feature flag.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AdminFlagJson {
+    pub flag_id: String,
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    pub flag_type: String,
+    pub enabled: bool,
+    pub status: String,
+    pub version: u64,
+    pub variants: Vec<VariantJson>,
+    pub rules: Vec<RuleJson>,
+    pub default_variant_key: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+fn proto_variant_value_to_json(
+    v: Option<stitchd_proto::flags::v1::VariantValue>,
+) -> serde_json::Value {
+    use stitchd_proto::flags::v1::variant_value::Value;
+    match v.and_then(|vv| vv.value) {
+        Some(Value::BoolValue(b)) => serde_json::Value::Bool(b),
+        Some(Value::IntValue(i)) => serde_json::json!(i),
+        Some(Value::DoubleValue(d)) => serde_json::json!(d),
+        Some(Value::StringValue(s)) => serde_json::Value::String(s),
+        Some(Value::JsonValue(s)) => {
+            serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
+        }
+        None => serde_json::Value::Null,
+    }
+}
+
+fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
+    use stitchd_proto::flags::v1::flag_rule::Output;
+
+    let condition = if r.rule_payload.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::from_slice(&r.rule_payload).unwrap_or(serde_json::Value::Null)
+    };
+
+    let output = match &r.output {
+        Some(Output::VariantKey(k)) => serde_json::json!({ "variant_key": k }),
+        Some(Output::Allocation(alloc)) => {
+            let buckets: Vec<_> = alloc
+                .buckets
+                .iter()
+                .map(|b| {
+                    serde_json::json!({
+                        "variant_key": b.variant_key,
+                        "weight_milli": b.weight_milli
+                    })
+                })
+                .collect();
+            serde_json::json!({ "allocation": buckets })
+        }
+        None => serde_json::Value::Null,
+    };
+
+    RuleJson { condition, output }
+}
+
+fn flag_value_type_str(t: i32) -> &'static str {
+    use stitchd_proto::flags::v1::FlagValueType;
+    match FlagValueType::try_from(t).unwrap_or(FlagValueType::Unspecified) {
+        FlagValueType::Bool => "bool",
+        FlagValueType::Int => "int",
+        FlagValueType::Double => "double",
+        FlagValueType::String => "string",
+        FlagValueType::Json => "json",
+        FlagValueType::Unspecified => "unspecified",
+    }
+}
+
+fn flag_to_admin_json(f: &FeatureFlag) -> AdminFlagJson {
+    let variants = f
+        .variants
+        .iter()
+        .map(|v| VariantJson {
+            key: v.key.clone(),
+            value: proto_variant_value_to_json(v.value.clone()),
+        })
+        .collect();
+
+    let rules = f.rules.iter().map(flag_rule_to_json).collect();
+
+    let created_at = if f.created_at_ms != 0 {
+        chrono::DateTime::from_timestamp_millis(f.created_at_ms)
+            .map(|dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339())
+    } else {
+        None
+    };
+    let updated_at = if f.updated_at_ms != 0 {
+        chrono::DateTime::from_timestamp_millis(f.updated_at_ms)
+            .map(|dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339())
+    } else {
+        None
+    };
+
+    AdminFlagJson {
+        flag_id: f.flag_id.clone(),
+        key: f.key.clone(),
+        name: f.name.clone(),
+        description: f.description.clone(),
+        flag_type: flag_value_type_str(f.value_type).to_string(),
+        enabled: f.enabled,
+        status: if f.archived { "archived" } else { "active" }.to_string(),
+        version: f.version,
+        variants,
+        rules,
+        default_variant_key: if f.default_variant_key.is_empty() {
+            None
+        } else {
+            Some(f.default_variant_key.clone())
+        },
+        created_at,
+        updated_at,
     }
 }
 
@@ -78,7 +217,7 @@ fn flag_to_json(f: &FeatureFlag) -> FlagJson {
     tag = "flags",
     params(("project_id" = String, Path, description = "Project / environment ID")),
     responses(
-        (status = 200, description = "List of flags", body = Vec<FlagJson>),
+        (status = 200, description = "List of flags", body = Vec<AdminFlagJson>),
         (status = 401, description = "Unauthorized"),
         (status = 502, description = "Flag service unavailable"),
     ),
@@ -93,7 +232,12 @@ pub async fn list_flags(
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.list_flags(req).await.map_err(GatewayError::from)?;
-    let flags: Vec<FlagJson> = resp.into_inner().flags.iter().map(flag_to_json).collect();
+    let flags: Vec<AdminFlagJson> = resp
+        .into_inner()
+        .flags
+        .iter()
+        .map(flag_to_admin_json)
+        .collect();
     Ok(Json(flags))
 }
 
@@ -105,7 +249,7 @@ pub async fn list_flags(
     params(("project_id" = String, Path, description = "Project / environment ID")),
     request_body = FlagMutateRequest,
     responses(
-        (status = 201, description = "Flag created", body = FlagJson),
+        (status = 201, description = "Flag created", body = AdminFlagJson),
         (status = 401, description = "Unauthorized"),
         (status = 502, description = "Flag service unavailable"),
     ),
@@ -130,10 +274,11 @@ pub async fn create_flag(
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
-    let flag_json = inner.flag.as_ref().map(flag_to_json).unwrap_or(FlagJson {
-        key: String::new(),
-        enabled: false,
-    });
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
     Ok((StatusCode::CREATED, Json(flag_json)))
 }
 
@@ -147,7 +292,7 @@ pub async fn create_flag(
         ("flag_id" = String, Path, description = "Flag key"),
     ),
     responses(
-        (status = 200, description = "Flag", body = FlagJson),
+        (status = 200, description = "Flag", body = AdminFlagJson),
         (status = 401, description = "Unauthorized"),
         (status = 404, description = "Flag not found"),
         (status = 502, description = "Flag service unavailable"),
@@ -164,7 +309,7 @@ pub async fn get_flag(
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.get_flag(req).await.map_err(GatewayError::from)?;
-    Ok(Json(flag_to_json(&resp.into_inner())))
+    Ok(Json(flag_to_admin_json(&resp.into_inner())))
 }
 
 /// `PUT /v1/projects/{project_id}/flags/{flag_id}`
@@ -178,7 +323,7 @@ pub async fn get_flag(
     ),
     request_body = FlagMutateRequest,
     responses(
-        (status = 200, description = "Updated flag", body = FlagJson),
+        (status = 200, description = "Updated flag", body = AdminFlagJson),
         (status = 401, description = "Unauthorized"),
         (status = 502, description = "Flag service unavailable"),
     ),
@@ -203,10 +348,11 @@ pub async fn update_flag(
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
-    let flag_json = inner.flag.as_ref().map(flag_to_json).unwrap_or(FlagJson {
-        key: String::new(),
-        enabled: false,
-    });
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
     Ok(Json(flag_json))
 }
 
@@ -335,10 +481,11 @@ pub async fn update_flag_hashing(
         .await
         .map_err(GatewayError::from)?;
     let inner = resp.into_inner();
-    let flag_json = inner.flag.as_ref().map(flag_to_json).unwrap_or(FlagJson {
-        key: String::new(),
-        enabled: false,
-    });
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
     let configs_json: Vec<HashingConfigJson> = inner
         .configs
         .iter()
@@ -583,5 +730,57 @@ mod tests {
     #[allow(dead_code)]
     fn _use_with_flag() {
         let _ = make_stub_state_with_flag;
+    }
+
+    #[test]
+    fn flag_to_admin_json_maps_all_fields() {
+        use stitchd_proto::flags::v1::{FlagValueType, VariantValue, variant_value::Value};
+
+        let flag = FeatureFlag {
+            key: "my-flag".to_string(),
+            enabled: true,
+            value_type: FlagValueType::Bool as i32,
+            name: "My Flag".to_string(),
+            description: "A test flag".to_string(),
+            flag_id: "abc-123".to_string(),
+            version: 3,
+            default_variant_key: "on".to_string(),
+            created_at_ms: 1_000_000,
+            updated_at_ms: 2_000_000,
+            archived: false,
+            variants: vec![stitchd_proto::flags::v1::Variant {
+                key: "on".to_string(),
+                value: Some(VariantValue { value: Some(Value::BoolValue(true)) }),
+            }],
+            rules: vec![],
+        };
+
+        let admin = flag_to_admin_json(&flag);
+
+        assert_eq!(admin.flag_id, "abc-123");
+        assert_eq!(admin.key, "my-flag");
+        assert_eq!(admin.name, "My Flag");
+        assert_eq!(admin.description, "A test flag");
+        assert_eq!(admin.flag_type, "bool");
+        assert!(admin.enabled);
+        assert_eq!(admin.status, "active");
+        assert_eq!(admin.version, 3);
+        assert_eq!(admin.default_variant_key, Some("on".to_string()));
+        assert_eq!(admin.variants.len(), 1);
+        assert_eq!(admin.variants[0].key, "on");
+        assert_eq!(admin.variants[0].value, serde_json::Value::Bool(true));
+        assert!(admin.created_at.is_some());
+        assert!(admin.updated_at.is_some());
+    }
+
+    #[test]
+    fn flag_to_admin_json_archived_status() {
+        let flag = FeatureFlag {
+            key: "archived-flag".to_string(),
+            archived: true,
+            ..Default::default()
+        };
+        let admin = flag_to_admin_json(&flag);
+        assert_eq!(admin.status, "archived");
     }
 }
