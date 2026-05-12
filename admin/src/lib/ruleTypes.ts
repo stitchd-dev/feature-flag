@@ -94,3 +94,22 @@ export function defaultOutput(variantKey: string): RuleOutputJson {
 export function localId(): string {
   return Math.random().toString(36).slice(2, 9)
 }
+
+/**
+ * True when this rule's condition is the always-true sentinel (`And: []`).
+ * The Rust evaluator treats an empty AND as always-matching, making it the
+ * natural catch-all / default rule at the end of the rules array.
+ */
+export function isCatchAll(rule: RuleState): boolean {
+  const expr = rule.condition
+  return 'And' in expr && (expr as { And: ConditionExpr[] }).And.length === 0
+}
+
+/** Build a new catch-all rule (always-true condition, single-variant output). */
+export function defaultCatchAll(variantKey: string): RuleState {
+  return {
+    _localId: localId(),
+    condition: { And: [] },
+    output: { variant_key: variantKey },
+  }
+}

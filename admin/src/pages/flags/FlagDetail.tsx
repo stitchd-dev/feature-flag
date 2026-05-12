@@ -12,7 +12,7 @@ import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
 import type { AdminFlagResponse, VariantJson } from '../../lib/types'
 import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
-import { localId, allocationSum } from '../../lib/ruleTypes'
+import { localId, allocationSum, isCatchAll, defaultCatchAll } from '../../lib/ruleTypes'
 import { RuleList } from '../../components/rules/RuleList'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -226,19 +226,40 @@ function TargetingPanel({
   onDirtyChange: (dirty: boolean) => void
 }) {
   const { projectId } = useOrgContext()
-  const [rules, setRules] = useState<RuleState[]>(() => flag.rules.map(parseRuleState))
+
+  const variantKeys = flag.variants.map((v: VariantJson) => v.key)
+
+  // Split stored rules into user-authored rules and the catch-all (last rule
+  // with an empty AND condition = always-true sentinel).
+  const [rules, setRules] = useState<RuleState[]>(() => {
+    const all = flag.rules.map(parseRuleState)
+    const last = all[all.length - 1]
+    return last && isCatchAll(last) ? all.slice(0, -1) : all
+  })
+  const [catchAllOutput, setCatchAllOutput] = useState<RuleOutputJson>(() => {
+    const all = flag.rules.map(parseRuleState)
+    const last = all[all.length - 1]
+    return last && isCatchAll(last)
+      ? last.output
+      : { variant_key: variantKeys[0] ?? '' }
+  })
+
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dirty, setDirty] = useState(false)
 
-  const variantKeys = flag.variants.map((v: VariantJson) => v.key)
+  function markDirty() {
+    if (!dirty) { setDirty(true); onDirtyChange(true) }
+  }
 
   function updateRules(next: RuleState[]) {
     setRules(next)
-    if (!dirty) {
-      setDirty(true)
-      onDirtyChange(true)
-    }
+    markDirty()
+  }
+
+  function updateCatchAll(output: RuleOutputJson) {
+    setCatchAllOutput(output)
+    markDirty()
   }
 
   async function saveRules() {
@@ -248,8 +269,12 @@ function TargetingPanel({
     setSaving(true)
     setError(null)
     try {
+      // Append the catch-all as the last rule (always-true sentinel AND: []).
+      const catchAll = defaultCatchAll('')
+      catchAll.output = catchAllOutput
+      const allRules = [...rules, catchAll]
       const body = {
-        rules: rules.map((r) => ({ condition: r.condition, output: r.output })),
+        rules: allRules.map((r) => ({ condition: r.condition, output: r.output })),
         version: flag.version,
       }
       const { data } = await api.put<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${flag.key}/rules`, body)
@@ -302,17 +327,14 @@ function TargetingPanel({
             <I.lock size={12} /> View-only — you do not have permission to edit rules.
           </div>
         )}
-        {!flag.enabled && (
-          <div style={{ padding: '10px 14px', background: 'var(--bg-sunken)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, color: 'var(--fg-muted)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <I.info size={13} style={{ flexShrink: 0 }} />
-            <span>Flag is <strong>disabled</strong> — all contexts receive the default variant regardless of rules.</span>
-          </div>
-        )}
         <RuleList
           rules={rules}
           variants={variantKeys}
           defaultVariantKey={flag.default_variant_key}
+          catchAllOutput={catchAllOutput}
+          flagEnabled={flag.enabled}
           onChange={canWrite ? updateRules : () => undefined}
+          onCatchAllChange={canWrite ? updateCatchAll : () => undefined}
           canWrite={canWrite}
           onSaveDefaultVariant={canWrite ? saveDefaultVariant : undefined}
         />

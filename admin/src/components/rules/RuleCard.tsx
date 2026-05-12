@@ -134,7 +134,7 @@ function ConditionExprEditor({
 
 // ─── OutputEditor ─────────────────────────────────────────────────────────────
 
-function OutputEditor({
+export function OutputEditor({
   output, variants, onChange,
 }: {
   output: RuleOutputJson
