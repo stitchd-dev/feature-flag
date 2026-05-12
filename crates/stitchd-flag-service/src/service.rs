@@ -670,6 +670,20 @@ mod tests {
             &self,
             _project_id: ProjectId,
         ) -> Result<Vec<FlagRecord>, RepositoryError> {
+            Ok(self
+                .flags
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|f| f.deleted_at.is_none())
+                .cloned()
+                .collect())
+        }
+
+        async fn list_by_project_all(
+            &self,
+            _project_id: ProjectId,
+        ) -> Result<Vec<FlagRecord>, RepositoryError> {
             Ok(self.flags.lock().unwrap().clone())
         }
 
@@ -986,6 +1000,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(GetFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             flag_key: "nonexistent-flag".to_string(),
         });
         let result = svc.get_flag(req).await;
@@ -1006,6 +1021,7 @@ mod tests {
 
         let req = Request::new(GetFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             flag_key: flag_key.clone(),
         });
         let result = svc.get_flag(req).await;
@@ -1019,6 +1035,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(GetFlagRequest {
             environment_id: "not-a-uuid".to_string(),
+            project_id: String::new(),
             flag_key: "my-flag".to_string(),
         });
         let result = svc.get_flag(req).await;
@@ -1031,6 +1048,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_ok());
@@ -1054,6 +1072,7 @@ mod tests {
 
         let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_ok());
@@ -1065,6 +1084,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: "bad-uuid".to_string(),
+            project_id: String::new(),
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_err());
@@ -1078,6 +1098,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: ProjectId::new().to_string(),
             kind: MutationKind::Create as i32,
             flag: Some(FeatureFlag {
                 key: "new-flag".to_string(),
@@ -1103,6 +1124,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Create as i32,
             flag: Some(FeatureFlag {
                 key: "".to_string(),
@@ -1134,6 +1156,7 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: flag_key.clone(),
@@ -1167,6 +1190,7 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
@@ -1198,6 +1222,7 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Delete as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
@@ -1228,6 +1253,7 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Delete as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
@@ -1259,6 +1285,7 @@ mod tests {
 
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Archive as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
@@ -1281,6 +1308,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Unspecified as i32,
             flag: Some(FeatureFlag {
                 key: "some-flag".to_string(),
@@ -1304,6 +1332,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: "nonexistent".to_string(),
@@ -1327,6 +1356,7 @@ mod tests {
         let svc = make_service_empty();
         let req = Request::new(MutateFlagRequest {
             environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
             kind: MutationKind::Create as i32,
             flag: None,
             version: 0,
