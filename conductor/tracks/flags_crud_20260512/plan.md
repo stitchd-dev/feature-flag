@@ -66,7 +66,7 @@
     exists for variant outputs
   - Run: `cargo test -p stitchd-gateway`
 
-- [~] Task 7: Archive flag endpoint
+- [x] Task 7: Archive flag endpoint
   - Write failing test: POST /archive → 200 (soft-delete, MutationKind::Archive)
   - Add `POST /v1/projects/{project_id}/flags/{flag_id}/archive` handler
     using `MutationKind::Archive`
