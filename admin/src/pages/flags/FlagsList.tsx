@@ -5,29 +5,18 @@ import { PageHeader, VariantBar, Sparkline } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
-
-interface FlagResponse {
-  flag_id: string
-  project_id: string
-  key: string
-  name: string
-  description: string
-  flag_type: string // "bool" | "string" | "int" | "double" | "json"
-  status: string // "enabled" | "disabled"
-  version: number
-  created_at: string
-  updated_at: string
-}
+import type { AdminFlagResponse } from '../../lib/types'
+import { CreateFlagModal } from './CreateFlagModal'
 
 function Toggle({ on, onClick }: { on: boolean; onClick: (e: React.MouseEvent) => void }) {
   return <span className={`toggle ${on ? 'on' : ''}`} onClick={onClick} />
 }
 
-function FlagTableRow({ flag, orgId, onToggle }: { flag: FlagResponse; orgId: string; onToggle: (key: string) => void }) {
+function FlagTableRow({ flag, orgId, onToggle }: { flag: AdminFlagResponse; orgId: string; onToggle: (key: string) => void }) {
   const navigate = useNavigate()
   return (
     <tr className="row-clickable" onClick={() => navigate(`/org/${orgId}/flags/${flag.key}`)}>
-      <td><Toggle on={flag.status === 'enabled'} onClick={(e) => { e.stopPropagation(); onToggle(flag.key) }} /></td>
+      <td><Toggle on={flag.enabled} onClick={(e) => { e.stopPropagation(); onToggle(flag.key) }} /></td>
       <td>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span className="mono-key">{flag.key}</span>
@@ -35,7 +24,7 @@ function FlagTableRow({ flag, orgId, onToggle }: { flag: FlagResponse; orgId: st
         </div>
       </td>
       <td><span className={`type-pill ${flag.flag_type}`}>{flag.flag_type}</span></td>
-      <td style={{ minWidth: 180 }}><VariantBar variants={[{ name: flag.status === 'enabled' ? 'on' : 'off', alloc: 100 }]} /></td>
+      <td style={{ minWidth: 180 }}><VariantBar variants={[{ name: flag.enabled ? 'on' : 'off', alloc: 100 }]} /></td>
       <td>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Sparkline data={[]} height={20} />
@@ -44,29 +33,31 @@ function FlagTableRow({ flag, orgId, onToggle }: { flag: FlagResponse; orgId: st
       </td>
       <td><span style={{ color: 'var(--fg-faint)' }}>—</span></td>
       <td><span style={{ color: 'var(--fg-muted)' }}>—</span></td>
-      <td style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{new Date(flag.updated_at).toLocaleDateString()}</td>
+      <td style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+        {flag.updated_at ? new Date(flag.updated_at).toLocaleDateString() : '—'}
+      </td>
       <td><I.chevronRight size={14} stroke="var(--fg-subtle)" /></td>
     </tr>
   )
 }
 
-function FlagCard({ flag, orgId, onToggle }: { flag: FlagResponse; orgId: string; onToggle: (key: string) => void }) {
+function FlagCard({ flag, orgId, onToggle }: { flag: AdminFlagResponse; orgId: string; onToggle: (key: string) => void }) {
   const navigate = useNavigate()
   return (
     <div className="card" style={{ cursor: 'pointer' }} onClick={() => navigate(`/org/${orgId}/flags/${flag.key}`)}>
       <div style={{ padding: 14, borderBottom: '1px solid var(--border-faint)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-          <Toggle on={flag.status === 'enabled'} onClick={(e) => { e.stopPropagation(); onToggle(flag.key) }} />
+          <Toggle on={flag.enabled} onClick={(e) => { e.stopPropagation(); onToggle(flag.key) }} />
           <span className={`type-pill ${flag.flag_type}`}>{flag.flag_type}</span>
         </div>
         <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{flag.key}</div>
         <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{flag.name}</div>
       </div>
       <div style={{ padding: 14 }}>
-        <VariantBar variants={[{ name: flag.status === 'enabled' ? 'on' : 'off', alloc: 100 }]} />
+        <VariantBar variants={[{ name: flag.enabled ? 'on' : 'off', alloc: 100 }]} />
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 10, fontSize: 11, color: 'var(--fg-muted)' }}>
           <span>v{flag.version}</span>
-          <span>{new Date(flag.updated_at).toLocaleDateString()}</span>
+          <span>{flag.updated_at ? new Date(flag.updated_at).toLocaleDateString() : '—'}</span>
         </div>
       </div>
     </div>
@@ -79,41 +70,50 @@ export function FlagsList() {
   const { projectId, orgId } = useOrgContext()
   const [layout, setLayout] = useState<'table' | 'cards' | 'grouped'>(tweaks.flagsLayout)
   const [search, setSearch] = useState('')
-  const [flags, setFlags] = useState<FlagResponse[]>([])
+  const [showArchived, setShowArchived] = useState(false)
+  const [flags, setFlags] = useState<AdminFlagResponse[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [enabledSet, setEnabledSet] = useState<Set<string>>(new Set())
+  const [optimisticEnabled, setOptimisticEnabled] = useState<Map<string, boolean>>(new Map())
+  const [showCreate, setShowCreate] = useState(false)
 
   useEffect(() => {
     if (!projectId) return
     setLoading(true)
     setError(null)
-    api.get<FlagResponse[]>(`/v1/projects/${projectId}/flags`)
+    const params = showArchived ? '?include_archived=true' : ''
+    api.get<AdminFlagResponse[]>(`/v1/projects/${projectId}/flags${params}`)
       .then(({ data }) => {
         setFlags(data)
-        setEnabledSet(new Set(data.filter((f) => f.status === 'enabled').map((f) => f.key)))
+        setOptimisticEnabled(new Map(data.map((f) => [f.key, f.enabled])))
       })
       .catch((err) => setError(err?.response?.data?.message ?? err.message ?? 'Failed to load flags'))
       .finally(() => setLoading(false))
-  }, [projectId])
+  }, [projectId, showArchived])
 
   function toggleFlag(key: string) {
-    setEnabledSet((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
+    const current = optimisticEnabled.get(key) ?? flags.find((f) => f.key === key)?.enabled ?? false
+    const next = !current
+    // Optimistic update
+    setOptimisticEnabled((prev) => new Map(prev).set(key, next))
+    // Fire API call
+    const flag = flags.find((f) => f.key === key)
+    if (!flag || !projectId) return
+    api.put(`/v1/projects/${projectId}/flags/${key}`, { enabled: next, version: flag.version })
+      .catch(() => {
+        // Revert on failure
+        setOptimisticEnabled((prev) => new Map(prev).set(key, current))
+      })
   }
 
-  const displayFlags = flags.map((f) => ({ ...f, status: enabledSet.has(f.key) ? 'enabled' : 'disabled' }))
+  const displayFlags = flags.map((f) => ({ ...f, enabled: optimisticEnabled.get(f.key) ?? f.enabled }))
 
   const filtered = displayFlags.filter((f) =>
     !search || f.key.includes(search) || f.name.toLowerCase().includes(search.toLowerCase())
   )
 
-  const onCount = filtered.filter((f) => f.status === 'enabled').length
-  const offCount = filtered.filter((f) => f.status === 'disabled').length
+  const onCount = filtered.filter((f) => f.enabled).length
+  const offCount = filtered.filter((f) => !f.enabled).length
 
   if (!projectId) {
     return (
@@ -148,8 +148,13 @@ export function FlagsList() {
         actions={
           <>
             <button className="btn"><I.filter size={13} /> Filters</button>
-            <button className="btn"><I.archive size={13} /> Archived</button>
-            <button className="btn primary" onClick={() => navigate(`/org/${orgId}/flags/new`)}><I.plus size={14} /> New flag</button>
+            <button
+              className={`btn ${showArchived ? 'active' : ''}`}
+              onClick={() => setShowArchived((v) => !v)}
+            >
+              <I.archive size={13} /> {showArchived ? 'Hide archived' : 'Show archived'}
+            </button>
+            <button className="btn primary" onClick={() => setShowCreate(true)}><I.plus size={14} /> New flag</button>
           </>
         }
       />
@@ -207,7 +212,7 @@ export function FlagsList() {
                   <div className="empty-icon"><I.flag size={20} /></div>
                   <div className="empty-title">No flags yet</div>
                   <div className="empty-desc">Create your first feature flag to start controlling feature rollouts.</div>
-                  <button className="btn primary" style={{ marginTop: 8 }}><I.plus size={13} /> New flag</button>
+                  <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowCreate(true)}><I.plus size={13} /> New flag</button>
                 </div>
               </div>
             )}
@@ -256,11 +261,13 @@ export function FlagsList() {
                       {filtered.map((f) => (
                         <tr key={f.key} className="row-clickable" onClick={() => navigate(`/org/${orgId}/flags/${f.key}`)}>
                           <td style={{ width: 40 }}>
-                            <Toggle on={f.status === 'enabled'} onClick={(e) => { e.stopPropagation(); toggleFlag(f.key) }} />
+                            <Toggle on={f.enabled} onClick={(e) => { e.stopPropagation(); toggleFlag(f.key) }} />
                           </td>
                           <td><span className="mono-key">{f.key}</span></td>
                           <td><span className={`type-pill ${f.flag_type}`}>{f.flag_type}</span></td>
-                          <td style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{new Date(f.updated_at).toLocaleDateString()}</td>
+                          <td style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
+                            {f.updated_at ? new Date(f.updated_at).toLocaleDateString() : '—'}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -271,6 +278,8 @@ export function FlagsList() {
           </>
         )}
       </div>
+
+      {showCreate && <CreateFlagModal onClose={() => setShowCreate(false)} />}
     </>
   )
 }

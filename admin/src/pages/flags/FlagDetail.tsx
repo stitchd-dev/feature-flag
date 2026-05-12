@@ -3,254 +3,280 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
 import { PageHeader, VariantBar } from '../../components/primitives'
 import { I } from '../../components/icons'
-import { FLAGS, EXPERIMENTS } from '../../lib/mockData'
-import type { Flag } from '../../lib/mockData'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
+import type { AdminFlagResponse, VariantJson } from '../../lib/types'
+import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
+import { localId, allocationSum } from '../../lib/ruleTypes'
+import { RuleList } from '../../components/rules/RuleList'
 
-interface FlagResponse {
-  flag_id: string
-  project_id: string
-  key: string
-  name: string
-  description: string
-  flag_type: string
-  status: string
-  version: number
-  created_at: string
-  updated_at: string
-}
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-// ─── Rule tree types ────────────────────────────────────────────────────────
-
-type ClauseNode = { op: 'clause'; ctx?: string; attr: string; comparator: string; value: string }
-type SegmentNode = { op: 'segment'; segmentKey: string; negate?: boolean }
-type GroupNode = { op: 'AND' | 'OR' | 'NOT'; children: RuleNode[] }
-type RuleNode = ClauseNode | SegmentNode | GroupNode
-
-interface Rule {
-  id: number
-  contextTypes: string[]
-  hit: string
-  tree: RuleNode
-  then: { variant?: string; alloc?: number } | { rollout: { name: string; alloc: number }[] }
-}
-
-const CTX_COLOR: Record<string, string> = {
-  user: '#5BAEF5',
-  merchant: '#3DD68C',
-  device: '#A892FF',
-  organization: '#F0B547',
-  session: '#F0461F',
-}
-
-const MOCK_RULES: Rule[] = [
-  {
-    id: 1, contextTypes: ['user'], hit: '892K',
-    tree: { op: 'AND', children: [
-      { op: 'clause', attr: 'country', comparator: 'in', value: '[US, CA, GB]' },
-      { op: 'clause', attr: 'plan', comparator: '==', value: 'pro' },
-    ]},
-    then: { variant: 'on', alloc: 100 },
-  },
-  {
-    id: 2, contextTypes: ['user', 'merchant', 'device'], hit: '318K',
-    tree: { op: 'AND', children: [
-      { op: 'segment', segmentKey: 'high-value-cart' },
-      { op: 'OR', children: [
-        { op: 'clause', ctx: 'user', attr: 'plan', comparator: 'in', value: '[pro, enterprise]' },
-        { op: 'AND', children: [
-          { op: 'clause', ctx: 'user', attr: 'signup_age_days', comparator: '>=', value: '30' },
-          { op: 'clause', ctx: 'user', attr: 'lifetime_orders', comparator: '>', value: '5' },
-        ]},
-      ]},
-      { op: 'clause', ctx: 'merchant', attr: 'tier', comparator: '==', value: 'platinum' },
-      { op: 'clause', ctx: 'device', attr: 'platform', comparator: 'in', value: '[ios, android]' },
-      { op: 'NOT', children: [{ op: 'segment', segmentKey: 'internal' }] },
-    ]},
-    then: { rollout: [{ name: 'on', alloc: 50 }, { name: 'off', alloc: 50 }] },
-  },
-  {
-    id: 3, contextTypes: ['merchant'], hit: '1.2M',
-    tree: { op: 'AND', children: [
-      { op: 'clause', attr: 'tier', comparator: '==', value: 'platinum' },
-      { op: 'clause', attr: 'dispute_rate', comparator: '<', value: '0.02' },
-    ]},
-    then: { rollout: [{ name: 'on', alloc: 30 }, { name: 'off', alloc: 70 }] },
-  },
-  {
-    id: 4, contextTypes: ['user'], hit: '44K',
-    tree: { op: 'segment', segmentKey: 'beta-customers' },
-    then: { variant: 'on', alloc: 100 },
-  },
-  {
-    id: 5, contextTypes: ['device'], hit: '2.1K',
-    tree: { op: 'NOT', children: [
-      { op: 'clause', attr: 'user_agent', comparator: 'contains', value: 'stitchd-internal' },
-    ]},
-    then: { variant: 'off', alloc: 100 },
-  },
-]
-
-// ─── RuleTree ───────────────────────────────────────────────────────────────
-
-function RuleTree({ node, depth = 0, showCtx = false }: { node: RuleNode; depth?: number; showCtx?: boolean }) {
-  if (node.op === 'clause') {
-    return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 5, fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-        {showCtx && node.ctx && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 5px', marginRight: 2, background: 'var(--bg-sunken)', border: '1px solid var(--border-faint)', borderRadius: 3, fontSize: 10, fontWeight: 600 }}>
-            <span className="env-dot" style={{ width: 5, height: 5, background: CTX_COLOR[node.ctx] ?? 'var(--fg-muted)', boxShadow: 'none' }} />
-            {node.ctx}
-          </span>
-        )}
-        <span style={{ color: 'var(--info)' }}>{node.attr}</span>
-        <span style={{ color: 'var(--fg-subtle)' }}>{node.comparator}</span>
-        <span style={{ color: 'var(--success)' }}>{node.value}</span>
-      </span>
-    )
+function parseRuleState(raw: { condition: unknown; output: unknown }): RuleState {
+  return {
+    _localId: localId(),
+    condition: raw.condition as ConditionExpr,
+    output: raw.output as RuleOutputJson,
   }
+}
 
-  if (node.op === 'segment') {
-    return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 8px', background: 'var(--accent-soft)', border: '1px solid var(--accent)', borderRadius: 5, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent)' }}>
-        <I.users size={11} />
-        <span style={{ color: 'var(--fg-subtle)' }}>segment</span>
-        <span style={{ fontWeight: 600 }}>{node.segmentKey}</span>
-      </span>
-    )
-  }
+function formatVariantValue(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
 
-  const opColor = node.op === 'AND' ? 'var(--info)' : node.op === 'OR' ? '#A892FF' : 'var(--danger)'
-  const showLabel = depth > 0
+function parseValue(raw: string, flagType: string): unknown {
+  if (flagType === 'bool') return raw === 'true' || raw === '1'
+  if (flagType === 'int') return parseInt(raw, 10)
+  if (flagType === 'double') return parseFloat(raw)
+  if (flagType === 'json') { try { return JSON.parse(raw) } catch { return raw } }
+  return raw
+}
 
+// ─── Toast ────────────────────────────────────────────────────────────────────
+
+function Toast({ message, kind, onDismiss }: { message: string; kind: 'success' | 'error'; onDismiss: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDismiss, 3500)
+    return () => clearTimeout(t)
+  }, [onDismiss])
   return (
     <div style={{
-      position: 'relative',
-      padding: showLabel ? '10px 10px 10px 14px' : 0,
-      background: showLabel ? 'var(--bg-sunken)' : 'transparent',
-      borderRadius: 6,
-      border: showLabel ? '1px solid var(--border-faint)' : 'none',
-      borderLeft: showLabel ? `2px solid ${opColor}` : 'none',
+      position: 'fixed', bottom: 72, right: 20, zIndex: 300,
+      padding: '10px 16px', borderRadius: 8, fontSize: 13, maxWidth: 340,
+      background: kind === 'success' ? 'var(--success-bg)' : 'var(--danger-bg)',
+      border: `1px solid ${kind === 'success' ? 'rgba(17,122,61,0.3)' : 'rgba(196,43,28,0.3)'}`,
+      color: kind === 'success' ? 'var(--success)' : 'var(--danger)',
+      boxShadow: 'var(--shadow-md)',
+      display: 'flex', alignItems: 'center', gap: 8,
     }}>
-      {showLabel && (
-        <div style={{ position: 'absolute', top: -8, left: 10, padding: '1px 7px', background: 'var(--surface)', border: `1px solid ${opColor}`, borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, color: opColor, letterSpacing: '0.05em' }}>{node.op}</div>
-      )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-        {node.op === 'NOT' ? (
-          <>
-            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, color: 'var(--danger)', padding: '2px 6px', background: 'var(--surface)', borderRadius: 3 }}>NOT</span>
-            {node.children.map((c, i) => <RuleTree key={i} node={c} depth={depth + 1} showCtx={showCtx} />)}
-          </>
-        ) : (
-          node.children.map((c, i) => (
-            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              {i > 0 && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, color: opColor, padding: '2px 6px', background: 'var(--surface)', border: `1px solid ${opColor}33`, borderRadius: 3, letterSpacing: '0.05em' }}>{node.op}</span>}
-              <RuleTree node={c} depth={depth + 1} showCtx={showCtx} />
-            </span>
-          ))
-        )}
-      </div>
+      {kind === 'success' ? <I.check size={14} /> : <I.alert size={14} />}
+      {message}
+      <button className="icon-btn" style={{ marginLeft: 'auto' }} onClick={onDismiss}><I.x size={12} /></button>
     </div>
   )
 }
 
-// ─── Panels ─────────────────────────────────────────────────────────────────
-
-function CtxPill({ kind }: { kind: string }) {
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 9px', background: 'var(--surface)', border: '1px solid var(--border-strong)', borderRadius: 5, fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600 }}>
-      <span className="env-dot" style={{ width: 6, height: 6, background: CTX_COLOR[kind] ?? 'var(--accent)', boxShadow: 'none' }} />
-      {kind}
-    </span>
-  )
-}
-
-function RulesPanel({ flag }: { flag: Flag }) {
-  const rules = MOCK_RULES.slice(0, Math.max(flag.rules || 4, 5))
-  return (
-    <div className="card">
-      <div className="card-header">
-        <div className="card-title"><I.toggle size={14} /> Targeting rules</div>
-        <button className="btn sm"><I.plus size={12} /> Add rule</button>
-      </div>
-      <div style={{ padding: 14 }}>
-        {rules.map((r, i) => (
-          <div key={r.id} style={{ display: 'flex', gap: 10, padding: '14px 0', borderBottom: i < rules.length - 1 ? '1px solid var(--border-faint)' : 'none' }}>
-            <div style={{ width: 28, height: 28, borderRadius: 6, background: 'var(--bg-sunken)', color: 'var(--fg-muted)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, flexShrink: 0 }}>{i + 1}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 10, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>{r.contextTypes.length > 1 ? 'Contexts' : 'Context'}</span>
-                {r.contextTypes.map((kind, ki) => (
-                  <span key={kind} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    {ki > 0 && <span style={{ fontSize: 10, color: 'var(--fg-subtle)', fontFamily: 'var(--font-mono)' }}>+</span>}
-                    <CtxPill kind={kind} />
-                  </span>
-                ))}
-                {r.contextTypes.length > 1 && <span style={{ fontSize: 10, padding: '2px 6px', background: 'var(--accent-soft)', color: 'var(--accent)', borderRadius: 3, fontWeight: 600, letterSpacing: '0.04em' }}>MULTI-CONTEXT</span>}
-                <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>where</span>
-              </div>
-              <RuleTree node={r.tree} depth={0} showCtx={r.contextTypes.length > 1} />
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border-faint)' }}>
-                <div style={{ fontSize: 10, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4, fontWeight: 600 }}>Serve</div>
-                {'variant' in r.then ? (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span className="badge accent">{r.then.variant}</span>
-                    <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>to 100% of matching contexts</span>
-                  </div>
-                ) : (
-                  <div style={{ maxWidth: 360 }}>
-                    <VariantBar variants={(r.then as { rollout: { name: string; alloc: number }[] }).rollout} />
-                  </div>
-                )}
-              </div>
-            </div>
-            <div style={{ textAlign: 'right', flexShrink: 0 }}>
-              <div style={{ fontSize: 10, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>30d hit</div>
-              <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13 }}>{r.hit}</div>
-              <button className="icon-btn" style={{ marginTop: 4 }}><I.more size={14} /></button>
-            </div>
-          </div>
-        ))}
-        <div style={{ padding: '12px 0 0', display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--fg-muted)' }}>
-          <I.info size={13} />
-          <span>Default rule (catch-all): serve <span className="badge">off</span> to 100%</span>
-        </div>
-      </div>
-    </div>
-  )
-}
+// ─── VariantsPanel ────────────────────────────────────────────────────────────
 
 const VARIANT_PALETTE = ['#F0461F', '#5BAEF5', '#3DD68C', '#A892FF', '#E6B14F']
 
-function VariantsPanel({ flag, full }: { flag: Flag; full?: boolean }) {
+function VariantsPanel({
+  flag, onSaved,
+}: {
+  flag: AdminFlagResponse
+  onSaved: (updated: AdminFlagResponse) => void
+}) {
+  const { projectId } = useOrgContext()
+  const [editing, setEditing] = useState(false)
+  const [variants, setVariants] = useState<{ key: string; value: string }[]>([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function startEdit() {
+    setVariants(flag.variants.map((v) => ({ key: v.key, value: formatVariantValue(v.value) })))
+    setEditing(true)
+    setError(null)
+  }
+
+  function cancel() {
+    setEditing(false)
+    setError(null)
+  }
+
+  function addVariant() {
+    setVariants([...variants, { key: '', value: '' }])
+  }
+
+  function removeVariant(i: number) {
+    if (variants.length <= 1) return
+    const removed = variants[i].key
+    const usedInRules = flag.rules.some((r) => {
+      const o = r.output as { variant_key?: string; allocation?: AllocationBucket[] }
+      if (o.variant_key === removed) return true
+      return o.allocation?.some((b) => b.variant_key === removed) ?? false
+    })
+    if (usedInRules) {
+      setError(`Variant "${removed}" is referenced in a rule — remove it from rules first.`)
+      return
+    }
+    setVariants(variants.filter((_, j) => j !== i))
+    setError(null)
+  }
+
+  async function save() {
+    if (!projectId) return
+    const validVariants = variants.filter((v) => v.key.trim())
+    if (validVariants.length === 0) { setError('At least one variant is required'); return }
+    setSaving(true)
+    setError(null)
+    try {
+      const body = {
+        variants: validVariants.map((v) => ({ key: v.key.trim(), value: parseValue(v.value, flag.flag_type) })),
+        version: flag.version,
+      }
+      const { data } = await api.put<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${flag.key}/variants`, body)
+      setEditing(false)
+      onSaved(data)
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to save variants')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const displayVariants = flag.variants.map((v, i) => ({
+    name: v.key, alloc: Math.floor(100 / flag.variants.length) + (i === 0 ? 100 % flag.variants.length : 0),
+  }))
+
   return (
     <div className="card">
       <div className="card-header">
         <div className="card-title"><I.layers size={14} /> Variants</div>
-        <button className="btn sm"><I.plus size={12} /> Add variant</button>
-      </div>
-      <div style={{ padding: full ? 18 : 14 }}>
-        <VariantBar variants={flag.variants} />
-        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {flag.variants.map((v, i) => (
-            <div key={v.name} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-2)' }}>
-              <div style={{ width: 10, height: 10, borderRadius: 3, background: VARIANT_PALETTE[i % VARIANT_PALETTE.length] }} />
-              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, flex: 1 }}>{v.name}</span>
-              {v.value !== undefined && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>= {String(v.value)}</span>}
-              <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 13 }}>{v.alloc}%</span>
-              <button className="icon-btn"><I.pencil size={13} /></button>
+        {!editing
+          ? <button className="btn sm" onClick={startEdit}><I.pencil size={12} /> Edit</button>
+          : <div style={{ display: 'flex', gap: 6 }}>
+              <button className="btn sm" onClick={cancel}>Cancel</button>
+              <button className="btn primary sm" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>
             </div>
-          ))}
-        </div>
+        }
+      </div>
+      <div style={{ padding: 14 }}>
+        {error && (
+          <div style={{ padding: '8px 12px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 12, marginBottom: 10 }}>
+            {error}
+          </div>
+        )}
+
+        {!editing ? (
+          <>
+            <VariantBar variants={displayVariants} />
+            <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {flag.variants.map((v, i) => (
+                <div key={v.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-2)' }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 3, background: VARIANT_PALETTE[i % VARIANT_PALETTE.length] }} />
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, flex: 1 }}>{v.key}</span>
+                  {v.value !== undefined && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>= {formatVariantValue(v.value)}</span>}
+                  {flag.default_variant_key === v.key && <span className="badge">default</span>}
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {variants.map((v, i) => (
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ width: 10, height: 10, borderRadius: 3, background: VARIANT_PALETTE[i % VARIANT_PALETTE.length], flexShrink: 0 }} />
+                <input className="input" style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                  placeholder="key" value={v.key}
+                  onChange={(e) => setVariants(variants.map((x, j) => j === i ? { ...x, key: e.target.value } : x))} />
+                <input className="input" style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                  placeholder="value" value={v.value}
+                  onChange={(e) => setVariants(variants.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
+                <button className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
+                  disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
+                  <I.x size={12} />
+                </button>
+              </div>
+            ))}
+            <button className="btn sm" style={{ alignSelf: 'flex-start' }} onClick={addVariant}><I.plus size={11} /> Add variant</button>
+          </div>
+        )}
+
         <div className="hr" />
         <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-          <strong style={{ color: 'var(--fg)' }}>Bucketing:</strong> hash(user.id, "{flag.key}", project, env) — sticky across evaluations. 0.1% granularity.
+          <strong style={{ color: 'var(--fg)' }}>Bucketing:</strong> hash(context.key, &quot;{flag.key}&quot;, project, env) — sticky across evaluations. 0.1% granularity.
         </div>
       </div>
     </div>
   )
 }
+
+// ─── TargetingPanel (rule builder) ───────────────────────────────────────────
+
+function validateRules(rules: RuleState[]): string | null {
+  for (let i = 0; i < rules.length; i++) {
+    const o = rules[i].output
+    if ('allocation' in o) {
+      const sum = allocationSum((o as { allocation: AllocationBucket[] }).allocation)
+      if (sum !== 1000) return `Rule ${i + 1}: allocation must sum to 100% (currently ${(sum / 10).toFixed(1)}%)`
+    }
+  }
+  return null
+}
+
+function TargetingPanel({
+  flag, onSaved,
+}: {
+  flag: AdminFlagResponse
+  onSaved: (updated: AdminFlagResponse) => void
+}) {
+  const { projectId } = useOrgContext()
+  const [rules, setRules] = useState<RuleState[]>(() => flag.rules.map(parseRuleState))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [dirty, setDirty] = useState(false)
+
+  const variantKeys = flag.variants.map((v: VariantJson) => v.key)
+
+  function updateRules(next: RuleState[]) {
+    setRules(next)
+    setDirty(true)
+  }
+
+  async function saveRules() {
+    const err = validateRules(rules)
+    if (err) { setError(err); return }
+    if (!projectId) return
+    setSaving(true)
+    setError(null)
+    try {
+      const body = {
+        rules: rules.map((r) => ({ condition: r.condition, output: r.output })),
+        version: flag.version,
+      }
+      const { data } = await api.put<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${flag.key}/rules`, body)
+      setDirty(false)
+      onSaved(data)
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to save rules')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div className="card-title"><I.toggle size={14} /> Targeting rules</div>
+        {dirty && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 600 }}>Unsaved changes</span>
+            <button className="btn primary sm" disabled={saving} onClick={saveRules}>
+              {saving ? 'Saving…' : 'Save rules'}
+            </button>
+          </div>
+        )}
+      </div>
+      <div style={{ padding: 14 }}>
+        {error && (
+          <div style={{ padding: '8px 12px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 12, marginBottom: 12 }}>
+            {error}
+          </div>
+        )}
+        <RuleList
+          rules={rules}
+          variants={variantKeys}
+          defaultVariantKey={flag.default_variant_key}
+          onChange={updateRules}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ─── EvalPanel ────────────────────────────────────────────────────────────────
 
 function EvalPanel() {
   return (
@@ -274,11 +300,9 @@ function EvalPanel() {
           {[40, 80, 120, 160].map((y) => <line key={y} x1="0" x2="800" y1={y} y2={y} stroke="var(--border-faint)" strokeWidth="1" />)}
           <path d="M0,160 L60,140 L120,150 L180,120 L240,135 L300,100 L360,85 L420,95 L480,70 L540,55 L600,60 L660,40 L720,25 L800,20 L800,200 L0,200 Z" fill="url(#evGrad)" />
           <path d="M0,160 L60,140 L120,150 L180,120 L240,135 L300,100 L360,85 L420,95 L480,70 L540,55 L600,60 L660,40 L720,25 L800,20" fill="none" stroke="var(--accent)" strokeWidth="2" />
-          <path d="M0,180 L60,175 L120,178 L180,170 L240,172 L300,165 L360,160 L420,162 L480,155 L540,150 L600,152 L660,148 L720,145 L800,143" fill="none" stroke="var(--info)" strokeWidth="1.5" strokeDasharray="3 3" />
         </svg>
         <div style={{ display: 'flex', gap: 18, marginTop: 12, fontSize: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 2, background: 'var(--accent)', display: 'inline-block' }} /> on (served)</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 2, background: 'var(--info)', display: 'inline-block', borderTop: '1px dashed var(--info)' }} /> off (served)</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 2, background: 'var(--accent)', display: 'inline-block' }} /> served</div>
           <div style={{ marginLeft: 'auto', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>p95 8ms · p99 14ms · errors 0.001%</div>
         </div>
       </div>
@@ -286,44 +310,9 @@ function EvalPanel() {
   )
 }
 
-function FlagExpPanel({ flag }: { flag: Flag }) {
-  const navigate = useNavigate()
-  const exps = EXPERIMENTS.filter((e) => e.flag === flag.key)
-  if (!exps.length) {
-    return (
-      <div className="card">
-        <div className="empty">
-          <div className="empty-icon"><I.beaker size={20} /></div>
-          <div className="empty-title">No experiments yet</div>
-          <div className="empty-desc">When you bind an experiment to this flag, it'll be locked from edits for the duration. Stats compute every 60 minutes.</div>
-          <button className="btn primary" style={{ marginTop: 8 }}><I.plus size={13} /> Create experiment</button>
-        </div>
-      </div>
-    )
-  }
-  return (
-    <div className="card">
-      <table className="table">
-        <thead><tr><th>Experiment</th><th>Model</th><th>Status</th><th>Lift</th><th>Confidence</th><th>Samples</th><th></th></tr></thead>
-        <tbody>
-          {exps.map((e) => (
-            <tr key={e.key} className="row-clickable" onClick={() => navigate(`/experiments/${e.key}`)}>
-              <td><div style={{ fontWeight: 600 }}>{e.name}</div><div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{e.primary}</div></td>
-              <td><span className="badge">{e.model}</span></td>
-              <td><span className={`badge ${e.state === 'running' ? 'info' : 'success'}`}>{e.state}</span></td>
-              <td style={{ color: e.lift.startsWith('+') ? 'var(--success)' : 'var(--danger)', fontFamily: 'var(--font-mono)' }}>{e.lift}</td>
-              <td style={{ fontFamily: 'var(--font-mono)' }}>{e.confidence}%</td>
-              <td style={{ fontFamily: 'var(--font-mono)' }}>{e.samples}</td>
-              <td><I.chevronRight size={14} stroke="var(--fg-subtle)" /></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
+// ─── SdkSnippet ───────────────────────────────────────────────────────────────
 
-function SdkSnippet({ flag }: { flag: Flag }) {
+function SdkSnippet({ flag }: { flag: AdminFlagResponse }) {
   const typeMap: Record<string, string> = { bool: 'bool', string: 'String', double: 'f64', int: 'i64', json: 'serde_json::Value' }
   return (
     <div className="split-2">
@@ -338,7 +327,7 @@ let ctx = Context::user("u_8421")
     .param("country", "US")
     .param("plan", "pro");
 
-let value = client.evaluate::<${typeMap[flag.type] ?? flag.type}>(
+let value = client.evaluate::<${typeMap[flag.flag_type] ?? flag.flag_type}>(
     "${flag.key}", &ctx
 ).await?;`}</pre>
         </div>
@@ -352,15 +341,13 @@ let value = client.evaluate::<${typeMap[flag.type] ?? flag.type}>(
   "key": "u_8421",
   "parameters": {
     "country": "US",
-    "plan": "pro",
-    "signup_age_days": 14
-  },
-  "privateParameters": ["email"]
+    "plan": "pro"
+  }
 }`}</pre>
           <div style={{ padding: 12, background: 'var(--success-bg)', border: '1px solid rgba(17,122,61,0.25)', borderRadius: 6 }}>
             <div style={{ fontSize: 11, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Result</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 700 }}>{flag.variants[0]?.name}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 700 }}>{flag.variants[0]?.key ?? '—'}</span>
               <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>matched rule #1 · evaluated in 0.4ms</span>
             </div>
           </div>
@@ -370,73 +357,189 @@ let value = client.evaluate::<${typeMap[flag.type] ?? flag.type}>(
   )
 }
 
+// ─── FlagHistory ──────────────────────────────────────────────────────────────
+
 function FlagHistory() {
   const events = [
-    { t: 'now', who: 'Priya Reddy', what: 'rollout 20% → 30%', kind: 'update' },
-    { t: '12m ago', who: 'Marco Greco', what: 'added rule #2 (NOT segment is internal)', kind: 'create' },
-    { t: '3h ago', who: 'system', what: 'evaluation rate +12% over baseline', kind: 'info' },
-    { t: 'yesterday', who: 'Lin Tan', what: 'added segment beta-customers to rule #3', kind: 'update' },
-    { t: '2d ago', who: 'Marco Greco', what: 'promoted from staging → production', kind: 'deploy' },
+    { t: 'now', who: 'you', what: 'loaded flag history', kind: 'info' },
   ]
   return (
     <div className="card">
-      <div className="card-body" style={{ padding: 0 }}>
-        {events.map((e, i) => (
-          <div key={i} style={{ display: 'flex', gap: 12, padding: '14px 18px', borderBottom: i < events.length - 1 ? '1px solid var(--border-faint)' : 'none' }}>
-            <div className="user-avatar" style={{ background: e.who === 'system' ? 'var(--bg-sunken)' : 'linear-gradient(135deg, #FF8866, #C8361A)', color: e.who === 'system' ? 'var(--fg-muted)' : 'white', border: e.who === 'system' ? '1px solid var(--border)' : 'none' }}>
-              {e.who === 'system' ? 'Σ' : e.who.split(' ').map((s) => s[0]).join('')}
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13 }}><strong>{e.who}</strong> {e.what}</div>
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2, fontFamily: 'var(--font-mono)' }}>{e.t} · {e.kind}</div>
-            </div>
-            <button className="btn sm">View diff</button>
-          </div>
-        ))}
+      <div className="empty" style={{ padding: '32px 24px' }}>
+        <div className="empty-icon"><I.history size={20} /></div>
+        <div className="empty-title">History coming soon</div>
+        <div className="empty-desc">Audit log will show all flag mutations here.</div>
+      </div>
+      {events.length === 0 && null}
+    </div>
+  )
+}
+
+// ─── ArchiveConfirm ───────────────────────────────────────────────────────────
+
+function ArchiveConfirm({ flagKey, onConfirm, onCancel }: { flagKey: string; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} onClick={onCancel} />
+      <div className="card" style={{ position: 'relative', width: 400, zIndex: 1, padding: 24 }}>
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Archive flag?</div>
+        <div style={{ fontSize: 13, color: 'var(--fg-muted)', marginBottom: 20 }}>
+          Flag <span className="mono-key">{flagKey}</span> will be archived and excluded from evaluations.
+          You can restore it later with <code>?include_archived=true</code>.
+        </div>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn danger" onClick={onConfirm}>Archive</button>
+        </div>
       </div>
     </div>
   )
 }
 
-// ─── FlagDetail ──────────────────────────────────────────────────────────────
+// ─── MetadataEditor (inline edit) ────────────────────────────────────────────
 
-type Tab = 'targeting' | 'variants' | 'evals' | 'exp' | 'code' | 'history'
+function MetadataEditor({
+  flag,
+  onSaved,
+}: {
+  flag: AdminFlagResponse
+  onSaved: (updated: AdminFlagResponse) => void
+}) {
+  const { projectId } = useOrgContext()
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(flag.name)
+  const [description, setDescription] = useState(flag.description)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function startEdit() {
+    setName(flag.name)
+    setDescription(flag.description)
+    setEditing(true)
+    setError(null)
+  }
+
+  function cancel() {
+    setEditing(false)
+    setError(null)
+  }
+
+  async function save() {
+    if (!projectId) return
+    setSaving(true)
+    setError(null)
+    try {
+      const { data } = await api.put<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${flag.key}`, {
+        name: name.trim(),
+        description: description.trim(),
+        version: flag.version,
+      })
+      setEditing(false)
+      onSaved(data)
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: 13, color: 'var(--fg-muted)' }}>
+          {flag.name}{flag.description ? ` — ${flag.description}` : ''}
+        </span>
+        <button className="icon-btn" onClick={startEdit}><I.pencil size={12} /></button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 300 }}>
+      {error && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{error}</div>}
+      <input className="input" style={{ fontSize: 13 }} placeholder="Name" value={name}
+        onChange={(e) => setName(e.target.value)} autoFocus />
+      <input className="input" style={{ fontSize: 12 }} placeholder="Description (optional)" value={description}
+        onChange={(e) => setDescription(e.target.value)} />
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button className="btn sm" onClick={cancel}>Cancel</button>
+        <button className="btn primary sm" disabled={saving} onClick={save}>{saving ? '…' : 'Save'}</button>
+      </div>
+    </div>
+  )
+}
+
+// ─── FlagDetail ───────────────────────────────────────────────────────────────
+
+type Tab = 'targeting' | 'variants' | 'evals' | 'code' | 'history'
 
 export function FlagDetail() {
   const { key } = useParams<{ key: string }>()
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
   const { projectId, orgId } = useOrgContext()
-  const [apiFlag, setApiFlag] = useState<FlagResponse | null>(null)
-  const [apiLoading, setApiLoading] = useState(false)
-  const [apiError, setApiError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!projectId || !key) return
-    setApiLoading(true)
-    setApiError(null)
-    api.get<FlagResponse>(`/v1/projects/${projectId}/flags/${key}`)
-      .then(({ data }) => setApiFlag(data))
-      .catch((err) => setApiError(err?.response?.data?.message ?? err.message ?? 'Failed to load flag'))
-      .finally(() => setApiLoading(false))
-  }, [projectId, key])
-
-  // Fall back to mock data when API data isn't available yet
-  const mockFlag = FLAGS.find((f) => f.key === key) ?? FLAGS[0]
-  const flag = mockFlag
+  const [flag, setFlag] = useState<AdminFlagResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('targeting')
-  const [enabled, setEnabled] = useState(apiFlag ? apiFlag.status === 'enabled' : flag.state === 'on')
+  const [enabled, setEnabled] = useState(false)
+  const [togglingEnabled, setTogglingEnabled] = useState(false)
+  const [toast, setToast] = useState<{ message: string; kind: 'success' | 'error' } | null>(null)
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false)
   const layout = tweaks.flagDetailLayout
 
   useEffect(() => {
-    if (apiFlag) setEnabled(apiFlag.status === 'enabled')
-  }, [apiFlag])
+    if (!projectId || !key) return
+    setLoading(true)
+    setLoadError(null)
+    api.get<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${key}`)
+      .then(({ data }) => {
+        setFlag(data)
+        setEnabled(data.enabled)
+      })
+      .catch((err) => setLoadError(err?.response?.data?.message ?? err.message ?? 'Failed to load flag'))
+      .finally(() => setLoading(false))
+  }, [projectId, key])
 
-  const displayName = apiFlag?.name ?? flag.name
-  const displayKey = apiFlag?.key ?? flag.key
-  const displayType = apiFlag?.flag_type ?? flag.type
+  function showToast(message: string, kind: 'success' | 'error') {
+    setToast({ message, kind })
+  }
 
-  if (apiLoading) {
+  async function toggleEnabled() {
+    if (!flag || !projectId || togglingEnabled) return
+    const next = !enabled
+    setEnabled(next)
+    setTogglingEnabled(true)
+    try {
+      const { data } = await api.put<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${key}`, {
+        enabled: next,
+        version: flag.version,
+      })
+      setFlag(data)
+      setEnabled(data.enabled)
+    } catch (err: unknown) {
+      setEnabled(!next)
+      const message = (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to update flag'
+      showToast(message, 'error')
+    } finally {
+      setTogglingEnabled(false)
+    }
+  }
+
+  async function archiveFlag() {
+    if (!flag || !projectId) return
+    setShowArchiveConfirm(false)
+    try {
+      await api.post(`/v1/projects/${projectId}/flags/${flag.key}/archive`, {})
+      showToast('Flag archived', 'success')
+      setTimeout(() => navigate(`/org/${orgId}/flags`), 1200)
+    } catch (err: unknown) {
+      const message = (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to archive flag'
+      showToast(message, 'error')
+    }
+  }
+
+  if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
         <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading flag…</span>
@@ -444,12 +547,12 @@ export function FlagDetail() {
     )
   }
 
-  if (apiError) {
+  if (loadError || !flag) {
     return (
       <div className="page-body">
         <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 8, color: 'var(--danger)', fontSize: 13 }}>
           <I.alert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-          {apiError}
+          {loadError ?? 'Flag not found'}
         </div>
       </div>
     )
@@ -458,61 +561,67 @@ export function FlagDetail() {
   return (
     <>
       <PageHeader
-        crumbs={[<a key="1" onClick={() => navigate(`/org/${orgId}/flags`)} style={{ cursor: 'pointer' }}>Flags</a>, displayKey]}
-        title={displayKey}
+        crumbs={[<a key="1" onClick={() => navigate(`/org/${orgId}/flags`)} style={{ cursor: 'pointer' }}>Flags</a>, flag.key]}
+        title={flag.key}
         mono
-        subtitle={`${displayName} — ${flag.owner} team`}
+        subtitle={<MetadataEditor flag={flag} onSaved={(updated) => { setFlag(updated); showToast('Saved', 'success') }} />}
         badge={
-          <>
-            <span className={`type-pill ${displayType}`} style={{ fontSize: 11, padding: '2px 7px' }}>{displayType}</span>
-            {flag.staged && <span className="badge warning">staged changes</span>}
-          </>
+          <span className={`type-pill ${flag.flag_type}`} style={{ fontSize: 11, padding: '2px 7px' }}>{flag.flag_type}</span>
         }
         actions={
           <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', border: '1px solid var(--border-strong)', borderRadius: 6, background: 'var(--surface)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', border: '1px solid var(--border-strong)', borderRadius: 6, background: 'var(--surface)', opacity: togglingEnabled ? 0.6 : 1 }}>
               <span style={{ fontSize: 11, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{enabled ? 'Enabled' : 'Disabled'}</span>
-              <button className={`toggle lg ${enabled ? 'on' : ''}`} onClick={() => setEnabled(!enabled)} />
+              <button className={`toggle lg ${enabled ? 'on' : ''}`} onClick={toggleEnabled} />
             </div>
-            <button className="btn"><I.copy size={13} /> Copy key</button>
-            <button className="btn"><I.history size={13} /> History</button>
-            <button className="btn"><I.more size={14} /></button>
+            <button className="btn" onClick={() => { navigator.clipboard.writeText(flag.key) }}><I.copy size={13} /> Copy key</button>
+            <button className="btn" style={{ color: 'var(--danger)' }} onClick={() => setShowArchiveConfirm(true)}>
+              <I.archive size={13} /> Archive
+            </button>
           </>
         }
       />
       <div className="page-body">
-        {flag.staged && (
-          <div style={{ background: 'var(--warning-bg)', border: '1px solid rgba(184,118,26,0.35)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <I.alert size={16} stroke="var(--warning)" />
-            <div style={{ flex: 1, fontSize: 13 }}>
-              <strong>Staged changes</strong> — Marco Greco modified rule order 12m ago. Changes won't be applied until you publish.
-            </div>
-            <button className="btn sm">View diff</button>
-            <button className="btn primary sm">Publish</button>
-          </div>
-        )}
-
         <div className="tabs">
-          <button className={`tab ${tab === 'targeting' ? 'active' : ''}`} onClick={() => setTab('targeting')}><I.toggle size={13} /> Targeting <span className="count">{flag.rules}</span></button>
-          <button className={`tab ${tab === 'variants' ? 'active' : ''}`} onClick={() => setTab('variants')}><I.layers size={13} /> Variants <span className="count">{flag.variants.length}</span></button>
-          <button className={`tab ${tab === 'evals' ? 'active' : ''}`} onClick={() => setTab('evals')}><I.zap size={13} /> Evaluations</button>
-          <button className={`tab ${tab === 'exp' ? 'active' : ''}`} onClick={() => setTab('exp')}><I.beaker size={13} /> Experiments <span className="count">{flag.experiments}</span></button>
-          <button className={`tab ${tab === 'code' ? 'active' : ''}`} onClick={() => setTab('code')}><I.command size={13} /> SDK snippet</button>
-          <button className={`tab ${tab === 'history' ? 'active' : ''}`} onClick={() => setTab('history')}><I.history size={13} /> History</button>
+          <button className={`tab ${tab === 'targeting' ? 'active' : ''}`} onClick={() => setTab('targeting')}>
+            <I.toggle size={13} /> Targeting <span className="count">{flag.rules.length}</span>
+          </button>
+          <button className={`tab ${tab === 'variants' ? 'active' : ''}`} onClick={() => setTab('variants')}>
+            <I.layers size={13} /> Variants <span className="count">{flag.variants.length}</span>
+          </button>
+          <button className={`tab ${tab === 'evals' ? 'active' : ''}`} onClick={() => setTab('evals')}>
+            <I.zap size={13} /> Evaluations
+          </button>
+          <button className={`tab ${tab === 'code' ? 'active' : ''}`} onClick={() => setTab('code')}>
+            <I.command size={13} /> SDK snippet
+          </button>
+          <button className={`tab ${tab === 'history' ? 'active' : ''}`} onClick={() => setTab('history')}>
+            <I.history size={13} /> History
+          </button>
         </div>
 
         {tab === 'targeting' && (
           <div className={layout === 'side' ? 'split-2' : 'stack'}>
-            <RulesPanel flag={flag} />
-            <VariantsPanel flag={flag} />
+            <TargetingPanel flag={flag} onSaved={(updated) => { setFlag(updated); showToast('Rules saved', 'success') }} />
+            <VariantsPanel flag={flag} onSaved={(updated) => { setFlag(updated); showToast('Variants saved', 'success') }} />
           </div>
         )}
-        {tab === 'variants' && <VariantsPanel flag={flag} full />}
+        {tab === 'variants' && (
+          <VariantsPanel flag={flag} onSaved={(updated) => { setFlag(updated); showToast('Variants saved', 'success') }} />
+        )}
         {tab === 'evals' && <EvalPanel />}
-        {tab === 'exp' && <FlagExpPanel flag={flag} />}
         {tab === 'code' && <SdkSnippet flag={flag} />}
         {tab === 'history' && <FlagHistory />}
       </div>
+
+      {toast && <Toast message={toast.message} kind={toast.kind} onDismiss={() => setToast(null)} />}
+      {showArchiveConfirm && (
+        <ArchiveConfirm
+          flagKey={flag.key}
+          onConfirm={archiveFlag}
+          onCancel={() => setShowArchiveConfirm(false)}
+        />
+      )}
     </>
   )
 }

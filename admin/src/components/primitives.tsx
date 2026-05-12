@@ -107,7 +107,7 @@ export function VariantBar({ variants }: { variants: Variant[] }) {
 interface PageHeaderProps {
   crumbs?: React.ReactNode[]
   title: React.ReactNode
-  subtitle?: string
+  subtitle?: React.ReactNode
   mono?: boolean
   badge?: React.ReactNode
   actions?: React.ReactNode
