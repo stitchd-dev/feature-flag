@@ -3,7 +3,7 @@ import { useNavigate, useParams, useBlocker } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
 import { useToast } from '../../hooks/useToast'
 import { usePermissions } from '../../hooks/usePermissions'
-import { PageHeader, VariantBar } from '../../components/primitives'
+import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { ToastContainer } from '../../components/ToastContainer'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
@@ -137,10 +137,6 @@ function VariantsPanel({
     }
   }
 
-  const displayVariants = flag.variants.map((v, i) => ({
-    name: v.key, alloc: Math.floor(100 / flag.variants.length) + (i === 0 ? 100 % flag.variants.length : 0),
-  }))
-
   return (
     <div className="card">
       <div className="card-header">
@@ -161,19 +157,16 @@ function VariantsPanel({
         )}
 
         {!editing ? (
-          <>
-            <VariantBar variants={displayVariants} />
-            <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {flag.variants.map((v, i) => (
-                <div key={v.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-2)' }}>
-                  <div style={{ width: 10, height: 10, borderRadius: 3, background: VARIANT_PALETTE[i % VARIANT_PALETTE.length] }} />
-                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, flex: 1 }}>{v.key}</span>
-                  {v.value !== undefined && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>= {formatVariantValue(v.value)}</span>}
-                  {flag.default_variant_key === v.key && <span className="badge">default</span>}
-                </div>
-              ))}
-            </div>
-          </>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {flag.variants.map((v, i) => (
+              <div key={v.key} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-2)' }}>
+                <div style={{ width: 10, height: 10, borderRadius: 3, background: VARIANT_PALETTE[i % VARIANT_PALETTE.length] }} />
+                <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, flex: 1 }}>{v.key}</span>
+                {v.value !== undefined && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>= {formatVariantValue(v.value)}</span>}
+                {flag.default_variant_key === v.key && <span className="badge">default</span>}
+              </div>
+            ))}
+          </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {variants.map((v, i) => (
@@ -195,10 +188,6 @@ function VariantsPanel({
           </div>
         )}
 
-        <div className="hr" />
-        <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
-          <strong style={{ color: 'var(--fg)' }}>Bucketing:</strong> hash(context.key, &quot;{flag.key}&quot;, project, env) — sticky across evaluations. 0.1% granularity.
-        </div>
       </div>
     </div>
   )
@@ -684,21 +673,13 @@ export function FlagDetail() {
         </div>
 
         {tab === 'targeting' && (
-          <div className={layout === 'side' ? 'split-2' : 'stack'}>
-            <TargetingPanel
-              flag={flag}
-              canWrite={canWrite}
-              onSaved={(updated) => { setFlag(updated); setRulesDirty(false); toast('Rules saved', 'success') }}
-              onConflict={handleConflict}
-              onDirtyChange={setRulesDirty}
-            />
-            <VariantsPanel
-              flag={flag}
-              canWrite={canWrite}
-              onSaved={(updated) => { setFlag(updated); toast('Variants saved', 'success') }}
-              onConflict={handleConflict}
-            />
-          </div>
+          <TargetingPanel
+            flag={flag}
+            canWrite={canWrite}
+            onSaved={(updated) => { setFlag(updated); setRulesDirty(false); toast('Rules saved', 'success') }}
+            onConflict={handleConflict}
+            onDirtyChange={setRulesDirty}
+          />
         )}
         {tab === 'variants' && (
           <VariantsPanel
