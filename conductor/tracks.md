@@ -26,3 +26,8 @@ This file tracks all major tracks for the project.
 - admin_ui_multitenant_20260428 (Admin UI — Multi-Tenant Routing & API Integration)
 - env_sdk_rbac_20260429 (Environments & SDK Keys — Full-Stack Functional UI with RBAC)
 -->
+
+---
+
+## [ ] Track: Feature Flags Full CRUD + Rule Builder
+*Link: [./conductor/tracks/flags_crud_20260512/](./conductor/tracks/flags_crud_20260512/)*
