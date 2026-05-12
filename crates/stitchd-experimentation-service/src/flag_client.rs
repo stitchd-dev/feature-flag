@@ -41,6 +41,7 @@ impl FlagClient {
         let request = tonic::Request::new(GetFlagRequest {
             environment_id: environment_id.to_string(),
             flag_key: flag_key.to_string(),
+            project_id: String::new(),
         });
         let mut client = self.inner.lock().await;
         client.get_flag(request).await.map(|_| ())

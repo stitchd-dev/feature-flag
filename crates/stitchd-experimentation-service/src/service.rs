@@ -470,6 +470,9 @@ fn repo_err_to_status(e: stitchd_db::RepositoryError) -> Status {
         stitchd_db::RepositoryError::UniqueViolation { field } => {
             Status::already_exists(format!("unique violation on: {field}"))
         }
+        stitchd_db::RepositoryError::ForeignKeyViolation { constraint } => {
+            Status::invalid_argument(format!("referenced entity does not exist: {constraint}"))
+        }
         stitchd_db::RepositoryError::InvalidState { reason } => Status::failed_precondition(reason),
         stitchd_db::RepositoryError::Database(e) => Status::internal(format!("database: {e}")),
         stitchd_db::RepositoryError::Unexpected(e) => Status::internal(format!("unexpected: {e}")),
