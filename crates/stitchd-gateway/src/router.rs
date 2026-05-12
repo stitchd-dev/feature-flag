@@ -141,7 +141,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/variants",
-            post(flags::create_variant),
+            put(flags::update_variants),
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/rules",

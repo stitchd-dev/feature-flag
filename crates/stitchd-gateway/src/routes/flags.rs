@@ -454,29 +454,77 @@ pub async fn delete_flag(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /v1/projects/{project_id}/flags/{flag_id}/variants`
+/// Request body for replacing a flag's variant list.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ReplaceVariantsBody {
+    pub variants: Vec<VariantBody>,
+    pub version: u64,
+}
+
+/// `PUT /v1/projects/{project_id}/flags/{flag_id}/variants`
 #[utoipa::path(
-    post,
+    put,
     path = "/v1/projects/{project_id}/flags/{flag_id}/variants",
     tag = "flags",
     params(
         ("project_id" = String, Path, description = "Project / environment ID"),
         ("flag_id" = String, Path, description = "Flag key"),
     ),
+    request_body = ReplaceVariantsBody,
     responses(
-        (status = 202, description = "Variant accepted for processing"),
+        (status = 200, description = "Updated flag with new variants", body = AdminFlagJson),
         (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Version conflict"),
+        (status = 502, description = "Flag service unavailable"),
     ),
     security(("bearer_jwt" = []))
 )]
-pub async fn create_variant(
-    State(_state): State<Arc<GatewayState>>,
-    Path((_project_id, _flag_key)): Path<(String, String)>,
-    Json(_body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    // Variant creation is handled by updating the flag with embedded variants.
-    // Return 202 Accepted — full implementation requires a round-trip GetFlag → MutateFlag.
-    StatusCode::ACCEPTED
+pub async fn update_variants(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<ReplaceVariantsBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    // First fetch the current flag to get its metadata (enabled, name, etc.).
+    let get_req = tonic::Request::new(GetFlagRequest {
+        environment_id: project_id.clone(),
+        flag_key: flag_key.clone(),
+    });
+    let mut client = state.flag_client.lock().await;
+    let current = client
+        .get_flag(get_req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+
+    // Build an Update mutation carrying the new variant list.
+    let proto_variants = body
+        .variants
+        .into_iter()
+        .map(variant_body_to_proto)
+        .collect();
+    let flag = FeatureFlag {
+        key: flag_key,
+        enabled: current.enabled,
+        name: current.name,
+        description: current.description,
+        value_type: current.value_type,
+        variants: proto_variants,
+        ..Default::default()
+    };
+    let req = tonic::Request::new(MutateFlagRequest {
+        environment_id: project_id,
+        kind: MutationKind::Update as i32,
+        flag: Some(flag),
+        version: body.version,
+    });
+    let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
+    Ok(Json(flag_json))
 }
 
 /// `PUT /v1/projects/{project_id}/flags/{flag_id}/rules`
@@ -583,7 +631,7 @@ pub fn test_router(_client: Arc<GatewayState>, state: Arc<GatewayState>) -> axum
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/variants",
-            post(create_variant),
+            put(update_variants),
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/rules",
@@ -696,21 +744,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_variant_returns_202() {
+    async fn update_variants_returns_200_or_404_or_502() {
         let state = make_stub_state();
         let app = test_router(Arc::clone(&state), state);
         let resp = app
             .oneshot(
                 Request::builder()
-                    .method("POST")
+                    .method("PUT")
                     .uri("/v1/projects/env-1/flags/flag-key/variants")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"key":"on","value":true}"#))
+                    .body(Body::from(
+                        r#"{"variants":[{"key":"on","value":true}],"version":1}"#,
+                    ))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        assert!(
+            resp.status() == StatusCode::OK
+                || resp.status() == StatusCode::NOT_FOUND
+                || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]

@@ -717,6 +717,59 @@ impl VariantRepository for PgVariantRepository {
 
         Ok(())
     }
+
+    async fn replace_all_for_flag(
+        &self,
+        flag_id: FlagId,
+        variants: &[Variant],
+    ) -> Result<(), RepositoryError> {
+        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
+
+        sqlx::query("DELETE FROM variants WHERE flag_id = $1")
+            .bind(flag_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+
+        for v in variants {
+            let value = serde_json::to_value(&v.value).map_err(|e| {
+                RepositoryError::Unexpected(anyhow::anyhow!("cannot serialise variant value: {e}"))
+            })?;
+            sqlx::query(
+                "INSERT INTO variants (id, flag_id, key, value) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(v.id.as_uuid())
+            .bind(flag_id.as_uuid())
+            .bind(&v.key)
+            .bind(value)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                if let sqlx::Error::Database(ref dbe) = e {
+                    if let Some(c) = dbe.constraint() {
+                        return RepositoryError::UniqueViolation {
+                            field: c.to_string(),
+                        };
+                    }
+                }
+                RepositoryError::Database(e)
+            })?;
+        }
+
+        tx.commit().await.map_err(RepositoryError::Database)?;
+
+        self.audit
+            .log(
+                None,
+                "variant",
+                flag_id.as_uuid(),
+                "replace_all",
+                serde_json::json!({ "count": variants.len() }),
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------

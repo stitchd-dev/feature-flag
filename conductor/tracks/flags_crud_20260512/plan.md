@@ -40,14 +40,14 @@
   - Update `list_flags` handler to return `Vec<AdminFlagJson>`
   - Run: `cargo test -p stitchd-gateway`
 
-- [~] Task 4: Implement create_flag with full fields
+- [x] Task 4: Implement create_flag with full fields
   - Write failing test: POST flag with name/description/value_type/variants → 201
   - Update `FlagMutateRequest` to include `name`, `description`, `value_type`,
     `variants: Option<Vec<VariantBody>>`
   - Implement `create_flag` to forward all fields via `MutateFlagRequest`
   - Run: `cargo test -p stitchd-gateway`
 
-- [ ] Task 5: Implement update_variants handler
+- [~] Task 5: Implement update_variants handler
   - Write failing test: PUT /variants replaces variant list on flag
   - The handler must: GET current flag, replace variants list, call MutateFlag(Update)
   - Understand flag service update semantics (does MutateFlag replace all variants?

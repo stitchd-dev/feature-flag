@@ -282,6 +282,13 @@ pub trait VariantRepository: Send + Sync {
 
     /// Delete a variant permanently (variants don't soft-delete).
     async fn delete(&self, id: VariantId) -> Result<(), RepositoryError>;
+
+    /// Replace all variants for a flag atomically (delete all, then insert).
+    async fn replace_all_for_flag(
+        &self,
+        flag_id: FlagId,
+        variants: &[Variant],
+    ) -> Result<(), RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

@@ -205,6 +205,20 @@ impl FlagService for FlagServiceImpl {
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
 
+                // Persist variants supplied in the creation request.
+                let domain_variants: Vec<_> = flag_proto
+                    .variants
+                    .iter()
+                    .filter_map(|v| mapping::proto_variant_to_domain(v.clone()))
+                    .collect();
+                if !domain_variants.is_empty() {
+                    self.variant_repo
+                        .replace_all_for_flag(record.id, &domain_variants)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                }
+
                 let variants = self
                     .variant_repo
                     .find_by_flag(record.id)
@@ -268,6 +282,20 @@ impl FlagService for FlagServiceImpl {
                     .await
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
+
+                // Replace variants if the request includes a non-empty list.
+                if !flag_proto.variants.is_empty() {
+                    let domain_variants: Vec<_> = flag_proto
+                        .variants
+                        .iter()
+                        .filter_map(|v| mapping::proto_variant_to_domain(v.clone()))
+                        .collect();
+                    self.variant_repo
+                        .replace_all_for_flag(updated.id, &domain_variants)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                }
 
                 let variants = self
                     .variant_repo
@@ -627,6 +655,14 @@ mod tests {
         }
 
         async fn delete(&self, _id: VariantId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn replace_all_for_flag(
+            &self,
+            _flag_id: FlagId,
+            _variants: &[stitchd_core::flag::Variant],
+        ) -> Result<(), RepositoryError> {
             Ok(())
         }
     }

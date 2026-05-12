@@ -13,6 +13,27 @@ use stitchd_proto::flags::v1::{
     VariantValue as ProtoVariantValue, variant_value::Value as ProtoVariantValueInner,
 };
 
+/// Convert a proto [`ProtoVariant`] to a domain [`stitchd_core::flag::Variant`].
+///
+/// Returns `None` if the variant value is missing or cannot be parsed.
+#[must_use]
+pub fn proto_variant_to_domain(v: ProtoVariant) -> Option<stitchd_core::flag::Variant> {
+    let value = match v.value?.value? {
+        ProtoVariantValueInner::BoolValue(b) => VariantValue::BoolValue(b),
+        ProtoVariantValueInner::IntValue(i) => VariantValue::IntValue(i),
+        ProtoVariantValueInner::DoubleValue(d) => VariantValue::DoubleValue(d),
+        ProtoVariantValueInner::StringValue(s) => VariantValue::StrValue(s),
+        ProtoVariantValueInner::JsonValue(s) => {
+            VariantValue::JsonValue(serde_json::from_str(&s).ok()?)
+        }
+    };
+    Some(stitchd_core::flag::Variant {
+        id: stitchd_core::id::VariantId::new(),
+        key: v.key,
+        value,
+    })
+}
+
 /// Convert a domain [`stitchd_core::flag::Variant`] to the proto [`ProtoVariant`].
 #[must_use]
 pub fn domain_variant_to_proto(v: stitchd_core::flag::Variant) -> ProtoVariant {
