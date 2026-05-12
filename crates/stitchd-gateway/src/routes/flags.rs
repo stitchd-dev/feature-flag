@@ -40,6 +40,8 @@ pub struct FlagMutateRequest {
     #[schema(value_type = Object, nullable = true)]
     pub flag: Option<serde_json::Value>,
     pub version: Option<u64>,
+    /// Key of the variant to serve when no rules match (or flag is disabled).
+    pub default_variant_key: Option<String>,
 }
 
 /// Query parameters for listing flags.
@@ -412,6 +414,7 @@ pub async fn update_flag(
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
         enabled: body.enabled.unwrap_or(false),
+        default_variant_key: body.default_variant_key.unwrap_or_default(),
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {

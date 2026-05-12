@@ -9,9 +9,11 @@ interface Props {
   variants: string[]
   defaultVariantKey: string | null
   onChange: (rules: RuleState[]) => void
+  canWrite?: boolean
+  onSaveDefaultVariant?: (key: string) => Promise<void>
 }
 
-export function RuleList({ rules, variants, defaultVariantKey, onChange }: Props) {
+export function RuleList({ rules, variants, defaultVariantKey, onChange, canWrite, onSaveDefaultVariant }: Props) {
   const [dragSourceIndex, setDragSourceIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
 
@@ -77,7 +79,12 @@ export function RuleList({ rules, variants, defaultVariantKey, onChange }: Props
             </button>
           </div>
         </div>
-        <DefaultRuleFooter variantKey={defaultVariantKey} />
+        <DefaultRuleFooter
+          variantKey={defaultVariantKey}
+          variants={variants}
+          canWrite={canWrite}
+          onSaveDefaultVariant={onSaveDefaultVariant}
+        />
       </div>
     )
   }
@@ -116,20 +123,70 @@ export function RuleList({ rules, variants, defaultVariantKey, onChange }: Props
         </div>
       ))}
 
-      <DefaultRuleFooter variantKey={defaultVariantKey} />
+      <DefaultRuleFooter
+        variantKey={defaultVariantKey}
+        variants={variants}
+        canWrite={canWrite}
+        onSaveDefaultVariant={onSaveDefaultVariant}
+      />
     </div>
   )
 }
 
-function DefaultRuleFooter({ variantKey }: { variantKey: string | null }) {
+function DefaultRuleFooter({
+  variantKey,
+  variants,
+  canWrite,
+  onSaveDefaultVariant,
+}: {
+  variantKey: string | null
+  variants: string[]
+  canWrite?: boolean
+  onSaveDefaultVariant?: (key: string) => Promise<void>
+}) {
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const next = e.target.value
+    if (!onSaveDefaultVariant) return
+    setSaving(true)
+    setError(null)
+    try {
+      await onSaveDefaultVariant(next)
+    } catch {
+      setError('Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
-    <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', border: '1px solid var(--border-faint)', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: 'var(--fg-muted)' }}>
-      <I.info size={13} />
-      <span>
-        Default rule (catch-all): serve{' '}
-        <span className="badge">{variantKey ?? 'off'}</span>{' '}
-        to all remaining contexts
-      </span>
+    <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', border: '1px solid var(--border-faint)', borderRadius: 8, fontSize: 12, color: 'var(--fg-muted)', marginTop: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <I.info size={13} style={{ flexShrink: 0 }} />
+        <span style={{ whiteSpace: 'nowrap' }}>Default rule (catch-all): serve</span>
+        {canWrite && onSaveDefaultVariant ? (
+          <select
+            className="input"
+            value={variantKey ?? variants[0] ?? ''}
+            onChange={handleChange}
+            disabled={saving}
+            style={{ padding: '2px 6px', fontSize: 12, height: 26, minWidth: 100, fontFamily: 'var(--font-mono)', fontWeight: 600 }}
+          >
+            {variants.map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        ) : (
+          <span className="badge">{variantKey ?? 'off'}</span>
+        )}
+        <span style={{ whiteSpace: 'nowrap' }}>to all remaining contexts</span>
+        {saving && <span style={{ color: 'var(--fg-subtle)', fontStyle: 'italic' }}>saving…</span>}
+      </div>
+      {error && (
+        <div style={{ marginTop: 4, marginLeft: 23, color: 'var(--danger)', fontSize: 11 }}>{error}</div>
+      )}
     </div>
   )
 }

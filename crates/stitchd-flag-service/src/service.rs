@@ -345,6 +345,26 @@ impl FlagService for FlagServiceImpl {
                 if !flag_proto.description.is_empty() {
                     record.description = flag_proto.description.clone();
                 }
+                // Resolve default_variant_key → variant ID when provided.
+                if !flag_proto.default_variant_key.is_empty() {
+                    let variants_for_lookup = self
+                        .variant_repo
+                        .find_by_flag(record.id)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                    let variant_id = variants_for_lookup
+                        .iter()
+                        .find(|v| v.key == flag_proto.default_variant_key)
+                        .map(|v| v.id)
+                        .ok_or_else(|| {
+                            Status::not_found(format!(
+                                "variant '{}' not found",
+                                flag_proto.default_variant_key
+                            ))
+                        })?;
+                    record.default_variant_id = Some(variant_id);
+                }
                 // Do NOT increment version here — the repo's update() does
                 // `new_version = flag.version + 1` and `WHERE version = flag.version`,
                 // so flag.version must remain the current stored value.

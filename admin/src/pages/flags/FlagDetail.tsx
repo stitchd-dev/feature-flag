@@ -264,6 +264,20 @@ function TargetingPanel({
     }
   }
 
+  async function saveDefaultVariant(key: string) {
+    if (!projectId) return
+    try {
+      const { data } = await api.put<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${flag.key}`, {
+        default_variant_key: key,
+        version: flag.version,
+      })
+      onSaved(data)
+    } catch (err: unknown) {
+      if (isConflict(err)) { onConflict() }
+      throw err
+    }
+  }
+
   return (
     <div className="card">
       <div className="card-header">
@@ -288,11 +302,19 @@ function TargetingPanel({
             <I.lock size={12} /> View-only — you do not have permission to edit rules.
           </div>
         )}
+        {!flag.enabled && (
+          <div style={{ padding: '10px 14px', background: 'var(--bg-sunken)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, color: 'var(--fg-muted)', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <I.info size={13} style={{ flexShrink: 0 }} />
+            <span>Flag is <strong>disabled</strong> — all contexts receive the default variant regardless of rules.</span>
+          </div>
+        )}
         <RuleList
           rules={rules}
           variants={variantKeys}
           defaultVariantKey={flag.default_variant_key}
           onChange={canWrite ? updateRules : () => undefined}
+          canWrite={canWrite}
+          onSaveDefaultVariant={canWrite ? saveDefaultVariant : undefined}
         />
       </div>
     </div>
