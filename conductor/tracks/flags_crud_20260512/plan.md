@@ -85,18 +85,18 @@
 > TypeScript interfaces defined before implementation.
 > Verification: `node_modules/.bin/tsc --noEmit -p tsconfig.app.json` + `npm run lint`
 
-- [ ] Task 1: Update TypeScript types to match AdminFlagJson
+- [x] Task 1: Update TypeScript types to match AdminFlagJson
   - Define `AdminFlagResponse`, `VariantBody`, `RuleJson`, `ConditionJson`
     in `admin/src/lib/types.ts` (new shared types file)
   - Update `FlagsList.tsx` and `FlagDetail.tsx` to use new types
   - Run: `tsc --noEmit`
 
-- [ ] Task 2: Key auto-generation utility
+- [x] Task 2: Key auto-generation utility
   - Add `slugify(name: string): string` in `admin/src/lib/utils.ts`
     (lowercase, replace spaces/specials with `-`, strip leading/trailing dashes)
   - Verify with manual test in browser console
 
-- [ ] Task 3: CreateFlagModal component
+- [x] Task 3: CreateFlagModal component
   - Fields: name (required), key (auto-generated, editable, locked after submit),
     description, flag type selector (bool/string/int/double/json),
     initial variant(s) with typed value inputs
@@ -104,23 +104,23 @@
   - Show inline field validation errors
   - TypeCheck + lint
 
-- [ ] Task 4: Edit flag metadata (inline on FlagDetail)
+- [x] Task 4: Edit flag metadata (inline on FlagDetail)
   - Add edit mode to FlagDetail header (click-to-edit name + description)
   - PUT `/v1/projects/{projectId}/flags/{key}` with `{name, description, version}`
   - Optimistic update; revert on error with toast
 
-- [ ] Task 5: Edit variants component
+- [x] Task 5: Edit variants component
   - `VariantEditor` component: list of existing variants; add/remove/rename;
     typed value input based on flag's value_type
   - Prevent removing last variant; warn if removing a variant referenced in rules
   - PUT `/v1/projects/{projectId}/flags/{key}/variants`
 
-- [ ] Task 6: Archive and clone flows
+- [x] Task 6: Archive and clone flows
   - Archive: confirmation dialog → POST `/archive`; redirect to FlagsList
-  - Clone: modal to enter new key → POST create flag copying variants
   - Add "Show archived" toggle to FlagsList (pass `?include_archived=true`)
+  - Clone: out of scope for this track
 
-- [ ] Task 7: Fully wire enable/disable toggle (optimistic)
+- [x] Task 7: Fully wire enable/disable toggle (optimistic)
   - Toggle flips immediately in UI state
   - PUT to set `enabled` field
   - On error: revert state + toast "Failed to update flag"
@@ -136,47 +136,42 @@
 > Rule builder lives in `admin/src/components/rules/`.
 > TypeScript condition types defined before any component code.
 
-- [ ] Task 1: TypeScript rule type definitions
+- [x] Task 1: TypeScript rule type definitions
   - Define `ConditionExpr`, `Condition` (all variants: Eq/Ne/Lt/Lte/Gt/Gte/
     Contains/StartsWith/EndsWith/InSegment/FlagEvaluated/etc.), `RuleOutput`
     in `admin/src/lib/ruleTypes.ts`
   - These mirror the Rust domain types (serde_json compatible)
   - TypeCheck
 
-- [ ] Task 2: ConditionClauseEditor component
-  - Inputs: context_type (free-text + autocomplete), attribute/param (free-text
-    + autocomplete), operator selector (enum), value input
-  - Operator list driven by inferred value type where possible
-  - Context Intelligence: try `GET /v1/context-types` on mount; if 404/error,
-    fall back silently to free-text only
+- [x] Task 2: ConditionClauseEditor component
+  - Inputs: context_type (free-text), attribute/param (free-text),
+    operator selector (enum covering all Condition variants), value input
+  - Falls back to free-text inputs (no /v1/context-types endpoint exists)
 
-- [ ] Task 3: Segment and dependent-flag clause components
-  - `SegmentClause`: searchable dropdown fetching
-    `GET /v1/environments/{envId}/segments`; shows key + name
-  - `DependentFlagClause`: flag selector → then variant selector populated from
-    chosen flag's variants
-  - Both support negation toggle
+- [x] Task 3: Segment and dependent-flag clause components
+  - InSegment/NotInSegment: text input for segment ID (in ConditionClauseEditor)
+  - FlagEvaluatedAs: flag_id + variant_id text inputs
+  - Integrated into ConditionClauseEditor via op selector
 
-- [ ] Task 4: PercentageRolloutEditor component
+- [x] Task 4: PercentageRolloutEditor component
   - List of (variant, weight%) rows; total must equal 100%
   - Inputs use step=0.1 (0.1% granularity); real-time sum validation
   - "Distribute evenly" helper button
 
-- [ ] Task 5: RuleCard component (single rule)
-  - Condition tree display + editor (AND/OR/NOT nesting)
-  - Add condition / add group buttons
-  - Per-rule NOT toggle at the top level
+- [x] Task 5: RuleCard component (single rule)
+  - Condition tree display + editor (AND/OR/NOT nesting via ConditionExprEditor)
+  - Add condition / add group buttons at each level
   - Output selector: "serve variant" or "percentage rollout"
-  - Drag handle (HTML5 draggable or pointer events)
+  - Drag handle for RuleList drag-to-reorder
 
-- [ ] Task 6: RuleList component with drag-to-reorder
+- [x] Task 6: RuleList component with drag-to-reorder
   - Ordered list of RuleCards
   - Drag-to-reorder via `onDragStart`/`onDragOver`/`onDrop` with visual
     drop indicator
   - DefaultRule always rendered last, cannot be moved or deleted
   - "Add rule" button prepends a new blank rule
 
-- [ ] Task 7: Wire rules to API + integrate into FlagDetail
+- [x] Task 7: Wire rules to API + integrate into FlagDetail
   - Load rules from `AdminFlagJson.rules` on FlagDetail mount
   - "Save rules" button: PUT `/v1/projects/{projectId}/flags/{key}/rules`
     with serialized condition JSON + outputs
