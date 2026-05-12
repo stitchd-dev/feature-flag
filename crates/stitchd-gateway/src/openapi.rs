@@ -46,6 +46,7 @@ use utoipa::{
         crate::routes::flags::get_flag,
         crate::routes::flags::update_flag,
         crate::routes::flags::delete_flag,
+        crate::routes::flags::archive_flag,
         crate::routes::flags::update_variants,
         crate::routes::flags::update_rules,
         crate::routes::flags::update_flag_hashing,

@@ -56,7 +56,7 @@
   - Input: `{variants: [{key, value}], version}`
   - Run: `cargo test -p stitchd-gateway`
 
-- [~] Task 6: Implement update_rules handler
+- [x] Task 6: Implement update_rules handler
   - Write failing test: PUT /rules replaces rule list on flag
   - Input JSON: `{rules: [{condition: <ConditionExpr JSON>, output: {variant_key}
     | {allocation: [{variant_key, weight_milli}]}}, ...], version}`
@@ -66,7 +66,7 @@
     exists for variant outputs
   - Run: `cargo test -p stitchd-gateway`
 
-- [ ] Task 7: Archive flag endpoint
+- [~] Task 7: Archive flag endpoint
   - Write failing test: POST /archive → 200 (soft-delete, MutationKind::Archive)
   - Add `POST /v1/projects/{project_id}/flags/{flag_id}/archive` handler
     using `MutationKind::Archive`

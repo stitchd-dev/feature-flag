@@ -12,7 +12,8 @@ message GetFlagRequest {
 }
 
 message ListFlagsRequest {
-  string environment_id = 1;
+  string environment_id  = 1;
+  bool   include_archived = 2;
 }
 
 message ListFlagsResponse {

@@ -131,12 +131,19 @@ impl FlagService for FlagServiceImpl {
         let req = request.into_inner();
         let env_id = parse_env_id(&req.environment_id)?;
 
-        let flag_records = self
-            .flag_repo
-            .list_by_environment(env_id)
-            .await
-            .map_err(FlagServiceError::from)
-            .map_err(Status::from)?;
+        let flag_records = if req.include_archived {
+            self.flag_repo
+                .list_by_environment_all(env_id)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?
+        } else {
+            self.flag_repo
+                .list_by_environment(env_id)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?
+        };
 
         let mut proto_flags = Vec::with_capacity(flag_records.len());
         for record in &flag_records {
@@ -589,6 +596,20 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
         ) -> Result<Vec<FlagRecord>, RepositoryError> {
+            Ok(self
+                .flags
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|f| f.deleted_at.is_none())
+                .cloned()
+                .collect())
+        }
+
+        async fn list_by_environment_all(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<FlagRecord>, RepositoryError> {
             Ok(self.flags.lock().unwrap().clone())
         }
 
@@ -927,7 +948,7 @@ mod tests {
     #[tokio::test]
     async fn list_flags_returns_empty_for_empty_environment() {
         let svc = make_service_empty();
-        let req = Request::new(ListFlagsRequest {
+        let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
         });
         let result = svc.list_flags(req).await;
@@ -950,7 +971,7 @@ mod tests {
             StubSdkKeyRepo::empty(),
         );
 
-        let req = Request::new(ListFlagsRequest {
+        let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
         });
         let result = svc.list_flags(req).await;
@@ -961,7 +982,7 @@ mod tests {
     #[tokio::test]
     async fn list_flags_returns_invalid_argument_for_bad_env_id() {
         let svc = make_service_empty();
-        let req = Request::new(ListFlagsRequest {
+        let req = Request::new(ListFlagsRequest { include_archived: false,
             environment_id: "bad-uuid".to_string(),
         });
         let result = svc.list_flags(req).await;

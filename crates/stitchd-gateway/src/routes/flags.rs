@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -40,6 +40,13 @@ pub struct FlagMutateRequest {
     #[schema(value_type = Object, nullable = true)]
     pub flag: Option<serde_json::Value>,
     pub version: Option<u64>,
+}
+
+/// Query parameters for listing flags.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListFlagsQuery {
+    #[serde(default)]
+    pub include_archived: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -272,9 +279,11 @@ fn flag_to_admin_json(f: &FeatureFlag) -> AdminFlagJson {
 pub async fn list_flags(
     State(state): State<Arc<GatewayState>>,
     Path(project_id): Path<String>,
+    Query(query): Query<ListFlagsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListFlagsRequest {
         environment_id: project_id,
+        include_archived: query.include_archived,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.list_flags(req).await.map_err(GatewayError::from)?;
@@ -452,6 +461,51 @@ pub async fn delete_flag(
     let mut client = state.flag_client.lock().await;
     client.mutate_flag(req).await.map_err(GatewayError::from)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /v1/projects/{project_id}/flags/{flag_id}/archive`
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/archive",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project / environment ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    request_body = FlagMutateRequest,
+    responses(
+        (status = 200, description = "Flag archived", body = AdminFlagJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Flag not found"),
+        (status = 409, description = "Version conflict"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn archive_flag(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<FlagMutateRequest>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let flag = FeatureFlag {
+        key: flag_key,
+        ..Default::default()
+    };
+    let req = tonic::Request::new(MutateFlagRequest {
+        environment_id: project_id,
+        kind: MutationKind::Archive as i32,
+        flag: Some(flag),
+        version: body.version.unwrap_or(0),
+    });
+    let mut client = state.flag_client.lock().await;
+    let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
+    Ok(Json(flag_json))
 }
 
 /// Request body for replacing a flag's variant list.
@@ -726,6 +780,10 @@ pub fn test_router(_client: Arc<GatewayState>, state: Arc<GatewayState>) -> axum
             get(get_flag).put(update_flag).delete(delete_flag),
         )
         .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/archive",
+            post(archive_flag),
+        )
+        .route(
             "/v1/projects/{project_id}/flags/{flag_id}/variants",
             put(update_variants),
         )
@@ -951,6 +1009,30 @@ mod tests {
     #[allow(dead_code)]
     fn _use_with_flag() {
         let _ = make_stub_state_with_flag;
+    }
+
+    #[tokio::test]
+    async fn archive_flag_returns_200_or_404_or_502() {
+        let state = make_stub_state();
+        let app = test_router(Arc::clone(&state), state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/projects/env-1/flags/my-flag/archive")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"version":1}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK
+                || resp.status() == StatusCode::NOT_FOUND
+                || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
     }
 
     #[test]

@@ -225,6 +225,12 @@ pub trait FlagRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
 
+    /// List flags in an environment, optionally including archived (soft-deleted) ones.
+    async fn list_by_environment_all(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
+
     /// Persist a new flag.
     async fn create(&self, flag: &stitchd_core::flag::FlagRecord) -> Result<(), RepositoryError>;
 
