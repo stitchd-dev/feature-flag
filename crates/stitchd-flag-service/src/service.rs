@@ -188,8 +188,8 @@ impl FlagService for FlagServiceImpl {
                     id: stitchd_core::id::FlagId::new(),
                     project_id: stitchd_core::id::ProjectId::from_uuid(uuid::Uuid::nil()), // placeholder — env owns scope
                     key: flag_key,
-                    name: String::new(),
-                    description: String::new(),
+                    name: flag_proto.name.clone(),
+                    description: flag_proto.description.clone(),
                     value_type,
                     enabled: flag_proto.enabled,
                     default_variant_id: None,
@@ -910,6 +910,8 @@ mod tests {
             kind: MutationKind::Create as i32,
             flag: Some(FeatureFlag {
                 key: "new-flag".to_string(),
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
@@ -932,6 +934,8 @@ mod tests {
             kind: MutationKind::Create as i32,
             flag: Some(FeatureFlag {
                 key: "".to_string(),
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
@@ -960,6 +964,8 @@ mod tests {
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: flag_key.clone(),
+                name: String::new(),
+                description: String::new(),
                 enabled: false,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
@@ -990,6 +996,8 @@ mod tests {
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
+                name: String::new(),
+                description: String::new(),
                 enabled: false,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
@@ -1018,6 +1026,8 @@ mod tests {
             kind: MutationKind::Delete as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
@@ -1045,6 +1055,8 @@ mod tests {
             kind: MutationKind::Delete as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
@@ -1073,6 +1085,8 @@ mod tests {
             kind: MutationKind::Archive as i32,
             flag: Some(FeatureFlag {
                 key: flag_key,
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
@@ -1092,6 +1106,8 @@ mod tests {
             kind: MutationKind::Unspecified as i32,
             flag: Some(FeatureFlag {
                 key: "some-flag".to_string(),
+                name: String::new(),
+                description: String::new(),
                 enabled: true,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],
@@ -1112,6 +1128,8 @@ mod tests {
             kind: MutationKind::Update as i32,
             flag: Some(FeatureFlag {
                 key: "nonexistent".to_string(),
+                name: String::new(),
+                description: String::new(),
                 enabled: false,
                 value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
                 variants: vec![],

@@ -11,7 +11,7 @@
 > Rules are stored as `rule_def JSONB` in `feature_flag_rules` and serialized
 > to opaque bytes in the proto. The admin API needs to expose rich flag data.
 
-- [ ] Task 1: DB migration — add name + description to feature_flags
+- [x] Task 1: DB migration — add name + description to feature_flags
   - Write failing test: flag repo load with name/description
   - Migration: `ALTER TABLE feature_flags ADD COLUMN name TEXT NOT NULL DEFAULT ''`,
     `ADD COLUMN description TEXT NOT NULL DEFAULT ''`
@@ -20,7 +20,7 @@
   - Update flag service DB repository queries to read/write name + description
   - Update `MutateFlagRequest` flow in `service.rs` to persist name/description
 
-- [ ] Task 2: Extend proto + mapping for full admin flag data
+- [~] Task 2: Extend proto + mapping for full admin flag data
   - Write failing test: `build_feature_flag_proto` includes name/description
   - Add `name` and `description` string fields to `FeatureFlag` in
     `proto/flags/v1/flag_sync.proto`

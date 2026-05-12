@@ -128,6 +128,8 @@ pub fn build_feature_flag_proto(
         value_type: domain_value_type_to_proto(record.value_type) as i32,
         variants: proto_variants,
         rules: proto_rules,
+        name: record.name.clone(),
+        description: record.description.clone(),
     }
 }
 
@@ -346,5 +348,36 @@ mod tests {
         } else {
             panic!("expected Allocation output");
         }
+    }
+
+    #[test]
+    fn build_feature_flag_proto_includes_name_and_description() {
+        use stitchd_core::{
+            flag::FlagRecord,
+            id::{FlagId, ProjectId},
+            id::FlagKey,
+        };
+
+        let record = FlagRecord {
+            id: FlagId::new(),
+            project_id: ProjectId::new(),
+            key: FlagKey::new("my-flag").unwrap(),
+            name: "My Flag".to_string(),
+            description: "A flag for testing".to_string(),
+            value_type: DomainFVT::Bool,
+            enabled: true,
+            default_variant_id: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+
+        let proto = build_feature_flag_proto(&record, vec![], &[]);
+
+        assert_eq!(proto.key, "my-flag");
+        assert_eq!(proto.name, "My Flag");
+        assert_eq!(proto.description, "A flag for testing");
+        assert!(proto.enabled);
     }
 }

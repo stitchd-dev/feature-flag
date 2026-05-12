@@ -71,12 +71,14 @@ enum FlagValueType {
 }
 
 message FeatureFlag {
-  string         key        = 1;
-  bool           enabled    = 2;
-  FlagValueType  value_type = 3;
-  repeated Variant variants = 4;
+  string         key         = 1;
+  bool           enabled     = 2;
+  FlagValueType  value_type  = 3;
+  repeated Variant variants  = 4;
   // Evaluated in order; first match wins. Last rule is the default fallback.
-  repeated FlagRule rules   = 5;
+  repeated FlagRule rules    = 5;
+  string         name        = 6;
+  string         description = 7;
 }
 
 // --- SDK sync service ---
