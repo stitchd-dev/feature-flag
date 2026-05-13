@@ -160,36 +160,14 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
 
             {/* Type-specific section */}
             {isListType ? (
-              <>
-                <div>
-                  <label className="label">Context Type</label>
-                  <div style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '4px 10px', borderRadius: 6,
-                    background: 'var(--bg-sunken)', border: '1px solid var(--border)',
-                    fontSize: 12, color: 'var(--fg)', fontFamily: 'var(--font-mono)',
-                  }}>
-                    {contextType || 'user'}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-                    Context type is fixed after creation.
-                  </div>
-                </div>
-                <div>
-                  <label className="label">Keys</label>
-                  <textarea
-                    className="input"
-                    style={{ width: '100%', minHeight: 100, resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                    placeholder={"key-1\nkey-2\nkey-3"}
-                    value={userListInput}
-                    onChange={(e) => setUserListInput(e.target.value)}
-                    rows={5}
-                  />
-                  <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-                    One <code>{contextType || 'context'}</code> key per line — these will always match this segment.
-                  </div>
-                </div>
-              </>
+              <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', borderRadius: 8, fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <I.info size={13} style={{ marginTop: 1, flexShrink: 0, color: 'var(--info)' }} />
+                <span>
+                  Include / exclude keys and CSV imports are managed from the{' '}
+                  <strong style={{ color: 'var(--fg)' }}>segment detail page</strong>.
+                  Save name/description/tags changes here.
+                </span>
+              </div>
             ) : (
               <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', borderRadius: 8, fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                 <I.info size={13} style={{ marginTop: 1, flexShrink: 0 }} />

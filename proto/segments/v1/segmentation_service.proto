@@ -74,6 +74,7 @@ message AdminSegment {
   // JSON-encoded ConditionExpr, empty string when not set.
   bytes           condition_expr = 6;
   // Explicit keys for list-based targeting.
+  // Deprecated: always empty. Use include_count instead.
   repeated string user_list      = 7;
   int64           created_at_ms  = 8;
   int64           updated_at_ms  = 9;
@@ -83,6 +84,44 @@ message AdminSegment {
   // Context kind this list targets (e.g. "user", "org", "device").
   // Only meaningful for list-based segments.
   string          context_type   = 12;
+  // Keys explicitly excluded from this segment (list-based only).
+  // Deprecated: always empty. Use exclude_count instead.
+  repeated string excluded_keys  = 13;
+  // Count of include-list entries (list-based segments only).
+  uint32          include_count  = 14;
+  // Count of exclude-list entries (list-based segments only).
+  uint32          exclude_count  = 15;
+}
+
+// ─── Entry patch / lookup messages ───────────────────────────────────────────
+
+// Patch (add/remove/replace) entries in a list segment.
+message PatchSegmentEntriesRequest {
+  string          segment_id = 1;
+  repeated string keys       = 2;
+  // "include" or "exclude"
+  string          list_type  = 3;
+  // "add"     — union CSV keys into the existing list
+  // "remove"  — remove matching keys from the list
+  // "replace" — replace the entire list with these keys
+  string          action     = 4;
+  string          org_id     = 5;
+}
+
+message PatchSegmentEntriesResponse {
+  uint32 include_count = 1;
+  uint32 exclude_count = 2;
+}
+
+message LookupSegmentEntryRequest {
+  string segment_id = 1;
+  string key        = 2;
+  string org_id     = 3;
+}
+
+message LookupSegmentEntryResponse {
+  bool in_include = 1;
+  bool in_exclude = 2;
 }
 
 // ─── Admin CRUD requests ──────────────────────────────────────────────────────
@@ -113,6 +152,8 @@ message CreateAdminSegmentRequest {
   // Context kind this list targets (e.g. "user", "org", "device").
   // Defaults to "user" when omitted for backward compatibility.
   string          context_type   = 8;
+  // Keys explicitly excluded from this segment (list-based only).
+  repeated string excluded_keys  = 9;
 }
 
 message UpdateAdminSegmentRequest {
@@ -126,6 +167,8 @@ message UpdateAdminSegmentRequest {
   // Context kind this list targets (e.g. "user", "org", "device").
   // Defaults to "user" when omitted for backward compatibility.
   string          context_type   = 8;
+  // Keys to explicitly exclude from this segment (list-based only).
+  repeated string excluded_keys  = 9;
 }
 
 message DeleteAdminSegmentRequest {
@@ -167,4 +210,10 @@ service SegmentationService {
 
   // Delete an admin segment.
   rpc DeleteAdminSegment(DeleteAdminSegmentRequest) returns (DeleteAdminSegmentResponse);
+
+  // Patch (add/remove/replace) entries in a list segment.
+  rpc PatchSegmentEntries(PatchSegmentEntriesRequest) returns (PatchSegmentEntriesResponse);
+
+  // Look up whether a single key is in the include/exclude list of a segment.
+  rpc LookupSegmentEntry(LookupSegmentEntryRequest) returns (LookupSegmentEntryResponse);
 }

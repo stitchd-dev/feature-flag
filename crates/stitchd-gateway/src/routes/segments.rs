@@ -16,7 +16,8 @@ use utoipa::ToSchema;
 
 use stitchd_proto::segments::v1::{
     CreateAdminSegmentRequest, DeleteAdminSegmentRequest, GetAdminSegmentRequest,
-    ListAdminSegmentsRequest, UpdateAdminSegmentRequest,
+    ListAdminSegmentsRequest, LookupSegmentEntryRequest, PatchSegmentEntriesRequest,
+    UpdateAdminSegmentRequest,
 };
 
 use crate::error::GatewayError;
@@ -40,6 +41,7 @@ pub struct SegmentCreateRequest {
     #[schema(value_type = Object, nullable = true)]
     pub condition_expr: Option<serde_json::Value>,
     pub user_list: Option<Vec<String>>,
+    pub excluded_keys: Option<Vec<String>>,
     /// "list" or "rule"
     pub segment_type: Option<String>,
     /// Context kind this list targets (e.g. "user", "org", "device"). Defaults to "user".
@@ -58,6 +60,7 @@ pub struct SegmentUpdateRequest {
     #[schema(value_type = Object, nullable = true)]
     pub condition_expr: Option<serde_json::Value>,
     pub user_list: Option<Vec<String>>,
+    pub excluded_keys: Option<Vec<String>>,
     pub version: Option<u64>,
     /// Context kind this list targets (e.g. "user", "org", "device"). Defaults to "user".
     pub context_type: Option<String>,
@@ -72,7 +75,14 @@ pub struct AdminSegmentJson {
     pub tags: Vec<String>,
     #[schema(value_type = Object, nullable = true)]
     pub condition_expr: Option<serde_json::Value>,
+    /// Deprecated: always empty. Use `include_count` instead.
     pub user_list: Vec<String>,
+    /// Deprecated: always empty. Use `exclude_count` instead.
+    pub excluded_keys: Vec<String>,
+    /// Count of include-list entries (list-based segments only).
+    pub include_count: u32,
+    /// Count of exclude-list entries (list-based segments only).
+    pub exclude_count: u32,
     /// Number of top-level condition nodes (convenience for the UI).
     pub condition_count: usize,
     pub version: u64,
@@ -82,6 +92,38 @@ pub struct AdminSegmentJson {
     pub segment_type: String,
     /// Context kind for list-based segments (e.g. "user", "org", "device").
     pub context_type: Option<String>,
+}
+
+// ─── Entry patch / lookup types ───────────────────────────────────────────────
+
+/// Request body for `POST /v1/segments/{id}/entries`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct PatchEntriesRequest {
+    pub keys: Vec<String>,
+    /// "include" or "exclude"
+    pub list_type: String,
+    /// "add", "remove", or "replace"
+    pub action: String,
+}
+
+/// Response from `POST /v1/segments/{id}/entries`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PatchEntriesResponse {
+    pub include_count: u32,
+    pub exclude_count: u32,
+}
+
+/// Query params for `GET /v1/segments/{id}/entries/lookup`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct LookupEntryQuery {
+    pub key: String,
+}
+
+/// Response from `GET /v1/segments/{id}/entries/lookup`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct LookupEntryResponse {
+    pub in_include: bool,
+    pub in_exclude: bool,
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -136,14 +178,16 @@ fn proto_to_admin_json(seg: &stitchd_proto::segments::v1::AdminSegment) -> Admin
         },
         tags: seg.tags.clone(),
         condition_expr,
-        user_list: seg.user_list.clone(),
+        user_list: vec![],
+        excluded_keys: vec![],
+        include_count: seg.include_count,
+        exclude_count: seg.exclude_count,
         condition_count,
         version: seg.version,
         created_at,
         updated_at,
         segment_type: if seg.segment_type.is_empty() {
-            // Infer from presence of user_list for backward compatibility.
-            if seg.user_list.is_empty() { "rule".to_string() } else { "list".to_string() }
+            "rule".to_string()
         } else {
             seg.segment_type.clone()
         },
@@ -248,6 +292,7 @@ pub async fn create_segment(
         tags: body.tags.unwrap_or_default(),
         condition_expr,
         user_list: body.user_list.unwrap_or_default(),
+        excluded_keys: body.excluded_keys.unwrap_or_default(),
         segment_type: body.segment_type.unwrap_or_default(),
         context_type: body.context_type.unwrap_or_default(),
     });
@@ -302,6 +347,7 @@ pub async fn create_segment_in_env(
         tags: body.tags.unwrap_or_default(),
         condition_expr,
         user_list: body.user_list.unwrap_or_default(),
+        excluded_keys: body.excluded_keys.unwrap_or_default(),
         segment_type: body.segment_type.unwrap_or_default(),
         context_type: body.context_type.unwrap_or_default(),
     });
@@ -394,6 +440,7 @@ pub async fn update_segment(
         tags: body.tags.unwrap_or_default(),
         condition_expr,
         user_list: body.user_list.unwrap_or_default(),
+        excluded_keys: body.excluded_keys.unwrap_or_default(),
         version: body.version.unwrap_or(0),
         context_type: body.context_type.unwrap_or_default(),
     });
@@ -442,6 +489,110 @@ pub async fn delete_segment(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `POST /v1/segments/{id}/entries` — patch (add/remove/replace) list entries.
+#[utoipa::path(
+    post,
+    path = "/v1/segments/{id}/entries",
+    tag = "segments",
+    params(("id" = String, Path, description = "Segment UUID")),
+    request_body = PatchEntriesRequest,
+    responses(
+        (status = 200, description = "Updated counts", body = PatchEntriesResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — missing segment:write"),
+        (status = 404, description = "Segment not found"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn patch_segment_entries(
+    State(state): State<Arc<GatewayState>>,
+    Path(segment_id): Path<String>,
+    req: axum::extract::Request,
+) -> Result<impl IntoResponse, GatewayError> {
+    require_permission(&req, "segment:write")?;
+
+    let org_id = req
+        .extensions()
+        .get::<stitchd_proto::auth::v1::RbacContext>()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let (_parts, body_raw) = req.into_parts();
+    let bytes = axum::body::to_bytes(body_raw, 4 * 1024 * 1024)
+        .await
+        .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
+    let body: PatchEntriesRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid request body: {e}")))?;
+
+    let rpc = tonic::Request::new(PatchSegmentEntriesRequest {
+        segment_id,
+        keys: body.keys,
+        list_type: body.list_type,
+        action: body.action,
+        org_id,
+    });
+    let mut client = state.segmentation_client.lock().await;
+    let resp = client
+        .patch_segment_entries(rpc)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    Ok(Json(PatchEntriesResponse {
+        include_count: inner.include_count,
+        exclude_count: inner.exclude_count,
+    }))
+}
+
+/// `GET /v1/segments/{id}/entries/lookup?key=...` — look up a single key.
+#[utoipa::path(
+    get,
+    path = "/v1/segments/{id}/entries/lookup",
+    tag = "segments",
+    params(
+        ("id" = String, Path, description = "Segment UUID"),
+        ("key" = String, Query, description = "Key to look up"),
+    ),
+    responses(
+        (status = 200, description = "Lookup result", body = LookupEntryResponse),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — missing segment:read"),
+        (status = 404, description = "Segment not found"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn lookup_segment_entry(
+    State(state): State<Arc<GatewayState>>,
+    Path(segment_id): Path<String>,
+    Query(query): Query<LookupEntryQuery>,
+    req: axum::extract::Request,
+) -> Result<impl IntoResponse, GatewayError> {
+    require_permission(&req, "segment:read")?;
+
+    let org_id = req
+        .extensions()
+        .get::<stitchd_proto::auth::v1::RbacContext>()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let rpc = tonic::Request::new(LookupSegmentEntryRequest {
+        segment_id,
+        key: query.key,
+        org_id,
+    });
+    let mut client = state.segmentation_client.lock().await;
+    let resp = client
+        .lookup_segment_entry(rpc)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    Ok(Json(LookupEntryResponse {
+        in_include: inner.in_include,
+        in_exclude: inner.in_exclude,
+    }))
+}
+
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
 /// Serialise an optional `condition_expr` JSON value to bytes for the proto.
@@ -470,6 +621,8 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
             "/v1/environments/{env_id}/segments",
             post(create_segment_in_env),
         )
+        .route("/v1/segments/{id}/entries", post(patch_segment_entries))
+        .route("/v1/segments/{id}/entries/lookup", get(lookup_segment_entry))
         .with_state(state)
 }
 

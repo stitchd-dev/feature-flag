@@ -138,9 +138,25 @@ export function SegmentsList() {
                   </thead>
                   <tbody>
                     {filtered.map((s) => (
-                      <tr key={s.id}>
+                      <tr
+                        key={s.id}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => navigate(`/org/${orgId}/segments/${s.id}`)}
+                      >
                         <td>
-                          <span style={{ fontWeight: 600, fontSize: 13 }}>{s.name}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ fontWeight: 600, fontSize: 13 }}>{s.name}</span>
+                            {s.segment_type && (
+                              <span style={{
+                                fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4,
+                                background: s.segment_type === 'list' ? 'rgba(22,163,74,0.1)' : 'rgba(59,130,246,0.1)',
+                                color: s.segment_type === 'list' ? '#16a34a' : '#2563eb',
+                                border: `1px solid ${s.segment_type === 'list' ? 'rgba(22,163,74,0.25)' : 'rgba(59,130,246,0.25)'}`,
+                              }}>
+                                {s.segment_type === 'list' ? 'list' : 'rule'}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td style={{ color: 'var(--fg-muted)', fontSize: 12 }}>{s.description || '—'}</td>
                         <td>
@@ -163,7 +179,7 @@ export function SegmentsList() {
                             <button
                               className="btn sm"
                               onClick={(e) => { e.stopPropagation(); setEditSegment(s) }}
-                              title="Edit segment"
+                              title="Edit metadata"
                             >
                               <I.pencil size={12} />
                             </button>

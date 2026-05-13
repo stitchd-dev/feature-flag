@@ -177,6 +177,14 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             "/v1/environments/{env_id}/segments",
             post(segments::create_segment_in_env),
         )
+        .route(
+            "/v1/segments/{id}/entries",
+            post(segments::patch_segment_entries),
+        )
+        .route(
+            "/v1/segments/{id}/entries/lookup",
+            get(segments::lookup_segment_entry),
+        )
         // Events
         .route(
             "/v1/environments/{env_id}/event-definitions",
