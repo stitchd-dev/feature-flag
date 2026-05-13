@@ -212,18 +212,20 @@ export function OutputEditor({
 
 interface Props {
   index: number
+  name?: string
   condition: ConditionExpr
   output: RuleOutputJson
   variants: string[]
   onChange: (condition: ConditionExpr, output: RuleOutputJson) => void
+  onNameChange: (name: string) => void
   onDelete: () => void
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>
   envId?: string | null
   orgId?: string
 }
 
-export function RuleCard({ index, condition, output, variants, onChange, onDelete, dragHandleProps, envId, orgId }: Props) {
-  const [expanded, setExpanded] = useState(true)
+export function RuleCard({ index, name, condition, output, variants, onChange, onNameChange, onDelete, dragHandleProps, envId, orgId }: Props) {
+  const [expanded, setExpanded] = useState(false)
 
   return (
     <div className="card" style={{ marginBottom: 8, overflow: 'hidden' }}>
@@ -234,11 +236,18 @@ export function RuleCard({ index, condition, output, variants, onChange, onDelet
         <div style={{ width: 26, height: 26, borderRadius: 6, background: 'var(--bg-sunken)', color: 'var(--fg-muted)', display: 'grid', placeItems: 'center', fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, flexShrink: 0 }}>
           {index + 1}
         </div>
-        <div style={{ flex: 1, fontSize: 13, color: 'var(--fg-muted)' }}>
-          {isVariantOutput(output)
-            ? <span>→ <span className="badge accent">{(output as { variant_key: string }).variant_key}</span></span>
-            : <span>→ percentage rollout ({(output as { allocation: AllocationOutput }).allocation.buckets.length} variants)</span>
-          }
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {name && (
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {name}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
+            {isVariantOutput(output)
+              ? <span>→ <span className="badge accent">{(output as { variant_key: string }).variant_key}</span></span>
+              : <span>→ percentage rollout ({(output as { allocation: AllocationOutput }).allocation.buckets.length} variants)</span>
+            }
+          </div>
         </div>
         <button className="icon-btn" onClick={() => setExpanded((v) => !v)}>
           {expanded ? <I.chevronUp size={14} /> : <I.chevronDown size={14} />}
@@ -250,6 +259,17 @@ export function RuleCard({ index, condition, output, variants, onChange, onDelet
 
       {expanded && (
         <div style={{ padding: 14, borderTop: '1px solid var(--border-faint)' }}>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 11, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginBottom: 6 }}>Rule name</div>
+            <input
+              className="input"
+              placeholder="Untitled rule"
+              value={name ?? ''}
+              onChange={(e) => onNameChange(e.target.value)}
+              style={{ width: '100%', fontSize: 13 }}
+            />
+          </div>
+
           <div style={{ fontSize: 11, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginBottom: 8 }}>When</div>
           <ConditionExprEditor
             expr={condition}

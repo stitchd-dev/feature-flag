@@ -32,9 +32,10 @@ function validateVariantValue(raw: string, flagType: string): string | null {
   return null
 }
 
-function parseRuleState(raw: { condition: unknown; output: unknown }): RuleState {
+function parseRuleState(raw: { condition: unknown; output: unknown; name?: unknown }): RuleState {
   return {
     _localId: localId(),
+    name: typeof raw.name === 'string' && raw.name ? raw.name : undefined,
     condition: raw.condition as ConditionExpr,
     // normalizeOutput migrates legacy bare-array allocation to the new object form
     output: normalizeOutput(raw.output),
@@ -345,7 +346,7 @@ function TargetingPanel({
       catchAll.output = catchAllOutput
       const allRules = [...rules, catchAll]
       const body = {
-        rules: allRules.map((r) => ({ condition: r.condition, output: r.output })),
+        rules: allRules.map((r) => ({ ...(r.name ? { name: r.name } : {}), condition: r.condition, output: r.output })),
         version: flag.version,
       }
       const { data } = await api.put<AdminFlagResponse>(`/v1/projects/${projectId}/flags/${flag.key}/rules`, body)

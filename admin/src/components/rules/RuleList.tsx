@@ -47,6 +47,10 @@ export function RuleList({
     onChange(rules.map((r, j) => j === i ? { ...r, condition, output } : r))
   }
 
+  function updateRuleName(i: number, name: string) {
+    onChange(rules.map((r, j) => j === i ? { ...r, name: name || undefined } : r))
+  }
+
   function deleteRule(i: number) {
     onChange(rules.filter((_, j) => j !== i))
   }
@@ -123,10 +127,12 @@ export function RuleList({
         >
           <RuleCard
             index={i}
+            name={rule.name}
             condition={rule.condition}
             output={rule.output}
             variants={variants}
             onChange={(c, o) => updateRule(i, c, o)}
+            onNameChange={(n) => updateRuleName(i, n)}
             onDelete={() => deleteRule(i)}
             dragHandleProps={{ style: { cursor: 'grab' } }}
             envId={envId}

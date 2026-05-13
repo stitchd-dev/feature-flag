@@ -95,6 +95,8 @@ export function normalizeOutput(raw: unknown): RuleOutputJson {
 export interface RuleState {
   /** Stable local key for React list reconciliation — not sent to backend. */
   _localId: string
+  /** Optional human-readable label. Stored as rule metadata; ignored by the evaluator. */
+  name?: string
   condition: ConditionExpr
   output: RuleOutputJson
 }
