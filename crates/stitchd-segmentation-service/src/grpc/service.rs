@@ -7,9 +7,11 @@ use tonic::{Request, Response, Status};
 use stitchd_core::segment::SegmentType;
 use stitchd_db::SegmentRepository;
 use stitchd_proto::segments::v1::{
-    EvaluateMembershipRequest, EvaluateMembershipResponse, GetSegmentRequest, ListSegmentsRequest,
+    AdminSegment, CreateAdminSegmentRequest, DeleteAdminSegmentRequest, DeleteAdminSegmentResponse,
+    EvaluateMembershipRequest, EvaluateMembershipResponse, GetAdminSegmentRequest,
+    GetSegmentRequest, ListAdminSegmentsRequest, ListAdminSegmentsResponse, ListSegmentsRequest,
     ListSegmentsResponse, MutateSegmentRequest, MutateSegmentResponse, SegmentBundle,
-    segmentation_service_server::SegmentationService,
+    UpdateAdminSegmentRequest, segmentation_service_server::SegmentationService,
 };
 
 use crate::{
@@ -184,6 +186,55 @@ impl SegmentationService for SegmentationServiceImpl {
                 "mutation kind must not be UNSPECIFIED",
             )),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Admin RPCs — forwarded to the gateway; stubs required for trait impl.
+    // -----------------------------------------------------------------------
+
+    async fn list_admin_segments(
+        &self,
+        _req: Request<ListAdminSegmentsRequest>,
+    ) -> Result<Response<ListAdminSegmentsResponse>, Status> {
+        Err(Status::unimplemented(
+            "list_admin_segments is handled by the gateway",
+        ))
+    }
+
+    async fn get_admin_segment(
+        &self,
+        _req: Request<GetAdminSegmentRequest>,
+    ) -> Result<Response<AdminSegment>, Status> {
+        Err(Status::unimplemented(
+            "get_admin_segment is handled by the gateway",
+        ))
+    }
+
+    async fn create_admin_segment(
+        &self,
+        _req: Request<CreateAdminSegmentRequest>,
+    ) -> Result<Response<AdminSegment>, Status> {
+        Err(Status::unimplemented(
+            "create_admin_segment is handled by the gateway",
+        ))
+    }
+
+    async fn update_admin_segment(
+        &self,
+        _req: Request<UpdateAdminSegmentRequest>,
+    ) -> Result<Response<AdminSegment>, Status> {
+        Err(Status::unimplemented(
+            "update_admin_segment is handled by the gateway",
+        ))
+    }
+
+    async fn delete_admin_segment(
+        &self,
+        _req: Request<DeleteAdminSegmentRequest>,
+    ) -> Result<Response<DeleteAdminSegmentResponse>, Status> {
+        Err(Status::unimplemented(
+            "delete_admin_segment is handled by the gateway",
+        ))
     }
 }
 

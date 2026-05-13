@@ -110,6 +110,8 @@ mod tests {
                 id: FlagId::new(),
                 project_id: ProjectId::new(),
                 key: FlagKey::new("test").unwrap(),
+                name: "Test Flag".to_string(),
+                description: String::new(),
                 value_type: FlagValueType::Bool,
                 enabled: true,
                 default_variant_id: Some(vid),

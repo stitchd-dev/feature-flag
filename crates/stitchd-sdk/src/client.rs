@@ -472,6 +472,7 @@ mod tests {
                     rule_payload: serde_json::to_vec(&ConditionExpr::And(vec![])).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
                 }],
+                ..Default::default()
             }],
             server_timestamp_ms: 0,
             rule_segments: vec![],
@@ -541,6 +542,7 @@ mod tests {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
                 }],
+                ..Default::default()
             }],
             server_timestamp_ms: 0,
             rule_segments: vec![ProtoRuleSegment {
@@ -597,6 +599,7 @@ mod tests {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
                 }],
+                ..Default::default()
             }],
             server_timestamp_ms: 0,
             rule_segments: vec![ProtoRuleSegment {
@@ -681,6 +684,7 @@ mod tests {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
                 }],
+                ..Default::default()
             }],
             server_timestamp_ms: 0,
             rule_segments: vec![],
@@ -740,6 +744,7 @@ mod tests {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
                 }],
+                ..Default::default()
             }],
             server_timestamp_ms: 0,
             rule_segments: vec![],
@@ -786,6 +791,7 @@ mod tests {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
                 }],
+                ..Default::default()
             }],
             server_timestamp_ms: 0,
             rule_segments: vec![],
