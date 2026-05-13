@@ -56,7 +56,19 @@ export function SegmentPicker({ value, onChange, envId, orgId, readOnly, segment
   const didFetch = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Lazy-load segments when dropdown first opens
+  // Eagerly fetch segments when we have a value and envId so the name resolves
+  // without the user having to open the dropdown.
+  useEffect(() => {
+    if (didFetch.current || !envId || !value) return
+    didFetch.current = true
+    setLoading(true)
+    api.get<Segment[]>(`/v1/segments?env_id=${envId}`)
+      .then(({ data }) => setSegments(data)) // eslint-disable-line react-hooks/set-state-in-effect
+      .catch(() => { /* silently ignore — user can still open dropdown */ }) // eslint-disable-line react-hooks/set-state-in-effect
+      .finally(() => setLoading(false)) // eslint-disable-line react-hooks/set-state-in-effect
+  }, [envId, value])
+
+  // Lazy-load segments when dropdown first opens (in case eager fetch didn't run)
   function handleOpen() {
     if (readOnly) return
     setOpen(true)
