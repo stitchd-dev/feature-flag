@@ -63,9 +63,9 @@ export function SegmentPicker({ value, onChange, envId, orgId, readOnly, segment
     didFetch.current = true
     setLoading(true)
     api.get<Segment[]>(`/v1/segments?env_id=${envId}`)
-      .then(({ data }) => setSegments(data)) // eslint-disable-line react-hooks/set-state-in-effect
-      .catch(() => { /* silently ignore — user can still open dropdown */ }) // eslint-disable-line react-hooks/set-state-in-effect
-      .finally(() => setLoading(false)) // eslint-disable-line react-hooks/set-state-in-effect
+      .then(({ data }) => setSegments(data))
+      .catch(() => { /* silently ignore — user can still open dropdown */ })
+      .finally(() => setLoading(false))
   }, [envId, value])
 
   // Lazy-load segments when dropdown first opens (in case eager fetch didn't run)
