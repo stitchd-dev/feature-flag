@@ -367,6 +367,21 @@ pub trait SegmentRepository: Send + Sync {
         exclude: &[String],
     ) -> Result<(), RepositoryError>;
 
+    /// Fetch the raw ConditionExpr JSON for a rule-based segment (admin UI).
+    /// Returns `None` if the segment has no condition set yet.
+    async fn get_condition_expr(
+        &self,
+        id: SegmentId,
+    ) -> Result<Option<serde_json::Value>, RepositoryError>;
+
+    /// Persist (overwrite) the raw ConditionExpr JSON for a rule-based segment.
+    /// Pass `None` to clear it.
+    async fn set_condition_expr(
+        &self,
+        id: SegmentId,
+        expr: Option<&serde_json::Value>,
+    ) -> Result<(), RepositoryError>;
+
     /// Soft-delete a segment.
     async fn soft_delete(&self, id: SegmentId) -> Result<(), RepositoryError>;
 

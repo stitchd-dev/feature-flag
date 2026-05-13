@@ -19,11 +19,15 @@ interface Props {
   canWrite?: boolean
   /** Only used when flag is DISABLED — auto-saves default_variant_key. */
   onSaveDefaultVariant?: (key: string) => Promise<void>
+  /** Environment ID passed to the segment picker for lazy-loading segments. */
+  envId?: string | null
+  /** Org ID used to build segment detail links. */
+  orgId?: string
 }
 
 export function RuleList({
   rules, variants, defaultVariantKey, catchAllOutput, flagEnabled,
-  onChange, onCatchAllChange, canWrite, onSaveDefaultVariant,
+  onChange, onCatchAllChange, canWrite, onSaveDefaultVariant, envId, orgId,
 }: Props) {
   const [dragSourceIndex, setDragSourceIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
@@ -31,7 +35,9 @@ export function RuleList({
   function addRule() {
     const newRule: RuleState = {
       _localId: localId(),
-      condition: defaultCondition(),
+      // Start as And([leaf]) so the "Add condition" / "Add group" buttons are
+      // immediately available for building multi-condition rules.
+      condition: { And: [defaultCondition()] },
       output: defaultOutput(variants[0] ?? ''),
     }
     onChange([newRule, ...rules])
@@ -39,6 +45,10 @@ export function RuleList({
 
   function updateRule(i: number, condition: ConditionExpr, output: RuleOutputJson) {
     onChange(rules.map((r, j) => j === i ? { ...r, condition, output } : r))
+  }
+
+  function updateRuleName(i: number, name: string) {
+    onChange(rules.map((r, j) => j === i ? { ...r, name: name || undefined } : r))
   }
 
   function deleteRule(i: number) {
@@ -117,12 +127,16 @@ export function RuleList({
         >
           <RuleCard
             index={i}
+            name={rule.name}
             condition={rule.condition}
             output={rule.output}
             variants={variants}
             onChange={(c, o) => updateRule(i, c, o)}
+            onNameChange={(n) => updateRuleName(i, n)}
             onDelete={() => deleteRule(i)}
             dragHandleProps={{ style: { cursor: 'grab' } }}
+            envId={envId}
+            orgId={orgId}
           />
         </div>
       ))}

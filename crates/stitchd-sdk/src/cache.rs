@@ -195,6 +195,7 @@ fn build_flag_def(flag: FeatureFlag) -> Result<SdkFlagDef, SdkError> {
 
         rules.push(Rule {
             id: RuleId::new(),
+            name: if proto_rule.name.is_empty() { None } else { Some(proto_rule.name.clone()) },
             condition,
             output,
         });
@@ -314,6 +315,7 @@ mod tests {
                     "on".to_string(),
                 )),
             }],
+            ..Default::default()
         };
 
         let def = build_flag_def(flag).unwrap();
@@ -552,6 +554,7 @@ mod tests {
             value_type: 2,
             variants: vec![make_variant_proto("forty-two", Value::IntValue(42))],
             rules: vec![],
+            ..Default::default()
         };
         let def = build_flag_def(flag).unwrap();
         let val = def.variant_map.values().next().unwrap();
@@ -568,6 +571,7 @@ mod tests {
             value_type: 3,
             variants: vec![make_variant_proto("pi", Value::DoubleValue(2.5))],
             rules: vec![],
+            ..Default::default()
         };
         let def = build_flag_def(flag).unwrap();
         let val = def.variant_map.values().next().unwrap();
@@ -587,6 +591,7 @@ mod tests {
                 Value::StringValue("world".to_string()),
             )],
             rules: vec![],
+            ..Default::default()
         };
         let def = build_flag_def(flag).unwrap();
         let val = def.variant_map.values().next().unwrap();
@@ -606,6 +611,7 @@ mod tests {
                 Value::JsonValue(r#"{"key":"val"}"#.to_string()),
             )],
             rules: vec![],
+            ..Default::default()
         };
         let def = build_flag_def(flag).unwrap();
         let val = def.variant_map.values().next().unwrap();
@@ -629,6 +635,7 @@ mod tests {
                 Value::JsonValue("not-json!!!".to_string()),
             )],
             rules: vec![],
+            ..Default::default()
         };
         let result = build_flag_def(flag);
         assert!(result.is_err());
@@ -645,6 +652,7 @@ mod tests {
                 value: None, // missing value
             }],
             rules: vec![],
+            ..Default::default()
         };
         let result = build_flag_def(flag);
         assert!(result.is_err());
@@ -663,6 +671,7 @@ mod tests {
                     "nonexistent".to_string(),
                 )),
             }],
+            ..Default::default()
         };
         let result = build_flag_def(flag);
         let err = result.err().expect("expected error");
@@ -683,6 +692,7 @@ mod tests {
                     "on".to_string(),
                 )),
             }],
+            ..Default::default()
         };
         let result = build_flag_def(flag);
         assert!(result.is_err());
@@ -699,6 +709,7 @@ mod tests {
                 rule_payload: serde_json::to_vec(&always_true_condition()).unwrap(),
                 output: None, // None output should be skipped
             }],
+            ..Default::default()
         };
         let def = build_flag_def(flag).unwrap();
         assert_eq!(def.rules.len(), 0); // rule skipped
@@ -743,6 +754,7 @@ mod tests {
                     ],
                 })),
             }],
+            ..Default::default()
         };
         let def = build_flag_def(flag).unwrap();
         assert_eq!(def.rules.len(), 1);
@@ -784,6 +796,7 @@ mod tests {
                     }],
                 })),
             }],
+            ..Default::default()
         };
         let def = build_flag_def(flag).unwrap();
         if let RuleOutput::Percentage { targets, .. } = &def.rules[0].output {
@@ -811,6 +824,7 @@ mod tests {
                         "on".to_string(),
                     )),
                 }],
+                ..Default::default()
             }],
             server_timestamp_ms: 0,
             rule_segments: vec![],

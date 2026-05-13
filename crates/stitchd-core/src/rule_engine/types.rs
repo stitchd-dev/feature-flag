@@ -73,6 +73,9 @@ pub enum RuleOutput {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct Rule {
     pub id: RuleId,
+    /// Optional human-readable label. Ignored by the evaluator; UI metadata only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub condition: ConditionExpr,
     pub output: RuleOutput,
 }

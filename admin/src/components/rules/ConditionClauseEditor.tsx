@@ -1,5 +1,6 @@
 import { I } from '../icons'
 import type { Condition, ParameterValue } from '../../lib/ruleTypes'
+import { SegmentPicker } from './SegmentPicker'
 
 const COMPARE_OPS = ['Eq', 'Ne', 'Lt', 'Lte', 'Gt', 'Gte'] as const
 const STRING_OPS = ['Contains', 'StartsWith', 'EndsWith'] as const
@@ -46,20 +47,40 @@ function buildCondition(op: string, prev: Condition): Condition {
   return { Eq: { context_type: 'user', param: '', value: '' } }
 }
 
+/** Ops that are forbidden inside a segment's own condition expression. */
+const SEGMENT_FORBIDDEN_OPS = new Set(['InSegment', 'NotInSegment', 'FlagEvaluatedAs'])
+
 interface Props {
   condition: Condition
   onChange: (c: Condition) => void
   onDelete: () => void
+  /** Needed for the segment picker lazy-load. */
+  envId?: string | null
+  orgId?: string
+  /**
+   * 'flag' (default) — all operators available.
+   * 'segment' — InSegment / NotInSegment / FlagEvaluatedAs are hidden
+   *             (segments cannot self-reference or depend on flag evaluations).
+   */
+  mode?: 'flag' | 'segment'
 }
 
-export function ConditionClauseEditor({ condition, onChange, onDelete }: Props) {
+export function ConditionClauseEditor({ condition, onChange, onDelete, envId, orgId, mode = 'flag' }: Props) {
   const op = currentOpKey(condition)
 
   function setOp(newOp: string) {
     onChange(buildCondition(newOp, condition))
   }
 
-  const iInput = (
+  // In segment mode, forbidden ops are hidden. If the current condition somehow
+  // uses one (e.g. copy-paste), display a warning placeholder instead.
+  const isForbidden = mode === 'segment' && SEGMENT_FORBIDDEN_OPS.has(op)
+
+  const iInput = isForbidden ? (
+    <span style={{ fontSize: 12, color: 'var(--danger)', fontFamily: 'var(--font-mono)', padding: '4px 6px', background: 'var(--danger-bg, rgba(220,53,69,0.1))', borderRadius: 3 }}>
+      ⚠ {OP_LABELS[op] ?? op} (not allowed in segments)
+    </span>
+  ) : (
     <select
       className="input"
       style={{ width: 130, fontFamily: 'var(--font-mono)', fontSize: 12 }}
@@ -75,12 +96,16 @@ export function ConditionClauseEditor({ condition, onChange, onDelete }: Props) 
       <optgroup label="SemVer">
         {SEMVER_OPS.map((o) => <option key={o} value={o}>{OP_LABELS[o]}</option>)}
       </optgroup>
-      <optgroup label="Segment">
-        {SEGMENT_OPS.map((o) => <option key={o} value={o}>{OP_LABELS[o]}</option>)}
-      </optgroup>
-      <optgroup label="Flag">
-        {FLAG_OPS.map((o) => <option key={o} value={o}>{OP_LABELS[o]}</option>)}
-      </optgroup>
+      {mode !== 'segment' && (
+        <optgroup label="Segment">
+          {SEGMENT_OPS.map((o) => <option key={o} value={o}>{OP_LABELS[o]}</option>)}
+        </optgroup>
+      )}
+      {mode !== 'segment' && (
+        <optgroup label="Flag">
+          {FLAG_OPS.map((o) => <option key={o} value={o}>{OP_LABELS[o]}</option>)}
+        </optgroup>
+      )}
     </select>
   )
 
@@ -133,9 +158,14 @@ export function ConditionClauseEditor({ condition, onChange, onDelete }: Props) 
     if (op === 'InSegment' || op === 'NotInSegment') {
       const segId = (condition as Record<string, string>)[op]
       return (
-        <input className="input" style={{ width: 200 }} placeholder="segment ID"
+        <SegmentPicker
           value={segId}
-          onChange={(e) => onChange({ [op]: e.target.value } as Condition)} />
+          envId={envId ?? null}
+          orgId={orgId ?? ''}
+          onChange={(newId) =>
+            onChange({ [op]: newId } as Condition)
+          }
+        />
       )
     }
 

@@ -62,6 +62,122 @@ message MutateSegmentResponse {
   uint64 version = 3;
 }
 
+// ─── Admin segment message ────────────────────────────────────────────────────
+
+// Full admin representation of a segment (used by the management UI).
+message AdminSegment {
+  string          id             = 1;
+  string          environment_id = 2;
+  string          name           = 3;
+  string          description    = 4;
+  repeated string tags           = 5;
+  // JSON-encoded ConditionExpr, empty string when not set.
+  bytes           condition_expr = 6;
+  // Explicit keys for list-based targeting.
+  // Deprecated: always empty. Use include_count instead.
+  repeated string user_list      = 7;
+  int64           created_at_ms  = 8;
+  int64           updated_at_ms  = 9;
+  uint64          version        = 10;
+  // "list" or "rule"
+  string          segment_type   = 11;
+  // Context kind this list targets (e.g. "user", "org", "device").
+  // Only meaningful for list-based segments.
+  string          context_type   = 12;
+  // Keys explicitly excluded from this segment (list-based only).
+  // Deprecated: always empty. Use exclude_count instead.
+  repeated string excluded_keys  = 13;
+  // Count of include-list entries (list-based segments only).
+  uint32          include_count  = 14;
+  // Count of exclude-list entries (list-based segments only).
+  uint32          exclude_count  = 15;
+}
+
+// ─── Entry patch / lookup messages ───────────────────────────────────────────
+
+// Patch (add/remove/replace) entries in a list segment.
+message PatchSegmentEntriesRequest {
+  string          segment_id = 1;
+  repeated string keys       = 2;
+  // "include" or "exclude"
+  string          list_type  = 3;
+  // "add"     — union CSV keys into the existing list
+  // "remove"  — remove matching keys from the list
+  // "replace" — replace the entire list with these keys
+  string          action     = 4;
+  string          org_id     = 5;
+}
+
+message PatchSegmentEntriesResponse {
+  uint32 include_count = 1;
+  uint32 exclude_count = 2;
+}
+
+message LookupSegmentEntryRequest {
+  string segment_id = 1;
+  string key        = 2;
+  string org_id     = 3;
+}
+
+message LookupSegmentEntryResponse {
+  bool in_include = 1;
+  bool in_exclude = 2;
+}
+
+// ─── Admin CRUD requests ──────────────────────────────────────────────────────
+
+message ListAdminSegmentsRequest {
+  string environment_id = 1;
+}
+
+message ListAdminSegmentsResponse {
+  repeated AdminSegment segments = 1;
+}
+
+message GetAdminSegmentRequest {
+  string segment_id = 1;
+  // The caller's org — used to scope the lookup.
+  string org_id     = 2;
+}
+
+message CreateAdminSegmentRequest {
+  string          environment_id = 1;
+  string          name           = 2;
+  string          description    = 3;
+  repeated string tags           = 4;
+  bytes           condition_expr = 5;
+  repeated string user_list      = 6;
+  // "list" or "rule"
+  string          segment_type   = 7;
+  // Context kind this list targets (e.g. "user", "org", "device").
+  // Defaults to "user" when omitted for backward compatibility.
+  string          context_type   = 8;
+  // Keys explicitly excluded from this segment (list-based only).
+  repeated string excluded_keys  = 9;
+}
+
+message UpdateAdminSegmentRequest {
+  string          segment_id     = 1;
+  string          name           = 2;
+  string          description    = 3;
+  repeated string tags           = 4;
+  bytes           condition_expr = 5;
+  repeated string user_list      = 6;
+  uint64          version        = 7;
+  // Context kind this list targets (e.g. "user", "org", "device").
+  // Defaults to "user" when omitted for backward compatibility.
+  string          context_type   = 8;
+  // Keys to explicitly exclude from this segment (list-based only).
+  repeated string excluded_keys  = 9;
+}
+
+message DeleteAdminSegmentRequest {
+  string segment_id = 1;
+  string org_id     = 2;
+}
+
+message DeleteAdminSegmentResponse {}
+
 // ─── Segmentation service ─────────────────────────────────────────────────────
 
 service SegmentationService {
@@ -77,4 +193,27 @@ service SegmentationService {
 
   // Create, update, or delete a segment.
   rpc MutateSegment(MutateSegmentRequest) returns (MutateSegmentResponse);
+
+  // ─── Admin CRUD ──────────────────────────────────────────────────────────
+
+  // List all admin segments for an environment.
+  rpc ListAdminSegments(ListAdminSegmentsRequest) returns (ListAdminSegmentsResponse);
+
+  // Get a single admin segment by ID.
+  rpc GetAdminSegment(GetAdminSegmentRequest) returns (AdminSegment);
+
+  // Create a new admin segment.
+  rpc CreateAdminSegment(CreateAdminSegmentRequest) returns (AdminSegment);
+
+  // Update an existing admin segment.
+  rpc UpdateAdminSegment(UpdateAdminSegmentRequest) returns (AdminSegment);
+
+  // Delete an admin segment.
+  rpc DeleteAdminSegment(DeleteAdminSegmentRequest) returns (DeleteAdminSegmentResponse);
+
+  // Patch (add/remove/replace) entries in a list segment.
+  rpc PatchSegmentEntries(PatchSegmentEntriesRequest) returns (PatchSegmentEntriesResponse);
+
+  // Look up whether a single key is in the include/exclude list of a segment.
+  rpc LookupSegmentEntry(LookupSegmentEntryRequest) returns (LookupSegmentEntryResponse);
 }

@@ -13,7 +13,8 @@ import { switchOrg } from '../lib/api'
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-function initials(name: string): string {
+function initials(name: string | undefined | null): string {
+  if (!name) return '?'
   return name
     .split(/\s+/)
     .slice(0, 2)

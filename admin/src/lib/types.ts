@@ -10,6 +10,11 @@ export interface RuleJson {
   condition: unknown
   /** Gateway output JSON — `{variant_key: "..."}` or `{allocation: [...]}` */
   output: unknown
+  /**
+   * Segment IDs referenced in this rule's condition (populated by Phase 1 backend).
+   * Used to resolve segment names for display without a separate fetch.
+   */
+  segment_ids?: string[]
 }
 
 export interface AdminFlagResponse {

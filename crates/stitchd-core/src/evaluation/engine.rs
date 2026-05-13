@@ -154,6 +154,7 @@ mod tests {
             rule_index: 0,
             rule: Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::Leaf(Condition::Eq {
                     context_type: "user".to_string(),
                     param: "beta".to_string(),
@@ -225,6 +226,7 @@ mod tests {
                 rule_index: -1,
                 rule: Rule {
                     id: RuleId::new(),
+                    name: None,
                     condition: ConditionExpr::Leaf(Condition::InSegment(segment_id)),
                     output: RuleOutput::Variant(v1_id),
                 },

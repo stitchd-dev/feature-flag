@@ -271,7 +271,10 @@ pub async fn list_projects(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListProjectsRequest { org_id });
     let mut client = state.management_client.lock().await;
-    let resp = client.list_projects(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .list_projects(req)
+        .await
+        .map_err(GatewayError::from)?;
     let projects = resp
         .into_inner()
         .projects
@@ -296,7 +299,10 @@ pub async fn rename_project(
         name: body.name,
     });
     let mut client = state.management_client.lock().await;
-    client.rename_project(req).await.map_err(GatewayError::from)?;
+    client
+        .rename_project(req)
+        .await
+        .map_err(GatewayError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -307,7 +313,10 @@ pub async fn delete_project(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(DeleteProjectRequest { project_id });
     let mut client = state.management_client.lock().await;
-    client.delete_project(req).await.map_err(GatewayError::from)?;
+    client
+        .delete_project(req)
+        .await
+        .map_err(GatewayError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -374,7 +383,10 @@ pub async fn list_sdk_keys(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListSdkKeysRequest { environment_id });
     let mut client = state.management_client.lock().await;
-    let resp = client.list_sdk_keys(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .list_sdk_keys(req)
+        .await
+        .map_err(GatewayError::from)?;
     let sdk_keys = resp
         .into_inner()
         .sdk_keys
@@ -400,7 +412,10 @@ pub async fn revoke_sdk_key(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(RevokeSdkKeyRequest { sdk_key_id });
     let mut client = state.management_client.lock().await;
-    client.revoke_sdk_key(req).await.map_err(GatewayError::from)?;
+    client
+        .revoke_sdk_key(req)
+        .await
+        .map_err(GatewayError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

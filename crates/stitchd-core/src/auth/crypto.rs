@@ -244,6 +244,7 @@ mod tests {
         assert!(ok);
     }
 
+
     #[test]
     fn verify_wrong_password_returns_false() {
         let hash = hash_password("my-password").unwrap();

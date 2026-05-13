@@ -106,6 +106,7 @@ mod tests {
     fn flag_eq_rule(flag_id: FlagId, variant_id: VariantId) -> Rule {
         Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::FlagEvaluatedAs {
                 flag_id,
                 variant_id,
@@ -117,6 +118,7 @@ mod tests {
     fn no_dep_rule() -> Rule {
         Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![]),
             output: RuleOutput::Variant(VariantId::new()),
         }
@@ -146,6 +148,7 @@ mod tests {
         let v = VariantId::new();
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![
                 ConditionExpr::Leaf(Condition::FlagEvaluatedAs {
                     flag_id: f1,

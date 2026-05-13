@@ -101,10 +101,16 @@ pub struct VariantJson {
 /// Rule as returned in admin API responses.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RuleJson {
+    /// Optional human-readable label set by the user; ignored by the evaluator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Decoded ConditionExpr JSON.
     pub condition: serde_json::Value,
     /// Rule output — `{"variant_key": "..."}` or `{"allocation": [...]}`.
     pub output: serde_json::Value,
+    /// Segment UUIDs referenced in the condition expression (convenience for the UI).
+    /// Populated by extracting all `InSegment` / `NotInSegment` leaf values.
+    pub segment_ids: Vec<String>,
 }
 
 /// Full admin representation of a feature flag.
@@ -138,6 +144,35 @@ fn proto_variant_value_to_json(
             serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
         }
         None => serde_json::Value::Null,
+    }
+}
+
+/// Recursively collect all segment UUIDs from a `ConditionExpr` JSON tree.
+///
+/// The `ConditionExpr` serde representation uses variant names as keys:
+/// - `{"Leaf": {"InSegment": "<uuid>"}}`
+/// - `{"Leaf": {"NotInSegment": "<uuid>"}}`
+/// - `{"And": [...]}`  / `{"Or": [...]}` / `{"Not": {...}}`
+fn collect_segment_ids(expr: &serde_json::Value, out: &mut Vec<String>) {
+    match expr {
+        serde_json::Value::Object(map) => {
+            if let Some(leaf) = map.get("Leaf") {
+                if let Some(seg_id) = leaf.get("InSegment").and_then(|v| v.as_str()) {
+                    out.push(seg_id.to_string());
+                } else if let Some(seg_id) = leaf.get("NotInSegment").and_then(|v| v.as_str()) {
+                    out.push(seg_id.to_string());
+                }
+            }
+            for child in map.values() {
+                collect_segment_ids(child, out);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_segment_ids(item, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -186,7 +221,19 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
         None => serde_json::Value::Null,
     };
 
-    RuleJson { condition, output }
+    let mut segment_ids = Vec::new();
+    collect_segment_ids(&condition, &mut segment_ids);
+    // Deduplicate while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    segment_ids.retain(|id| seen.insert(id.clone()));
+
+    let name = if r.name.is_empty() { None } else { Some(r.name.clone()) };
+    RuleJson {
+        name,
+        condition,
+        output,
+        segment_ids,
+    }
 }
 
 /// Validate that every variant's value matches the declared flag type.
@@ -255,15 +302,10 @@ fn variant_body_to_proto(v: VariantBody) -> stitchd_proto::flags::v1::Variant {
     use stitchd_proto::flags::v1::{VariantValue, variant_value::Value};
     let value = match &v.value {
         serde_json::Value::Bool(b) => Some(Value::BoolValue(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Some(Value::IntValue(i))
-            } else if let Some(d) = n.as_f64() {
-                Some(Value::DoubleValue(d))
-            } else {
-                None
-            }
-        }
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .map(Value::IntValue)
+            .or_else(|| n.as_f64().map(Value::DoubleValue)),
         serde_json::Value::String(s) => Some(Value::StringValue(s.clone())),
         other => Some(Value::JsonValue(other.to_string())),
     };
@@ -395,7 +437,10 @@ pub async fn create_flag(
     if let Some(err) = validate_variant_values(&variant_list, proto_value_type) {
         return Err(GatewayError::BadRequest(err));
     }
-    let variants = variant_list.into_iter().map(variant_body_to_proto).collect();
+    let variants = variant_list
+        .into_iter()
+        .map(variant_body_to_proto)
+        .collect();
     let flag = FeatureFlag {
         key: body.key.unwrap_or_default(),
         name: body.name.unwrap_or_default(),
@@ -691,6 +736,8 @@ pub async fn update_variants(
 /// A single rule in a replace-rules request.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RuleBody {
+    /// Optional human-readable label; ignored by the evaluator.
+    pub name: Option<String>,
     /// ConditionExpr as a JSON value.
     pub condition: serde_json::Value,
     /// Output:
@@ -721,7 +768,10 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
         let (hash_targets_val, buckets_val) = if alloc_val.is_array() {
             (None, alloc_val)
         } else {
-            (alloc_val.get("hash_targets"), alloc_val.get("buckets").unwrap_or(&serde_json::Value::Null))
+            (
+                alloc_val.get("hash_targets"),
+                alloc_val.get("buckets").unwrap_or(&serde_json::Value::Null),
+            )
         };
 
         let buckets: Vec<AllocationBucket> = buckets_val
@@ -742,11 +792,19 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
             std::collections::HashMap::new();
         if let Some(targets) = hash_targets_val.and_then(|v| v.as_array()) {
             for target in targets {
-                let ctx_type = target.get("context_type").and_then(|v| v.as_str()).unwrap_or("user");
-                let field = target.get("field").and_then(|v| v.as_str()).unwrap_or("key");
-                let spec = context_hash_specs.entry(ctx_type.to_string()).or_insert_with(|| ContextHashSpec {
-                    parameter_names: Vec::new(),
-                });
+                let ctx_type = target
+                    .get("context_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("user");
+                let field = target
+                    .get("field")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("key");
+                let spec = context_hash_specs
+                    .entry(ctx_type.to_string())
+                    .or_insert_with(|| ContextHashSpec {
+                        parameter_names: Vec::new(),
+                    });
                 if field != "key" {
                     spec.parameter_names.push(field.to_string());
                 }
@@ -754,7 +812,12 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
         }
         // Default to user.key when no targets provided.
         if context_hash_specs.is_empty() {
-            context_hash_specs.insert("user".to_string(), ContextHashSpec { parameter_names: Vec::new() });
+            context_hash_specs.insert(
+                "user".to_string(),
+                ContextHashSpec {
+                    parameter_names: Vec::new(),
+                },
+            );
         }
 
         Some(Output::Allocation(PercentageAllocation {
@@ -769,6 +832,7 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
     stitchd_proto::flags::v1::FlagRule {
         rule_payload,
         output,
+        name: r.name.unwrap_or_default(),
     }
 }
 
@@ -1194,7 +1258,9 @@ mod tests {
             archived: false,
             variants: vec![stitchd_proto::flags::v1::Variant {
                 key: "on".to_string(),
-                value: Some(VariantValue { value: Some(Value::BoolValue(true)) }),
+                value: Some(VariantValue {
+                    value: Some(Value::BoolValue(true)),
+                }),
             }],
             rules: vec![],
         };

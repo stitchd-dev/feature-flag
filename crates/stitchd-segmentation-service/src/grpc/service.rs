@@ -4,11 +4,15 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
-use stitchd_core::segment::SegmentType;
+use stitchd_core::segment::{Segment, SegmentType};
 use stitchd_db::SegmentRepository;
 use stitchd_proto::segments::v1::{
-    EvaluateMembershipRequest, EvaluateMembershipResponse, GetSegmentRequest, ListSegmentsRequest,
-    ListSegmentsResponse, MutateSegmentRequest, MutateSegmentResponse, SegmentBundle,
+    AdminSegment, CreateAdminSegmentRequest, DeleteAdminSegmentRequest, DeleteAdminSegmentResponse,
+    EvaluateMembershipRequest, EvaluateMembershipResponse, GetAdminSegmentRequest,
+    GetSegmentRequest, ListAdminSegmentsRequest, ListAdminSegmentsResponse, ListSegmentsRequest,
+    ListSegmentsResponse, LookupSegmentEntryRequest, LookupSegmentEntryResponse,
+    MutateSegmentRequest, MutateSegmentResponse, PatchSegmentEntriesRequest,
+    PatchSegmentEntriesResponse, SegmentBundle, UpdateAdminSegmentRequest,
     segmentation_service_server::SegmentationService,
 };
 
@@ -185,6 +189,395 @@ impl SegmentationService for SegmentationServiceImpl {
             )),
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Admin RPCs
+    // -----------------------------------------------------------------------
+
+    async fn list_admin_segments(
+        &self,
+        req: Request<ListAdminSegmentsRequest>,
+    ) -> Result<Response<ListAdminSegmentsResponse>, Status> {
+        let r = req.into_inner();
+        let env_id = parse_env_id(&r.environment_id).map_err(Status::from)?;
+
+        let segments = self
+            .state
+            .segment_repo
+            .list_by_environment(env_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        let mut admin_segments = Vec::with_capacity(segments.len());
+        for s in &segments {
+            let list_counts = if s.segment_type == SegmentType::List {
+                count_list_entries(&*self.state.segment_repo, s.id).await?
+            } else {
+                None
+            };
+            let condition_expr = if s.segment_type == SegmentType::Rule {
+                self.state.segment_repo.get_condition_expr(s.id).await
+                    .map_err(|e| Status::from(ServiceError::from(e)))?
+            } else {
+                None
+            };
+            admin_segments.push(segment_to_admin_proto_with_counts(s, list_counts, condition_expr));
+        }
+        Ok(Response::new(ListAdminSegmentsResponse { segments: admin_segments }))
+    }
+
+    async fn get_admin_segment(
+        &self,
+        req: Request<GetAdminSegmentRequest>,
+    ) -> Result<Response<AdminSegment>, Status> {
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+
+        let seg = self
+            .state
+            .segment_repo
+            .find_by_id(segment_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        // For list-based segments, fetch counts (not full lists).
+        let list_counts = if seg.segment_type == SegmentType::List {
+            count_list_entries(&*self.state.segment_repo, segment_id).await?
+        } else {
+            None
+        };
+
+        let condition_expr = if seg.segment_type == SegmentType::Rule {
+            self.state.segment_repo.get_condition_expr(segment_id).await
+                .map_err(|e| Status::from(ServiceError::from(e)))?
+        } else {
+            None
+        };
+
+        Ok(Response::new(segment_to_admin_proto_with_counts(&seg, list_counts, condition_expr)))
+    }
+
+    async fn create_admin_segment(
+        &self,
+        req: Request<CreateAdminSegmentRequest>,
+    ) -> Result<Response<AdminSegment>, Status> {
+        use chrono::Utc;
+        use stitchd_core::{id::SegmentId, segment::Segment};
+
+        let r = req.into_inner();
+        let env_id = parse_env_id(&r.environment_id).map_err(Status::from)?;
+
+        // Determine segment type: explicit field wins, fallback to list presence.
+        let seg_type = match r.segment_type.as_str() {
+            "rule" => SegmentType::Rule,
+            "list" => SegmentType::List,
+            _ => {
+                if r.user_list.is_empty() { SegmentType::Rule } else { SegmentType::List }
+            }
+        };
+        let context_type = if r.context_type.is_empty() { "user".to_string() } else { r.context_type.clone() };
+
+        let key = r.name.to_lowercase().replace(' ', "-");
+        let now = Utc::now();
+        let seg = Segment {
+            id: SegmentId::new(),
+            environment_id: env_id,
+            key,
+            name: r.name.clone(),
+            description: r.description.clone(),
+            tags: r.tags.clone(),
+            segment_type: seg_type,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+            version: 1,
+        };
+
+        self.state
+            .segment_repo
+            .create(&seg)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        if seg_type == SegmentType::List {
+            self.state
+                .segment_repo
+                .set_list_entries(seg.id, &context_type, &r.user_list, &r.excluded_keys)
+                .await
+                .map_err(|e| Status::from(ServiceError::from(e)))?;
+        }
+
+        // Persist condition_expr for rule-based segments.
+        let condition_expr = if seg_type == SegmentType::Rule && !r.condition_expr.is_empty() {
+            let v: serde_json::Value = serde_json::from_slice(&r.condition_expr)
+                .map_err(|e| Status::invalid_argument(format!("invalid condition_expr: {e}")))?;
+            self.state.segment_repo.set_condition_expr(seg.id, Some(&v)).await
+                .map_err(|e| Status::from(ServiceError::from(e)))?;
+            Some(v)
+        } else {
+            None
+        };
+
+        let list_counts = if seg_type == SegmentType::List {
+            Some((
+                context_type,
+                u32::try_from(r.user_list.len()).unwrap_or(u32::MAX),
+                u32::try_from(r.excluded_keys.len()).unwrap_or(u32::MAX),
+            ))
+        } else {
+            None
+        };
+        Ok(Response::new(segment_to_admin_proto_with_counts(&seg, list_counts, condition_expr)))
+    }
+
+    async fn update_admin_segment(
+        &self,
+        req: Request<UpdateAdminSegmentRequest>,
+    ) -> Result<Response<AdminSegment>, Status> {
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+
+        let mut seg = self
+            .state
+            .segment_repo
+            .find_by_id(segment_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        seg.name = r.name.clone();
+        seg.description = r.description.clone();
+        seg.tags = r.tags.clone();
+
+        let updated = self
+            .state
+            .segment_repo
+            .update(&seg)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        // Update list entries if this is a list-based segment.
+        let list_counts = if updated.segment_type == SegmentType::List {
+            let context_type = if r.context_type.is_empty() { "user".to_string() } else { r.context_type.clone() };
+            self.state
+                .segment_repo
+                .set_list_entries(updated.id, &context_type, &r.user_list, &r.excluded_keys)
+                .await
+                .map_err(|e| Status::from(ServiceError::from(e)))?;
+            Some((
+                context_type,
+                u32::try_from(r.user_list.len()).unwrap_or(u32::MAX),
+                u32::try_from(r.excluded_keys.len()).unwrap_or(u32::MAX),
+            ))
+        } else {
+            None
+        };
+
+        // Persist condition_expr for rule-based segments.
+        let condition_expr = if updated.segment_type == SegmentType::Rule && !r.condition_expr.is_empty() {
+            let v: serde_json::Value = serde_json::from_slice(&r.condition_expr)
+                .map_err(|e| Status::invalid_argument(format!("invalid condition_expr: {e}")))?;
+            self.state.segment_repo.set_condition_expr(updated.id, Some(&v)).await
+                .map_err(|e| Status::from(ServiceError::from(e)))?;
+            Some(v)
+        } else {
+            // Read back existing condition_expr to include in response.
+            self.state.segment_repo.get_condition_expr(updated.id).await
+                .map_err(|e| Status::from(ServiceError::from(e)))?
+        };
+
+        Ok(Response::new(segment_to_admin_proto_with_counts(&updated, list_counts, condition_expr)))
+    }
+
+    async fn delete_admin_segment(
+        &self,
+        req: Request<DeleteAdminSegmentRequest>,
+    ) -> Result<Response<DeleteAdminSegmentResponse>, Status> {
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+
+        self.state
+            .segment_repo
+            .soft_delete(segment_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        Ok(Response::new(DeleteAdminSegmentResponse {}))
+    }
+
+    async fn patch_segment_entries(
+        &self,
+        req: Request<PatchSegmentEntriesRequest>,
+    ) -> Result<Response<PatchSegmentEntriesResponse>, Status> {
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+
+        // Validate list_type
+        match r.list_type.as_str() {
+            "include" | "exclude" => {}
+            other => return Err(Status::invalid_argument(format!("invalid list_type: {other}; expected 'include' or 'exclude'"))),
+        };
+
+        // Load current list entries
+        let current = self
+            .state
+            .segment_repo
+            .find_with_list(segment_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        // Use first context_type found, or "user" as fallback
+        let context_type = current.lists.keys().next().cloned().unwrap_or_else(|| "user".to_string());
+        let ctx_list = current.lists.get(&context_type).cloned().unwrap_or_default();
+
+        let mut include: Vec<String> = ctx_list.include.into_iter().collect();
+        let mut exclude: Vec<String> = ctx_list.exclude.into_iter().collect();
+
+        let target_list = if r.list_type == "include" { &mut include } else { &mut exclude };
+
+        match r.action.as_str() {
+            "add" => {
+                let existing: std::collections::HashSet<String> = target_list.iter().cloned().collect();
+                for k in &r.keys {
+                    if !existing.contains(k.as_str()) {
+                        target_list.push(k.clone());
+                    }
+                }
+            }
+            "remove" => {
+                let remove_set: std::collections::HashSet<&String> = r.keys.iter().collect();
+                target_list.retain(|k| !remove_set.contains(k));
+            }
+            "replace" => {
+                *target_list = {
+                    let mut seen = std::collections::HashSet::new();
+                    r.keys.iter().filter(|k| seen.insert(k.to_string())).cloned().collect()
+                };
+            }
+            other => return Err(Status::invalid_argument(format!("invalid action: {other}; expected 'add', 'remove', or 'replace'"))),
+        }
+
+        self.state
+            .segment_repo
+            .set_list_entries(segment_id, &context_type, &include, &exclude)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        Ok(Response::new(PatchSegmentEntriesResponse {
+            include_count: u32::try_from(include.len()).unwrap_or(u32::MAX),
+            exclude_count: u32::try_from(exclude.len()).unwrap_or(u32::MAX),
+        }))
+    }
+
+    async fn lookup_segment_entry(
+        &self,
+        req: Request<LookupSegmentEntryRequest>,
+    ) -> Result<Response<LookupSegmentEntryResponse>, Status> {
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+
+        let list = self
+            .state
+            .segment_repo
+            .find_with_list(segment_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        // Check across all context types (any context that contains the key)
+        let (in_include, in_exclude) = list.lists.values().fold((false, false), |(inc, exc), ctx| {
+            (inc || ctx.include.contains(&r.key), exc || ctx.exclude.contains(&r.key))
+        });
+
+        Ok(Response::new(LookupSegmentEntryResponse { in_include, in_exclude }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Admin proto helpers
+// ---------------------------------------------------------------------------
+
+/// Build an `AdminSegment` proto from a domain `Segment` and optional count info.
+/// `list_counts` is `Some((context_type, include_count, exclude_count))` for list-based segments.
+/// `condition_expr` is the raw JSON value for rule-based segments.
+fn segment_to_admin_proto_with_counts(
+    seg: &Segment,
+    list_counts: Option<(String, u32, u32)>,
+    condition_expr: Option<serde_json::Value>,
+) -> AdminSegment {
+    let seg_type_str = match seg.segment_type {
+        SegmentType::List => "list",
+        SegmentType::Rule => "rule",
+    };
+    let (context_type, include_count, exclude_count) = list_counts.unwrap_or_default();
+    let condition_expr_bytes = condition_expr
+        .as_ref()
+        .and_then(|v| serde_json::to_vec(v).ok())
+        .unwrap_or_default();
+    AdminSegment {
+        id: seg.id.to_string(),
+        environment_id: seg.environment_id.to_string(),
+        name: if seg.name.is_empty() { seg.key.clone() } else { seg.name.clone() },
+        description: seg.description.clone(),
+        tags: seg.tags.clone(),
+        condition_expr: condition_expr_bytes,
+        // Always empty — callers use include_count / exclude_count instead.
+        user_list: vec![],
+        excluded_keys: vec![],
+        created_at_ms: seg.created_at.timestamp_millis(),
+        updated_at_ms: seg.updated_at.timestamp_millis(),
+        version: u64::try_from(seg.version).unwrap_or(0),
+        segment_type: seg_type_str.to_string(),
+        context_type,
+        include_count,
+        exclude_count,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Count helper
+// ---------------------------------------------------------------------------
+
+/// Fetch (context_type, include_count, exclude_count) for a list-based segment.
+/// Returns `None` if the segment has no list entries.
+async fn count_list_entries(
+    repo: &dyn SegmentRepository,
+    segment_id: stitchd_core::id::SegmentId,
+) -> Result<Option<(String, u32, u32)>, Status> {
+    match repo.find_with_list(segment_id).await {
+        Ok(list) => {
+            let (ctx, inc_count, exc_count) = list
+                .lists
+                .into_iter()
+                .next()
+                .map(|(ctx, entries)| {
+                    let inc = u32::try_from(entries.include.len()).unwrap_or(u32::MAX);
+                    let exc = u32::try_from(entries.exclude.len()).unwrap_or(u32::MAX);
+                    (ctx, inc, exc)
+                })
+                .unwrap_or_default();
+            Ok(Some((ctx, inc_count, exc_count)))
+        }
+        Err(_) => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +661,9 @@ async fn mutate_create(
         id: SegmentId::new(),
         environment_id: env_id,
         key,
+        name: String::new(),
+        description: String::new(),
+        tags: vec![],
         segment_type: seg_type,
         created_at: now,
         updated_at: now,

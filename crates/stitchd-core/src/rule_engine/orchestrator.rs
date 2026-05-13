@@ -87,6 +87,7 @@ mod tests {
     fn variant_rule(cond: ConditionExpr, variant: VariantId) -> Rule {
         Rule {
             id: RuleId::new(),
+            name: None,
             condition: cond,
             output: RuleOutput::Variant(variant),
         }
@@ -265,6 +266,7 @@ mod tests {
         // A rule with Percentage output — orchestrator maps this to None.
         let rule = Rule {
             id: crate::id::RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![]), // always true
             output: RuleOutput::Percentage {
                 targets: vec![crate::rule_engine::types::PercentageTarget {

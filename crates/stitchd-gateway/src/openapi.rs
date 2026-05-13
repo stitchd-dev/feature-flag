@@ -53,6 +53,7 @@ use utoipa::{
         // Segments (JWT)
         crate::routes::segments::list_segments,
         crate::routes::segments::create_segment,
+        crate::routes::segments::create_segment_in_env,
         crate::routes::segments::get_segment,
         crate::routes::segments::update_segment,
         crate::routes::segments::delete_segment,
@@ -111,7 +112,9 @@ use utoipa::{
             crate::routes::flags::UpdateHashingResponse,
             // Segments
             crate::routes::segments::SegmentCreateRequest,
-            crate::routes::segments::SegmentJson,
+            crate::routes::segments::SegmentUpdateRequest,
+            crate::routes::segments::AdminSegmentJson,
+            crate::routes::segments::ListSegmentsQuery,
             // Events
             crate::routes::events::EventBody,
             crate::routes::events::BatchEventBody,

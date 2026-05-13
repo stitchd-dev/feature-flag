@@ -241,6 +241,12 @@ pub struct Segment {
     pub environment_id: EnvironmentId,
     /// URL-safe string key (unique within the environment).
     pub key: String,
+    /// Human-readable display name.
+    pub name: String,
+    /// Optional description of the segment.
+    pub description: String,
+    /// Arbitrary tags for filtering/grouping.
+    pub tags: Vec<String>,
     /// Whether this is a rule-based or list-based segment.
     pub segment_type: SegmentType,
     /// When this record was created.
@@ -421,6 +427,7 @@ mod tests {
     fn eq_rule(context_type: &str, param: &str, value: &str) -> Rule {
         Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::Eq {
                 context_type: context_type.to_string(),
                 param: param.to_string(),
@@ -479,6 +486,7 @@ mod tests {
     fn rule_based_in_segment_is_invalid() {
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::InSegment(SegmentId::new())),
             output: RuleOutput::Variant(crate::id::VariantId::new()),
         };
@@ -501,6 +509,7 @@ mod tests {
         // And([Eq(...), InSegment(...)]) — the And arm must detect nested InSegment
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![
                 ConditionExpr::Leaf(Condition::Eq {
                     context_type: "user".into(),
@@ -527,6 +536,7 @@ mod tests {
         // Or([Eq(...), NotInSegment(...)]) — the Or arm must detect nested NotInSegment
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Or(vec![
                 ConditionExpr::Leaf(Condition::Eq {
                     context_type: "user".into(),
@@ -553,6 +563,7 @@ mod tests {
         // Not(InSegment(...)) — the Not arm in contains_segment_condition must detect it
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Not(Box::new(ConditionExpr::Leaf(Condition::InSegment(
                 SegmentId::new(),
             )))),

@@ -112,11 +112,13 @@ pub fn proto_flag_rule_to_domain(
         None => return None,
     };
 
+    let name = if proto.name.is_empty() { None } else { Some(proto.name.clone()) };
     Some(stitchd_core::flag::FlagRule {
         flag_id,
         rule_index,
         rule: Rule {
             id: RuleId::new(),
+            name,
             condition,
             output,
         },
@@ -184,6 +186,7 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
     ProtoFlagRule {
         rule_payload,
         output,
+        name: fr.rule.name.clone().unwrap_or_default(),
     }
 }
 
@@ -452,8 +455,8 @@ mod tests {
     fn build_feature_flag_proto_includes_name_and_description() {
         use stitchd_core::{
             flag::FlagRecord,
-            id::{FlagId, ProjectId},
             id::FlagKey,
+            id::{FlagId, ProjectId},
         };
 
         let record = FlagRecord {
