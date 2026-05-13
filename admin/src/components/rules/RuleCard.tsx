@@ -158,9 +158,7 @@ function ConditionExprEditor({
       <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
         <button className="btn sm" onClick={addLeaf}><I.plus size={11} /> Add condition</button>
         <button className="btn sm" onClick={addGroup}><I.plus size={11} /> Add group</button>
-        {depth === 0 && (
-          <button className="btn sm" onClick={() => onChange({ Not: expr })}>Wrap in NOT</button>
-        )}
+        <button className="btn sm" onClick={() => onChange({ Not: expr })}>Wrap in NOT</button>
       </div>
     </div>
   )
