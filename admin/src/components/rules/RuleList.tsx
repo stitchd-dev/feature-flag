@@ -19,11 +19,15 @@ interface Props {
   canWrite?: boolean
   /** Only used when flag is DISABLED — auto-saves default_variant_key. */
   onSaveDefaultVariant?: (key: string) => Promise<void>
+  /** Environment ID passed to the segment picker for lazy-loading segments. */
+  envId?: string | null
+  /** Org ID used to build segment detail links. */
+  orgId?: string
 }
 
 export function RuleList({
   rules, variants, defaultVariantKey, catchAllOutput, flagEnabled,
-  onChange, onCatchAllChange, canWrite, onSaveDefaultVariant,
+  onChange, onCatchAllChange, canWrite, onSaveDefaultVariant, envId, orgId,
 }: Props) {
   const [dragSourceIndex, setDragSourceIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
@@ -123,6 +127,8 @@ export function RuleList({
             onChange={(c, o) => updateRule(i, c, o)}
             onDelete={() => deleteRule(i)}
             dragHandleProps={{ style: { cursor: 'grab' } }}
+            envId={envId}
+            orgId={orgId}
           />
         </div>
       ))}

@@ -1,5 +1,6 @@
 import { I } from '../icons'
 import type { Condition, ParameterValue } from '../../lib/ruleTypes'
+import { SegmentPicker } from './SegmentPicker'
 
 const COMPARE_OPS = ['Eq', 'Ne', 'Lt', 'Lte', 'Gt', 'Gte'] as const
 const STRING_OPS = ['Contains', 'StartsWith', 'EndsWith'] as const
@@ -50,9 +51,12 @@ interface Props {
   condition: Condition
   onChange: (c: Condition) => void
   onDelete: () => void
+  /** Needed for the segment picker lazy-load. */
+  envId?: string | null
+  orgId?: string
 }
 
-export function ConditionClauseEditor({ condition, onChange, onDelete }: Props) {
+export function ConditionClauseEditor({ condition, onChange, onDelete, envId, orgId }: Props) {
   const op = currentOpKey(condition)
 
   function setOp(newOp: string) {
@@ -133,9 +137,14 @@ export function ConditionClauseEditor({ condition, onChange, onDelete }: Props) 
     if (op === 'InSegment' || op === 'NotInSegment') {
       const segId = (condition as Record<string, string>)[op]
       return (
-        <input className="input" style={{ width: 200 }} placeholder="segment ID"
+        <SegmentPicker
           value={segId}
-          onChange={(e) => onChange({ [op]: e.target.value } as Condition)} />
+          envId={envId ?? null}
+          orgId={orgId ?? ''}
+          onChange={(newId) =>
+            onChange({ [op]: newId } as Condition)
+          }
+        />
       )
     }
 

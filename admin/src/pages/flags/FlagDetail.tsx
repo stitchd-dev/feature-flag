@@ -296,7 +296,7 @@ function TargetingPanel({
   onConflict: () => void
   onDirtyChange: (dirty: boolean) => void
 }) {
-  const { projectId } = useOrgContext()
+  const { projectId, envId, orgId } = useOrgContext()
 
   const variantKeys = flag.variants.map((v: VariantJson) => v.key)
 
@@ -408,6 +408,8 @@ function TargetingPanel({
           onCatchAllChange={canWrite ? updateCatchAll : () => undefined}
           canWrite={canWrite}
           onSaveDefaultVariant={canWrite ? saveDefaultVariant : undefined}
+          envId={envId}
+          orgId={orgId}
         />
       </div>
     </div>

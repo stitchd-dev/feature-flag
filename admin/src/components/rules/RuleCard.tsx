@@ -8,12 +8,14 @@ import { exprKey, isVariantOutput, localId, defaultCondition, defaultAllocationO
 // ─── ConditionExprEditor (recursive) ─────────────────────────────────────────
 
 function ConditionExprEditor({
-  expr, onChange, onDelete, depth = 0,
+  expr, onChange, onDelete, depth = 0, envId, orgId,
 }: {
   expr: ConditionExpr
   onChange: (e: ConditionExpr) => void
   onDelete?: () => void
   depth?: number
+  envId?: string | null
+  orgId?: string
 }) {
   const key = exprKey(expr)
 
@@ -25,6 +27,8 @@ function ConditionExprEditor({
           condition={condition}
           onChange={(c) => onChange({ Leaf: c })}
           onDelete={() => onDelete?.()}
+          envId={envId}
+          orgId={orgId}
         />
       </div>
     )
@@ -43,7 +47,7 @@ function ConditionExprEditor({
           <button className="btn sm" style={{ fontSize: 11 }} onClick={() => onChange(inner)}>Remove NOT</button>
           {onDelete && <button className="icon-btn" style={{ color: 'var(--danger)', marginLeft: 'auto' }} onClick={onDelete}><I.x size={12} /></button>}
         </div>
-        <ConditionExprEditor expr={inner} depth={depth + 1} onChange={(e) => onChange({ Not: e })} />
+        <ConditionExprEditor expr={inner} depth={depth + 1} onChange={(e) => onChange({ Not: e })} envId={envId} orgId={orgId} />
       </div>
     )
   }
@@ -115,6 +119,8 @@ function ConditionExprEditor({
                 depth={depth + 1}
                 onChange={(e) => updateChild(i, e)}
                 onDelete={() => deleteChild(i)}
+                envId={envId}
+                orgId={orgId}
               />
             </div>
           </div>
@@ -186,9 +192,11 @@ interface Props {
   onChange: (condition: ConditionExpr, output: RuleOutputJson) => void
   onDelete: () => void
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement>
+  envId?: string | null
+  orgId?: string
 }
 
-export function RuleCard({ index, condition, output, variants, onChange, onDelete, dragHandleProps }: Props) {
+export function RuleCard({ index, condition, output, variants, onChange, onDelete, dragHandleProps, envId, orgId }: Props) {
   const [expanded, setExpanded] = useState(true)
 
   return (
@@ -220,6 +228,8 @@ export function RuleCard({ index, condition, output, variants, onChange, onDelet
           <ConditionExprEditor
             expr={condition}
             onChange={(c) => onChange(c, output)}
+            envId={envId}
+            orgId={orgId}
           />
 
           <div style={{ fontSize: 11, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginTop: 16, marginBottom: 8 }}>Serve</div>
