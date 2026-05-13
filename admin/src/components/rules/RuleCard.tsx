@@ -21,15 +21,43 @@ function ConditionExprEditor({
 
   if (key === 'Leaf') {
     const condition = (expr as { Leaf: Condition }).Leaf
+    // At depth > 0 the parent And/Or group owns the add/delete buttons.
+    // At depth 0 we show "Add condition" / "Add group" so the user can promote
+    // this single leaf into an And group without having to delete and re-create.
+    if (depth > 0) {
+      return (
+        <div style={{ padding: '4px 0' }}>
+          <ConditionClauseEditor
+            condition={condition}
+            onChange={(c) => onChange({ Leaf: c })}
+            onDelete={() => onDelete?.()}
+            envId={envId}
+            orgId={orgId}
+          />
+        </div>
+      )
+    }
+    // depth === 0: render the leaf plus And-promotion controls
     return (
-      <div style={{ padding: '4px 0' }}>
-        <ConditionClauseEditor
-          condition={condition}
-          onChange={(c) => onChange({ Leaf: c })}
-          onDelete={() => onDelete?.()}
-          envId={envId}
-          orgId={orgId}
-        />
+      <div>
+        <div style={{ padding: '4px 0' }}>
+          <ConditionClauseEditor
+            condition={condition}
+            onChange={(c) => onChange({ Leaf: c })}
+            onDelete={() => onDelete?.()}
+            envId={envId}
+            orgId={orgId}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+          <button className="btn sm" onClick={() => onChange({ And: [expr, defaultCondition()] })}>
+            <I.plus size={11} /> Add condition
+          </button>
+          <button className="btn sm" onClick={() => onChange({ And: [expr, { And: [defaultCondition(), defaultCondition()] }] })}>
+            <I.plus size={11} /> Add group
+          </button>
+          <button className="btn sm" onClick={() => onChange({ Not: expr })}>Wrap in NOT</button>
+        </div>
       </div>
     )
   }
@@ -99,10 +127,6 @@ function ConditionExprEditor({
     }}>
       {depth > 0 && (
         <div style={{ position: 'absolute', top: -9, left: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button
-            style={{ padding: '1px 7px', background: 'var(--surface)', border: `1px solid ${opColor}`, borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, color: opColor, cursor: 'pointer', letterSpacing: '0.05em' }}
-            onClick={toggleAndOr}
-          >{key}</button>
           {onDelete && <button className="icon-btn" style={{ color: 'var(--danger)' }} onClick={onDelete}><I.x size={11} /></button>}
         </div>
       )}
@@ -111,7 +135,11 @@ function ConditionExprEditor({
         {children.map((child, i) => (
           <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
             {i > 0 && (
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, color: opColor, padding: '4px 6px', background: 'var(--surface)', border: `1px solid ${opColor}33`, borderRadius: 3, marginTop: 6, letterSpacing: '0.05em', flexShrink: 0 }}>{key}</span>
+              <button
+                onClick={toggleAndOr}
+                title={`Click to switch to ${isAnd ? 'OR' : 'AND'}`}
+                style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 700, color: opColor, padding: '4px 6px', background: 'var(--surface)', border: `1px solid ${opColor}`, borderRadius: 3, marginTop: 6, letterSpacing: '0.05em', flexShrink: 0, cursor: 'pointer' }}
+              >{key}</button>
             )}
             <div style={{ flex: 1 }}>
               <ConditionExprEditor
