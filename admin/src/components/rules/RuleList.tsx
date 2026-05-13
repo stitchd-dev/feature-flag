@@ -35,7 +35,9 @@ export function RuleList({
   function addRule() {
     const newRule: RuleState = {
       _localId: localId(),
-      condition: defaultCondition(),
+      // Start as And([leaf]) so the "Add condition" / "Add group" buttons are
+      // immediately available for building multi-condition rules.
+      condition: { And: [defaultCondition()] },
       output: defaultOutput(variants[0] ?? ''),
     }
     onChange([newRule, ...rules])
