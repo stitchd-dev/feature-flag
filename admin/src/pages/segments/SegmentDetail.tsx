@@ -41,7 +41,7 @@ export function SegmentDetail() {
 
   useEffect(() => {
     if (!envId || !key) return
-    setLoading(true)
+    setLoading(true) // eslint-disable-line react-hooks/set-state-in-effect
     setError(null)
     api.get<SegmentResponse>(`/v1/environments/${envId}/segments/${key}`)
       .then(({ data }) => setSegment(data))
