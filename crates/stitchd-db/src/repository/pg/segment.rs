@@ -246,6 +246,40 @@ impl SegmentRepository for PgSegmentRepository {
         }
     }
 
+    async fn get_condition_expr(
+        &self,
+        id: SegmentId,
+    ) -> Result<Option<serde_json::Value>, RepositoryError> {
+        let row = sqlx::query!(
+            r#"SELECT condition_expr FROM segments WHERE id = $1 AND deleted_at IS NULL"#,
+            id as SegmentId
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        match row {
+            None => Err(RepositoryError::NotFound { id: id.to_string() }),
+            Some(r) => Ok(r.condition_expr),
+        }
+    }
+
+    async fn set_condition_expr(
+        &self,
+        id: SegmentId,
+        expr: Option<&serde_json::Value>,
+    ) -> Result<(), RepositoryError> {
+        sqlx::query!(
+            r#"UPDATE segments SET condition_expr = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL"#,
+            expr as Option<&serde_json::Value>,
+            id as SegmentId
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+        Ok(())
+    }
+
     async fn soft_delete(&self, id: SegmentId) -> Result<(), RepositoryError> {
         let result = sqlx::query!(
             r#"

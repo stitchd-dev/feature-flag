@@ -215,7 +215,13 @@ impl SegmentationService for SegmentationServiceImpl {
             } else {
                 None
             };
-            admin_segments.push(segment_to_admin_proto_with_counts(s, list_counts));
+            let condition_expr = if s.segment_type == SegmentType::Rule {
+                self.state.segment_repo.get_condition_expr(s.id).await
+                    .map_err(|e| Status::from(ServiceError::from(e)))?
+            } else {
+                None
+            };
+            admin_segments.push(segment_to_admin_proto_with_counts(s, list_counts, condition_expr));
         }
         Ok(Response::new(ListAdminSegmentsResponse { segments: admin_segments }))
     }
@@ -245,7 +251,14 @@ impl SegmentationService for SegmentationServiceImpl {
             None
         };
 
-        Ok(Response::new(segment_to_admin_proto_with_counts(&seg, list_counts)))
+        let condition_expr = if seg.segment_type == SegmentType::Rule {
+            self.state.segment_repo.get_condition_expr(segment_id).await
+                .map_err(|e| Status::from(ServiceError::from(e)))?
+        } else {
+            None
+        };
+
+        Ok(Response::new(segment_to_admin_proto_with_counts(&seg, list_counts, condition_expr)))
     }
 
     async fn create_admin_segment(
@@ -298,6 +311,17 @@ impl SegmentationService for SegmentationServiceImpl {
                 .map_err(|e| Status::from(ServiceError::from(e)))?;
         }
 
+        // Persist condition_expr for rule-based segments.
+        let condition_expr = if seg_type == SegmentType::Rule && !r.condition_expr.is_empty() {
+            let v: serde_json::Value = serde_json::from_slice(&r.condition_expr)
+                .map_err(|e| Status::invalid_argument(format!("invalid condition_expr: {e}")))?;
+            self.state.segment_repo.set_condition_expr(seg.id, Some(&v)).await
+                .map_err(|e| Status::from(ServiceError::from(e)))?;
+            Some(v)
+        } else {
+            None
+        };
+
         let list_counts = if seg_type == SegmentType::List {
             Some((
                 context_type,
@@ -307,7 +331,7 @@ impl SegmentationService for SegmentationServiceImpl {
         } else {
             None
         };
-        Ok(Response::new(segment_to_admin_proto_with_counts(&seg, list_counts)))
+        Ok(Response::new(segment_to_admin_proto_with_counts(&seg, list_counts, condition_expr)))
     }
 
     async fn update_admin_segment(
@@ -356,7 +380,20 @@ impl SegmentationService for SegmentationServiceImpl {
             None
         };
 
-        Ok(Response::new(segment_to_admin_proto_with_counts(&updated, list_counts)))
+        // Persist condition_expr for rule-based segments.
+        let condition_expr = if updated.segment_type == SegmentType::Rule && !r.condition_expr.is_empty() {
+            let v: serde_json::Value = serde_json::from_slice(&r.condition_expr)
+                .map_err(|e| Status::invalid_argument(format!("invalid condition_expr: {e}")))?;
+            self.state.segment_repo.set_condition_expr(updated.id, Some(&v)).await
+                .map_err(|e| Status::from(ServiceError::from(e)))?;
+            Some(v)
+        } else {
+            // Read back existing condition_expr to include in response.
+            self.state.segment_repo.get_condition_expr(updated.id).await
+                .map_err(|e| Status::from(ServiceError::from(e)))?
+        };
+
+        Ok(Response::new(segment_to_admin_proto_with_counts(&updated, list_counts, condition_expr)))
     }
 
     async fn delete_admin_segment(
@@ -480,22 +517,28 @@ impl SegmentationService for SegmentationServiceImpl {
 
 /// Build an `AdminSegment` proto from a domain `Segment` and optional count info.
 /// `list_counts` is `Some((context_type, include_count, exclude_count))` for list-based segments.
+/// `condition_expr` is the raw JSON value for rule-based segments.
 fn segment_to_admin_proto_with_counts(
     seg: &Segment,
     list_counts: Option<(String, u32, u32)>,
+    condition_expr: Option<serde_json::Value>,
 ) -> AdminSegment {
     let seg_type_str = match seg.segment_type {
         SegmentType::List => "list",
         SegmentType::Rule => "rule",
     };
     let (context_type, include_count, exclude_count) = list_counts.unwrap_or_default();
+    let condition_expr_bytes = condition_expr
+        .as_ref()
+        .and_then(|v| serde_json::to_vec(v).ok())
+        .unwrap_or_default();
     AdminSegment {
         id: seg.id.to_string(),
         environment_id: seg.environment_id.to_string(),
         name: if seg.name.is_empty() { seg.key.clone() } else { seg.name.clone() },
         description: seg.description.clone(),
         tags: seg.tags.clone(),
-        condition_expr: vec![],
+        condition_expr: condition_expr_bytes,
         // Always empty — callers use include_count / exclude_count instead.
         user_list: vec![],
         excluded_keys: vec![],

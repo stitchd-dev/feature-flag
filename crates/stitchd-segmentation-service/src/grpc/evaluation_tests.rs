@@ -73,7 +73,7 @@ pub mod tests {
                 id: seg_id,
                 environment_id: env_id,
                 key: key.to_string(),
-                segment_type: SegmentType::Rule,
+                segment_type: SegmentType::Rule, name: String::new(), description: String::new(), tags: vec![],
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 deleted_at: None,
@@ -102,7 +102,7 @@ pub mod tests {
                 id: seg_id,
                 environment_id: env_id,
                 key: key.to_string(),
-                segment_type: SegmentType::List,
+                segment_type: SegmentType::List, name: String::new(), description: String::new(), tags: vec![],
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 deleted_at: None,
@@ -324,6 +324,21 @@ pub mod tests {
         ) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> {
             Ok(vec![])
         }
+
+        async fn get_condition_expr(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+        ) -> Result<Option<serde_json::Value>, RepositoryError> {
+            Ok(None)
+        }
+
+        async fn set_condition_expr(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _expr: Option<&serde_json::Value>,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -331,7 +346,7 @@ pub mod tests {
     // -------------------------------------------------------------------------
 
     fn eq_rule(context_type: &str, param: &str, value: &str) -> Rule {
-        Rule {
+        Rule { name: None,
             id: RuleId::new(),
             condition: ConditionExpr::Leaf(Condition::Eq {
                 context_type: context_type.to_string(),
@@ -467,7 +482,7 @@ pub mod tests {
         let (env_id, env_id_str) = env_id();
 
         // Rule containing an invalid InSegment condition.
-        let bad_rule = Rule {
+        let bad_rule = Rule { name: None,
             id: RuleId::new(),
             condition: ConditionExpr::Leaf(Condition::InSegment(SegmentId::new())),
             output: RuleOutput::Variant(VariantId::new()),

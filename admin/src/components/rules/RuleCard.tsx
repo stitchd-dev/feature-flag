@@ -7,8 +7,8 @@ import { exprKey, isVariantOutput, localId, defaultCondition, defaultAllocationO
 
 // ─── ConditionExprEditor (recursive) ─────────────────────────────────────────
 
-function ConditionExprEditor({
-  expr, onChange, onDelete, depth = 0, envId, orgId,
+export function ConditionExprEditor({
+  expr, onChange, onDelete, depth = 0, envId, orgId, mode = 'flag',
 }: {
   expr: ConditionExpr
   onChange: (e: ConditionExpr) => void
@@ -16,6 +16,8 @@ function ConditionExprEditor({
   depth?: number
   envId?: string | null
   orgId?: string
+  /** 'flag' (default) or 'segment' — controls which leaf ops are available. */
+  mode?: 'flag' | 'segment'
 }) {
   const key = exprKey(expr)
 
@@ -33,6 +35,7 @@ function ConditionExprEditor({
             onDelete={() => onDelete?.()}
             envId={envId}
             orgId={orgId}
+            mode={mode}
           />
         </div>
       )
@@ -47,6 +50,7 @@ function ConditionExprEditor({
             onDelete={() => onDelete?.()}
             envId={envId}
             orgId={orgId}
+            mode={mode}
           />
         </div>
         <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
@@ -75,7 +79,7 @@ function ConditionExprEditor({
           <button className="btn sm" style={{ fontSize: 11 }} onClick={() => onChange(inner)}>Remove NOT</button>
           {onDelete && <button className="icon-btn" style={{ color: 'var(--danger)', marginLeft: 'auto' }} onClick={onDelete}><I.x size={12} /></button>}
         </div>
-        <ConditionExprEditor expr={inner} depth={depth + 1} onChange={(e) => onChange({ Not: e })} envId={envId} orgId={orgId} />
+        <ConditionExprEditor expr={inner} depth={depth + 1} onChange={(e) => onChange({ Not: e })} envId={envId} orgId={orgId} mode={mode} />
       </div>
     )
   }
@@ -149,6 +153,7 @@ function ConditionExprEditor({
                 onDelete={() => deleteChild(i)}
                 envId={envId}
                 orgId={orgId}
+                mode={mode}
               />
             </div>
           </div>

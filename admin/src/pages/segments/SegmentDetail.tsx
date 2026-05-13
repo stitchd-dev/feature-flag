@@ -6,6 +6,91 @@ import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import type { Segment } from './types'
 import { EditSegmentModal } from './EditSegmentModal'
+import { ConditionExprEditor } from '../../components/rules/RuleCard'
+import type { ConditionExpr } from '../../lib/ruleTypes'
+import { defaultCondition } from '../../lib/ruleTypes'
+
+// ─── Segment condition builder ────────────────────────────────────────────────
+
+function SegmentConditionEditor({
+  segment,
+  envId,
+  orgId,
+  onSaved,
+}: {
+  segment: Segment
+  envId?: string | null
+  orgId?: string
+  onSaved: (updated: Segment) => void
+}) {
+  const [expr, setExpr] = useState<ConditionExpr>(
+    (segment.condition_expr as ConditionExpr | null | undefined) ?? defaultCondition()
+  )
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  function handleChange(e: ConditionExpr) {
+    setExpr(e)
+    setDirty(true)
+    setError(null)
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setError(null)
+    try {
+      const updated = await api.put<Segment>(`/v1/segments/${segment.id}`, {
+        name: segment.name,
+        description: segment.description,
+        tags: segment.tags,
+        condition_expr: expr,
+        user_list: [],
+        version: segment.version,
+      })
+      setDirty(false)
+      onSaved(updated)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header">
+        <div className="card-title"><I.toggle size={14} /> Rule definition</div>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {dirty && (
+            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>Unsaved changes</span>
+          )}
+          <button
+            className="btn sm accent"
+            onClick={handleSave}
+            disabled={!dirty || saving}
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </div>
+      <div style={{ padding: 14 }}>
+        {error && (
+          <div style={{ marginBottom: 10, padding: '8px 10px', background: 'var(--danger-bg)', color: 'var(--danger)', borderRadius: 4, fontSize: 13 }}>
+            {error}
+          </div>
+        )}
+        <ConditionExprEditor
+          expr={expr}
+          onChange={handleChange}
+          envId={envId}
+          orgId={orgId}
+          mode="segment"
+        />
+      </div>
+    </div>
+  )
+}
 
 // ─── CSV import modal ──────────────────────────────────────────────────────────
 
@@ -522,16 +607,12 @@ export function SegmentDetail() {
               </div>
             </div>
           ) : (
-            /* Rule-based placeholder */
-            <div className="card">
-              <div className="card-header">
-                <div className="card-title"><I.toggle size={14} /> Rule definition</div>
-              </div>
-              <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--fg-muted)', fontSize: 13 }}>
-                <I.info size={18} style={{ display: 'block', margin: '0 auto 8px' }} />
-                Rule-based condition builder coming soon.
-              </div>
-            </div>
+            <SegmentConditionEditor
+              segment={segment}
+              envId={envId}
+              orgId={orgId}
+              onSaved={(updated) => setSegment(updated)}
+            />
           )}
 
           {/* ── Sidebar ── */}

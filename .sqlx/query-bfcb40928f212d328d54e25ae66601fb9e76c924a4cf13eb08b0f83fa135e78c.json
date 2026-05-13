@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE segments SET condition_expr = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bfcb40928f212d328d54e25ae66601fb9e76c924a4cf13eb08b0f83fa135e78c"
+}

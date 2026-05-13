@@ -595,13 +595,60 @@ pub async fn lookup_segment_entry(
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
-/// Serialise an optional `condition_expr` JSON value to bytes for the proto.
-/// Returns `GatewayError::BadRequest` if the JSON is somehow unserializable.
+/// Ops that are not permitted inside a segment's own `condition_expr`.
+///
+/// - `InSegment` / `NotInSegment` — would create circular segment dependencies.
+/// - `FlagEvaluatedAs` — segments are resolved before flag evaluation, so a
+///   flag-based condition can never be satisfied.
+const SEGMENT_FORBIDDEN_OPS: &[&str] = &["InSegment", "NotInSegment", "FlagEvaluatedAs"];
+
+/// Walk a `ConditionExpr` JSON tree and return an error if any leaf uses a
+/// forbidden operator (see [`SEGMENT_FORBIDDEN_OPS`]).
+fn validate_segment_condition_expr(expr: &serde_json::Value) -> Result<(), GatewayError> {
+    if expr.is_null() {
+        return Ok(());
+    }
+    // Leaf node: {"Leaf": <condition>}
+    if let Some(leaf) = expr.get("Leaf") {
+        if let Some(obj) = leaf.as_object() {
+            for op in obj.keys() {
+                if SEGMENT_FORBIDDEN_OPS.contains(&op.as_str()) {
+                    return Err(GatewayError::BadRequest(format!(
+                        "condition operator '{op}' is not allowed in segment rules \
+                         (segments cannot reference other segments or flag evaluations)"
+                    )));
+                }
+            }
+        }
+        return Ok(());
+    }
+    // And / Or: recurse into children array
+    for key in &["And", "Or"] {
+        if let Some(arr) = expr.get(key).and_then(|v| v.as_array()) {
+            for child in arr {
+                validate_segment_condition_expr(child)?;
+            }
+            return Ok(());
+        }
+    }
+    // Not: recurse into the single inner expression
+    if let Some(inner) = expr.get("Not") {
+        return validate_segment_condition_expr(inner);
+    }
+    Ok(())
+}
+
+/// Validate, then serialise an optional `condition_expr` JSON value to bytes
+/// for the proto. Returns `GatewayError::BadRequest` if the JSON is
+/// unserializable or contains forbidden operators.
 fn encode_condition_expr(expr: Option<serde_json::Value>) -> Result<Vec<u8>, GatewayError> {
     match expr {
         None => Ok(Vec::new()),
-        Some(v) => serde_json::to_vec(&v)
-            .map_err(|e| GatewayError::BadRequest(format!("malformed condition_expr: {e}"))),
+        Some(v) => {
+            validate_segment_condition_expr(&v)?;
+            serde_json::to_vec(&v)
+                .map_err(|e| GatewayError::BadRequest(format!("malformed condition_expr: {e}")))
+        }
     }
 }
 
@@ -835,11 +882,77 @@ mod tests {
     }
 
     #[test]
-    fn encode_condition_expr_valid_json_roundtrips() {
-        let expr = serde_json::json!({"Leaf": {"InSegment": "some-id"}});
+    fn encode_condition_expr_valid_leaf_roundtrips() {
+        let expr = serde_json::json!({"Leaf": {"Eq": {"context_type": "user", "param": "plan", "value": "pro"}}});
         let bytes = encode_condition_expr(Some(expr.clone())).unwrap();
         let back: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(expr, back);
+    }
+
+    // ─── validate_segment_condition_expr ─────────────────────────────────────
+
+    #[test]
+    fn validate_allows_eq_leaf() {
+        let expr = serde_json::json!({"Leaf": {"Eq": {"context_type": "user", "param": "plan", "value": "pro"}}});
+        assert!(validate_segment_condition_expr(&expr).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_in_segment_leaf() {
+        let expr = serde_json::json!({"Leaf": {"InSegment": "seg-id"}});
+        let err = validate_segment_condition_expr(&expr).unwrap_err();
+        assert!(err.to_string().contains("InSegment"));
+    }
+
+    #[test]
+    fn validate_rejects_not_in_segment_leaf() {
+        let expr = serde_json::json!({"Leaf": {"NotInSegment": "seg-id"}});
+        let err = validate_segment_condition_expr(&expr).unwrap_err();
+        assert!(err.to_string().contains("NotInSegment"));
+    }
+
+    #[test]
+    fn validate_rejects_flag_evaluated_as_leaf() {
+        let expr = serde_json::json!({"Leaf": {"FlagEvaluatedAs": {"flag_id": "f1", "variant_id": "on"}}});
+        let err = validate_segment_condition_expr(&expr).unwrap_err();
+        assert!(err.to_string().contains("FlagEvaluatedAs"));
+    }
+
+    #[test]
+    fn validate_rejects_forbidden_op_nested_in_and() {
+        let expr = serde_json::json!({
+            "And": [
+                {"Leaf": {"Eq": {"context_type": "user", "param": "plan", "value": "pro"}}},
+                {"Leaf": {"InSegment": "seg-id"}}
+            ]
+        });
+        assert!(validate_segment_condition_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_forbidden_op_nested_in_not() {
+        let expr = serde_json::json!({"Not": {"Leaf": {"FlagEvaluatedAs": {"flag_id": "f", "variant_id": "on"}}}});
+        assert!(validate_segment_condition_expr(&expr).is_err());
+    }
+
+    #[test]
+    fn validate_accepts_complex_allowed_expr() {
+        let expr = serde_json::json!({
+            "And": [
+                {"Leaf": {"Eq": {"context_type": "user", "param": "plan", "value": "pro"}}},
+                {"Not": {"Leaf": {"Contains": {"context_type": "user", "param": "email", "substr": "@test.com"}}}},
+                {"Or": [
+                    {"Leaf": {"Gte": {"context_type": "user", "param": "age", "value": 18}}},
+                    {"Leaf": {"SemverGte": {"context_type": "app", "param": "version", "value": "2.0.0"}}}
+                ]}
+            ]
+        });
+        assert!(validate_segment_condition_expr(&expr).is_ok());
+    }
+
+    #[test]
+    fn validate_null_expr_is_ok() {
+        assert!(validate_segment_condition_expr(&serde_json::Value::Null).is_ok());
     }
 
     // ─── count_conditions helper ──────────────────────────────────────────────

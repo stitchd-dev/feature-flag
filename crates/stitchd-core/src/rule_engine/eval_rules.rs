@@ -29,6 +29,7 @@ mod tests {
     fn pro_rule(variant: VariantId) -> Rule {
         Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::Eq {
                 context_type: "user".into(),
                 param: "plan".into(),
@@ -41,6 +42,7 @@ mod tests {
     fn free_rule(variant: VariantId) -> Rule {
         Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::Eq {
                 context_type: "user".into(),
                 param: "plan".into(),
@@ -53,6 +55,7 @@ mod tests {
     fn always_rule(variant: VariantId) -> Rule {
         Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![]), // always true
             output: RuleOutput::Variant(variant),
         }
@@ -120,6 +123,7 @@ mod tests {
         // First rule references missing context
         let error_rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::Eq {
                 context_type: "org".into(), // not provided
                 param: "tier".into(),

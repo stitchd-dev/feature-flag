@@ -277,6 +277,26 @@
 .btn.danger:hover { background: var(--danger-bg); border-color: var(--danger); }
 .btn.sm { padding: 5px 10px; font-size: 12px; }
 .btn.lg { padding: 10px 16px; font-size: 14px; }
+.btn.accent {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
+  box-shadow: 0 1px 0 var(--accent-strong), inset 0 1px 0 rgba(255,255,255,0.15);
+}
+.btn.accent:hover:not(:disabled) { background: var(--accent-strong); border-color: var(--accent-strong); }
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.btn.accent:disabled,
+.btn.accent[disabled] {
+  background: var(--accent);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
+  box-shadow: none;
+}
 
 /* ============================================
    Cards & panels
