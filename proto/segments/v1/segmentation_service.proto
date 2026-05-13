@@ -62,6 +62,66 @@ message MutateSegmentResponse {
   uint64 version = 3;
 }
 
+// ─── Admin segment message ────────────────────────────────────────────────────
+
+// Full admin representation of a segment (used by the management UI).
+message AdminSegment {
+  string          id             = 1;
+  string          environment_id = 2;
+  string          name           = 3;
+  string          description    = 4;
+  repeated string tags           = 5;
+  // JSON-encoded ConditionExpr, empty string when not set.
+  bytes           condition_expr = 6;
+  // Explicit user keys for list-based targeting.
+  repeated string user_list      = 7;
+  int64           created_at_ms  = 8;
+  int64           updated_at_ms  = 9;
+  uint64          version        = 10;
+}
+
+// ─── Admin CRUD requests ──────────────────────────────────────────────────────
+
+message ListAdminSegmentsRequest {
+  string environment_id = 1;
+}
+
+message ListAdminSegmentsResponse {
+  repeated AdminSegment segments = 1;
+}
+
+message GetAdminSegmentRequest {
+  string segment_id = 1;
+  // The caller's org — used to scope the lookup.
+  string org_id     = 2;
+}
+
+message CreateAdminSegmentRequest {
+  string          environment_id = 1;
+  string          name           = 2;
+  string          description    = 3;
+  repeated string tags           = 4;
+  bytes           condition_expr = 5;
+  repeated string user_list      = 6;
+}
+
+message UpdateAdminSegmentRequest {
+  string          segment_id     = 1;
+  string          name           = 2;
+  string          description    = 3;
+  repeated string tags           = 4;
+  bytes           condition_expr = 5;
+  repeated string user_list      = 6;
+  uint64          version        = 7;
+}
+
+message DeleteAdminSegmentRequest {
+  string segment_id = 1;
+  string org_id     = 2;
+}
+
+message DeleteAdminSegmentResponse {}
+
 // ─── Segmentation service ─────────────────────────────────────────────────────
 
 service SegmentationService {
@@ -77,4 +137,21 @@ service SegmentationService {
 
   // Create, update, or delete a segment.
   rpc MutateSegment(MutateSegmentRequest) returns (MutateSegmentResponse);
+
+  // ─── Admin CRUD ──────────────────────────────────────────────────────────
+
+  // List all admin segments for an environment.
+  rpc ListAdminSegments(ListAdminSegmentsRequest) returns (ListAdminSegmentsResponse);
+
+  // Get a single admin segment by ID.
+  rpc GetAdminSegment(GetAdminSegmentRequest) returns (AdminSegment);
+
+  // Create a new admin segment.
+  rpc CreateAdminSegment(CreateAdminSegmentRequest) returns (AdminSegment);
+
+  // Update an existing admin segment.
+  rpc UpdateAdminSegment(UpdateAdminSegmentRequest) returns (AdminSegment);
+
+  // Delete an admin segment.
+  rpc DeleteAdminSegment(DeleteAdminSegmentRequest) returns (DeleteAdminSegmentResponse);
 }

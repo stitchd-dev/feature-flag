@@ -56,10 +56,19 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
 
     // ── Superadmin-only routes (JWT + system-org check) ───────────────────────
     let admin_routes = Router::new()
-        .route("/v1/admin/orgs", get(admin::list_orgs).post(admin::create_org))
+        .route(
+            "/v1/admin/orgs",
+            get(admin::list_orgs).post(admin::create_org),
+        )
         .route("/v1/admin/orgs/{org_id}", get(admin::get_org))
-        .route("/v1/admin/orgs/{org_id}/users", get(admin::list_org_users).post(admin::seed_user))
-        .route("/v1/admin/orgs/{org_id}/users/{user_id}", delete(admin::remove_org_user))
+        .route(
+            "/v1/admin/orgs/{org_id}/users",
+            get(admin::list_org_users).post(admin::seed_user),
+        )
+        .route(
+            "/v1/admin/orgs/{org_id}/users/{user_id}",
+            delete(admin::remove_org_user),
+        )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_system_org))
         .layer(middleware::from_fn_with_state(
@@ -155,14 +164,18 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             "/v1/projects/{project_id}/flags/{flag_id}/hashing",
             put(flags::update_flag_hashing),
         )
-        // Segments
+        // Segments (admin CRUD — env-id as query param for list, path param for env-scoped create)
         .route(
-            "/v1/environments/{env_id}/segments",
+            "/v1/segments",
             get(segments::list_segments).post(segments::create_segment),
         )
         .route(
-            "/v1/environments/{env_id}/segments/{segment_id}",
+            "/v1/segments/{id}",
             get(segments::get_segment).put(segments::update_segment).delete(segments::delete_segment),
+        )
+        .route(
+            "/v1/environments/{env_id}/segments",
+            post(segments::create_segment_in_env),
         )
         // Events
         .route(
@@ -283,7 +296,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/v1/environments/env-1/segments")
+                    .uri("/v1/segments?env_id=env-1")
                     .body(Body::empty())
                     .unwrap(),
             )

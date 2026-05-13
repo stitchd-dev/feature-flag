@@ -1,6 +1,11 @@
 //! Auth route handlers — login, org listing, org switching.
 
-use axum::{Json, extract::{Extension, State}, http::HeaderMap, response::IntoResponse};
+use axum::{
+    Json,
+    extract::{Extension, State},
+    http::HeaderMap,
+    response::IntoResponse,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
@@ -110,7 +115,10 @@ pub async fn list_user_orgs(
         current_token: token,
     });
     let mut client = state.auth_client.lock().await;
-    let resp = client.list_user_orgs(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .list_user_orgs(req)
+        .await
+        .map_err(GatewayError::from)?;
     let orgs: Vec<OrgEntryJson> = resp
         .into_inner()
         .orgs
@@ -156,9 +164,7 @@ pub struct PermissionsJson {
 ///
 /// Returns the roles and permissions embedded in the caller's validated JWT.
 /// Requires `auth_middleware` to have injected an [`RbacContext`] extension.
-pub async fn get_my_permissions(
-    Extension(rbac): Extension<RbacContext>,
-) -> impl IntoResponse {
+pub async fn get_my_permissions(Extension(rbac): Extension<RbacContext>) -> impl IntoResponse {
     Json(PermissionsJson {
         roles: rbac.roles,
         permissions: rbac.permissions,
@@ -194,7 +200,10 @@ mod tests {
         // Build a router that inserts RbacContext via an extension layer
         let state = make_stub_state();
         let app = axum::Router::new()
-            .route("/v1/auth/me/permissions", axum::routing::get(get_my_permissions))
+            .route(
+                "/v1/auth/me/permissions",
+                axum::routing::get(get_my_permissions),
+            )
             .layer(axum::Extension(RbacContext {
                 roles: vec!["org_admin".to_string()],
                 permissions: vec!["project:create".to_string()],
@@ -224,7 +233,10 @@ mod tests {
     async fn get_my_permissions_without_rbac_context_returns_500() {
         let state = make_stub_state();
         let app = axum::Router::new()
-            .route("/v1/auth/me/permissions", axum::routing::get(get_my_permissions))
+            .route(
+                "/v1/auth/me/permissions",
+                axum::routing::get(get_my_permissions),
+            )
             .with_state(state);
 
         let resp = app
