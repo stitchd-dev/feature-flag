@@ -57,6 +57,8 @@ message FlagRule {
     string               variant_key = 2;
     PercentageAllocation allocation  = 3;
   }
+  // Optional human-readable label. Ignored by the evaluator; UI metadata only.
+  string name = 4;
 }
 
 // --- Feature flag ---

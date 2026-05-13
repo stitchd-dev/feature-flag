@@ -195,6 +195,7 @@ fn build_flag_def(flag: FeatureFlag) -> Result<SdkFlagDef, SdkError> {
 
         rules.push(Rule {
             id: RuleId::new(),
+            name: if proto_rule.name.is_empty() { None } else { Some(proto_rule.name.clone()) },
             condition,
             output,
         });

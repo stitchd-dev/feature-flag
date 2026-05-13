@@ -101,6 +101,9 @@ pub struct VariantJson {
 /// Rule as returned in admin API responses.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RuleJson {
+    /// Optional human-readable label set by the user; ignored by the evaluator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Decoded ConditionExpr JSON.
     pub condition: serde_json::Value,
     /// Rule output — `{"variant_key": "..."}` or `{"allocation": [...]}`.
@@ -224,7 +227,9 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
     let mut seen = std::collections::HashSet::new();
     segment_ids.retain(|id| seen.insert(id.clone()));
 
+    let name = if r.name.is_empty() { None } else { Some(r.name.clone()) };
     RuleJson {
+        name,
         condition,
         output,
         segment_ids,
@@ -731,6 +736,8 @@ pub async fn update_variants(
 /// A single rule in a replace-rules request.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RuleBody {
+    /// Optional human-readable label; ignored by the evaluator.
+    pub name: Option<String>,
     /// ConditionExpr as a JSON value.
     pub condition: serde_json::Value,
     /// Output:
@@ -825,6 +832,7 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
     stitchd_proto::flags::v1::FlagRule {
         rule_payload,
         output,
+        name: r.name.unwrap_or_default(),
     }
 }
 
