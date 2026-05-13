@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
-use stitchd_core::segment::SegmentType;
+use stitchd_core::segment::{Segment, SegmentType};
 use stitchd_db::SegmentRepository;
 use stitchd_proto::segments::v1::{
     AdminSegment, CreateAdminSegmentRequest, DeleteAdminSegmentRequest, DeleteAdminSegmentResponse,
@@ -189,53 +189,219 @@ impl SegmentationService for SegmentationServiceImpl {
     }
 
     // -----------------------------------------------------------------------
-    // Admin RPCs — forwarded to the gateway; stubs required for trait impl.
+    // Admin RPCs
     // -----------------------------------------------------------------------
 
     async fn list_admin_segments(
         &self,
-        _req: Request<ListAdminSegmentsRequest>,
+        req: Request<ListAdminSegmentsRequest>,
     ) -> Result<Response<ListAdminSegmentsResponse>, Status> {
-        Err(Status::unimplemented(
-            "list_admin_segments is handled by the gateway",
-        ))
+        let r = req.into_inner();
+        let env_id = parse_env_id(&r.environment_id).map_err(Status::from)?;
+
+        let segments = self
+            .state
+            .segment_repo
+            .list_by_environment(env_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        let admin_segments = segments.iter().map(segment_to_admin_proto).collect();
+        Ok(Response::new(ListAdminSegmentsResponse { segments: admin_segments }))
     }
 
     async fn get_admin_segment(
         &self,
-        _req: Request<GetAdminSegmentRequest>,
+        req: Request<GetAdminSegmentRequest>,
     ) -> Result<Response<AdminSegment>, Status> {
-        Err(Status::unimplemented(
-            "get_admin_segment is handled by the gateway",
-        ))
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+
+        let seg = self
+            .state
+            .segment_repo
+            .find_by_id(segment_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        // For list-based segments, load the list entries so the UI can show them.
+        let list_info = if seg.segment_type == SegmentType::List {
+            self.state
+                .segment_repo
+                .find_with_list(segment_id)
+                .await
+                .ok()
+                .and_then(|l| {
+                    l.lists.into_iter().next().map(|(ctx, entries)| {
+                        (ctx, entries.include.into_iter().collect::<Vec<_>>())
+                    })
+                })
+        } else {
+            None
+        };
+
+        Ok(Response::new(segment_to_admin_proto_full(&seg, list_info)))
     }
 
     async fn create_admin_segment(
         &self,
-        _req: Request<CreateAdminSegmentRequest>,
+        req: Request<CreateAdminSegmentRequest>,
     ) -> Result<Response<AdminSegment>, Status> {
-        Err(Status::unimplemented(
-            "create_admin_segment is handled by the gateway",
-        ))
+        use chrono::Utc;
+        use stitchd_core::{id::SegmentId, segment::Segment};
+
+        let r = req.into_inner();
+        let env_id = parse_env_id(&r.environment_id).map_err(Status::from)?;
+
+        // Determine segment type: explicit field wins, fallback to list presence.
+        let seg_type = match r.segment_type.as_str() {
+            "rule" => SegmentType::Rule,
+            "list" => SegmentType::List,
+            _ => {
+                if r.user_list.is_empty() { SegmentType::Rule } else { SegmentType::List }
+            }
+        };
+        let context_type = if r.context_type.is_empty() { "user".to_string() } else { r.context_type.clone() };
+
+        let key = r.name.to_lowercase().replace(' ', "-");
+        let now = Utc::now();
+        let seg = Segment {
+            id: SegmentId::new(),
+            environment_id: env_id,
+            key,
+            name: r.name.clone(),
+            description: r.description.clone(),
+            tags: r.tags.clone(),
+            segment_type: seg_type,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+            version: 1,
+        };
+
+        self.state
+            .segment_repo
+            .create(&seg)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        if seg_type == SegmentType::List && !r.user_list.is_empty() {
+            self.state
+                .segment_repo
+                .set_list_entries(seg.id, &context_type, &r.user_list, &[])
+                .await
+                .map_err(|e| Status::from(ServiceError::from(e)))?;
+        }
+
+        let list_info = if seg_type == SegmentType::List && !r.user_list.is_empty() {
+            Some((context_type, r.user_list.clone()))
+        } else {
+            None
+        };
+        Ok(Response::new(segment_to_admin_proto_full(&seg, list_info)))
     }
 
     async fn update_admin_segment(
         &self,
-        _req: Request<UpdateAdminSegmentRequest>,
+        req: Request<UpdateAdminSegmentRequest>,
     ) -> Result<Response<AdminSegment>, Status> {
-        Err(Status::unimplemented(
-            "update_admin_segment is handled by the gateway",
-        ))
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+
+        let mut seg = self
+            .state
+            .segment_repo
+            .find_by_id(segment_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        seg.name = r.name.clone();
+        seg.description = r.description.clone();
+        seg.tags = r.tags.clone();
+
+        let updated = self
+            .state
+            .segment_repo
+            .update(&seg)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        // Update list entries if this is a list-based segment.
+        let list_info = if updated.segment_type == SegmentType::List {
+            let context_type = if r.context_type.is_empty() { "user".to_string() } else { r.context_type.clone() };
+            self.state
+                .segment_repo
+                .set_list_entries(updated.id, &context_type, &r.user_list, &[])
+                .await
+                .map_err(|e| Status::from(ServiceError::from(e)))?;
+            Some((context_type, r.user_list.clone()))
+        } else {
+            None
+        };
+
+        Ok(Response::new(segment_to_admin_proto_full(&updated, list_info)))
     }
 
     async fn delete_admin_segment(
         &self,
-        _req: Request<DeleteAdminSegmentRequest>,
+        req: Request<DeleteAdminSegmentRequest>,
     ) -> Result<Response<DeleteAdminSegmentResponse>, Status> {
-        Err(Status::unimplemented(
-            "delete_admin_segment is handled by the gateway",
-        ))
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+
+        self.state
+            .segment_repo
+            .soft_delete(segment_id)
+            .await
+            .map_err(|e| Status::from(ServiceError::from(e)))?;
+
+        Ok(Response::new(DeleteAdminSegmentResponse {}))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Admin proto helpers
+// ---------------------------------------------------------------------------
+
+/// Build an `AdminSegment` proto from a domain `Segment` and optional list metadata.
+/// `list_info` is `Some((context_type, keys))` for list-based segments.
+fn segment_to_admin_proto_full(seg: &Segment, list_info: Option<(String, Vec<String>)>) -> AdminSegment {
+    let seg_type_str = match seg.segment_type {
+        SegmentType::List => "list",
+        SegmentType::Rule => "rule",
+    };
+    let (context_type, user_list) = list_info.unwrap_or_default();
+    AdminSegment {
+        id: seg.id.to_string(),
+        environment_id: seg.environment_id.to_string(),
+        name: if seg.name.is_empty() { seg.key.clone() } else { seg.name.clone() },
+        description: seg.description.clone(),
+        tags: seg.tags.clone(),
+        condition_expr: vec![],
+        user_list,
+        created_at_ms: seg.created_at.timestamp_millis(),
+        updated_at_ms: seg.updated_at.timestamp_millis(),
+        version: u64::try_from(seg.version).unwrap_or(0),
+        segment_type: seg_type_str.to_string(),
+        context_type,
+    }
+}
+
+// Keep the old helper for list_admin_segments which doesn't need list entries.
+fn segment_to_admin_proto(seg: &Segment) -> AdminSegment {
+    segment_to_admin_proto_full(seg, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +485,9 @@ async fn mutate_create(
         id: SegmentId::new(),
         environment_id: env_id,
         key,
+        name: String::new(),
+        description: String::new(),
+        tags: vec![],
         segment_type: seg_type,
         created_at: now,
         updated_at: now,

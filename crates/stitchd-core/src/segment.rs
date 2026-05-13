@@ -241,6 +241,12 @@ pub struct Segment {
     pub environment_id: EnvironmentId,
     /// URL-safe string key (unique within the environment).
     pub key: String,
+    /// Human-readable display name.
+    pub name: String,
+    /// Optional description of the segment.
+    pub description: String,
+    /// Arbitrary tags for filtering/grouping.
+    pub tags: Vec<String>,
     /// Whether this is a rule-based or list-based segment.
     pub segment_type: SegmentType,
     /// When this record was created.

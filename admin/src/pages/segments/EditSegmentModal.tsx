@@ -19,6 +19,13 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [nameError, setNameError] = useState(false)
   const [fresh, setFresh] = useState<Segment | null>(null)
+  const [contextType, setContextType] = useState(segment.context_type ?? 'user')
+
+  // Infer segment type: list if user_list is non-empty or condition_count == 0 and no condition_expr
+  const resolvedFresh = fresh ?? segment
+  const isListType =
+    resolvedFresh.segment_type === 'list' ||
+    (resolvedFresh.segment_type == null && resolvedFresh.user_list.length > 0)
 
   // Fetch latest data for the segment
   useEffect(() => {
@@ -30,9 +37,9 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
         setDescription(data.description ?? '')
         setTagsInput(data.tags.join(', '))
         setUserListInput(data.user_list.join('\n'))
+        setContextType(data.context_type ?? 'user')
       })
       .catch(() => {
-        // Use the passed segment data if fetch fails
         setFresh(segment)
       })
       .finally(() => setLoading(false))
@@ -53,10 +60,9 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
       .map((t) => t.trim())
       .filter((t) => t.length > 0)
 
-    const user_list = userListInput
-      .split('\n')
-      .map((u) => u.trim())
-      .filter((u) => u.length > 0)
+    const user_list = isListType
+      ? userListInput.split('\n').map((u) => u.trim()).filter((u) => u.length > 0)
+      : []
 
     setSaving(true)
     try {
@@ -66,6 +72,7 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
         tags,
         condition_expr: (fresh ?? segment).condition_expr,
         user_list,
+        context_type: isListType ? contextType : undefined,
       }
       const { data } = await api.put<Segment>(`/v1/segments/${segment.id}`, body)
       onSaved(data)
@@ -82,7 +89,21 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} onClick={onClose} />
       <div className="card" style={{ position: 'relative', width: 520, maxHeight: '90vh', overflow: 'auto', zIndex: 1, padding: 0 }}>
         <div className="card-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
-          <div className="card-title"><I.pencil size={15} /> Edit segment</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div className="card-title"><I.pencil size={15} /> Edit segment</div>
+            {/* Type badge — read-only, can't change after creation */}
+            <span style={{
+              fontSize: 11,
+              fontWeight: 600,
+              padding: '2px 8px',
+              borderRadius: 4,
+              background: isListType ? 'rgba(22,163,74,0.1)' : 'rgba(59,130,246,0.1)',
+              color: isListType ? '#16a34a' : '#2563eb',
+              border: `1px solid ${isListType ? 'rgba(22,163,74,0.25)' : 'rgba(59,130,246,0.25)'}`,
+            }}>
+              {isListType ? 'List-based' : 'Rule-based'}
+            </span>
+          </div>
           <button className="icon-btn" onClick={onClose}><I.x size={16} /></button>
         </div>
 
@@ -137,20 +158,47 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
               </div>
             </div>
 
-            <div>
-              <label className="label">User List (optional)</label>
-              <textarea
-                className="input"
-                style={{ width: '100%', minHeight: 80, resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                placeholder={"user-key-1\nuser-key-2\nuser-key-3"}
-                value={userListInput}
-                onChange={(e) => setUserListInput(e.target.value)}
-                rows={5}
-              />
-              <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-                Enter one user key per line. These users will always match this segment.
+            {/* Type-specific section */}
+            {isListType ? (
+              <>
+                <div>
+                  <label className="label">Context Type</label>
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '4px 10px', borderRadius: 6,
+                    background: 'var(--bg-sunken)', border: '1px solid var(--border)',
+                    fontSize: 12, color: 'var(--fg)', fontFamily: 'var(--font-mono)',
+                  }}>
+                    {contextType || 'user'}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+                    Context type is fixed after creation.
+                  </div>
+                </div>
+                <div>
+                  <label className="label">Keys</label>
+                  <textarea
+                    className="input"
+                    style={{ width: '100%', minHeight: 100, resize: 'vertical', fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                    placeholder={"key-1\nkey-2\nkey-3"}
+                    value={userListInput}
+                    onChange={(e) => setUserListInput(e.target.value)}
+                    rows={5}
+                  />
+                  <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+                    One <code>{contextType || 'context'}</code> key per line — these will always match this segment.
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', borderRadius: 8, fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <I.info size={13} style={{ marginTop: 1, flexShrink: 0 }} />
+                <span>
+                  Targeting rules are managed from the segment detail page where you can build
+                  AND / OR condition trees.
+                </span>
               </div>
-            </div>
+            )}
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
               <button type="button" className="btn" onClick={onClose}>Cancel</button>

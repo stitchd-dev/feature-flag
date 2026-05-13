@@ -40,6 +40,9 @@ impl SegmentRepository for PgSegmentRepository {
                 id             AS "id: SegmentId",
                 environment_id AS "environment_id: EnvironmentId",
                 key,
+                name,
+                description,
+                tags,
                 segment_type   AS "segment_type: SegmentType",
                 created_at,
                 updated_at,
@@ -70,6 +73,9 @@ impl SegmentRepository for PgSegmentRepository {
                 id             AS "id: SegmentId",
                 environment_id AS "environment_id: EnvironmentId",
                 key,
+                name,
+                description,
+                tags,
                 segment_type   AS "segment_type: SegmentType",
                 created_at,
                 updated_at,
@@ -102,6 +108,9 @@ impl SegmentRepository for PgSegmentRepository {
                 id             AS "id: SegmentId",
                 environment_id AS "environment_id: EnvironmentId",
                 key,
+                name,
+                description,
+                tags,
                 segment_type   AS "segment_type: SegmentType",
                 created_at,
                 updated_at,
@@ -122,13 +131,16 @@ impl SegmentRepository for PgSegmentRepository {
         sqlx::query!(
             r#"
             INSERT INTO segments
-                (id, environment_id, key, segment_type,
+                (id, environment_id, key, name, description, tags, segment_type,
                  created_at, updated_at, deleted_at, version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
             segment.id as SegmentId,
             segment.environment_id as EnvironmentId,
             segment.key,
+            segment.name,
+            segment.description,
+            &segment.tags as &[String],
             segment.segment_type as SegmentType,
             segment.created_at,
             segment.updated_at,
@@ -170,12 +182,16 @@ impl SegmentRepository for PgSegmentRepository {
             Segment,
             r#"
             UPDATE segments
-            SET key = $1, segment_type = $2, updated_at = NOW(), version = $3
-            WHERE id = $4 AND version = $5 AND deleted_at IS NULL
+            SET key = $1, name = $2, description = $3, tags = $4,
+                segment_type = $5, updated_at = NOW(), version = $6
+            WHERE id = $7 AND version = $8 AND deleted_at IS NULL
             RETURNING
                 id             AS "id: SegmentId",
                 environment_id AS "environment_id: EnvironmentId",
                 key,
+                name,
+                description,
+                tags,
                 segment_type   AS "segment_type: SegmentType",
                 created_at,
                 updated_at,
@@ -183,6 +199,9 @@ impl SegmentRepository for PgSegmentRepository {
                 version
             "#,
             segment.key,
+            segment.name,
+            segment.description,
+            &segment.tags as &[String],
             segment.segment_type as SegmentType,
             new_version,
             segment.id as SegmentId,

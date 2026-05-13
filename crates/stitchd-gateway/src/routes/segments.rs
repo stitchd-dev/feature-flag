@@ -40,6 +40,12 @@ pub struct SegmentCreateRequest {
     #[schema(value_type = Object, nullable = true)]
     pub condition_expr: Option<serde_json::Value>,
     pub user_list: Option<Vec<String>>,
+    /// "list" or "rule"
+    pub segment_type: Option<String>,
+    /// Context kind this list targets (e.g. "user", "org", "device"). Defaults to "user".
+    pub context_type: Option<String>,
+    /// Environment UUID — accepted from the body when the route has no path param.
+    pub env_id: Option<String>,
 }
 
 /// Request body for updating a segment.
@@ -53,6 +59,8 @@ pub struct SegmentUpdateRequest {
     pub condition_expr: Option<serde_json::Value>,
     pub user_list: Option<Vec<String>>,
     pub version: Option<u64>,
+    /// Context kind this list targets (e.g. "user", "org", "device"). Defaults to "user".
+    pub context_type: Option<String>,
 }
 
 /// Full admin representation of a segment.
@@ -70,6 +78,10 @@ pub struct AdminSegmentJson {
     pub version: u64,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// "list" or "rule"
+    pub segment_type: String,
+    /// Context kind for list-based segments (e.g. "user", "org", "device").
+    pub context_type: Option<String>,
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -129,6 +141,13 @@ fn proto_to_admin_json(seg: &stitchd_proto::segments::v1::AdminSegment) -> Admin
         version: seg.version,
         created_at,
         updated_at,
+        segment_type: if seg.segment_type.is_empty() {
+            // Infer from presence of user_list for backward compatibility.
+            if seg.user_list.is_empty() { "rule".to_string() } else { "list".to_string() }
+        } else {
+            seg.segment_type.clone()
+        },
+        context_type: if seg.context_type.is_empty() { None } else { Some(seg.context_type.clone()) },
     }
 }
 
@@ -223,12 +242,14 @@ pub async fn create_segment(
     let condition_expr = encode_condition_expr(body.condition_expr)?;
 
     let rpc = tonic::Request::new(CreateAdminSegmentRequest {
-        environment_id: String::new(), // caller must pass env_id — handled by the segment service
+        environment_id: body.env_id.unwrap_or_default(),
         name: body.name,
         description: body.description.unwrap_or_default(),
         tags: body.tags.unwrap_or_default(),
         condition_expr,
         user_list: body.user_list.unwrap_or_default(),
+        segment_type: body.segment_type.unwrap_or_default(),
+        context_type: body.context_type.unwrap_or_default(),
     });
     let mut client = state.segmentation_client.lock().await;
     let resp = client
@@ -281,6 +302,8 @@ pub async fn create_segment_in_env(
         tags: body.tags.unwrap_or_default(),
         condition_expr,
         user_list: body.user_list.unwrap_or_default(),
+        segment_type: body.segment_type.unwrap_or_default(),
+        context_type: body.context_type.unwrap_or_default(),
     });
     let mut client = state.segmentation_client.lock().await;
     let resp = client
@@ -372,6 +395,7 @@ pub async fn update_segment(
         condition_expr,
         user_list: body.user_list.unwrap_or_default(),
         version: body.version.unwrap_or(0),
+        context_type: body.context_type.unwrap_or_default(),
     });
     let mut client = state.segmentation_client.lock().await;
     let resp = client
