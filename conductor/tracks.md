@@ -30,3 +30,8 @@ This file tracks all major tracks for the project.
 <!-- Archived (continued):
 - flags_crud_20260512 (Feature Flags Full CRUD + Rule Builder)
 -->
+
+---
+
+## [ ] Track: Segments UI — full CRUD admin UI for environment-scoped segments, plus Match Segment rule type in flag rule builder
+*Link: [./conductor/tracks/segments_ui_20260513/](./conductor/tracks/segments_ui_20260513/)*

@@ -1,0 +1,13 @@
+{
+  "track_id": "segments_ui_20260513",
+  "type": "feature",
+  "status": "new",
+  "priority": "critical",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-13T00:00:00Z",
+  "updated_at": "2026-05-13T00:00:00Z",
+  "description": "Segments UI — full CRUD admin UI for environment-scoped segments, plus Match Segment rule type in flag rule builder",
+  "git_branch": "track/segments_ui_20260513",
+  "worktree_path": ".worktrees/segments_ui_20260513"
+}
