@@ -22,14 +22,13 @@ use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateEnvironmentResponse, CreateOrgRequest, CreateOrgResponse,
     CreateProjectRequest, CreateProjectResponse, CreateSdkKeyRequest, CreateSdkKeyResponse,
     CreateUserRequest, CreateUserResponse, DeleteEnvironmentRequest, DeleteEnvironmentResponse,
-    DeleteProjectRequest, DeleteProjectResponse, EnvironmentSummary, GetOrgRequest,
-    GetOrgResponse, ListEnvironmentsRequest, ListEnvironmentsResponse, ListOrgUsersRequest,
-    ListOrgUsersResponse, ListOrgsRequest, ListOrgsResponse, ListProjectsRequest,
-    ListProjectsResponse, ListSdkKeysRequest, ListSdkKeysResponse, OrgSummary, OrgUserSummary,
-    ProjectSummary, RenameEnvironmentRequest, RenameEnvironmentResponse, RenameProjectRequest,
-    RenameProjectResponse, RemoveOrgUserRequest, RemoveOrgUserResponse, RevokeSdkKeyRequest,
-    RevokeSdkKeyResponse, SdkKeySummary,
-    management_service_server::ManagementService,
+    DeleteProjectRequest, DeleteProjectResponse, EnvironmentSummary, GetOrgRequest, GetOrgResponse,
+    ListEnvironmentsRequest, ListEnvironmentsResponse, ListOrgUsersRequest, ListOrgUsersResponse,
+    ListOrgsRequest, ListOrgsResponse, ListProjectsRequest, ListProjectsResponse,
+    ListSdkKeysRequest, ListSdkKeysResponse, OrgSummary, OrgUserSummary, ProjectSummary,
+    RemoveOrgUserRequest, RemoveOrgUserResponse, RenameEnvironmentRequest,
+    RenameEnvironmentResponse, RenameProjectRequest, RenameProjectResponse, RevokeSdkKeyRequest,
+    RevokeSdkKeyResponse, SdkKeySummary, management_service_server::ManagementService,
 };
 
 use crate::sdk_key::hash_sdk_key;
@@ -191,7 +190,11 @@ impl ManagementService for ManagementServiceImpl {
         request: Request<GetOrgRequest>,
     ) -> Result<Response<GetOrgResponse>, Status> {
         let org_id = parse_org_id(&request.into_inner().org_id)?;
-        let org = self.org_repo.find_by_id(org_id).await.map_err(map_repo_err)?;
+        let org = self
+            .org_repo
+            .find_by_id(org_id)
+            .await
+            .map_err(map_repo_err)?;
         if org.is_system {
             return Err(Status::not_found("org not found"));
         }
@@ -304,22 +307,28 @@ impl ManagementService for ManagementServiceImpl {
 
         // Find-or-create: reuse an existing platform user so the same person
         // can be a member of multiple organisations with different roles.
-        let user =
-            if let Some(existing) = self.user_repo.find_by_email(&r.email).await.map_err(map_repo_err)? {
-                // User already exists on the platform — just add the org
-                // membership below. No password or profile changes.
-                existing
-            } else {
-                // New user: password is required.
-                if r.password.is_empty() {
-                    return Err(Status::invalid_argument("password must not be empty for a new user"));
-                }
-                let hash = hash_password(&r.password).map_err(|e| Status::internal(e.to_string()))?;
-                self.user_repo
-                    .create(&r.email, &r.display_name, Some(&hash))
-                    .await
-                    .map_err(map_repo_err)?
-            };
+        let user = if let Some(existing) = self
+            .user_repo
+            .find_by_email(&r.email)
+            .await
+            .map_err(map_repo_err)?
+        {
+            // User already exists on the platform — just add the org
+            // membership below. No password or profile changes.
+            existing
+        } else {
+            // New user: password is required.
+            if r.password.is_empty() {
+                return Err(Status::invalid_argument(
+                    "password must not be empty for a new user",
+                ));
+            }
+            let hash = hash_password(&r.password).map_err(|e| Status::internal(e.to_string()))?;
+            self.user_repo
+                .create(&r.email, &r.display_name, Some(&hash))
+                .await
+                .map_err(map_repo_err)?
+        };
 
         let role = match r.org_role.as_str() {
             "org_admin" => OrgRole::OrgAdmin,
@@ -360,7 +369,9 @@ impl ManagementService for ManagementServiceImpl {
                 created_at: p.created_at.to_rfc3339(),
             })
             .collect();
-        Ok(Response::new(ListProjectsResponse { projects: summaries }))
+        Ok(Response::new(ListProjectsResponse {
+            projects: summaries,
+        }))
     }
 
     async fn rename_project(
@@ -435,7 +446,11 @@ impl ManagementService for ManagementServiceImpl {
             ));
         }
         let env_id = parse_env_id(&r.environment_id)?;
-        let mut env = self.env_repo.find_by_id(env_id).await.map_err(map_repo_err)?;
+        let mut env = self
+            .env_repo
+            .find_by_id(env_id)
+            .await
+            .map_err(map_repo_err)?;
         env.name = r.name.trim().to_string();
         env.updated_at = Utc::now();
         env.version += 1;
@@ -476,7 +491,9 @@ impl ManagementService for ManagementServiceImpl {
                 revoked_at: k.revoked_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
             })
             .collect();
-        Ok(Response::new(ListSdkKeysResponse { sdk_keys: summaries }))
+        Ok(Response::new(ListSdkKeysResponse {
+            sdk_keys: summaries,
+        }))
     }
 
     async fn revoke_sdk_key(
@@ -485,13 +502,16 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<RevokeSdkKeyResponse>, Status> {
         let r = request.into_inner();
         let key_id = parse_sdk_key_id(&r.sdk_key_id)?;
-        self.sdk_key_repo.revoke(key_id).await.map_err(|e| match e {
-            // min-1-active constraint
-            RepositoryError::UniqueViolation { .. } => Status::failed_precondition(
-                "cannot revoke the last active SDK key for an environment",
-            ),
-            other => map_repo_err(other),
-        })?;
+        self.sdk_key_repo
+            .revoke(key_id)
+            .await
+            .map_err(|e| match e {
+                // min-1-active constraint
+                RepositoryError::UniqueViolation { .. } => Status::failed_precondition(
+                    "cannot revoke the last active SDK key for an environment",
+                ),
+                other => map_repo_err(other),
+            })?;
         Ok(Response::new(RevokeSdkKeyResponse {}))
     }
 
@@ -723,12 +743,7 @@ mod tests {
 
     #[tonic::async_trait]
     impl AuthUserRepository for StubUserRepo {
-        async fn create(
-            &self,
-            _: &str,
-            _: &str,
-            _: Option<&str>,
-        ) -> Result<User, RepositoryError> {
+        async fn create(&self, _: &str, _: &str, _: Option<&str>) -> Result<User, RepositoryError> {
             Err(RepositoryError::NotFound { id: "stub".into() })
         }
         async fn find_by_email(&self, _: &str) -> Result<Option<User>, RepositoryError> {
@@ -743,11 +758,7 @@ mod tests {
         async fn update_status(&self, id: UserId, _: UserStatus) -> Result<(), RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
-        async fn update_password_hash(
-            &self,
-            id: UserId,
-            _: &str,
-        ) -> Result<(), RepositoryError> {
+        async fn update_password_hash(&self, id: UserId, _: &str) -> Result<(), RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
         async fn update_profile(
@@ -791,11 +802,7 @@ mod tests {
         ) -> Result<Vec<OrgMembership>, RepositoryError> {
             Ok(vec![])
         }
-        async fn remove_member(
-            &self,
-            _: UserId,
-            _: OrganisationId,
-        ) -> Result<(), RepositoryError> {
+        async fn remove_member(&self, _: UserId, _: OrganisationId) -> Result<(), RepositoryError> {
             Ok(())
         }
         async fn update_role(
@@ -996,7 +1003,11 @@ mod tests {
 
         let inner = resp.into_inner();
         assert_eq!(inner.sdk_keys.len(), 2);
-        let ids: Vec<_> = inner.sdk_keys.iter().map(|k| k.sdk_key_id.as_str()).collect();
+        let ids: Vec<_> = inner
+            .sdk_keys
+            .iter()
+            .map(|k| k.sdk_key_id.as_str())
+            .collect();
         assert!(ids.contains(&active_key.id.to_string().as_str()));
         assert!(ids.contains(&revoked_key.id.to_string().as_str()));
     }
@@ -1169,7 +1180,7 @@ mod tests {
         let err = svc
             .rename_environment(Request::new(RenameEnvironmentRequest {
                 environment_id: env.id.to_string(),
-                name: "".into(),
+                name: String::new(),
             }))
             .await
             .unwrap_err();

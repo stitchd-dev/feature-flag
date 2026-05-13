@@ -8,12 +8,12 @@ use std::sync::Arc;
 
 use tonic::{Request, Response, Status};
 
+use stitchd_core::auth::{OrgRole, jwt::JwtEngine};
+use stitchd_core::id::OrganisationId;
 use stitchd_db::{
     AuthUserRepository, OrgMembershipRepository, OrganisationRepository, RefreshTokenRepository,
     SdkKeyRepository,
 };
-use stitchd_core::auth::{OrgRole, jwt::JwtEngine};
-use stitchd_core::id::OrganisationId;
 use stitchd_proto::auth::v1::{
     CredentialRequest, ListUserOrgsRequest, ListUserOrgsResponse, LoginRequest, LoginResponse,
     RbacContext, SwitchOrgRequest, SwitchOrgResponse, UserOrgEntry,

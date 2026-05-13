@@ -24,10 +24,17 @@ use crate::{
 fn map_db_err(e: sqlx::Error) -> RepositoryError {
     if let sqlx::Error::Database(ref dbe) = e {
         if let Some(constraint) = dbe.constraint() {
-            let code = dbe.code().map(|c| c.into_owned()).unwrap_or_default();
+            let code = dbe
+                .code()
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_default();
             return match code.as_str() {
-                "23505" => RepositoryError::UniqueViolation { field: constraint.to_string() },
-                "23503" => RepositoryError::ForeignKeyViolation { constraint: constraint.to_string() },
+                "23505" => RepositoryError::UniqueViolation {
+                    field: constraint.to_string(),
+                },
+                "23503" => RepositoryError::ForeignKeyViolation {
+                    constraint: constraint.to_string(),
+                },
                 _ => RepositoryError::Database(e),
             };
         }
@@ -815,16 +822,14 @@ impl VariantRepository for PgVariantRepository {
             let value = serde_json::to_value(&v.value).map_err(|e| {
                 RepositoryError::Unexpected(anyhow::anyhow!("cannot serialise variant value: {e}"))
             })?;
-            sqlx::query(
-                "INSERT INTO variants (id, flag_id, key, value) VALUES ($1, $2, $3, $4)",
-            )
-            .bind(v.id.as_uuid())
-            .bind(flag_id.as_uuid())
-            .bind(&v.key)
-            .bind(value)
-            .execute(&mut *tx)
-            .await
-            .map_err(map_db_err)?;
+            sqlx::query("INSERT INTO variants (id, flag_id, key, value) VALUES ($1, $2, $3, $4)")
+                .bind(v.id.as_uuid())
+                .bind(flag_id.as_uuid())
+                .bind(&v.key)
+                .bind(value)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_db_err)?;
         }
 
         tx.commit().await.map_err(RepositoryError::Database)?;

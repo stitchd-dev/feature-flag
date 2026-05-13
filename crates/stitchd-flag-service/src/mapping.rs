@@ -452,8 +452,8 @@ mod tests {
     fn build_feature_flag_proto_includes_name_and_description() {
         use stitchd_core::{
             flag::FlagRecord,
-            id::{FlagId, ProjectId},
             id::FlagKey,
+            id::{FlagId, ProjectId},
         };
 
         let record = FlagRecord {

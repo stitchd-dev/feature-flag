@@ -22,9 +22,11 @@ const ORG_ADMIN_PERMISSIONS: &[&str] = &[
     "sdk_key:revoke",
     "flag:read",
     "flag:write",
+    "segment:read",
+    "segment:write",
 ];
 
-const ORG_MEMBER_PERMISSIONS: &[&str] = &["environment:read", "flag:read"];
+const ORG_MEMBER_PERMISSIONS: &[&str] = &["environment:read", "flag:read", "segment:read"];
 
 /// Assemble an [`RbacContext`] from a validated JWT.
 #[must_use]

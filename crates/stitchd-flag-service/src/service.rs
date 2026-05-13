@@ -399,10 +399,8 @@ impl FlagService for FlagServiceImpl {
 
                 // Replace rules if the request includes a non-empty list.
                 if !flag_proto.rules.is_empty() {
-                    let variant_key_to_id: std::collections::HashMap<_, _> = variants
-                        .iter()
-                        .map(|v| (v.key.clone(), v.id))
-                        .collect();
+                    let variant_key_to_id: std::collections::HashMap<_, _> =
+                        variants.iter().map(|v| (v.key.clone(), v.id)).collect();
                     let domain_rules: Vec<_> = flag_proto
                         .rules
                         .iter()
@@ -1046,7 +1044,8 @@ mod tests {
     #[tokio::test]
     async fn list_flags_returns_empty_for_empty_environment() {
         let svc = make_service_empty();
-        let req = Request::new(ListFlagsRequest { include_archived: false,
+        let req = Request::new(ListFlagsRequest {
+            include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
             project_id: String::new(),
         });
@@ -1070,7 +1069,8 @@ mod tests {
             StubSdkKeyRepo::empty(),
         );
 
-        let req = Request::new(ListFlagsRequest { include_archived: false,
+        let req = Request::new(ListFlagsRequest {
+            include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
             project_id: String::new(),
         });
@@ -1082,7 +1082,8 @@ mod tests {
     #[tokio::test]
     async fn list_flags_returns_invalid_argument_for_bad_env_id() {
         let svc = make_service_empty();
-        let req = Request::new(ListFlagsRequest { include_archived: false,
+        let req = Request::new(ListFlagsRequest {
+            include_archived: false,
             environment_id: "bad-uuid".to_string(),
             project_id: String::new(),
         });

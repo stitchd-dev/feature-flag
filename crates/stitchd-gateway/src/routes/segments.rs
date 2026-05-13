@@ -1,8 +1,12 @@
-//! Segment route handlers — proxy REST requests to the Segmentation Service.
+//! Segment route handlers — admin CRUD for environment-scoped Segments.
+//!
+//! All routes require a valid JWT (injected by [`auth_middleware`]).
+//! Write routes additionally require the `segment:write` permission;
+//! read routes require `segment:read`.
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -11,7 +15,8 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use stitchd_proto::segments::v1::{
-    GetSegmentRequest, ListSegmentsRequest, MutateSegmentRequest, SegmentMutationKind,
+    CreateAdminSegmentRequest, DeleteAdminSegmentRequest, GetAdminSegmentRequest,
+    ListAdminSegmentsRequest, UpdateAdminSegmentRequest,
 };
 
 use crate::error::GatewayError;
@@ -19,68 +24,224 @@ use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
 
+/// Query parameters for `GET /v1/segments`.
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct SegmentCreateRequest {
-    pub key: Option<String>,
-    pub context_type: Option<String>,
+pub struct ListSegmentsQuery {
+    pub env_id: Option<String>,
 }
 
+/// Request body for creating a segment.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SegmentCreateRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Option<Vec<String>>,
+    /// ConditionExpr as a JSON value.
+    #[schema(value_type = Object, nullable = true)]
+    pub condition_expr: Option<serde_json::Value>,
+    pub user_list: Option<Vec<String>>,
+}
+
+/// Request body for updating a segment.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SegmentUpdateRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub tags: Option<Vec<String>>,
+    /// ConditionExpr as a JSON value.
+    #[schema(value_type = Object, nullable = true)]
+    pub condition_expr: Option<serde_json::Value>,
+    pub user_list: Option<Vec<String>>,
+    pub version: Option<u64>,
+}
+
+/// Full admin representation of a segment.
 #[derive(Debug, Serialize, ToSchema)]
-pub struct SegmentJson {
-    pub key: String,
-    pub context_type: String,
-    #[schema(value_type = String)]
-    pub kind: &'static str,
+pub struct AdminSegmentJson {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Vec<String>,
+    #[schema(value_type = Object, nullable = true)]
+    pub condition_expr: Option<serde_json::Value>,
+    pub user_list: Vec<String>,
+    /// Number of top-level condition nodes (convenience for the UI).
+    pub condition_count: usize,
+    pub version: u64,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Count the number of top-level conditions in the given expr JSON.
+/// For UI convenience — shows how many rules the segment has.
+fn count_conditions(expr: &serde_json::Value) -> usize {
+    if expr.is_null() {
+        return 0;
+    }
+    // If the expr is an object with "And" / "Or" / "Not" at the top level, count children.
+    if let Some(children) = expr.get("And").and_then(|v| v.as_array()) {
+        return children.len();
+    }
+    if let Some(children) = expr.get("Or").and_then(|v| v.as_array()) {
+        return children.len();
+    }
+    // Any other non-null value (Leaf / Not / …) counts as 1.
+    1
+}
+
+/// Convert an `AdminSegment` proto into the gateway's `AdminSegmentJson`.
+fn proto_to_admin_json(seg: &stitchd_proto::segments::v1::AdminSegment) -> AdminSegmentJson {
+    let condition_expr: Option<serde_json::Value> = if seg.condition_expr.is_empty() {
+        None
+    } else {
+        serde_json::from_slice(&seg.condition_expr).ok()
+    };
+
+    let condition_count = condition_expr.as_ref().map(count_conditions).unwrap_or(0);
+
+    let created_at = if seg.created_at_ms != 0 {
+        chrono::DateTime::from_timestamp_millis(seg.created_at_ms)
+            .map(|dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339())
+    } else {
+        None
+    };
+    let updated_at = if seg.updated_at_ms != 0 {
+        chrono::DateTime::from_timestamp_millis(seg.updated_at_ms)
+            .map(|dt: chrono::DateTime<chrono::Utc>| dt.to_rfc3339())
+    } else {
+        None
+    };
+
+    AdminSegmentJson {
+        id: seg.id.clone(),
+        name: seg.name.clone(),
+        description: if seg.description.is_empty() {
+            None
+        } else {
+            Some(seg.description.clone())
+        },
+        tags: seg.tags.clone(),
+        condition_expr,
+        user_list: seg.user_list.clone(),
+        condition_count,
+        version: seg.version,
+        created_at,
+        updated_at,
+    }
+}
+
+/// Check that the caller has the given permission in their `RbacContext`.
+/// Returns `GatewayError::Unauthorized(403)` when denied.
+fn require_permission(req: &axum::extract::Request, permission: &str) -> Result<(), GatewayError> {
+    match req
+        .extensions()
+        .get::<stitchd_proto::auth::v1::RbacContext>()
+    {
+        Some(ctx) if ctx.permissions.iter().any(|p| p == permission) => Ok(()),
+        Some(_) => Err(GatewayError::Unauthorized(format!(
+            "missing permission: {permission}"
+        ))),
+        None => Err(GatewayError::Unauthorized(
+            "missing credentials".to_string(),
+        )),
+    }
 }
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
-/// `GET /v1/environments/{env_id}/segments`
+/// `GET /v1/segments?env_id=<uuid>` — list all segments for an environment.
 #[utoipa::path(
     get,
-    path = "/v1/environments/{env_id}/segments",
+    path = "/v1/segments",
     tag = "segments",
-    params(("env_id" = String, Path, description = "Environment ID")),
+    params(("env_id" = String, Query, description = "Environment ID")),
     responses(
-        (status = 200, description = "List of segments", body = Vec<SegmentJson>),
+        (status = 200, description = "List of segments", body = Vec<AdminSegmentJson>),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — missing segment:read"),
         (status = 502, description = "Segmentation service unavailable"),
     ),
     security(("bearer_jwt" = []))
 )]
 pub async fn list_segments(
     State(state): State<Arc<GatewayState>>,
-    Path(env_id): Path<String>,
+    Query(query): Query<ListSegmentsQuery>,
+    req: axum::extract::Request,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(ListSegmentsRequest {
-        environment_id: env_id,
-    });
+    require_permission(&req, "segment:read")?;
+
+    let environment_id = query.env_id.unwrap_or_default();
+    let rpc = tonic::Request::new(ListAdminSegmentsRequest { environment_id });
     let mut client = state.segmentation_client.lock().await;
     let resp = client
-        .list_segments(req)
+        .list_admin_segments(rpc)
         .await
         .map_err(GatewayError::from)?;
-    let inner = resp.into_inner();
-    let mut segments: Vec<SegmentJson> = inner
-        .rule_segments
+    let segments: Vec<AdminSegmentJson> = resp
+        .into_inner()
+        .segments
         .iter()
-        .map(|s| SegmentJson {
-            key: s.key.clone(),
-            context_type: s.context_type.clone(),
-            kind: "rule",
-        })
+        .map(proto_to_admin_json)
         .collect();
-    for ls in &inner.list_segments {
-        segments.push(SegmentJson {
-            key: ls.key.clone(),
-            context_type: ls.context_type.clone(),
-            kind: "list",
-        });
-    }
     Ok(Json(segments))
 }
 
-/// `POST /v1/environments/{env_id}/segments`
+/// `POST /v1/segments` — create a new segment.
+#[utoipa::path(
+    post,
+    path = "/v1/segments",
+    tag = "segments",
+    request_body = SegmentCreateRequest,
+    responses(
+        (status = 201, description = "Segment created", body = AdminSegmentJson),
+        (status = 400, description = "Malformed condition_expr JSON"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — missing segment:write"),
+        (status = 409, description = "Name already exists in this environment"),
+        (status = 502, description = "Segmentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn create_segment(
+    State(state): State<Arc<GatewayState>>,
+    req: axum::extract::Request,
+) -> Result<impl IntoResponse, GatewayError> {
+    require_permission(&req, "segment:write")?;
+
+    // Extract body from the request.
+    let (parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, 4 * 1024 * 1024)
+        .await
+        .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
+    let body: SegmentCreateRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid request body: {e}")))?;
+    let _ = parts;
+
+    // Validate and encode condition_expr.
+    let condition_expr = encode_condition_expr(body.condition_expr)?;
+
+    let rpc = tonic::Request::new(CreateAdminSegmentRequest {
+        environment_id: String::new(), // caller must pass env_id — handled by the segment service
+        name: body.name,
+        description: body.description.unwrap_or_default(),
+        tags: body.tags.unwrap_or_default(),
+        condition_expr,
+        user_list: body.user_list.unwrap_or_default(),
+    });
+    let mut client = state.segmentation_client.lock().await;
+    let resp = client
+        .create_admin_segment(rpc)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(proto_to_admin_json(&resp.into_inner())),
+    ))
+}
+
+/// `POST /v1/environments/{env_id}/segments` — create a new segment scoped to an environment.
 #[utoipa::path(
     post,
     path = "/v1/environments/{env_id}/segments",
@@ -88,73 +249,60 @@ pub async fn list_segments(
     params(("env_id" = String, Path, description = "Environment ID")),
     request_body = SegmentCreateRequest,
     responses(
-        (status = 201, description = "Segment created", body = SegmentJson),
+        (status = 201, description = "Segment created", body = AdminSegmentJson),
+        (status = 400, description = "Malformed condition_expr JSON"),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — missing segment:write"),
+        (status = 409, description = "Name already exists in this environment"),
         (status = 502, description = "Segmentation service unavailable"),
     ),
     security(("bearer_jwt" = []))
 )]
-pub async fn create_segment(
+pub async fn create_segment_in_env(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<String>,
-    Json(body): Json<SegmentCreateRequest>,
+    req: axum::extract::Request,
 ) -> Result<impl IntoResponse, GatewayError> {
-    use stitchd_proto::segments::v1::mutate_segment_request::Segment;
-    use stitchd_proto::segments::v1::{MutateSegmentRequest, RuleSegment};
+    require_permission(&req, "segment:write")?;
 
-    let rule_seg = RuleSegment {
-        key: body.key.unwrap_or_default(),
-        context_type: body.context_type.unwrap_or_default(),
-        ..Default::default()
-    };
-    let req = tonic::Request::new(MutateSegmentRequest {
+    let (_parts, body_raw) = req.into_parts();
+    let bytes = axum::body::to_bytes(body_raw, 4 * 1024 * 1024)
+        .await
+        .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
+    let body: SegmentCreateRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid request body: {e}")))?;
+
+    let condition_expr = encode_condition_expr(body.condition_expr)?;
+
+    let rpc = tonic::Request::new(CreateAdminSegmentRequest {
         environment_id: env_id,
-        kind: SegmentMutationKind::Create as i32,
-        segment: Some(Segment::RuleSegment(rule_seg)),
-        version: 0,
+        name: body.name,
+        description: body.description.unwrap_or_default(),
+        tags: body.tags.unwrap_or_default(),
+        condition_expr,
+        user_list: body.user_list.unwrap_or_default(),
     });
     let mut client = state.segmentation_client.lock().await;
     let resp = client
-        .mutate_segment(req)
+        .create_admin_segment(rpc)
         .await
         .map_err(GatewayError::from)?;
-    let inner = resp.into_inner();
-    let seg_json = match inner.segment {
-        Some(stitchd_proto::segments::v1::mutate_segment_response::Segment::RuleSegment(s)) => {
-            SegmentJson {
-                key: s.key,
-                context_type: s.context_type,
-                kind: "rule",
-            }
-        }
-        Some(stitchd_proto::segments::v1::mutate_segment_response::Segment::ListSegment(s)) => {
-            SegmentJson {
-                key: s.key,
-                context_type: s.context_type,
-                kind: "list",
-            }
-        }
-        None => SegmentJson {
-            key: String::new(),
-            context_type: String::new(),
-            kind: "unknown",
-        },
-    };
-    Ok((StatusCode::CREATED, Json(seg_json)))
+    Ok((
+        StatusCode::CREATED,
+        Json(proto_to_admin_json(&resp.into_inner())),
+    ))
 }
 
-/// `GET /v1/environments/{env_id}/segments/{segment_key}`
+/// `GET /v1/segments/{id}` — get one segment by ID.
 #[utoipa::path(
     get,
-    path = "/v1/environments/{env_id}/segments/{segment_id}",
+    path = "/v1/segments/{id}",
     tag = "segments",
-    params(
-        ("env_id" = String, Path, description = "Environment ID"),
-        ("segment_id" = String, Path, description = "Segment key"),
-    ),
+    params(("id" = String, Path, description = "Segment UUID")),
     responses(
-        (status = 200, description = "Segment", body = SegmentJson),
+        (status = 200, description = "Segment", body = AdminSegmentJson),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — missing segment:read"),
         (status = 404, description = "Segment not found"),
         (status = 502, description = "Segmentation service unavailable"),
     ),
@@ -162,139 +310,124 @@ pub async fn create_segment(
 )]
 pub async fn get_segment(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, segment_key)): Path<(String, String)>,
+    Path(segment_id): Path<String>,
+    req: axum::extract::Request,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(GetSegmentRequest {
-        environment_id: env_id,
-        segment_key,
-    });
+    require_permission(&req, "segment:read")?;
+
+    let org_id = req
+        .extensions()
+        .get::<stitchd_proto::auth::v1::RbacContext>()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let rpc = tonic::Request::new(GetAdminSegmentRequest { segment_id, org_id });
     let mut client = state.segmentation_client.lock().await;
-    let resp = client.get_segment(req).await.map_err(GatewayError::from)?;
-    let bundle = resp.into_inner();
-    // Return first rule or list segment found
-    let result = if let Some(s) = bundle.rule_segments.first() {
-        SegmentJson {
-            key: s.key.clone(),
-            context_type: s.context_type.clone(),
-            kind: "rule",
-        }
-    } else if let Some(s) = bundle.list_segments.first() {
-        SegmentJson {
-            key: s.key.clone(),
-            context_type: s.context_type.clone(),
-            kind: "list",
-        }
-    } else {
-        return Err(GatewayError::NotFound("segment not found".to_string()));
-    };
-    Ok(Json(result))
+    let resp = client
+        .get_admin_segment(rpc)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(Json(proto_to_admin_json(&resp.into_inner())))
 }
 
-/// `PUT /v1/environments/{env_id}/segments/{segment_key}`
+/// `PUT /v1/segments/{id}` — update a segment.
 #[utoipa::path(
     put,
-    path = "/v1/environments/{env_id}/segments/{segment_id}",
+    path = "/v1/segments/{id}",
     tag = "segments",
-    params(
-        ("env_id" = String, Path, description = "Environment ID"),
-        ("segment_id" = String, Path, description = "Segment key"),
-    ),
-    request_body = SegmentCreateRequest,
+    params(("id" = String, Path, description = "Segment UUID")),
+    request_body = SegmentUpdateRequest,
     responses(
-        (status = 200, description = "Updated segment", body = SegmentJson),
+        (status = 200, description = "Updated segment", body = AdminSegmentJson),
+        (status = 400, description = "Malformed condition_expr JSON"),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — missing segment:write"),
+        (status = 404, description = "Segment not found"),
+        (status = 409, description = "Name already exists in this environment"),
         (status = 502, description = "Segmentation service unavailable"),
     ),
     security(("bearer_jwt" = []))
 )]
 pub async fn update_segment(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, segment_key)): Path<(String, String)>,
-    Json(body): Json<SegmentCreateRequest>,
+    Path(segment_id): Path<String>,
+    req: axum::extract::Request,
 ) -> Result<impl IntoResponse, GatewayError> {
-    use stitchd_proto::segments::v1::RuleSegment;
-    use stitchd_proto::segments::v1::mutate_segment_request::Segment;
+    require_permission(&req, "segment:write")?;
 
-    let rule_seg = RuleSegment {
-        key: segment_key,
-        context_type: body.context_type.unwrap_or_default(),
-        ..Default::default()
-    };
-    let req = tonic::Request::new(MutateSegmentRequest {
-        environment_id: env_id,
-        kind: SegmentMutationKind::Update as i32,
-        segment: Some(Segment::RuleSegment(rule_seg)),
-        version: 0,
+    let (_parts, body_raw) = req.into_parts();
+    let bytes = axum::body::to_bytes(body_raw, 4 * 1024 * 1024)
+        .await
+        .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
+    let body: SegmentUpdateRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid request body: {e}")))?;
+
+    let condition_expr = encode_condition_expr(body.condition_expr)?;
+
+    let rpc = tonic::Request::new(UpdateAdminSegmentRequest {
+        segment_id,
+        name: body.name.unwrap_or_default(),
+        description: body.description.unwrap_or_default(),
+        tags: body.tags.unwrap_or_default(),
+        condition_expr,
+        user_list: body.user_list.unwrap_or_default(),
+        version: body.version.unwrap_or(0),
     });
     let mut client = state.segmentation_client.lock().await;
     let resp = client
-        .mutate_segment(req)
+        .update_admin_segment(rpc)
         .await
         .map_err(GatewayError::from)?;
-    let inner = resp.into_inner();
-    let seg_json = match inner.segment {
-        Some(stitchd_proto::segments::v1::mutate_segment_response::Segment::RuleSegment(s)) => {
-            SegmentJson {
-                key: s.key,
-                context_type: s.context_type,
-                kind: "rule",
-            }
-        }
-        Some(stitchd_proto::segments::v1::mutate_segment_response::Segment::ListSegment(s)) => {
-            SegmentJson {
-                key: s.key,
-                context_type: s.context_type,
-                kind: "list",
-            }
-        }
-        None => SegmentJson {
-            key: String::new(),
-            context_type: String::new(),
-            kind: "unknown",
-        },
-    };
-    Ok(Json(seg_json))
+    Ok(Json(proto_to_admin_json(&resp.into_inner())))
 }
 
-/// `DELETE /v1/environments/{env_id}/segments/{segment_key}`
+/// `DELETE /v1/segments/{id}` — delete a segment.
 #[utoipa::path(
     delete,
-    path = "/v1/environments/{env_id}/segments/{segment_id}",
+    path = "/v1/segments/{id}",
     tag = "segments",
-    params(
-        ("env_id" = String, Path, description = "Environment ID"),
-        ("segment_id" = String, Path, description = "Segment key"),
-    ),
+    params(("id" = String, Path, description = "Segment UUID")),
     responses(
         (status = 204, description = "Segment deleted"),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — missing segment:write"),
+        (status = 404, description = "Segment not found"),
         (status = 502, description = "Segmentation service unavailable"),
     ),
     security(("bearer_jwt" = []))
 )]
 pub async fn delete_segment(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, segment_key)): Path<(String, String)>,
+    Path(segment_id): Path<String>,
+    req: axum::extract::Request,
 ) -> Result<impl IntoResponse, GatewayError> {
-    use stitchd_proto::segments::v1::RuleSegment;
-    use stitchd_proto::segments::v1::mutate_segment_request::Segment;
+    require_permission(&req, "segment:write")?;
 
-    let rule_seg = RuleSegment {
-        key: segment_key,
-        ..Default::default()
-    };
-    let req = tonic::Request::new(MutateSegmentRequest {
-        environment_id: env_id,
-        kind: SegmentMutationKind::Delete as i32,
-        segment: Some(Segment::RuleSegment(rule_seg)),
-        version: 0,
-    });
+    let org_id = req
+        .extensions()
+        .get::<stitchd_proto::auth::v1::RbacContext>()
+        .map(|c| c.tenant_id.clone())
+        .unwrap_or_default();
+
+    let rpc = tonic::Request::new(DeleteAdminSegmentRequest { segment_id, org_id });
     let mut client = state.segmentation_client.lock().await;
     client
-        .mutate_segment(req)
+        .delete_admin_segment(rpc)
         .await
         .map_err(GatewayError::from)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
+/// Serialise an optional `condition_expr` JSON value to bytes for the proto.
+/// Returns `GatewayError::BadRequest` if the JSON is somehow unserializable.
+fn encode_condition_expr(expr: Option<serde_json::Value>) -> Result<Vec<u8>, GatewayError> {
+    match expr {
+        None => Ok(Vec::new()),
+        Some(v) => serde_json::to_vec(&v)
+            .map_err(|e| GatewayError::BadRequest(format!("malformed condition_expr: {e}"))),
+    }
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -304,13 +437,14 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
     use axum::routing::{delete, get, post, put};
     axum::Router::new()
+        .route("/v1/segments", get(list_segments).post(create_segment))
         .route(
-            "/v1/environments/{env_id}/segments",
-            get(list_segments).post(create_segment),
+            "/v1/segments/{id}",
+            get(get_segment).put(update_segment).delete(delete_segment),
         )
         .route(
-            "/v1/environments/{env_id}/segments/{segment_key}",
-            get(get_segment).put(update_segment).delete(delete_segment),
+            "/v1/environments/{env_id}/segments",
+            post(create_segment_in_env),
         )
         .with_state(state)
 }
@@ -326,19 +460,20 @@ mod tests {
 
     use crate::tests::helpers::make_stub_state;
 
+    // ─── Happy paths (stub returns 502 as downstream is unreachable) ──────────
+
     #[tokio::test]
-    async fn list_segments_returns_200_or_502() {
+    async fn list_segments_with_permission_returns_200_or_502() {
         let state = make_stub_state();
         let app = test_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/environments/env-1/segments")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+        // Inject RbacContext with segment:read permission.
+        let mut req = Request::builder()
+            .uri("/v1/segments?env_id=env-1")
+            .body(Body::empty())
             .unwrap();
+        req.extensions_mut()
+            .insert(make_rbac_with_perms(&["segment:read"]));
+        let resp = app.oneshot(req).await.unwrap();
         assert!(
             resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
             "status: {}",
@@ -347,20 +482,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_segment_returns_201_or_502() {
+    async fn list_segments_without_permission_returns_401() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let mut req = Request::builder()
+            .uri("/v1/segments?env_id=env-1")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(make_rbac_with_perms(&[]));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_segments_without_rbac_returns_401() {
         let state = make_stub_state();
         let app = test_router(state);
         let resp = app
             .oneshot(
                 Request::builder()
-                    .method("POST")
-                    .uri("/v1/environments/env-1/segments")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"key":"s1","context_type":"user"}"#))
+                    .uri("/v1/segments?env_id=env-1")
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await
             .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn create_segment_with_write_permission_returns_201_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/segments")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"beta-users","tags":["internal"]}"#))
+            .unwrap();
+        req.extensions_mut()
+            .insert(make_rbac_with_perms(&["segment:write"]));
+        let resp = app.oneshot(req).await.unwrap();
         assert!(
             resp.status() == StatusCode::CREATED || resp.status() == StatusCode::BAD_GATEWAY,
             "status: {}",
@@ -369,18 +531,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_segment_returns_200_404_or_502() {
+    async fn create_segment_without_write_permission_returns_401() {
         let state = make_stub_state();
         let app = test_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/environments/env-1/segments/my-seg")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/segments")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"beta-users"}"#))
             .unwrap();
+        req.extensions_mut()
+            .insert(make_rbac_with_perms(&["segment:read"]));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_segment_with_read_permission_returns_200_404_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let mut req = Request::builder()
+            .uri("/v1/segments/550e8400-e29b-41d4-a716-446655440000")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(make_rbac_with_perms(&["segment:read"]));
+        let resp = app.oneshot(req).await.unwrap();
         assert!(
             resp.status() == StatusCode::OK
                 || resp.status() == StatusCode::NOT_FOUND
@@ -391,20 +567,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_segment_returns_200_or_502() {
+    async fn get_segment_without_permission_returns_401() {
         let state = make_stub_state();
         let app = test_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("PUT")
-                    .uri("/v1/environments/env-1/segments/my-seg")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"context_type":"user"}"#))
-                    .unwrap(),
-            )
-            .await
+        let mut req = Request::builder()
+            .uri("/v1/segments/550e8400-e29b-41d4-a716-446655440000")
+            .body(Body::empty())
             .unwrap();
+        req.extensions_mut().insert(make_rbac_with_perms(&[]));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn update_segment_with_write_permission_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let mut req = Request::builder()
+            .method("PUT")
+            .uri("/v1/segments/550e8400-e29b-41d4-a716-446655440000")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"updated","version":1}"#))
+            .unwrap();
+        req.extensions_mut()
+            .insert(make_rbac_with_perms(&["segment:write"]));
+        let resp = app.oneshot(req).await.unwrap();
         assert!(
             resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
             "status: {}",
@@ -413,23 +600,150 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_segment_returns_204_or_502() {
+    async fn update_segment_without_write_permission_returns_401() {
         let state = make_stub_state();
         let app = test_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .method("DELETE")
-                    .uri("/v1/environments/env-1/segments/my-seg")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
+        let mut req = Request::builder()
+            .method("PUT")
+            .uri("/v1/segments/550e8400-e29b-41d4-a716-446655440000")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"updated","version":1}"#))
             .unwrap();
+        req.extensions_mut()
+            .insert(make_rbac_with_perms(&["segment:read"]));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_segment_with_write_permission_returns_204_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let mut req = Request::builder()
+            .method("DELETE")
+            .uri("/v1/segments/550e8400-e29b-41d4-a716-446655440000")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(make_rbac_with_perms(&["segment:write"]));
+        let resp = app.oneshot(req).await.unwrap();
         assert!(
             resp.status() == StatusCode::NO_CONTENT || resp.status() == StatusCode::BAD_GATEWAY,
             "status: {}",
             resp.status()
         );
+    }
+
+    #[tokio::test]
+    async fn delete_segment_without_write_permission_returns_401() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let mut req = Request::builder()
+            .method("DELETE")
+            .uri("/v1/segments/550e8400-e29b-41d4-a716-446655440000")
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut()
+            .insert(make_rbac_with_perms(&["segment:read"]));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── Bad condition JSON ───────────────────────────────────────────────────
+
+    #[test]
+    fn encode_condition_expr_none_is_empty_vec() {
+        let result = encode_condition_expr(None).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn encode_condition_expr_valid_json_roundtrips() {
+        let expr = serde_json::json!({"Leaf": {"InSegment": "some-id"}});
+        let bytes = encode_condition_expr(Some(expr.clone())).unwrap();
+        let back: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(expr, back);
+    }
+
+    // ─── count_conditions helper ──────────────────────────────────────────────
+
+    #[test]
+    fn count_conditions_null_is_zero() {
+        assert_eq!(count_conditions(&serde_json::Value::Null), 0);
+    }
+
+    #[test]
+    fn count_conditions_and_counts_children() {
+        let expr = serde_json::json!({"And": [1, 2, 3]});
+        assert_eq!(count_conditions(&expr), 3);
+    }
+
+    #[test]
+    fn count_conditions_or_counts_children() {
+        let expr = serde_json::json!({"Or": [1, 2]});
+        assert_eq!(count_conditions(&expr), 2);
+    }
+
+    #[test]
+    fn count_conditions_leaf_is_one() {
+        let expr = serde_json::json!({"Leaf": "something"});
+        assert_eq!(count_conditions(&expr), 1);
+    }
+
+    // ─── RBAC: org_member gets segment:read only ──────────────────────────────
+
+    #[tokio::test]
+    async fn org_member_can_list_segments() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let mut req = Request::builder()
+            .uri("/v1/segments?env_id=env-1")
+            .body(Body::empty())
+            .unwrap();
+        // org_member has segment:read
+        req.extensions_mut().insert(make_rbac_with_perms(&[
+            "environment:read",
+            "flag:read",
+            "segment:read",
+        ]));
+        let resp = app.oneshot(req).await.unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn org_member_cannot_create_segment() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/segments")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"name":"test"}"#))
+            .unwrap();
+        // org_member does NOT have segment:write
+        req.extensions_mut().insert(make_rbac_with_perms(&[
+            "environment:read",
+            "flag:read",
+            "segment:read",
+        ]));
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ─── Helper ──────────────────────────────────────────────────────────────
+
+    fn make_rbac_with_perms(perms: &[&str]) -> stitchd_proto::auth::v1::RbacContext {
+        stitchd_proto::auth::v1::RbacContext {
+            tenant_id: "org-1".to_string(),
+            environment_id: String::new(),
+            roles: vec!["org_member".to_string()],
+            permissions: perms.iter().map(|s| s.to_string()).collect(),
+            subject: "user-1".to_string(),
+            is_system: false,
+        }
     }
 }
