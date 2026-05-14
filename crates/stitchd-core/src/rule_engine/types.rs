@@ -80,6 +80,24 @@ pub struct Rule {
     pub output: RuleOutput,
 }
 
+impl ConditionExpr {
+    /// Collect all `SegmentId`s referenced by `InSegment` or `NotInSegment` leaves.
+    pub fn collect_segment_ids(&self, out: &mut HashSet<SegmentId>) {
+        match self {
+            Self::Leaf(Condition::InSegment(id)) | Self::Leaf(Condition::NotInSegment(id)) => {
+                out.insert(*id);
+            }
+            Self::Leaf(_) => {}
+            Self::And(children) | Self::Or(children) => {
+                for child in children {
+                    child.collect_segment_ids(out);
+                }
+            }
+            Self::Not(inner) => inner.collect_segment_ids(out),
+        }
+    }
+}
+
 // ── EvaluationInput ───────────────────────────────────────────────────────────
 
 /// All inputs required for a single rule-engine evaluation pass.

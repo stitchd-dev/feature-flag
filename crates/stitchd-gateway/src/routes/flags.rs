@@ -11,8 +11,8 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use stitchd_proto::flags::v1::{
-    FeatureFlag, FlagHashingConfig, GetFlagRequest, ListFlagsRequest, MutateFlagRequest,
-    MutationKind, UpdateFlagHashingRequest,
+    EvaluatePreviewRequest, FeatureFlag, FlagHashingConfig, GetFlagRequest, ListFlagsRequest,
+    MutateFlagRequest, MutationKind, UpdateFlagHashingRequest,
 };
 
 use crate::error::GatewayError;
@@ -967,6 +967,167 @@ pub async fn update_flag_hashing(
     }))
 }
 
+// ─── Evaluate preview ─────────────────────────────────────────────────────────
+
+/// Request body for `POST /v1/projects/{project_id}/flags/{flag_key}/evaluate-preview`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct EvaluatePreviewBody {
+    /// JSON array of `EvaluationContext` objects.
+    pub contexts: Vec<serde_json::Value>,
+}
+
+/// A single per-context evaluation result returned by the preview endpoint.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PreviewResultJson {
+    pub context_index: usize,
+    pub variant_key: String,
+    pub variant_value: serde_json::Value,
+    pub fired_rule_index: Option<usize>,
+    pub fired_rule_name: Option<String>,
+    pub rule_traces: Vec<RuleTraceJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollout_debug: Option<RolloutDebugJson>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RuleTraceJson {
+    pub rule_index: usize,
+    pub rule_name: Option<String>,
+    pub outcome: String,
+    pub conditions: Vec<ConditionTraceJson>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ConditionTraceJson {
+    pub predicate: String,
+    pub result: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RolloutDebugJson {
+    pub hash_input: String,
+    pub bucket: u32,
+    pub variant_ranges: Vec<VariantRangeJson>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct VariantRangeJson {
+    pub variant_key: String,
+    pub from: u32,
+    pub to: u32,
+}
+
+/// Response body for the evaluate-preview endpoint.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EvaluatePreviewResponse {
+    pub flag_enabled: bool,
+    pub results: Vec<PreviewResultJson>,
+}
+
+pub async fn evaluate_preview(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<EvaluatePreviewBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let contexts_json = serde_json::to_string(&body.contexts)
+        .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
+
+    let req = tonic::Request::new(EvaluatePreviewRequest {
+        project_id,
+        flag_key,
+        contexts_json,
+    });
+    let mut client = state.flag_client.lock().await;
+    let resp = client
+        .evaluate_preview(req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+
+    let raw_results: Vec<serde_json::Value> =
+        serde_json::from_str(&resp.results_json)
+            .map_err(|e| GatewayError::Upstream(e.to_string()))?;
+
+    let results: Vec<PreviewResultJson> = raw_results
+        .into_iter()
+        .map(|v| {
+            let context_index = v["context_index"].as_u64().unwrap_or(0) as usize;
+            let variant_key = v["variant_key"].as_str().unwrap_or("").to_string();
+            let variant_value = v["variant_value"].clone();
+            let fired_rule_index = v["fired_rule_index"].as_u64().map(|n| n as usize);
+            let fired_rule_name = v["fired_rule_name"].as_str().map(str::to_string);
+            let rule_traces = v["rule_traces"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .map(|t| RuleTraceJson {
+                            rule_index: t["rule_index"].as_u64().unwrap_or(0) as usize,
+                            rule_name: t["rule_name"].as_str().map(str::to_string),
+                            outcome: t["outcome"].as_str().unwrap_or("no_match").to_string(),
+                            conditions: t["conditions"]
+                                .as_array()
+                                .map(|cs| {
+                                    cs.iter()
+                                        .map(|c| ConditionTraceJson {
+                                            predicate: c["predicate"]
+                                                .as_str()
+                                                .unwrap_or("")
+                                                .to_string(),
+                                            result: c["result"].as_bool().unwrap_or(false),
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let rollout_debug = v.get("rollout_debug").and_then(|rd| {
+                if rd.is_null() {
+                    None
+                } else {
+                    Some(RolloutDebugJson {
+                        hash_input: rd["hash_input"].as_str().unwrap_or("").to_string(),
+                        bucket: rd["bucket"].as_u64().unwrap_or(0) as u32,
+                        variant_ranges: rd["variant_ranges"]
+                            .as_array()
+                            .map(|arr| {
+                                arr.iter()
+                                    .map(|r| VariantRangeJson {
+                                        variant_key: r["variant_key"]
+                                            .as_str()
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        from: r["from"].as_u64().unwrap_or(0) as u32,
+                                        to: r["to"].as_u64().unwrap_or(0) as u32,
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    })
+                }
+            });
+            PreviewResultJson {
+                context_index,
+                variant_key,
+                variant_value,
+                fired_rule_index,
+                fired_rule_name,
+                rule_traces,
+                rollout_debug,
+            }
+        })
+        .collect();
+
+    Ok((
+        StatusCode::OK,
+        Json(EvaluatePreviewResponse {
+            flag_enabled: resp.flag_enabled,
+            results,
+        }),
+    ))
+}
+
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 /// Build a minimal router for unit testing.
@@ -999,6 +1160,10 @@ pub fn test_router(_client: Arc<GatewayState>, state: Arc<GatewayState>) -> axum
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/hashing",
             put(update_flag_hashing),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/evaluate-preview",
+            post(evaluate_preview),
         )
         .with_state(state)
 }

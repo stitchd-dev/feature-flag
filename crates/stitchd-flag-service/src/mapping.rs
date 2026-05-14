@@ -353,6 +353,7 @@ mod tests {
             rule_index: 0,
             rule: Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::And(vec![]),
                 output: RuleOutput::Variant(vid),
             },
@@ -375,6 +376,7 @@ mod tests {
             rule_index: 0,
             rule: Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::And(vec![]),
                 output: RuleOutput::Variant(vid),
             },
@@ -398,6 +400,7 @@ mod tests {
             rule_index: 0,
             rule: Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::And(vec![]),
                 output: RuleOutput::Percentage {
                     targets: vec![PercentageTarget {
@@ -431,6 +434,7 @@ mod tests {
             rule_index: 0,
             rule: Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::And(vec![]),
                 output: RuleOutput::Percentage {
                     targets: vec![PercentageTarget {
