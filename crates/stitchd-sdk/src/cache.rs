@@ -280,6 +280,7 @@ mod tests {
         let sid = SegmentId::new();
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::InSegment(sid)),
             output: RuleOutput::Variant(VariantId::new()),
         };
@@ -292,6 +293,7 @@ mod tests {
         let sid = SegmentId::new();
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![ConditionExpr::Leaf(Condition::InSegment(sid))]),
             output: RuleOutput::Variant(VariantId::new()),
         };
@@ -314,6 +316,7 @@ mod tests {
                 output: Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey(
                     "on".to_string(),
                 )),
+                name: String::new(),
             }],
             ..Default::default()
         };
@@ -670,6 +673,7 @@ mod tests {
                 output: Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey(
                     "nonexistent".to_string(),
                 )),
+                name: String::new(),
             }],
             ..Default::default()
         };
@@ -691,6 +695,7 @@ mod tests {
                 output: Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey(
                     "on".to_string(),
                 )),
+                name: String::new(),
             }],
             ..Default::default()
         };
@@ -708,6 +713,7 @@ mod tests {
             rules: vec![stitchd_proto::flags::v1::FlagRule {
                 rule_payload: serde_json::to_vec(&always_true_condition()).unwrap(),
                 output: None, // None output should be skipped
+                name: String::new(),
             }],
             ..Default::default()
         };
@@ -753,6 +759,7 @@ mod tests {
                         },
                     ],
                 })),
+                name: String::new(),
             }],
             ..Default::default()
         };
@@ -795,6 +802,7 @@ mod tests {
                         weight_milli: 1000,
                     }],
                 })),
+                name: String::new(),
             }],
             ..Default::default()
         };
@@ -823,6 +831,7 @@ mod tests {
                     output: Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey(
                         "on".to_string(),
                     )),
+                    name: String::new(),
                 }],
                 ..Default::default()
             }],
@@ -843,6 +852,7 @@ mod tests {
         // A non-InSegment/NotInSegment leaf should be ignored
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::Eq {
                 context_type: "user".into(),
                 param: "plan".into(),
@@ -859,6 +869,7 @@ mod tests {
         let sid = SegmentId::new();
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Leaf(Condition::NotInSegment(sid)),
             output: RuleOutput::Variant(VariantId::new()),
         };
@@ -871,6 +882,7 @@ mod tests {
         let sid = SegmentId::new();
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Or(vec![ConditionExpr::Leaf(Condition::InSegment(sid))]),
             output: RuleOutput::Variant(VariantId::new()),
         };
@@ -883,6 +895,7 @@ mod tests {
         let sid = SegmentId::new();
         let rule = Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::Not(Box::new(ConditionExpr::Leaf(Condition::InSegment(sid)))),
             output: RuleOutput::Variant(VariantId::new()),
         };
