@@ -28,8 +28,8 @@ interface RuleTrace {
 
 interface VariantRange {
   variant_key: string
-  start: number
-  end: number
+  from: number
+  to: number
 }
 
 interface RolloutDebug {
@@ -146,7 +146,7 @@ function RolloutDebugPanel({ debug }: { debug: RolloutDebug }) {
       <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
         {debug.variant_ranges.map((r, i) => (
           <div key={i} style={{ display: 'flex', gap: 8 }}>
-            <span style={{ opacity: 0.6 }}>{r.start}–{r.end}</span>
+            <span style={{ opacity: 0.6 }}>{r.from}–{r.to}</span>
             <span>{r.variant_key}</span>
           </div>
         ))}
