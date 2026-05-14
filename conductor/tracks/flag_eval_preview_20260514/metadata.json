@@ -1,0 +1,13 @@
+{
+  "track_id": "flag_eval_preview_20260514",
+  "type": "feature",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-14T00:00:00Z",
+  "updated_at": "2026-05-14T00:00:00Z",
+  "description": "Flag Evaluation Preview — admin UI tab to test flag evaluation against sample contexts with full rule-trace breakdown",
+  "git_branch": "track/flag_eval_preview_20260514",
+  "worktree_path": ".worktrees/flag_eval_preview_20260514"
+}
