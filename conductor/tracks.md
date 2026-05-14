@@ -37,5 +37,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Flag Evaluation Preview
+## [x] Track: Flag Evaluation Preview
 *Link: [./conductor/tracks/flag_eval_preview_20260514/](./conductor/tracks/flag_eval_preview_20260514/)*
