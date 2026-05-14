@@ -15,7 +15,7 @@
 - [x] Task: Implement `POST /v1/flags/:flagKey/evaluate-preview` handler in gateway
   - Call flag service, map rule traces to response shape; no event emission
 - [x] Task: Verify all Phase 1 tests pass + coverage ≥90% for touched crates
-- [ ] Task: Conductor — User Manual Verification 'Backend — Evaluate Preview Endpoint' (Protocol in workflow.md)
+- [x] Task: Conductor — User Manual Verification 'Backend — Evaluate Preview Endpoint' (Protocol in workflow.md)
 
 ## Phase 2: Frontend — Preview Tab
 
@@ -40,4 +40,4 @@
   - Stale-results clearing when input changes; empty state and error state
 - [x] Task: Wire results panel to `POST /v1/flags/:flagKey/evaluate-preview`
   - Loading state; disable Evaluate button during in-flight request
-- [ ] Task: Conductor — User Manual Verification 'Frontend — Preview Tab' (Protocol in workflow.md)
+- [x] Task: Conductor — User Manual Verification 'Frontend — Preview Tab' (Protocol in workflow.md)
