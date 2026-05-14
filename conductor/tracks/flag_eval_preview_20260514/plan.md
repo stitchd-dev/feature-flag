@@ -19,25 +19,25 @@
 
 ## Phase 2: Frontend — Preview Tab
 
-- [ ] Task: Write component tests for context input (JSON mode + form builder mode + sync)
+- [x] Task: Write component tests for context input (JSON mode + form builder mode + sync)
   - Test: valid JSON parses into form state
   - Test: form state round-trips back to identical JSON
   - Test: invalid JSON shows inline parse error, blocks submit
   - Test: adding/removing context cards updates JSON editor
-- [ ] Task: Scaffold `PreviewTab` component and add "Preview" tab to `FlagDetail`
+- [x] Task: Scaffold `PreviewTab` component and add "Preview" tab to `FlagDetail`
   - Tab only renders when `flagId` is set (not in create flow)
-- [ ] Task: Implement JSON editor mode
+- [x] Task: Implement JSON editor mode
   - Syntax-highlighted textarea, pre-populated with `[{ "_type": "", "key": "", "parameters": {} }]`
   - Validate JSON on change; surface parse errors inline
-- [ ] Task: Implement form builder mode
+- [x] Task: Implement form builder mode
   - Context cards: `_type`, `key`, key/value parameter rows; add/remove context cards
-- [ ] Task: Bidirectional JSON↔form sync
+- [x] Task: Bidirectional JSON↔form sync
   - Mode toggle copies current state to the other representation without data loss
-- [ ] Task: Implement results panel
+- [x] Task: Implement results panel
   - Per-context result card: resolved variant badge, firing rule label, disabled-flag banner
   - Collapsible rule trace list (pass ✓ / fail ✗ per rule + per-condition predicates)
   - Rollout debug section (hash input, bucket, variant ranges) when present
   - Stale-results clearing when input changes; empty state and error state
-- [ ] Task: Wire results panel to `POST /v1/flags/:flagKey/evaluate-preview`
+- [x] Task: Wire results panel to `POST /v1/flags/:flagKey/evaluate-preview`
   - Loading state; disable Evaluate button during in-flight request
 - [ ] Task: Conductor — User Manual Verification 'Frontend — Preview Tab' (Protocol in workflow.md)
