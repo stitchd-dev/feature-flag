@@ -980,8 +980,12 @@ pub struct EvaluatePreviewBody {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PreviewResultJson {
     pub context_index: usize,
+    /// Primary key from the first sub-context in the evaluation context.
+    pub context_key: String,
     pub variant_key: String,
     pub variant_value: serde_json::Value,
+    /// True when the flag itself is disabled (default rule fired for all contexts).
+    pub disabled: bool,
     pub fired_rule_index: Option<usize>,
     pub fired_rule_name: Option<String>,
     pub rule_traces: Vec<RuleTraceJson>,
@@ -1029,7 +1033,45 @@ pub async fn evaluate_preview(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<EvaluatePreviewBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let contexts_json = serde_json::to_string(&body.contexts)
+    // Translate simplified UI format → EvaluationContext format.
+    // UI sends: [{"_type":"user","key":"alice","parameters":{...}}]
+    // Core expects: [{"contexts":[{"context_type":"user","key":"alice","parameters":{...},"private_parameters":[]}]}]
+    let evaluation_contexts: Vec<serde_json::Value> = body
+        .contexts
+        .into_iter()
+        .map(|item| {
+            if item.get("contexts").is_some() {
+                // Already in EvaluationContext shape — pass through.
+                item
+            } else {
+                // Simplified shape: lift into a single-sub-context EvaluationContext.
+                let context_type = item
+                    .get("_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let key = item
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let parameters = item
+                    .get("parameters")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+                serde_json::json!({
+                    "contexts": [{
+                        "context_type": context_type,
+                        "key": key,
+                        "parameters": parameters,
+                        "private_parameters": []
+                    }]
+                })
+            }
+        })
+        .collect();
+
+    let contexts_json = serde_json::to_string(&evaluation_contexts)
         .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
 
     let req = tonic::Request::new(EvaluatePreviewRequest {
@@ -1044,6 +1086,8 @@ pub async fn evaluate_preview(
         .map_err(GatewayError::from)?
         .into_inner();
 
+    let flag_enabled = resp.flag_enabled;
+
     let raw_results: Vec<serde_json::Value> =
         serde_json::from_str(&resp.results_json)
             .map_err(|e| GatewayError::Upstream(e.to_string()))?;
@@ -1052,6 +1096,14 @@ pub async fn evaluate_preview(
         .into_iter()
         .map(|v| {
             let context_index = v["context_index"].as_u64().unwrap_or(0) as usize;
+            // Extract context_key from the first sub-context of the input evaluation context.
+            let context_key = evaluation_contexts
+                .get(context_index)
+                .and_then(|ec| ec["contexts"].as_array())
+                .and_then(|ctxs| ctxs.first())
+                .and_then(|c| c["key"].as_str())
+                .unwrap_or("")
+                .to_string();
             let variant_key = v["variant_key"].as_str().unwrap_or("").to_string();
             let variant_value = v["variant_value"].clone();
             let fired_rule_index = v["fired_rule_index"].as_u64().map(|n| n as usize);
@@ -1109,8 +1161,10 @@ pub async fn evaluate_preview(
             });
             PreviewResultJson {
                 context_index,
+                context_key,
                 variant_key,
                 variant_value,
+                disabled: !flag_enabled,
                 fired_rule_index,
                 fired_rule_name,
                 rule_traces,

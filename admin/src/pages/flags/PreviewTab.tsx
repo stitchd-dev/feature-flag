@@ -17,12 +17,12 @@ export interface ContextCard {
 
 interface ConditionTrace {
   predicate: string
-  passed: boolean
+  result: boolean
 }
 
 interface RuleTrace {
   rule_name: string | null
-  matched: boolean
+  outcome: 'match' | 'no_match' | 'skipped'
   conditions: ConditionTrace[]
 }
 
@@ -35,15 +35,17 @@ interface VariantRange {
 interface RolloutDebug {
   hash_input: string
   bucket: number
-  ranges: VariantRange[]
+  variant_ranges: VariantRange[]
 }
 
 interface ContextResult {
+  context_index: number
   context_key: string
-  variant_key: string | null
+  variant_key: string
   variant_value: unknown
   disabled: boolean
-  firing_rule: string | null
+  fired_rule_index: number | null
+  fired_rule_name: string | null
   rule_traces: RuleTrace[]
   rollout_debug: RolloutDebug | null
 }
@@ -104,10 +106,10 @@ function RuleTraceRow({ trace }: { trace: RuleTrace }) {
         style={{
           background: 'none', border: 'none', cursor: 'pointer', padding: 0,
           display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
-          color: trace.matched ? 'var(--success, #22c55e)' : 'var(--fg-muted)',
+          color: trace.outcome === 'match' ? 'var(--success, #22c55e)' : 'var(--fg-muted)',
         }}
       >
-        <span>{trace.matched ? '✓' : '✗'}</span>
+        <span>{trace.outcome === 'match' ? '✓' : '✗'}</span>
         <span>{trace.rule_name ?? 'Unnamed rule'}</span>
         <span style={{ opacity: 0.5 }}>{open ? '▾' : '▸'}</span>
       </button>
@@ -115,8 +117,8 @@ function RuleTraceRow({ trace }: { trace: RuleTrace }) {
         <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
           {trace.conditions.map((c, i) => (
             <div key={i} style={{ fontSize: 11, display: 'flex', gap: 6, color: 'var(--fg-muted)' }}>
-              <span style={{ color: c.passed ? 'var(--success, #22c55e)' : 'var(--danger)' }}>
-                {c.passed ? '✓' : '✗'}
+              <span style={{ color: c.result ? 'var(--success, #22c55e)' : 'var(--danger)' }}>
+                {c.result ? '✓' : '✗'}
               </span>
               <span>{c.predicate}</span>
             </div>
@@ -142,7 +144,7 @@ function RolloutDebugPanel({ debug }: { debug: RolloutDebug }) {
         <span><span style={{ opacity: 0.6 }}>bucket:</span> <code>{debug.bucket}</code></span>
       </div>
       <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        {debug.ranges.map((r, i) => (
+        {debug.variant_ranges.map((r, i) => (
           <div key={i} style={{ display: 'flex', gap: 8 }}>
             <span style={{ opacity: 0.6 }}>{r.start}–{r.end}</span>
             <span>{r.variant_key}</span>
@@ -180,8 +182,8 @@ function ContextResultCard({ result }: { result: ContextResult }) {
             background: 'var(--accent)', color: '#fff',
           }}>{result.variant_key ?? 'default'}</span>
         )}
-        {result.firing_rule && (
-          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>via {result.firing_rule}</span>
+        {result.fired_rule_name && (
+          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>via {result.fired_rule_name}</span>
         )}
       </div>
       <div style={{ padding: '10px 14px' }}>

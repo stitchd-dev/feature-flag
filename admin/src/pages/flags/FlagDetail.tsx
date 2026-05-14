@@ -772,7 +772,7 @@ export function FlagDetail() {
           />
         )}
         {tab === 'evals' && <EvalPanel />}
-        {tab === 'preview' && <PreviewTab flagId={flag.flag_id} />}
+        {tab === 'preview' && <PreviewTab flagId={flag.key} />}
         {tab === 'code' && <SdkSnippet flag={flag} />}
         {tab === 'history' && <FlagHistory />}
       </div>
