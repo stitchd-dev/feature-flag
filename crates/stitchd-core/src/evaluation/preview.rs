@@ -367,7 +367,8 @@ mod tests {
     use super::*;
     use crate::context::{Context, ParameterValue};
     use crate::flag::{Flag, FlagRecord, FlagRule, FlagValueType};
-    use crate::id::{FlagId, FlagKey, ProjectId, RuleId, VariantId};
+    use crate::id::{FlagId, FlagKey, ProjectId, RuleId, SegmentId, VariantId};
+    use crate::rule_engine::types::TargetField;
     use crate::rule_engine::condition::Condition;
     use crate::rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput};
     use crate::variants::{Variant, VariantValue};
@@ -635,5 +636,147 @@ mod tests {
             }),
             "user.email contains \"acme\""
         );
+    }
+
+    #[test]
+    fn predicate_formats_all_variants() {
+        let seg_id = SegmentId::from_uuid(Uuid::nil());
+        let flag_id = FlagId::new();
+        let variant_id = VariantId::new();
+
+        let cases: &[(Condition, &str)] = &[
+            (Condition::Ne { context_type: "u".into(), param: "x".into(), value: ParameterValue::Bool(false) }, "u.x != false"),
+            (Condition::Lt { context_type: "u".into(), param: "age".into(), value: ParameterValue::Int(18) }, "u.age < 18"),
+            (Condition::Lte { context_type: "u".into(), param: "age".into(), value: ParameterValue::Int(18) }, "u.age <= 18"),
+            (Condition::Gt { context_type: "u".into(), param: "score".into(), value: ParameterValue::Int(100) }, "u.score > 100"),
+            (Condition::Gte { context_type: "u".into(), param: "score".into(), value: ParameterValue::Int(100) }, "u.score >= 100"),
+            (Condition::StartsWith { context_type: "u".into(), param: "name".into(), prefix: "Al".into() }, "u.name starts_with \"Al\""),
+            (Condition::EndsWith { context_type: "u".into(), param: "name".into(), suffix: "son".into() }, "u.name ends_with \"son\""),
+            (Condition::SemverGte { context_type: "app".into(), param: "version".into(), version: "2.0.0".into() }, "app.version semver >= 2.0.0"),
+            (Condition::SemverTilde { context_type: "app".into(), param: "version".into(), version: "1.2.0".into() }, "app.version semver ~1.2.0"),
+            (Condition::SemverCaret { context_type: "app".into(), param: "version".into(), version: "1.0.0".into() }, "app.version semver ^1.0.0"),
+            (Condition::NotInSegment(seg_id), &format!("not in segment {seg_id}")),
+        ];
+        for (cond, expected) in cases {
+            assert_eq!(&condition_to_predicate(cond), expected, "failed for {expected}");
+        }
+        // InSegment and FlagEvaluatedAs
+        assert!(condition_to_predicate(&Condition::InSegment(seg_id)).starts_with("in segment "));
+        assert!(condition_to_predicate(&Condition::FlagEvaluatedAs { flag_id, variant_id }).starts_with("flag "));
+    }
+
+    // ── segment resolution ────────────────────────────────────────────────────
+
+    #[test]
+    fn list_segment_resolution_gates_in_segment_rule() {
+        use crate::segment::{ContextList, ListBasedSegment, SegmentDefinition};
+        use std::collections::HashMap;
+
+        let (mut flag, on_id, _) = make_bool_flag(true);
+        let seg_id = SegmentId::new();
+
+        flag.rules.push(FlagRule {
+            flag_id: flag.record.id,
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::Leaf(Condition::InSegment(seg_id)),
+                output: RuleOutput::Variant(on_id),
+            },
+        });
+
+        let mut lists = HashMap::new();
+        lists.insert(
+            "user".to_string(),
+            ContextList {
+                include: ["u1".to_string()].into_iter().collect(),
+                exclude: Default::default(),
+            },
+        );
+        let segment_def = SegmentDefinition::ListBased(ListBasedSegment { id: seg_id, lists });
+
+        // u1 is in segment → rule fires → "on"
+        let ec_in = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let results = evaluate_preview(&flag, &[ec_in], &[segment_def.clone()], env_id());
+        assert_eq!(results[0].variant_key, "on");
+
+        // u2 is NOT in segment → default "off"
+        let ec_out = EvaluationContext::new().with_context(Context::new("user", "u2"));
+        let results = evaluate_preview(&flag, &[ec_out], &[segment_def], env_id());
+        assert_eq!(results[0].variant_key, "off");
+    }
+
+    // ── collect_leaf_traces with AND / NOT ────────────────────────────────────
+
+    #[test]
+    fn trace_conditions_handles_and_and_not_expressions() {
+        let (mut flag, on_id, _) = make_bool_flag(true);
+        // Rule: AND(beta == true, NOT(country == "DE"))
+        flag.rules.push(FlagRule {
+            flag_id: flag.record.id,
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![
+                    ConditionExpr::Leaf(Condition::Eq {
+                        context_type: "user".to_string(),
+                        param: "beta".to_string(),
+                        value: ParameterValue::Bool(true),
+                    }),
+                    ConditionExpr::Not(Box::new(ConditionExpr::Leaf(Condition::Eq {
+                        context_type: "user".to_string(),
+                        param: "country".to_string(),
+                        value: ParameterValue::Str("DE".to_string()),
+                    }))),
+                ]),
+                output: RuleOutput::Variant(on_id),
+            },
+        });
+
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1")
+                .with_parameter("beta", ParameterValue::Bool(true))
+                .with_parameter("country", ParameterValue::Str("US".to_string())),
+        );
+        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let r = &results[0];
+        assert_eq!(r.variant_key, "on");
+        // Both leaf conditions should appear in traces for the fired rule.
+        assert_eq!(r.rule_traces[0].conditions.len(), 2);
+    }
+
+    // ── percentage rollout with Parameter hashing field ───────────────────────
+
+    #[test]
+    fn percentage_rollout_with_parameter_field() {
+        let (mut flag, on_id, off_id) = make_bool_flag(true);
+        flag.rules.push(FlagRule {
+            flag_id: flag.record.id,
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![PercentageTarget {
+                        context_type: "user".to_string(),
+                        field: TargetField::Parameter("account_id".to_string()),
+                    }],
+                    weights: vec![(on_id, 500), (off_id, 500)],
+                },
+            },
+        });
+
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1")
+                .with_parameter("account_id", ParameterValue::Str("acct-123".to_string())),
+        );
+        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let r = &results[0];
+        assert!(r.rollout_debug.is_some());
+        let debug = r.rollout_debug.as_ref().unwrap();
+        assert!(debug.hash_input.contains("acct-123"));
     }
 }

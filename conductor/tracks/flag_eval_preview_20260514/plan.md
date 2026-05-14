@@ -2,19 +2,19 @@
 
 ## Phase 1: Backend — Evaluate Preview Endpoint
 
-- [ ] Task: Define `EvaluatePreviewRequest` / `EvaluatePreviewResponse` types in gateway
+- [x] Task: Define `EvaluatePreviewRequest` / `EvaluatePreviewResponse` types in gateway
   - `contexts: Vec<EvaluationContext>`; response mirrors spec §6 shape
-- [ ] Task: Write failing tests for the preview handler (TDD red phase)
+- [x] Task: Write failing tests for the preview handler (TDD red phase)
   - Test: flag disabled → all results use default rule with disabled banner
   - Test: context matches rule N → correct variant + trace
   - Test: percentage rollout rule → `rollout_debug` populated
   - Test: RBAC — `flag:read` sufficient, no write required
-- [ ] Task: Implement rule-trace evaluation logic in `stitchd-flag-service`
+- [x] Task: Implement rule-trace evaluation logic in `stitchd-flag-service`
   - Run rule engine per context, collecting per-rule pass/fail + per-condition predicates
   - Emit `rollout_debug` when fired rule uses percentage allocation
-- [ ] Task: Implement `POST /v1/flags/:flagKey/evaluate-preview` handler in gateway
+- [x] Task: Implement `POST /v1/flags/:flagKey/evaluate-preview` handler in gateway
   - Call flag service, map rule traces to response shape; no event emission
-- [ ] Task: Verify all Phase 1 tests pass + coverage ≥90% for touched crates
+- [x] Task: Verify all Phase 1 tests pass + coverage ≥90% for touched crates
 - [ ] Task: Conductor — User Manual Verification 'Backend — Evaluate Preview Endpoint' (Protocol in workflow.md)
 
 ## Phase 2: Frontend — Preview Tab
