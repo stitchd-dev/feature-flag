@@ -9,5 +9,22 @@
   "updated_at": "2026-05-14T00:00:00Z",
   "description": "Flag Evaluation Preview — admin UI tab to test flag evaluation against sample contexts with full rule-trace breakdown",
   "git_branch": "track/flag_eval_preview_20260514",
-  "worktree_path": ".worktrees/flag_eval_preview_20260514"
+  "worktree_path": ".worktrees/flag_eval_preview_20260514",
+  "beads_epic": "feature-flag-09e",
+  "beads_tasks": {
+    "phase1": "feature-flag-09e.1",
+    "phase1_task1": "feature-flag-09e.1.1",
+    "phase1_task2": "feature-flag-09e.1.2",
+    "phase1_task3": "feature-flag-09e.1.3",
+    "phase1_task4": "feature-flag-09e.1.4",
+    "phase1_task5": "feature-flag-09e.1.5",
+    "phase2": "feature-flag-09e.2",
+    "phase2_task1": "feature-flag-09e.2.1",
+    "phase2_task2": "feature-flag-09e.2.2",
+    "phase2_task3": "feature-flag-09e.2.3",
+    "phase2_task4": "feature-flag-09e.2.4",
+    "phase2_task5": "feature-flag-09e.2.5",
+    "phase2_task6": "feature-flag-09e.2.6",
+    "phase2_task7": "feature-flag-09e.2.7"
+  }
 }
