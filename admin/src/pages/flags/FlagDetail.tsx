@@ -10,6 +10,7 @@ import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
 import type { AdminFlagResponse, VariantJson } from '../../lib/types'
+import { PreviewTab } from './PreviewTab'
 import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
 import { localId, allocationSum, isCatchAll, defaultCatchAll, normalizeOutput } from '../../lib/ruleTypes'
 import { RuleList } from '../../components/rules/RuleList'
@@ -589,7 +590,7 @@ function MetadataEditor({
 
 // ─── FlagDetail ───────────────────────────────────────────────────────────────
 
-type Tab = 'targeting' | 'variants' | 'evals' | 'code' | 'history'
+type Tab = 'targeting' | 'variants' | 'evals' | 'preview' | 'code' | 'history'
 
 export function FlagDetail() {
   const { key } = useParams<{ key: string }>()
@@ -742,6 +743,9 @@ export function FlagDetail() {
           <button className={`tab ${tab === 'evals' ? 'active' : ''}`} onClick={() => setTab('evals')}>
             <I.zap size={13} /> Evaluations
           </button>
+          <button className={`tab ${tab === 'preview' ? 'active' : ''}`} onClick={() => setTab('preview')}>
+            <I.toggle size={13} /> Preview
+          </button>
           <button className={`tab ${tab === 'code' ? 'active' : ''}`} onClick={() => setTab('code')}>
             <I.command size={13} /> SDK snippet
           </button>
@@ -768,6 +772,7 @@ export function FlagDetail() {
           />
         )}
         {tab === 'evals' && <EvalPanel />}
+        {tab === 'preview' && <PreviewTab flagId={flag.key} />}
         {tab === 'code' && <SdkSnippet flag={flag} />}
         {tab === 'history' && <FlagHistory />}
       </div>

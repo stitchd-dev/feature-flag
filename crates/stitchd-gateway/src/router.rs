@@ -164,6 +164,10 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             "/v1/projects/{project_id}/flags/{flag_id}/hashing",
             put(flags::update_flag_hashing),
         )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/evaluate-preview",
+            post(flags::evaluate_preview),
+        )
         // Segments (admin CRUD — env-id as query param for list, path param for env-scoped create)
         .route(
             "/v1/segments",

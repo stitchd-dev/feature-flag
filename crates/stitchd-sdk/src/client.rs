@@ -363,6 +363,7 @@ mod tests {
     fn always_true_rule(vid: VariantId) -> Rule {
         Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![]),
             output: RuleOutput::Variant(vid),
         }
@@ -401,6 +402,7 @@ mod tests {
             enabled: true,
             rules: vec![Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::Leaf(Condition::Eq {
                     context_type: "user".into(),
                     param: "plan".into(),
@@ -428,6 +430,7 @@ mod tests {
             enabled: true,
             rules: vec![Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::Leaf(Condition::InSegment(seg_id)),
                 output: RuleOutput::Variant(vid),
             }],
@@ -471,6 +474,7 @@ mod tests {
                 rules: vec![FlagRule {
                     rule_payload: serde_json::to_vec(&ConditionExpr::And(vec![])).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
+                    name: String::new(),
                 }],
                 ..Default::default()
             }],
@@ -541,6 +545,7 @@ mod tests {
                 rules: vec![FlagRule {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
+                    name: String::new(),
                 }],
                 ..Default::default()
             }],
@@ -577,6 +582,7 @@ mod tests {
         // Rule segment: always matches (always-true And([])-based rule)
         let seg_rule = stitchd_core::rule_engine::types::Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![]), // always true
             output: stitchd_core::rule_engine::types::RuleOutput::Variant(VariantId::new()),
         };
@@ -598,6 +604,7 @@ mod tests {
                 rules: vec![FlagRule {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
+                    name: String::new(),
                 }],
                 ..Default::default()
             }],
@@ -683,6 +690,7 @@ mod tests {
                 rules: vec![FlagRule {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
+                    name: String::new(),
                 }],
                 ..Default::default()
             }],
@@ -743,6 +751,7 @@ mod tests {
                 rules: vec![FlagRule {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
+                    name: String::new(),
                 }],
                 ..Default::default()
             }],
@@ -790,6 +799,7 @@ mod tests {
                 rules: vec![FlagRule {
                     rule_payload: serde_json::to_vec(&flag_condition).unwrap(),
                     output: Some(Output::VariantKey("on".to_string())),
+                    name: String::new(),
                 }],
                 ..Default::default()
             }],
@@ -961,6 +971,7 @@ mod tests {
             enabled: true,
             rules: vec![Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::And(vec![]),
                 output: RuleOutput::Percentage {
                     targets: vec![stitchd_core::rule_engine::types::PercentageTarget {
@@ -1029,6 +1040,7 @@ mod tests {
             enabled: true,
             rules: vec![Rule {
                 id: RuleId::new(),
+                name: None,
                 condition: ConditionExpr::And(vec![]),
                 output: RuleOutput::Percentage {
                     targets: vec![stitchd_core::rule_engine::types::PercentageTarget {

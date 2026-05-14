@@ -9,7 +9,9 @@ use crate::rule_engine::types::{ConditionExpr, EvaluationInput};
 /// - `Or([])` → `false` (vacuously false)
 /// - `And` short-circuits on the first `false` child
 /// - `Or` short-circuits on the first `true` child
-/// - Errors propagate immediately without further evaluation
+/// - `MissingContext` / `MissingParameter` are treated as `false` in `And`/`Or` branches,
+///   allowing remaining branches to be evaluated rather than aborting early
+/// - Other errors propagate immediately
 pub fn evaluate_expr(
     expr: &ConditionExpr,
     input: &EvaluationInput<'_>,
@@ -19,8 +21,12 @@ pub fn evaluate_expr(
 
         ConditionExpr::And(children) => {
             for child in children {
-                if !evaluate_expr(child, input)? {
-                    return Ok(false);
+                match evaluate_expr(child, input) {
+                    Ok(true) => continue,
+                    Ok(false) => return Ok(false),
+                    Err(RuleEngineError::MissingContext { .. })
+                    | Err(RuleEngineError::MissingParameter { .. }) => return Ok(false),
+                    Err(e) => return Err(e),
                 }
             }
             Ok(true)
@@ -28,8 +34,12 @@ pub fn evaluate_expr(
 
         ConditionExpr::Or(children) => {
             for child in children {
-                if evaluate_expr(child, input)? {
-                    return Ok(true);
+                match evaluate_expr(child, input) {
+                    Ok(true) => return Ok(true),
+                    Ok(false) => continue,
+                    Err(RuleEngineError::MissingContext { .. })
+                    | Err(RuleEngineError::MissingParameter { .. }) => continue,
+                    Err(e) => return Err(e),
                 }
             }
             Ok(false)
@@ -257,33 +267,54 @@ mod tests {
         assert_eq!(evaluate_expr(&expr, &EvaluationInput::new(&ctx)), Ok(true));
     }
 
-    // ── Error propagation ─────────────────────────────────────────────────────
+    // ── Missing context/param → false (not error) in And/Or ──────────────────
 
     #[test]
-    fn error_in_and_propagates() {
+    fn missing_context_in_and_is_false() {
         let ctx: [Context; 0] = [];
         let expr = ConditionExpr::And(vec![ConditionExpr::Leaf(Condition::Eq {
-            context_type: "user".into(), // missing
+            context_type: "user".into(), // missing context
             param: "plan".into(),
             value: ParameterValue::Str("pro".into()),
         })]);
-        assert!(matches!(
-            evaluate_expr(&expr, &EvaluationInput::new(&ctx)),
-            Err(RuleEngineError::MissingContext { .. })
-        ));
+        assert_eq!(evaluate_expr(&expr, &EvaluationInput::new(&ctx)), Ok(false));
     }
 
     #[test]
-    fn error_in_or_propagates() {
-        let ctx: [Context; 0] = [];
-        let expr = ConditionExpr::Or(vec![ConditionExpr::Leaf(Condition::Eq {
-            context_type: "user".into(), // missing
-            param: "plan".into(),
-            value: ParameterValue::Str("pro".into()),
-        })]);
-        assert!(matches!(
-            evaluate_expr(&expr, &EvaluationInput::new(&ctx)),
-            Err(RuleEngineError::MissingContext { .. })
-        ));
+    fn missing_context_in_or_is_false_branch_and_continues() {
+        // Or([missing_context_condition, matching_condition]) → true via second branch
+        let ctx = [Context::new("user", "u1").with_parameter("role", ParameterValue::Str("admin".into()))];
+        let expr = ConditionExpr::Or(vec![
+            ConditionExpr::Leaf(Condition::Eq {
+                context_type: "org".into(), // missing context
+                param: "tier".into(),
+                value: ParameterValue::Str("enterprise".into()),
+            }),
+            ConditionExpr::Leaf(Condition::Eq {
+                context_type: "user".into(),
+                param: "role".into(),
+                value: ParameterValue::Str("admin".into()),
+            }),
+        ]);
+        assert_eq!(evaluate_expr(&expr, &EvaluationInput::new(&ctx)), Ok(true));
+    }
+
+    #[test]
+    fn missing_param_in_or_continues_to_next_branch() {
+        // Or([user.plan==pro (plan absent), user.role==power_user (role present)]) → true
+        let ctx = [Context::new("user", "alice").with_parameter("role", ParameterValue::Str("power_user".into()))];
+        let expr = ConditionExpr::Or(vec![
+            ConditionExpr::Leaf(Condition::Eq {
+                context_type: "user".into(),
+                param: "plan".into(), // missing parameter
+                value: ParameterValue::Str("pro".into()),
+            }),
+            ConditionExpr::Leaf(Condition::Eq {
+                context_type: "user".into(),
+                param: "role".into(),
+                value: ParameterValue::Str("power_user".into()),
+            }),
+        ]);
+        assert_eq!(evaluate_expr(&expr, &EvaluationInput::new(&ctx)), Ok(true));
     }
 }

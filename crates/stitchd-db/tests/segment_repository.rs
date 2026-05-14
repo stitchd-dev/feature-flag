@@ -65,6 +65,9 @@ async fn test_rule_based_segment_repository(pool: sqlx::PgPool) {
         id: segment_id,
         environment_id: env_id,
         key: "rule-segment".to_string(),
+        name: String::new(),
+        description: String::new(),
+        tags: vec![],
         segment_type: SegmentType::Rule,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
@@ -75,6 +78,7 @@ async fn test_rule_based_segment_repository(pool: sqlx::PgPool) {
 
     let rules = vec![Rule {
         id: RuleId::new(),
+        name: None,
         condition: ConditionExpr::And(vec![]),
         output: RuleOutput::Variant(VariantId::new()),
     }];
@@ -90,6 +94,7 @@ async fn test_rule_based_segment_repository(pool: sqlx::PgPool) {
     // 3. Second upsert replaces
     let new_rules = vec![Rule {
         id: RuleId::new(),
+        name: None,
         condition: ConditionExpr::Or(vec![]),
         output: RuleOutput::Variant(VariantId::new()),
     }];
@@ -108,6 +113,9 @@ async fn test_list_based_segment_repository(pool: sqlx::PgPool) {
         id: segment_id,
         environment_id: env_id,
         key: "list-segment".to_string(),
+        name: String::new(),
+        description: String::new(),
+        tags: vec![],
         segment_type: SegmentType::List,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
@@ -146,6 +154,9 @@ async fn test_wrong_type_returns_not_found(pool: sqlx::PgPool) {
         id: segment_id,
         environment_id: env_id,
         key: "rule-segment".to_string(),
+        name: String::new(),
+        description: String::new(),
+        tags: vec![],
         segment_type: SegmentType::Rule,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),

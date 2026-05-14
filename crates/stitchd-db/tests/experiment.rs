@@ -87,6 +87,7 @@ async fn setup_experiment_deps(pool: sqlx::PgPool) -> (EnvironmentId, RuleId) {
         rule_index: 0,
         rule: Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![]),
             output: RuleOutput::Variant(VariantId::new()),
         },

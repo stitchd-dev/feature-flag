@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Row as _, types::Json};
 
 use stitchd_core::{
-    id::{EnvironmentId, SegmentId},
-    rule_engine::types::Rule,
+    id::{EnvironmentId, RuleId, SegmentId, VariantId},
+    rule_engine::types::{ConditionExpr, Rule, RuleOutput},
     segment::{ContextList, ListBasedSegment, RuleBasedSegment, Segment, SegmentType},
 };
 
@@ -316,7 +316,7 @@ impl SegmentRepository for PgSegmentRepository {
             return Err(RepositoryError::NotFound { id: id.to_string() });
         }
 
-        let rules = sqlx::query!(
+        let mut rules: Vec<Rule> = sqlx::query!(
             r#"
             SELECT rule_def as "rule_def: Json<Rule>"
             FROM segment_rules
@@ -331,6 +331,21 @@ impl SegmentRepository for PgSegmentRepository {
         .into_iter()
         .map(|r| r.rule_def.0)
         .collect();
+
+        // If no legacy segment_rules rows exist, fall back to the condition_expr column.
+        // The UI condition builder stores a single ConditionExpr there instead of rows.
+        if rules.is_empty() {
+            if let Ok(Some(expr_json)) = self.get_condition_expr(id).await {
+                if let Ok(expr) = serde_json::from_value::<ConditionExpr>(expr_json) {
+                    rules.push(Rule {
+                        id: RuleId::new(),
+                        name: None,
+                        condition: expr,
+                        output: RuleOutput::Variant(VariantId::new()),
+                    });
+                }
+            }
+        }
 
         Ok(RuleBasedSegment { id, rules })
     }

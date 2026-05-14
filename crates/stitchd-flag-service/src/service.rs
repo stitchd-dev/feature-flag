@@ -8,11 +8,12 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use stitchd_db::{FlagRepository, SdkKeyRepository, VariantRepository};
+use stitchd_db::{FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository};
 use stitchd_proto::flags::v1::{
-    FeatureFlag, GetFlagDefinitionsRequest, GetFlagRequest, ListFlagsRequest, ListFlagsResponse,
-    MutateFlagRequest, MutateFlagResponse, MutationKind, UpdateFlagHashingRequest,
-    UpdateFlagHashingResponse, flag_service_server::FlagService,
+    EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
+    GetFlagRequest, ListFlagsRequest, ListFlagsResponse, MutateFlagRequest, MutateFlagResponse,
+    MutationKind, UpdateFlagHashingRequest, UpdateFlagHashingResponse,
+    flag_service_server::FlagService,
 };
 
 use crate::{error::FlagServiceError, mapping};
@@ -23,6 +24,7 @@ pub struct FlagServiceImpl {
     flag_repo: Arc<dyn FlagRepository>,
     variant_repo: Arc<dyn VariantRepository>,
     sdk_key_repo: Arc<dyn SdkKeyRepository>,
+    segment_repo: Arc<dyn SegmentRepository>,
 }
 
 impl FlagServiceImpl {
@@ -32,12 +34,50 @@ impl FlagServiceImpl {
         flag_repo: Arc<dyn FlagRepository>,
         variant_repo: Arc<dyn VariantRepository>,
         sdk_key_repo: Arc<dyn SdkKeyRepository>,
+        segment_repo: Arc<dyn SegmentRepository>,
     ) -> Self {
         Self {
             flag_repo,
             variant_repo,
             sdk_key_repo,
+            segment_repo,
         }
+    }
+
+    /// Fetch `SegmentDefinition`s for a set of IDs.
+    ///
+    /// For each ID: looks up the segment record to determine its type, then
+    /// fetches the appropriate definition (rules or lists). Segments that are
+    /// not found are silently skipped so a missing segment doesn't break preview.
+    async fn fetch_segment_definitions(
+        &self,
+        ids: &std::collections::HashSet<stitchd_core::id::SegmentId>,
+    ) -> Result<Vec<stitchd_core::segment::SegmentDefinition>, Status> {
+        use stitchd_core::segment::{SegmentDefinition, SegmentType};
+
+        let mut definitions = Vec::with_capacity(ids.len());
+        for &id in ids {
+            let record = match self.segment_repo.find_by_id(id).await {
+                Ok(r) => r,
+                Err(_) => continue, // segment may have been deleted; skip it
+            };
+            let definition = match record.segment_type {
+                SegmentType::Rule => {
+                    match self.segment_repo.find_with_rules(id).await {
+                        Ok(s) => SegmentDefinition::RuleBased(s),
+                        Err(_) => continue,
+                    }
+                }
+                SegmentType::List => {
+                    match self.segment_repo.find_with_list(id).await {
+                        Ok(s) => SegmentDefinition::ListBased(s),
+                        Err(_) => continue,
+                    }
+                }
+            };
+            definitions.push(definition);
+        }
+        Ok(definitions)
     }
 
     /// Extract and validate the SDK key from gRPC metadata, returning the environment ID.
@@ -585,6 +625,73 @@ impl FlagService for FlagServiceImpl {
             configs: proto_configs,
         }))
     }
+
+    async fn evaluate_preview(
+        &self,
+        request: Request<EvaluatePreviewRequest>,
+    ) -> Result<Response<EvaluatePreviewResponse>, Status> {
+        let req = request.into_inner();
+
+        let project_id = parse_project_id(&req.project_id)?
+            .ok_or_else(|| Status::invalid_argument("project_id is required"))?;
+
+        let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let record = self
+            .flag_repo
+            .find_by_key(&flag_key, project_id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let variants = self
+            .variant_repo
+            .find_by_flag(record.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let rules = self
+            .flag_repo
+            .find_rules(record.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let flag = stitchd_core::flag::Flag {
+            record,
+            hashing_config: vec![],
+            rules,
+            variants,
+        };
+
+        // Step 2: Fetch SegmentDefinitions for all segments referenced by this flag's rules.
+        let segment_ids = flag.referenced_segment_ids();
+        let segment_definitions = self.fetch_segment_definitions(&segment_ids).await?;
+
+        let evaluation_contexts: Vec<stitchd_core::context::EvaluationContext> =
+            serde_json::from_str(&req.contexts_json)
+                .map_err(|e| Status::invalid_argument(format!("invalid contexts_json: {e}")))?;
+
+        let env_id = stitchd_core::id::EnvironmentId::from_uuid(uuid::Uuid::nil());
+
+        // Step 3: stitchd-core handles all evaluation logic (segment resolution + rule traces).
+        let results = stitchd_core::evaluation::preview::evaluate_preview(
+            &flag,
+            &evaluation_contexts,
+            &segment_definitions,
+            env_id,
+        );
+
+        let results_json = serde_json::to_string(&results)
+            .map_err(|e| Status::internal(format!("serialization error: {e}")))?;
+
+        Ok(Response::new(EvaluatePreviewResponse {
+            flag_enabled: flag.record.enabled,
+            results_json,
+        }))
+    }
 }
 
 /// Convert a proto `FlagValueType` to the domain type.
@@ -612,7 +719,7 @@ mod tests {
         id::{EnvironmentId, FlagId, FlagKey, ProjectId, SdkKeyId, VariantId},
         tenant::SdkKey,
     };
-    use stitchd_db::{FlagRepository, RepositoryError, SdkKeyRepository, VariantRepository};
+    use stitchd_db::{FlagRepository, RepositoryError, SdkKeyRepository, SegmentRepository, VariantRepository};
     use tokio_stream::StreamExt as _;
 
     // ── Stub repositories ──────────────────────────────────────────────────────
@@ -768,6 +875,30 @@ mod tests {
         }
     }
 
+    struct StubVariantRepoWithData {
+        variants: Mutex<Vec<stitchd_core::flag::Variant>>,
+    }
+
+    impl StubVariantRepoWithData {
+        fn with_variants(variants: Vec<stitchd_core::flag::Variant>) -> Arc<Self> {
+            Arc::new(Self { variants: Mutex::new(variants) })
+        }
+    }
+
+    #[async_trait]
+    impl VariantRepository for StubVariantRepoWithData {
+        async fn find_by_flag(
+            &self,
+            _flag_id: FlagId,
+        ) -> Result<Vec<stitchd_core::flag::Variant>, RepositoryError> {
+            Ok(self.variants.lock().unwrap().clone())
+        }
+        async fn create(&self, _flag_id: FlagId, _variant: &stitchd_core::flag::Variant) -> Result<(), RepositoryError> { Ok(()) }
+        async fn update(&self, variant: &stitchd_core::flag::Variant) -> Result<stitchd_core::flag::Variant, RepositoryError> { Ok(variant.clone()) }
+        async fn delete(&self, _id: VariantId) -> Result<(), RepositoryError> { Ok(()) }
+        async fn replace_all_for_flag(&self, _flag_id: FlagId, _variants: &[stitchd_core::flag::Variant]) -> Result<(), RepositoryError> { Ok(()) }
+    }
+
     #[derive(Default)]
     struct StubVariantRepo;
 
@@ -877,6 +1008,35 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct StubSegmentRepo;
+
+    #[async_trait]
+    impl SegmentRepository for StubSegmentRepo {
+        async fn find_by_id(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn find_by_key(&self, key: &str, _env_id: EnvironmentId) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: key.to_string() })
+        }
+        async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
+        async fn create(&self, _seg: &stitchd_core::segment::Segment) -> Result<(), RepositoryError> { Ok(()) }
+        async fn update(&self, seg: &stitchd_core::segment::Segment) -> Result<stitchd_core::segment::Segment, RepositoryError> { Ok(seg.clone()) }
+        async fn find_with_rules(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn find_with_list(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::ListBasedSegment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn upsert_rules(&self, _id: stitchd_core::id::SegmentId, _rules: &[stitchd_core::rule_engine::types::Rule]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn set_list_entries(&self, _id: stitchd_core::id::SegmentId, _ctx_type: &str, _include: &[String], _exclude: &[String]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn get_condition_expr(&self, _id: stitchd_core::id::SegmentId) -> Result<Option<serde_json::Value>, RepositoryError> { Ok(None) }
+        async fn set_condition_expr(&self, _id: stitchd_core::id::SegmentId, _expr: Option<&serde_json::Value>) -> Result<(), RepositoryError> { Ok(()) }
+        async fn soft_delete(&self, _id: stitchd_core::id::SegmentId) -> Result<(), RepositoryError> { Ok(()) }
+        async fn check_list_membership(&self, _env_id: EnvironmentId, _context_type: &str, _context_key: &str, _segment_keys: &[String]) -> Result<std::collections::HashMap<String, bool>, RepositoryError> { Ok(std::collections::HashMap::new()) }
+        async fn batch_check_list_membership(&self, _env_id: EnvironmentId, _contexts: &[(String, String)], _segment_keys: &[String]) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> { Ok(vec![]) }
+    }
+
     fn make_flag_record() -> FlagRecord {
         FlagRecord {
             id: FlagId::new(),
@@ -899,6 +1059,7 @@ mod tests {
             StubFlagRepo::empty(),
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
         )
     }
 
@@ -938,6 +1099,7 @@ mod tests {
             StubFlagRepo::empty(),
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::with_hash(key_hash, env_id),
+            Arc::new(StubSegmentRepo),
         );
 
         let mut req = Request::new(GetFlagDefinitionsRequest {
@@ -972,6 +1134,7 @@ mod tests {
             flag_repo,
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::with_hash(key_hash, env_id),
+            Arc::new(StubSegmentRepo),
         );
 
         let mut req = Request::new(GetFlagDefinitionsRequest {
@@ -1015,6 +1178,7 @@ mod tests {
             flag_repo,
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
         );
 
         let req = Request::new(GetFlagRequest {
@@ -1067,6 +1231,7 @@ mod tests {
             flag_repo,
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
         );
 
         let req = Request::new(ListFlagsRequest {
@@ -1153,6 +1318,7 @@ mod tests {
             flag_repo,
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
         );
 
         let req = Request::new(MutateFlagRequest {
@@ -1187,6 +1353,7 @@ mod tests {
             flag_repo,
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
         );
 
         let req = Request::new(MutateFlagRequest {
@@ -1219,6 +1386,7 @@ mod tests {
             flag_repo,
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
         );
 
         let req = Request::new(MutateFlagRequest {
@@ -1250,6 +1418,7 @@ mod tests {
             flag_repo,
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
         );
 
         let req = Request::new(MutateFlagRequest {
@@ -1282,6 +1451,7 @@ mod tests {
             flag_repo,
             Arc::new(StubVariantRepo),
             StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
         );
 
         let req = Request::new(MutateFlagRequest {
@@ -1379,5 +1549,147 @@ mod tests {
         let h1 = hash_sdk_key("key-a");
         let h2 = hash_sdk_key("key-b");
         assert_ne!(h1, h2);
+    }
+
+    // ── evaluate_preview tests ─────────────────────────────────────────────────
+
+    use stitchd_core::{
+        context::{Context, EvaluationContext, ParameterValue},
+        rule_engine::types::{ConditionExpr, Rule, RuleOutput},
+        id::RuleId,
+    };
+
+    fn make_bool_variants(flag_id: FlagId) -> (Vec<stitchd_core::flag::Variant>, VariantId, VariantId) {
+        let on_id = VariantId::new();
+        let off_id = VariantId::new();
+        let _ = flag_id; // variants are associated by id stored in FlagRecord.default_variant_id
+        let variants = vec![
+            stitchd_core::flag::Variant { id: on_id, key: "on".to_string(), value: stitchd_core::variants::VariantValue::BoolValue(true) },
+            stitchd_core::flag::Variant { id: off_id, key: "off".to_string(), value: stitchd_core::variants::VariantValue::BoolValue(false) },
+        ];
+        (variants, on_id, off_id)
+    }
+
+    fn make_flag_record_with_default(default_variant_id: Option<VariantId>) -> FlagRecord {
+        FlagRecord {
+            id: FlagId::new(),
+            project_id: ProjectId::new(),
+            key: FlagKey::new("test-flag").unwrap(),
+            name: String::new(),
+            description: String::new(),
+            value_type: FlagValueType::Bool,
+            enabled: true,
+            default_variant_id,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn evaluate_preview_disabled_flag_returns_default_no_traces() {
+        let (variants, _, off_id) = make_bool_variants(FlagId::new());
+        let mut record = make_flag_record_with_default(Some(off_id));
+        record.enabled = false;
+
+        let flag_repo = StubFlagRepo::with_flags(vec![record.clone()]);
+        let variant_repo = StubVariantRepoWithData::with_variants(variants);
+        let svc = FlagServiceImpl::new(flag_repo, variant_repo, StubSdkKeyRepo::empty(), Arc::new(StubSegmentRepo));
+
+        let ec = EvaluationContext::new()
+            .with_context(Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)));
+        let contexts_json = serde_json::to_string(&[ec]).unwrap();
+
+        let req = Request::new(EvaluatePreviewRequest {
+            project_id: record.project_id.to_string(),
+            flag_key: record.key.to_string(),
+            contexts_json,
+        });
+        let resp = svc.evaluate_preview(req).await.unwrap().into_inner();
+
+        assert!(!resp.flag_enabled);
+        let results: Vec<stitchd_core::evaluation::preview::ContextPreviewResult> =
+            serde_json::from_str(&resp.results_json).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].variant_key, "off");
+        assert!(results[0].rule_traces.is_empty());
+        assert!(results[0].rollout_debug.is_none());
+    }
+
+    #[tokio::test]
+    async fn evaluate_preview_matching_rule_returns_trace() {
+        let (variants, on_id, off_id) = make_bool_variants(FlagId::new());
+        let record = make_flag_record_with_default(Some(off_id));
+        let flag_id = record.id;
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id,
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: Some("beta rule".to_string()),
+                condition: ConditionExpr::Leaf(stitchd_core::rule_engine::condition::Condition::Eq {
+                    context_type: "user".to_string(),
+                    param: "beta".to_string(),
+                    value: ParameterValue::Bool(true),
+                }),
+                output: RuleOutput::Variant(on_id),
+            },
+        };
+
+        let flag_repo = Arc::new(StubFlagRepo {
+            flags: Mutex::new(vec![record.clone()]),
+            rules: Mutex::new(std::collections::HashMap::from([(flag_id, vec![flag_rule])])),
+        });
+        let variant_repo = StubVariantRepoWithData::with_variants(variants);
+        let svc = FlagServiceImpl::new(flag_repo, variant_repo, StubSdkKeyRepo::empty(), Arc::new(StubSegmentRepo));
+
+        let ec = EvaluationContext::new()
+            .with_context(Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)));
+        let contexts_json = serde_json::to_string(&[ec]).unwrap();
+
+        let req = Request::new(EvaluatePreviewRequest {
+            project_id: record.project_id.to_string(),
+            flag_key: record.key.to_string(),
+            contexts_json,
+        });
+        let resp = svc.evaluate_preview(req).await.unwrap().into_inner();
+
+        assert!(resp.flag_enabled);
+        let results: Vec<stitchd_core::evaluation::preview::ContextPreviewResult> =
+            serde_json::from_str(&resp.results_json).unwrap();
+        assert_eq!(results[0].variant_key, "on");
+        assert_eq!(results[0].fired_rule_name, Some("beta rule".to_string()));
+        assert!(!results[0].rule_traces.is_empty());
+    }
+
+    #[tokio::test]
+    async fn evaluate_preview_invalid_project_id_returns_error() {
+        let svc = make_service_empty();
+        let req = Request::new(EvaluatePreviewRequest {
+            project_id: "not-a-uuid".to_string(),
+            flag_key: "my-flag".to_string(),
+            contexts_json: "[]".to_string(),
+        });
+        let result = svc.evaluate_preview(req).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn evaluate_preview_invalid_contexts_json_returns_error() {
+        let record = make_flag_record_with_default(None);
+        let flag_repo = StubFlagRepo::with_flags(vec![record.clone()]);
+        let svc = FlagServiceImpl::new(flag_repo, Arc::new(StubVariantRepo), StubSdkKeyRepo::empty(), Arc::new(StubSegmentRepo));
+
+        let req = Request::new(EvaluatePreviewRequest {
+            project_id: record.project_id.to_string(),
+            flag_key: record.key.to_string(),
+            contexts_json: "not json".to_string(),
+        });
+        let result = svc.evaluate_preview(req).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
     }
 }

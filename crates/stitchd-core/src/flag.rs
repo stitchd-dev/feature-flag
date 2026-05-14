@@ -3,10 +3,12 @@
 //! A flag declares a [`FlagValueType`]; every [`Variant`] belonging to that flag
 //! must carry a [`VariantValue`] whose discriminant matches the flag's type.
 
+use std::collections::HashSet;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::id::{FlagId, FlagKey, ProjectId, VariantId};
+use crate::id::{FlagId, FlagKey, ProjectId, SegmentId, VariantId};
 use crate::rule_engine::types::Rule;
 pub use crate::variants::{FlagValueType, Variant, VariantValue};
 
@@ -95,6 +97,15 @@ impl Flag {
         self.record
             .default_variant_id
             .and_then(|id| self.get_variant(id))
+    }
+
+    /// Returns all `SegmentId`s referenced in any of this flag's rules.
+    pub fn referenced_segment_ids(&self) -> HashSet<SegmentId> {
+        let mut ids = HashSet::new();
+        for flag_rule in &self.rules {
+            flag_rule.rule.condition.collect_segment_ids(&mut ids);
+        }
+        ids
     }
 }
 

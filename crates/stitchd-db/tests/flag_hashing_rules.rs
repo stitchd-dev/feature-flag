@@ -85,6 +85,7 @@ async fn test_flag_hashing_and_rules(pool: sqlx::PgPool) {
         rule_index: 0,
         rule: Rule {
             id: RuleId::new(),
+            name: None,
             condition: ConditionExpr::And(vec![]),
             output: RuleOutput::Variant(stitchd_core::id::VariantId::new()),
         },
