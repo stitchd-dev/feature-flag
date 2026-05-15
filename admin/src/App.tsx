@@ -27,6 +27,7 @@ import {
   EventsRegistry, Members, AuditLog,
 } from './pages/stubs'
 import { Environments } from './pages/environments/Environments'
+import { ContextExplorer } from './pages/environments/ContextExplorer'
 import { I } from './components/icons'
 
 function AppShell() {
@@ -107,6 +108,7 @@ function AppRoutes() {
           <Route path="/org/:orgId/experiments/:key" element={<ExperimentDetail />} />
           <Route path="/org/:orgId/events" element={<EventsRegistry />} />
           <Route path="/org/:orgId/environments" element={<Environments />} />
+          <Route path="/org/:orgId/context-explorer" element={<ContextExplorer />} />
           <Route path="/org/:orgId/members" element={<Members />} />
           <Route path="/org/:orgId/audit" element={<AuditLog />} />
         </Route>
