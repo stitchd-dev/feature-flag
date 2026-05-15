@@ -58,13 +58,11 @@ Track: `context_intel_20260515`
   - Priority: bool → int → double → semver → str; "********" → Unknown
   - 8 unit tests: all type variants, private param, priority ordering, FromStr round-trip
 
-- [ ] Task 4: Stats-service registry refresh job (15-min interval)
-  - `ContextRegistryRefresher` in stitchd-stats-service
-  - Queries ClickHouse: GROUP BY env_id, context_type, context_key
-    WHERE evaluated_at >= now() - INTERVAL 90 DAY
-  - Upserts PostgreSQL registry; purges entries with last_seen_at < 90 days ago
-  - Wired into existing scheduler on 15-min cadence
-  - Unit tests with mocked ClickHouse + PostgreSQL repos
+- [x] Task 4: Stats-service registry refresh job (50c1bdb)
+  - `EvalLogSource` trait + `ClickHouseEvalLogSource`: DISTINCT query on flag_evaluation_log
+  - `ContextRegistryRefresher`: upserts types/params, purges stale (90-day cutoff)
+  - Wired into stitchd-stats-service main.rs on 15-min tokio::time::interval
+  - 4 unit tests with FakeEvalLogSource + FakeRegistry (zero I/O)
 
 - [ ] Task: Conductor - User Manual Verification 'Context Parameter Registry' (Protocol in workflow.md)
 
@@ -74,21 +72,18 @@ Track: `context_intel_20260515`
 <!-- depends: phase1 -->
 <!-- execution: sequential -->
 
-- [ ] Task 1: Eval stats gateway route + ClickHouse query
+- [x] Task 1: Eval stats gateway route + ClickHouse query (b160763)
   - GET /v1/projects/:pid/flags/:fid/eval-stats?from=&to=&granularity=hour|day
-  - Auto-granularity: override to `day` if range > 24 h; HTTP 400 if range > 90 days
-  - ClickHouse: GROUP BY toStartOfHour/toStartOfDay, variant_key, is_disabled;
-    COUNT(*) + COUNT(DISTINCT context_key)
-  - Response: { buckets: [{ts, total, by_variant:{k:n}, disabled_count, unique_context_keys}] }
-  - Unit tests: granularity auto-switching, 90-day range rejection
+  - Auto-granularity: range > 24 h → force 'day'; range > 90 d → HTTP 400
+  - ClickHouse: toStartOfHour/toStartOfDay bucketing, uniqApprox(context_key)
+  - Response: {granularity, buckets:[{ts,total,by_variant,disabled_count,unique_context_keys}]}
+  - 5 unit tests: granularity switching, boundary, 24h edge case
 
-- [ ] Task 2: Analytics tab on Flag Detail page (`AnalyticsTab.tsx`)
-  - Time range selector: Last 1h / 6h / 24h / 7d / 30d (capped at 90d)
-  - Auto-selects granularity; shows "Hourly" / "Daily" label
-  - ComposedChart (recharts): stacked bars per variant, disabled series shaded,
-    unique context keys on secondary Y-axis (line)
-  - Polls every 60 s when range ≤ 24 h
-  - Vitest tests: granularity switching, empty state, series key rendering
+- [x] Task 2: Analytics tab on Flag Detail page (91da654)
+  - Time range selector: 1h/6h/24h/7d/30d; auto-granularity (>24h → daily)
+  - recharts ComposedChart: stacked bars per variant, disabled shaded, Line for unique contexts
+  - Polls 60 s when range ≤ 24h; loading/empty/error states
+  - 13 Vitest tests: granularity, derivation, chart data, empty state, series keys
 
 - [ ] Task: Conductor - User Manual Verification 'Evaluation Graph' (Protocol in workflow.md)
 
