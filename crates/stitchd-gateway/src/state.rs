@@ -39,6 +39,8 @@ pub struct GatewayState {
     pub saml_login_client: Arc<Mutex<SamlLoginServiceClient<Channel>>>,
     /// Stats service gRPC client.
     pub stats_client: Arc<Mutex<StatsServiceClient<Channel>>>,
+    /// ClickHouse HTTP client for evaluation analytics queries.
+    pub ch_client: Arc<clickhouse::Client>,
 }
 
 impl GatewayState {
@@ -53,6 +55,7 @@ impl GatewayState {
         event_addr: String,
         experimentation_addr: String,
         stats_addr: String,
+        ch_client: clickhouse::Client,
     ) -> Result<Self, anyhow::Error> {
         let auth_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid Auth Service URI: {e}"))?
@@ -133,6 +136,7 @@ impl GatewayState {
                 saml_login_channel,
             ))),
             stats_client: Arc::new(Mutex::new(StatsServiceClient::new(stats_channel))),
+            ch_client: Arc::new(ch_client),
         })
     }
 
@@ -162,6 +166,7 @@ impl GatewayState {
             oidc_login_client: Arc::new(Mutex::new(oidc_login_client)),
             saml_login_client: Arc::new(Mutex::new(saml_login_client)),
             stats_client: Arc::new(Mutex::new(stats_client)),
+            ch_client: Arc::new(clickhouse::Client::default()),
         }
     }
 }

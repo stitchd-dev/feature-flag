@@ -49,6 +49,12 @@ async fn main() -> anyhow::Result<()> {
         .install()?;
     info!(%metrics_addr, "prometheus metrics ready");
 
+    let ch_client = clickhouse::Client::default()
+        .with_url(env_or("CLICKHOUSE_URL", "http://localhost:8123"))
+        .with_database(env_or("CLICKHOUSE_DB", "stitchd"))
+        .with_user(env_or("CLICKHOUSE_USER", "default"))
+        .with_password(std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default());
+
     let state = GatewayState::connect(
         env_or("AUTH_SERVICE_ADDR", "http://localhost:50051"),
         env_or("FLAG_SERVICE_ADDR", "http://localhost:50052"),
@@ -56,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
         env_or("EVENT_SERVICE_ADDR", "http://localhost:50054"),
         env_or("EXPERIMENTATION_SERVICE_ADDR", "http://localhost:50055"),
         env_or("STATS_SERVICE_ADDR", "http://localhost:50056"),
+        ch_client,
     )
     .await?;
 

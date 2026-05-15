@@ -19,8 +19,8 @@ use axum::{
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
 use crate::routes::{
-    admin, auth, auth_providers, events, experiments, flags, management, oidc, saml, sdk, segments,
-    stats,
+    admin, auth, auth_providers, eval_stats, events, experiments, flags, management, oidc, saml,
+    sdk, segments, stats,
 };
 use crate::state::GatewayState;
 
@@ -167,6 +167,10 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/evaluate-preview",
             post(flags::evaluate_preview),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/eval-stats",
+            get(eval_stats::get_eval_stats),
         )
         // Segments (admin CRUD — env-id as query param for list, path param for env-scoped create)
         .route(
