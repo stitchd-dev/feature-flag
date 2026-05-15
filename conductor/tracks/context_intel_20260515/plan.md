@@ -93,7 +93,7 @@ Track: `context_intel_20260515`
 <!-- depends: phase2 -->
 <!-- execution: sequential -->
 
-- [ ] Task 1: Gateway context intelligence routes
+- [x] Task 1: Gateway context intelligence routes (8adec8c)
   - GET .../environments/:eid/context-types → [{context_type, last_seen_at}]
     (last_seen_at within 90 days, ordered by recency)
   - GET .../environments/:eid/context-types/:type/params
@@ -102,25 +102,25 @@ Track: `context_intel_20260515`
   - RBAC: flag:read
   - Integration tests with seeded registry data
 
-- [ ] Task 2: `useContextSuggestions` hook + `SuggestionInput` component
+- [x] Task 2: `useContextSuggestions` hook + `SuggestionInput` component (d7f44cc)
   - Hook: fetches intelligence API, debounced 200 ms, handles loading/error
   - SuggestionInput: input + dropdown, keyboard nav, private params show 🔒
   - Vitest: debounce, empty state, error state, keyboard navigation
 
-- [ ] Task 3: Autocomplete in Segment rule builder
+- [x] Task 3: Autocomplete in Segment rule builder (5463cd1)
   - context_type field → type suggestions via SuggestionInput
   - param key field → param suggestions for selected type; private params show 🔒
   - Vitest: suggestions appear for known types/params
 
-- [ ] Task 4: Autocomplete in Flag rule builder
+- [x] Task 4: Autocomplete in Flag rule builder (5463cd1)
   - Same as Task 3 for flag condition editor
   - Vitest: component test
 
-- [ ] Task 5: Autocomplete in Preview tab form builder
+- [x] Task 5: Autocomplete in Preview tab form builder (510f84e)
   - _type input and param key inputs → SuggestionInput
   - Vitest: component test
 
-- [ ] Task 6: Context Explorer page
+- [x] Task 6: Context Explorer page (7ab7e49)
   - Route: .../environments/:eid/context-explorer
   - Lists context types (last 90 days only), sorted by last_seen_at desc
   - Expandable rows: param key, inferred type chip, 🔒 badge, last seen date
