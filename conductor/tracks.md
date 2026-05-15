@@ -38,5 +38,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Context Intelligence & Evaluation Telemetry
+## [~] Track: Context Intelligence & Evaluation Telemetry
 *Link: [./conductor/tracks/context_intel_20260515/](./conductor/tracks/context_intel_20260515/)*
