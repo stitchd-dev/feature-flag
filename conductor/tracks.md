@@ -35,3 +35,8 @@ This file tracks all major tracks for the project.
 - segments_ui_20260513 (Segments UI — full CRUD admin UI for environment-scoped segments, plus Match Segment rule type in flag rule builder)
 - flag_eval_preview_20260514 (Flag Evaluation Preview — evaluate-preview endpoint with rule traces, rollout debug, OR/And missing-context fix)
 -->
+
+---
+
+## [ ] Track: Context Intelligence & Evaluation Telemetry
+*Link: [./conductor/tracks/context_intel_20260515/](./conductor/tracks/context_intel_20260515/)*
