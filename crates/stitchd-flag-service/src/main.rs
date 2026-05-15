@@ -11,6 +11,8 @@
 //! | `DATABASE_URL`       | *required*                                 | PostgreSQL connection string    |
 //! | `CLICKHOUSE_URL`     | `http://localhost:8123`                    | ClickHouse HTTP endpoint        |
 //! | `CLICKHOUSE_DB`      | `stitchd`                                  | ClickHouse database name        |
+//! | `CLICKHOUSE_USER`    | `default`                                  | ClickHouse username             |
+//! | `CLICKHOUSE_PASSWORD`| *(empty)*                                  | ClickHouse password             |
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -63,7 +65,15 @@ async fn main() -> anyhow::Result<()> {
     let ch_url = std::env::var("CLICKHOUSE_URL")
         .unwrap_or_else(|_| "http://localhost:8123".to_string());
     let ch_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
-    let ch_client = Arc::new(ChClient::default().with_url(ch_url).with_database(ch_db));
+    let ch_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let ch_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+    let ch_client = Arc::new(
+        ChClient::default()
+            .with_url(ch_url)
+            .with_database(ch_db)
+            .with_user(ch_user)
+            .with_password(ch_password),
+    );
 
     // ── gRPC Server ────────────────────────────────────────────────────────────
     let port: u16 = std::env::var("FLAG_SERVICE_PORT")
