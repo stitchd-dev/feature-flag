@@ -12,6 +12,7 @@ interface SuggestionInputProps {
   placeholder?: string
   disabled?: boolean
   className?: string
+  style?: React.CSSProperties
 }
 
 /**
@@ -25,6 +26,7 @@ export function SuggestionInput({
   placeholder,
   disabled,
   className,
+  style,
 }: SuggestionInputProps) {
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
@@ -73,7 +75,7 @@ export function SuggestionInput({
   }
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', display: 'inline-block', width: '100%' }}>
+    <div ref={containerRef} style={{ position: 'relative', display: 'inline-block', ...style }}>
       <input
         type="text"
         value={value}
@@ -86,7 +88,7 @@ export function SuggestionInput({
         placeholder={placeholder}
         disabled={disabled}
         className={className}
-        style={{ width: '100%', boxSizing: 'border-box' }}
+        style={{ width: '100%', boxSizing: 'border-box' as const }}
         role="combobox"
         aria-autocomplete="list"
         aria-expanded={open && filtered.length > 0}

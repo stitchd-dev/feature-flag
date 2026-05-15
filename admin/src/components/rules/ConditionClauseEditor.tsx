@@ -1,6 +1,8 @@
 import { I } from '../icons'
 import type { Condition, ParameterValue } from '../../lib/ruleTypes'
 import { SegmentPicker } from './SegmentPicker'
+import { SuggestionInput } from '../SuggestionInput'
+import { useContextTypeSuggestions, useContextParamSuggestions } from '../../hooks/useContextSuggestions'
 
 const COMPARE_OPS = ['Eq', 'Ne', 'Lt', 'Lte', 'Gt', 'Gte'] as const
 const STRING_OPS = ['Contains', 'StartsWith', 'EndsWith'] as const
@@ -65,8 +67,26 @@ interface Props {
   mode?: 'flag' | 'segment'
 }
 
+function extractContextType(condition: Condition): string | null {
+  const op = currentOpKey(condition)
+  const isContextOp =
+    COMPARE_OPS.includes(op as (typeof COMPARE_OPS)[number]) ||
+    STRING_OPS.includes(op as (typeof STRING_OPS)[number]) ||
+    SEMVER_OPS.includes(op as (typeof SEMVER_OPS)[number])
+  if (!isContextOp) return null
+  const payload = (condition as Record<string, { context_type?: string }>)[op]
+  return payload?.context_type ?? null
+}
+
 export function ConditionClauseEditor({ condition, onChange, onDelete, envId, orgId, mode = 'flag' }: Props) {
   const op = currentOpKey(condition)
+
+  const currentContextType = extractContextType(condition)
+  const { data: typeData } = useContextTypeSuggestions(envId ?? null)
+  const { data: paramData } = useContextParamSuggestions(envId ?? null, currentContextType)
+
+  const typeSuggestions = typeData.map((t) => ({ label: t.context_type }))
+  const paramSuggestions = paramData.map((p) => ({ label: p.param_key, isPrivate: p.is_private }))
 
   function setOp(newOp: string) {
     onChange(buildCondition(newOp, condition))
@@ -114,10 +134,12 @@ export function ConditionClauseEditor({ condition, onChange, onDelete, envId, or
       const payload = (condition as Record<string, { context_type: string; param: string; value: ParameterValue }>)[op]
       return (
         <>
-          <input className="input" style={{ width: 90 }} placeholder="context" value={payload.context_type}
-            onChange={(e) => onChange({ [op]: { ...payload, context_type: e.target.value } } as Condition)} />
-          <input className="input" style={{ width: 110 }} placeholder="attribute" value={payload.param}
-            onChange={(e) => onChange({ [op]: { ...payload, param: e.target.value } } as Condition)} />
+          <SuggestionInput className="input" style={{ width: 90 }} placeholder="context" value={payload.context_type}
+            suggestions={typeSuggestions}
+            onChange={(v) => onChange({ [op]: { ...payload, context_type: v } } as Condition)} />
+          <SuggestionInput className="input" style={{ width: 110 }} placeholder="attribute" value={payload.param}
+            suggestions={paramSuggestions}
+            onChange={(v) => onChange({ [op]: { ...payload, param: v } } as Condition)} />
           <input className="input" style={{ width: 120 }} placeholder="value" value={String(payload.value)}
             onChange={(e) => onChange({ [op]: { ...payload, value: e.target.value } } as Condition)} />
         </>
@@ -131,10 +153,12 @@ export function ConditionClauseEditor({ condition, onChange, onDelete, envId, or
       const extraVal = (payload[extraKey as keyof StringPayload] as string) ?? ''
       return (
         <>
-          <input className="input" style={{ width: 90 }} placeholder="context" value={payload.context_type}
-            onChange={(e) => onChange({ [op]: { ...payload, context_type: e.target.value } } as Condition)} />
-          <input className="input" style={{ width: 110 }} placeholder="attribute" value={payload.param}
-            onChange={(e) => onChange({ [op]: { ...payload, param: e.target.value } } as Condition)} />
+          <SuggestionInput className="input" style={{ width: 90 }} placeholder="context" value={payload.context_type}
+            suggestions={typeSuggestions}
+            onChange={(v) => onChange({ [op]: { ...payload, context_type: v } } as Condition)} />
+          <SuggestionInput className="input" style={{ width: 110 }} placeholder="attribute" value={payload.param}
+            suggestions={paramSuggestions}
+            onChange={(v) => onChange({ [op]: { ...payload, param: v } } as Condition)} />
           <input className="input" style={{ width: 120 }} placeholder={extraKey} value={extraVal}
             onChange={(e) => onChange({ [op]: { ...payload, [extraKey]: e.target.value } } as Condition)} />
         </>
@@ -145,10 +169,12 @@ export function ConditionClauseEditor({ condition, onChange, onDelete, envId, or
       const payload = (condition as Record<string, { context_type: string; param: string; value: string }>)[op]
       return (
         <>
-          <input className="input" style={{ width: 90 }} placeholder="context" value={payload.context_type}
-            onChange={(e) => onChange({ [op]: { ...payload, context_type: e.target.value } } as Condition)} />
-          <input className="input" style={{ width: 110 }} placeholder="attribute" value={payload.param}
-            onChange={(e) => onChange({ [op]: { ...payload, param: e.target.value } } as Condition)} />
+          <SuggestionInput className="input" style={{ width: 90 }} placeholder="context" value={payload.context_type}
+            suggestions={typeSuggestions}
+            onChange={(v) => onChange({ [op]: { ...payload, context_type: v } } as Condition)} />
+          <SuggestionInput className="input" style={{ width: 110 }} placeholder="attribute" value={payload.param}
+            suggestions={paramSuggestions}
+            onChange={(v) => onChange({ [op]: { ...payload, param: v } } as Condition)} />
           <input className="input" style={{ width: 120 }} placeholder="1.2.3" value={payload.value}
             onChange={(e) => onChange({ [op]: { ...payload, value: e.target.value } } as Condition)} />
         </>
