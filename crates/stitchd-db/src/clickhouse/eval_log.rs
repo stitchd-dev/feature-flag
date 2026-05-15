@@ -15,8 +15,10 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Row)]
 pub struct EvalLogRow {
     /// FK → environments.id.
+    #[serde(with = "clickhouse::serde::uuid")]
     pub env_id: Uuid,
     /// FK → feature_flags.id.
+    #[serde(with = "clickhouse::serde::uuid")]
     pub flag_id: Uuid,
     /// Human-readable flag key.
     pub flag_key: String,
@@ -25,6 +27,7 @@ pub struct EvalLogRow {
     /// `true` when the flag was disabled and the default variant was applied.
     pub is_disabled: bool,
     /// When the evaluation occurred (millisecond precision UTC).
+    #[serde(with = "clickhouse::serde::chrono::datetime64::millis")]
     pub evaluated_at: DateTime<Utc>,
     /// Context `_type` field (e.g. `"user"`, `"org"`).
     pub context_type: String,
