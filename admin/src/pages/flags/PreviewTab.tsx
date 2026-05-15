@@ -315,7 +315,7 @@ interface PreviewTabProps {
 }
 
 export function PreviewTab({ flagId }: PreviewTabProps) {
-  const { projectId } = useOrgContext()
+  const { projectId, envId } = useOrgContext()
 
   const [mode, setMode] = useState<InputMode>('json')
   const [jsonText, setJsonText] = useState(DEFAULT_JSON)
@@ -371,7 +371,7 @@ export function PreviewTab({ flagId }: PreviewTabProps) {
     try {
       const { data } = await api.post<{ results: ContextResult[] }>(
         `/v1/projects/${projectId}/flags/${flagId}/evaluate-preview`,
-        { contexts: JSON.parse(jsonText) },
+        { contexts: JSON.parse(jsonText), environment_id: envId ?? '' },
       )
       setResults(data.results)
     } catch (err: unknown) {

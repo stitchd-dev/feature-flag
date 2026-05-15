@@ -33,6 +33,8 @@ async-trait = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 chrono = { workspace = true }
+clickhouse = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+semver = { workspace = true }

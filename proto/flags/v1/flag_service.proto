@@ -86,6 +86,9 @@ message EvaluatePreviewRequest {
   string flag_key      = 2;
   // JSON-serialized Vec<Context> (stitchd_core::context::Context).
   string contexts_json = 3;
+  // Optional environment_id used for eval-log scoping.
+  // Empty string means "unknown" (env_id stored as nil UUID in the log).
+  string environment_id = 4;
 }
 
 message EvaluatePreviewResponse {
