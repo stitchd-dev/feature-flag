@@ -4,6 +4,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
+use stitchd_db::{ContextRegistryRepository, PgContextRegistryRepository};
+
 use stitchd_proto::auth::v1::{
     auth_provider_service_client::AuthProviderServiceClient,
     auth_service_client::AuthServiceClient, oidc_login_service_client::OidcLoginServiceClient,
@@ -41,6 +43,8 @@ pub struct GatewayState {
     pub stats_client: Arc<Mutex<StatsServiceClient<Channel>>>,
     /// ClickHouse HTTP client for evaluation analytics queries.
     pub ch_client: Arc<clickhouse::Client>,
+    /// Context type / param registry backed by PostgreSQL.
+    pub context_registry: Arc<dyn ContextRegistryRepository>,
 }
 
 impl GatewayState {
@@ -56,6 +60,7 @@ impl GatewayState {
         experimentation_addr: String,
         stats_addr: String,
         ch_client: clickhouse::Client,
+        pg_pool: sqlx::PgPool,
     ) -> Result<Self, anyhow::Error> {
         let auth_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid Auth Service URI: {e}"))?
@@ -137,6 +142,7 @@ impl GatewayState {
             ))),
             stats_client: Arc::new(Mutex::new(StatsServiceClient::new(stats_channel))),
             ch_client: Arc::new(ch_client),
+            context_registry: Arc::new(PgContextRegistryRepository::new(pg_pool)),
         })
     }
 
@@ -167,8 +173,40 @@ impl GatewayState {
             saml_login_client: Arc::new(Mutex::new(saml_login_client)),
             stats_client: Arc::new(Mutex::new(stats_client)),
             ch_client: Arc::new(clickhouse::Client::default()),
+            context_registry: Arc::new(NoopContextRegistry),
         }
     }
+}
+
+/// No-op registry used in unit tests where no database is available.
+struct NoopContextRegistry;
+
+#[async_trait::async_trait]
+impl ContextRegistryRepository for NoopContextRegistry {
+    async fn upsert_context_type(
+        &self, _: stitchd_core::id::EnvironmentId, _: &str,
+    ) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+
+    async fn upsert_param(
+        &self, _: stitchd_core::id::EnvironmentId, _: &str, _: &str,
+        _: stitchd_core::context::InferredType, _: bool,
+    ) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+
+    async fn list_types(
+        &self, _: stitchd_core::id::EnvironmentId,
+    ) -> Result<Vec<stitchd_core::context::ContextTypeRecord>, stitchd_db::RepositoryError> {
+        Ok(vec![])
+    }
+
+    async fn list_params(
+        &self, _: stitchd_core::id::EnvironmentId, _: &str,
+    ) -> Result<Vec<stitchd_core::context::ContextParamRecord>, stitchd_db::RepositoryError> {
+        Ok(vec![])
+    }
+
+    async fn purge_stale(
+        &self, _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
 }
 
 #[cfg(test)]

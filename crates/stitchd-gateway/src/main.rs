@@ -3,6 +3,7 @@
 //! Environment variables:
 //! - `GATEWAY_PORT` (default: `8080`) — REST listen port
 //! - `METRICS_PORT` (default: `9080`) — Prometheus metrics port
+//! - `DATABASE_URL` — PostgreSQL connection string
 //! - `AUTH_SERVICE_ADDR` (default: `http://localhost:50051`)
 //! - `FLAG_SERVICE_ADDR` (default: `http://localhost:50052`)
 //! - `SEGMENTATION_SERVICE_ADDR` (default: `http://localhost:50053`)
@@ -55,6 +56,10 @@ async fn main() -> anyhow::Result<()> {
         .with_user(env_or("CLICKHOUSE_USER", "default"))
         .with_password(std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default());
 
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/stitchd".to_string());
+    let pg_pool = sqlx::PgPool::connect(&database_url).await?;
+
     let state = GatewayState::connect(
         env_or("AUTH_SERVICE_ADDR", "http://localhost:50051"),
         env_or("FLAG_SERVICE_ADDR", "http://localhost:50052"),
@@ -63,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
         env_or("EXPERIMENTATION_SERVICE_ADDR", "http://localhost:50055"),
         env_or("STATS_SERVICE_ADDR", "http://localhost:50056"),
         ch_client,
+        pg_pool,
     )
     .await?;
 

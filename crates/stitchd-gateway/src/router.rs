@@ -19,8 +19,8 @@ use axum::{
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
 use crate::routes::{
-    admin, auth, auth_providers, eval_stats, events, experiments, flags, management, oidc, saml,
-    sdk, segments, stats,
+    admin, auth, auth_providers, context_intel, eval_stats, events, experiments, flags, management,
+    oidc, saml, sdk, segments, stats,
 };
 use crate::state::GatewayState;
 
@@ -226,6 +226,15 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .route(
             "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
             get(experiments::list_iterations),
+        )
+        // Context intelligence
+        .route(
+            "/v1/environments/{env_id}/context-types",
+            get(context_intel::list_context_types),
+        )
+        .route(
+            "/v1/environments/{env_id}/context-types/{context_type}/params",
+            get(context_intel::list_context_params),
         )
         // Stats recompute
         .route(

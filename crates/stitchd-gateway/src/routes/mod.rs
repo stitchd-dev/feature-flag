@@ -3,6 +3,7 @@
 pub mod admin;
 pub mod auth;
 pub mod auth_providers;
+pub mod context_intel;
 pub mod eval_stats;
 pub mod events;
 pub mod experiments;
