@@ -1144,6 +1144,7 @@ mod tests {
         async fn find_batch_by_ids(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
         async fn find_rules_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError> { Ok(std::collections::HashMap::new()) }
         async fn find_lists_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>, RepositoryError> { Ok(std::collections::HashMap::new()) }
+        async fn find_memberships_batch(&self, _env_id: stitchd_core::id::EnvironmentId, _contexts: &[(String, String)], _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_db::SegmentIdMembership>, RepositoryError> { Ok(Vec::new()) }
     }
 
     fn make_flag_record() -> FlagRecord {
@@ -1865,6 +1866,7 @@ mod tests {
             self.lists_batch_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(self.lists.clone())
         }
+        async fn find_memberships_batch(&self, _env_id: stitchd_core::id::EnvironmentId, _contexts: &[(String, String)], _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_db::SegmentIdMembership>, RepositoryError> { Ok(Vec::new()) }
     }
 
     #[tokio::test]

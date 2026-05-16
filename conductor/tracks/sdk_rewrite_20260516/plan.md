@@ -110,7 +110,7 @@ NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
     existing `eval_log_writer::EvalLogSender`
   - **No SDK-key auth**
 
-- [ ] Task 4: `stitchd-segmentation-service::BatchCheckListMembership`
+- [x] Task 4: `stitchd-segmentation-service::BatchCheckListMembership`
   - TDD: write failing test that sends 5 `(context_type, key, segment_ids[])`
     queries and asserts a correct membership matrix
   - Add repo method `find_memberships_batch(env_id, queries) -> Vec<MembershipResult>`

@@ -395,6 +395,14 @@ pub mod tests {
                 .collect();
             Ok(result)
         }
+        async fn find_memberships_batch(
+            &self,
+            _env_id: stitchd_core::id::EnvironmentId,
+            _contexts: &[(String, String)],
+            _ids: &[SegmentId],
+        ) -> Result<Vec<stitchd_db::SegmentIdMembership>, RepositoryError> {
+            Ok(Vec::new())
+        }
     }
 
     // -------------------------------------------------------------------------

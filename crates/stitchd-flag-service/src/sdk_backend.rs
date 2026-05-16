@@ -654,6 +654,21 @@ mod tests {
             let lists = self.lists.lock().unwrap();
             Ok(ids.iter().filter_map(|id| lists.get(id).map(|l| (*id, l.clone()))).collect())
         }
+        async fn find_memberships_batch(
+            &self,
+            _env_id: EnvironmentId,
+            contexts: &[(String, String)],
+            segment_ids: &[SegmentId],
+        ) -> Result<Vec<stitchd_db::SegmentIdMembership>, RepositoryError> {
+            Ok(contexts
+                .iter()
+                .map(|(t, k)| stitchd_db::SegmentIdMembership {
+                    context_type: t.clone(),
+                    context_key: k.clone(),
+                    memberships: segment_ids.iter().map(|id| (*id, false)).collect(),
+                })
+                .collect())
+        }
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
