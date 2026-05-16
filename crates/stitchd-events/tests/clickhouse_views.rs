@@ -367,3 +367,103 @@ async fn events_without_experiment_context_not_in_mv() {
     let rows = query_experiment_daily(&client, env_id, &exp_id, "plain_metric").await;
     assert!(rows.is_empty(), "non-experiment events must not appear in events_experiment_daily");
 }
+
+// ── events_v2 (weekly partition) tests ───────────────────────────────────────
+
+#[derive(Debug, clickhouse::Row, Deserialize)]
+struct PartitionRow {
+    partition: String,
+    rows: u64,
+}
+
+async fn query_events_v2_count(client: &Client, env_id: Uuid) -> u64 {
+    let sql = format!(
+        "SELECT count() AS cnt FROM events_v2 WHERE env_id = '{env_id}'"
+    );
+    client.query(&sql).fetch_one::<u64>().await.unwrap_or(0)
+}
+
+async fn query_events_v2_partitions(client: &Client, env_id: Uuid) -> Vec<PartitionRow> {
+    // system.parts shows active partition keys for the table.
+    let sql = format!(
+        "SELECT partition, sum(rows) AS rows \
+         FROM system.parts \
+         WHERE table = 'events_v2' AND active = 1 \
+         GROUP BY partition ORDER BY partition"
+    );
+    // env_id filter not possible in system.parts; query full table partitions.
+    let _ = env_id;
+    client.query(&sql).fetch_all().await.unwrap_or_default()
+}
+
+#[tokio::test]
+async fn events_v2_inserts_are_queryable() {
+    let client = make_client();
+    setup_migrations(&client).await;
+    let writer_v2 = EventWriter::new(make_client());
+    let env_id = Uuid::new_v4();
+
+    // Direct insert into events_v2 (bypassing the writer which targets events).
+    // The EventWriter targets "events"; for v2 we insert via raw ClickHouse insert.
+    let insert_sql = format!(
+        "INSERT INTO events_v2 (env_id, contexts, metric_key, value_int, timestamp) \
+         VALUES ('{env_id}', [], 'v2_test_metric', 42, now64())"
+    );
+    client.query(&insert_sql).execute().await.unwrap();
+
+    wait_for_merge(&client, "events_v2").await;
+
+    let count = query_events_v2_count(&client, env_id).await;
+    assert!(count >= 1, "expected at least 1 row in events_v2 after insert, got {count}");
+    let _ = writer_v2; // keep alive
+}
+
+#[tokio::test]
+async fn events_v2_uses_weekly_partitions() {
+    let client = make_client();
+    setup_migrations(&client).await;
+
+    // Verify schema: events_v2 partition key must be toMonday (weekly).
+    // We check via system.tables for partition_key string.
+    #[derive(Debug, clickhouse::Row, Deserialize)]
+    struct TableInfo {
+        partition_key: String,
+    }
+
+    let rows: Vec<TableInfo> = client
+        .query("SELECT partition_key FROM system.tables WHERE name = 'events_v2' AND database = currentDatabase()")
+        .fetch_all()
+        .await
+        .unwrap();
+
+    assert!(!rows.is_empty(), "events_v2 table must exist");
+    let partition_key = &rows[0].partition_key;
+    assert!(
+        partition_key.contains("toMonday"),
+        "events_v2 must use toMonday partition key, got: {partition_key}"
+    );
+}
+
+#[tokio::test]
+async fn events_v2_row_count_matches_events_after_migration() {
+    let client = make_client();
+    setup_migrations(&client).await;
+
+    // After migration, events_v2 must have been seeded with all events rows.
+    // This verifies the INSERT .. SELECT backfill ran correctly.
+    let events_count: u64 = client
+        .query("SELECT count() FROM events")
+        .fetch_one()
+        .await
+        .unwrap();
+    let events_v2_count: u64 = client
+        .query("SELECT count() FROM events_v2")
+        .fetch_one()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        events_count, events_v2_count,
+        "events_v2 row count ({events_v2_count}) must match events ({events_count}) after backfill"
+    );
+}
