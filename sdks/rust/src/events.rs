@@ -362,9 +362,9 @@ mod tests {
     #[test]
     fn send_drops_oldest_on_capacity_overflow() {
         let q = EventQueue::new(2, 1);
-        assert_eq!(q.send(ev("a")), false);
-        assert_eq!(q.send(ev("b")), false);
-        assert_eq!(q.send(ev("c")), true, "should drop oldest");
+        assert!(!q.send(ev("a")));
+        assert!(!q.send(ev("b")));
+        assert!(q.send(ev("c")), "should drop oldest");
         let drained = q.drain_all();
         let keys: Vec<&str> = drained.iter().map(|e| e.flag_key.as_str()).collect();
         // "a" dropped to make room for "c"; queue holds [b, c].

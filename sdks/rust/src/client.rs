@@ -489,7 +489,6 @@ impl SdkClient {
                 &req.flag_key,
                 find_flag_id(&snapshot, &req.flag_key),
                 &variant_key,
-                &req.context,
                 outcome.as_str(),
                 "",
                 false,
@@ -520,7 +519,6 @@ impl SdkClient {
                 &req.flag_key,
                 find_flag_id(&snapshot, &req.flag_key),
                 &variant_key,
-                &req.context,
                 outcome.as_str(),
                 "",
                 true,
@@ -573,7 +571,7 @@ impl SdkClient {
         build_reasoning: bool,
     ) -> (String, serde_json::Value, EvalOutcome, Option<ReasoningTrace>) {
         let Some(flag) = snapshot.flag(flag_key) else {
-            let trace = build_reasoning.then(|| ReasoningTrace {
+            let trace = build_reasoning.then_some(ReasoningTrace {
                 outcome: EvalOutcome::FlagNotFound,
                 matched_rule_index: None,
                 matched_rule_name: None,
@@ -583,7 +581,7 @@ impl SdkClient {
 
         if flag.archived {
             let (key, val) = default_variant(flag);
-            let trace = build_reasoning.then(|| ReasoningTrace {
+            let trace = build_reasoning.then_some(ReasoningTrace {
                 outcome: EvalOutcome::FlagNotFound,
                 matched_rule_index: None,
                 matched_rule_name: None,
@@ -593,7 +591,7 @@ impl SdkClient {
 
         if !flag.enabled {
             let (key, val) = default_variant(flag);
-            let trace = build_reasoning.then(|| ReasoningTrace {
+            let trace = build_reasoning.then_some(ReasoningTrace {
                 outcome: EvalOutcome::Disabled,
                 matched_rule_index: None,
                 matched_rule_name: None,
@@ -650,7 +648,7 @@ impl SdkClient {
                     };
                     let rule_name = if rule.name.is_empty() { None } else { Some(rule.name.clone()) };
                     let outcome = EvalOutcome::Matched { rule_index: *idx };
-                    let trace = build_reasoning.then(|| ReasoningTrace {
+                    let trace = build_reasoning.then_some(ReasoningTrace {
                         outcome: outcome.clone(),
                         matched_rule_index: Some(*idx),
                         matched_rule_name: rule_name,
@@ -666,7 +664,7 @@ impl SdkClient {
 
         // ── Default rule ──────────────────────────────────────────────────
         let (key, val) = default_variant(flag);
-        let trace = build_reasoning.then(|| ReasoningTrace {
+        let trace = build_reasoning.then_some(ReasoningTrace {
             outcome: EvalOutcome::DefaultRule,
             matched_rule_index: None,
             matched_rule_name: None,
@@ -899,7 +897,6 @@ fn build_event(
     flag_key: &str,
     flag_id: &str,
     variant_key: &str,
-    _context_for_params: &Context,
     outcome: &str,
     matched_rule_id: &str,
     reasoning_included: bool,
