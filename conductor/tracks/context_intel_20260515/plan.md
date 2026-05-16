@@ -64,7 +64,7 @@ Track: `context_intel_20260515`
   - Wired into stitchd-stats-service main.rs on 15-min tokio::time::interval
   - 4 unit tests with FakeEvalLogSource + FakeRegistry (zero I/O)
 
-- [ ] Task: Conductor - User Manual Verification 'Context Parameter Registry' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Context Parameter Registry' — user confirmed
 
 ---
 
@@ -85,7 +85,7 @@ Track: `context_intel_20260515`
   - Polls 60 s when range ≤ 24h; loading/empty/error states
   - 13 Vitest tests: granularity, derivation, chart data, empty state, series keys
 
-- [ ] Task: Conductor - User Manual Verification 'Evaluation Graph' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Evaluation Graph' — user confirmed
 
 ---
 
@@ -128,4 +128,4 @@ Track: `context_intel_20260515`
   - Linked from environment sidebar nav
   - Vitest: expand/collapse, empty state, private badge rendering
 
-- [ ] Task: Conductor - User Manual Verification 'Context Intelligence & Explorer' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Context Intelligence & Explorer' — user confirmed
