@@ -63,7 +63,7 @@ are pinned before downstream phases reference them.
 Removes `crates/stitchd-sdk` and creates the empty `sdks/rust/` crate shell so
 later phases have a place to land.
 
-- [ ] Task 1: Delete `crates/stitchd-sdk/` entirely
+- [x] Task 1: Delete `crates/stitchd-sdk/` entirely
   - `git rm -r crates/stitchd-sdk`
   - Remove from workspace `[workspace.members]` in root `Cargo.toml`
   - Remove `stitchd-sdk` from `dev-dependencies` in `crates/stitchd-db/Cargo.toml`

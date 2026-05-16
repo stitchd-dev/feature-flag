@@ -27,7 +27,9 @@ fn docs() -> Result<()> {
     // Step 2: Export OpenAPI JSON from the server binary
     export_openapi(&root)?;
     // Step 3: Build rustdoc for stitchd-sdk and copy into docs/
-    generate_sdk_rustdoc(&root)?;
+    // TODO(sdk_rewrite_20260516 Phase 2 Task 2): re-enable pointing at
+    // sdks/rust/src/lib.rs once the new SDK crate is scaffolded.
+    // generate_sdk_rustdoc(&root)?;
 
     // Step 4: build the mdBook site
     mdbook_build(&root)?;
@@ -549,6 +551,7 @@ fn export_openapi(root: &Path) -> Result<()> {
 // Step 3: SDK rustdoc
 // ---------------------------------------------------------------------------
 
+#[allow(dead_code)] // re-enabled by sdk_rewrite_20260516 Phase 2 Task 2
 fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
     let out_dir = root.join("docs/book/rustdoc");
     println!("Generating SDK rustdoc → {}", out_dir.display());
@@ -575,6 +578,7 @@ fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
 
 /// Extract the `# Quickstart` section from `stitchd-sdk/src/lib.rs` module docs
 /// and write it to `docs/src/sdk/quickstart.md`.
+#[allow(dead_code)] // re-enabled by sdk_rewrite_20260516 Phase 2 Task 2
 fn extract_quickstart(root: &Path) -> Result<()> {
     let lib_rs = root.join("crates/stitchd-sdk/src/lib.rs");
     let source =

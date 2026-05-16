@@ -5,7 +5,6 @@ members = [
     "crates/stitchd-db",
     "crates/stitchd-events",
     "crates/stitchd-proto",
-    "crates/stitchd-sdk",
     "crates/xtask",
     "crates/stitchd-auth-service",
     "crates/stitchd-flag-service",
