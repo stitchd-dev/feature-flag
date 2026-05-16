@@ -23,8 +23,10 @@ tonic = { workspace = true }
 prost = { workspace = true }
 reqwest = { workspace = true }
 
-# Caching + lock-free snapshot swap
-moka = { workspace = true }
+# Caching + lock-free snapshot swap. Enable `sync` for MembershipCache (sync
+# get/insert on the evaluate() hot path) on top of the workspace-default
+# `future` feature (used by auth-service's SdkKeyCache).
+moka = { workspace = true, features = ["future", "sync"] }
 arc-swap = { workspace = true }
 
 # Serialization

@@ -171,7 +171,7 @@ The actual SDK. Built incrementally with TDD.
   - `DefinitionSnapshot { flags: HashMap, rule_segments: HashMap, list_segments: HashMap }`
   - Use `ArcSwap<DefinitionSnapshot>` for lock-free reads
 
-- [ ] Task 3: LRU cache for list-segment membership
+- [x] Task 3: LRU cache for list-segment membership
   - TDD: insert / get / eviction at capacity / refresh-in-place
   - `LruCache<(ContextType, String), HashMap<SegmentId, bool>>` keyed on
     `(context_type, context_key)`
