@@ -19,7 +19,7 @@ use stitchd_proto::segments::v1::{
 use crate::{
     error::ServiceError,
     segment::{
-        parse_env_id, segment_to_list_meta_proto, segment_to_list_proto, segment_to_rule_proto,
+        parse_env_id, segment_to_list_meta_proto, segment_to_rule_proto,
     },
 };
 
@@ -77,14 +77,10 @@ impl SegmentationService for SegmentationServiceImpl {
                 bundle.rule_segments.push(proto);
             }
             SegmentType::List => {
-                let def = self
-                    .state
-                    .segment_repo
-                    .find_with_list(seg.id)
-                    .await
-                    .map_err(|e| Status::from(ServiceError::from(e)))?;
-                let proto = segment_to_list_proto(&seg, &def);
-                bundle.list_segments.push(proto);
+                // GetSegment for list type: return summary pending Scylla migration.
+                return Err(Status::unimplemented(
+                    "list segment GetSegment pending Scylla migration",
+                ));
             }
         }
 
@@ -437,54 +433,53 @@ impl SegmentationService for SegmentationServiceImpl {
             other => return Err(Status::invalid_argument(format!("invalid list_type: {other}; expected 'include' or 'exclude'"))),
         };
 
-        // Load current list entries
-        let current = self
-            .state
-            .segment_repo
-            .find_with_list(segment_id)
-            .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
-
-        // Use first context_type found, or "user" as fallback
-        let context_type = current.lists.keys().next().cloned().unwrap_or_else(|| "user".to_string());
-        let ctx_list = current.lists.get(&context_type).cloned().unwrap_or_default();
-
-        let mut include: Vec<String> = ctx_list.include.into_iter().collect();
-        let mut exclude: Vec<String> = ctx_list.exclude.into_iter().collect();
-
-        let target_list = if r.list_type == "include" { &mut include } else { &mut exclude };
+        // Use "user" as the default context_type (find_with_list removed in Scylla migration).
+        let context_type = "user";
 
         match r.action.as_str() {
             "add" => {
-                let existing: std::collections::HashSet<String> = target_list.iter().cloned().collect();
-                for k in &r.keys {
-                    if !existing.contains(k.as_str()) {
-                        target_list.push(k.clone());
-                    }
-                }
+                self.state
+                    .segment_repo
+                    .add_entries(segment_id, context_type, &r.list_type, &r.keys)
+                    .await
+                    .map_err(|e| Status::from(ServiceError::from(e)))?;
             }
             "remove" => {
-                let remove_set: std::collections::HashSet<&String> = r.keys.iter().collect();
-                target_list.retain(|k| !remove_set.contains(k));
+                self.state
+                    .segment_repo
+                    .remove_entries(segment_id, context_type, &r.list_type, &r.keys)
+                    .await
+                    .map_err(|e| Status::from(ServiceError::from(e)))?;
             }
             "replace" => {
-                *target_list = {
+                let deduped: Vec<String> = {
                     let mut seen = std::collections::HashSet::new();
                     r.keys.iter().filter(|k| seen.insert(k.to_string())).cloned().collect()
                 };
+                let (include, exclude) = if r.list_type == "include" {
+                    (deduped.as_slice(), [].as_slice())
+                } else {
+                    ([].as_slice(), deduped.as_slice())
+                };
+                self.state
+                    .segment_repo
+                    .set_list_entries(segment_id, context_type, include, exclude)
+                    .await
+                    .map_err(|e| Status::from(ServiceError::from(e)))?;
             }
             other => return Err(Status::invalid_argument(format!("invalid action: {other}; expected 'add', 'remove', or 'replace'"))),
         }
 
-        self.state
-            .segment_repo
-            .set_list_entries(segment_id, &context_type, &include, &exclude)
+        // Get updated counts from summary.
+        let summary = self.state.segment_repo
+            .get_list_segment_summary(segment_id)
             .await
             .map_err(|e| Status::from(ServiceError::from(e)))?;
+        let counts = summary.counts.get(context_type).cloned().unwrap_or_default();
 
         Ok(Response::new(PatchSegmentEntriesResponse {
-            include_count: u32::try_from(include.len()).unwrap_or(u32::MAX),
-            exclude_count: u32::try_from(exclude.len()).unwrap_or(u32::MAX),
+            include_count: u32::try_from(counts.include_count).unwrap_or(u32::MAX),
+            exclude_count: u32::try_from(counts.exclude_count).unwrap_or(u32::MAX),
         }))
     }
 
@@ -499,19 +494,9 @@ impl SegmentationService for SegmentationServiceImpl {
             .map(stitchd_core::id::SegmentId::from_uuid)
             .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
 
-        let list = self
-            .state
-            .segment_repo
-            .find_with_list(segment_id)
-            .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
-
-        // Check across all context types (any context that contains the key)
-        let (in_include, in_exclude) = list.lists.values().fold((false, false), |(inc, exc), ctx| {
-            (inc || ctx.include.contains(&r.key), exc || ctx.exclude.contains(&r.key))
-        });
-
-        Ok(Response::new(LookupSegmentEntryResponse { in_include, in_exclude }))
+        // lookup_segment_entry pending Scylla migration (find_with_list removed).
+        let _ = (segment_id, r);
+        return Err(Status::unimplemented("lookup_segment_entry pending Scylla migration"));
     }
 }
 
@@ -566,15 +551,15 @@ async fn count_list_entries(
     repo: &dyn SegmentRepository,
     segment_id: stitchd_core::id::SegmentId,
 ) -> Result<Option<(String, u32, u32)>, Status> {
-    match repo.find_with_list(segment_id).await {
-        Ok(list) => {
-            let (ctx, inc_count, exc_count) = list
-                .lists
+    match repo.get_list_segment_summary(segment_id).await {
+        Ok(summary) => {
+            let (ctx, inc_count, exc_count) = summary
+                .counts
                 .into_iter()
                 .next()
-                .map(|(ctx, entries)| {
-                    let inc = u32::try_from(entries.include.len()).unwrap_or(u32::MAX);
-                    let exc = u32::try_from(entries.exclude.len()).unwrap_or(u32::MAX);
+                .map(|(ctx, counts)| {
+                    let inc = u32::try_from(counts.include_count).unwrap_or(u32::MAX);
+                    let exc = u32::try_from(counts.exclude_count).unwrap_or(u32::MAX);
                     (ctx, inc, exc)
                 })
                 .unwrap_or_default();

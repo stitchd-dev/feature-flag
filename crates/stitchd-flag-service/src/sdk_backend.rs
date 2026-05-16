@@ -144,13 +144,8 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
             .map_err(|e| {
                 Status::internal(format!("segment_repo.find_rules_batch failed: {e}"))
             })?;
-        let list_payloads = self
-            .segment_repo
-            .find_lists_batch(&list_ids)
-            .await
-            .map_err(|e| {
-                Status::internal(format!("segment_repo.find_lists_batch failed: {e}"))
-            })?;
+        // List segment defs not returned until Phase 4 Scylla membership reads.
+        let _ = list_ids;
 
         // 5. Build proto rule-segments (with serialized rule tree in `rule_payload`).
         //    For each rule-based segment we emit one entry; `context_type` is empty
@@ -172,41 +167,16 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
             })
             .collect::<Vec<_>>();
 
-        // 6. Build proto list-segment metadata. A list segment can target multiple
-        //    context types (HashMap keyed on context_type). We emit ONE entry per
-        //    (segment_id, context_type) pair so the SDK's LRU resolution stays
-        //    well-defined. If the segment has no entries yet, context_type is empty.
-        //    NOTE: This duplicates `id` across rows for multi-context-type segments;
-        //    the SDK's snapshot dedupes by (id, context_type).
+        // 6. Build proto list-segment metadata. List payloads are empty until Phase 4
+        //    Scylla membership reads are wired. For now emit one entry per segment
+        //    with an empty context_type (pristine/pending state).
         let mut list_segments = Vec::new();
         for s in &list_segment_records {
-            if let Some(lb) = list_payloads.get(&s.id) {
-                if lb.lists.is_empty() {
-                    list_segments.push(stitchd_proto::segments::v1::ListSegmentMeta {
-                        id: s.id.to_string(),
-                        key: s.key.clone(),
-                        context_type: String::new(),
-                    });
-                } else {
-                    // Sort context types for deterministic output (important for tests).
-                    let mut ctx_types: Vec<&String> = lb.lists.keys().collect();
-                    ctx_types.sort();
-                    for ct in ctx_types {
-                        list_segments.push(stitchd_proto::segments::v1::ListSegmentMeta {
-                            id: s.id.to_string(),
-                            key: s.key.clone(),
-                            context_type: ct.clone(),
-                        });
-                    }
-                }
-            } else {
-                // Segment exists but has no list rows yet (pristine state).
-                list_segments.push(stitchd_proto::segments::v1::ListSegmentMeta {
-                    id: s.id.to_string(),
-                    key: s.key.clone(),
-                    context_type: String::new(),
-                });
-            }
+            list_segments.push(stitchd_proto::segments::v1::ListSegmentMeta {
+                id: s.id.to_string(),
+                key: s.key.clone(),
+                context_type: String::new(),
+            });
         }
 
         let server_timestamp_ms = SystemTime::now()
@@ -360,7 +330,7 @@ mod tests {
     use stitchd_core::flag::{FlagRecord, FlagRule, FlagValueType, Variant};
     use stitchd_core::id::{FlagId, FlagKey, ProjectId, SegmentId, VariantId};
     use stitchd_core::segment::{
-        ContextList, ListBasedSegment, RuleBasedSegment, Segment, SegmentType,
+        RuleBasedSegment, Segment, SegmentType,
     };
     use stitchd_db::{ContextMembership, RepositoryError};
 
@@ -513,7 +483,6 @@ mod tests {
     struct StubSegmentRepo {
         segments_by_env: Mutex<HashMap<EnvironmentId, Vec<Segment>>>,
         rules: Mutex<HashMap<SegmentId, RuleBasedSegment>>,
-        lists: Mutex<HashMap<SegmentId, ListBasedSegment>>,
     }
     impl StubSegmentRepo {
         fn arc() -> Arc<Self> {
@@ -526,9 +495,6 @@ mod tests {
                 .entry(env_id)
                 .or_default()
                 .push(s);
-        }
-        fn with_list_payload(self: &Arc<Self>, id: SegmentId, lb: ListBasedSegment) {
-            self.lists.lock().unwrap().insert(id, lb);
         }
     }
 
@@ -551,12 +517,6 @@ mod tests {
             &self,
             _id: SegmentId,
         ) -> Result<RuleBasedSegment, RepositoryError> {
-            unimplemented!()
-        }
-        async fn find_with_list(
-            &self,
-            _id: SegmentId,
-        ) -> Result<ListBasedSegment, RepositoryError> {
             unimplemented!()
         }
         async fn list_by_environment(
@@ -647,13 +607,9 @@ mod tests {
             let rules = self.rules.lock().unwrap();
             Ok(ids.iter().filter_map(|id| rules.get(id).map(|r| (*id, r.clone()))).collect())
         }
-        async fn find_lists_batch(
-            &self,
-            ids: &[SegmentId],
-        ) -> Result<HashMap<SegmentId, ListBasedSegment>, RepositoryError> {
-            let lists = self.lists.lock().unwrap();
-            Ok(ids.iter().filter_map(|id| lists.get(id).map(|l| (*id, l.clone()))).collect())
-        }
+        async fn add_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn remove_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn get_list_segment_summary(&self, _id: SegmentId) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> { Ok(stitchd_db::ListSegmentSummary::default()) }
         async fn find_memberships_batch(
             &self,
             _env_id: EnvironmentId,
@@ -783,25 +739,11 @@ mod tests {
 
         let rule_seg = make_segment(env_id, "pro-users", SegmentType::Rule);
         let list_seg = make_segment(env_id, "early-access", SegmentType::List);
-        let list_seg_id = list_seg.id;
         segment_repo.with_segment(env_id, rule_seg);
         segment_repo.with_segment(env_id, list_seg);
 
-        // Seed a list-based payload spanning two context types.
-        let mut lists = HashMap::new();
-        let mut user_include = std::collections::HashSet::new();
-        user_include.insert("alice".to_string());
-        lists.insert(
-            "user".to_string(),
-            ContextList { include: user_include, exclude: std::collections::HashSet::new() },
-        );
-        let mut org_include = std::collections::HashSet::new();
-        org_include.insert("acme".to_string());
-        lists.insert(
-            "org".to_string(),
-            ContextList { include: org_include, exclude: std::collections::HashSet::new() },
-        );
-        segment_repo.with_list_payload(list_seg_id, ListBasedSegment { id: list_seg_id, lists });
+        // NOTE: list_payloads is empty until Phase 4 Scylla wiring.
+        // List segments appear with empty context_type (pristine state).
 
         let svc = make_service(StubFlagRepo::arc(), segment_repo);
         let resp = svc
@@ -813,13 +755,10 @@ mod tests {
         assert_eq!(resp.rule_segments.len(), 1);
         assert_eq!(resp.rule_segments[0].key, "pro-users");
 
-        // Multi-context-type list segment becomes two ListSegmentMeta entries,
-        // one per context type, sorted alphabetically.
-        assert_eq!(resp.list_segments.len(), 2);
-        let ctx_types: Vec<_> = resp.list_segments.iter().map(|m| m.context_type.as_str()).collect();
-        assert_eq!(ctx_types, vec!["org", "user"]);
-        // Both share the same segment id (the dedup-by-(id,context_type) invariant).
-        assert_eq!(resp.list_segments[0].id, resp.list_segments[1].id);
+        // List segment appears once with empty context_type (pending Phase 4 Scylla wiring).
+        assert_eq!(resp.list_segments.len(), 1);
+        assert_eq!(resp.list_segments[0].context_type, "");
+        assert_eq!(resp.list_segments[0].key, "early-access");
     }
 
     #[tokio::test]

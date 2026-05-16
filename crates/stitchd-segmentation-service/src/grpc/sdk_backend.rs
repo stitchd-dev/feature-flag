@@ -144,7 +144,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
-    use stitchd_core::segment::{ListBasedSegment, RuleBasedSegment, Segment};
+    use stitchd_core::segment::{RuleBasedSegment, Segment};
     use stitchd_db::{ContextMembership, RepositoryError, SegmentIdMembership};
     use stitchd_proto::sdk::v1::MembershipQuery;
 
@@ -213,12 +213,6 @@ mod tests {
         ) -> Result<RuleBasedSegment, RepositoryError> {
             unimplemented!()
         }
-        async fn find_with_list(
-            &self,
-            _id: SegmentId,
-        ) -> Result<ListBasedSegment, RepositoryError> {
-            unimplemented!()
-        }
         async fn upsert_rules(
             &self,
             _id: SegmentId,
@@ -280,12 +274,9 @@ mod tests {
         ) -> Result<HashMap<SegmentId, RuleBasedSegment>, RepositoryError> {
             unimplemented!()
         }
-        async fn find_lists_batch(
-            &self,
-            _ids: &[SegmentId],
-        ) -> Result<HashMap<SegmentId, ListBasedSegment>, RepositoryError> {
-            unimplemented!()
-        }
+        async fn add_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn remove_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn get_list_segment_summary(&self, _id: SegmentId) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> { Ok(stitchd_db::ListSegmentSummary::default()) }
         async fn find_memberships_batch(
             &self,
             env_id: EnvironmentId,

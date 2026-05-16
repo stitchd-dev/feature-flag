@@ -233,15 +233,6 @@ pub mod tests {
                 .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })
         }
 
-        async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
-            self.list_defs
-                .lock()
-                .unwrap()
-                .get(&id)
-                .cloned()
-                .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })
-        }
-
         async fn upsert_rules(
             &self,
             id: SegmentId,
@@ -277,6 +268,10 @@ pub mod tests {
             drop(defs);
             Ok(())
         }
+
+        async fn add_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn remove_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn get_list_segment_summary(&self, _id: SegmentId) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> { Ok(stitchd_db::ListSegmentSummary::default()) }
 
         async fn soft_delete(&self, id: SegmentId) -> Result<(), RepositoryError> {
             let mut segs = self.segments.lock().unwrap();
@@ -384,17 +379,6 @@ pub mod tests {
             Ok(result)
         }
 
-        async fn find_lists_batch(
-            &self,
-            ids: &[SegmentId],
-        ) -> Result<std::collections::HashMap<SegmentId, ListBasedSegment>, RepositoryError> {
-            let defs = self.list_defs.lock().unwrap();
-            let result = ids
-                .iter()
-                .filter_map(|id| defs.get(id).map(|d| (*id, d.clone())))
-                .collect();
-            Ok(result)
-        }
         async fn find_memberships_batch(
             &self,
             _env_id: stitchd_core::id::EnvironmentId,
