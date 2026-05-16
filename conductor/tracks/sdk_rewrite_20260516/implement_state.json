@@ -1,13 +1,14 @@
 {
-  "current_phase": "Phase 4: Gateway SDK Surface",
-  "current_phase_index": 3,
+  "current_phase": "Phase 5: Rust SDK Implementation",
+  "current_phase_index": 4,
   "current_task_index": 0,
   "completed_phases": [
     "Phase 1: SDK Spec Foundation",
     "Phase 2: Workspace Cleanup",
-    "Phase 3: Backend RPCs"
+    "Phase 3: Backend RPCs",
+    "Phase 4: Gateway SDK Surface"
   ],
-  "last_updated": "2026-05-16T13:55:00Z",
+  "last_updated": "2026-05-16T14:21:00Z",
   "status": "in_progress",
-  "resume_hint": "Phase 3 COMPLETE and checkpointed (3f4c7c3). Next session starts at Phase 4 Task 1 — SDK auth middleware in crates/stitchd-gateway/src/middleware/. TDD: tests for valid key → injects SdkContext{env_id,project_id,org_id} into request extensions; invalid → 401; missing header → 401. Reuse SdkKeyCache from stitchd-auth-service (shared via GatewayState or new injection)."
+  "resume_hint": "Phase 4 COMPLETE and checkpointed (17c84cd). Next session starts at Phase 5 Task 1 — SdkConfig + SdkError + module skeleton in sdks/rust/src/{config,error}.rs (currently empty placeholders from Phase 2). TDD: config defaults (poll=30s, refresh=60s, lru=10_000, flush=5s, batch=100), required field validation in init (gateway_url non-empty, sdk_key min length 8, intervals positive). See sdks/spec/schemas/sdk_config.schema.json for the canonical field list."
 }

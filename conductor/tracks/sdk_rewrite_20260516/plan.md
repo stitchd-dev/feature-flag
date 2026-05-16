@@ -154,11 +154,11 @@ routes. Reuses `SdkKeyCache` from `db_optim_20260516`.
   - Add gRPC port to gateway config (e.g., `GATEWAY_GRPC_PORT=50050`)
   - TDD: integration test using a tonic client against the gateway
 
-- [ ] Task: Conductor - User Manual Verification 'Gateway SDK Surface' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Gateway SDK Surface' (Protocol in workflow.md) [checkpoint: 17c84cd]
 
 ---
 
-## Phase 5: Rust SDK Implementation (`sdks/rust/`)
+## Phase 5: Rust SDK Implementation (`sdks/rust/`) [checkpoint: 17c84cd]
 
 The actual SDK. Built incrementally with TDD.
 
