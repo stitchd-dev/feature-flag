@@ -26,6 +26,7 @@ use crate::{
     rbac::{rbac_context_from_jwt, rbac_context_from_sdk_key},
     refresh::refresh_token,
     sdk_key::validate_sdk_key,
+    sdk_key_cache::SdkKeyCache,
 };
 
 /// tonic gRPC service implementation for `AuthService`.
@@ -36,6 +37,7 @@ pub struct AuthServiceImpl {
     membership_repo: Arc<dyn OrgMembershipRepository>,
     org_repo: Arc<dyn OrganisationRepository>,
     refresh_token_repo: Arc<dyn RefreshTokenRepository>,
+    sdk_key_cache: SdkKeyCache,
 }
 
 impl AuthServiceImpl {
@@ -54,6 +56,7 @@ impl AuthServiceImpl {
             membership_repo,
             org_repo,
             refresh_token_repo,
+            sdk_key_cache: SdkKeyCache::new(),
         }
     }
 }
@@ -75,7 +78,7 @@ impl AuthService for AuthServiceImpl {
                 Ok(Response::new(ctx))
             }
             Some(Credential::SdkKey(raw_key)) => {
-                let sdk_ctx = validate_sdk_key(&raw_key, &self.sdk_key_repo)
+                let sdk_ctx = validate_sdk_key(&raw_key, &self.sdk_key_repo, &self.sdk_key_cache)
                     .await
                     .map_err(Status::from)?;
                 let ctx = rbac_context_from_sdk_key(&sdk_ctx);

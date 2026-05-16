@@ -93,5 +93,6 @@ lettre = { version = "0.11", features = ["tokio1-native-tls", "smtp-transport", 
 governor = { version = "0.10", features = ["std"] }
 tower_governor = { version = "0.8", default-features = false, features = ["axum"] }
 dashmap = { version = "6" }
+moka = { version = "0.12", features = ["future"] }
 wiremock = { version = "0.6" }
 futures = { version = "0.3" }

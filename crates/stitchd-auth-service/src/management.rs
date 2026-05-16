@@ -32,6 +32,7 @@ use stitchd_proto::management::v1::{
 };
 
 use crate::sdk_key::hash_sdk_key;
+use crate::sdk_key_cache::SdkKeyCache;
 
 /// tonic gRPC handler for the [`ManagementService`](stitchd_proto::management::v1::management_service_server::ManagementService) — org/project/environment/SDK-key/user creation.
 #[allow(clippy::struct_field_names)]
@@ -42,6 +43,7 @@ pub struct ManagementServiceImpl {
     sdk_key_repo: Arc<dyn SdkKeyRepository>,
     user_repo: Arc<dyn AuthUserRepository>,
     membership_repo: Arc<dyn OrgMembershipRepository>,
+    sdk_key_cache: SdkKeyCache,
 }
 
 impl ManagementServiceImpl {
@@ -54,6 +56,7 @@ impl ManagementServiceImpl {
         sdk_key_repo: Arc<dyn SdkKeyRepository>,
         user_repo: Arc<dyn AuthUserRepository>,
         membership_repo: Arc<dyn OrgMembershipRepository>,
+        sdk_key_cache: SdkKeyCache,
     ) -> Self {
         Self {
             org_repo,
@@ -62,6 +65,7 @@ impl ManagementServiceImpl {
             sdk_key_repo,
             user_repo,
             membership_repo,
+            sdk_key_cache,
         }
     }
 }
@@ -502,6 +506,15 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<RevokeSdkKeyResponse>, Status> {
         let r = request.into_inner();
         let key_id = parse_sdk_key_id(&r.sdk_key_id)?;
+
+        // Fetch the hash before revoking so we can invalidate the cache entry.
+        let key_hash = self
+            .sdk_key_repo
+            .find_by_id(key_id)
+            .await
+            .map(|k| k.key_hash)
+            .ok();
+
         self.sdk_key_repo
             .revoke(key_id)
             .await
@@ -512,6 +525,11 @@ impl ManagementService for ManagementServiceImpl {
                 ),
                 other => map_repo_err(other),
             })?;
+
+        if let Some(hash) = key_hash {
+            self.sdk_key_cache.invalidate(&hash).await;
+        }
+
         Ok(Response::new(RevokeSdkKeyResponse {}))
     }
 
@@ -829,6 +847,7 @@ mod tests {
             Arc::new(StubSdkKeyRepo { keys }),
             Arc::new(StubUserRepo),
             Arc::new(StubMembershipRepo),
+            crate::sdk_key_cache::SdkKeyCache::new(),
         )
     }
 

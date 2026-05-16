@@ -26,6 +26,7 @@ use stitchd_auth_service::{
     oidc_login::{LiveOidcExchanger, OidcLoginServiceImpl, OidcStateStore},
     saml_factory::SamlProviderFactory,
     saml_login::{LiveSamlExchanger, SamlLoginServiceImpl, SamlRelayStore},
+    sdk_key_cache::SdkKeyCache,
 };
 use stitchd_core::auth::CryptoKey;
 use stitchd_db::PgAuthProviderRepository;
@@ -112,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
         org_repo.clone() as Arc<dyn OrganisationRepository>,
         refresh_repo.clone(),
     );
+    let sdk_key_cache = SdkKeyCache::new();
     let mgmt_service = ManagementServiceImpl::new(
         org_repo,
         project_repo,
@@ -119,6 +121,7 @@ async fn main() -> anyhow::Result<()> {
         sdk_key_repo,
         auth_user_repo.clone(),
         membership_repo.clone(),
+        sdk_key_cache,
     );
     let auth_provider_service = AuthProviderServiceImpl::new(
         auth_provider_repo.clone(),

@@ -58,17 +58,17 @@ Track: `db_optim_20260516`
 <!-- depends: -->
 <!-- execution: sequential -->
 
-- [ ] Task 1: Add moka dependency + update tech-stack.md
+- [x] Task 1: Add moka dependency + update tech-stack.md
   - `moka = { version = "0.12", features = ["future"] }` in stitchd-auth-service Cargo.toml
   - Document cache pattern under "Caching" section in tech-stack.md
 
-- [ ] Task 2: Implement SdkKeyCache
+- [x] Task 2: Implement SdkKeyCache
   - `struct SdkKeyCache(Cache<String, SdkKey>)` keyed on `key_hash`, TTL = 60s
   - `async fn get_or_load(&self, hash: &str, loader: F) -> Result<SdkKey, RepositoryError>`
   - Unit tests: hit skips loader, miss invokes loader once, TTL expiry retriggers loader,
     invalidate removes entry, concurrent gets coalesce to single loader call
 
-- [ ] Task 3: Wire cache into validate_sdk_key and revocation path
+- [x] Task 3: Wire cache into validate_sdk_key and revocation path
   - Inject `SdkKeyCache` into `AuthServiceImpl` (new field, constructed in main)
   - `validate_sdk_key` uses `cache.get_or_load(hash, || repo.find_active_by_hash(hash))`
   - SDK key revocation: call `cache.invalidate(key_hash)` after DB revoke
