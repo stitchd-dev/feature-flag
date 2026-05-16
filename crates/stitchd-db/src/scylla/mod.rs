@@ -1,3 +1,6 @@
+/// CQL migration applier for bootstrapping and evolving the Scylla schema.
+pub mod migrate;
+
 use std::{collections::HashMap, sync::Arc};
 
 use scylla::{
