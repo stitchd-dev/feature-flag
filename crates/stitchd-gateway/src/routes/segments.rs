@@ -21,6 +21,7 @@ use stitchd_proto::segments::v1::{
 };
 
 use crate::error::GatewayError;
+use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
@@ -29,6 +30,8 @@ use crate::state::GatewayState;
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListSegmentsQuery {
     pub env_id: Option<String>,
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
 }
 
 /// Request body for creating a segment.
@@ -236,19 +239,20 @@ pub async fn list_segments(
     require_permission(&req, "segment:read")?;
 
     let environment_id = query.env_id.unwrap_or_default();
-    let rpc = tonic::Request::new(ListAdminSegmentsRequest { environment_id });
+    let pagination = &query.pagination;
+    let rpc = tonic::Request::new(ListAdminSegmentsRequest {
+        environment_id,
+        page: pagination.effective_page(),
+        per_page: pagination.effective_per_page(),
+    });
     let mut client = state.segmentation_client.lock().await;
-    let resp = client
+    let inner = client
         .list_admin_segments(rpc)
         .await
-        .map_err(GatewayError::from)?;
-    let segments: Vec<AdminSegmentJson> = resp
-        .into_inner()
-        .segments
-        .iter()
-        .map(proto_to_admin_json)
-        .collect();
-    Ok(Json(segments))
+        .map_err(GatewayError::from)?
+        .into_inner();
+    let items: Vec<AdminSegmentJson> = inner.segments.iter().map(proto_to_admin_json).collect();
+    Ok(Json(PaginatedResponse::new(items, inner.total, pagination)))
 }
 
 /// `POST /v1/segments` — create a new segment.

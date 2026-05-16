@@ -156,6 +156,46 @@ impl SegmentRepository for PgSegmentRepository {
         .map_err(RepositoryError::Database)
     }
 
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<Segment>, u64), RepositoryError> {
+        let rows = sqlx::query(
+            r"
+            SELECT id, environment_id, key, name, description, tags,
+                   segment_type, created_at, updated_at, deleted_at, version,
+                   COUNT(*) OVER() AS total_count
+            FROM segments
+            WHERE environment_id = $1 AND deleted_at IS NULL
+            ORDER BY created_at
+            LIMIT $2 OFFSET $3
+            ",
+        )
+        .bind(environment_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let total = rows
+            .first()
+            .map(|r| {
+                let n: i64 = r.get("total_count");
+                n.max(0) as u64
+            })
+            .unwrap_or(0);
+
+        let segments = rows
+            .iter()
+            .map(row_to_segment)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok((segments, total))
+    }
+
     async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {
         sqlx::query!(
             r#"

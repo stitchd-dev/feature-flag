@@ -1116,6 +1116,7 @@ mod tests {
             Err(RepositoryError::NotFound { id: key.to_string() })
         }
         async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
+        async fn list_by_environment_paginated(&self, _env_id: EnvironmentId, _offset: u64, _limit: u64) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError> { Ok((vec![], 0)) }
         async fn create(&self, _seg: &stitchd_core::segment::Segment) -> Result<(), RepositoryError> { Ok(()) }
         async fn update(&self, seg: &stitchd_core::segment::Segment) -> Result<stitchd_core::segment::Segment, RepositoryError> { Ok(seg.clone()) }
         async fn find_with_rules(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
@@ -1827,6 +1828,7 @@ mod tests {
             Err(RepositoryError::NotFound { id: key.to_string() })
         }
         async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
+        async fn list_by_environment_paginated(&self, _env_id: EnvironmentId, _offset: u64, _limit: u64) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError> { Ok((vec![], 0)) }
         async fn create(&self, _seg: &stitchd_core::segment::Segment) -> Result<(), RepositoryError> { Ok(()) }
         async fn update(&self, seg: &stitchd_core::segment::Segment) -> Result<stitchd_core::segment::Segment, RepositoryError> { Ok(seg.clone()) }
         async fn find_with_rules(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {

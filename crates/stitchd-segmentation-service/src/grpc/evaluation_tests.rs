@@ -182,6 +182,25 @@ pub mod tests {
                 .collect())
         }
 
+        async fn list_by_environment_paginated(
+            &self,
+            environment_id: EnvironmentId,
+            offset: u64,
+            limit: u64,
+        ) -> Result<(Vec<Segment>, u64), RepositoryError> {
+            let all: Vec<Segment> = self
+                .segments
+                .lock()
+                .unwrap()
+                .values()
+                .filter(|s| s.environment_id == environment_id)
+                .cloned()
+                .collect();
+            let total = all.len() as u64;
+            let page = all.into_iter().skip(offset as usize).take(limit as usize).collect();
+            Ok((page, total))
+        }
+
         async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {
             self.segments.lock().unwrap().insert(
                 (segment.environment_id, segment.key.clone()),

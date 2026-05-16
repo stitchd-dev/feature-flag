@@ -340,6 +340,16 @@ pub trait SegmentRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError>;
 
+    /// List non-deleted segments in an environment with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)`.
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError>;
+
     /// Persist a new segment.
     async fn create(&self, segment: &stitchd_core::segment::Segment)
     -> Result<(), RepositoryError>;
