@@ -37,6 +37,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+# async trait support for EventSink (boxed-future signatures)
+async-trait = { workspace = true }
+
 # Common types
 uuid = { workspace = true }
 chrono = { workspace = true }

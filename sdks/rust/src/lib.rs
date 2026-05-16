@@ -47,10 +47,12 @@
 
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod lru;
 pub mod snapshot;
 
 pub use config::SdkConfig;
 pub use error::SdkError;
+pub use events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, ParameterValue};
 pub use lru::{ContextKey, MembershipCache, MembershipMap};
 pub use snapshot::{DefinitionSnapshot, DefinitionStore};

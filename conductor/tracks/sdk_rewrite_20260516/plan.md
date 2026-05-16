@@ -177,7 +177,7 @@ The actual SDK. Built incrementally with TDD.
     `(context_type, context_key)`
   - Use `moka::sync::Cache` with `max_capacity` (consistent with auth-service usage)
 
-- [ ] Task 4: Event queue + flush task
+- [x] Task 4: Event queue + flush task
   - TDD: events flushed on interval OR on batch-size threshold; bounded channel
   - MPSC bounded channel, background task drains and batches POSTs to gateway
   - Graceful shutdown drains remaining events before exit
