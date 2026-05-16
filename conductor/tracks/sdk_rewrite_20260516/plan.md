@@ -54,11 +54,11 @@ are pinned before downstream phases reference them.
     list-based segment (hit + miss); reasoning trace shape
   - TDD: fixture-validity test that round-trips each fixture through JSON Schema validation
 
-- [ ] Task: Conductor - User Manual Verification 'SDK Spec Foundation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'SDK Spec Foundation' (Protocol in workflow.md) [checkpoint: 2d21beb]
 
 ---
 
-## Phase 2: Workspace Cleanup — Delete Old SDK + Scaffold New
+## Phase 2: Workspace Cleanup — Delete Old SDK + Scaffold New [checkpoint: 2d21beb]
 
 Removes `crates/stitchd-sdk` and creates the empty `sdks/rust/` crate shell so
 later phases have a place to land.
