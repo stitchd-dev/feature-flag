@@ -17,3 +17,26 @@ From `conductor/patterns.md`:
 ---
 
 <!-- Learnings from implementation will be appended below -->
+
+## [2026-05-17] - Phase 2 Tasks 1-9: Scylla-Backed Repository Layer
+
+- **Implemented:** Updated SegmentRepository trait (removed find_with_list/find_lists_batch, added add_entries/remove_entries/get_list_segment_summary); implemented ScyllaSegmentStore with all list-entry CRUD and membership reads
+- **Files changed:** 
+  - crates/stitchd-db/src/scylla/segment.rs (new)
+  - crates/stitchd-db/src/scylla/mod.rs (add segment module)
+  - crates/stitchd-db/src/repository/mod.rs (trait already updated)
+  - crates/stitchd-db/tests/scylla_segment_repository.rs (new)
+  - crates/stitchd-db/tests/scylla_segment_membership.rs (new)
+  - crates/stitchd-db/tests/segment_repository.rs (remove find_with_list tests)
+  - crates/stitchd-db/tests/indexes.rs (remove find_lists_batch tests)
+  - crates/stitchd-segmentation-service/src/grpc/service.rs (fix call sites)
+  - crates/stitchd-flag-service/src/service.rs + sdk_backend.rs (fix call sites)
+  - Multiple mock impls updated
+- **Commits:** d28836b, 458c712, 7faeadd
+- **Learnings:**
+  - Patterns: Scylla TIMESTAMP columns require `scylla::value::CqlTimestamp(millis_i64)` not `i64` or `chrono::DateTime`
+  - Patterns: Use randomized generation IDs (not current+1) so concurrent writers get isolated partitions; CAS condition only checks current_gen value
+  - Gotchas: `gen` is a reserved keyword in Rust — use `active_gen` or `cur_gen`
+  - Gotchas: CAS with `current_gen == 0` and concurrent writers both using `new_gen = 1` causes both sets of entries to appear in the same partition — random IDs prevent this
+  - Context: PG mock stubs need add_entries/remove_entries/get_list_segment_summary; test assertions for find_lists_batch batch count need removal
+---
