@@ -36,9 +36,5 @@ This file tracks all major tracks for the project.
 - flag_eval_preview_20260514 (Flag Evaluation Preview — evaluate-preview endpoint with rule traces, rollout debug, OR/And missing-context fix)
 - context_intel_20260515 (Context Intelligence & Evaluation Telemetry — ClickHouse eval log, context registry, analytics tab, autocomplete, explorer)
 - db_optim_20260516 (Database & Query Optimizations — PostgreSQL indexes, N+1 elimination, SDK key cache, ClickHouse MV overhaul, partition tuning, offset pagination)
+- sdk_rewrite_20260516 (Clean SDK Implementation — sdks/ Foundation + Rust Server-Side SDK)
 -->
-
----
-
-## [x] Track: Clean SDK Implementation — sdks/ Foundation + Rust Server-Side SDK
-*Link: [./conductor/tracks/sdk_rewrite_20260516/](./conductor/tracks/sdk_rewrite_20260516/)*
