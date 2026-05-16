@@ -336,8 +336,8 @@ async fn context_registry_last_seen_index_purge_removes_old_params(pool: sqlx::P
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2 Task 1: Batch repository methods — find_batch_by_ids,
-// find_rules_batch, find_lists_batch
+// Batch repository methods — find_batch_by_ids, find_rules_batch
+// (find_lists_batch removed — list storage moved to ScyllaDB in Phase 2)
 // ---------------------------------------------------------------------------
 
 #[sqlx::test(migrations = "./migrations")]
@@ -475,51 +475,6 @@ async fn find_rules_batch_empty_ids_returns_empty_map(pool: sqlx::PgPool) {
     assert!(results.is_empty(), "empty input must yield empty map");
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn find_lists_batch_returns_entries_for_all_ids(pool: sqlx::PgPool) {
-    let (_, _, env) = seed_org_project_env(&pool).await;
-    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
-    let repo = PgSegmentRepository::new(pool.clone(), audit);
-
-    let mut seg_ids = Vec::new();
-    for i in 0..2 {
-        let seg = Segment {
-            id: SegmentId::new(),
-            environment_id: env.id,
-            key: format!("list-batch-{i}"),
-            segment_type: SegmentType::List,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            deleted_at: None,
-            version: 1,
-            name: format!("List Batch {i}"),
-            description: String::new(),
-            tags: vec![],
-        };
-        seg_ids.push(seg.id);
-        repo.create(&seg).await.unwrap();
-        repo.set_list_entries(seg.id, "user", &[format!("user-{i}")], &[])
-            .await
-            .unwrap();
-    }
-
-    let results = repo.find_lists_batch(&seg_ids).await.unwrap();
-    assert_eq!(results.len(), 2, "both segments must have list entries");
-    for id in &seg_ids {
-        assert!(results.contains_key(id), "missing list for segment {id}");
-        let list_def = &results[id];
-        assert!(
-            list_def.lists.contains_key("user"),
-            "must have 'user' context list"
-        );
-    }
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn find_lists_batch_empty_ids_returns_empty_map(pool: sqlx::PgPool) {
-    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
-    let repo = PgSegmentRepository::new(pool.clone(), audit);
-
-    let results = repo.find_lists_batch(&[]).await.unwrap();
-    assert!(results.is_empty(), "empty input must yield empty map");
-}
+// NOTE: find_lists_batch_returns_entries_for_all_ids and find_lists_batch_empty_ids_returns_empty_map
+// removed in Phase 2 (Scylla migration). find_lists_batch removed from SegmentRepository trait;
+// list-entry storage moved to ScyllaDB. See scylla_segment_repository.rs for replacement tests.

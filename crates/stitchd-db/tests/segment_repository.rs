@@ -104,69 +104,7 @@ async fn test_rule_based_segment_repository(pool: sqlx::PgPool) {
     assert_eq!(found2.rules[0].id, new_rules[0].id);
 }
 
-#[sqlx::test(migrations = "./migrations")]
-async fn test_list_based_segment_repository(pool: sqlx::PgPool) {
-    let (repo, env_id) = setup(&pool).await;
-
-    let segment_id = SegmentId::new();
-    let segment = Segment {
-        id: segment_id,
-        environment_id: env_id,
-        key: "list-segment".to_string(),
-        name: String::new(),
-        description: String::new(),
-        tags: vec![],
-        segment_type: SegmentType::List,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
-    repo.create(&segment).await.unwrap();
-
-    // 1. Set list entries
-    repo.set_list_entries(segment_id, "user", &["u1".to_string()], &["u2".to_string()])
-        .await
-        .unwrap();
-
-    // 2. Find with list
-    let found = repo.find_with_list(segment_id).await.unwrap();
-    let user_list = found.lists.get("user").unwrap();
-    assert!(user_list.include.contains("u1"));
-    assert!(user_list.exclude.contains("u2"));
-
-    // 3. Set replaces for context_type
-    repo.set_list_entries(segment_id, "user", &["u3".to_string()], &[])
-        .await
-        .unwrap();
-    let found2 = repo.find_with_list(segment_id).await.unwrap();
-    let user_list2 = found2.lists.get("user").unwrap();
-    assert!(user_list2.include.contains("u3"));
-    assert!(!user_list2.include.contains("u1"));
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn test_wrong_type_returns_not_found(pool: sqlx::PgPool) {
-    let (repo, env_id) = setup(&pool).await;
-
-    let segment_id = SegmentId::new();
-    let segment = Segment {
-        id: segment_id,
-        environment_id: env_id,
-        key: "rule-segment".to_string(),
-        name: String::new(),
-        description: String::new(),
-        tags: vec![],
-        segment_type: SegmentType::Rule,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
-    repo.create(&segment).await.unwrap();
-
-    // Try to find as list segment
-    let result = repo.find_with_list(segment_id).await;
-    assert!(result.is_err());
-    // Spec says NotFound for wrong type
-}
+// NOTE: test_list_based_segment_repository and test_wrong_type_returns_not_found
+// have been removed in Phase 2 (Scylla migration). find_with_list was removed from
+// the trait; list-entry storage moved to ScyllaDB. See scylla_segment_repository.rs
+// for the replacement Scylla-backed tests.
