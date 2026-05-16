@@ -16,14 +16,15 @@ use stitchd_db::{
 };
 use stitchd_proto::auth::v1::{
     CredentialRequest, ListUserOrgsRequest, ListUserOrgsResponse, LoginRequest, LoginResponse,
-    RbacContext, SwitchOrgRequest, SwitchOrgResponse, UserOrgEntry,
-    auth_service_server::AuthService, credential_request::Credential,
+    RbacContext, RefreshTokenRequest, RefreshTokenResponse, SwitchOrgRequest, SwitchOrgResponse,
+    UserOrgEntry, auth_service_server::AuthService, credential_request::Credential,
 };
 
 use crate::{
     jwt::validate_bearer_token,
     login::login_with_password,
     rbac::{rbac_context_from_jwt, rbac_context_from_sdk_key},
+    refresh::refresh_token,
     sdk_key::validate_sdk_key,
 };
 
@@ -161,6 +162,20 @@ impl AuthService for AuthServiceImpl {
             expires_in: 3600,
             org_id: membership.org_id.to_string(),
         }))
+    }
+
+    async fn refresh_token(
+        &self,
+        request: Request<RefreshTokenRequest>,
+    ) -> Result<Response<RefreshTokenResponse>, Status> {
+        refresh_token(
+            request,
+            &self.auth_user_repo,
+            &self.membership_repo,
+            &self.org_repo,
+            &self.refresh_token_repo,
+        )
+        .await
     }
 
     async fn list_user_orgs(

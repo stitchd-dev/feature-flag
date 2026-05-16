@@ -79,6 +79,19 @@ message ListUserOrgsResponse {
   repeated UserOrgEntry orgs = 1;
 }
 
+// ─── Token refresh ────────────────────────────────────────────────────────────
+
+message RefreshTokenRequest {
+  // The raw refresh token previously issued on login or switch-org.
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  string access_token  = 1;
+  string refresh_token = 2;
+  int64  expires_in    = 3;
+}
+
 // ─── Auth service ─────────────────────────────────────────────────────────────
 
 service AuthService {
@@ -94,4 +107,7 @@ service AuthService {
 
   // Lists all orgs the current user is a member of (excluding System orgs).
   rpc ListUserOrgs(ListUserOrgsRequest) returns (ListUserOrgsResponse);
+
+  // Exchange a valid refresh token for a new access + refresh token pair.
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
 }

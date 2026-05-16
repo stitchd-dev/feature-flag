@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::auth::v1::{ListUserOrgsRequest, LoginRequest, RbacContext, SwitchOrgRequest};
+use stitchd_proto::auth::v1::{
+    ListUserOrgsRequest, LoginRequest, RbacContext, RefreshTokenRequest, SwitchOrgRequest,
+};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -158,6 +160,38 @@ pub async fn switch_org(
 pub struct PermissionsJson {
     pub roles: Vec<String>,
     pub permissions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RefreshBody {
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshJson {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: i64,
+}
+
+/// `POST /v1/auth/refresh`
+///
+/// Exchange a valid refresh token for a fresh access + refresh token pair.
+pub async fn refresh(
+    State(state): State<Arc<GatewayState>>,
+    Json(body): Json<RefreshBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(RefreshTokenRequest {
+        refresh_token: body.refresh_token,
+    });
+    let mut client = state.auth_client.lock().await;
+    let resp = client.refresh_token(req).await.map_err(GatewayError::from)?;
+    let r = resp.into_inner();
+    Ok(Json(RefreshJson {
+        access_token: r.access_token,
+        refresh_token: r.refresh_token,
+        expires_in: r.expires_in,
+    }))
 }
 
 /// `GET /v1/auth/me/permissions`

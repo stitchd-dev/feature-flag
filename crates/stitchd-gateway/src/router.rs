@@ -32,6 +32,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
     let auth_routes = Router::new()
         .route("/health", get(|| async { StatusCode::OK }))
         .route("/v1/auth/login", post(auth::login))
+        .route("/v1/auth/refresh", post(auth::refresh))
         .route("/v1/auth/me/orgs", get(auth::list_user_orgs))
         .route("/v1/auth/switch-org", post(auth::switch_org))
         // OIDC: provider-scoped authorize + callback (public — redirected from IdP)

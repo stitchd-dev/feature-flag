@@ -31,7 +31,7 @@ export function OidcCallbackPage() {
         const isSystem = auth.decodeIsSystem(data.access_token)
         const roles = auth.decodeRoles(data.access_token)
         const permissions = auth.decodePermissions(data.access_token)
-        auth.setSession({ token: data.access_token, orgId: data.org_id, isSystem, userId: data.user_id, roles, permissions })
+        auth.setSession({ token: data.access_token, refreshToken: data.refresh_token, orgId: data.org_id, isSystem, userId: data.user_id, roles, permissions })
         if (isSystem) navigate('/superadmin', { replace: true })
         else navigate(`/org/${data.org_id}`, { replace: true })
       } catch (err: unknown) {

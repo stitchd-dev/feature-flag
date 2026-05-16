@@ -10,6 +10,7 @@ export interface OrgEntry {
 
 export interface Session {
   token: string
+  refreshToken?: string
   orgId: string
   isSystem: boolean
   userId: string

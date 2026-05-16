@@ -12,15 +12,47 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// On 401, clear session and redirect to login
+// On 401, attempt refresh once before redirecting to login.
+// Concurrent 401s are queued and replayed after a single refresh call.
+let refreshing: Promise<string> | null = null
+
 api.interceptors.response.use(
   (r) => r,
-  (err) => {
-    if (err.response?.status === 401) {
+  async (err) => {
+    const original = err.config
+    if (err.response?.status !== 401 || original._retried) {
+      return Promise.reject(err)
+    }
+    const refreshToken = auth.getSession()?.refreshToken
+    if (!refreshToken) {
       auth.clearSession()
       window.location.href = '/login'
+      return Promise.reject(err)
     }
-    return Promise.reject(err)
+    original._retried = true
+    if (!refreshing) {
+      refreshing = axios
+        .post<{ access_token: string; refresh_token: string; expires_in: number }>(
+          `${api.defaults.baseURL ?? '/api'}/v1/auth/refresh`,
+          { refresh_token: refreshToken },
+        )
+        .then(({ data }) => {
+          const session = auth.getSession()!
+          auth.setSession({ ...session, token: data.access_token, refreshToken: data.refresh_token })
+          return data.access_token
+        })
+        .catch((refreshErr) => {
+          auth.clearSession()
+          window.location.href = '/login'
+          return Promise.reject(refreshErr)
+        })
+        .finally(() => {
+          refreshing = null
+        })
+    }
+    const newToken = await refreshing
+    original.headers = { ...original.headers, Authorization: `Bearer ${newToken}` }
+    return api(original)
   },
 )
 
