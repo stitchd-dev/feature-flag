@@ -18,9 +18,10 @@ use axum::{
 };
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
+use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
     admin, auth, auth_providers, context_intel, eval_stats, events, experiments, flags, management,
-    oidc, saml, sdk, segments, stats,
+    oidc, saml, sdk, sdk_backend, segments, stats,
 };
 use crate::state::GatewayState;
 
@@ -134,6 +135,23 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .layer(middleware::from_fn_with_state(
             Arc::clone(&auth_client),
             auth_middleware,
+        ));
+
+    // ── NEW SDK backend routes (x-sdk-key auth via sdk_auth_middleware) ─────
+    // These implement the contract specified in sdks/spec/openapi/sdk.yaml
+    // for the clean-implementation SDK (sdks/rust/). They use the dedicated
+    // sdk_auth_middleware (which injects SdkContext) rather than the generic
+    // auth_middleware (which only injects RbacContext).
+    let sdk_backend_routes = Router::new()
+        .route(
+            "/v1/sdk/segments/list:batch",
+            post(sdk_backend::segments_list_batch),
+        )
+        .route("/v1/sdk/events:batch", post(sdk_backend::events_batch))
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&auth_client),
+            sdk_auth_middleware,
         ));
 
     // ── JWT-authenticated resource routes ─────────────────────────────────────
@@ -287,6 +305,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .merge(admin_routes)
         .merge(mgmt_routes)
         .merge(sdk_routes)
+        .merge(sdk_backend_routes)
         .merge(resource_routes)
         .merge(auth_provider_routes)
 }

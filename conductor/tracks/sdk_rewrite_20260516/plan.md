@@ -135,7 +135,7 @@ routes. Reuses `SdkKeyCache` from `db_optim_20260516`.
   - Uses existing `SdkKeyCache` from `stitchd-auth-service` (shared via
     `GatewayState` or new injection)
 
-- [ ] Task 2: Gateway REST routes for SDK
+- [x] Task 2: Gateway REST routes for SDK
   - `POST /v1/sdk/segments/list:batch` — extracts `SdkContext`, calls
     `stitchd-segmentation-service::BatchCheckListMembership` with `x-env-id`
     metadata, returns membership matrix
