@@ -3,10 +3,10 @@
 ## Phase 1: ScyllaDB Foundation & Driver Wiring
 <!-- execution: sequential -->
 
-- [ ] Task 1: Add ScyllaDB to docker-compose
+- [x] Task 1: Add ScyllaDB to docker-compose
   <!-- files: docker-compose.yml -->
-  - [ ] Add `scylladb` service with healthcheck, volume, ports
-  - [ ] Update segmentation-service `depends_on` to wait on Scylla health
+  - [x] Add `scylladb` service with healthcheck, volume, ports
+  - [x] Update segmentation-service `depends_on` to wait on Scylla health
   - [ ] Verify `docker compose up postgres clickhouse scylladb -d --wait` succeeds
 
 - [ ] Task 2: Add `scylla` crate dependency
