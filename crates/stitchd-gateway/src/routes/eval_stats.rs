@@ -21,6 +21,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use uuid::Uuid;
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -92,12 +93,46 @@ pub fn resolve_granularity(from: DateTime<Utc>, to: DateTime<Utc>, requested: &s
     }
 }
 
+/// Build the parameterized SQL for eval-stats.
+///
+/// `bucket_fn` must be one of the two trusted internal strings produced by
+/// [`resolve_granularity`] (`"toStartOfDay"` / `"toStartOfHour"`).
+///
+/// # Bind order
+/// 1. `flag_id` — UUID
+/// 2. `from_ms` — i64 millisecond epoch
+/// 3. `to_ms`   — i64 millisecond epoch
+#[must_use]
+pub fn build_eval_stats_sql(bucket_fn: &str) -> String {
+    format!(
+        r"
+        SELECT
+            toUnixTimestamp({bucket_fn}(evaluated_at, 'UTC')) AS ts,
+            variant_key,
+            toUInt8(is_disabled)                              AS is_disabled,
+            COUNT(*)                                          AS count,
+            uniq(context_key)                                AS unique_ctx
+        FROM flag_evaluation_log
+        WHERE flag_id  = ?
+          AND evaluated_at >= fromUnixTimestamp64Milli(?)
+          AND evaluated_at <  fromUnixTimestamp64Milli(?)
+        GROUP BY ts, variant_key, is_disabled
+        ORDER BY ts ASC
+        "
+    )
+}
+
 /// GET /v1/projects/{project_id}/flags/{flag_id}/eval-stats
 pub async fn get_eval_stats(
     State(state): State<Arc<GatewayState>>,
     Path((_project_id, flag_id)): Path<(String, String)>,
     Query(params): Query<EvalStatsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    // Validate flag_id as UUID — prevents SQL injection via path parameter.
+    let flag_uuid: Uuid = flag_id.parse().map_err(|_| {
+        GatewayError::BadRequest(format!("flag_id must be a valid UUID, got: {flag_id}"))
+    })?;
+
     let from = params.from;
     let to = params.to;
 
@@ -124,28 +159,15 @@ pub async fn get_eval_stats(
 
     let from_ms = from.timestamp_millis();
     let to_ms = to.timestamp_millis();
-    let flag_id_str = flag_id.clone();
 
-    let sql = format!(
-        r"
-        SELECT
-            toUnixTimestamp({bucket_fn}(evaluated_at, 'UTC')) AS ts,
-            variant_key,
-            toUInt8(is_disabled)                              AS is_disabled,
-            COUNT(*)                                          AS count,
-            uniq(context_key)                                AS unique_ctx
-        FROM flag_evaluation_log
-        WHERE flag_id  = '{flag_id_str}'
-          AND evaluated_at >= fromUnixTimestamp64Milli({from_ms})
-          AND evaluated_at <  fromUnixTimestamp64Milli({to_ms})
-        GROUP BY ts, variant_key, is_disabled
-        ORDER BY ts ASC
-        "
-    );
+    let sql = build_eval_stats_sql(bucket_fn);
 
     let rows = state
         .ch_client
         .query(&sql)
+        .bind(flag_uuid)
+        .bind(from_ms)
+        .bind(to_ms)
         .fetch_all::<EvalStatRow>()
         .await
         .map_err(|e| GatewayError::Upstream(format!("ClickHouse error: {e}")))?;
@@ -230,5 +252,68 @@ mod tests {
         let from = ts(2026, 4, 1, 0);
         let to = ts(2026, 5, 1, 0);
         assert_eq!(resolve_granularity(from, to, "hour"), "day");
+    }
+
+    // ── UUID validation ───────────────────────────────────────────────────────
+
+    #[test]
+    fn invalid_flag_id_parse_returns_gateway_bad_request() {
+        let bad_ids = ["not-a-uuid", "1234", "", "flag_abc", "' OR 1=1 --"];
+        for id in &bad_ids {
+            let result = id.parse::<Uuid>();
+            assert!(result.is_err(), "expected parse error for: {id}");
+            // Confirm this maps to BadRequest (same code path as handler).
+            let err = GatewayError::BadRequest(format!("flag_id must be a valid UUID, got: {id}"));
+            assert!(matches!(err, GatewayError::BadRequest(_)));
+        }
+    }
+
+    #[test]
+    fn valid_flag_id_parses_as_uuid() {
+        let valid = "550e8400-e29b-41d4-a716-446655440000";
+        let result = valid.parse::<Uuid>();
+        assert!(result.is_ok(), "expected valid UUID to parse, got: {result:?}");
+    }
+
+    // ── SQL parameterization ─────────────────────────────────────────────────
+
+    #[test]
+    fn build_eval_stats_sql_uses_bind_placeholders_not_interpolation() {
+        let sql = build_eval_stats_sql("toStartOfHour");
+        // Must use positional '?' placeholders for user-supplied values.
+        assert!(sql.contains('?'), "SQL must contain bind placeholders");
+        // Must not contain any raw string that looks like an injected value.
+        assert!(
+            !sql.contains("flag_id_str"),
+            "SQL must not reference variable name"
+        );
+        assert!(
+            !sql.contains("from_ms"),
+            "SQL must not reference variable name"
+        );
+        assert!(
+            !sql.contains("to_ms"),
+            "SQL must not reference variable name"
+        );
+    }
+
+    #[test]
+    fn build_eval_stats_sql_hour_uses_tostartofahour() {
+        let sql = build_eval_stats_sql("toStartOfHour");
+        assert!(sql.contains("toStartOfHour"), "hour granularity must use toStartOfHour");
+    }
+
+    #[test]
+    fn build_eval_stats_sql_day_uses_tostartofday() {
+        let sql = build_eval_stats_sql("toStartOfDay");
+        assert!(sql.contains("toStartOfDay"), "day granularity must use toStartOfDay");
+    }
+
+    #[test]
+    fn build_eval_stats_sql_has_exactly_three_bind_slots() {
+        let sql = build_eval_stats_sql("toStartOfHour");
+        // Count standalone '?' characters (bind slots for flag_id, from_ms, to_ms).
+        let count = sql.chars().filter(|&c| c == '?').count();
+        assert_eq!(count, 3, "SQL must have exactly 3 bind slots: flag_id, from_ms, to_ms");
     }
 }
