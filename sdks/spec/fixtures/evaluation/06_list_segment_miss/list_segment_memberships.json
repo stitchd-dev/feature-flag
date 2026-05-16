@@ -1,0 +1,15 @@
+{
+  "preseed_lru": [],
+  "on_miss_responses": [
+    {
+      "match_query": {
+        "context_type": "org",
+        "context_key": "startup",
+        "segment_ids_contains": "22222222-2222-2222-2222-222222222222"
+      },
+      "return_memberships": {
+        "22222222-2222-2222-2222-222222222222": true
+      }
+    }
+  ]
+}

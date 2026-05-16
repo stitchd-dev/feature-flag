@@ -15,8 +15,10 @@
         { "type": "integer" },
         { "type": "number" },
         { "type": "string" },
-        { "type": "object" }
-      ]
+        { "type": "object" },
+        { "type": "null" }
+      ],
+      "description": "null only legitimate for outcome = \"flag_not_found\""
     },
     "outcome": {
       "type": "string",

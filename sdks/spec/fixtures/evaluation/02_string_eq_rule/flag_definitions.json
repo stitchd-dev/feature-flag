@@ -1,0 +1,30 @@
+{
+  "flags": [
+    {
+      "key": "welcome-banner",
+      "value_type": "string",
+      "enabled": true,
+      "environment_id": "00000000-0000-0000-0000-000000000001",
+      "variants": [
+        {"key": "generic",     "value": "Welcome!"},
+        {"key": "personalized", "value": "Welcome back, valued Pro user!"}
+      ],
+      "default_rule": {
+        "variant_assignment": {"specific_variant": "generic"}
+      },
+      "rules": [
+        {
+          "rule_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          "rule_name": "pro-users-get-personalized",
+          "condition": {
+            "op": "Eq",
+            "context_type": "user",
+            "param": "plan",
+            "value": "pro"
+          },
+          "variant_assignment": {"specific_variant": "personalized"}
+        }
+      ]
+    }
+  ]
+}

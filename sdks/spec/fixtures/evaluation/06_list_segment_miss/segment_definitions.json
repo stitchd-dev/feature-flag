@@ -1,0 +1,10 @@
+{
+  "rule_segments": [],
+  "list_segments": [
+    {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "key": "early-access-orgs",
+      "context_type": "org"
+    }
+  ]
+}

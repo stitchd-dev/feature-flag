@@ -35,6 +35,10 @@
         {
           "type": "object",
           "description": "JSON-typed variant. Implementations MAY surface as a parsed object or as a string depending on idiomatic conventions."
+        },
+        {
+          "type": "null",
+          "description": "Only legitimate for outcome = \"flag_not_found\" — SDK does not know the flag's value_type and so cannot synthesise a type-appropriate default."
         }
       ]
     }

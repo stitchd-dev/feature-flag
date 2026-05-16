@@ -1,0 +1,18 @@
+{
+  "flags": [
+    {
+      "key": "homepage-redesign",
+      "value_type": "bool",
+      "enabled": true,
+      "environment_id": "00000000-0000-0000-0000-000000000001",
+      "variants": [
+        {"key": "true",  "value": true},
+        {"key": "false", "value": false}
+      ],
+      "default_rule": {
+        "variant_assignment": {"specific_variant": "true"}
+      },
+      "rules": []
+    }
+  ]
+}

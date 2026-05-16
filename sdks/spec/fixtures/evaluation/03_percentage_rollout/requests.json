@@ -1,0 +1,20 @@
+[
+  {
+    "flag_key": "checkout-flow",
+    "context": {
+      "type": "user",
+      "key": "alice",
+      "parameters": {},
+      "private_parameters": []
+    }
+  },
+  {
+    "flag_key": "checkout-flow",
+    "context": {
+      "type": "user",
+      "key": "bob",
+      "parameters": {},
+      "private_parameters": []
+    }
+  }
+]

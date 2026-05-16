@@ -1,0 +1,11 @@
+[
+  {
+    "flag_key": "homepage-redesign",
+    "context": {
+      "type": "user",
+      "key": "alice",
+      "parameters": {},
+      "private_parameters": []
+    }
+  }
+]

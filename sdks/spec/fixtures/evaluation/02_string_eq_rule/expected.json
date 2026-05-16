@@ -1,0 +1,14 @@
+[
+  {
+    "flag_key": "welcome-banner",
+    "variant_key": "personalized",
+    "value": "Welcome back, valued Pro user!",
+    "outcome": "matched"
+  },
+  {
+    "flag_key": "welcome-banner",
+    "variant_key": "generic",
+    "value": "Welcome!",
+    "outcome": "default_rule"
+  }
+]

@@ -1,0 +1,28 @@
+{
+  "flags": [
+    {
+      "key": "beta-feature",
+      "value_type": "bool",
+      "enabled": true,
+      "environment_id": "00000000-0000-0000-0000-000000000001",
+      "variants": [
+        {"key": "on",  "value": true},
+        {"key": "off", "value": false}
+      ],
+      "default_rule": {
+        "variant_assignment": {"specific_variant": "off"}
+      },
+      "rules": [
+        {
+          "rule_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+          "rule_name": "early-access-orgs-get-beta",
+          "condition": {
+            "op": "InSegment",
+            "segment_id": "22222222-2222-2222-2222-222222222222"
+          },
+          "variant_assignment": {"specific_variant": "on"}
+        }
+      ]
+    }
+  ]
+}

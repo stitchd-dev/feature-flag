@@ -1,0 +1,59 @@
+{
+  "description": "MurmurHash3 x64_128 reference vectors. Inputs are concatenated UTF-8 strings (NO separator). Output is u128. Bucket = floor((u128 mod 100000) / 1000 * 10) clamped to [0, 999]. Source: crates/stitchd-core/src/hashing.rs::calculate_allocation, murmur3 crate v0.5.2.",
+  "algorithm": {
+    "hash": "murmur3_x64_128(input_bytes, seed=0)",
+    "reduction": "percent = (u128 mod 100000) / 1000.0; bucket = min(999, floor(percent * 10))"
+  },
+  "vectors": [
+    {
+      "name": "checkout-alice",
+      "flag_key": "checkout-flow",
+      "env_id": "00000000-0000-0000-0000-000000000001",
+      "target_values": ["alice"],
+      "concatenated_input": "checkout-flow00000000-0000-0000-0000-000000000001alice",
+      "expected_u128_hash": "222181947253813895803534738316378551102",
+      "expected_percent": 51.102,
+      "expected_bucket": 511
+    },
+    {
+      "name": "checkout-bob",
+      "flag_key": "checkout-flow",
+      "env_id": "00000000-0000-0000-0000-000000000001",
+      "target_values": ["bob"],
+      "concatenated_input": "checkout-flow00000000-0000-0000-0000-000000000001bob",
+      "expected_u128_hash": "18952123904222406138070807736280323342",
+      "expected_percent": 23.342,
+      "expected_bucket": 233
+    },
+    {
+      "name": "new-pricing-user42",
+      "flag_key": "new-pricing",
+      "env_id": "11111111-1111-1111-1111-111111111111",
+      "target_values": ["user-42"],
+      "concatenated_input": "new-pricing11111111-1111-1111-1111-111111111111user-42",
+      "expected_u128_hash": "168110605657145194934791374285431545175",
+      "expected_percent": 45.175,
+      "expected_bucket": 451
+    },
+    {
+      "name": "homepage-empty-targets",
+      "flag_key": "homepage-redesign",
+      "env_id": "00000000-0000-0000-0000-000000000001",
+      "target_values": [],
+      "concatenated_input": "homepage-redesign00000000-0000-0000-0000-000000000001",
+      "expected_u128_hash": "228078977241418722764046033579419205404",
+      "expected_percent": 5.404,
+      "expected_bucket": 54
+    },
+    {
+      "name": "minimal-3-segment",
+      "flag_key": "flag-X",
+      "env_id": "env-Y",
+      "target_values": ["ctx-Z"],
+      "concatenated_input": "flag-Xenv-Yctx-Z",
+      "expected_u128_hash": "34508178141733093739110042051873359827",
+      "expected_percent": 59.827,
+      "expected_bucket": 598
+    }
+  ]
+}

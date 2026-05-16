@@ -45,7 +45,7 @@ are pinned before downstream phases reference them.
   - `sdk_config.schema.json`
   - TDD: `jsonschema` library validates each schema is itself well-formed
 
-- [ ] Task 6: Author initial conformance fixtures (`sdks/spec/fixtures/`)
+- [x] Task 6: Author initial conformance fixtures (`sdks/spec/fixtures/`)
   - Directory layout: `fixtures/{evaluation,caching,events}/<scenario>/`
   - Each scenario contains: `flag_definitions.json`, `segment_definitions.json`,
     `requests.json` (inputs), `expected.json` (outputs)
