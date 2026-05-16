@@ -27,7 +27,7 @@ Track: `db_optim_20260516`
   - 20260516000004: idx_context_type_registry_last_seen + idx_context_param_registry_last_seen
   - sqlx::test: context_registry_last_seen_index_purge_removes_old_types + old_params
 
-- [ ] Task: Conductor - User Manual Verification 'PostgreSQL Index Layer' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'PostgreSQL Index Layer' (Protocol in workflow.md) [checkpoint: 42dd283]
 
 ---
 
