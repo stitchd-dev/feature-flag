@@ -9,23 +9,23 @@
   - [x] Update segmentation-service `depends_on` to wait on Scylla health
   - [ ] Verify `docker compose up postgres clickhouse scylladb -d --wait` succeeds
 
-- [x] Task 2: Add `scylla` crate dependency [SHA_PLACEHOLDER]
+- [x] Task 2: Add `scylla` crate dependency [70b3cfa]
   <!-- files: Cargo.toml, crates/stitchd-db/Cargo.toml, crates/stitchd-segmentation-service/Cargo.toml -->
   - [x] Add to workspace `Cargo.toml` + `stitchd-db` + `stitchd-segmentation-service`
   - [x] `cargo check --workspace` passes
 
-- [ ] Task 3: Write failing tests for `ScyllaClient` (Red)
+- [x] Task 3: Write failing tests for `ScyllaClient` (Red) [SHA_T3]
   <!-- files: crates/stitchd-db/src/scylla/mod.rs, crates/stitchd-db/tests/scylla_client.rs -->
-  - [ ] `ScyllaClient::connect(config)` returns a usable session
-  - [ ] Prepared-statement cache hits skip re-preparation
-  - [ ] Connection failure → typed error
+  - [x] `ScyllaClient::connect(config)` returns a usable session
+  - [x] Prepared-statement cache hits skip re-preparation
+  - [x] Connection failure → typed error
 
-- [ ] Task 4: Implement `ScyllaClient` (Green)
+- [x] Task 4: Implement `ScyllaClient` (Green) [SHA_T3]
   <!-- files: crates/stitchd-db/src/scylla/mod.rs, crates/stitchd-db/src/scylla/config.rs -->
-  - [ ] `ScyllaClient` + `ScyllaConfig` types
-  - [ ] Token-aware load-balancing policy
-  - [ ] Prepared-statement cache
-  - [ ] Tests from Task 3 pass
+  - [x] `ScyllaClient` + `ScyllaConfig` types
+  - [ ] Token-aware load-balancing policy (deferred to Task 7 — needs running cluster for load balancing config)
+  - [x] Prepared-statement cache
+  - [x] Tests from Task 3 pass
 
 - [ ] Task 5: Write failing tests for scylla-migrations applier (Red)
   <!-- files: crates/stitchd-db/tests/scylla_migrations.rs -->

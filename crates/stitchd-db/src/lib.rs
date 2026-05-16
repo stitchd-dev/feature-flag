@@ -7,6 +7,8 @@
 
 pub mod auth;
 pub mod clickhouse;
+/// ScyllaDB client, migration applier, and list-segment repository.
+pub mod scylla;
 pub mod error;
 pub mod experiment_results;
 pub mod repository;
