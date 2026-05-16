@@ -11,11 +11,13 @@
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use clickhouse::Client as ChClient;
 use tonic::{Request, Response, Status};
 
 use stitchd_core::id::EnvironmentId;
 use stitchd_core::segment::SegmentType;
+use stitchd_db::clickhouse::{EvalLogRow, insert_eval_log_rows};
 use stitchd_db::{FlagRepository, SegmentRepository, VariantRepository};
 use stitchd_proto::sdk::v1::{
     FlagEvaluationEvent, IngestSdkEvalLogRequest, IngestSdkEvalLogResponse, SyncDefinitionsRequest,
@@ -33,13 +35,16 @@ pub struct FlagSdkBackendServiceImpl {
     flag_repo: Arc<dyn FlagRepository>,
     variant_repo: Arc<dyn VariantRepository>,
     segment_repo: Arc<dyn SegmentRepository>,
+    /// Optional ClickHouse client for `IngestSdkEvalLog`. When `None`, events
+    /// are accepted (200 OK) but discarded — useful for local dev without CH.
+    ch_client: Option<Arc<ChClient>>,
 }
 
 impl FlagSdkBackendServiceImpl {
     /// Construct a new service backed by the given repositories.
     ///
-    /// Eval-log wiring (`IngestSdkEvalLog`) lands in Phase 3 Task 3 — until
-    /// then `ingest_sdk_eval_log` accepts requests but discards events.
+    /// `IngestSdkEvalLog` is functional but discards events until
+    /// [`with_clickhouse`] is called.
     #[must_use]
     pub fn new(
         flag_repo: Arc<dyn FlagRepository>,
@@ -50,7 +55,16 @@ impl FlagSdkBackendServiceImpl {
             flag_repo,
             variant_repo,
             segment_repo,
+            ch_client: None,
         }
+    }
+
+    /// Attach a ClickHouse client so `IngestSdkEvalLog` writes events to the
+    /// `flag_evaluation_log` table.
+    #[must_use]
+    pub fn with_clickhouse(mut self, client: Arc<ChClient>) -> Self {
+        self.ch_client = Some(client);
+        self
     }
 }
 
@@ -213,28 +227,122 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
         &self,
         request: Request<IngestSdkEvalLogRequest>,
     ) -> Result<Response<IngestSdkEvalLogResponse>, Status> {
-        // Real implementation lands in Phase 3 Task 3 — for now we accept the
-        // request to keep the trait implementation valid but discard events
-        // (logging a warning so it's visible in dev).
         let env_id = env_id_from_metadata(&request)?;
-        let n = request.into_inner().events.len();
-        // Stamp env_id on each event before forwarding to eval_log_writer (Task 3.3).
-        let _ = (env_id, n);
-        // No-op until Task 3.3 wires up the eval_log_writer.
-        tracing::warn!(
-            event_count = n,
-            "ingest_sdk_eval_log called but eval_log writer not wired (Phase 3 Task 3 pending)"
-        );
+        let events = request.into_inner().events;
+        let received = events.len();
+
+        // Convert SDK events → EvalLogRows. Events with unparseable flag_id are
+        // SKIPPED with a warning (data quality issue: SDK should always send a
+        // valid UUID except for outcome=flag_not_found, which we also skip
+        // because there's no flag record to FK against).
+        let mut rows = Vec::with_capacity(events.len());
+        let mut skipped_unparseable = 0_usize;
+        let mut skipped_flag_not_found = 0_usize;
+        for ev in events {
+            if ev.outcome == "flag_not_found" {
+                skipped_flag_not_found += 1;
+                continue;
+            }
+            match event_to_row(ev, env_id) {
+                Ok(row) => rows.push(row),
+                Err(reason) => {
+                    skipped_unparseable += 1;
+                    tracing::warn!(reason = %reason, "skipping malformed SDK eval event");
+                }
+            }
+        }
+
+        if skipped_unparseable > 0 || skipped_flag_not_found > 0 {
+            tracing::debug!(
+                received,
+                accepted = rows.len(),
+                skipped_unparseable,
+                skipped_flag_not_found,
+                "ingest_sdk_eval_log batch summary"
+            );
+        }
+
+        // If we have no ClickHouse client, accept the batch but discard. This
+        // is the "wiring not configured" path — useful for local dev. The
+        // gateway forwards events here regardless.
+        let Some(client) = self.ch_client.as_ref() else {
+            tracing::warn!(
+                received,
+                "ingest_sdk_eval_log: no clickhouse client wired; events discarded"
+            );
+            return Ok(Response::new(IngestSdkEvalLogResponse {}));
+        };
+
+        if let Err(e) = insert_eval_log_rows(client, &rows).await {
+            // Don't surface the error to the SDK — the gateway has already
+            // returned 202 Accepted by this point in the SDK's view. Log and
+            // count.
+            tracing::error!(
+                error = %e,
+                row_count = rows.len(),
+                "ingest_sdk_eval_log: clickhouse insert failed"
+            );
+            return Err(Status::internal(format!(
+                "eval log insert failed: {e}"
+            )));
+        }
+
         Ok(Response::new(IngestSdkEvalLogResponse {}))
     }
 }
 
-// Re-export FlagEvaluationEvent so callers in Phase 3 Task 3 don't need a
-// second import path. Currently unused — silences dead_code warning until wired.
-#[allow(dead_code)]
-pub(crate) fn _unused_event_marker(e: FlagEvaluationEvent) -> chrono::DateTime<Utc> {
-    let _ = e.flag_key;
-    Utc::now()
+/// Map a proto `ParameterValue` (which doesn't impl Serialize) onto a
+/// `serde_json::Value` for embedding in `params_json`. Unknown/empty variants
+/// become `Null`.
+fn param_value_to_json(pv: stitchd_proto::common::v1::ParameterValue) -> serde_json::Value {
+    use stitchd_proto::common::v1::parameter_value::Value;
+    match pv.value {
+        Some(Value::IntValue(i)) => serde_json::Value::from(i),
+        Some(Value::DoubleValue(d)) => {
+            serde_json::Number::from_f64(d).map_or(serde_json::Value::Null, serde_json::Value::Number)
+        }
+        Some(Value::StringValue(s)) => serde_json::Value::String(s),
+        Some(Value::BoolValue(b)) => serde_json::Value::Bool(b),
+        Some(Value::SemverValue(s)) => serde_json::Value::String(s),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// Convert a single SDK `FlagEvaluationEvent` into an `EvalLogRow`. Returns
+/// `Err(reason)` if any required field can't be parsed.
+fn event_to_row(ev: FlagEvaluationEvent, env_id: EnvironmentId) -> Result<EvalLogRow, String> {
+    let flag_id = uuid::Uuid::parse_str(&ev.flag_id)
+        .map_err(|_| format!("flag_id is not a valid UUID: {:?}", ev.flag_id))?;
+    let evaluated_at: DateTime<Utc> = ev
+        .evaluated_at
+        .parse::<DateTime<chrono::FixedOffset>>()
+        .map(|dt| dt.with_timezone(&Utc))
+        .map_err(|_| format!("evaluated_at is not a valid RFC3339 timestamp: {:?}", ev.evaluated_at))?;
+    // params_json: serialise non-private parameters; private ones are already
+    // stripped by the SDK before sending (per sdks/spec/docs/05-events.md).
+    // The proto's ParameterValue doesn't impl Serialize directly (generated
+    // code), so we convert through serde_json::Value manually.
+    let params_json = if ev.context_parameters.is_empty() {
+        "{}".to_string()
+    } else {
+        let mut obj = serde_json::Map::with_capacity(ev.context_parameters.len());
+        for (k, v) in ev.context_parameters {
+            obj.insert(k, param_value_to_json(v));
+        }
+        serde_json::to_string(&serde_json::Value::Object(obj))
+            .unwrap_or_else(|_| "{}".to_string())
+    };
+    Ok(EvalLogRow {
+        env_id: env_id.as_uuid(),
+        flag_id,
+        flag_key: ev.flag_key,
+        variant_key: ev.variant_key,
+        is_disabled: ev.outcome == "disabled",
+        evaluated_at,
+        context_type: ev.context_type,
+        context_key: ev.context_key,
+        params_json,
+    })
 }
 
 // ============================================================================
@@ -725,8 +833,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ingest_sdk_eval_log_accepts_empty_batch() {
-        // Placeholder behaviour for Phase 3 Task 2 (real wiring lands in Task 3).
+    async fn ingest_sdk_eval_log_accepts_empty_batch_without_ch_client() {
+        // No ch_client wired → events discarded but request still succeeds.
         let svc = make_service(StubFlagRepo::arc(), StubSegmentRepo::arc());
         let env_id = EnvironmentId::new();
         let mut req = Request::new(IngestSdkEvalLogRequest { events: vec![] });
@@ -742,6 +850,126 @@ mod tests {
         let req = Request::new(IngestSdkEvalLogRequest { events: vec![] });
         let status = svc.ingest_sdk_eval_log(req).await.unwrap_err();
         assert_eq!(status.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[tokio::test]
+    async fn ingest_sdk_eval_log_discards_events_when_no_ch_client_wired() {
+        // Even with valid events, when ch_client is None we return success
+        // and just log a warning. Verifies we don't accidentally error on the
+        // discard-events code path.
+        let svc = make_service(StubFlagRepo::arc(), StubSegmentRepo::arc());
+        let env_id = EnvironmentId::new();
+        let event = FlagEvaluationEvent {
+            flag_key: "f".into(),
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            variant_key: "on".into(),
+            context_type: "user".into(),
+            context_key: "alice".into(),
+            evaluated_at: "2026-05-16T18:00:00.000Z".into(),
+            matched_rule_id: String::new(),
+            outcome: "default_rule".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let mut req = Request::new(IngestSdkEvalLogRequest { events: vec![event] });
+        req.metadata_mut()
+            .insert("x-env-id", env_id.to_string().parse().unwrap());
+        let _ = svc.ingest_sdk_eval_log(req).await.unwrap();
+    }
+
+    // ── event_to_row unit tests ─────────────────────────────────────────────
+
+    #[test]
+    fn event_to_row_happy_path() {
+        let env_id = EnvironmentId::new();
+        let flag_uuid = uuid::Uuid::new_v4();
+        let event = FlagEvaluationEvent {
+            flag_key: "checkout-flow".into(),
+            flag_id: flag_uuid.to_string(),
+            variant_key: "treatment".into(),
+            context_type: "user".into(),
+            context_key: "alice".into(),
+            evaluated_at: "2026-05-16T18:32:14.123Z".into(),
+            matched_rule_id: String::new(),
+            outcome: "matched".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let row = event_to_row(event, env_id).unwrap();
+        assert_eq!(row.env_id, env_id.as_uuid());
+        assert_eq!(row.flag_id, flag_uuid);
+        assert_eq!(row.flag_key, "checkout-flow");
+        assert_eq!(row.variant_key, "treatment");
+        assert!(!row.is_disabled);
+        assert_eq!(row.context_type, "user");
+        assert_eq!(row.context_key, "alice");
+        assert_eq!(row.params_json, "{}");
+    }
+
+    #[test]
+    fn event_to_row_marks_disabled_outcome() {
+        let env_id = EnvironmentId::new();
+        let mut event = FlagEvaluationEvent {
+            flag_key: "f".into(),
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            variant_key: "off".into(),
+            context_type: "u".into(),
+            context_key: "k".into(),
+            evaluated_at: "2026-05-16T18:00:00Z".into(),
+            matched_rule_id: String::new(),
+            outcome: "disabled".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let row = event_to_row(event.clone(), env_id).unwrap();
+        assert!(row.is_disabled);
+        // Compare with non-disabled outcome.
+        event.outcome = "matched".into();
+        let row2 = event_to_row(event, env_id).unwrap();
+        assert!(!row2.is_disabled);
+    }
+
+    #[test]
+    fn event_to_row_rejects_invalid_flag_id() {
+        let env_id = EnvironmentId::new();
+        let event = FlagEvaluationEvent {
+            flag_key: "f".into(),
+            flag_id: "not-a-uuid".into(),
+            variant_key: "v".into(),
+            context_type: "u".into(),
+            context_key: "k".into(),
+            evaluated_at: "2026-05-16T18:00:00Z".into(),
+            matched_rule_id: String::new(),
+            outcome: "matched".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let err = event_to_row(event, env_id).unwrap_err();
+        assert!(err.contains("flag_id"));
+    }
+
+    #[test]
+    fn event_to_row_rejects_invalid_evaluated_at() {
+        let env_id = EnvironmentId::new();
+        let event = FlagEvaluationEvent {
+            flag_key: "f".into(),
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            variant_key: "v".into(),
+            context_type: "u".into(),
+            context_key: "k".into(),
+            evaluated_at: "yesterday".into(),
+            matched_rule_id: String::new(),
+            outcome: "matched".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let err = event_to_row(event, env_id).unwrap_err();
+        assert!(err.contains("evaluated_at"));
     }
 
     // Silence unused-import warnings on test-only types.

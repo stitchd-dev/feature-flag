@@ -11,6 +11,9 @@ Formal schema: `sdks/spec/schemas/flag_evaluation_event.schema.json`.
 ```
 FlagEvaluationEvent {
   flag_key:            String       // required
+  flag_id:             String (UUID) // required (empty string for outcome=flag_not_found)
+                                     //   — SDK reads from loaded FeatureFlag definition;
+                                     //   backend uses directly as FK to feature_flags.id
   environment_id:      String (UUID) // required — resolved from the SDK key
   variant_key:         String       // required — the variant key that was returned
   context_type:        String       // required
@@ -22,6 +25,11 @@ FlagEvaluationEvent {
   context_parameters:  Object | null  // see *Parameter Redaction* below
 }
 ```
+
+`flag_id` was added during Phase 3 Task 3 implementation. The SDK has the flag_id
+in its in-memory snapshot (from the FeatureFlag proto returned by SyncDefinitions),
+so including it in every event payload is free for the SDK and saves a per-event
+flag-key lookup on the backend hot path.
 
 Notes:
 

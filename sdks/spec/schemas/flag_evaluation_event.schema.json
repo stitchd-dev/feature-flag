@@ -16,6 +16,10 @@
   "additionalProperties": false,
   "properties": {
     "flag_key": { "type": "string", "minLength": 1 },
+    "flag_id": {
+      "type": "string",
+      "description": "UUID of the flag record. SDK reads from loaded FeatureFlag definition; backend uses directly as FK to feature_flags.id. Empty string for outcome = flag_not_found."
+    },
     "variant_key": {
       "type": "string",
       "description": "Variant key returned. For outcome = flag_not_found, this is the default-for-type value stringified."

@@ -103,6 +103,13 @@ message FlagEvaluationEvent {
   // stringified.
   string variant_key = 2;
 
+  // UUID of the flag record. The SDK reads this from the FeatureFlag
+  // definition it loaded via SyncDefinitions, so no per-event flag lookup is
+  // needed on the backend (gateway forwards events as-is; the eval log writer
+  // uses this field directly as the FK to feature_flags.id).
+  // Empty string for outcome = "flag_not_found" (no record exists).
+  string flag_id = 11;
+
   // The context this evaluation was run against.
   string context_type = 3;
   string context_key  = 4;

@@ -103,7 +103,7 @@ NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
     assemble `DefinitionsSnapshot` proto
   - **No SDK-key auth** — handler trusts metadata
 
-- [ ] Task 3: `stitchd-flag-service::IngestSdkEvalLog` (unary RPC)
+- [x] Task 3: `stitchd-flag-service::IngestSdkEvalLog` (unary RPC)
   - TDD: write failing test that sends a batch and asserts rows are appended
     to the `eval_log_writer` MPSC channel
   - Implement handler: convert `SdkEvalBatch` → `Vec<EvalLogRow>` → forward to

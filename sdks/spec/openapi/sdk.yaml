@@ -296,6 +296,13 @@ components:
         flag_key:
           type: string
           minLength: 1
+        flag_id:
+          type: string
+          description: |
+            UUID of the flag record. The SDK reads this from the loaded
+            FeatureFlag definition; backend uses it directly as the FK to
+            `feature_flags.id` without a per-event lookup. Empty string for
+            `outcome = "flag_not_found"`.
         variant_key:
           type: string
           description: |
