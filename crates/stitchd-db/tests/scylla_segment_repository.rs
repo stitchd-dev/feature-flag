@@ -176,8 +176,8 @@ async fn set_list_entries_replaces_atomically() {
         .await
         .expect("gen2 should exist");
 
-    // Pointer must have advanced.
-    assert!(gen2 > gen1, "generation must increment on replace");
+    // Pointer must have changed (random generation IDs — not necessarily ordered).
+    assert_ne!(gen2, gen1, "generation must change on replace");
 
     // New generation has only carol.
     let inc_count_new = count_entries(&client, &ks, seg_id.as_uuid(), "user", gen2, "include").await;
