@@ -36,7 +36,7 @@ SELECT
     metric_key,
     toDate(timestamp)                                                            AS day,
     countState()                                                                 AS count_state,
-    sumState(coalesce(value_double, CAST(value_int AS Nullable(Float64))))       AS sum_state,
+    sumState(ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))), 0.0)) AS sum_state,
     uniqState(arrayFirst(t -> t.2 != '', contexts).2)                           AS uniq_ctx_state
 FROM events
 WHERE arrayExists(t -> t.1 = 'experiment', contexts)
