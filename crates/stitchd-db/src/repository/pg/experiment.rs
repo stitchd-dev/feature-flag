@@ -121,7 +121,7 @@ impl ExperimentRepository for PgExperimentRepository {
             r"
             SELECT
                 id, env_id, flag_rule_id, name, description, hypothesis, status,
-                metric_keys, traffic_allocation, min_sample_size,
+                metric_keys, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
                 scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at,
                 COUNT(*) OVER() AS total_count
             FROM experiments
