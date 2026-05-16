@@ -339,6 +339,43 @@ pub mod tests {
         ) -> Result<(), RepositoryError> {
             Ok(())
         }
+
+        async fn find_batch_by_ids(
+            &self,
+            ids: &[SegmentId],
+        ) -> Result<Vec<Segment>, RepositoryError> {
+            let segs = self.segments.lock().unwrap();
+            let result = segs
+                .values()
+                .filter(|s| ids.contains(&s.id))
+                .cloned()
+                .collect();
+            Ok(result)
+        }
+
+        async fn find_rules_batch(
+            &self,
+            ids: &[SegmentId],
+        ) -> Result<std::collections::HashMap<SegmentId, RuleBasedSegment>, RepositoryError> {
+            let defs = self.rule_defs.lock().unwrap();
+            let result = ids
+                .iter()
+                .filter_map(|id| defs.get(id).map(|d| (*id, d.clone())))
+                .collect();
+            Ok(result)
+        }
+
+        async fn find_lists_batch(
+            &self,
+            ids: &[SegmentId],
+        ) -> Result<std::collections::HashMap<SegmentId, ListBasedSegment>, RepositoryError> {
+            let defs = self.list_defs.lock().unwrap();
+            let result = ids
+                .iter()
+                .filter_map(|id| defs.get(id).map(|d| (*id, d.clone())))
+                .collect();
+            Ok(result)
+        }
     }
 
     // -------------------------------------------------------------------------

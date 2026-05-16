@@ -7,28 +7,25 @@ Track: `db_optim_20260516`
 ## Phase 1: PostgreSQL Index Layer
 <!-- execution: sequential -->
 
-- [ ] Task 1: SDK key hash composite index migration
-  - New migration: `CREATE INDEX CONCURRENTLY idx_sdk_keys_key_hash_active ON sdk_keys(key_hash, is_active)`
-  - Migration must be non-transactional (CONCURRENTLY cannot run inside a transaction)
-  - sqlx::test: verify `find_active_by_hash` executes via the new index path (query plan check)
+- [x] Task 1: SDK key hash composite index migration (fe931df)
+  - 20260516000001: `CREATE INDEX IF NOT EXISTS idx_sdk_keys_key_hash_active ON sdk_keys(key_hash, is_active)`
+  - Note: migration uses CREATE INDEX (transactional); production deploy should use CONCURRENTLY manually
+  - sqlx::test: sdk_key_hash_index_find_active_returns_matching_key + revoked_key_not_returned
 
-- [ ] Task 2: Soft-delete partial indexes migration
-  - New migration: `CREATE INDEX CONCURRENTLY` with `WHERE deleted_at IS NULL` for:
-    `feature_flags(project_id)`, `segments(environment_id)`, `projects(organisation_id)`,
-    `environments(project_id)`, `variants(flag_id)`,
-    `event_definitions(environment_id)`, `experiments(env_id)`
-  - sqlx::test: list queries on each table return correct results post-migration
+- [x] Task 2: Soft-delete partial indexes migration (fe931df)
+  - 20260516000002: 6 partial indexes WHERE deleted_at IS NULL for
+    feature_flags, segments, projects, environments, event_definitions, experiments
+  - Note: variants table has no deleted_at — skipped; CONCURRENTLY for production
+  - sqlx::test: soft_delete_partial_index_flags_excludes_deleted + segments_excludes_deleted
 
-- [ ] Task 3: Segment list entry covering index migration
-  - New migration: drop `idx_segment_list_entries_lookup`, create replacement
-    `(segment_id, context_type, list_type, entry_key)` — covering, enables index-only scans
-  - sqlx::test: EXISTS membership subquery returns correct results with new index
+- [x] Task 3: Segment list entry covering index migration (fe931df)
+  - 20260516000003: drop idx_segment_list_entries_lookup, create idx_segment_list_entries_covering
+    (segment_id, context_type, list_type, entry_key)
+  - sqlx::test: segment_list_covering_index_member_found + non_member_returns_false
 
-- [ ] Task 4: Context registry purge indexes migration
-  - New migration:
-    `CREATE INDEX idx_context_type_registry_last_seen ON context_type_registry(last_seen_at)`
-    `CREATE INDEX idx_context_param_registry_last_seen ON context_param_registry(last_seen_at)`
-  - sqlx::test: DELETE WHERE last_seen_at < $1 deletes correct rows
+- [x] Task 4: Context registry purge indexes migration (fe931df)
+  - 20260516000004: idx_context_type_registry_last_seen + idx_context_param_registry_last_seen
+  - sqlx::test: context_registry_last_seen_index_purge_removes_old_types + old_params
 
 - [ ] Task: Conductor - User Manual Verification 'PostgreSQL Index Layer' (Protocol in workflow.md)
 

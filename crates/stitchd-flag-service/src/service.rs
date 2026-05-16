@@ -1070,6 +1070,9 @@ mod tests {
         async fn soft_delete(&self, _id: stitchd_core::id::SegmentId) -> Result<(), RepositoryError> { Ok(()) }
         async fn check_list_membership(&self, _env_id: EnvironmentId, _context_type: &str, _context_key: &str, _segment_keys: &[String]) -> Result<std::collections::HashMap<String, bool>, RepositoryError> { Ok(std::collections::HashMap::new()) }
         async fn batch_check_list_membership(&self, _env_id: EnvironmentId, _contexts: &[(String, String)], _segment_keys: &[String]) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> { Ok(vec![]) }
+        async fn find_batch_by_ids(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
+        async fn find_rules_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError> { Ok(std::collections::HashMap::new()) }
+        async fn find_lists_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>, RepositoryError> { Ok(std::collections::HashMap::new()) }
     }
 
     fn make_flag_record() -> FlagRecord {

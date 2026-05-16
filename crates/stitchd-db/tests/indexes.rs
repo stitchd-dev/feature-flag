@@ -334,3 +334,192 @@ async fn context_registry_last_seen_index_purge_removes_old_params(pool: sqlx::P
             .unwrap();
     assert_eq!(remaining.0, 1, "only the recent 'plan' param should survive");
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 Task 1: Batch repository methods — find_batch_by_ids,
+// find_rules_batch, find_lists_batch
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn find_batch_by_ids_returns_all_seeded_segments(pool: sqlx::PgPool) {
+    let (_, _, env) = seed_org_project_env(&pool).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgSegmentRepository::new(pool.clone(), audit);
+
+    let mut seeded_ids = Vec::new();
+    for i in 0..3 {
+        let seg = Segment {
+            id: SegmentId::new(),
+            environment_id: env.id,
+            key: format!("batch-seg-{i}"),
+            segment_type: SegmentType::Rule,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+            name: format!("Batch Seg {i}"),
+            description: String::new(),
+            tags: vec![],
+        };
+        seeded_ids.push(seg.id);
+        repo.create(&seg).await.unwrap();
+    }
+
+    let results = repo.find_batch_by_ids(&seeded_ids).await.unwrap();
+    assert_eq!(results.len(), 3, "all 3 seeded segments must be returned");
+    for id in &seeded_ids {
+        assert!(results.iter().any(|s| &s.id == id), "missing segment {id}");
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn find_batch_by_ids_excludes_soft_deleted(pool: sqlx::PgPool) {
+    let (_, _, env) = seed_org_project_env(&pool).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgSegmentRepository::new(pool.clone(), audit);
+
+    let live = Segment {
+        id: SegmentId::new(),
+        environment_id: env.id,
+        key: "live-seg".to_string(),
+        segment_type: SegmentType::Rule,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        deleted_at: None,
+        version: 1,
+        name: "Live".into(),
+        description: String::new(),
+        tags: vec![],
+    };
+    let deleted = Segment {
+        id: SegmentId::new(),
+        environment_id: env.id,
+        key: "deleted-seg".to_string(),
+        segment_type: SegmentType::Rule,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        deleted_at: None,
+        version: 1,
+        name: "Deleted".into(),
+        description: String::new(),
+        tags: vec![],
+    };
+    repo.create(&live).await.unwrap();
+    repo.create(&deleted).await.unwrap();
+    repo.soft_delete(deleted.id).await.unwrap();
+
+    let results = repo
+        .find_batch_by_ids(&[live.id, deleted.id])
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 1, "soft-deleted segment must be excluded");
+    assert_eq!(results[0].id, live.id);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn find_rules_batch_returns_rules_for_all_ids(pool: sqlx::PgPool) {
+    use stitchd_core::{
+        context::ParameterValue,
+        id::{RuleId, VariantId},
+        rule_engine::{Condition, types::{ConditionExpr, Rule, RuleOutput}},
+    };
+
+    let (_, _, env) = seed_org_project_env(&pool).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgSegmentRepository::new(pool.clone(), audit);
+
+    let mut seg_ids = Vec::new();
+    for i in 0..2 {
+        let seg = Segment {
+            id: SegmentId::new(),
+            environment_id: env.id,
+            key: format!("rule-seg-{i}"),
+            segment_type: SegmentType::Rule,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+            name: format!("Rule Seg {i}"),
+            description: String::new(),
+            tags: vec![],
+        };
+        let rule = Rule {
+            id: RuleId::new(),
+            name: None,
+            condition: ConditionExpr::Leaf(Condition::Eq {
+                context_type: "user".to_string(),
+                param: "plan".to_string(),
+                value: ParameterValue::Str(format!("plan-{i}")),
+            }),
+            output: RuleOutput::Variant(VariantId::new()),
+        };
+        seg_ids.push(seg.id);
+        repo.create(&seg).await.unwrap();
+        repo.upsert_rules(seg.id, &[rule]).await.unwrap();
+    }
+
+    let results = repo.find_rules_batch(&seg_ids).await.unwrap();
+    assert_eq!(results.len(), 2, "both segments must have rule entries");
+    for id in &seg_ids {
+        assert!(results.contains_key(id), "missing rules for segment {id}");
+        assert_eq!(results[id].rules.len(), 1, "each segment must have 1 rule");
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn find_rules_batch_empty_ids_returns_empty_map(pool: sqlx::PgPool) {
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgSegmentRepository::new(pool.clone(), audit);
+
+    let results = repo.find_rules_batch(&[]).await.unwrap();
+    assert!(results.is_empty(), "empty input must yield empty map");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn find_lists_batch_returns_entries_for_all_ids(pool: sqlx::PgPool) {
+    let (_, _, env) = seed_org_project_env(&pool).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgSegmentRepository::new(pool.clone(), audit);
+
+    let mut seg_ids = Vec::new();
+    for i in 0..2 {
+        let seg = Segment {
+            id: SegmentId::new(),
+            environment_id: env.id,
+            key: format!("list-batch-{i}"),
+            segment_type: SegmentType::List,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+            name: format!("List Batch {i}"),
+            description: String::new(),
+            tags: vec![],
+        };
+        seg_ids.push(seg.id);
+        repo.create(&seg).await.unwrap();
+        repo.set_list_entries(seg.id, "user", &[format!("user-{i}")], &[])
+            .await
+            .unwrap();
+    }
+
+    let results = repo.find_lists_batch(&seg_ids).await.unwrap();
+    assert_eq!(results.len(), 2, "both segments must have list entries");
+    for id in &seg_ids {
+        assert!(results.contains_key(id), "missing list for segment {id}");
+        let list_def = &results[id];
+        assert!(
+            list_def.lists.contains_key("user"),
+            "must have 'user' context list"
+        );
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn find_lists_batch_empty_ids_returns_empty_map(pool: sqlx::PgPool) {
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgSegmentRepository::new(pool.clone(), audit);
+
+    let results = repo.find_lists_batch(&[]).await.unwrap();
+    assert!(results.is_empty(), "empty input must yield empty map");
+}

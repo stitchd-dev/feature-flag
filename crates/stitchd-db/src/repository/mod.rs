@@ -407,6 +407,33 @@ pub trait SegmentRepository: Send + Sync {
         contexts: &[(String, String)],
         segment_keys: &[String],
     ) -> Result<Vec<crate::ContextMembership>, RepositoryError>;
+
+    // ---- N+1 elimination methods (FR-2) ----
+
+    /// Fetch multiple segment records in one query.
+    ///
+    /// Returns all non-deleted segments whose IDs are in `ids`, in unspecified order.
+    async fn find_batch_by_ids(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError>;
+
+    /// Fetch rule definitions for multiple rule-based segments in one query.
+    ///
+    /// Returns a map from segment ID to its assembled [`RuleBasedSegment`].
+    /// Segments with no `segment_rules` rows fall back to the `condition_expr` column.
+    async fn find_rules_batch(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<std::collections::HashMap<SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError>;
+
+    /// Fetch list entries for multiple list-based segments in one query.
+    ///
+    /// Returns a map from segment ID to its assembled [`ListBasedSegment`].
+    async fn find_lists_batch(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<std::collections::HashMap<SegmentId, stitchd_core::segment::ListBasedSegment>, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
