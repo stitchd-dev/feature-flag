@@ -166,7 +166,7 @@ The actual SDK. Built incrementally with TDD.
   - TDD: config defaults (poll=30s, refresh=60s, lru=10_000, flush=5s, batch=100)
   - Implement in `sdks/rust/src/config.rs` and `sdks/rust/src/error.rs`
 
-- [ ] Task 2: Definition snapshot + atomic swap
+- [x] Task 2: Definition snapshot + atomic swap
   - TDD: writer task swaps snapshot; reader sees consistent view
   - `DefinitionSnapshot { flags: HashMap, rule_segments: HashMap, list_segments: HashMap }`
   - Use `ArcSwap<DefinitionSnapshot>` for lock-free reads
