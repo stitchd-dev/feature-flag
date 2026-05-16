@@ -10,7 +10,7 @@ Establishes the language-agnostic contract that backend changes (Phase 3-4) and
 the Rust SDK (Phase 5) will both consume. Must come first so proto/OpenAPI shapes
 are pinned before downstream phases reference them.
 
-- [ ] Task 1: Scaffold `sdks/spec/` directory structure
+- [x] Task 1: Scaffold `sdks/spec/` directory structure
   - Create `sdks/spec/{docs,proto,openapi,schemas,fixtures}/`
   - Add top-level `sdks/spec/README.md` explaining the contract model
   - Add `sdks/README.md` explaining the overall `sdks/` layout
