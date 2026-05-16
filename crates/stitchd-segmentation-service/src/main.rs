@@ -7,6 +7,8 @@
 //! - `SEGMENTATION_SERVICE_PORT` — gRPC listen port (default: `50053`)
 //! - `SEGMENTATION_METRICS_PORT` — Prometheus metrics port (default: `9053`)
 //! - `DATABASE_URL` — PostgreSQL connection string (required)
+//! - `SCYLLA_URI` — ScyllaDB contact point (default: `127.0.0.1:9042`)
+//! - `SCYLLA_KEYSPACE` — ScyllaDB keyspace (default: `stitchd`)
 //! - `RUST_LOG` — log filter directive (default: `info`)
 
 use std::sync::Arc;
@@ -18,6 +20,7 @@ use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
+use stitchd_db::scylla::{ScyllaConfig, migrate as scylla_migrate};
 use stitchd_db::{PgAuditLogger, PgSegmentRepository, SegmentRepository};
 use stitchd_proto::sdk::v1::segmentation_sdk_backend_service_server::SegmentationSdkBackendServiceServer;
 use stitchd_proto::segments::v1::segmentation_service_server::SegmentationServiceServer;
@@ -73,6 +76,23 @@ async fn main() -> anyhow::Result<()> {
     let audit_logger = Arc::new(PgAuditLogger::new(pool.clone()));
     let segment_repo: Arc<dyn SegmentRepository> =
         Arc::new(PgSegmentRepository::new(pool.clone(), audit_logger));
+
+    // ── ScyllaDB ──────────────────────────────────────────────────────────────
+    let scylla_config = ScyllaConfig::from_env();
+    tracing::info!(uri = %scylla_config.uri, keyspace = %scylla_config.keyspace, "connecting to ScyllaDB");
+
+    let scylla_client = stitchd_db::scylla::ScyllaClient::connect(&scylla_config)
+        .await
+        .context("failed to connect to ScyllaDB")?;
+
+    let migrations_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/stitchd-db/scylla-migrations"
+    );
+    scylla_migrate::run(&scylla_client, migrations_dir)
+        .await
+        .context("ScyllaDB migrations failed")?;
+    tracing::info!("ScyllaDB migrations applied");
 
     // ── gRPC server ───────────────────────────────────────────────────────────
     let addr: std::net::SocketAddr = format!("0.0.0.0:{port}")

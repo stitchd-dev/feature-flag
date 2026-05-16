@@ -10,6 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+stitchd-db = { path = "../stitchd-db" }
 
 # mdbook and mdbook-mermaid are invoked as subprocesses.
 # xtask auto-installs them via `cargo install` if absent from PATH.

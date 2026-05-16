@@ -6,14 +6,45 @@ fn main() -> Result<()> {
     let task = std::env::args().nth(1);
     match task.as_deref() {
         Some("docs") => docs(),
+        Some("scylla-migrate") => scylla_migrate(),
         _ => {
             eprintln!("Usage: cargo xtask <task>");
             eprintln!();
             eprintln!("Tasks:");
-            eprintln!("  docs    Regenerate all documentation and build the mdBook site");
+            eprintln!("  docs            Regenerate all documentation and build the mdBook site");
+            eprintln!("  scylla-migrate  Apply pending ScyllaDB CQL migrations");
             std::process::exit(1);
         }
     }
+}
+
+fn scylla_migrate() -> Result<()> {
+    use stitchd_db::scylla::{ScyllaClient, ScyllaConfig, migrate};
+
+    let config = ScyllaConfig::from_env();
+    println!("Connecting to ScyllaDB at {} (keyspace: {})", config.uri, config.keyspace);
+
+    let migrations_dir = {
+        let root = project_root();
+        root.join("crates/stitchd-db/scylla-migrations")
+            .to_string_lossy()
+            .to_string()
+    };
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime")?
+        .block_on(async {
+            let client = ScyllaClient::connect(&config)
+                .await
+                .context("failed to connect to ScyllaDB")?;
+            migrate::run(&client, &migrations_dir)
+                .await
+                .context("migration failed")?;
+            println!("✓ ScyllaDB migrations applied successfully");
+            Ok(())
+        })
 }
 
 fn docs() -> Result<()> {
