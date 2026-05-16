@@ -1,0 +1,13 @@
+{
+  "track_id": "segment_scylla_20260516",
+  "type": "feature",
+  "status": "new",
+  "priority": "critical",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-16T16:11:45Z",
+  "updated_at": "2026-05-16T16:11:45Z",
+  "description": "Move list-based segment storage from PostgreSQL to ScyllaDB; keep PG for metadata only. Generation-swap atomic full-replace + diff-based add/remove API; drop fetch-all-keys path entirely.",
+  "git_branch": "track/segment_scylla_20260516",
+  "worktree_path": ".worktrees/segment_scylla_20260516"
+}

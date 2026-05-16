@@ -38,3 +38,9 @@ This file tracks all major tracks for the project.
 - db_optim_20260516 (Database & Query Optimizations — PostgreSQL indexes, N+1 elimination, SDK key cache, ClickHouse MV overhaul, partition tuning, offset pagination)
 - sdk_rewrite_20260516 (Clean SDK Implementation — sdks/ Foundation + Rust Server-Side SDK)
 -->
+
+---
+
+## [ ] Track: List-Based Segment Storage on ScyllaDB
+*Link: [./conductor/tracks/segment_scylla_20260516/](./conductor/tracks/segment_scylla_20260516/)*
+
