@@ -1,6 +1,9 @@
 /// CQL migration applier for bootstrapping and evolving the Scylla schema.
 pub mod migrate;
 
+/// ScyllaDB-backed list-segment store.
+pub mod segment;
+
 use std::{collections::HashMap, sync::Arc};
 
 use scylla::{

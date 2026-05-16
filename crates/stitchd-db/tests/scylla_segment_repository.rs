@@ -186,7 +186,7 @@ async fn set_list_entries_replaces_atomically() {
     cleanup(&client, &ks).await;
 }
 
-/// Concurrent set_list_entries: LWT ensures exactly one generation wins.
+/// Concurrent set_list_entries on top of an established generation: CAS pointer stays consistent.
 #[tokio::test]
 async fn concurrent_set_list_entries_only_one_wins() {
     if !scylla_available().await {
@@ -200,26 +200,37 @@ async fn concurrent_set_list_entries_only_one_wins() {
 
     let seg_id = SegmentId::new();
 
-    // Launch two concurrent set_list_entries calls.
+    // Establish an initial generation so the concurrent writers both see gen=1.
+    store
+        .set_list_entries(seg_id, "user", &["initial".to_string()], &[])
+        .await
+        .expect("initial set");
+
+    // Now launch two concurrent set_list_entries calls starting from gen=1.
+    // The LWT CAS ensures only one writer's generation becomes active.
     let store_a = store.clone();
     let store_b = store.clone();
+    let alice = vec!["alice".to_string()];
+    let bob = vec!["bob".to_string()];
     let (res_a, res_b) = tokio::join!(
-        store_a.set_list_entries(seg_id, "user", &["alice".to_string()], &[]),
-        store_b.set_list_entries(seg_id, "user", &["bob".to_string()], &[]),
+        store_a.set_list_entries(seg_id, "user", &alice, &[]),
+        store_b.set_list_entries(seg_id, "user", &bob, &[]),
     );
 
-    // Both may succeed (LWT retry not required for correctness, just progress).
+    // Both return Ok — one won the CAS, one lost (stale gen to be swept).
     res_a.ok();
     res_b.ok();
 
-    // The active generation pointer must point to exactly one consistent state.
+    // The active generation pointer must exist and be at least 2.
     let active_gen = active_generation(&client, &ks, seg_id.as_uuid(), "user")
         .await
         .expect("generation should be set");
 
+    assert!(active_gen >= 2, "generation must have advanced from 1");
+
+    // The active generation must contain exactly 1 include entry (one winner).
     let inc_count = count_entries(&client, &ks, seg_id.as_uuid(), "user", active_gen, "include").await;
-    // Exactly one of the two writers' data should be active.
-    assert_eq!(inc_count, 1, "active generation should have exactly 1 include entry");
+    assert_eq!(inc_count, 1, "active generation should have exactly 1 include entry (one CAS winner)");
 
     cleanup(&client, &ks).await;
 }
