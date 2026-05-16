@@ -46,12 +46,12 @@ Track: `context_intel_20260515`
     is_private bool, first_seen_at, last_seen_at
   - Indexes on (env_id, last_seen_at DESC) for 90-day window queries
 
-- [x] Task 2: Repository trait + Postgres impl (7634076)
+- [x] Task 2: Repository trait + Postgres impl (7634076, af5bc65)
   - `ContextRegistryRepository` trait: upsert_context_type, upsert_param,
     list_types (90-day filter), list_params (90-day filter), purge_stale
   - `PgContextRegistryRepository` impl using sqlx non-macro query_as
   - ON CONFLICT upsert for first_seen_at/last_seen_at refresh semantics
-  - 6 sqlx::test integration tests including 90-day boundary assertions
+  - 8 sqlx::test integration tests including 90-day boundary assertions
 
 - [x] Task 3: Type inference logic (7634076)
   - `InferredType::infer(value: &str) -> InferredType` in stitchd-core::context
