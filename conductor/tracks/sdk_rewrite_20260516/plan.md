@@ -128,7 +128,7 @@ NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
 Adds the gateway-side SDK trust boundary: auth middleware, gRPC server, REST
 routes. Reuses `SdkKeyCache` from `db_optim_20260516`.
 
-- [ ] Task 1: SDK auth middleware
+- [x] Task 1: SDK auth middleware
   - TDD: tests for valid key → injects `SdkContext { env_id, project_id, org_id }`
     into request extensions; invalid key → HTTP 401; missing header → HTTP 401
   - Implement `sdk_auth_middleware` in `crates/stitchd-gateway/src/middleware/`
