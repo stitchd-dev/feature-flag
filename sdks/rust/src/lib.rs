@@ -45,6 +45,7 @@
 //! evaluation engine, polling loops, LRU cache, and event flush — each
 //! introducing its own module here.
 
+pub mod client;
 pub mod config;
 pub mod error;
 pub mod events;
@@ -53,6 +54,7 @@ pub mod polling;
 pub mod refresh;
 pub mod snapshot;
 
+pub use client::{EvalOutcome, EvalRequest, EvalResult, EvalResultWithReasoning, ReasoningTrace, SdkClient};
 pub use config::SdkConfig;
 pub use error::SdkError;
 pub use events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, ParameterValue};
