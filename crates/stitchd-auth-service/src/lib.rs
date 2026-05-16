@@ -24,6 +24,7 @@ pub mod oidc_factory;
 pub mod oidc_login;
 pub mod provider_cache;
 pub mod rbac;
+pub mod refresh;
 pub mod saml_factory;
 pub mod saml_login;
 pub mod sdk_key;

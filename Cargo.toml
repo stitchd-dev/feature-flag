@@ -48,7 +48,7 @@ utoipa-axum = { version = "0.2" }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
-clickhouse = { version = "0.13", features = ["uuid", "time", "lz4"] }
+clickhouse = { version = "0.13", features = ["uuid", "time", "chrono", "lz4"] }
 
 # Observability
 tracing = { version = "0.1" }

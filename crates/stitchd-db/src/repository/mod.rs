@@ -491,6 +491,61 @@ pub trait ExperimentRepository: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+// ContextRegistry
+// ---------------------------------------------------------------------------
+
+/// Upsert-and-query operations for the context type / parameter registry.
+///
+/// All list methods apply a 90-day recency filter on `last_seen_at`.
+#[async_trait]
+pub trait ContextRegistryRepository: Send + Sync {
+    /// Record or refresh a context type observation.
+    ///
+    /// Sets `first_seen_at` on insert; always bumps `last_seen_at = now()`.
+    async fn upsert_context_type(
+        &self,
+        env_id: EnvironmentId,
+        context_type: &str,
+    ) -> Result<(), RepositoryError>;
+
+    /// Record or refresh a context parameter observation.
+    ///
+    /// Sets `first_seen_at` on insert; always bumps `last_seen_at = now()` and
+    /// updates `inferred_type` and `is_private`.
+    async fn upsert_param(
+        &self,
+        env_id: EnvironmentId,
+        context_type: &str,
+        param_key: &str,
+        inferred_type: stitchd_core::context::InferredType,
+        is_private: bool,
+    ) -> Result<(), RepositoryError>;
+
+    /// List context types for an environment seen within the last 90 days,
+    /// ordered by `last_seen_at DESC`.
+    async fn list_types(
+        &self,
+        env_id: EnvironmentId,
+    ) -> Result<Vec<stitchd_core::context::ContextTypeRecord>, RepositoryError>;
+
+    /// List params for a context type in an environment seen within the last 90 days,
+    /// ordered by `param_key ASC`.
+    async fn list_params(
+        &self,
+        env_id: EnvironmentId,
+        context_type: &str,
+    ) -> Result<Vec<stitchd_core::context::ContextParamRecord>, RepositoryError>;
+
+    /// Delete registry entries not observed since `older_than`.
+    ///
+    /// Purges params first, then types (FK-safe order without requiring an actual FK).
+    async fn purge_stale(
+        &self,
+        older_than: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), RepositoryError>;
+}
+
+// ---------------------------------------------------------------------------
 // EventDefinition
 // ---------------------------------------------------------------------------
 

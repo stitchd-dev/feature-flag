@@ -26,14 +26,14 @@ pub use experiment_results::{
     UpsertResultRow,
 };
 pub use repository::{
-    AuditLogger, EnvironmentRepository, EventDefinitionRepository, ExperimentRepository,
-    FlagRepository, OrganisationRepository, ProjectRepository, RoleRepository, SdkKeyRepository,
-    SegmentRepository, UserRepository, VariantRepository,
+    AuditLogger, ContextRegistryRepository, EnvironmentRepository, EventDefinitionRepository,
+    ExperimentRepository, FlagRepository, OrganisationRepository, ProjectRepository,
+    RoleRepository, SdkKeyRepository, SegmentRepository, UserRepository, VariantRepository,
     pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
-        PgExperimentRepository, PgFlagRepository, PgOrganisationRepository, PgProjectRepository,
-        PgRoleRepository, PgSdkKeyRepository, PgSegmentRepository, PgUserRepository,
-        PgVariantRepository,
+        PgAuditLogger, PgContextRegistryRepository, PgEnvironmentRepository,
+        PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository,
+        PgOrganisationRepository, PgProjectRepository, PgRoleRepository, PgSdkKeyRepository,
+        PgSegmentRepository, PgUserRepository, PgVariantRepository,
     },
 };
 pub use stats_jobs::{

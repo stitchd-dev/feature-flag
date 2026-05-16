@@ -9,11 +9,16 @@
 //! |----------------------|--------------------------------------------|---------------------------------|
 //! | `FLAG_SERVICE_PORT`  | `50052`                                    | gRPC server listen port         |
 //! | `DATABASE_URL`       | *required*                                 | PostgreSQL connection string    |
+//! | `CLICKHOUSE_URL`     | `http://localhost:8123`                    | ClickHouse HTTP endpoint        |
+//! | `CLICKHOUSE_DB`      | `stitchd`                                  | ClickHouse database name        |
+//! | `CLICKHOUSE_USER`    | `default`                                  | ClickHouse username             |
+//! | `CLICKHOUSE_PASSWORD`| *(empty)*                                  | ClickHouse password             |
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::Context as _;
+use clickhouse::Client as ChClient;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use stitchd_db::{PgFlagRepository, PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository};
 use stitchd_flag_service::service::FlagServiceImpl;
@@ -56,6 +61,20 @@ async fn main() -> anyhow::Result<()> {
     let sdk_key_repo = Arc::new(PgSdkKeyRepository::new(pool.clone(), audit_raw.clone()));
     let segment_repo = Arc::new(PgSegmentRepository::new(pool, audit_raw.clone()));
 
+    // ── ClickHouse (optional — evaluation telemetry) ───────────────────────────
+    let ch_url = std::env::var("CLICKHOUSE_URL")
+        .unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let ch_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
+    let ch_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let ch_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+    let ch_client = Arc::new(
+        ChClient::default()
+            .with_url(ch_url)
+            .with_database(ch_db)
+            .with_user(ch_user)
+            .with_password(ch_password),
+    );
+
     // ── gRPC Server ────────────────────────────────────────────────────────────
     let port: u16 = std::env::var("FLAG_SERVICE_PORT")
         .ok()
@@ -63,7 +82,8 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(50052);
 
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse().unwrap();
-    let svc = FlagServiceImpl::new(flag_repo, variant_repo, sdk_key_repo, segment_repo);
+    let svc = FlagServiceImpl::new(flag_repo, variant_repo, sdk_key_repo, segment_repo)
+        .with_clickhouse(ch_client);
 
     let (health_reporter, health_service) = health_reporter();
     health_reporter

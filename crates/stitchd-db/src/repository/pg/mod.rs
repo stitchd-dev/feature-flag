@@ -1,6 +1,8 @@
 //! Postgres implementations of all repository traits.
 
 pub mod audit;
+/// Postgres implementation of [`crate::ContextRegistryRepository`].
+pub mod context_registry;
 pub mod environment;
 pub mod event_definition;
 pub mod experiment;
@@ -13,6 +15,7 @@ pub mod segment;
 pub mod user;
 
 pub use audit::PgAuditLogger;
+pub use context_registry::PgContextRegistryRepository;
 pub use environment::PgEnvironmentRepository;
 pub use event_definition::PgEventDefinitionRepository;
 pub use experiment::PgExperimentRepository;

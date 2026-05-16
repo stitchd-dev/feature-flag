@@ -36,7 +36,7 @@ export function LoginPage() {
         const isSystem = auth.decodeIsSystem(res.access_token)
         const roles = auth.decodeRoles(res.access_token)
         const permissions = auth.decodePermissions(res.access_token)
-        auth.setSession({ token: res.access_token, orgId: res.org_id, isSystem, userId: res.user_id, roles, permissions })
+        auth.setSession({ token: res.access_token, refreshToken: res.refresh_token, orgId: res.org_id, isSystem, userId: res.user_id, roles, permissions })
         // Fetch org list for seamless switching — non-blocking
         try {
           const orgs = await listUserOrgs()

@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use clickhouse::Client as ChClient;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -16,7 +17,7 @@ use stitchd_proto::flags::v1::{
     flag_service_server::FlagService,
 };
 
-use crate::{error::FlagServiceError, mapping};
+use crate::{error::FlagServiceError, eval_log_writer, mapping};
 
 /// gRPC implementation of [`FlagService`].
 #[allow(clippy::struct_field_names)]
@@ -25,6 +26,8 @@ pub struct FlagServiceImpl {
     variant_repo: Arc<dyn VariantRepository>,
     sdk_key_repo: Arc<dyn SdkKeyRepository>,
     segment_repo: Arc<dyn SegmentRepository>,
+    /// Optional ClickHouse client for evaluation telemetry. `None` disables logging.
+    ch_client: Option<Arc<ChClient>>,
 }
 
 impl FlagServiceImpl {
@@ -41,7 +44,15 @@ impl FlagServiceImpl {
             variant_repo,
             sdk_key_repo,
             segment_repo,
+            ch_client: None,
         }
+    }
+
+    /// Attach a ClickHouse client for fire-and-forget evaluation telemetry.
+    #[must_use]
+    pub fn with_clickhouse(mut self, client: Arc<ChClient>) -> Self {
+        self.ch_client = Some(client);
+        self
     }
 
     /// Fetch `SegmentDefinition`s for a set of IDs.
@@ -666,7 +677,6 @@ impl FlagService for FlagServiceImpl {
             variants,
         };
 
-        // Step 2: Fetch SegmentDefinitions for all segments referenced by this flag's rules.
         let segment_ids = flag.referenced_segment_ids();
         let segment_definitions = self.fetch_segment_definitions(&segment_ids).await?;
 
@@ -674,15 +684,40 @@ impl FlagService for FlagServiceImpl {
             serde_json::from_str(&req.contexts_json)
                 .map_err(|e| Status::invalid_argument(format!("invalid contexts_json: {e}")))?;
 
-        let env_id = stitchd_core::id::EnvironmentId::from_uuid(uuid::Uuid::nil());
+        // Parse environment_id; treat empty string as nil UUID (unknown env).
+        let env_uuid = if req.environment_id.is_empty() {
+            uuid::Uuid::nil()
+        } else {
+            uuid::Uuid::parse_str(&req.environment_id)
+                .map_err(|_| Status::invalid_argument("invalid environment_id"))?
+        };
+        let env_id = stitchd_core::id::EnvironmentId::from_uuid(env_uuid);
 
-        // Step 3: stitchd-core handles all evaluation logic (segment resolution + rule traces).
         let results = stitchd_core::evaluation::preview::evaluate_preview(
             &flag,
             &evaluation_contexts,
             &segment_definitions,
             env_id,
         );
+
+        // Fire-and-forget eval log write — pairs each context with its evaluated variant.
+        if let Some(ch) = &self.ch_client {
+            let is_disabled = !flag.record.enabled;
+            let contexts_with_variants: Vec<_> = evaluation_contexts
+                .iter()
+                .zip(results.iter())
+                .map(|(ctx, res)| (ctx.clone(), res.variant_key.clone()))
+                .collect();
+            eval_log_writer::spawn_eval_log_write(
+                Arc::clone(ch),
+                env_uuid,
+                flag.record.id.as_uuid(),
+                flag.record.key.to_string(),
+                is_disabled,
+                chrono::Utc::now(),
+                contexts_with_variants,
+            );
+        }
 
         let results_json = serde_json::to_string(&results)
             .map_err(|e| Status::internal(format!("serialization error: {e}")))?;
@@ -1605,6 +1640,7 @@ mod tests {
             project_id: record.project_id.to_string(),
             flag_key: record.key.to_string(),
             contexts_json,
+            environment_id: String::new(),
         });
         let resp = svc.evaluate_preview(req).await.unwrap().into_inner();
 
@@ -1653,6 +1689,7 @@ mod tests {
             project_id: record.project_id.to_string(),
             flag_key: record.key.to_string(),
             contexts_json,
+            environment_id: String::new(),
         });
         let resp = svc.evaluate_preview(req).await.unwrap().into_inner();
 
@@ -1671,6 +1708,7 @@ mod tests {
             project_id: "not-a-uuid".to_string(),
             flag_key: "my-flag".to_string(),
             contexts_json: "[]".to_string(),
+            environment_id: String::new(),
         });
         let result = svc.evaluate_preview(req).await;
         assert!(result.is_err());
@@ -1687,6 +1725,7 @@ mod tests {
             project_id: record.project_id.to_string(),
             flag_key: record.key.to_string(),
             contexts_json: "not json".to_string(),
+            environment_id: String::new(),
         });
         let result = svc.evaluate_preview(req).await;
         assert!(result.is_err());

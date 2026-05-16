@@ -25,6 +25,7 @@ function getOrgAdmin(orgId: string) {
   const p = `/org/${orgId}`
   return [
     { id: 'environments', path: `${p}/environments`, label: 'Environments & SDK Keys', icon: 'key' },
+    { id: 'context-explorer', path: `${p}/context-explorer`, label: 'Context Explorer', icon: 'database' },
     { id: 'members', path: `${p}/members`, label: 'Members & Roles', icon: 'users' },
     { id: 'audit', path: `${p}/audit`, label: 'Audit Log', icon: 'history' },
   ]

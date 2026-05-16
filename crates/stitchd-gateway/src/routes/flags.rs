@@ -974,6 +974,9 @@ pub async fn update_flag_hashing(
 pub struct EvaluatePreviewBody {
     /// JSON array of `EvaluationContext` objects.
     pub contexts: Vec<serde_json::Value>,
+    /// Optional environment ID for eval-log scoping. Empty string means unknown.
+    #[serde(default)]
+    pub environment_id: String,
 }
 
 /// A single per-context evaluation result returned by the preview endpoint.
@@ -1033,6 +1036,7 @@ pub async fn evaluate_preview(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<EvaluatePreviewBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let environment_id = body.environment_id;
     // Translate simplified UI format → EvaluationContext format.
     // UI sends: [{"_type":"user","key":"alice","parameters":{...}}]
     // Core expects: [{"contexts":[{"context_type":"user","key":"alice","parameters":{...},"private_parameters":[]}]}]
@@ -1078,6 +1082,7 @@ pub async fn evaluate_preview(
         project_id,
         flag_key,
         contexts_json,
+        environment_id,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client

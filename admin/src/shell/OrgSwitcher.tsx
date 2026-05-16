@@ -65,7 +65,7 @@ export function OrgSwitcher({ currentOrgId, currentOrgName }: OrgSwitcherProps) 
       const permissions = auth.decodePermissions(res.access_token)
       // Preserve userId from current session — SwitchOrgResponse has no user_id field
       const currentUserId = auth.getSession()?.userId ?? ''
-      auth.setSession({ token: res.access_token, orgId: res.org_id, isSystem, userId: currentUserId, roles, permissions })
+      auth.setSession({ token: res.access_token, refreshToken: res.refresh_token, orgId: res.org_id, isSystem, userId: currentUserId, roles, permissions })
       // Refresh the org list with the new token context
       auth.setOrgs(auth.getOrgs())
       if (isSystem) {

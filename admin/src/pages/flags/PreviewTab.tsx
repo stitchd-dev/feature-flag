@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
+import { SuggestionInput } from '../../components/SuggestionInput'
+import { useContextTypeSuggestions, useContextParamSuggestions } from '../../hooks/useContextSuggestions'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -207,99 +209,120 @@ function ContextResultCard({ result }: { result: ContextResult }) {
 
 // ─── FormBuilder mode ─────────────────────────────────────────────────────────
 
+function ContextCardEditor({
+  card,
+  envId,
+  onUpdate,
+  onRemove,
+}: {
+  card: ContextCard
+  envId: string | null
+  onUpdate: (patch: Partial<ContextCard>) => void
+  onRemove: () => void
+}) {
+  const { data: typeData } = useContextTypeSuggestions(envId)
+  const { data: paramData } = useContextParamSuggestions(envId, card._type || null)
+
+  const typeSuggestions = typeData.map((t) => ({ label: t.context_type }))
+  const paramSuggestions = paramData.map((p) => ({ label: p.param_key, isPrivate: p.is_private }))
+
+  function updateParam(pi: number, patch: Partial<ContextParam>) {
+    onUpdate({ params: card.params.map((p, i) => (i === pi ? { ...p, ...patch } : p)) })
+  }
+
+  function addParam() {
+    onUpdate({ params: [...card.params, { key: '', value: '' }] })
+  }
+
+  function removeParam(pi: number) {
+    onUpdate({ params: card.params.filter((_, i) => i !== pi) })
+  }
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <SuggestionInput
+          className="input"
+          style={{ flex: 1, fontSize: 12 }}
+          placeholder="_type (e.g. user, org)"
+          value={card._type}
+          suggestions={typeSuggestions}
+          onChange={(v) => onUpdate({ _type: v })}
+        />
+        <input
+          className="input"
+          style={{ flex: 1, fontSize: 12 }}
+          placeholder="key (e.g. alice)"
+          value={card.key}
+          onChange={(e) => onUpdate({ key: e.target.value })}
+        />
+        <button
+          className="icon-btn"
+          onClick={onRemove}
+          title="Remove context"
+          style={{ color: 'var(--danger)', flexShrink: 0 }}
+        >×</button>
+      </div>
+      {card.params.map((param, pi) => (
+        <div key={pi} style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
+          <SuggestionInput
+            className="input"
+            style={{ flex: 1, fontSize: 11 }}
+            placeholder="param key"
+            value={param.key}
+            suggestions={paramSuggestions}
+            onChange={(v) => updateParam(pi, { key: v })}
+          />
+          <input
+            className="input"
+            style={{ flex: 1, fontSize: 11 }}
+            placeholder="param value"
+            value={param.value}
+            onChange={(e) => updateParam(pi, { value: e.target.value })}
+          />
+          <button
+            className="icon-btn"
+            onClick={() => removeParam(pi)}
+            style={{ color: 'var(--fg-muted)', flexShrink: 0 }}
+          >×</button>
+        </div>
+      ))}
+      <button
+        className="btn sm"
+        onClick={addParam}
+        style={{ fontSize: 11, marginTop: 4 }}
+      >+ param</button>
+    </div>
+  )
+}
+
 function FormBuilder({
   contexts,
+  envId,
   onChange,
 }: {
   contexts: ContextCard[]
+  envId: string | null
   onChange: (updated: ContextCard[]) => void
 }) {
   function addCard() {
     onChange([...contexts, { _type: '', key: '', params: [] }])
   }
 
-  function removeCard(idx: number) {
-    onChange(contexts.filter((_, i) => i !== idx))
-  }
-
   function updateCard(idx: number, patch: Partial<ContextCard>) {
     onChange(contexts.map((c, i) => (i === idx ? { ...c, ...patch } : c)))
-  }
-
-  function addParam(idx: number) {
-    const card = contexts[idx]
-    updateCard(idx, { params: [...card.params, { key: '', value: '' }] })
-  }
-
-  function removeParam(cardIdx: number, paramIdx: number) {
-    const card = contexts[cardIdx]
-    updateCard(cardIdx, { params: card.params.filter((_, i) => i !== paramIdx) })
-  }
-
-  function updateParam(cardIdx: number, paramIdx: number, patch: Partial<ContextParam>) {
-    const card = contexts[cardIdx]
-    updateCard(cardIdx, {
-      params: card.params.map((p, i) => (i === paramIdx ? { ...p, ...patch } : p)),
-    })
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {contexts.map((card, ci) => (
-        <div key={ci} style={{
-          border: '1px solid var(--border)', borderRadius: 6, padding: '10px 12px',
-        }}>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <input
-              className="input"
-              style={{ flex: 1, fontSize: 12 }}
-              placeholder="_type (e.g. user, org)"
-              value={card._type}
-              onChange={(e) => updateCard(ci, { _type: e.target.value })}
-            />
-            <input
-              className="input"
-              style={{ flex: 1, fontSize: 12 }}
-              placeholder="key (e.g. alice)"
-              value={card.key}
-              onChange={(e) => updateCard(ci, { key: e.target.value })}
-            />
-            <button
-              className="icon-btn"
-              onClick={() => removeCard(ci)}
-              title="Remove context"
-              style={{ color: 'var(--danger)', flexShrink: 0 }}
-            >×</button>
-          </div>
-          {card.params.map((param, pi) => (
-            <div key={pi} style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
-              <input
-                className="input"
-                style={{ flex: 1, fontSize: 11 }}
-                placeholder="param key"
-                value={param.key}
-                onChange={(e) => updateParam(ci, pi, { key: e.target.value })}
-              />
-              <input
-                className="input"
-                style={{ flex: 1, fontSize: 11 }}
-                placeholder="param value"
-                value={param.value}
-                onChange={(e) => updateParam(ci, pi, { value: e.target.value })}
-              />
-              <button
-                className="icon-btn"
-                onClick={() => removeParam(ci, pi)}
-                style={{ color: 'var(--fg-muted)', flexShrink: 0 }}
-              >×</button>
-            </div>
-          ))}
-          <button
-            className="btn sm"
-            onClick={() => addParam(ci)}
-            style={{ fontSize: 11, marginTop: 4 }}
-          >+ param</button>
-        </div>
+        <ContextCardEditor
+          key={ci}
+          card={card}
+          envId={envId}
+          onUpdate={(patch) => updateCard(ci, patch)}
+          onRemove={() => onChange(contexts.filter((_, i) => i !== ci))}
+        />
       ))}
       <button className="btn sm" onClick={addCard}>+ Add context</button>
     </div>
@@ -315,7 +338,7 @@ interface PreviewTabProps {
 }
 
 export function PreviewTab({ flagId }: PreviewTabProps) {
-  const { projectId } = useOrgContext()
+  const { projectId, envId } = useOrgContext()
 
   const [mode, setMode] = useState<InputMode>('json')
   const [jsonText, setJsonText] = useState(DEFAULT_JSON)
@@ -371,7 +394,7 @@ export function PreviewTab({ flagId }: PreviewTabProps) {
     try {
       const { data } = await api.post<{ results: ContextResult[] }>(
         `/v1/projects/${projectId}/flags/${flagId}/evaluate-preview`,
-        { contexts: JSON.parse(jsonText) },
+        { contexts: JSON.parse(jsonText), environment_id: envId ?? '' },
       )
       setResults(data.results)
     } catch (err: unknown) {
@@ -420,7 +443,7 @@ export function PreviewTab({ flagId }: PreviewTabProps) {
               )}
             </div>
           ) : (
-            <FormBuilder contexts={formContexts} onChange={handleFormChange} />
+            <FormBuilder contexts={formContexts} envId={envId ?? null} onChange={handleFormChange} />
           )}
         </div>
 

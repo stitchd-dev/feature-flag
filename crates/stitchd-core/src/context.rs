@@ -107,9 +107,162 @@ impl EvaluationContext {
     }
 }
 
+// ── Context registry domain types ────────────────────────────────────────────
+
+/// Inferred value type for a context parameter key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InferredType {
+    Str,
+    Int,
+    Double,
+    Bool,
+    SemVer,
+    Unknown,
+}
+
+impl InferredType {
+    /// Parse a string to the most specific type, in priority order:
+    /// bool → int → double → semver → str.
+    /// Returns `Unknown` when `value == "********"` (masked private param).
+    #[must_use]
+    pub fn infer(value: &str) -> Self {
+        if value == "********" {
+            return Self::Unknown;
+        }
+        if value == "true" || value == "false" {
+            return Self::Bool;
+        }
+        if value.parse::<i64>().is_ok() {
+            return Self::Int;
+        }
+        if value.parse::<f64>().is_ok() {
+            return Self::Double;
+        }
+        if semver::Version::parse(value).is_ok() {
+            return Self::SemVer;
+        }
+        Self::Str
+    }
+
+    /// Return the database string representation.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Str => "str",
+            Self::Int => "int",
+            Self::Double => "double",
+            Self::Bool => "bool",
+            Self::SemVer => "semver",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for InferredType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for InferredType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "str" => Ok(Self::Str),
+            "int" => Ok(Self::Int),
+            "double" => Ok(Self::Double),
+            "bool" => Ok(Self::Bool),
+            "semver" => Ok(Self::SemVer),
+            "unknown" => Ok(Self::Unknown),
+            other => Err(format!("unknown InferredType: {other}")),
+        }
+    }
+}
+
+/// A row in `context_type_registry`.
+#[derive(Debug, Clone)]
+pub struct ContextTypeRecord {
+    pub env_id: crate::id::EnvironmentId,
+    pub context_type: String,
+    pub first_seen_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// A row in `context_param_registry`.
+#[derive(Debug, Clone)]
+pub struct ContextParamRecord {
+    pub env_id: crate::id::EnvironmentId,
+    pub context_type: String,
+    pub param_key: String,
+    pub inferred_type: InferredType,
+    pub is_private: bool,
+    pub first_seen_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen_at: chrono::DateTime<chrono::Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_infer_type_bool() {
+        assert_eq!(InferredType::infer("true"), InferredType::Bool);
+        assert_eq!(InferredType::infer("false"), InferredType::Bool);
+    }
+
+    #[test]
+    fn test_infer_type_int() {
+        assert_eq!(InferredType::infer("42"), InferredType::Int);
+        assert_eq!(InferredType::infer("-7"), InferredType::Int);
+        assert_eq!(InferredType::infer("0"), InferredType::Int);
+    }
+
+    #[test]
+    fn test_infer_type_double() {
+        assert_eq!(InferredType::infer("3.14"), InferredType::Double);
+        assert_eq!(InferredType::infer("-0.5"), InferredType::Double);
+    }
+
+    #[test]
+    fn test_infer_type_semver() {
+        assert_eq!(InferredType::infer("1.2.3"), InferredType::SemVer);
+        assert_eq!(InferredType::infer("0.0.1"), InferredType::SemVer);
+    }
+
+    #[test]
+    fn test_infer_type_str() {
+        assert_eq!(InferredType::infer("hello"), InferredType::Str);
+        assert_eq!(InferredType::infer("user@example.com"), InferredType::Str);
+        assert_eq!(InferredType::infer(""), InferredType::Str);
+    }
+
+    #[test]
+    fn test_infer_type_private_param_is_unknown() {
+        assert_eq!(InferredType::infer("********"), InferredType::Unknown);
+    }
+
+    #[test]
+    fn test_infer_type_priority_bool_over_int() {
+        // "true"/"false" must match Bool before the int parser sees them
+        assert_eq!(InferredType::infer("true"), InferredType::Bool);
+    }
+
+    #[test]
+    fn test_inferred_type_round_trip_from_str() {
+        for ty in [
+            InferredType::Str,
+            InferredType::Int,
+            InferredType::Double,
+            InferredType::Bool,
+            InferredType::SemVer,
+            InferredType::Unknown,
+        ] {
+            let s = ty.as_str();
+            let parsed: InferredType = s.parse().unwrap();
+            assert_eq!(parsed, ty);
+        }
+    }
 
     #[test]
     fn test_context_privacy() {
