@@ -14,6 +14,7 @@
 #![deny(warnings, clippy::all)]
 
 pub mod error;
+pub mod grpc_server;
 pub mod middleware;
 pub mod openapi;
 pub mod pagination;

@@ -144,7 +144,7 @@ routes. Reuses `SdkKeyCache` from `db_optim_20260516`.
   - Both routes registered under `sdk_auth_middleware`
   - TDD: route-level tests using `tower::ServiceExt::oneshot`
 
-- [ ] Task 3: Gateway gRPC server hosting `SdkService`
+- [x] Task 3: Gateway gRPC server hosting `SdkService`
   - Add tonic server to `stitchd-gateway` (currently REST-only) — run in parallel
     with the Axum server using `tokio::try_join!`
   - Implement `SdkService::SyncDefinitions` as a proxy: read `x-sdk-key` from
