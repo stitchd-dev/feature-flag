@@ -122,7 +122,7 @@ export function PageHeader({ crumbs, title, subtitle, mono, badge, actions }: Pa
             {crumbs.map((c, i) => (
               <React.Fragment key={i}>
                 {i > 0 && <I.chevronRight size={11} className="crumb-sep" />}
-                <a>{c}</a>
+                {React.isValidElement(c) ? c : <span className="crumb">{c}</span>}
               </React.Fragment>
             ))}
           </div>

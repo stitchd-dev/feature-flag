@@ -68,8 +68,8 @@ pub struct EvalStatsResponse {
 /// ClickHouse row returned by the analytics query.
 #[derive(clickhouse::Row, Deserialize)]
 struct EvalStatRow {
-    /// Bucket start as Unix timestamp (seconds).
-    ts: i64,
+    /// Bucket start as Unix timestamp (seconds). ClickHouse toUnixTimestamp returns UInt32.
+    ts: u32,
     /// Variant key for this row.
     variant_key: String,
     /// Whether the flag was disabled.
@@ -133,7 +133,7 @@ pub async fn get_eval_stats(
             variant_key,
             toUInt8(is_disabled)                              AS is_disabled,
             COUNT(*)                                          AS count,
-            uniqApprox(context_key)                          AS unique_ctx
+            uniq(context_key)                                AS unique_ctx
         FROM flag_evaluation_log
         WHERE flag_id  = '{flag_id_str}'
           AND evaluated_at >= fromUnixTimestamp64Milli({from_ms})
@@ -155,8 +155,8 @@ pub async fn get_eval_stats(
         std::collections::BTreeMap::new();
 
     for row in rows {
-        let bucket = bucket_map.entry(row.ts).or_insert_with(|| EvalStatsBucket {
-            ts: DateTime::from_timestamp(row.ts, 0)
+        let bucket = bucket_map.entry(row.ts as i64).or_insert_with(|| EvalStatsBucket {
+            ts: DateTime::from_timestamp(row.ts as i64, 0)
                 .unwrap_or_default()
                 .format("%Y-%m-%dT%H:%M:%SZ")
                 .to_string(),
