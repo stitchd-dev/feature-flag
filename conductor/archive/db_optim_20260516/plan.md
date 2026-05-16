@@ -54,7 +54,7 @@ Track: `db_optim_20260516`
 
 ---
 
-## Phase 3: SDK Key In-Process Cache
+## Phase 3: SDK Key In-Process Cache [checkpoint: e830042]
 <!-- depends: -->
 <!-- execution: sequential -->
 
@@ -74,7 +74,7 @@ Track: `db_optim_20260516`
   - SDK key revocation: call `cache.invalidate(key_hash)` after DB revoke
   - Unit test: revoked key not returned after invalidation within TTL window
 
-- [ ] Task: Conductor - User Manual Verification 'SDK Key Cache' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'SDK Key Cache' (Protocol in workflow.md) (Protocol in workflow.md)
 
 ---
 
