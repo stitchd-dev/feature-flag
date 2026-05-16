@@ -182,7 +182,7 @@ The actual SDK. Built incrementally with TDD.
   - MPSC bounded channel, background task drains and batches POSTs to gateway
   - Graceful shutdown drains remaining events before exit
 
-- [ ] Task 5: Definition polling task
+- [x] Task 5: Definition polling task
   - TDD: polls every `definition_poll_interval` via gRPC unary call;
     on success swaps snapshot; on failure logs + exponential backoff
   - Implement as `tokio::spawn` task launched from `SdkClient::init`
