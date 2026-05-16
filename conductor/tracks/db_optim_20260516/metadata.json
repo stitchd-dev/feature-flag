@@ -1,0 +1,13 @@
+{
+  "track_id": "db_optim_20260516",
+  "type": "feature",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-16T00:00:00Z",
+  "updated_at": "2026-05-16T00:00:00Z",
+  "description": "Database & Query Optimizations — comprehensive overhaul of all data-access bottlenecks across PostgreSQL and ClickHouse: index gaps, N+1 elimination, SDK key cache, ClickHouse injection hardening, experiment materialized views, partition tuning, and offset pagination.",
+  "git_branch": "track/db_optim_20260516",
+  "worktree_path": ".worktrees/db_optim_20260516"
+}
