@@ -79,11 +79,11 @@ later phases have a place to land.
   - Add `sdks/rust` to workspace `[workspace.members]`
   - Verify `cargo check -p stitchd-sdk` passes (compiles an empty crate)
 
-- [ ] Task: Conductor - User Manual Verification 'Workspace Cleanup' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Workspace Cleanup' (Protocol in workflow.md) [checkpoint: cbf2be5]
 
 ---
 
-## Phase 3: Backend RPCs (No Auth — Trust Gateway Metadata)
+## Phase 3: Backend RPCs (No Auth — Trust Gateway Metadata) [checkpoint: cbf2be5]
 
 Implements the backend-side RPCs that the gateway will call. These services do
 NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
