@@ -34,12 +34,8 @@ This file tracks all major tracks for the project.
 <!-- Archived (continued):
 - segments_ui_20260513 (Segments UI — full CRUD admin UI for environment-scoped segments, plus Match Segment rule type in flag rule builder)
 - flag_eval_preview_20260514 (Flag Evaluation Preview — evaluate-preview endpoint with rule traces, rollout debug, OR/And missing-context fix)
+- context_intel_20260515 (Context Intelligence & Evaluation Telemetry — ClickHouse eval log, context registry, analytics tab, autocomplete, explorer)
 -->
-
----
-
-## [x] Track: Context Intelligence & Evaluation Telemetry
-*Link: [./conductor/tracks/context_intel_20260515/](./conductor/tracks/context_intel_20260515/)*
 
 ---
 
