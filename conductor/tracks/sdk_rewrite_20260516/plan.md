@@ -119,11 +119,11 @@ NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
   - Implement gRPC handler
   - **No SDK-key auth**
 
-- [ ] Task: Conductor - User Manual Verification 'Backend SDK RPCs' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Backend SDK RPCs' (Protocol in workflow.md) [checkpoint: 3f4c7c3]
 
 ---
 
-## Phase 4: Gateway SDK Surface
+## Phase 4: Gateway SDK Surface [checkpoint: 3f4c7c3]
 
 Adds the gateway-side SDK trust boundary: auth middleware, gRPC server, REST
 routes. Reuses `SdkKeyCache` from `db_optim_20260516`.

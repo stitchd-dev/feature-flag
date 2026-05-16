@@ -1,12 +1,13 @@
 {
-  "current_phase": "Phase 3: Backend RPCs",
-  "current_phase_index": 2,
-  "current_task_index": 1,
+  "current_phase": "Phase 4: Gateway SDK Surface",
+  "current_phase_index": 3,
+  "current_task_index": 0,
   "completed_phases": [
     "Phase 1: SDK Spec Foundation",
-    "Phase 2: Workspace Cleanup"
+    "Phase 2: Workspace Cleanup",
+    "Phase 3: Backend RPCs"
   ],
-  "last_updated": "2026-05-16T13:30:00Z",
+  "last_updated": "2026-05-16T13:55:00Z",
   "status": "in_progress",
-  "resume_hint": "Phase 3 Task 1 (proto bindings) is COMPLETE and committed. Next session starts at Phase 3 Task 2 — implement FlagSdkBackendService::SyncDefinitions in a new module crates/stitchd-flag-service/src/sdk_backend.rs (TDD: failing test reading x-env-id metadata, then implementation that fetches flags + segments and assembles SyncDefinitionsResponse — NO SDK key validation, trust gateway metadata)."
+  "resume_hint": "Phase 3 COMPLETE and checkpointed (3f4c7c3). Next session starts at Phase 4 Task 1 — SDK auth middleware in crates/stitchd-gateway/src/middleware/. TDD: tests for valid key → injects SdkContext{env_id,project_id,org_id} into request extensions; invalid → 401; missing header → 401. Reuse SdkKeyCache from stitchd-auth-service (shared via GatewayState or new injection)."
 }
