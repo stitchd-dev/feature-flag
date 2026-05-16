@@ -134,11 +134,24 @@ async fn apply_file(
     // Replace keyspace placeholder with the actual keyspace name.
     let cql = cql.replace("__KEYSPACE__", keyspace);
 
+    // Strip line comments (-- to end of line) before splitting so that
+    // semicolons inside comment text don't produce spurious statement fragments.
+    let stripped: String = cql
+        .lines()
+        .map(|line| {
+            if let Some(pos) = line.find("--") {
+                &line[..pos]
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
     // Split on ';' and execute each non-blank statement.
-    for stmt in cql.split(';') {
+    for stmt in stripped.split(';') {
         let stmt = stmt.trim();
-        #[allow(clippy::needless_continue)]
-        if stmt.is_empty() || stmt.starts_with("--") {
+        if stmt.is_empty() {
             continue;
         }
         client
