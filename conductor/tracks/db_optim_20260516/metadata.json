@@ -9,5 +9,32 @@
   "updated_at": "2026-05-16T00:00:00Z",
   "description": "Database & Query Optimizations — comprehensive overhaul of all data-access bottlenecks across PostgreSQL and ClickHouse: index gaps, N+1 elimination, SDK key cache, ClickHouse injection hardening, experiment materialized views, partition tuning, and offset pagination.",
   "git_branch": "track/db_optim_20260516",
-  "worktree_path": ".worktrees/db_optim_20260516"
+  "worktree_path": ".worktrees/db_optim_20260516",
+  "beads_epic": "feature-flag-dhu",
+  "beads_tasks": {
+    "phase1": "feature-flag-dhu.1",
+    "phase1_task1": "feature-flag-dhu.1.1",
+    "phase1_task2": "feature-flag-dhu.1.2",
+    "phase1_task3": "feature-flag-dhu.1.3",
+    "phase1_task4": "feature-flag-dhu.1.4",
+    "phase2": "feature-flag-dhu.2",
+    "phase2_task1": "feature-flag-dhu.2.1",
+    "phase2_task2": "feature-flag-dhu.2.2",
+    "phase3": "feature-flag-dhu.3",
+    "phase3_task1": "feature-flag-dhu.3.1",
+    "phase3_task2": "feature-flag-dhu.3.2",
+    "phase3_task3": "feature-flag-dhu.3.3",
+    "phase4": "feature-flag-dhu.4",
+    "phase4_task1": "feature-flag-dhu.4.1",
+    "phase4_task2": "feature-flag-dhu.4.2",
+    "phase4_task3": "feature-flag-dhu.4.3",
+    "phase4_task4": "feature-flag-dhu.4.4",
+    "phase4_task5": "feature-flag-dhu.4.5",
+    "phase5": "feature-flag-dhu.5",
+    "phase5_task1": "feature-flag-dhu.5.1",
+    "phase5_task2": "feature-flag-dhu.5.2",
+    "phase5_task3": "feature-flag-dhu.5.3",
+    "phase5_task4": "feature-flag-dhu.5.4",
+    "phase5_task5": "feature-flag-dhu.5.5"
+  }
 }
