@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
 stitchd-db = { path = "../stitchd-db" }
+scylla = { workspace = true }
 stitchd-proto = { path = "../stitchd-proto" }
 tokio = { workspace = true }
 tonic = { workspace = true }

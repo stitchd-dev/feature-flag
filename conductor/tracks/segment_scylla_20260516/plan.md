@@ -3,16 +3,16 @@
 ## Phase 1: ScyllaDB Foundation & Driver Wiring
 <!-- execution: sequential -->
 
-- [x] Task 1: Add ScyllaDB to docker-compose
+- [x] Task 1: Add ScyllaDB to docker-compose [dbfdb47]
   <!-- files: docker-compose.yml -->
   - [x] Add `scylladb` service with healthcheck, volume, ports
   - [x] Update segmentation-service `depends_on` to wait on Scylla health
   - [ ] Verify `docker compose up postgres clickhouse scylladb -d --wait` succeeds
 
-- [ ] Task 2: Add `scylla` crate dependency
+- [x] Task 2: Add `scylla` crate dependency [SHA_PLACEHOLDER]
   <!-- files: Cargo.toml, crates/stitchd-db/Cargo.toml, crates/stitchd-segmentation-service/Cargo.toml -->
-  - [ ] Add to workspace `Cargo.toml` + `stitchd-db` + `stitchd-segmentation-service`
-  - [ ] `cargo check --workspace` passes
+  - [x] Add to workspace `Cargo.toml` + `stitchd-db` + `stitchd-segmentation-service`
+  - [x] `cargo check --workspace` passes
 
 - [ ] Task 3: Write failing tests for `ScyllaClient` (Red)
   <!-- files: crates/stitchd-db/src/scylla/mod.rs, crates/stitchd-db/tests/scylla_client.rs -->

@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
+scylla = { workspace = true }
 sqlx = { workspace = true }
 clickhouse = { workspace = true }
 tokio = { workspace = true }
