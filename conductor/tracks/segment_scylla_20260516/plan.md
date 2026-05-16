@@ -27,30 +27,30 @@
   - [x] Prepared-statement cache
   - [x] Tests from Task 3 pass
 
-- [ ] Task 5: Write failing tests for scylla-migrations applier (Red)
+- [x] Task 5: Write failing tests for scylla-migrations applier (Red) [e8b845a]
   <!-- files: crates/stitchd-db/tests/scylla_migrations.rs -->
-  - [ ] Applier picks up `.cql` files in order
-  - [ ] Re-running is idempotent
-  - [ ] Applied versions tracked in `scylla_migrations` table
+  - [x] Applier picks up `.cql` files in order
+  - [x] Re-running is idempotent
+  - [x] Applied versions tracked in `scylla_migrations` table
 
-- [ ] Task 6: Implement scylla-migrations applier (Green)
+- [x] Task 6: Implement scylla-migrations applier (Green) [e8b845a]
   <!-- files: crates/stitchd-db/src/scylla/migrate.rs, crates/stitchd-db/scylla-migrations/ -->
-  - [ ] `crates/stitchd-db/scylla-migrations/` directory
-  - [ ] Applier reads versioned files, executes via `ScyllaClient`
-  - [ ] Tests from Task 5 pass
+  - [x] `crates/stitchd-db/scylla-migrations/` directory
+  - [x] Applier reads versioned files, executes via `ScyllaClient`
+  - [x] Tests from Task 5 pass
 
-- [ ] Task 7: Author initial CQL migration files
+- [x] Task 7: Author initial CQL migration files [e8b845a]
   <!-- files: crates/stitchd-db/scylla-migrations/0001_keyspace.cql, crates/stitchd-db/scylla-migrations/0002_segment_list_entries.cql, crates/stitchd-db/scylla-migrations/0003_segment_list_generations.cql, crates/stitchd-db/scylla-migrations/0004_segment_list_summary.cql -->
-  - [ ] `0001_keyspace.cql` — keyspace with replication strategy
-  - [ ] `0002_segment_list_entries.cql` — entries table per FR-1
-  - [ ] `0003_segment_list_generations.cql` — pointer table
-  - [ ] `0004_segment_list_summary.cql` — counter rows for summary
+  - [x] `0001_keyspace.cql` — keyspace with replication strategy
+  - [x] `0002_segment_list_entries.cql` — entries table per FR-1
+  - [x] `0003_segment_list_generations.cql` — pointer table
+  - [x] `0004_segment_list_summary.cql` — counter rows for summary
 
-- [ ] Task 8: Add xtask command + startup migration invocation
+- [x] Task 8: Add xtask command + startup migration invocation [cd74a92]
   <!-- files: crates/xtask/src/main.rs, crates/stitchd-segmentation-service/src/main.rs -->
-  - [ ] `cargo xtask scylla-migrate` applies migrations
-  - [ ] `stitchd-segmentation-service` runs migrations on startup
-  - [ ] Test: spin up against empty keyspace creates all tables
+  - [x] `cargo xtask scylla-migrate` applies migrations
+  - [x] `stitchd-segmentation-service` runs migrations on startup
+  - [x] Test: spin up against empty keyspace creates all tables (covered by scylla_migrations.rs integration tests)
 
 - [ ] Task 9: Conductor - User Manual Verification 'ScyllaDB Foundation & Driver Wiring' (Protocol in workflow.md)
 
