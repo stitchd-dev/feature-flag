@@ -70,7 +70,7 @@ later phases have a place to land.
   - Delete any tests in `crates/stitchd-db/tests/` that depend on it
   - Verify `cargo check --workspace` passes
 
-- [ ] Task 2: Scaffold `sdks/rust/` crate skeleton
+- [x] Task 2: Scaffold `sdks/rust/` crate skeleton
   - Create `sdks/rust/Cargo.toml` with `package.name = "stitchd-sdk"`,
     workspace inheritance, dependencies (`stitchd-core`, `stitchd-proto`,
     `tonic`, `reqwest`, `tokio`, `moka`, `arc-swap`, `thiserror`)

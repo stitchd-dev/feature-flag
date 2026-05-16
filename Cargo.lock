@@ -86,6 +86,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "arc-swap"
+version = "1.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f3647c145568cec02c42054e07bdf9a5a698e15b466fb2341bfc393cd24aa5"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3742,6 +3751,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "stitchd-sdk"
+version = "0.1.0"
+dependencies = [
+ "arc-swap",
+ "chrono",
+ "futures",
+ "moka",
+ "prost",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "stitchd-core",
+ "stitchd-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "stitchd-segmentation-service"
 version = "0.1.0"
 dependencies = [
@@ -4067,6 +4100,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

@@ -27,9 +27,7 @@ fn docs() -> Result<()> {
     // Step 2: Export OpenAPI JSON from the server binary
     export_openapi(&root)?;
     // Step 3: Build rustdoc for stitchd-sdk and copy into docs/
-    // TODO(sdk_rewrite_20260516 Phase 2 Task 2): re-enable pointing at
-    // sdks/rust/src/lib.rs once the new SDK crate is scaffolded.
-    // generate_sdk_rustdoc(&root)?;
+    generate_sdk_rustdoc(&root)?;
 
     // Step 4: build the mdBook site
     mdbook_build(&root)?;
@@ -551,7 +549,6 @@ fn export_openapi(root: &Path) -> Result<()> {
 // Step 3: SDK rustdoc
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // re-enabled by sdk_rewrite_20260516 Phase 2 Task 2
 fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
     let out_dir = root.join("docs/book/rustdoc");
     println!("Generating SDK rustdoc → {}", out_dir.display());
@@ -576,13 +573,12 @@ fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Extract the `# Quickstart` section from `stitchd-sdk/src/lib.rs` module docs
+/// Extract the `# Quickstart` section from `sdks/rust/src/lib.rs` module docs
 /// and write it to `docs/src/sdk/quickstart.md`.
-#[allow(dead_code)] // re-enabled by sdk_rewrite_20260516 Phase 2 Task 2
 fn extract_quickstart(root: &Path) -> Result<()> {
-    let lib_rs = root.join("crates/stitchd-sdk/src/lib.rs");
+    let lib_rs = root.join("sdks/rust/src/lib.rs");
     let source =
-        std::fs::read_to_string(&lib_rs).context("failed to read stitchd-sdk/src/lib.rs")?;
+        std::fs::read_to_string(&lib_rs).context("failed to read sdks/rust/src/lib.rs")?;
 
     // Collect `//!` lines and strip the prefix
     let doc_lines: Vec<&str> = source
@@ -605,7 +601,7 @@ fn extract_quickstart(root: &Path) -> Result<()> {
 
         let quickstart_body = doc_lines[start..end].join("\n");
         let out = format!(
-            "# SDK Quickstart\n\n> Auto-extracted from `stitchd-sdk/src/lib.rs` module docs.\n> Run `cargo xtask docs` to regenerate.\n\n{}\n",
+            "# SDK Quickstart\n\n> Auto-extracted from `sdks/rust/src/lib.rs` module docs.\n> Run `cargo xtask docs` to regenerate.\n\n{}\n",
             &quickstart_body["# Quickstart".len()..].trim_start()
         );
 
