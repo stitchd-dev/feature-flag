@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+// Backend RPCs live in the same proto package as the SDK-facing service so
+// they can share message types (SyncDefinitionsRequest/Response,
+// IngestSdkEvalLogRequest/Response) without re-declaration.
+package stitchd.sdk.v1;
+
+import "sdk/v1/service.proto";
+
+// ============================================================================
+// Backend SDK RPCs (called by gateway, NOT by SDKs directly)
+// ============================================================================
+//
+// These RPCs live on backend microservices (stitchd-flag-service,
+// stitchd-segmentation-service). They are called EXCLUSIVELY by the gateway
+// on behalf of SDK clients — never by SDKs directly.
+//
+// Authentication / Authorization:
+//   - No SDK-key validation. Backend trusts the gateway.
+//   - The resolved environment id is passed via gRPC metadata `x-env-id`
+//     (lowercase UUID, hyphenated, no braces).
+//   - Any backend RPC here that receives a request WITHOUT `x-env-id` metadata
+//     MUST return `Unauthenticated` (gRPC code 16). This guards against the
+//     accidental case where an SDK reaches the backend directly, bypassing
+//     the gateway's auth middleware.
+//
+// All RPCs are unary; no streaming in this revision.
+
+// ============================================================================
+// FlagSdkBackendService — hosted by stitchd-flag-service
+// ============================================================================
+
+service FlagSdkBackendService {
+  // Returns the full snapshot of flag + segment definitions for the env_id
+  // supplied via gRPC metadata. Wire-equivalent to
+  // `SdkService.SyncDefinitions`, minus the SDK-key auth concern.
+  //
+  // Reads from:
+  //   - flag_repository.list_by_environment(env_id)
+  //   - segment_repository.list_by_environment(env_id)
+  //
+  // Returns the same message shape so the gateway can pass it through
+  // verbatim (with `environment_id` populated).
+  rpc SyncDefinitions(SyncDefinitionsRequest)
+      returns (SyncDefinitionsResponse);
+
+  // Append a batch of SDK-emitted evaluation events to the eval_log_writer
+  // pipeline. Each event becomes one EvalLogRow forwarded to ClickHouse
+  // `flag_evaluation_log_v2`.
+  //
+  // Implementation detail: handler converts SdkEvalBatch -> Vec<EvalLogRow>
+  // and sends through the existing eval_log_writer::EvalLogSender MPSC.
+  // Response is empty (success = `Ok` status).
+  rpc IngestSdkEvalLog(IngestSdkEvalLogRequest)
+      returns (IngestSdkEvalLogResponse);
+}
+
+// ============================================================================
+// SegmentationSdkBackendService — hosted by stitchd-segmentation-service
+// ============================================================================
+
+service SegmentationSdkBackendService {
+  // Batch membership lookup across multiple (context_type, context_key) tuples
+  // for a given set of list-based segment ids.
+  //
+  // Implementation: single SQL query against `segment_list_entries`:
+  //   SELECT segment_id, context_type, entry_key
+  //   FROM   segment_list_entries
+  //   WHERE  segment_id = ANY($1)
+  //     AND  (context_type, entry_key) = ANY($2)
+  //
+  // Response shape mirrors request shape: one MembershipResult per query,
+  // returned in the same order as the request's `queries` field.
+  rpc BatchCheckListMembership(BatchCheckListMembershipRequest)
+      returns (BatchCheckListMembershipResponse);
+}
+
+// ── BatchCheckListMembership messages ───────────────────────────────────────
+
+message BatchCheckListMembershipRequest {
+  repeated MembershipQuery queries = 1;
+}
+
+message MembershipQuery {
+  // The (context_type, context_key) tuple to look up.
+  string context_type = 1;
+  string context_key  = 2;
+  // Restrict the lookup to these list-segment ids. The SDK fills this with
+  // ALL currently-flag-referenced list segments to amortise round-trips.
+  // Empty list means "check no segments" → response will return an empty
+  // memberships map.
+  repeated string segment_ids = 3;
+}
+
+message BatchCheckListMembershipResponse {
+  // One entry per request query, in the same order. Length MUST equal
+  // request.queries.length.
+  repeated MembershipResult results = 1;
+}
+
+message MembershipResult {
+  // Echoes the query's context_type / context_key for client correlation.
+  string context_type = 1;
+  string context_key  = 2;
+  // segment_id -> bool. Segments not present in the response default to
+  // `false` on the SDK side. The backend MAY omit `false` entries to save
+  // bytes, OR include them explicitly — both are valid.
+  map<string, bool> memberships = 3;
+}

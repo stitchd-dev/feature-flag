@@ -23,7 +23,7 @@ are pinned before downstream phases reference them.
   - `05-events.md` — event schema, batching/flush semantics, at-least-once delivery
   - `06-errors.md` — error taxonomy, retry policy
 
-- [ ] Task 3: Author Protobuf contracts (`sdks/spec/proto/`)
+- [x] Task 3: Author Protobuf contracts (`sdks/spec/proto/`)
   - `sdk_service.proto` — `SdkService.SyncDefinitions(SyncRequest) -> DefinitionsSnapshot`
     + `IngestSdkEvalLog(SdkEvalBatch) -> Empty` (gateway-hosted surface)
   - `segmentation_sdk.proto` — `BatchCheckListMembership({env_id, queries}) -> {results}`

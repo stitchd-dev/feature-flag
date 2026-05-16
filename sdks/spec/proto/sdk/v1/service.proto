@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package stitchd.sdk.v1;
+
+import "common/v1/context.proto";
+import "flags/v1/flag_sync.proto";
+import "segments/v1/segment.proto";
+
+// ============================================================================
+// SDK Service (gateway-hosted)
+// ============================================================================
+//
+// This is the SDK-facing surface — the gateway runs a tonic gRPC server
+// exposing these RPCs. Every SDK implementation (Rust, JS, Python, Go)
+// generates a client from this file.
+//
+// Authentication: SDK supplies `x-sdk-key` in gRPC metadata. Gateway validates
+// once via its in-memory SdkKeyCache; on success, gateway resolves the
+// (environment_id, project_id, organization_id) and forwards to backend
+// services with `x-env-id` metadata. Backend services trust this and do not
+// re-validate. See sdks/spec/docs/01-overview.md "Gateway is the Trust
+// Boundary".
+//
+// Streaming: all RPCs here are unary. Server-streaming definition sync
+// (and SSE / WebSocket variants) are deferred to a future enhancement track.
+
+service SdkService {
+  // Fetch the full current snapshot of flag + segment definitions for the
+  // SDK's environment. Called by the SDK on its `definition_poll_interval`
+  // (default 30s). Returns full data — there are no deltas.
+  //
+  // The gateway forwards to `FlagSdkBackendService.SyncDefinitions` (see
+  // sdk_backend.proto) with the resolved env_id in `x-env-id` metadata.
+  rpc SyncDefinitions(SyncDefinitionsRequest) returns (SyncDefinitionsResponse);
+
+  // Ingest a batch of flag-evaluation events emitted by the SDK.
+  // The gateway forwards to `FlagSdkBackendService.IngestSdkEvalLog`, which
+  // routes events to the existing eval_log_writer pipeline (ClickHouse
+  // `flag_evaluation_log_v2`). Idempotency is best-effort: at-least-once
+  // delivery; downstream may dedupe on (flag_key, environment_id,
+  // context_type, context_key, evaluated_at).
+  rpc IngestSdkEvalLog(IngestSdkEvalLogRequest) returns (IngestSdkEvalLogResponse);
+}
+
+// ============================================================================
+// SyncDefinitions
+// ============================================================================
+
+message SyncDefinitionsRequest {
+  // Reserved for future use (e.g. delta-sync cursor). Empty in v1.
+}
+
+message SyncDefinitionsResponse {
+  // All flag definitions for the resolved environment.
+  repeated stitchd.flags.v1.FeatureFlag flags = 1;
+
+  // Rule-based segment definitions (full condition trees) — evaluated locally.
+  repeated stitchd.segments.v1.RuleSegment rule_segments = 2;
+
+  // List-based segment metadata (id + key + context_type, NO entries).
+  // The SDK uses this to know which segments require list-membership lookup.
+  repeated stitchd.segments.v1.ListSegmentMeta list_segments = 3;
+
+  // Epoch millis at which the gateway computed this snapshot.
+  // The SDK MAY log this for staleness diagnostics; it does NOT need to be
+  // monotonic across calls.
+  int64 server_timestamp_ms = 4;
+
+  // UUID of the resolved environment — populated by the gateway from the
+  // SDK key. The SDK uses this only for log correlation; it does NOT include
+  // it in subsequent SDK->gateway requests (auth flows from `x-sdk-key`).
+  string environment_id = 5;
+}
+
+// ============================================================================
+// IngestSdkEvalLog
+// ============================================================================
+
+message IngestSdkEvalLogRequest {
+  repeated FlagEvaluationEvent events = 1;
+}
+
+message IngestSdkEvalLogResponse {
+  // Empty — gateway returns 202 Accepted to the SDK on success.
+  // Body is intentionally vacant; presence of a successful gRPC response
+  // is the only signal needed.
+}
+
+// ============================================================================
+// FlagEvaluationEvent (shared message — also used in REST POST body)
+// ============================================================================
+//
+// One event per evaluated flag. The SDK queues these in a bounded MPSC,
+// drains in batches via either gRPC (above) or REST (POST /v1/sdk/events:batch).
+// Wire-equivalent across both transports.
+
+message FlagEvaluationEvent {
+  // The flag key that was evaluated.
+  string flag_key = 1;
+
+  // The variant key that the evaluation returned (e.g. "control", "treatment").
+  // For `outcome = "flag_not_found"`, this is the default-for-type value
+  // stringified.
+  string variant_key = 2;
+
+  // The context this evaluation was run against.
+  string context_type = 3;
+  string context_key  = 4;
+
+  // SDK-local clock at the moment evaluation returned. RFC3339 UTC, ms precision.
+  string evaluated_at = 5;
+
+  // UUID of the rule that matched, if any. Empty string for outcomes other
+  // than "matched".
+  string matched_rule_id = 6;
+
+  // What the evaluation produced. One of: "matched", "default_rule",
+  // "disabled", "flag_not_found".
+  string outcome = 7;
+
+  // Whether the caller invoked the reasoning-enabled entry point.
+  // Note: the reasoning trace itself is NOT included in the event payload
+  // (would bloat ClickHouse writes); this flag is for downstream analytics
+  // only.
+  bool reasoning_included = 8;
+
+  // Context parameters (minus those listed in private_parameters).
+  // Empty / unset if all parameters were marked private.
+  map<string, stitchd.common.v1.ParameterValue> context_parameters = 9;
+
+  // Populated by the gateway from the SDK key when forwarding to the backend.
+  // SDKs MUST leave this field empty in outbound payloads.
+  string environment_id = 10;
+}
