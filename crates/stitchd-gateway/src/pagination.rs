@@ -3,6 +3,28 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Deserialize a u32 from either a JSON integer or a URL query string value.
+/// serde_urlencoded (used by axum's Query extractor) passes all values as strings,
+/// which causes `u32::deserialize` to fail when the field is inside a `#[serde(flatten)]`
+/// struct. This visitor accepts both representations.
+fn de_u32_from_str<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = u32;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "a u32 or string containing a u32")
+        }
+        fn visit_u32<E: serde::de::Error>(self, v: u32) -> Result<u32, E> { Ok(v) }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<u32, E> {
+            u32::try_from(v).map_err(|_| E::custom("u32 overflow"))
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<u32, E> {
+            v.parse::<u32>().map_err(E::custom)
+        }
+    }
+    d.deserialize_any(Visitor)
+}
+
 const DEFAULT_PAGE: u32 = 1;
 const DEFAULT_PER_PAGE: u32 = 50;
 const MAX_PER_PAGE: u32 = 200;
@@ -13,9 +35,9 @@ const MAX_PER_PAGE: u32 = 200;
 /// `page=1` and `per_page=50`; `per_page` is capped at 200.
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct PaginationParams {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_u32_from_str")]
     pub page: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_u32_from_str")]
     pub per_page: u32,
 }
 
