@@ -12,6 +12,50 @@ use stitchd_db::{
     },
 };
 
+fn make_flag(project_id: ProjectId, key: &str) -> FlagRecord {
+    FlagRecord {
+        id: FlagId::new(),
+        project_id,
+        key: FlagKey::new(key).unwrap(),
+        name: key.to_string(),
+        description: String::new(),
+        value_type: FlagValueType::Bool,
+        enabled: true,
+        default_variant_id: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    }
+}
+
+async fn setup_org_and_project(
+    org_repo: &PgOrganisationRepository,
+    proj_repo: &PgProjectRepository,
+) -> Project {
+    let org = Organisation {
+        id: OrganisationId::new(),
+        name: "TestOrg".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+        is_system: false,
+    };
+    org_repo.create(&org).await.unwrap();
+    let project = Project {
+        id: ProjectId::new(),
+        organisation_id: org.id,
+        name: "TestProj".into(),
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    };
+    proj_repo.create(&project).await.unwrap();
+    project
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn test_flag_lifecycle(pool: sqlx::PgPool) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
@@ -100,4 +144,91 @@ async fn test_flag_lifecycle(pool: sqlx::PgPool) {
         .expect("Failed to delete variant");
     let after_delete = var_repo.find_by_flag(flag.id).await.unwrap();
     assert_eq!(after_delete.len(), 0);
+}
+
+// ── Paginated flag list tests ─────────────────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_project_paginated_page_1_returns_first_slice(pool: sqlx::PgPool) {
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
+    let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
+    let repo = PgFlagRepository::new(pool.clone(), audit);
+
+    let project = setup_org_and_project(&org_repo, &proj_repo).await;
+
+    // Seed 5 flags in a project.
+    for i in 0..5 {
+        repo.create(&make_flag(project.id, &format!("flag-{i:02}"))).await.unwrap();
+    }
+
+    let (page1, total) = repo
+        .list_by_project_paginated(project.id, 0, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(total, 5, "total must reflect all non-deleted flags");
+    assert_eq!(page1.len(), 3, "page 1 must return 3 items");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_project_paginated_page_2_returns_remainder(pool: sqlx::PgPool) {
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
+    let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
+    let repo = PgFlagRepository::new(pool.clone(), audit);
+
+    let project = setup_org_and_project(&org_repo, &proj_repo).await;
+
+    for i in 0..5 {
+        repo.create(&make_flag(project.id, &format!("flag-{i:02}"))).await.unwrap();
+    }
+
+    let (page2, total) = repo
+        .list_by_project_paginated(project.id, 3, 3)
+        .await
+        .unwrap();
+
+    assert_eq!(total, 5);
+    assert_eq!(page2.len(), 2, "page 2 must return the remaining 2 items");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_project_paginated_total_count_accurate(pool: sqlx::PgPool) {
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
+    let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
+    let repo = PgFlagRepository::new(pool.clone(), audit);
+
+    let project = setup_org_and_project(&org_repo, &proj_repo).await;
+
+    for i in 0..10 {
+        repo.create(&make_flag(project.id, &format!("flag-{i:02}"))).await.unwrap();
+    }
+
+    // Even with per_page=1 the total must reflect all 10 flags.
+    let (_items, total) = repo
+        .list_by_project_paginated(project.id, 0, 1)
+        .await
+        .unwrap();
+
+    assert_eq!(total, 10, "total must include all rows regardless of page size");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_project_paginated_empty_project_returns_zero_total(pool: sqlx::PgPool) {
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
+    let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
+    let repo = PgFlagRepository::new(pool.clone(), audit);
+
+    let project = setup_org_and_project(&org_repo, &proj_repo).await;
+
+    let (items, total) = repo
+        .list_by_project_paginated(project.id, 0, 50)
+        .await
+        .unwrap();
+
+    assert_eq!(total, 0);
+    assert!(items.is_empty());
 }

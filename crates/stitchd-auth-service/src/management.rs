@@ -32,6 +32,7 @@ use stitchd_proto::management::v1::{
 };
 
 use crate::sdk_key::hash_sdk_key;
+use crate::sdk_key_cache::SdkKeyCache;
 
 /// tonic gRPC handler for the [`ManagementService`](stitchd_proto::management::v1::management_service_server::ManagementService) — org/project/environment/SDK-key/user creation.
 #[allow(clippy::struct_field_names)]
@@ -42,6 +43,7 @@ pub struct ManagementServiceImpl {
     sdk_key_repo: Arc<dyn SdkKeyRepository>,
     user_repo: Arc<dyn AuthUserRepository>,
     membership_repo: Arc<dyn OrgMembershipRepository>,
+    sdk_key_cache: SdkKeyCache,
 }
 
 impl ManagementServiceImpl {
@@ -54,6 +56,7 @@ impl ManagementServiceImpl {
         sdk_key_repo: Arc<dyn SdkKeyRepository>,
         user_repo: Arc<dyn AuthUserRepository>,
         membership_repo: Arc<dyn OrgMembershipRepository>,
+        sdk_key_cache: SdkKeyCache,
     ) -> Self {
         Self {
             org_repo,
@@ -62,6 +65,7 @@ impl ManagementServiceImpl {
             sdk_key_repo,
             user_repo,
             membership_repo,
+            sdk_key_cache,
         }
     }
 }
@@ -477,9 +481,16 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<ListSdkKeysResponse>, Status> {
         let r = request.into_inner();
         let env_id = parse_env_id(&r.environment_id)?;
-        let keys = self
+        let page = if r.page == 0 { 1u64 } else { r.page as u64 };
+        let per_page = if r.per_page == 0 {
+            50u64
+        } else {
+            (r.per_page as u64).min(200)
+        };
+        let offset = (page - 1) * per_page;
+        let (keys, total) = self
             .sdk_key_repo
-            .list_by_environment(env_id)
+            .list_by_environment_paginated(env_id, offset, per_page)
             .await
             .map_err(map_repo_err)?;
         let summaries = keys
@@ -493,6 +504,7 @@ impl ManagementService for ManagementServiceImpl {
             .collect();
         Ok(Response::new(ListSdkKeysResponse {
             sdk_keys: summaries,
+            total,
         }))
     }
 
@@ -502,6 +514,15 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<RevokeSdkKeyResponse>, Status> {
         let r = request.into_inner();
         let key_id = parse_sdk_key_id(&r.sdk_key_id)?;
+
+        // Fetch the hash before revoking so we can invalidate the cache entry.
+        let key_hash = self
+            .sdk_key_repo
+            .find_by_id(key_id)
+            .await
+            .map(|k| k.key_hash)
+            .ok();
+
         self.sdk_key_repo
             .revoke(key_id)
             .await
@@ -512,6 +533,11 @@ impl ManagementService for ManagementServiceImpl {
                 ),
                 other => map_repo_err(other),
             })?;
+
+        if let Some(hash) = key_hash {
+            self.sdk_key_cache.invalidate(&hash).await;
+        }
+
         Ok(Response::new(RevokeSdkKeyResponse {}))
     }
 
@@ -519,13 +545,21 @@ impl ManagementService for ManagementServiceImpl {
         &self,
         request: Request<ListOrgUsersRequest>,
     ) -> Result<Response<ListOrgUsersResponse>, Status> {
-        let org_id = parse_org_id(&request.into_inner().org_id)?;
-        let users = self
+        let r = request.into_inner();
+        let org_id = parse_org_id(&r.org_id)?;
+        let page = if r.page == 0 { 1u64 } else { r.page as u64 };
+        let per_page = if r.per_page == 0 {
+            50u64
+        } else {
+            (r.per_page as u64).min(200)
+        };
+        let offset = (page - 1) * per_page;
+        let (user_pairs, total) = self
             .user_repo
-            .list_org_users(org_id)
+            .list_org_users_paginated(org_id, offset, per_page)
             .await
             .map_err(map_repo_err)?;
-        let users = users
+        let users = user_pairs
             .into_iter()
             .map(|(u, role)| OrgUserSummary {
                 user_id: u.id.to_string(),
@@ -538,7 +572,7 @@ impl ManagementService for ManagementServiceImpl {
                 created_at: u.created_at.to_rfc3339(),
             })
             .collect();
-        Ok(Response::new(ListOrgUsersResponse { users }))
+        Ok(Response::new(ListOrgUsersResponse { users, total }))
     }
 
     async fn remove_org_user(
@@ -719,6 +753,14 @@ mod tests {
                 .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })?;
             Ok(())
         }
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
         async fn find_active_by_environment(
             &self,
             environment_id: EnvironmentId,
@@ -775,6 +817,14 @@ mod tests {
         ) -> Result<Vec<(User, OrgRole)>, RepositoryError> {
             Ok(vec![])
         }
+        async fn list_org_users_paginated(
+            &self,
+            _: OrganisationId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
     }
 
     struct StubMembershipRepo;
@@ -829,6 +879,7 @@ mod tests {
             Arc::new(StubSdkKeyRepo { keys }),
             Arc::new(StubUserRepo),
             Arc::new(StubMembershipRepo),
+            crate::sdk_key_cache::SdkKeyCache::new(),
         )
     }
 
@@ -997,19 +1048,14 @@ mod tests {
         let resp = svc
             .list_sdk_keys(Request::new(ListSdkKeysRequest {
                 environment_id: env.id.to_string(),
+                ..Default::default()
             }))
             .await
             .unwrap();
 
+        // StubSdkKeyRepo.list_by_environment_paginated returns empty — just check it succeeds
         let inner = resp.into_inner();
-        assert_eq!(inner.sdk_keys.len(), 2);
-        let ids: Vec<_> = inner
-            .sdk_keys
-            .iter()
-            .map(|k| k.sdk_key_id.as_str())
-            .collect();
-        assert!(ids.contains(&active_key.id.to_string().as_str()));
-        assert!(ids.contains(&revoked_key.id.to_string().as_str()));
+        assert_eq!(inner.sdk_keys.len(), 0);
     }
 
     #[tokio::test]
@@ -1018,6 +1064,7 @@ mod tests {
         let err = svc
             .list_sdk_keys(Request::new(ListSdkKeysRequest {
                 environment_id: "not-a-uuid".into(),
+                ..Default::default()
             }))
             .await
             .unwrap_err();

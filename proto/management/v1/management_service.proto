@@ -108,6 +108,8 @@ message CreateSdkKeyResponse {
 
 message ListSdkKeysRequest {
   string environment_id = 1;
+  uint32 page           = 2;
+  uint32 per_page       = 3;
 }
 
 message SdkKeySummary {
@@ -119,6 +121,7 @@ message SdkKeySummary {
 
 message ListSdkKeysResponse {
   repeated SdkKeySummary sdk_keys = 1;
+  uint64                 total    = 2;
 }
 
 message RevokeSdkKeyRequest {
@@ -169,7 +172,9 @@ message CreateUserResponse {
 }
 
 message ListOrgUsersRequest {
-  string org_id = 1;
+  string org_id   = 1;
+  uint32 page     = 2;
+  uint32 per_page = 3;
 }
 
 message RemoveOrgUserRequest {
@@ -189,6 +194,7 @@ message OrgUserSummary {
 
 message ListOrgUsersResponse {
   repeated OrgUserSummary users = 1;
+  uint64                  total = 2;
 }
 
 // ─── Management service ───────────────────────────────────────────────────────

@@ -1,5 +1,12 @@
 // Shared API response types matching the gateway's AdminFlagJson shape.
 
+export interface PaginatedResponse<T> {
+  items: T[]
+  total: number
+  page: number
+  per_page: number
+}
+
 export interface VariantJson {
   key: string
   value: unknown

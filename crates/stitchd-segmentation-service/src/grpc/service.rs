@@ -201,10 +201,14 @@ impl SegmentationService for SegmentationServiceImpl {
         let r = req.into_inner();
         let env_id = parse_env_id(&r.environment_id).map_err(Status::from)?;
 
-        let segments = self
+        let page = if r.page == 0 { 1u64 } else { r.page as u64 };
+        let per_page = if r.per_page == 0 { 50u64 } else { (r.per_page as u64).min(200) };
+        let offset = (page - 1) * per_page;
+
+        let (segments, total) = self
             .state
             .segment_repo
-            .list_by_environment(env_id)
+            .list_by_environment_paginated(env_id, offset, per_page)
             .await
             .map_err(|e| Status::from(ServiceError::from(e)))?;
 
@@ -223,7 +227,7 @@ impl SegmentationService for SegmentationServiceImpl {
             };
             admin_segments.push(segment_to_admin_proto_with_counts(s, list_counts, condition_expr));
         }
-        Ok(Response::new(ListAdminSegmentsResponse { segments: admin_segments }))
+        Ok(Response::new(ListAdminSegmentsResponse { segments: admin_segments, total }))
     }
 
     async fn get_admin_segment(

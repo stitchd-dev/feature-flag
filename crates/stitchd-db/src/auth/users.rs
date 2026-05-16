@@ -67,6 +67,16 @@ pub trait AuthUserRepository: Send + Sync {
         &self,
         org_id: OrganisationId,
     ) -> Result<Vec<(User, OrgRole)>, RepositoryError>;
+
+    /// List users in an org with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)`.
+    async fn list_org_users_paginated(
+        &self,
+        org_id: OrganisationId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +392,73 @@ impl AuthUserRepository for PgAuthUserRepository {
                 Ok((user, org_role))
             })
             .collect()
+    }
+
+    async fn list_org_users_paginated(
+        &self,
+        org_id: OrganisationId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError> {
+        use sqlx::Row as _;
+
+        let rows = sqlx::query(
+            r"
+            SELECT
+                u.id, u.email, u.display_name, u.avatar_url, u.password_hash,
+                u.token_secret, u.totp_secret, u.totp_enabled, u.status,
+                u.created_at, u.updated_at,
+                m.role AS org_role,
+                COUNT(*) OVER() AS total_count
+            FROM users u
+            JOIN org_memberships m ON u.id = m.user_id
+            WHERE m.org_id = $1
+            ORDER BY u.email
+            LIMIT $2 OFFSET $3
+            ",
+        )
+        .bind(org_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let total = rows
+            .first()
+            .map(|r| {
+                let n: i64 = r.get("total_count");
+                n.max(0) as u64
+            })
+            .unwrap_or(0);
+
+        let users = rows
+            .iter()
+            .map(|r| {
+                let org_role_str: &str = r.get("org_role");
+                let org_role = match org_role_str {
+                    "org_admin" => OrgRole::OrgAdmin,
+                    _ => OrgRole::OrgMember,
+                };
+                let status_str: &str = r.get("status");
+                let user = User {
+                    id: UserId::from_uuid(r.get("id")),
+                    email: r.get("email"),
+                    display_name: r.get("display_name"),
+                    avatar_url: r.get("avatar_url"),
+                    password_hash: r.get("password_hash"),
+                    token_secret: r.get("token_secret"),
+                    totp_secret: r.get("totp_secret"),
+                    totp_enabled: r.get("totp_enabled"),
+                    status: parse_status(status_str)?,
+                    created_at: r.get("created_at"),
+                    updated_at: r.get("updated_at"),
+                };
+                Ok((user, org_role))
+            })
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+
+        Ok((users, total))
     }
 }
 

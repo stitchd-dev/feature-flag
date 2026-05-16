@@ -114,6 +114,16 @@ pub trait SdkKeyRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<SdkKey>, RepositoryError>;
 
+    /// List SDK keys for an environment with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)`.
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<stitchd_core::tenant::SdkKey>, u64), RepositoryError>;
+
     /// Persist a new SDK key.
     async fn create(&self, key: &SdkKey) -> Result<(), RepositoryError>;
 
@@ -218,6 +228,17 @@ pub trait FlagRepository: Send + Sync {
         &self,
         project_id: ProjectId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
+
+    /// List non-deleted flags in a project with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)` where `total_count` is the count of
+    /// all non-deleted flags for the project (regardless of offset/limit).
+    async fn list_by_project_paginated(
+        &self,
+        project_id: ProjectId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<stitchd_core::flag::FlagRecord>, u64), RepositoryError>;
 
     /// List all flags in a project including soft-deleted (archived) ones.
     async fn list_by_project_all(
@@ -329,6 +350,16 @@ pub trait SegmentRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError>;
 
+    /// List non-deleted segments in an environment with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)`.
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError>;
+
     /// Persist a new segment.
     async fn create(&self, segment: &stitchd_core::segment::Segment)
     -> Result<(), RepositoryError>;
@@ -407,6 +438,33 @@ pub trait SegmentRepository: Send + Sync {
         contexts: &[(String, String)],
         segment_keys: &[String],
     ) -> Result<Vec<crate::ContextMembership>, RepositoryError>;
+
+    // ---- N+1 elimination methods (FR-2) ----
+
+    /// Fetch multiple segment records in one query.
+    ///
+    /// Returns all non-deleted segments whose IDs are in `ids`, in unspecified order.
+    async fn find_batch_by_ids(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError>;
+
+    /// Fetch rule definitions for multiple rule-based segments in one query.
+    ///
+    /// Returns a map from segment ID to its assembled [`RuleBasedSegment`].
+    /// Segments with no `segment_rules` rows fall back to the `condition_expr` column.
+    async fn find_rules_batch(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<std::collections::HashMap<SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError>;
+
+    /// Fetch list entries for multiple list-based segments in one query.
+    ///
+    /// Returns a map from segment ID to its assembled [`ListBasedSegment`].
+    async fn find_lists_batch(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<std::collections::HashMap<SegmentId, stitchd_core::segment::ListBasedSegment>, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,6 +507,17 @@ pub trait ExperimentRepository: Send + Sync {
         env_id: EnvironmentId,
         status_filter: Option<ExperimentStatus>,
     ) -> Result<Vec<Experiment>, RepositoryError>;
+
+    /// List non-deleted experiments in an environment with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)` where `total_count` is the count of
+    /// all non-deleted experiments for the environment (regardless of offset/limit).
+    async fn list_by_environment_paginated(
+        &self,
+        env_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<Experiment>, u64), RepositoryError>;
 
     /// Persist a new experiment.
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError>;

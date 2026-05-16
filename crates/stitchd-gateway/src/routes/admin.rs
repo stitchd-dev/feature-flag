@@ -9,7 +9,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -23,9 +23,17 @@ use stitchd_proto::management::v1::{
 };
 
 use crate::error::GatewayError;
+use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
+
+/// Query parameters for listing org users.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListOrgUsersQuery {
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
+}
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateOrgBody {
@@ -189,14 +197,19 @@ pub async fn remove_org_user(
 pub async fn list_org_users(
     State(state): State<Arc<GatewayState>>,
     Path(org_id): Path<String>,
+    Query(query): Query<ListOrgUsersQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let mut client = state.management_client.lock().await;
     let resp = client
-        .list_org_users(tonic::Request::new(ListOrgUsersRequest { org_id }))
+        .list_org_users(tonic::Request::new(ListOrgUsersRequest {
+            org_id,
+            page: query.pagination.effective_page(),
+            per_page: query.pagination.effective_per_page(),
+        }))
         .await
         .map_err(GatewayError::from)?;
-    let users = resp
-        .into_inner()
+    let inner = resp.into_inner();
+    let users: Vec<OrgUserJson> = inner
         .users
         .into_iter()
         .map(|u| OrgUserJson {
@@ -207,7 +220,11 @@ pub async fn list_org_users(
             created_at: u.created_at,
         })
         .collect();
-    Ok(Json(ListOrgUsersJson { users }))
+    Ok(Json(PaginatedResponse::new(
+        users,
+        inner.total,
+        &query.pagination,
+    )))
 }
 
 /// `GET /v1/admin/orgs`

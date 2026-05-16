@@ -40,6 +40,18 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "20260419000004_events_numeric_mv",
         include_str!("../migrations/20260419000004_events_numeric_mv.sql"),
     ),
+    (
+        "20260516000005_events_experiment_daily_mv",
+        include_str!("../migrations/20260516000005_events_experiment_daily_mv.sql"),
+    ),
+    (
+        "20260516000006_events_experiment_daily_backfill",
+        include_str!("../migrations/20260516000006_events_experiment_daily_backfill.sql"),
+    ),
+    (
+        "20260516000007_events_v2",
+        include_str!("../migrations/20260516000007_events_v2.sql"),
+    ),
 ];
 
 /// Apply all pending ClickHouse migrations.

@@ -109,6 +109,80 @@ impl ExperimentRepository for PgExperimentRepository {
         }
     }
 
+    async fn list_by_environment_paginated(
+        &self,
+        env_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+        use sqlx::Row as _;
+
+        let rows = sqlx::query(
+            r"
+            SELECT
+                id, env_id, flag_rule_id, name, description, hypothesis, status,
+                metric_keys, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
+                scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at,
+                COUNT(*) OVER() AS total_count
+            FROM experiments
+            WHERE env_id = $1 AND deleted_at IS NULL
+            ORDER BY created_at
+            LIMIT $2 OFFSET $3
+            ",
+        )
+        .bind(env_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let total = rows
+            .first()
+            .map(|r| {
+                let n: i64 = r.get("total_count");
+                n.max(0) as u64
+            })
+            .unwrap_or(0);
+
+        let experiments = rows
+            .iter()
+            .map(|r| {
+                use stitchd_core::id::RuleId;
+                let status_str: &str = r.get("status");
+                let status = match status_str {
+                    "running" => ExperimentStatus::Running,
+                    "paused" => ExperimentStatus::Paused,
+                    "stopped" => ExperimentStatus::Stopped,
+                    _ => ExperimentStatus::Draft,
+                };
+                Ok(Experiment {
+                    id: ExperimentId::from_uuid(r.get("id")),
+                    environment_id: EnvironmentId::from_uuid(r.get("env_id")),
+                    flag_rule_id: RuleId::from_uuid(r.get("flag_rule_id")),
+                    name: r.get("name"),
+                    description: r.get("description"),
+                    hypothesis: r.get("hypothesis"),
+                    status,
+                    metric_keys: r.get("metric_keys"),
+                    traffic_allocation: {
+                        let v: f64 = r.get("traffic_allocation");
+                        v
+                    },
+                    min_sample_size: r.get("min_sample_size"),
+                    scheduled_start_at: r.get("scheduled_start_at"),
+                    scheduled_end_at: r.get("scheduled_end_at"),
+                    version: r.get("version"),
+                    created_at: r.get("created_at"),
+                    updated_at: r.get("updated_at"),
+                    deleted_at: r.get("deleted_at"),
+                })
+            })
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+
+        Ok((experiments, total))
+    }
+
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError> {
         sqlx::query!(
             r#"

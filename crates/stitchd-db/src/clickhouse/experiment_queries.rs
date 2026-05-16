@@ -2,10 +2,13 @@
 //!
 //! Three query families are provided:
 //!
-//! - [`query_count_metric`] — count / conversion metrics (distinct contexts +
-//!   event occurrences) queried from `events_count_mv`.
+//! - [`query_count_metric`] — count / conversion metrics queried from the
+//!   `events_experiment_daily` pre-aggregated AggregatingMergeTree table via
+//!   `countMerge`/`uniqMerge`. Avoids full `arrayFirst`/`arrayExists` raw
+//!   event scans for the most common query type.
 //! - [`query_numeric_metric`] — numeric sum / avg / percentile metrics queried
-//!   from `events_numeric_mv`.
+//!   from the raw `events` table. The MV omits quantile states, so percentile
+//!   columns (p50/p95/p99) require raw-event access.
 //! - [`query_funnel`] — multi-step funnel conversion counts chained via context
 //!   keys, queried from the raw `events` table.
 //!
@@ -86,30 +89,34 @@ pub struct FunnelStepRow {
 
 /// Build the SQL string for a count/conversion metric query.
 ///
-/// The query reads from the `events` raw table (which is fed by
-/// `events_count_mv`) so that experiment-id and variant-key context pairs can
-/// be extracted with `arrayFirst`.
+/// Reads from `events_experiment_daily` (pre-aggregated AggregatingMergeTree)
+/// rather than scanning raw events. `countMerge` and `uniqMerge` finalise the
+/// stored aggregate states across all matched day partitions.
+///
+/// `sample_size` is an HyperLogLog approximation via `uniqMerge` (vs the
+/// previous `uniqExact` on raw events). For experiment analysis at scale the
+/// approximation error is negligible.
 ///
 /// # Parameters (positional `?` binding order)
 /// 1. `env_id`         — UUID
-/// 2. `experiment_id`  — String context key stored under `context_type` `"experiment"`
+/// 2. `experiment_id`  — String stored in the MV `experiment_id` column
 /// 3. `metric_key`     — String
-/// 4. `date_from`      — `DateTime` (inclusive lower bound)
-/// 5. `date_to`        — `DateTime` (exclusive upper bound)
+/// 4. `date_from`      — Unix timestamp (seconds); converted to `Date` in SQL
+/// 5. `date_to`        — Unix timestamp (seconds); converted to `Date` in SQL (exclusive)
 #[must_use]
 pub const fn build_count_metric_sql() -> &'static str {
     r"
 SELECT
-    arrayFirst(t -> t.1 = 'variant', contexts).2  AS variant_key,
-    uniqExact(arrayFirst(t -> t.2 != '', contexts).2) AS sample_size,
-    count()                                        AS conversions
-FROM events
+    variant_key,
+    toInt64(uniqMerge(uniq_ctx_state))  AS sample_size,
+    toInt64(countMerge(count_state))    AS conversions
+FROM events_experiment_daily
 WHERE
-    env_id     = ?
-    AND arrayExists(t -> t.1 = 'experiment' AND t.2 = ?, contexts)
-    AND metric_key = ?
-    AND timestamp >= ?
-    AND timestamp <  ?
+    env_id        = ?
+    AND experiment_id = ?
+    AND metric_key    = ?
+    AND day >= toDate(fromUnixTimestamp(?))
+    AND day <  toDate(fromUnixTimestamp(?))
 GROUP BY variant_key
 HAVING variant_key != ''
 "
@@ -370,9 +377,27 @@ mod tests {
     // ── SQL builder: count metric ─────────────────────────────────────────────
 
     #[test]
-    fn count_metric_sql_contains_events_table() {
+    fn count_metric_sql_reads_from_mv_not_raw_events() {
         let sql = build_count_metric_sql();
-        assert!(sql.contains("FROM events"));
+        assert!(
+            sql.contains("FROM events_experiment_daily"),
+            "count metric must read from the pre-aggregated MV"
+        );
+        assert!(
+            !sql.contains("arrayExists"),
+            "count metric must not scan raw events with arrayExists"
+        );
+        assert!(
+            !sql.contains("arrayFirst"),
+            "count metric must not scan raw events with arrayFirst"
+        );
+    }
+
+    #[test]
+    fn count_metric_sql_uses_merge_aggregates() {
+        let sql = build_count_metric_sql();
+        assert!(sql.contains("countMerge"), "must use countMerge to finalise count_state");
+        assert!(sql.contains("uniqMerge"), "must use uniqMerge to finalise uniq_ctx_state");
     }
 
     #[test]
@@ -382,17 +407,15 @@ mod tests {
     }
 
     #[test]
-    fn count_metric_sql_filters_experiment_context() {
+    fn count_metric_sql_filters_experiment_id_column() {
         let sql = build_count_metric_sql();
-        assert!(sql.contains("'experiment'"));
-        assert!(sql.contains("arrayExists"));
+        assert!(sql.contains("experiment_id"), "must filter by experiment_id column in MV");
     }
 
     #[test]
     fn count_metric_sql_selects_variant_key() {
         let sql = build_count_metric_sql();
         assert!(sql.contains("variant_key"));
-        assert!(sql.contains("'variant'"));
     }
 
     #[test]
@@ -400,15 +423,13 @@ mod tests {
         let sql = build_count_metric_sql();
         assert!(sql.contains("sample_size"));
         assert!(sql.contains("conversions"));
-        assert!(sql.contains("uniqExact"));
-        assert!(sql.contains("count()"));
     }
 
     #[test]
     fn count_metric_sql_has_five_bind_placeholders() {
         let sql = build_count_metric_sql();
         let count = sql.chars().filter(|&c| c == '?').count();
-        assert_eq!(count, 5, "expected 5 bind params, got {count}");
+        assert_eq!(count, 5, "expected 5 bind params: env_id, experiment_id, metric_key, date_from, date_to");
     }
 
     #[test]
@@ -422,6 +443,7 @@ mod tests {
     #[test]
     fn numeric_metric_sql_contains_events_table() {
         let sql = build_numeric_metric_sql();
+        // Numeric metric reads from raw events — the MV lacks quantile states (p50/p95/p99).
         assert!(sql.contains("FROM events"));
     }
 

@@ -81,10 +81,13 @@ message GetExperimentRequest {
 
 message ListExperimentsRequest {
   string environment_id = 1;
+  uint32 page            = 3;
+  uint32 per_page        = 4;
 }
 
 message ListExperimentsResponse {
   repeated Experiment experiments = 1;
+  uint64              total       = 2;
 }
 
 message GetResultsRequest {

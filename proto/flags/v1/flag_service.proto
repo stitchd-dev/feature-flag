@@ -18,10 +18,15 @@ message ListFlagsRequest {
   bool   include_archived = 2;
   // Project-scoped admin reads set this instead of environment_id.
   string project_id      = 3;
+  // Pagination: 0 means "use server default" (page=1, per_page=50).
+  uint32 page     = 4;
+  uint32 per_page = 5;
 }
 
 message ListFlagsResponse {
   repeated FeatureFlag flags = 1;
+  // Total number of flags across all pages (set when page > 0).
+  uint64 total = 2;
 }
 
 // ─── Mutation ─────────────────────────────────────────────────────────────────

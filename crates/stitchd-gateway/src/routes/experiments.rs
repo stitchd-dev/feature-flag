@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -17,9 +17,17 @@ use stitchd_proto::experiments::v1::{
 };
 
 use crate::error::GatewayError;
+use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
+
+/// Query parameters for listing experiments.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListExperimentsQuery {
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
+}
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateExperimentBody {
@@ -136,9 +144,11 @@ fn status_from_str(s: &str) -> ExperimentStatus {
     get,
     path = "/v1/environments/{env_id}/experiments",
     tag = "experiments",
-    params(("env_id" = String, Path, description = "Environment ID")),
+    params(
+        ("env_id" = String, Path, description = "Environment ID"),
+    ),
     responses(
-        (status = 200, description = "List of experiments", body = Vec<ExperimentJson>),
+        (status = 200, description = "Paginated list of experiments"),
         (status = 401, description = "Unauthorized"),
         (status = 502, description = "Experimentation service unavailable"),
     ),
@@ -147,22 +157,25 @@ fn status_from_str(s: &str) -> ExperimentStatus {
 pub async fn list_experiments(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<String>,
+    Query(query): Query<ListExperimentsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListExperimentsRequest {
         environment_id: env_id,
+        page: query.pagination.effective_page(),
+        per_page: query.pagination.effective_per_page(),
     });
     let mut client = state.experimentation_client.lock().await;
     let resp = client
         .list_experiments(req)
         .await
         .map_err(GatewayError::from)?;
-    let experiments: Vec<ExperimentJson> = resp
-        .into_inner()
-        .experiments
-        .iter()
-        .map(experiment_to_json)
-        .collect();
-    Ok(Json(experiments))
+    let inner = resp.into_inner();
+    let experiments: Vec<ExperimentJson> = inner.experiments.iter().map(experiment_to_json).collect();
+    Ok(Json(PaginatedResponse::new(
+        experiments,
+        inner.total,
+        &query.pagination,
+    )))
 }
 
 /// `POST /v1/environments/{env_id}/experiments`

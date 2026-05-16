@@ -184,6 +184,15 @@ mod tests {
         ) -> Result<Vec<(User, stitchd_core::auth::OrgRole)>, RepositoryError> {
             Ok(vec![])
         }
+
+        async fn list_org_users_paginated(
+            &self,
+            _org_id: stitchd_core::id::OrganisationId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<(User, stitchd_core::auth::OrgRole)>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
     }
 
     fn make_active_user() -> User {

@@ -16,6 +16,7 @@ use stitchd_proto::flags::v1::{
 };
 
 use crate::error::GatewayError;
+use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
 // ─── REST request / response types ───────────────────────────────────────────
@@ -49,6 +50,8 @@ pub struct FlagMutateRequest {
 pub struct ListFlagsQuery {
     #[serde(default)]
     pub include_archived: bool,
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -382,7 +385,7 @@ fn flag_to_admin_json(f: &FeatureFlag) -> AdminFlagJson {
     tag = "flags",
     params(("project_id" = String, Path, description = "Project / environment ID")),
     responses(
-        (status = 200, description = "List of flags", body = Vec<AdminFlagJson>),
+        (status = 200, description = "Paginated list of flags"),
         (status = 401, description = "Unauthorized"),
         (status = 502, description = "Flag service unavailable"),
     ),
@@ -393,20 +396,19 @@ pub async fn list_flags(
     Path(project_id): Path<String>,
     Query(query): Query<ListFlagsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let pagination = &query.pagination;
     let req = tonic::Request::new(ListFlagsRequest {
         environment_id: String::new(),
         project_id,
         include_archived: query.include_archived,
+        page: pagination.effective_page(),
+        per_page: pagination.effective_per_page(),
     });
     let mut client = state.flag_client.lock().await;
-    let resp = client.list_flags(req).await.map_err(GatewayError::from)?;
-    let flags: Vec<AdminFlagJson> = resp
-        .into_inner()
-        .flags
-        .iter()
-        .map(flag_to_admin_json)
-        .collect();
-    Ok(Json(flags))
+    let inner = client.list_flags(req).await.map_err(GatewayError::from)?.into_inner();
+    let items: Vec<AdminFlagJson> = inner.flags.iter().map(flag_to_admin_json).collect();
+    let total = inner.total;
+    Ok(Json(PaginatedResponse::new(items, total, pagination)))
 }
 
 /// `POST /v1/projects/{project_id}/flags`

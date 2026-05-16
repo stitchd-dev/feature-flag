@@ -128,10 +128,13 @@ message LookupSegmentEntryResponse {
 
 message ListAdminSegmentsRequest {
   string environment_id = 1;
+  uint32 page           = 2;
+  uint32 per_page       = 3;
 }
 
 message ListAdminSegmentsResponse {
   repeated AdminSegment segments = 1;
+  uint64                total    = 2;
 }
 
 message GetAdminSegmentRequest {

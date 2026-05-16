@@ -541,6 +541,15 @@ mod tests {
         ) -> Result<Vec<(User, OrgRole)>, RepositoryError> {
             Ok(vec![])
         }
+
+        async fn list_org_users_paginated(
+            &self,
+            _org_id: OrganisationId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
     }
 
     // ── MockOrgMembershipRepo ────────────────────────────────────────────────

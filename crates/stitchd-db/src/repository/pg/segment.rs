@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use sqlx::{PgPool, Row as _, types::Json};
+use uuid::Uuid;
 
 use stitchd_core::{
     id::{EnvironmentId, RuleId, SegmentId, VariantId},
@@ -16,6 +17,34 @@ use crate::{
     ContextMembership, RepositoryError,
     repository::{AuditLogger, SegmentRepository},
 };
+
+/// Map a raw sqlx `Row` (non-macro query) to a [`Segment`] domain object.
+fn row_to_segment(row: &sqlx::postgres::PgRow) -> Result<Segment, RepositoryError> {
+    let seg_type_str: String = row.get("segment_type");
+    let seg_type = match seg_type_str.as_str() {
+        "rule" => SegmentType::Rule,
+        "list" => SegmentType::List,
+        other => {
+            return Err(RepositoryError::Database(sqlx::Error::Decode(
+                format!("unknown segment_type: {other}").into(),
+            )))
+        }
+    };
+    let tags: Vec<String> = row.get("tags");
+    Ok(Segment {
+        id: SegmentId::from_uuid(row.get::<Uuid, _>("id")),
+        environment_id: EnvironmentId::from_uuid(row.get::<Uuid, _>("environment_id")),
+        key: row.get("key"),
+        name: row.get("name"),
+        description: row.get("description"),
+        tags,
+        segment_type: seg_type,
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        deleted_at: row.get("deleted_at"),
+        version: row.get("version"),
+    })
+}
 
 /// Postgres-backed implementation of [`SegmentRepository`].
 pub struct PgSegmentRepository {
@@ -125,6 +154,46 @@ impl SegmentRepository for PgSegmentRepository {
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)
+    }
+
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<Segment>, u64), RepositoryError> {
+        let rows = sqlx::query(
+            r"
+            SELECT id, environment_id, key, name, description, tags,
+                   segment_type, created_at, updated_at, deleted_at, version,
+                   COUNT(*) OVER() AS total_count
+            FROM segments
+            WHERE environment_id = $1 AND deleted_at IS NULL
+            ORDER BY created_at
+            LIMIT $2 OFFSET $3
+            ",
+        )
+        .bind(environment_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let total = rows
+            .first()
+            .map(|r| {
+                let n: i64 = r.get("total_count");
+                n.max(0) as u64
+            })
+            .unwrap_or(0);
+
+        let segments = rows
+            .iter()
+            .map(row_to_segment)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok((segments, total))
     }
 
     async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {
@@ -597,5 +666,152 @@ impl SegmentRepository for PgSegmentRepository {
             });
         }
         Ok(results)
+    }
+
+    async fn find_batch_by_ids(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<Vec<Segment>, RepositoryError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let uuids: Vec<uuid::Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let rows = sqlx::query(
+            r"
+            SELECT id, environment_id, key, name, description, tags,
+                   segment_type, created_at, updated_at, deleted_at, version
+            FROM segments
+            WHERE id = ANY($1) AND deleted_at IS NULL
+            ",
+        )
+        .bind(&uuids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let mut segments = Vec::with_capacity(rows.len());
+        for row in rows {
+            segments.push(row_to_segment(&row)?);
+        }
+        Ok(segments)
+    }
+
+    async fn find_rules_batch(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<HashMap<SegmentId, RuleBasedSegment>, RepositoryError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let uuids: Vec<uuid::Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+
+        // Load all segment_rules rows for these IDs in one query.
+        let rule_rows = sqlx::query(
+            r"
+            SELECT segment_id, rule_def
+            FROM segment_rules
+            WHERE segment_id = ANY($1)
+            ORDER BY segment_id, rule_index
+            ",
+        )
+        .bind(&uuids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let mut rules_by_id: HashMap<SegmentId, Vec<Rule>> = HashMap::new();
+        for row in rule_rows {
+            let seg_uuid: uuid::Uuid = row.get("segment_id");
+            let seg_id = SegmentId::from_uuid(seg_uuid);
+            let rule_json: serde_json::Value = row.get("rule_def");
+            if let Ok(rule) = serde_json::from_value::<Rule>(rule_json) {
+                rules_by_id.entry(seg_id).or_default().push(rule);
+            }
+        }
+
+        // For any IDs with no segment_rules rows, fall back to condition_expr.
+        let ids_needing_fallback: Vec<SegmentId> = ids
+            .iter()
+            .copied()
+            .filter(|id| !rules_by_id.contains_key(id))
+            .collect();
+
+        if !ids_needing_fallback.is_empty() {
+            let fallback_uuids: Vec<uuid::Uuid> =
+                ids_needing_fallback.iter().map(|id| id.as_uuid()).collect();
+            let fallback_rows = sqlx::query(
+                r"SELECT id, condition_expr FROM segments WHERE id = ANY($1) AND condition_expr IS NOT NULL",
+            )
+            .bind(&fallback_uuids)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(RepositoryError::Database)?;
+
+            for row in fallback_rows {
+                let seg_uuid: uuid::Uuid = row.get("id");
+                let seg_id = SegmentId::from_uuid(seg_uuid);
+                let expr_json: serde_json::Value = row.get("condition_expr");
+                if let Ok(expr) = serde_json::from_value::<ConditionExpr>(expr_json) {
+                    rules_by_id.entry(seg_id).or_default().push(Rule {
+                        id: RuleId::new(),
+                        name: None,
+                        condition: expr,
+                        output: RuleOutput::Variant(VariantId::new()),
+                    });
+                }
+            }
+        }
+
+        Ok(ids
+            .iter()
+            .map(|&id| (id, RuleBasedSegment { id, rules: rules_by_id.remove(&id).unwrap_or_default() }))
+            .collect())
+    }
+
+    async fn find_lists_batch(
+        &self,
+        ids: &[SegmentId],
+    ) -> Result<HashMap<SegmentId, ListBasedSegment>, RepositoryError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let uuids: Vec<uuid::Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+
+        let rows = sqlx::query(
+            r"
+            SELECT segment_id, context_type, entry_key, list_type
+            FROM segment_list_entries
+            WHERE segment_id = ANY($1)
+            ",
+        )
+        .bind(&uuids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let mut lists_by_id: HashMap<SegmentId, HashMap<String, ContextList>> = HashMap::new();
+        for row in rows {
+            let seg_uuid: uuid::Uuid = row.get("segment_id");
+            let seg_id = SegmentId::from_uuid(seg_uuid);
+            let context_type: String = row.get("context_type");
+            let entry_key: String = row.get("entry_key");
+            let list_type: String = row.get("list_type");
+
+            let lists = lists_by_id.entry(seg_id).or_default();
+            let ctx_list = lists.entry(context_type).or_default();
+            match list_type.as_str() {
+                "include" => { ctx_list.include.insert(entry_key); }
+                "exclude" => { ctx_list.exclude.insert(entry_key); }
+                _ => {}
+            }
+        }
+
+        Ok(ids
+            .iter()
+            .map(|&id| {
+                let lists = lists_by_id.remove(&id).unwrap_or_default();
+                (id, ListBasedSegment { id, lists })
+            })
+            .collect())
     }
 }

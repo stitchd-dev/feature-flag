@@ -89,6 +89,64 @@ async fn test_segment_list_by_environment(pool: sqlx::PgPool) {
     assert_eq!(list.len(), 3);
 }
 
+// ── Paginated segment list tests ─────────────────────────────────────────────
+
+fn make_segment(env_id: EnvironmentId, key: &str) -> Segment {
+    Segment {
+        id: SegmentId::new(),
+        environment_id: env_id,
+        key: key.to_string(),
+        name: key.to_string(),
+        description: String::new(),
+        tags: vec![],
+        segment_type: SegmentType::Rule,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+        version: 1,
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_page_1_returns_first_slice(pool: sqlx::PgPool) {
+    let (repo, env_id) = setup(&pool).await;
+    for i in 0..5 {
+        repo.create(&make_segment(env_id, &format!("seg-{i:02}"))).await.unwrap();
+    }
+    let (page, total) = repo.list_by_environment_paginated(env_id, 0, 3).await.unwrap();
+    assert_eq!(total, 5);
+    assert_eq!(page.len(), 3);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_page_2_returns_remainder(pool: sqlx::PgPool) {
+    let (repo, env_id) = setup(&pool).await;
+    for i in 0..5 {
+        repo.create(&make_segment(env_id, &format!("seg-{i:02}"))).await.unwrap();
+    }
+    let (page, total) = repo.list_by_environment_paginated(env_id, 3, 3).await.unwrap();
+    assert_eq!(total, 5);
+    assert_eq!(page.len(), 2);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_total_count_accurate(pool: sqlx::PgPool) {
+    let (repo, env_id) = setup(&pool).await;
+    for i in 0..10 {
+        repo.create(&make_segment(env_id, &format!("seg-{i:02}"))).await.unwrap();
+    }
+    let (_items, total) = repo.list_by_environment_paginated(env_id, 0, 1).await.unwrap();
+    assert_eq!(total, 10);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_empty_returns_zero_total(pool: sqlx::PgPool) {
+    let (repo, env_id) = setup(&pool).await;
+    let (items, total) = repo.list_by_environment_paginated(env_id, 0, 50).await.unwrap();
+    assert_eq!(total, 0);
+    assert!(items.is_empty());
+}
+
 /// Test update with stale version returns VersionConflict.
 #[sqlx::test(migrations = "./migrations")]
 async fn test_segment_update_version_conflict(pool: sqlx::PgPool) {

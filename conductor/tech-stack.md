@@ -116,6 +116,11 @@ Key invariants:
 - On-demand recompute is handled by the gRPC `TriggerRecompute` RPC (spawns a task, returns job_id)
 - `stats_schedule.last_computed_at` is the authoritative staleness signal; results are stale when it is >60 min old or absent
 
+## Caching
+- **SDK Key Cache** (`stitchd-auth-service`): `moka 0.12` async `Cache<String, SdkKey>` keyed on `key_hash`, TTL = 60 s.
+  - `SdkKeyCache::get_or_load(hash, loader)` — cache hit skips DB; miss coalesces concurrent callers to one DB round-trip.
+  - Invalidated eagerly on revocation via `SdkKeyCache::invalidate(hash)`.
+
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
 - ClickHouse 24+ for events, experiment data, metric aggregations

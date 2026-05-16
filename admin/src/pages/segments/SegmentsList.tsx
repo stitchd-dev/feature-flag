@@ -1,35 +1,53 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
+import { Pagination } from '../../components/Pagination'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
+import type { PaginatedResponse } from '../../lib/types'
 import type { Segment } from './types'
 import { CreateSegmentModal } from './CreateSegmentModal'
 import { EditSegmentModal } from './EditSegmentModal'
 import { DeleteSegmentModal } from './DeleteSegmentModal'
 
+const PER_PAGE = 50
+
 export function SegmentsList() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { envId, orgId, projectId } = useOrgContext()
   const [search, setSearch] = useState('')
   const [segments, setSegments] = useState<Segment[]>([])
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [editSegment, setEditSegment] = useState<Segment | null>(null)
   const [deleteSegment, setDeleteSegment] = useState<Segment | null>(null)
 
+  const page = Math.max(1, Number(searchParams.get('page') ?? 1))
+
   const [refreshTick, setRefreshTick] = useState(0)
   function loadSegments() { setRefreshTick((t) => t + 1) }
+
+  function onPageChange(p: number) {
+    setSearchParams((prev) => { prev.set('page', String(p)); return prev })
+  }
 
   useEffect(() => {
     if (!envId) return
     let cancelled = false
     setLoading(true) // eslint-disable-line react-hooks/set-state-in-effect
     setError(null)
-    api.get<Segment[]>(`/v1/segments?env_id=${envId}`)
-      .then(({ data }) => { if (!cancelled) setSegments(data) })
+    const qs = new URLSearchParams({ env_id: envId, page: String(page), per_page: String(PER_PAGE) })
+    api.get<PaginatedResponse<Segment>>(`/v1/segments?${qs}`)
+      .then(({ data }) => {
+        if (cancelled) return
+        const items = data.items ?? (Array.isArray(data) ? data : [])
+        setSegments(items)
+        setTotal(data.total ?? items.length)
+      })
       .catch((err: unknown) => {
         if (cancelled) return
         const e = err as { response?: { data?: { message?: string } }; message?: string }
@@ -37,7 +55,7 @@ export function SegmentsList() {
       })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [envId, refreshTick])
+  }, [envId, refreshTick, page])
 
   const filtered = segments.filter((s) =>
     !search ||
@@ -125,7 +143,7 @@ export function SegmentsList() {
 
             {segments.length > 0 && (
               <div className="card">
-                <table className="table">
+                <table className="table" style={{ marginBottom: 0 }}>
                   <thead>
                     <tr>
                       <th>Name</th>
@@ -197,6 +215,7 @@ export function SegmentsList() {
                     ))}
                   </tbody>
                 </table>
+                <Pagination page={page} perPage={PER_PAGE} total={total} onChange={onPageChange} />
               </div>
             )}
           </>
