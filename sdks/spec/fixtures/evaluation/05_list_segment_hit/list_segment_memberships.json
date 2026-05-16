@@ -1,0 +1,19 @@
+{
+  "preseed_lru": [
+    {
+      "context_type": "org",
+      "context_key": "acme",
+      "memberships": {
+        "22222222-2222-2222-2222-222222222222": true
+      }
+    },
+    {
+      "context_type": "org",
+      "context_key": "bigcorp",
+      "memberships": {
+        "22222222-2222-2222-2222-222222222222": false
+      }
+    }
+  ],
+  "on_miss_responses": []
+}

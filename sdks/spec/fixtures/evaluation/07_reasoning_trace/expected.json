@@ -1,0 +1,26 @@
+[
+  {
+    "flag_key": "premium-feature",
+    "variant_key": "on",
+    "value": true,
+    "outcome": "matched",
+    "reasoning": {
+      "outcome": "matched",
+      "matched_rule": {
+        "rule_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "rule_name": "enable-for-pro-users",
+        "condition_summary": "InSegment(pro-users)"
+      },
+      "segment_evaluations": [
+        {
+          "segment_id": "11111111-1111-1111-1111-111111111111",
+          "segment_type": "rule",
+          "matched": true,
+          "source": "snapshot"
+        }
+      ],
+      "rollout": null,
+      "evaluated_at": "IGNORE"
+    }
+  }
+]

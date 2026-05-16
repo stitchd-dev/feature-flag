@@ -1,0 +1,14 @@
+[
+  {
+    "flag_key": "premium-feature",
+    "variant_key": "on",
+    "value": true,
+    "outcome": "matched"
+  },
+  {
+    "flag_key": "premium-feature",
+    "variant_key": "off",
+    "value": false,
+    "outcome": "default_rule"
+  }
+]

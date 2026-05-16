@@ -1,0 +1,8 @@
+[
+  {
+    "flag_key": "beta-feature",
+    "variant_key": "on",
+    "value": true,
+    "outcome": "matched"
+  }
+]

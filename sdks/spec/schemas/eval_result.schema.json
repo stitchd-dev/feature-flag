@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stitchd.dev/sdks/spec/schemas/eval_result.schema.json",
+  "title": "EvalResult",
+  "description": "Result of a single flag evaluation. Returned by `evaluate()` — no reasoning trace included.",
+  "type": "object",
+  "required": ["flag_key", "variant_key", "value", "outcome"],
+  "additionalProperties": false,
+  "properties": {
+    "flag_key": {
+      "type": "string",
+      "description": "Echoes the EvalRequest.flag_key (for correlation when batches return out-of-order)."
+    },
+    "variant_key": {
+      "type": "string",
+      "description": "Key of the variant returned. For `outcome = \"flag_not_found\"`, this is empty string."
+    },
+    "value": {
+      "$ref": "#/$defs/VariantValue",
+      "description": "Typed value of the returned variant."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["matched", "default_rule", "disabled", "flag_not_found"],
+      "description": "How the evaluation resolved. See `02-evaluation-semantics.md`."
+    }
+  },
+  "$defs": {
+    "VariantValue": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "integer" },
+        { "type": "number" },
+        { "type": "string" },
+        {
+          "type": "object",
+          "description": "JSON-typed variant. Implementations MAY surface as a parsed object or as a string depending on idiomatic conventions."
+        },
+        {
+          "type": "null",
+          "description": "Only legitimate for outcome = \"flag_not_found\" — SDK does not know the flag's value_type and so cannot synthesise a type-appropriate default."
+        }
+      ]
+    }
+  }
+}

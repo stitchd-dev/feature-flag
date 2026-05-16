@@ -2,6 +2,7 @@
 //!
 //! Environment variables:
 //! - `GATEWAY_PORT` (default: `8080`) — REST listen port
+//! - `GATEWAY_GRPC_PORT` (default: `50050`) — SDK gRPC listen port
 //! - `METRICS_PORT` (default: `9080`) — Prometheus metrics port
 //! - `DATABASE_URL` — PostgreSQL connection string
 //! - `AUTH_SERVICE_ADDR` (default: `http://localhost:50051`)
@@ -17,7 +18,10 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::signal;
 use tracing::info;
 
-use stitchd_gateway::{openapi::export_to_file, router::build_router, state::GatewayState};
+use stitchd_gateway::{
+    grpc_server::build_grpc_server, openapi::export_to_file, router::build_router,
+    state::GatewayState,
+};
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
@@ -75,19 +79,39 @@ async fn main() -> anyhow::Result<()> {
     let gateway_port: u16 = env_or("GATEWAY_PORT", "8080").parse().unwrap_or(8080);
     let addr: SocketAddr = format!("0.0.0.0:{gateway_port}").parse()?;
 
-    let app = build_router(Arc::new(state));
+    let grpc_port: u16 = env_or("GATEWAY_GRPC_PORT", "50050").parse().unwrap_or(50050);
+    let grpc_addr: SocketAddr = format!("0.0.0.0:{grpc_port}").parse()?;
 
-    info!(%addr, "stitchd-gateway starting");
+    // Capture the two SDK backend clients BEFORE we move `state` into the
+    // Axum router — both servers need them.
+    let state_arc = Arc::new(state);
+    let auth_client_for_grpc = Arc::clone(&state_arc.auth_client);
+    let flag_sdk_backend_for_grpc = Arc::clone(&state_arc.flag_sdk_backend_client);
+
+    let app = build_router(Arc::clone(&state_arc));
+
+    info!(%addr, %grpc_addr, "stitchd-gateway starting (REST + SDK gRPC)");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            signal::ctrl_c()
-                .await
-                .expect("failed to install CTRL+C handler");
-            info!("shutdown signal received");
-        })
-        .await?;
+    let rest_server = axum::serve(listener, app).with_graceful_shutdown(async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install CTRL+C handler");
+        info!("REST shutdown signal received");
+    });
+
+    let grpc_router = build_grpc_server(auth_client_for_grpc, flag_sdk_backend_for_grpc);
+    let grpc_server = grpc_router.serve_with_shutdown(grpc_addr, async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install CTRL+C handler");
+        info!("gRPC shutdown signal received");
+    });
+
+    // Run both servers concurrently; either one's error or shutdown ends the process.
+    let (rest_result, grpc_result) = tokio::join!(rest_server, grpc_server);
+    rest_result?;
+    grpc_result?;
 
     Ok(())
 }

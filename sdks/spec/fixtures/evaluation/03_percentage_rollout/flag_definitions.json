@@ -1,0 +1,28 @@
+{
+  "flags": [
+    {
+      "key": "checkout-flow",
+      "value_type": "string",
+      "enabled": true,
+      "environment_id": "00000000-0000-0000-0000-000000000001",
+      "variants": [
+        {"key": "control",   "value": "old-checkout"},
+        {"key": "treatment", "value": "new-checkout"}
+      ],
+      "default_rule": {
+        "variant_assignment": {
+          "percentage_rollout": {
+            "targets": [
+              {"context_type": "user", "field": "Key"}
+            ],
+            "weights": [
+              {"variant_key": "control",   "weight": 500},
+              {"variant_key": "treatment", "weight": 500}
+            ]
+          }
+        }
+      },
+      "rules": []
+    }
+  ]
+}

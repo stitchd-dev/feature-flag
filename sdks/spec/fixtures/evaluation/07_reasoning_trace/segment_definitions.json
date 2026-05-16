@@ -1,0 +1,16 @@
+{
+  "rule_segments": [
+    {
+      "id": "11111111-1111-1111-1111-111111111111",
+      "key": "pro-users",
+      "context_type": "user",
+      "condition": {
+        "op": "Eq",
+        "context_type": "user",
+        "param": "plan",
+        "value": "pro"
+      }
+    }
+  ],
+  "list_segments": []
+}

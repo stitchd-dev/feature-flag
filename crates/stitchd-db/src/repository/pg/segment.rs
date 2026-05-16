@@ -668,6 +668,94 @@ impl SegmentRepository for PgSegmentRepository {
         Ok(results)
     }
 
+    async fn find_memberships_batch(
+        &self,
+        environment_id: EnvironmentId,
+        contexts: &[(String, String)],
+        segment_ids: &[SegmentId],
+    ) -> Result<Vec<crate::SegmentIdMembership>, RepositoryError> {
+        // Always initialise every (context, segment_id) cell to `false` —
+        // even when there are no matching list_entries, the SDK expects the
+        // map to be fully populated.
+        let mut results: Vec<crate::SegmentIdMembership> = contexts
+            .iter()
+            .map(|(t, k)| crate::SegmentIdMembership {
+                context_type: t.clone(),
+                context_key: k.clone(),
+                memberships: segment_ids.iter().map(|id| (*id, false)).collect(),
+            })
+            .collect();
+
+        if segment_ids.is_empty() || contexts.is_empty() {
+            return Ok(results);
+        }
+
+        let segment_uuids: Vec<uuid::Uuid> = segment_ids.iter().map(|id| id.as_uuid()).collect();
+        let context_types: Vec<String> = contexts.iter().map(|(t, _)| t.clone()).collect();
+        let context_keys: Vec<String> = contexts.iter().map(|(_, k)| k.clone()).collect();
+
+        // Single SQL pass: cross-join segments × contexts, then test membership
+        // via two EXISTS subqueries (include AND NOT exclude — exclude takes
+        // precedence). Returns one row per (segment_id, context_type, context_key).
+        let rows = sqlx::query(
+            r"
+            SELECT
+                s.id           AS segment_id,
+                q.context_type AS context_type,
+                q.context_key  AS context_key,
+                (
+                    EXISTS (
+                        SELECT 1 FROM segment_list_entries e1
+                        WHERE e1.segment_id   = s.id
+                          AND e1.context_type = q.context_type
+                          AND e1.entry_key    = q.context_key
+                          AND e1.list_type    = 'include'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM segment_list_entries e2
+                        WHERE e2.segment_id   = s.id
+                          AND e2.context_type = q.context_type
+                          AND e2.entry_key    = q.context_key
+                          AND e2.list_type    = 'exclude'
+                    )
+                ) AS is_member
+            FROM segments s
+            CROSS JOIN UNNEST($2::text[], $3::text[]) AS q(context_type, context_key)
+            WHERE s.environment_id = $1
+              AND s.id             = ANY($4)
+              AND s.deleted_at     IS NULL
+              AND s.segment_type   = 'list'
+            ",
+        )
+        .bind(environment_id.as_uuid())
+        .bind(&context_types)
+        .bind(&context_keys)
+        .bind(&segment_uuids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        // Build a lookup index from (context_type, context_key) → result index.
+        let mut idx: HashMap<(String, String), usize> = HashMap::with_capacity(contexts.len());
+        for (i, (t, k)) in contexts.iter().enumerate() {
+            idx.insert((t.clone(), k.clone()), i);
+        }
+
+        for row in rows {
+            let seg_uuid: uuid::Uuid = row.get("segment_id");
+            let ctx_type: String = row.get("context_type");
+            let ctx_key: String = row.get("context_key");
+            let is_member: bool = row.get("is_member");
+            if let Some(&i) = idx.get(&(ctx_type, ctx_key)) {
+                results[i]
+                    .memberships
+                    .insert(SegmentId::from_uuid(seg_uuid), is_member);
+            }
+        }
+
+        Ok(results)
+    }
+
     async fn find_batch_by_ids(
         &self,
         ids: &[SegmentId],

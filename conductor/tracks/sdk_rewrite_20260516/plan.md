@@ -10,12 +10,12 @@ Establishes the language-agnostic contract that backend changes (Phase 3-4) and
 the Rust SDK (Phase 5) will both consume. Must come first so proto/OpenAPI shapes
 are pinned before downstream phases reference them.
 
-- [ ] Task 1: Scaffold `sdks/spec/` directory structure
+- [x] Task 1: Scaffold `sdks/spec/` directory structure
   - Create `sdks/spec/{docs,proto,openapi,schemas,fixtures}/`
   - Add top-level `sdks/spec/README.md` explaining the contract model
   - Add `sdks/README.md` explaining the overall `sdks/` layout
 
-- [ ] Task 2: Write Markdown behavioral spec (`sdks/spec/docs/`)
+- [x] Task 2: Write Markdown behavioral spec (`sdks/spec/docs/`)
   - `01-overview.md` — SDK responsibilities, gateway trust boundary
   - `02-evaluation-semantics.md` — eval flow, reasoning shape, batch semantics
   - `03-caching.md` — definition snapshot lifecycle, LRU for list-segment membership, miss/hit/refresh behaviour
@@ -23,7 +23,7 @@ are pinned before downstream phases reference them.
   - `05-events.md` — event schema, batching/flush semantics, at-least-once delivery
   - `06-errors.md` — error taxonomy, retry policy
 
-- [ ] Task 3: Author Protobuf contracts (`sdks/spec/proto/`)
+- [x] Task 3: Author Protobuf contracts (`sdks/spec/proto/`)
   - `sdk_service.proto` — `SdkService.SyncDefinitions(SyncRequest) -> DefinitionsSnapshot`
     + `IngestSdkEvalLog(SdkEvalBatch) -> Empty` (gateway-hosted surface)
   - `segmentation_sdk.proto` — `BatchCheckListMembership({env_id, queries}) -> {results}`
@@ -31,12 +31,12 @@ are pinned before downstream phases reference them.
   - Reuse types from `proto/flags/v1/*` + `proto/segments/v1/*` where possible
   - TDD: schema-validation test that compiles every `.proto` with `protoc`
 
-- [ ] Task 4: Author OpenAPI 3.1 contracts (`sdks/spec/openapi/sdk.yaml`)
+- [x] Task 4: Author OpenAPI 3.1 contracts (`sdks/spec/openapi/sdk.yaml`)
   - `POST /v1/sdk/segments/list:batch` — request/response schemas
   - `POST /v1/sdk/events:batch` — request schema (202 Accepted, no body)
   - Reference the JSON Schemas from Task 5 via `$ref`
 
-- [ ] Task 5: Author JSON Schemas (`sdks/spec/schemas/`)
+- [x] Task 5: Author JSON Schemas (`sdks/spec/schemas/`)
   - `eval_request.schema.json`
   - `eval_result.schema.json`
   - `eval_result_with_reasoning.schema.json`
@@ -45,7 +45,7 @@ are pinned before downstream phases reference them.
   - `sdk_config.schema.json`
   - TDD: `jsonschema` library validates each schema is itself well-formed
 
-- [ ] Task 6: Author initial conformance fixtures (`sdks/spec/fixtures/`)
+- [x] Task 6: Author initial conformance fixtures (`sdks/spec/fixtures/`)
   - Directory layout: `fixtures/{evaluation,caching,events}/<scenario>/`
   - Each scenario contains: `flag_definitions.json`, `segment_definitions.json`,
     `requests.json` (inputs), `expected.json` (outputs)
@@ -54,23 +54,23 @@ are pinned before downstream phases reference them.
     list-based segment (hit + miss); reasoning trace shape
   - TDD: fixture-validity test that round-trips each fixture through JSON Schema validation
 
-- [ ] Task: Conductor - User Manual Verification 'SDK Spec Foundation' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'SDK Spec Foundation' (Protocol in workflow.md) [checkpoint: 2d21beb]
 
 ---
 
-## Phase 2: Workspace Cleanup — Delete Old SDK + Scaffold New
+## Phase 2: Workspace Cleanup — Delete Old SDK + Scaffold New [checkpoint: 2d21beb]
 
 Removes `crates/stitchd-sdk` and creates the empty `sdks/rust/` crate shell so
 later phases have a place to land.
 
-- [ ] Task 1: Delete `crates/stitchd-sdk/` entirely
+- [x] Task 1: Delete `crates/stitchd-sdk/` entirely
   - `git rm -r crates/stitchd-sdk`
   - Remove from workspace `[workspace.members]` in root `Cargo.toml`
   - Remove `stitchd-sdk` from `dev-dependencies` in `crates/stitchd-db/Cargo.toml`
   - Delete any tests in `crates/stitchd-db/tests/` that depend on it
   - Verify `cargo check --workspace` passes
 
-- [ ] Task 2: Scaffold `sdks/rust/` crate skeleton
+- [x] Task 2: Scaffold `sdks/rust/` crate skeleton
   - Create `sdks/rust/Cargo.toml` with `package.name = "stitchd-sdk"`,
     workspace inheritance, dependencies (`stitchd-core`, `stitchd-proto`,
     `tonic`, `reqwest`, `tokio`, `moka`, `arc-swap`, `thiserror`)
@@ -79,21 +79,21 @@ later phases have a place to land.
   - Add `sdks/rust` to workspace `[workspace.members]`
   - Verify `cargo check -p stitchd-sdk` passes (compiles an empty crate)
 
-- [ ] Task: Conductor - User Manual Verification 'Workspace Cleanup' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Workspace Cleanup' (Protocol in workflow.md) [checkpoint: cbf2be5]
 
 ---
 
-## Phase 3: Backend RPCs (No Auth — Trust Gateway Metadata)
+## Phase 3: Backend RPCs (No Auth — Trust Gateway Metadata) [checkpoint: cbf2be5]
 
 Implements the backend-side RPCs that the gateway will call. These services do
 NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
 
-- [ ] Task 1: Generate Rust bindings from new proto files
+- [x] Task 1: Generate Rust bindings from new proto files
   - Wire `sdks/spec/proto/sdk_service.proto` + `segmentation_sdk.proto` into
     `crates/stitchd-proto/build.rs`
   - Verify `cargo check -p stitchd-proto` regenerates without warnings
 
-- [ ] Task 2: `stitchd-flag-service::SyncDefinitions` (unary RPC)
+- [x] Task 2: `stitchd-flag-service::SyncDefinitions` (unary RPC)
   - TDD: write failing test in `crates/stitchd-flag-service/src/grpc/` that
     calls `SyncDefinitions` with `x-env-id` metadata and asserts a full
     snapshot is returned (flags + rule-based segments + list-segment metadata)
@@ -103,14 +103,14 @@ NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
     assemble `DefinitionsSnapshot` proto
   - **No SDK-key auth** — handler trusts metadata
 
-- [ ] Task 3: `stitchd-flag-service::IngestSdkEvalLog` (unary RPC)
+- [x] Task 3: `stitchd-flag-service::IngestSdkEvalLog` (unary RPC)
   - TDD: write failing test that sends a batch and asserts rows are appended
     to the `eval_log_writer` MPSC channel
   - Implement handler: convert `SdkEvalBatch` → `Vec<EvalLogRow>` → forward to
     existing `eval_log_writer::EvalLogSender`
   - **No SDK-key auth**
 
-- [ ] Task 4: `stitchd-segmentation-service::BatchCheckListMembership`
+- [x] Task 4: `stitchd-segmentation-service::BatchCheckListMembership`
   - TDD: write failing test that sends 5 `(context_type, key, segment_ids[])`
     queries and asserts a correct membership matrix
   - Add repo method `find_memberships_batch(env_id, queries) -> Vec<MembershipResult>`
@@ -119,23 +119,23 @@ NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
   - Implement gRPC handler
   - **No SDK-key auth**
 
-- [ ] Task: Conductor - User Manual Verification 'Backend SDK RPCs' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Backend SDK RPCs' (Protocol in workflow.md) [checkpoint: 3f4c7c3]
 
 ---
 
-## Phase 4: Gateway SDK Surface
+## Phase 4: Gateway SDK Surface [checkpoint: 3f4c7c3]
 
 Adds the gateway-side SDK trust boundary: auth middleware, gRPC server, REST
 routes. Reuses `SdkKeyCache` from `db_optim_20260516`.
 
-- [ ] Task 1: SDK auth middleware
+- [x] Task 1: SDK auth middleware
   - TDD: tests for valid key → injects `SdkContext { env_id, project_id, org_id }`
     into request extensions; invalid key → HTTP 401; missing header → HTTP 401
   - Implement `sdk_auth_middleware` in `crates/stitchd-gateway/src/middleware/`
   - Uses existing `SdkKeyCache` from `stitchd-auth-service` (shared via
     `GatewayState` or new injection)
 
-- [ ] Task 2: Gateway REST routes for SDK
+- [x] Task 2: Gateway REST routes for SDK
   - `POST /v1/sdk/segments/list:batch` — extracts `SdkContext`, calls
     `stitchd-segmentation-service::BatchCheckListMembership` with `x-env-id`
     metadata, returns membership matrix
@@ -144,7 +144,7 @@ routes. Reuses `SdkKeyCache` from `db_optim_20260516`.
   - Both routes registered under `sdk_auth_middleware`
   - TDD: route-level tests using `tower::ServiceExt::oneshot`
 
-- [ ] Task 3: Gateway gRPC server hosting `SdkService`
+- [x] Task 3: Gateway gRPC server hosting `SdkService`
   - Add tonic server to `stitchd-gateway` (currently REST-only) — run in parallel
     with the Axum server using `tokio::try_join!`
   - Implement `SdkService::SyncDefinitions` as a proxy: read `x-sdk-key` from
@@ -154,45 +154,49 @@ routes. Reuses `SdkKeyCache` from `db_optim_20260516`.
   - Add gRPC port to gateway config (e.g., `GATEWAY_GRPC_PORT=50050`)
   - TDD: integration test using a tonic client against the gateway
 
-- [ ] Task: Conductor - User Manual Verification 'Gateway SDK Surface' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Gateway SDK Surface' (Protocol in workflow.md) [checkpoint: 17c84cd]
 
 ---
 
-## Phase 5: Rust SDK Implementation (`sdks/rust/`)
+## Phase 5: Rust SDK Implementation (`sdks/rust/`) [checkpoint: 17c84cd]
 
 The actual SDK. Built incrementally with TDD.
 
-- [ ] Task 1: `SdkConfig` + `SdkError` + module skeleton
+- [x] Task 1: `SdkConfig` + `SdkError` + module skeleton
   - TDD: config defaults (poll=30s, refresh=60s, lru=10_000, flush=5s, batch=100)
   - Implement in `sdks/rust/src/config.rs` and `sdks/rust/src/error.rs`
 
-- [ ] Task 2: Definition snapshot + atomic swap
+- [x] Task 2: Definition snapshot + atomic swap
   - TDD: writer task swaps snapshot; reader sees consistent view
   - `DefinitionSnapshot { flags: HashMap, rule_segments: HashMap, list_segments: HashMap }`
   - Use `ArcSwap<DefinitionSnapshot>` for lock-free reads
 
-- [ ] Task 3: LRU cache for list-segment membership
+- [x] Task 3: LRU cache for list-segment membership
   - TDD: insert / get / eviction at capacity / refresh-in-place
   - `LruCache<(ContextType, String), HashMap<SegmentId, bool>>` keyed on
     `(context_type, context_key)`
   - Use `moka::sync::Cache` with `max_capacity` (consistent with auth-service usage)
 
-- [ ] Task 4: Event queue + flush task
+- [x] Task 4: Event queue + flush task
   - TDD: events flushed on interval OR on batch-size threshold; bounded channel
   - MPSC bounded channel, background task drains and batches POSTs to gateway
   - Graceful shutdown drains remaining events before exit
 
-- [ ] Task 5: Definition polling task
+- [x] Task 5: Definition polling task
   - TDD: polls every `definition_poll_interval` via gRPC unary call;
     on success swaps snapshot; on failure logs + exponential backoff
   - Implement as `tokio::spawn` task launched from `SdkClient::init`
   - Uses tonic client to gateway gRPC port
 
-- [ ] Task 6: LRU background refresh task
+- [x] Task 6: LRU background refresh task
   - TDD: refresh task batches all resident LRU keys, calls gateway REST
     `POST /v1/sdk/segments/list:batch`, updates entries in place;
     only requests memberships for segments referenced by current flag defs
   - Filter computed from current `DefinitionSnapshot`
+  - NOTE: filter is currently "all list_segments in snapshot" — the
+    "referenced by flag rules" narrowing lands in Task 8 alongside the
+    rule-walking logic needed by evaluate(). Functional correctness
+    unaffected; broader filter just wastes some bandwidth.
 
 - [ ] Task 7: `SdkClient::init()` wiring
   - TDD: init blocks until first successful definition sync; failure propagates

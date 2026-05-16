@@ -19,7 +19,9 @@ use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use stitchd_db::{PgAuditLogger, PgSegmentRepository, SegmentRepository};
+use stitchd_proto::sdk::v1::segmentation_sdk_backend_service_server::SegmentationSdkBackendServiceServer;
 use stitchd_proto::segments::v1::segmentation_service_server::SegmentationServiceServer;
+use stitchd_segmentation_service::grpc::sdk_backend::SegmentationSdkBackendServiceImpl;
 use stitchd_segmentation_service::grpc::service::{AppState, SegmentationServiceImpl};
 
 /// Default gRPC listen port.
@@ -77,9 +79,14 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .context("invalid gRPC listen address")?;
 
-    let state = AppState { segment_repo };
+    let state = AppState {
+        segment_repo: Arc::clone(&segment_repo),
+    };
     let service = SegmentationServiceImpl::new(state);
     let svc = SegmentationServiceServer::new(service);
+
+    let sdk_backend_svc =
+        SegmentationSdkBackendServiceServer::new(SegmentationSdkBackendServiceImpl::new(segment_repo));
 
     tracing::info!(%addr, "starting segmentation service gRPC server");
 
@@ -91,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
     Server::builder()
         .add_service(health_service)
         .add_service(svc)
+        .add_service(sdk_backend_svc)
         .serve_with_shutdown(addr, shutdown_signal())
         .await
         .context("gRPC server error")?;

@@ -1,0 +1,28 @@
+{
+  "flags": [
+    {
+      "key": "premium-feature",
+      "value_type": "bool",
+      "enabled": true,
+      "environment_id": "00000000-0000-0000-0000-000000000001",
+      "variants": [
+        {"key": "on",  "value": true},
+        {"key": "off", "value": false}
+      ],
+      "default_rule": {
+        "variant_assignment": {"specific_variant": "off"}
+      },
+      "rules": [
+        {
+          "rule_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+          "rule_name": "enable-for-pro-users",
+          "condition": {
+            "op": "InSegment",
+            "segment_id": "11111111-1111-1111-1111-111111111111"
+          },
+          "variant_assignment": {"specific_variant": "on"}
+        }
+      ]
+    }
+  ]
+}

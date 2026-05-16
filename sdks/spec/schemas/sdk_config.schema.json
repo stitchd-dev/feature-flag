@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stitchd.dev/sdks/spec/schemas/sdk_config.schema.json",
+  "title": "SdkConfig",
+  "description": "Configuration object passed to `SdkClient::init()`. Every field except `gateway_url` and `sdk_key` has a default; SDKs MAY accept the entire config as optional except for those two.",
+  "type": "object",
+  "required": ["gateway_url", "sdk_key"],
+  "additionalProperties": false,
+  "properties": {
+    "gateway_url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Base URL of the stitchd-gateway. Both REST and gRPC are served from the same host; the SDK appends the gRPC port internally (see `gateway_grpc_port`)."
+    },
+    "sdk_key": {
+      "type": "string",
+      "minLength": 8,
+      "description": "SDK key scoped to a single (project, environment). Validated by the gateway on every request."
+    },
+    "gateway_grpc_port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 50050,
+      "description": "Port the gateway's tonic gRPC server listens on (for SyncDefinitions)."
+    },
+    "definition_poll_interval_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "default": 30000,
+      "description": "How often the background task polls SyncDefinitions. Milliseconds."
+    },
+    "list_segment_refresh_interval_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "default": 60000,
+      "description": "How often the LRU refresh task fetches up-to-date membership for all resident LRU entries. Milliseconds."
+    },
+    "lru_max_entries": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10000,
+      "description": "Capacity of the list-segment membership LRU, keyed on (context_type, context_key)."
+    },
+    "event_flush_interval_ms": {
+      "type": "integer",
+      "minimum": 100,
+      "default": 5000,
+      "description": "How often the event flush task drains the buffer to the gateway. Milliseconds."
+    },
+    "event_batch_size": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 100,
+      "description": "Maximum events per flush. Reaching this size triggers an immediate flush regardless of `event_flush_interval_ms`."
+    },
+    "event_buffer_capacity": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1000,
+      "description": "Maximum events buffered between flushes. When full, the oldest event is dropped (back-pressure on `evaluate()` is NOT acceptable)."
+    },
+    "request_timeout_ms": {
+      "type": "integer",
+      "minimum": 100,
+      "default": 5000,
+      "description": "Per-request timeout for ALL gateway HTTP/gRPC calls (definition sync, LRU fetch, event flush)."
+    }
+  }
+}

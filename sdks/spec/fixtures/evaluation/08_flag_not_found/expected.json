@@ -1,0 +1,8 @@
+[
+  {
+    "flag_key": "nonexistent-flag",
+    "variant_key": "",
+    "value": null,
+    "outcome": "flag_not_found"
+  }
+]

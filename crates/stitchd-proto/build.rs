@@ -9,6 +9,11 @@ fn main() {
     }
 
     let proto_root = workspace_root().join("proto");
+    // SDK-facing contracts live in the language-agnostic spec directory.
+    // sdks/spec/proto/ is included as a separate import path so .proto files
+    // there can `import "sdk/v1/service.proto"` while files in proto/ can still
+    // `import "common/v1/context.proto"`.
+    let sdk_proto_root = workspace_root().join("sdks/spec/proto");
 
     let proto_files = [
         // Shared types
@@ -28,6 +33,9 @@ fn main() {
         proto_root.join("experiments/v1/experimentation_service.proto"),
         proto_root.join("management/v1/management_service.proto"),
         proto_root.join("stats/v1/stats_service.proto"),
+        // SDK contracts (under sdks/spec/proto/, owned by sdk_rewrite_20260516)
+        sdk_proto_root.join("sdk/v1/service.proto"),
+        sdk_proto_root.join("sdk/v1/backend.proto"),
     ];
 
     // Re-run build script if any proto file changes.
@@ -38,7 +46,7 @@ fn main() {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile_protos(&proto_files, &[&proto_root])
+        .compile_protos(&proto_files, &[&proto_root, &sdk_proto_root])
         .expect("failed to compile proto files");
 }
 

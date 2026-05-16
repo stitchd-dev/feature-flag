@@ -1,0 +1,14 @@
+[
+  {
+    "flag_key": "checkout-flow",
+    "variant_key": "treatment",
+    "value": "new-checkout",
+    "outcome": "default_rule"
+  },
+  {
+    "flag_key": "checkout-flow",
+    "variant_key": "control",
+    "value": "old-checkout",
+    "outcome": "default_rule"
+  }
+]

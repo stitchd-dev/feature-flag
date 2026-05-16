@@ -54,3 +54,16 @@ pub struct ContextMembership {
     /// Map from segment key to membership boolean.
     pub memberships: std::collections::HashMap<String, bool>,
 }
+
+/// Membership result keyed by `SegmentId` (UUID) rather than segment key.
+/// Used by the SDK-facing batch RPC, which references segments by their
+/// stable UUIDs from the definition snapshot.
+#[derive(Debug, Clone)]
+pub struct SegmentIdMembership {
+    /// Context type (e.g. `"user"`, `"org"`).
+    pub context_type: String,
+    /// Context key.
+    pub context_key: String,
+    /// Map from segment id (UUID) to membership boolean.
+    pub memberships: std::collections::HashMap<stitchd_core::id::SegmentId, bool>,
+}

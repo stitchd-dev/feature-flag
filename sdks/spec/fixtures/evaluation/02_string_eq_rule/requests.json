@@ -1,0 +1,20 @@
+[
+  {
+    "flag_key": "welcome-banner",
+    "context": {
+      "type": "user",
+      "key": "alice",
+      "parameters": {"plan": "pro"},
+      "private_parameters": []
+    }
+  },
+  {
+    "flag_key": "welcome-banner",
+    "context": {
+      "type": "user",
+      "key": "bob",
+      "parameters": {"plan": "free"},
+      "private_parameters": []
+    }
+  }
+]

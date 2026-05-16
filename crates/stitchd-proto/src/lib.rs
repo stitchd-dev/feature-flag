@@ -62,4 +62,14 @@ pub mod stats {
     }
 }
 
+/// SDK contracts — both the gateway-hosted `SdkService` (SDK-facing) and the
+/// backend RPCs the gateway calls (`FlagSdkBackendService`,
+/// `SegmentationSdkBackendService`). Both files are in proto package
+/// `stitchd.sdk.v1` so they generate into one Rust module here.
+pub mod sdk {
+    pub mod v1 {
+        tonic::include_proto!("stitchd.sdk.v1");
+    }
+}
+
 mod tests;

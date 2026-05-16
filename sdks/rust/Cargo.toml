@@ -1,0 +1,62 @@
+[package]
+name = "stitchd-sdk"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Stitchd Feature Flag — server-side Rust SDK. In-process flag evaluation with polling-based definition sync and LRU-cached list-segment membership."
+readme = "README.md"
+
+[dependencies]
+# Internal — the rule engine + context types we evaluate against.
+stitchd-core = { path = "../../crates/stitchd-core" }
+# Internal — proto-generated types for the SDK ↔ gateway wire contract.
+stitchd-proto = { path = "../../crates/stitchd-proto" }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+# Transport
+tonic = { workspace = true }
+prost = { workspace = true }
+reqwest = { workspace = true }
+
+# Caching + lock-free snapshot swap. Enable `sync` for MembershipCache (sync
+# get/insert on the evaluate() hot path) on top of the workspace-default
+# `future` feature (used by auth-service's SdkKeyCache).
+moka = { workspace = true, features = ["future", "sync"] }
+arc-swap = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Errors + observability
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# async trait support for EventSink (boxed-future signatures)
+async-trait = { workspace = true }
+
+# Common types
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[features]
+# Expose test helpers (SdkClient constructor from snapshot) for integration / conformance tests.
+test-util = []
+
+[dev-dependencies]
+# Integration tests stub out the gateway with wiremock + tonic mock services.
+wiremock = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+futures = { workspace = true }
+serial_test = { workspace = true }
+# Conformance tests build proto/core types directly from spec fixtures.
+stitchd-proto = { path = "../../crates/stitchd-proto" }
+stitchd-core  = { path = "../../crates/stitchd-core" }
+async-trait         = { workspace = true }
+uuid                = { workspace = true }
+tracing-subscriber  = { workspace = true }

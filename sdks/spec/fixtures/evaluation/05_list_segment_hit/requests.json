@@ -1,0 +1,20 @@
+[
+  {
+    "flag_key": "beta-feature",
+    "context": {
+      "type": "org",
+      "key": "acme",
+      "parameters": {},
+      "private_parameters": []
+    }
+  },
+  {
+    "flag_key": "beta-feature",
+    "context": {
+      "type": "org",
+      "key": "bigcorp",
+      "parameters": {},
+      "private_parameters": []
+    }
+  }
+]

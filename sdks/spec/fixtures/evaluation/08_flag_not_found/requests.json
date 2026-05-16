@@ -1,0 +1,11 @@
+[
+  {
+    "flag_key": "nonexistent-flag",
+    "context": {
+      "type": "user",
+      "key": "alice",
+      "parameters": {},
+      "private_parameters": []
+    }
+  }
+]

@@ -20,10 +20,11 @@ use crate::state::GatewayState;
 /// Lazily-connected clients pointing at unused localhost ports.
 /// The connections are lazy — they fail only when the first RPC is made.
 pub fn make_stub_state() -> Arc<GatewayState> {
+    let flag_channel = Channel::from_static("http://127.0.0.1:2").connect_lazy();
+    let seg_channel = Channel::from_static("http://127.0.0.1:3").connect_lazy();
     let auth = AuthServiceClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
-    let flag = FlagServiceClient::new(Channel::from_static("http://127.0.0.1:2").connect_lazy());
-    let seg =
-        SegmentationServiceClient::new(Channel::from_static("http://127.0.0.1:3").connect_lazy());
+    let flag = FlagServiceClient::new(flag_channel.clone());
+    let seg = SegmentationServiceClient::new(seg_channel.clone());
     let event =
         EventIngestionServiceClient::new(Channel::from_static("http://127.0.0.1:4").connect_lazy());
     let exp = ExperimentationServiceClient::new(
@@ -41,7 +42,9 @@ pub fn make_stub_state() -> Arc<GatewayState> {
     Arc::new(GatewayState::from_channels(
         auth,
         flag,
+        flag_channel,
         seg,
+        seg_channel,
         event,
         exp,
         mgmt,

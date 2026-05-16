@@ -96,7 +96,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --features stitchd-sdk/test-util -- -D warnings
 
   # ── 4. API contract check ──────────────────────────────────────────────────
   # Ensures no REST routes present in the pre-decomposition OpenAPI snapshot
@@ -149,6 +149,7 @@ jobs:
             --workspace \
             --exclude stitchd-proto \
             --exclude xtask \
+            --features stitchd-sdk/test-util \
             --ignore-filename-regex 'main\.rs' \
             --cobertura \
             --output-path coverage/cobertura.xml

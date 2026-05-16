@@ -439,6 +439,22 @@ pub trait SegmentRepository: Send + Sync {
         segment_keys: &[String],
     ) -> Result<Vec<crate::ContextMembership>, RepositoryError>;
 
+    /// SDK-facing batch list-membership check, keyed on `SegmentId` (UUID).
+    ///
+    /// Uses a single SQL query (cross-join over the supplied contexts and
+    /// segment ids). Membership semantics match `check_list_membership`:
+    /// member iff included AND NOT excluded; exclude takes precedence.
+    ///
+    /// Returns one entry per context, with the memberships map covering every
+    /// supplied `segment_id` (defaulting to `false` for segments with no
+    /// matching list entries or that aren't list-type / are deleted).
+    async fn find_memberships_batch(
+        &self,
+        environment_id: EnvironmentId,
+        contexts: &[(String, String)],
+        segment_ids: &[SegmentId],
+    ) -> Result<Vec<crate::SegmentIdMembership>, RepositoryError>;
+
     // ---- N+1 elimination methods (FR-2) ----
 
     /// Fetch multiple segment records in one query.

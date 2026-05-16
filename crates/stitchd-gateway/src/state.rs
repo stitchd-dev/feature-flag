@@ -15,6 +15,10 @@ use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionSer
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::management::v1::management_service_client::ManagementServiceClient;
+use stitchd_proto::sdk::v1::{
+    flag_sdk_backend_service_client::FlagSdkBackendServiceClient,
+    segmentation_sdk_backend_service_client::SegmentationSdkBackendServiceClient,
+};
 use stitchd_proto::segments::v1::segmentation_service_client::SegmentationServiceClient;
 use stitchd_proto::stats::v1::stats_service_client::StatsServiceClient;
 
@@ -41,6 +45,12 @@ pub struct GatewayState {
     pub saml_login_client: Arc<Mutex<SamlLoginServiceClient<Channel>>>,
     /// Stats service gRPC client.
     pub stats_client: Arc<Mutex<StatsServiceClient<Channel>>>,
+    /// SDK backend client for flag-service (SyncDefinitions + IngestSdkEvalLog).
+    /// Hosted on the same port as `flag_client`.
+    pub flag_sdk_backend_client: Arc<Mutex<FlagSdkBackendServiceClient<Channel>>>,
+    /// SDK backend client for segmentation-service (BatchCheckListMembership).
+    /// Hosted on the same port as `segmentation_client`.
+    pub segmentation_sdk_backend_client: Arc<Mutex<SegmentationSdkBackendServiceClient<Channel>>>,
     /// ClickHouse HTTP client for evaluation analytics queries.
     pub ch_client: Arc<clickhouse::Client>,
     /// Context type / param registry backed by PostgreSQL.
@@ -122,6 +132,12 @@ impl GatewayState {
             .await
             .map_err(|e| anyhow::anyhow!("connect to Stats Service: {e}"))?;
 
+        // Clone channels for the SDK backend clients BEFORE moving the
+        // originals into the primary service clients. tonic Channel is a
+        // cheap Arc-wrapping handle — clones share the underlying connection.
+        let flag_channel_for_sdk = flag_channel.clone();
+        let seg_channel_for_sdk = seg_channel.clone();
+
         Ok(Self {
             auth_client: Arc::new(Mutex::new(AuthServiceClient::new(auth_channel))),
             flag_client: Arc::new(Mutex::new(FlagServiceClient::new(flag_channel))),
@@ -141,18 +157,32 @@ impl GatewayState {
                 saml_login_channel,
             ))),
             stats_client: Arc::new(Mutex::new(StatsServiceClient::new(stats_channel))),
+            // SDK backend services run on the same ports as their parent
+            // services (just additional tonic Service registrations on the
+            // same server), so the SDK clients share the parent channels.
+            flag_sdk_backend_client: Arc::new(Mutex::new(FlagSdkBackendServiceClient::new(
+                flag_channel_for_sdk,
+            ))),
+            segmentation_sdk_backend_client: Arc::new(Mutex::new(
+                SegmentationSdkBackendServiceClient::new(seg_channel_for_sdk),
+            )),
             ch_client: Arc::new(ch_client),
             context_registry: Arc::new(PgContextRegistryRepository::new(pg_pool)),
         })
     }
 
     /// Build a `GatewayState` from channels (used in tests).
+    ///
+    /// SDK backend clients reuse the `flag_channel` and `segmentation_channel`
+    /// — they're additional tonic services on the same backend ports.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn from_channels(
         auth_client: AuthServiceClient<Channel>,
         flag_client: FlagServiceClient<Channel>,
+        flag_channel: Channel,
         segmentation_client: SegmentationServiceClient<Channel>,
+        segmentation_channel: Channel,
         event_client: EventIngestionServiceClient<Channel>,
         experimentation_client: ExperimentationServiceClient<Channel>,
         management_client: ManagementServiceClient<Channel>,
@@ -172,6 +202,12 @@ impl GatewayState {
             oidc_login_client: Arc::new(Mutex::new(oidc_login_client)),
             saml_login_client: Arc::new(Mutex::new(saml_login_client)),
             stats_client: Arc::new(Mutex::new(stats_client)),
+            flag_sdk_backend_client: Arc::new(Mutex::new(FlagSdkBackendServiceClient::new(
+                flag_channel,
+            ))),
+            segmentation_sdk_backend_client: Arc::new(Mutex::new(
+                SegmentationSdkBackendServiceClient::new(segmentation_channel),
+            )),
             ch_client: Arc::new(clickhouse::Client::default()),
             context_registry: Arc::new(NoopContextRegistry),
         }

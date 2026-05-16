@@ -1,0 +1,14 @@
+{
+  "current_phase": "Phase 5: Rust SDK Implementation",
+  "current_phase_index": 4,
+  "current_task_index": 6,
+  "completed_phases": [
+    "Phase 1: SDK Spec Foundation",
+    "Phase 2: Workspace Cleanup",
+    "Phase 3: Backend RPCs",
+    "Phase 4: Gateway SDK Surface"
+  ],
+  "last_updated": "2026-05-16T14:50:00Z",
+  "status": "in_progress",
+  "resume_hint": "Phase 5 Tasks 1-6 COMPLETE: config+error, snapshot+ArcSwap, MembershipCache (moka), EventQueue+FlushTask, PollTask+DefinitionFetcher trait, RefreshTask+MembershipBatchFetcher trait. 78 unit tests pass in stitchd-sdk. Next session starts at Phase 5 Task 7 — SdkClient::init wiring. The 6 primitives are decoupled via async traits (EventSink, DefinitionFetcher, MembershipBatchFetcher); Task 7 plugs in real transports (reqwest HTTP for events:batch + segments/list:batch, tonic gRPC for SyncDefinitions). init() must: (1) validate config, (2) do FIRST sync synchronously (blocking) and return SdkError on failure, (3) only then spawn PollTask + RefreshTask + FlushTask, (4) return Arc<SdkClient>. Task 8 follows: evaluate() + evaluate_with_reasoning() integrating stitchd-core::rule_engine. Task 9: graceful shutdown coordinator. NOTE: refresh.rs has a deferred 'filter to flag-referenced segments only' — the rule-walking logic lands in Task 8 alongside evaluate, then both consume the same helper."
+}

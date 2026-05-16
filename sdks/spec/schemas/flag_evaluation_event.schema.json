@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stitchd.dev/sdks/spec/schemas/flag_evaluation_event.schema.json",
+  "title": "FlagEvaluationEvent",
+  "description": "One event emitted per evaluated flag. Queued, batched, and POSTed to `/v1/sdk/events:batch`. Mirror of the protobuf `FlagEvaluationEvent` and the OpenAPI components/schemas/FlagEvaluationEvent — kept in sync intentionally.",
+  "type": "object",
+  "required": [
+    "flag_key",
+    "variant_key",
+    "context_type",
+    "context_key",
+    "evaluated_at",
+    "outcome",
+    "reasoning_included"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "flag_key": { "type": "string", "minLength": 1 },
+    "flag_id": {
+      "type": "string",
+      "description": "UUID of the flag record. SDK reads from loaded FeatureFlag definition; backend uses directly as FK to feature_flags.id. Empty string for outcome = flag_not_found."
+    },
+    "variant_key": {
+      "type": "string",
+      "description": "Variant key returned. For outcome = flag_not_found, this is the default-for-type value stringified."
+    },
+    "context_type": { "type": "string", "minLength": 1 },
+    "context_key": { "type": "string", "minLength": 1 },
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC, millisecond precision."
+    },
+    "matched_rule_id": {
+      "type": "string",
+      "description": "UUID of the matched rule, or empty string for non-matched outcomes. Empty (not null) to keep on-wire shape stable for strict-null languages."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["matched", "default_rule", "disabled", "flag_not_found"]
+    },
+    "reasoning_included": {
+      "type": "boolean",
+      "description": "Whether the caller invoked the reasoning-enabled entry point. NOT whether reasoning is embedded in this event (it never is)."
+    },
+    "context_parameters": {
+      "type": ["object", "null"],
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "boolean" },
+          { "type": "integer" },
+          { "type": "number" },
+          { "type": "string" }
+        ]
+      },
+      "description": "Context parameters minus those listed in private_parameters. Omit or null if all parameters were marked private."
+    },
+    "environment_id": {
+      "type": "string",
+      "description": "Populated by the gateway from the resolved SDK key. SDKs MUST leave empty on outbound payloads."
+    }
+  }
+}
