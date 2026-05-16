@@ -133,18 +133,21 @@ Track: `db_optim_20260516`
   - Route: `GET /v1/segments?env_id=...&page=N` → `PaginatedResponse<AdminSegmentJson>`
   - sqlx::test: 4 tests — page slicing, remainder, total count, empty env
 
-- [ ] Task 4: Paginate remaining admin endpoints
-  - Experiments: `GET /v1/environments/:eid/experiments?page=N`
-  - Event definitions: `GET /v1/environments/:eid/event-definitions?page=N`
-  - SDK keys: `GET /v1/management/environments/:eid/sdk-keys?page=N`
-  - Org users: `GET /v1/admin/orgs/:oid/users?page=N`
-  - Audit log: `GET /v1/audit?page=N` (ordered by created_at DESC)
-  - Each: paginated repository method + route query param + sqlx::test
+- [x] Task 4: Paginate remaining admin endpoints (07e8a40, d010fc7)
+  - Experiments: list_by_environment_paginated + proto page/per_page/total + gateway PaginatedResponse
+  - Event definitions: stub updated to return PaginatedResponse shape (no proto RPC exists)
+  - SDK keys: list_by_environment_paginated + management proto + auth-service handler
+  - Org users: list_by_organisation_paginated + management proto + auth-service handler
+  - Audit log: skipped (route does not exist yet)
+  - sqlx tests: experiment (24 pass), sdk_key_extended (11 pass)
 
-- [ ] Task 5: Frontend pagination component + wire-up
-  - `admin/src/components/Pagination.tsx`: prev/next + page indicator, disabled states
-  - Wire into FlagsList and SegmentsList: read page from URL search param, push on change
-  - Vitest: renders correct page state, onChange fires correct page number, disables
-    prev on page 1 and next on last page
+- [x] Task 5: Frontend pagination component + wire-up (485a35a)
+  - `admin/src/components/Pagination.tsx`: prev/next buttons, page/total indicator, disabled states
+  - `PaginatedResponse<T>` type added to shared types
+  - FlagsList: reads ?page from URL, fetches with page/per_page, shows Pagination on table view
+  - SegmentsList: same pattern — URL-driven page, paginated fetch, Pagination below table
+  - 14 Vitest tests covering totalPages, isFirst/isLast, from/to range, onChange (134 total pass)
+
+## Phase 5: Offset Pagination [checkpoint: 485a35a]
 
 - [ ] Task: Conductor - User Manual Verification 'Offset Pagination' (Protocol in workflow.md)
