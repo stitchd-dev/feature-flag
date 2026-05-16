@@ -78,44 +78,33 @@ Track: `db_optim_20260516`
 
 ---
 
-## Phase 4: ClickHouse Overhaul
+## Phase 4: ClickHouse Overhaul [checkpoint: 4ba06fa]
 <!-- depends: -->
 <!-- execution: sequential -->
 
-- [ ] Task 1: Parameterize eval_stats query — injection fix
+- [x] Task 1: Parameterize eval_stats query — injection fix (314882f)
   - Validate `flag_id` path param as UUID at handler entry → HTTP 400 on parse failure
   - Replace `format!()` SQL in `routes/eval_stats.rs` with clickhouse-rs bind parameters
   - Unit tests: invalid UUID → 400; valid UUID → query executes; no raw interpolation in SQL
 
-- [ ] Task 2: Experiment materialized views — schema + migration files
-  - Create `migrations/clickhouse/` directory with numbered migration scripts
-  - `events_experiment_daily_mv` (AggregatingMergeTree):
-    keys: `(env_id, experiment_id, variant_key, metric_key, day Date)`
-    columns: `count_state AggregateFunction(count)`,
-             `sum_state AggregateFunction(sum, Float64)`,
-             `uniq_ctx_state AggregateFunction(uniq, String)`
-  - MATERIALIZED VIEW trigger on `events` table to auto-populate on insert
-  - Unit test: MV schema creation + insert triggers MV population
+- [x] Task 2: Experiment materialized views — schema + migration files (e5504ad)
+  - `events_experiment_daily` (AggregatingMergeTree) in 20260516000005
+  - MV trigger `events_experiment_daily_mv` auto-populates on events insert
+  - 2 integration tests: MV populates on insert; non-experiment events excluded
 
-- [ ] Task 3: Backfill migration — populate MVs from raw events
-  - Script: truncate MV, then `INSERT INTO events_experiment_daily_mv SELECT ...`
-    with `initializeAggregation` for state columns
-  - Idempotent: safe to re-run
-  - Integration test: seed raw events, run backfill, assert MV row counts match
+- [x] Task 3: Backfill migration — populate MVs from raw events (e5504ad)
+  - 20260516000006: TRUNCATE + INSERT .. SELECT (idempotent)
+  - Integration tests: seed raw events, run backfill, assert MV row counts match
 
-- [ ] Task 4: Rewrite experiment_queries.rs to read from MVs
-  - Replace `arrayFirst`/`arrayExists` raw events queries with
-    `finalizeAggregation()` reads against `events_experiment_daily_mv`
-  - Preserve all existing function signatures (no proto/API changes)
-  - Unit tests with seeded MV data; results must match previous test expectations
+- [x] Task 4: Rewrite experiment_queries.rs to read from MVs (9651898)
+  - build_count_metric_sql reads events_experiment_daily with countMerge/uniqMerge
+  - query_numeric_metric stays on raw events (MV lacks quantile states)
+  - 27 unit tests pass; function signatures preserved (no proto/API changes)
 
-- [ ] Task 5: Partition tuning — weekly partitions for flag_evaluation_log and events
-  - Create `flag_evaluation_log_v2` with `PARTITION BY toMonday(evaluated_at)`
-  - Create `events_v2` with `PARTITION BY toMonday(occurred_at)`
-  - Copy: `INSERT INTO ..._v2 SELECT * FROM ...`
-  - Assert row counts match, then drop originals and rename v2
-  - Integration test: post-migration row counts preserved; time-range query hits
-    correct weekly partition
+- [x] Task 5: Partition tuning — weekly partitions for flag_evaluation_log and events (4ba06fa)
+  - 20260516000007_events_v2: weekly toMonday partitions + INSERT SELECT backfill
+  - 0004_flag_evaluation_log_v2.sql: same + TTL preserved; manual rename documented
+  - 3 integration tests: inserts queryable, toMonday key verified, row counts match
 
 - [ ] Task: Conductor - User Manual Verification 'ClickHouse Overhaul' (Protocol in workflow.md)
 
