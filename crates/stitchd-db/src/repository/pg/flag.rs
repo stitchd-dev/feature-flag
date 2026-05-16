@@ -251,6 +251,64 @@ impl FlagRepository for PgFlagRepository {
             .collect()
     }
 
+    async fn list_by_project_paginated(
+        &self,
+        project_id: ProjectId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<FlagRecord>, u64), RepositoryError> {
+        // COUNT(*) OVER() gives the total row count alongside each result row,
+        // so we avoid a separate COUNT query.
+        #[allow(clippy::cast_possible_wrap)]
+        let rows = sqlx::query(
+            r"
+            SELECT id, project_id, key, name, description, value_type, enabled,
+                   default_variant_id, created_at, updated_at, deleted_at, version,
+                   COUNT(*) OVER() AS total_count
+            FROM feature_flags
+            WHERE project_id = $1 AND deleted_at IS NULL
+            ORDER BY created_at
+            LIMIT $2 OFFSET $3
+            ",
+        )
+        .bind(project_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let total = rows
+            .first()
+            .map(|r| {
+                let n: i64 = r.get("total_count");
+                n.max(0) as u64
+            })
+            .unwrap_or(0);
+
+        let flags = rows
+            .into_iter()
+            .map(|row| {
+                assemble_flag(
+                    row.get("id"),
+                    row.get("project_id"),
+                    row.get("key"),
+                    row.get("name"),
+                    row.get("description"),
+                    row.get::<String, _>("value_type").as_str(),
+                    row.get("enabled"),
+                    row.get("default_variant_id"),
+                    row.get("created_at"),
+                    row.get("updated_at"),
+                    row.get("deleted_at"),
+                    row.get("version"),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok((flags, total))
+    }
+
     async fn list_by_project_all(
         &self,
         project_id: ProjectId,

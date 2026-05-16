@@ -219,6 +219,17 @@ pub trait FlagRepository: Send + Sync {
         project_id: ProjectId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
 
+    /// List non-deleted flags in a project with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)` where `total_count` is the count of
+    /// all non-deleted flags for the project (regardless of offset/limit).
+    async fn list_by_project_paginated(
+        &self,
+        project_id: ProjectId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<stitchd_core::flag::FlagRecord>, u64), RepositoryError>;
+
     /// List all flags in a project including soft-deleted (archived) ones.
     async fn list_by_project_all(
         &self,

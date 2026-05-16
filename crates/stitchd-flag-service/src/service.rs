@@ -224,25 +224,40 @@ impl FlagService for FlagServiceImpl {
         let req = request.into_inner();
         let project_id = parse_project_id(&req.project_id)?;
 
-        let flag_records = if let Some(pid) = project_id {
+        // Pagination is supported only on the admin (project-scoped) path.
+        // page > 0 signals the caller wants paginated results.
+        let use_pagination = req.page > 0 && project_id.is_some();
+        let page = if req.page == 0 { 1u64 } else { req.page as u64 };
+        let per_page = if req.per_page == 0 { 50u64 } else { (req.per_page as u64).min(200) };
+        let offset = (page - 1) * per_page;
+
+        let (flag_records, total) = if let Some(pid) = project_id {
             // Admin path: project-scoped list.
-            if req.include_archived {
+            if use_pagination {
                 self.flag_repo
+                    .list_by_project_paginated(pid, offset, per_page)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            } else if req.include_archived {
+                let flags = self.flag_repo
                     .list_by_project_all(pid)
                     .await
                     .map_err(FlagServiceError::from)
-                    .map_err(Status::from)?
+                    .map_err(Status::from)?;
+                (flags, 0)
             } else {
-                self.flag_repo
+                let flags = self.flag_repo
                     .list_by_project(pid)
                     .await
                     .map_err(FlagServiceError::from)
-                    .map_err(Status::from)?
+                    .map_err(Status::from)?;
+                (flags, 0)
             }
         } else {
-            // SDK path: environment-scoped list.
+            // SDK path: environment-scoped list (no pagination).
             let env_id = parse_env_id(&req.environment_id)?;
-            if req.include_archived {
+            let flags = if req.include_archived {
                 self.flag_repo
                     .list_by_environment_all(env_id)
                     .await
@@ -254,7 +269,8 @@ impl FlagService for FlagServiceImpl {
                     .await
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?
-            }
+            };
+            (flags, 0)
         };
 
         let mut proto_flags = Vec::with_capacity(flag_records.len());
@@ -276,7 +292,7 @@ impl FlagService for FlagServiceImpl {
             proto_flags.push(mapping::build_feature_flag_proto(record, variants, &rules));
         }
 
-        Ok(Response::new(ListFlagsResponse { flags: proto_flags }))
+        Ok(Response::new(ListFlagsResponse { flags: proto_flags, total }))
     }
 
     async fn mutate_flag(
@@ -842,6 +858,29 @@ mod tests {
                 .collect())
         }
 
+        async fn list_by_project_paginated(
+            &self,
+            _project_id: ProjectId,
+            offset: u64,
+            limit: u64,
+        ) -> Result<(Vec<FlagRecord>, u64), RepositoryError> {
+            let all: Vec<FlagRecord> = self
+                .flags
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|f| f.deleted_at.is_none())
+                .cloned()
+                .collect();
+            let total = all.len() as u64;
+            let page: Vec<FlagRecord> = all
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect();
+            Ok((page, total))
+        }
+
         async fn list_by_project_all(
             &self,
             _project_id: ProjectId,
@@ -1272,6 +1311,8 @@ mod tests {
             include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
             project_id: String::new(),
+            page: 0,
+            per_page: 0,
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_ok());
@@ -1298,6 +1339,8 @@ mod tests {
             include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
             project_id: String::new(),
+            page: 0,
+            per_page: 0,
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_ok());
@@ -1311,6 +1354,8 @@ mod tests {
             include_archived: false,
             environment_id: "bad-uuid".to_string(),
             project_id: String::new(),
+            page: 0,
+            per_page: 0,
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_err());
