@@ -1,20 +1,22 @@
 {
-  "last_refreshed": "2026-05-11T00:00:00Z",
+  "last_refreshed": "2026-05-16T00:00:00Z",
   "scope": "all",
   "changes": {
-    "tech-stack.md": [
-      "Added stitchd-stats-service to Architecture table",
-      "Added Admin UI (Frontend) section — React 19, React Router v7, Vite 8, TypeScript 6, Axios, dev proxy pattern"
-    ],
     "product.md": [
-      "Updated Implementation Status: Admin UI split into 'In Progress' (Superadmin + Org Management) and 'Complete' (Environments & SDK Keys RBAC)"
+      "Updated Implementation Status to 2026-05-16: added flags CRUD, segments UI, eval preview, context intel, db optimizations as Complete; marked Admin UI Superadmin as Complete",
+      "Replaced stale 'Deferred: ClickHouse Query Optimisations' with 'Completed' summary",
+      "Added evaluate-preview endpoint description to Feature Flags module",
+      "Added Admin UI section describing full feature parity (flags, segments, context explorer, eval analytics, pagination)"
     ],
-    "workflow.md": [
-      "Added Admin UI (Frontend) dev commands section — npm dev, tsc type-check, lint, build"
+    "tech-stack.md": [
+      "Added vitest ^4.1.6 to Admin UI section",
+      "Added Pagination section: PaginationParams, PaginatedResponse<T>, COUNT(*) OVER() pattern",
+      "Added Context Intelligence Layer section: tables, routes",
+      "Added PostgreSQL Index Layer section: 4 migrations with index details",
+      "Added ClickHouse Schema section: events_v2, flag_evaluation_log_v2 weekly partitions, events_experiment_daily AggregatingMergeTree + MV, combiner invariants"
     ],
     "beads": [
-      "Closed feature-flag-ut2.2, ut2.4, ut2.5 — completed in env_sdk_rbac_20260429 but left open",
-      "Closed feature-flag-ut2 epic — all 5 phases done, track archived 2026-04-29"
+      "Closed 50 stale open issues across 4 archived epics: feature-flag-dhu (db_optim), feature-flag-c1h (context_intel), feature-flag-09e (flag_eval_preview), feature-flag-5au (segments_ui)"
     ]
   }
 }

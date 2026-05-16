@@ -1,6 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
-<!-- Last refreshed: 2026-05-11 -->
+<!-- Last refreshed: 2026-05-16 -->
 
 # Product Guide
 
@@ -47,7 +47,7 @@ a registry of known context types, their properties, and observed value ranges/e
 Exposed as an API for the Admin UI (coming later) to power dropdown/autocomplete 
 behaviour (e.g. when building segment rules or flag targeting conditions).
 
-## Implementation Status (as of 2026-04-22)
+## Implementation Status (as of 2026-05-16)
 
 | Module | Status |
 |---|---|
@@ -58,8 +58,13 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 | Server-side Rust SDK | ✅ Complete |
 | Human Auth (JWT, Password, OIDC, SAML, MFA, Invites, Rate Limiting) | ✅ Complete |
 | Microservice decomposition (6 services + gateway) | ✅ Complete |
-| Admin UI (Superadmin + Org Management) | 🔄 In Progress |
+| Admin UI — Superadmin + Org Management | ✅ Complete |
 | Admin UI — Environments & SDK Keys RBAC | ✅ Complete |
+| Admin UI — Feature Flags Full CRUD + Rule Builder | ✅ Complete |
+| Admin UI — Segments Full CRUD (rule-based + list-based) | ✅ Complete |
+| Flag Evaluation Preview (rule traces, rollout debug, OR/AND missing-context fix) | ✅ Complete |
+| Context Intelligence (eval telemetry, context registry, autocomplete, explorer) | ✅ Complete |
+| Database & Query Optimizations (PG indexes, N+1 elimination, SDK key cache, ClickHouse MVs, offset pagination) | ✅ Complete |
 
 ## Modules
 
@@ -73,6 +78,9 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 - States: enabled (default rule + custom rules) / disabled
 - Output: specific variant OR percentage allocation (0.1% granularity)
   hash(targeted context keys/params, flag key, project id, environment)
+- **Evaluate-Preview:** `POST /flags/{key}/evaluate-preview` accepts a mock context and returns
+  the evaluated variant plus a full rule trace (which rule matched, why), rollout debug info,
+  and OR/AND missing-context resolution details — used by the Admin UI "Test" panel
 
 ### 3. Experimentation
 - Events: pre-registered only; each event has a known key and typed metric value 
@@ -88,6 +96,17 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 - Segmentation rules: inherit core
 - Feature flag rules: inherit core + "Is in Segment" + "Flag evaluated with variant X"
 
+## Admin UI
+
+The admin console (`admin/`) is a React 19 + Vite SPA with full feature parity:
+
+- **Flags:** Create/edit/archive flags; variant management; rule builder (AND/OR/NOT condition trees, segment picker, percentage rollout); Evaluate-Preview "Test" panel with rule trace output
+- **Segments:** Rule-based (condition expression builder) + list-based (context-typed include/exclude key lists); full CRUD; segment picker in flag rule builder
+- **Context Explorer:** Browse observed context types and their parameter registry (autocomplete source for rule builder)
+- **Eval Analytics:** Evaluation stats per flag via ClickHouse `eval_stats` route; sparklines in flag list
+- **Experiments / Events / Environments / SDK Keys / Org Users / Audit Log:** Full management UI
+- **Pagination:** All list views use URL-driven offset pagination (`?page=N`) — `PaginationParams` + `PaginatedResponse<T>` backed by `COUNT(*) OVER()` window queries
+
 ## Server-Side SDK (Rust — initial)
 - `SdkClient::init(config)` blocks until first definition sync via gRPC, then polls at a configurable interval.
 - Flag evaluation (`evaluate()`) is in-process: rule-based segments evaluated locally; list-based segments resolved via REST lookup or optional LFU cache.
@@ -99,23 +118,11 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 - PostgreSQL: flag/segment configuration, tenants, environments, SDK keys
 - ClickHouse: events, experiment results, metric aggregations
 
-## Deferred: ClickHouse Query Optimisations
+## ClickHouse Query Optimisations (Completed — db_optim_20260516)
 
-ClickHouse performance optimisations for the Experimentation and Events modules are **explicitly out of scope until core functionality is complete and in production**.
+The ClickHouse overhaul was completed as part of `db_optim_20260516`:
 
-Current implementation queries the raw `events` table directly (using `arrayFirst`/`arrayExists` on the contexts array) because the existing materialized views (`events_count_mv`, `events_numeric_mv`) aggregate at `(env_id, metric_key, day)` and discard per-experiment context.
-
-**Deferred work (pick up when recompute p95 > 100ms at production load):**
-- New experiment-scoped MVs keyed on `(env_id, experiment_id, variant, metric_key, day)`
-- Rewrite `experiment_queries.rs` to read from MVs instead of raw events
-- Historical backfill migration
-- Equivalent optimisation for general event ingestion/query paths
-
-**Scheduled Stats Processing (deferred — pick up alongside MV optimisations):**
-
-Stats computation should run on a **1-hour scheduled interval**, not on-demand per API request. The computed results must be written to a dedicated processed results table (PostgreSQL `experiment_results` already exists for this purpose). The Results API must read exclusively from this pre-computed table — never triggering a live ClickHouse query at request time.
-
-- Replace the current fire-and-forget `ComputeResultsJob` (triggered by POST `/recompute`) with a periodic scheduler (tokio cron or similar) that runs every 60 minutes per active experiment
-- Results API (`GET /experiments/{id}/results`) reads from `experiment_results` only; returns stale data with a `computed_at` timestamp — no inline recompute
-- The manual `/recompute` endpoint may remain as an escape hatch but must not block the response
-- Staleness indicator on the API response (`is_stale: bool`, `computed_at`) so consumers know result freshness
+- **Injection fix:** `eval_stats` route now uses parameterized ClickHouse queries (no `format!()` SQL)
+- **Experiment MVs:** `events_experiment_daily` (AggregatingMergeTree, keyed on `env_id, experiment_id, variant_key, metric_key, day`) + backfill migration; `experiment_queries.rs` reads from MVs
+- **Partition tuning:** `events_v2` and `flag_evaluation_log_v2` use weekly `toMonday()` partitions + TTL
+- **Scheduled stats:** 60-minute interval via `stitchd-stats-service`; Results API reads from pre-computed `experiment_results` table only

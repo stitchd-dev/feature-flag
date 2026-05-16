@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-05-11 -->
+<!-- Last refreshed: 2026-05-16 -->
 
 ## Architecture
 
@@ -48,8 +48,29 @@ Located in `admin/` at the workspace root. Built with:
 | HTTP Client | Axios |
 | Dev Proxy | Vite server proxy: `/api → http://localhost:8080` (strips `/api` prefix, `changeOrigin: true`) |
 | Linting | ESLint with `eslint-plugin-react-hooks` + `eslint-plugin-react-refresh` |
+| Testing | Vitest `^4.1.6` + `@vitest/ui`; run with `npm test` (CI mode) or `npm run test:ui` |
 
 Auth model: JWT decoded client-side (base64 payload only) to extract `is_system`. `org_id` comes from the login response body. Superadmin users (`is_system=true`) use `/superadmin/*` routes; org users use `/org/:orgId/*`.
+
+## Pagination (REST API)
+
+Shared offset pagination types live in `crates/stitchd-gateway/src/pagination.rs`:
+
+- `PaginationParams` — extracted from `?page=N&per_page=N`; defaults page=1, per_page=50, cap=200. Uses a custom `de_u32_from_str` visitor to handle `serde_urlencoded` string coercion.
+- `PaginatedResponse<T>` — wraps `{items, total, page, per_page}`
+- Repository layer uses `COUNT(*) OVER()` window function to return total alongside items in one query
+
+All list endpoints (`flags`, `segments`, `experiments`, `sdk_keys`, `org_users`) support pagination. Frontend components use URL-driven state (`useSearchParams` → `?page=N`).
+
+## Context Intelligence Layer
+
+Tables in PostgreSQL (`20260515000001_context_registry.sql`):
+- `context_type_registry`: tracks observed context types per environment with `last_seen` timestamp
+- `context_param_registry`: tracks parameter names + observed value samples per context type
+
+Routes in `stitchd-gateway/src/routes/context_intel.rs`:
+- `GET /v1/environments/{env_id}/context-types` — list observed context types
+- `GET /v1/environments/{env_id}/context-types/{context_type}/params` — list parameters with value samples (autocomplete source for rule builder)
 
 ## Client SDK
 
@@ -120,6 +141,36 @@ Key invariants:
 - **SDK Key Cache** (`stitchd-auth-service`): `moka 0.12` async `Cache<String, SdkKey>` keyed on `key_hash`, TTL = 60 s.
   - `SdkKeyCache::get_or_load(hash, loader)` — cache hit skips DB; miss coalesces concurrent callers to one DB round-trip.
   - Invalidated eagerly on revocation via `SdkKeyCache::invalidate(hash)`.
+
+## PostgreSQL Index Layer
+
+Added in `db_optim_20260516` (`crates/stitchd-db/migrations/2026051600000{1-4}_*.sql`):
+
+| Migration | Index | Purpose |
+|---|---|---|
+| 000001 | `idx_sdk_keys_key_hash_active` on `(key_hash, is_active)` | Fast SDK key auth lookup |
+| 000002 | 6 partial indexes `WHERE deleted_at IS NULL` on flags, segments, projects, environments, event_definitions, experiments | Soft-delete query pruning |
+| 000003 | `idx_segment_list_entries_covering` on `(segment_id, context_type, list_type, entry_key)` | Covering index for membership checks |
+| 000004 | `idx_context_type/param_registry_last_seen` | Enables efficient purge of stale context registry entries |
+
+Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a transaction.
+
+## ClickHouse Schema
+
+**Tables and materialized views as of 2026-05-16:**
+
+| Table | Engine | Notes |
+|---|---|---|
+| `events` | MergeTree, monthly partitions | Primary ingestion table |
+| `events_v2` | MergeTree, weekly `toMonday()` partitions | Optimized partition granularity (migration 000007) |
+| `flag_evaluation_log_v2` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log (migration `0004_flag_evaluation_log_v2.sql`) |
+| `events_experiment_daily` | AggregatingMergeTree | Pre-aggregated experiment stats by `(env_id, experiment_id, variant_key, metric_key, day)` |
+| `events_experiment_daily_mv` | Materialized View | Auto-populates `events_experiment_daily` on `events` insert using `*State` combiners |
+
+**AggregatingMergeTree invariants:**
+- Insert: use `*State` combiners (`countState()`, `sumState(Float64)`, `uniqState()`)
+- Read: use `*Merge` combiners (`countMerge`, `sumMerge`, `uniqMerge`) in GROUP BY — NOT `finalizeAggregation` (scalar only)
+- `sumState(Nullable(Float64))` mismatches `AggregateFunction(sum, Float64)` — wrap with `ifNull(..., 0.0)`
 
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
