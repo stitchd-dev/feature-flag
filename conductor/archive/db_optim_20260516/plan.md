@@ -106,7 +106,7 @@ Track: `db_optim_20260516`
   - 0004_flag_evaluation_log_v2.sql: same + TTL preserved; manual rename documented
   - 3 integration tests: inserts queryable, toMonday key verified, row counts match
 
-- [ ] Task: Conductor - User Manual Verification 'ClickHouse Overhaul' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'ClickHouse Overhaul' (Protocol in workflow.md) [checkpoint: 2ad381e]
 
 ---
 
@@ -150,4 +150,4 @@ Track: `db_optim_20260516`
 
 ## Phase 5: Offset Pagination [checkpoint: 485a35a]
 
-- [ ] Task: Conductor - User Manual Verification 'Offset Pagination' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Offset Pagination' (Protocol in workflow.md) [checkpoint: f9e4b61]
