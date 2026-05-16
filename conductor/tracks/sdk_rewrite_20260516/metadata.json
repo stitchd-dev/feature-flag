@@ -1,0 +1,13 @@
+{
+  "track_id": "sdk_rewrite_20260516",
+  "type": "feature",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-16T00:00:00Z",
+  "updated_at": "2026-05-16T00:00:00Z",
+  "description": "Clean SDK implementation — sdks/ foundation (spec + Rust SDK). Delete crates/stitchd-sdk; create sdks/spec/ (docs, proto, openapi, schemas, fixtures) as language-agnostic contract; create sdks/rust/ server-side SDK on stitchd-core with polling-based definition sync, LRU list-segment cache (lazy-on-miss + hybrid refresh), batched event flush. All SDK traffic via gateway (sole trust boundary for SDK key); backend services trust gateway-propagated env_id metadata.",
+  "git_branch": "track/sdk_rewrite_20260516",
+  "worktree_path": ".worktrees/sdk_rewrite_20260516"
+}
