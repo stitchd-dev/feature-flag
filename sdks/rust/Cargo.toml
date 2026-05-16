@@ -44,9 +44,18 @@ async-trait = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
+[features]
+# Expose test helpers (SdkClient constructor from snapshot) for integration / conformance tests.
+test-util = []
+
 [dev-dependencies]
 # Integration tests stub out the gateway with wiremock + tonic mock services.
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 futures = { workspace = true }
 serial_test = { workspace = true }
+# Conformance tests build proto/core types directly from spec fixtures.
+stitchd-proto = { path = "../../crates/stitchd-proto" }
+stitchd-core  = { path = "../../crates/stitchd-core" }
+async-trait   = { workspace = true }
+uuid          = { workspace = true }

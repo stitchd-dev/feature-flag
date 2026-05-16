@@ -1687,3 +1687,100 @@ mod tests {
         assert_eq!(client.event_queue.len(), 2, "one event per EvalRequest");
     }
 }
+
+// ============================================================================
+// test-util — helpers for integration / conformance tests
+// ============================================================================
+
+/// Test helpers exposed under `--features test-util`. Allows integration
+/// tests to construct `SdkClient` from an in-memory snapshot without a real
+/// network connection.
+#[cfg(feature = "test-util")]
+pub mod testing {
+    use super::*;
+    use std::time::Duration;
+
+    struct NoopSink;
+    #[async_trait]
+    impl EventSink for NoopSink {
+        async fn flush(&self, _batch: Vec<FlagEvaluationEvent>) -> Result<(), SdkError> {
+            Ok(())
+        }
+    }
+
+    struct NoopDefinitionFetcher;
+    #[async_trait]
+    impl DefinitionFetcher for NoopDefinitionFetcher {
+        async fn fetch(&self) -> Result<DefinitionSnapshot, SdkError> {
+            Ok(DefinitionSnapshot::default())
+        }
+    }
+
+    /// A `MembershipBatchFetcher` that always returns empty membership maps.
+    pub struct NoopMembershipFetcher;
+    #[async_trait]
+    impl MembershipBatchFetcher for NoopMembershipFetcher {
+        async fn fetch(
+            &self,
+            contexts: Vec<ContextKey>,
+            _segment_ids: Vec<String>,
+        ) -> Result<Vec<MembershipMap>, SdkError> {
+            Ok(contexts.iter().map(|_| HashMap::new()).collect())
+        }
+    }
+
+    /// Construct an `Arc<SdkClient>` from an in-memory snapshot.
+    ///
+    /// - `snapshot`: the definition snapshot to serve evaluations from.
+    /// - `membership_fetcher`: called on list-segment LRU miss.
+    /// - `preseed`: `(context_type, context_key, memberships)` tuples pre-loaded into LRU.
+    pub fn sdk_client_with_snapshot_and_lru(
+        snapshot: DefinitionSnapshot,
+        membership_fetcher: Arc<dyn MembershipBatchFetcher>,
+        preseed: Vec<(String, String, MembershipMap)>,
+    ) -> Arc<SdkClient> {
+        let definition_store = DefinitionStore::from_snapshot(snapshot);
+        let membership_cache = MembershipCache::new(1000);
+
+        for (ctx_type, ctx_key, memberships) in preseed {
+            membership_cache.insert(&ctx_type, &ctx_key, memberships);
+        }
+
+        let event_queue = EventQueue::new(1000, 100);
+        let sink: Arc<dyn EventSink> = Arc::new(NoopSink);
+        let flush_task =
+            FlushTask::spawn(event_queue.clone(), sink, Duration::from_secs(60));
+
+        let poll_fetcher: Arc<dyn DefinitionFetcher> = Arc::new(NoopDefinitionFetcher);
+        let poll_task = PollTask::spawn(
+            poll_fetcher,
+            definition_store.clone(),
+            Duration::from_secs(60),
+        );
+        let refresh_task = RefreshTask::spawn(
+            Arc::clone(&membership_fetcher),
+            membership_cache.clone(),
+            definition_store.clone(),
+            Duration::from_secs(60),
+        );
+
+        Arc::new(SdkClient {
+            definition_store,
+            membership_cache,
+            event_queue,
+            membership_fetcher,
+            poll_task: Mutex::new(Some(poll_task)),
+            refresh_task: Mutex::new(Some(refresh_task)),
+            flush_task: Mutex::new(Some(flush_task)),
+        })
+    }
+
+    /// Simpler variant with a no-op membership fetcher and empty LRU.
+    pub fn sdk_client_simple(snapshot: DefinitionSnapshot) -> Arc<SdkClient> {
+        sdk_client_with_snapshot_and_lru(
+            snapshot,
+            Arc::new(NoopMembershipFetcher),
+            vec![],
+        )
+    }
+}
