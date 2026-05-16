@@ -15,7 +15,7 @@ are pinned before downstream phases reference them.
   - Add top-level `sdks/spec/README.md` explaining the contract model
   - Add `sdks/README.md` explaining the overall `sdks/` layout
 
-- [ ] Task 2: Write Markdown behavioral spec (`sdks/spec/docs/`)
+- [x] Task 2: Write Markdown behavioral spec (`sdks/spec/docs/`)
   - `01-overview.md` — SDK responsibilities, gateway trust boundary
   - `02-evaluation-semantics.md` — eval flow, reasoning shape, batch semantics
   - `03-caching.md` — definition snapshot lifecycle, LRU for list-segment membership, miss/hit/refresh behaviour
