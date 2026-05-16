@@ -36,7 +36,7 @@ are pinned before downstream phases reference them.
   - `POST /v1/sdk/events:batch` — request schema (202 Accepted, no body)
   - Reference the JSON Schemas from Task 5 via `$ref`
 
-- [ ] Task 5: Author JSON Schemas (`sdks/spec/schemas/`)
+- [x] Task 5: Author JSON Schemas (`sdks/spec/schemas/`)
   - `eval_request.schema.json`
   - `eval_result.schema.json`
   - `eval_result_with_reasoning.schema.json`

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stitchd.dev/sdks/spec/schemas/reasoning_trace.schema.json",
+  "title": "ReasoningTrace",
+  "description": "Diagnostic trace describing how an evaluation arrived at its variant. Attached to results returned by `evaluate_with_reasoning()`. NOT included in the FlagEvaluationEvent payload (would bloat ClickHouse writes).",
+  "type": "object",
+  "required": ["outcome", "segment_evaluations", "evaluated_at"],
+  "additionalProperties": false,
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "enum": ["matched", "default_rule", "disabled", "flag_not_found"]
+    },
+    "matched_rule": {
+      "type": ["object", "null"],
+      "required": ["rule_id"],
+      "additionalProperties": false,
+      "properties": {
+        "rule_id": { "type": "string", "format": "uuid" },
+        "rule_name": { "type": ["string", "null"] },
+        "condition_summary": {
+          "type": "string",
+          "description": "Human-readable rendering of the matched condition, suitable for logs and admin UI."
+        }
+      }
+    },
+    "segment_evaluations": {
+      "type": "array",
+      "description": "Every segment consulted during this evaluation, in the order encountered. Includes both rule-based and list-based segments.",
+      "items": {
+        "type": "object",
+        "required": ["segment_id", "segment_type", "matched", "source"],
+        "additionalProperties": false,
+        "properties": {
+          "segment_id": { "type": "string", "format": "uuid" },
+          "segment_type": {
+            "type": "string",
+            "enum": ["rule", "list"]
+          },
+          "matched": { "type": "boolean" },
+          "source": {
+            "type": "string",
+            "enum": ["snapshot", "lru_hit", "lru_miss_fetched", "lru_miss_failed"],
+            "description": "Where the membership determination came from. `snapshot` for rule-based; `lru_hit`/`lru_miss_fetched`/`lru_miss_failed` for list-based."
+          }
+        }
+      }
+    },
+    "rollout": {
+      "type": ["object", "null"],
+      "required": ["bucket", "allocation"],
+      "additionalProperties": false,
+      "properties": {
+        "bucket": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999,
+          "description": "The bucket the hash landed in. See hash function spec in `02-evaluation-semantics.md`."
+        },
+        "allocation": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["variant_key", "weight"],
+            "properties": {
+              "variant_key": { "type": "string" },
+              "weight": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000,
+                "description": "Weight in units of 0.1% (out of 1000)."
+              }
+            }
+          }
+        }
+      }
+    },
+    "evaluated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC3339 UTC, millisecond precision. SDK-local clock at the moment evaluation returned."
+    }
+  }
+}

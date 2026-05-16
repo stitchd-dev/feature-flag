@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stitchd.dev/sdks/spec/schemas/condition_tree.schema.json",
+  "title": "ConditionTree",
+  "description": "A rule condition expression. Recursive: And/Or/Not combine sub-trees, leaves are concrete predicates over a context's parameters or membership in a segment. Wire format inside FlagDefinition.rule.condition. Every SDK must implement the semantics in `02-evaluation-semantics.md` — Condition Tree Primitives.",
+  "oneOf": [
+    { "$ref": "#/$defs/Eq" },
+    { "$ref": "#/$defs/Neq" },
+    { "$ref": "#/$defs/Lt" },
+    { "$ref": "#/$defs/Lte" },
+    { "$ref": "#/$defs/Gt" },
+    { "$ref": "#/$defs/Gte" },
+    { "$ref": "#/$defs/Contains" },
+    { "$ref": "#/$defs/StartsWith" },
+    { "$ref": "#/$defs/EndsWith" },
+    { "$ref": "#/$defs/SemverGte" },
+    { "$ref": "#/$defs/SemverLt" },
+    { "$ref": "#/$defs/InList" },
+    { "$ref": "#/$defs/Matches" },
+    { "$ref": "#/$defs/InSegment" },
+    { "$ref": "#/$defs/NotInSegment" },
+    { "$ref": "#/$defs/And" },
+    { "$ref": "#/$defs/Or" },
+    { "$ref": "#/$defs/Not" }
+  ],
+  "$defs": {
+
+    "ParamLeaf": {
+      "description": "Base shape for leaf conditions over a context parameter.",
+      "type": "object",
+      "required": ["context_type", "param"],
+      "properties": {
+        "context_type": { "type": "string", "minLength": 1 },
+        "param": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "Eq":  { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","value"], "properties":{"op":{"const":"Eq"}, "value":{}} },
+    "Neq": { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","value"], "properties":{"op":{"const":"Neq"}, "value":{}} },
+    "Lt":  { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","value"], "properties":{"op":{"const":"Lt"}, "value":{}} },
+    "Lte": { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","value"], "properties":{"op":{"const":"Lte"}, "value":{}} },
+    "Gt":  { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","value"], "properties":{"op":{"const":"Gt"}, "value":{}} },
+    "Gte": { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","value"], "properties":{"op":{"const":"Gte"}, "value":{}} },
+
+    "Contains":   { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","substr"], "properties":{"op":{"const":"Contains"},   "substr":{"type":"string"}} },
+    "StartsWith": { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","substr"], "properties":{"op":{"const":"StartsWith"}, "substr":{"type":"string"}} },
+    "EndsWith":   { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","substr"], "properties":{"op":{"const":"EndsWith"},   "substr":{"type":"string"}} },
+
+    "SemverGte": { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","value"], "properties":{"op":{"const":"SemverGte"}, "value":{"type":"string","description":"SemVer string e.g. 1.2.3"}} },
+    "SemverLt":  { "allOf": [{"$ref":"#/$defs/ParamLeaf"}], "required":["op","value"], "properties":{"op":{"const":"SemverLt"},  "value":{"type":"string"}} },
+
+    "InList": {
+      "allOf": [{"$ref":"#/$defs/ParamLeaf"}],
+      "required":["op","values"],
+      "properties":{
+        "op":{"const":"InList"},
+        "values":{"type":"array","items":{"type":"string"},"minItems":1}
+      }
+    },
+
+    "Matches": {
+      "allOf": [{"$ref":"#/$defs/ParamLeaf"}],
+      "required":["op","pattern"],
+      "properties":{
+        "op":{"const":"Matches"},
+        "pattern":{"type":"string","description":"Simple wildcard pattern; `*` is wildcard. Prefix match: `foo*`. Suffix match: `*foo`."}
+      }
+    },
+
+    "InSegment": {
+      "type": "object",
+      "required": ["op", "segment_id"],
+      "properties": {
+        "op": {"const": "InSegment"},
+        "segment_id": {"type": "string", "format": "uuid"}
+      }
+    },
+
+    "NotInSegment": {
+      "type": "object",
+      "required": ["op", "segment_id"],
+      "properties": {
+        "op": {"const": "NotInSegment"},
+        "segment_id": {"type": "string", "format": "uuid"}
+      }
+    },
+
+    "And": {
+      "type": "object",
+      "required": ["op", "children"],
+      "properties": {
+        "op": {"const": "And"},
+        "children": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#"}
+        }
+      }
+    },
+
+    "Or": {
+      "type": "object",
+      "required": ["op", "children"],
+      "properties": {
+        "op": {"const": "Or"},
+        "children": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#"}
+        }
+      }
+    },
+
+    "Not": {
+      "type": "object",
+      "required": ["op", "child"],
+      "properties": {
+        "op": {"const": "Not"},
+        "child": {"$ref": "#"}
+      }
+    }
+  }
+}

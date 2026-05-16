@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stitchd.dev/sdks/spec/schemas/eval_request.schema.json",
+  "title": "EvalRequest",
+  "description": "Single flag evaluation request. SDKs accept a batch of these in `evaluate()` and `evaluate_with_reasoning()`.",
+  "type": "object",
+  "required": ["flag_key", "context"],
+  "additionalProperties": false,
+  "properties": {
+    "flag_key": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The key of the flag to evaluate. If unknown to the SDK's snapshot, evaluation returns the default-for-type variant and emits an event with `outcome = \"flag_not_found\"`."
+    },
+    "context": {
+      "$ref": "#/$defs/Context"
+    }
+  },
+  "$defs": {
+    "Context": {
+      "type": "object",
+      "required": ["type", "key", "parameters"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Context type discriminator (e.g. \"user\", \"device\", \"org\")."
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique identifier within this context type. Used as part of percentage-rollout hashing and as the LRU cache key for list-segment membership."
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ParameterValue"
+          },
+          "description": "Typed attributes used by rule conditions (`Eq`, `Gt`, `SemverGte`, etc.)."
+        },
+        "private_parameters": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Names of parameters that MUST be omitted from emitted FlagEvaluationEvent payloads. Use this for PII or internal identifiers."
+        }
+      }
+    },
+    "ParameterValue": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "integer" },
+        { "type": "number" },
+        { "type": "string" }
+      ],
+      "description": "Typed parameter value. Strings may carry SemVer; conditions like SemverGte parse them based on the rule type, not the JSON tag."
+    }
+  }
+}

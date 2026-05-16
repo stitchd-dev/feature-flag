@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stitchd.dev/sdks/spec/schemas/eval_result_with_reasoning.schema.json",
+  "title": "EvalResultWithReasoning",
+  "description": "Result returned by `evaluate_with_reasoning()`. Identical to `EvalResult` plus an embedded ReasoningTrace.",
+  "type": "object",
+  "required": ["flag_key", "variant_key", "value", "outcome", "reasoning"],
+  "additionalProperties": false,
+  "properties": {
+    "flag_key": { "type": "string" },
+    "variant_key": { "type": "string" },
+    "value": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "integer" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "object" }
+      ]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["matched", "default_rule", "disabled", "flag_not_found"]
+    },
+    "reasoning": {
+      "$ref": "https://stitchd.dev/sdks/spec/schemas/reasoning_trace.schema.json"
+    }
+  }
+}
