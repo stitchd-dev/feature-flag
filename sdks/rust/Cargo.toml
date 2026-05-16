@@ -57,5 +57,6 @@ serial_test = { workspace = true }
 # Conformance tests build proto/core types directly from spec fixtures.
 stitchd-proto = { path = "../../crates/stitchd-proto" }
 stitchd-core  = { path = "../../crates/stitchd-core" }
-async-trait   = { workspace = true }
-uuid          = { workspace = true }
+async-trait         = { workspace = true }
+uuid                = { workspace = true }
+tracing-subscriber  = { workspace = true }
