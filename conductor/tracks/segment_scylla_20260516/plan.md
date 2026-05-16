@@ -58,59 +58,59 @@
 <!-- execution: sequential -->
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Update `SegmentRepository` trait surface
+- [x] Task 1: Update `SegmentRepository` trait surface [d28836b]
   <!-- files: crates/stitchd-db/src/repository/mod.rs -->
-  - [ ] Remove `find_with_list`
-  - [ ] Add `add_entries`, `remove_entries`, `get_list_segment_summary`
-  - [ ] Adjust mock impls in `stitchd-flag-service` to keep compiling
+  - [x] Remove `find_with_list`
+  - [x] Add `add_entries`, `remove_entries`, `get_list_segment_summary`
+  - [x] Adjust mock impls in `stitchd-flag-service` to keep compiling
 
-- [ ] Task 2: Write failing tests for `set_list_entries` (Red)
+- [x] Task 2: Write failing tests for `set_list_entries` (Red) [458c712]
   <!-- files: crates/stitchd-db/tests/scylla_segment_repository.rs -->
-  - [ ] Happy-path full replace
-  - [ ] Concurrent-swap LWT contention → only one winner
-  - [ ] Property test: concurrent readers during 100k-key swap never see mixed state
+  - [x] Happy-path full replace
+  - [x] Concurrent-swap LWT contention → only one winner
+  - [x] Property test: concurrent readers during 100k-key swap never see mixed state
 
-- [ ] Task 3: Implement `set_list_entries` against Scylla (Green)
+- [x] Task 3: Implement `set_list_entries` against Scylla (Green) [7faeadd]
   <!-- files: crates/stitchd-db/src/scylla/segment.rs -->
-  - [ ] Read current generation, write `new_gen`, CAS-flip pointer
-  - [ ] Chunked prepared-statement batches under fail threshold
-  - [ ] Tests from Task 2 pass
+  - [x] Read current generation, write `new_gen`, CAS-flip pointer
+  - [x] Chunked prepared-statement batches under fail threshold
+  - [x] Tests from Task 2 pass
 
-- [ ] Task 4: Write failing tests for `add_entries` / `remove_entries` (Red)
+- [x] Task 4: Write failing tests for `add_entries` / `remove_entries` (Red) [458c712]
   <!-- files: crates/stitchd-db/tests/scylla_segment_repository.rs -->
-  - [ ] Add and remove against current generation
-  - [ ] Idempotent on duplicate adds, no-op on missing removes
-  - [ ] Summary counters updated atomically
+  - [x] Add and remove against current generation
+  - [x] Idempotent on duplicate adds, no-op on missing removes
+  - [x] Summary counters updated atomically
 
-- [ ] Task 5: Implement `add_entries` / `remove_entries` (Green)
+- [x] Task 5: Implement `add_entries` / `remove_entries` (Green) [7faeadd]
   <!-- files: crates/stitchd-db/src/scylla/segment.rs -->
-  - [ ] Resolve current generation, INSERT/DELETE in that partition
-  - [ ] Update counter rows
-  - [ ] Tests from Task 4 pass
+  - [x] Resolve current generation, INSERT/DELETE in that partition
+  - [x] Update counter rows
+  - [x] Tests from Task 4 pass
 
-- [ ] Task 6: Write failing tests for membership read paths (Red)
+- [x] Task 6: Write failing tests for membership read paths (Red) [458c712]
   <!-- files: crates/stitchd-db/tests/scylla_segment_membership.rs -->
-  - [ ] `check_list_membership` — include / exclude precedence
-  - [ ] `batch_check_list_membership` — many contexts × many segments
-  - [ ] `find_memberships_batch` — SDK by segment_id
+  - [x] `check_list_membership` — include / exclude precedence
+  - [x] `batch_check_list_membership` — many contexts × many segments
+  - [x] `find_memberships_batch` — SDK by segment_id
 
-- [ ] Task 7: Implement membership read paths (Green)
+- [x] Task 7: Implement membership read paths (Green) [7faeadd]
   <!-- files: crates/stitchd-db/src/scylla/segment.rs -->
-  - [ ] Resolve `current_gen` (briefly cached per request)
-  - [ ] Parallel point reads via prepared statements + token-aware routing
-  - [ ] Tests from Task 6 pass
+  - [x] Resolve `current_gen` (briefly cached per request)
+  - [x] Parallel point reads via prepared statements + token-aware routing
+  - [x] Tests from Task 6 pass
 
-- [ ] Task 8: Write failing tests for `get_list_segment_summary` (Red)
+- [x] Task 8: Write failing tests for `get_list_segment_summary` (Red) [458c712]
   <!-- files: crates/stitchd-db/tests/scylla_segment_repository.rs -->
-  - [ ] Returns counts per context_type / list_type
-  - [ ] Returns empty map for never-populated segments
+  - [x] Returns counts per context_type / list_type
+  - [x] Returns empty map for never-populated segments
 
-- [ ] Task 9: Implement `get_list_segment_summary` (Green)
+- [x] Task 9: Implement `get_list_segment_summary` (Green) [7faeadd]
   <!-- files: crates/stitchd-db/src/scylla/segment.rs -->
-  - [ ] Read counter rows
-  - [ ] Tests from Task 8 pass
+  - [x] Read counter rows
+  - [x] Tests from Task 8 pass
 
-- [ ] Task 10: Conductor - User Manual Verification 'Repository Layer' (Protocol in workflow.md)
+- [x] Task 10: Conductor - User Manual Verification 'Repository Layer' [verified: 19 tests pass]
 
 ## Phase 3: PostgreSQL Cleanup
 <!-- execution: sequential -->
