@@ -93,7 +93,7 @@ NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
     `crates/stitchd-proto/build.rs`
   - Verify `cargo check -p stitchd-proto` regenerates without warnings
 
-- [ ] Task 2: `stitchd-flag-service::SyncDefinitions` (unary RPC)
+- [x] Task 2: `stitchd-flag-service::SyncDefinitions` (unary RPC)
   - TDD: write failing test in `crates/stitchd-flag-service/src/grpc/` that
     calls `SyncDefinitions` with `x-env-id` metadata and asserts a full
     snapshot is returned (flags + rule-based segments + list-segment metadata)
