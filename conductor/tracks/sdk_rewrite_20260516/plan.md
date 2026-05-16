@@ -162,7 +162,7 @@ routes. Reuses `SdkKeyCache` from `db_optim_20260516`.
 
 The actual SDK. Built incrementally with TDD.
 
-- [ ] Task 1: `SdkConfig` + `SdkError` + module skeleton
+- [x] Task 1: `SdkConfig` + `SdkError` + module skeleton
   - TDD: config defaults (poll=30s, refresh=60s, lru=10_000, flush=5s, batch=100)
   - Implement in `sdks/rust/src/config.rs` and `sdks/rust/src/error.rs`
 
