@@ -88,7 +88,7 @@ later phases have a place to land.
 Implements the backend-side RPCs that the gateway will call. These services do
 NOT validate SDK keys; they trust `x-env-id` propagated by the gateway.
 
-- [ ] Task 1: Generate Rust bindings from new proto files
+- [x] Task 1: Generate Rust bindings from new proto files
   - Wire `sdks/spec/proto/sdk_service.proto` + `segmentation_sdk.proto` into
     `crates/stitchd-proto/build.rs`
   - Verify `cargo check -p stitchd-proto` regenerates without warnings
