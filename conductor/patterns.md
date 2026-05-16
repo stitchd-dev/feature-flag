@@ -15,6 +15,8 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Vendored protoc:** Add `protoc-bin-vendored` as a build dependency in `stitchd-proto` and set `PROTOC` env var in `build.rs`. Eliminates system `protoc` requirement for all contributors and CI. (from: scaffold_20260411, 2026-04-11)
 - **API Error Mapping:** Implement `IntoResponse` for a custom `ApiError` enum that maps internal errors (Repository, Validation, etc.) to HTTP status codes. (from: segmentation_20260412, 2026-04-12)
 - **Axum 0.8 Routing:** Use `{param}` syntax for path captures (e.g., `/users/{id}`) as Axum 0.8 deprecated the `:param` style. (from: fix_errors_20260412, 2026-04-12)
+- **In-process cache primitive:** Use `moka::future::Cache<K, V>` with `time_to_live` for in-process caching. Call `.get_or_try_insert_with(key, loader)` — concurrent callers for the same key coalesce to a single loader invocation. Invalidate explicitly (e.g., on revocation) with `.invalidate(&key).await`. (from: db_optim_20260516, archived 2026-05-16)
+- **Pagination total without second query:** Use `COUNT(*) OVER()` window function alongside `SELECT` columns — returns the total row count in every result row, eliminating a separate `SELECT COUNT(*)` round-trip. Pull `total` from `row.total` (type `i64`) and cast to `u64`. (from: db_optim_20260516, archived 2026-05-16)
 
 ## Rust 2024 Edition Patterns
 
@@ -41,6 +43,8 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Recursive Types:** Recursive enums or structs (like expression trees) must use `Box<T>` for recursive variants to avoid infinite-size type errors. (from: rule_engine_20260412, 2026-04-12)
 - **SQLx CLI Installation:** Use `--no-default-features --features rustls,postgres` when installing `sqlx-cli` to avoid unnecessary system dependencies like OpenSSL. (from: domain_20260411, 2026-04-11)
 - **Integer Truncation:** Rust 2024 lints against implicit/risky conversions; `as i32` on `usize` should be avoided or handled with `try_into()` if overflow is possible. (from: fix_errors_20260412, 2026-04-12)
+- **`CREATE INDEX CONCURRENTLY` inside a transaction:** sqlx migrations wrap each file in a transaction by default. `CREATE INDEX CONCURRENTLY` cannot run inside a transaction and will error. Either split the index into its own migration file (sqlx wraps each file separately) or add `-- migrate:noTransaction` at the top. For production, run `CREATE INDEX CONCURRENTLY` manually outside a migration to avoid table locks. (from: db_optim_20260516, archived 2026-05-16)
+- **`serde_urlencoded` + `#[serde(flatten)]` + `u32`:** Axum's `Query<T>` extractor uses `serde_urlencoded`, which passes all query param values as strings. A `u32` field inside a `#[serde(flatten)]` struct will fail deserialization with "invalid type: string '1', expected u32". Add a custom visitor that calls `deserialize_any` and accepts both integer and string representations. (from: db_optim_20260516, archived 2026-05-16)
 
 ## Testing
 
@@ -52,8 +56,14 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Local `DATABASE_URL` for `#[sqlx::test]`:** Use `postgresql://stitchd:stitchd@localhost:5432/stitchd` (TCP). Socket-auth URLs (e.g. `postgresql://vishal@localhost/stitchd`) fail because `#[sqlx::test]` always connects over TCP. (from: scheduled_stats_20260423, archived 2026-04-23)
 - **Test env-var isolation:** Config tests and sqlx tests share the same binary. Use `--test-threads=1` and an `EnvGuard` RAII wrapper to prevent env-var contamination across test cases. (from: scheduled_stats_20260423, archived 2026-04-23)
 
+## ClickHouse
+
+- **AggregatingMergeTree insert/read combiners:** When writing to an `AggregatingMergeTree`, use `*State` combiners (`sumState`, `countState`, `uniqState`) in INSERT...SELECT. When reading, use `*Merge` combiners (`sumMerge`, `countMerge`, `uniqMerge`) in GROUP BY queries — NOT `finalizeAggregation`, which is a scalar function and fails in aggregated context. (from: db_optim_20260516, archived 2026-05-16)
+- **`sumState(Nullable(Float64))` type mismatch:** `sumState` applied to a `Nullable(Float64)` expression produces `AggregateFunction(sum, Nullable(Float64))`. If the target column is declared `AggregateFunction(sum, Float64)` (non-nullable), the insert fails. Wrap the input with `ifNull(expr, 0.0)` to coerce to `Float64` before calling `sumState`. (from: db_optim_20260516, archived 2026-05-16)
+- **Weekly ClickHouse partition key:** Use `toMonday(event_date)` as the partition expression to get weekly partitions keyed to Mondays. Combine with `TTL toMonday(event_date) + INTERVAL 52 WEEK` for year-length retention windows. (from: db_optim_20260516, archived 2026-05-16)
+
 ---
-Last refreshed: 2026-04-29
+Last refreshed: 2026-05-16
 
 ## Frontend (Admin UI) Patterns
 

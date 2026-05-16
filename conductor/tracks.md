@@ -35,9 +35,5 @@ This file tracks all major tracks for the project.
 - segments_ui_20260513 (Segments UI — full CRUD admin UI for environment-scoped segments, plus Match Segment rule type in flag rule builder)
 - flag_eval_preview_20260514 (Flag Evaluation Preview — evaluate-preview endpoint with rule traces, rollout debug, OR/And missing-context fix)
 - context_intel_20260515 (Context Intelligence & Evaluation Telemetry — ClickHouse eval log, context registry, analytics tab, autocomplete, explorer)
+- db_optim_20260516 (Database & Query Optimizations — PostgreSQL indexes, N+1 elimination, SDK key cache, ClickHouse MV overhaul, partition tuning, offset pagination)
 -->
-
----
-
-## [ ] Track: Database & Query Optimizations
-*Link: [./conductor/tracks/db_optim_20260516/](./conductor/tracks/db_optim_20260516/)*
