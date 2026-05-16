@@ -55,34 +55,56 @@ impl FlagServiceImpl {
         self
     }
 
-    /// Fetch `SegmentDefinition`s for a set of IDs.
-    ///
-    /// For each ID: looks up the segment record to determine its type, then
-    /// fetches the appropriate definition (rules or lists). Segments that are
-    /// not found are silently skipped so a missing segment doesn't break preview.
+    /// Fetch `SegmentDefinition`s for a set of IDs in three bulk DB queries.
     async fn fetch_segment_definitions(
         &self,
         ids: &std::collections::HashSet<stitchd_core::id::SegmentId>,
     ) -> Result<Vec<stitchd_core::segment::SegmentDefinition>, Status> {
         use stitchd_core::segment::{SegmentDefinition, SegmentType};
 
-        let mut definitions = Vec::with_capacity(ids.len());
-        for &id in ids {
-            let record = match self.segment_repo.find_by_id(id).await {
-                Ok(r) => r,
-                Err(_) => continue, // segment may have been deleted; skip it
-            };
-            let definition = match record.segment_type {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let id_slice: Vec<stitchd_core::id::SegmentId> = ids.iter().copied().collect();
+
+        let segments = self
+            .segment_repo
+            .find_batch_by_ids(&id_slice)
+            .await
+            .map_err(|e| Status::internal(format!("segment batch lookup failed: {e}")))?;
+
+        let (rule_ids, list_ids): (Vec<_>, Vec<_>) = segments
+            .iter()
+            .partition(|s| s.segment_type == SegmentType::Rule);
+        let rule_ids: Vec<_> = rule_ids.iter().map(|s| s.id).collect();
+        let list_ids: Vec<_> = list_ids.iter().map(|s| s.id).collect();
+
+        let rules_map = self
+            .segment_repo
+            .find_rules_batch(&rule_ids)
+            .await
+            .map_err(|e| Status::internal(format!("rules batch lookup failed: {e}")))?;
+        let lists_map = self
+            .segment_repo
+            .find_lists_batch(&list_ids)
+            .await
+            .map_err(|e| Status::internal(format!("lists batch lookup failed: {e}")))?;
+
+        let mut definitions = Vec::with_capacity(segments.len());
+        for seg in &segments {
+            let definition = match seg.segment_type {
                 SegmentType::Rule => {
-                    match self.segment_repo.find_with_rules(id).await {
-                        Ok(s) => SegmentDefinition::RuleBased(s),
-                        Err(_) => continue,
+                    if let Some(rule_seg) = rules_map.get(&seg.id) {
+                        SegmentDefinition::RuleBased(rule_seg.clone())
+                    } else {
+                        continue;
                     }
                 }
                 SegmentType::List => {
-                    match self.segment_repo.find_with_list(id).await {
-                        Ok(s) => SegmentDefinition::ListBased(s),
-                        Err(_) => continue,
+                    if let Some(list_seg) = lists_map.get(&seg.id) {
+                        SegmentDefinition::ListBased(list_seg.clone())
+                    } else {
+                        continue;
                     }
                 }
             };
@@ -1716,6 +1738,140 @@ mod tests {
         let result = svc.evaluate_preview(req).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    // ── Phase 2 Task 2: fetch_segment_definitions uses batch methods ─────────
+
+    /// A spy implementation that tracks call counts for the three batch methods.
+    struct SpySegmentRepo {
+        /// Segments returned from find_batch_by_ids (keyed by id).
+        segments: Vec<stitchd_core::segment::Segment>,
+        /// Rules returned from find_rules_batch.
+        rules: std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>,
+        /// Lists returned from find_lists_batch.
+        lists: std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>,
+        /// Call counters.
+        batch_by_ids_calls: std::sync::atomic::AtomicUsize,
+        rules_batch_calls: std::sync::atomic::AtomicUsize,
+        lists_batch_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl SpySegmentRepo {
+        fn new(
+            segments: Vec<stitchd_core::segment::Segment>,
+            rules: std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>,
+            lists: std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>,
+        ) -> Self {
+            Self {
+                segments,
+                rules,
+                lists,
+                batch_by_ids_calls: std::sync::atomic::AtomicUsize::new(0),
+                rules_batch_calls: std::sync::atomic::AtomicUsize::new(0),
+                lists_batch_calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SegmentRepository for SpySegmentRepo {
+        async fn find_by_id(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn find_by_key(&self, key: &str, _env_id: EnvironmentId) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: key.to_string() })
+        }
+        async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
+        async fn create(&self, _seg: &stitchd_core::segment::Segment) -> Result<(), RepositoryError> { Ok(()) }
+        async fn update(&self, seg: &stitchd_core::segment::Segment) -> Result<stitchd_core::segment::Segment, RepositoryError> { Ok(seg.clone()) }
+        async fn find_with_rules(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn find_with_list(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::ListBasedSegment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn upsert_rules(&self, _id: stitchd_core::id::SegmentId, _rules: &[stitchd_core::rule_engine::types::Rule]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn set_list_entries(&self, _id: stitchd_core::id::SegmentId, _ctx_type: &str, _include: &[String], _exclude: &[String]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn get_condition_expr(&self, _id: stitchd_core::id::SegmentId) -> Result<Option<serde_json::Value>, RepositoryError> { Ok(None) }
+        async fn set_condition_expr(&self, _id: stitchd_core::id::SegmentId, _expr: Option<&serde_json::Value>) -> Result<(), RepositoryError> { Ok(()) }
+        async fn soft_delete(&self, _id: stitchd_core::id::SegmentId) -> Result<(), RepositoryError> { Ok(()) }
+        async fn check_list_membership(&self, _env_id: EnvironmentId, _ctx_type: &str, _ctx_key: &str, _keys: &[String]) -> Result<std::collections::HashMap<String, bool>, RepositoryError> { Ok(std::collections::HashMap::new()) }
+        async fn batch_check_list_membership(&self, _env_id: EnvironmentId, _contexts: &[(String, String)], _keys: &[String]) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> { Ok(vec![]) }
+        async fn find_batch_by_ids(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> {
+            self.batch_by_ids_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.segments.clone())
+        }
+        async fn find_rules_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError> {
+            self.rules_batch_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.rules.clone())
+        }
+        async fn find_lists_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>, RepositoryError> {
+            self.lists_batch_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(self.lists.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn fetch_segment_definitions_calls_each_batch_method_exactly_once() {
+        use std::collections::{HashMap, HashSet};
+        use stitchd_core::segment::{RuleBasedSegment, SegmentType};
+
+        // Build 10 rule-based segments
+        let env_id = EnvironmentId::new();
+        let segments: Vec<stitchd_core::segment::Segment> = (0..10)
+            .map(|i| stitchd_core::segment::Segment {
+                id: stitchd_core::id::SegmentId::new(),
+                environment_id: env_id,
+                key: format!("seg-{i}"),
+                name: format!("Seg {i}"),
+                description: String::new(),
+                tags: vec![],
+                segment_type: SegmentType::Rule,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                deleted_at: None,
+                version: 1,
+            })
+            .collect();
+
+        let rules: HashMap<_, _> = segments
+            .iter()
+            .map(|s| {
+                (
+                    s.id,
+                    RuleBasedSegment { id: s.id, rules: vec![] },
+                )
+            })
+            .collect();
+
+        let spy = Arc::new(SpySegmentRepo::new(segments.clone(), rules, HashMap::new()));
+        let svc = FlagServiceImpl {
+            flag_repo: StubFlagRepo::empty(),
+            variant_repo: Arc::new(StubVariantRepo),
+            sdk_key_repo: StubSdkKeyRepo::empty(),
+            segment_repo: spy.clone(),
+            ch_client: None,
+        };
+
+        let ids: HashSet<_> = segments.iter().map(|s| s.id).collect();
+        let result = svc.fetch_segment_definitions(&ids).await.unwrap();
+
+        assert_eq!(result.len(), 10, "all 10 definitions must be returned");
+        assert_eq!(
+            spy.batch_by_ids_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "find_batch_by_ids must be called exactly once"
+        );
+        assert_eq!(
+            spy.rules_batch_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "find_rules_batch must be called exactly once"
+        );
+        assert_eq!(
+            spy.lists_batch_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "find_lists_batch must be called exactly once"
+        );
     }
 
     #[tokio::test]

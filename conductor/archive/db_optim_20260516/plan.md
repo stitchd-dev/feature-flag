@@ -35,7 +35,7 @@ Track: `db_optim_20260516`
 <!-- depends: phase1 -->
 <!-- execution: sequential -->
 
-- [ ] Task 1: Batch repository methods on PgSegmentRepository
+- [x] Task 1: Batch repository methods on PgSegmentRepository (010ac1c)
   - `find_batch_by_ids(ids: &[SegmentId]) -> Vec<Segment>`
     → `WHERE id = ANY($1) AND deleted_at IS NULL`
   - `find_rules_batch(ids: &[SegmentId]) -> HashMap<SegmentId, Vec<SegmentRule>>`
@@ -45,7 +45,7 @@ Track: `db_optim_20260516`
   - Add methods to `SegmentRepository` trait; implement on `PgSegmentRepository`
   - sqlx::test for each: seed N segments, verify result count and ordering
 
-- [ ] Task 2: Refactor fetch_segment_definitions in stitchd-flag-service
+- [x] Task 2: Refactor fetch_segment_definitions in stitchd-flag-service
   - Replace per-segment loop in `service.rs` with three bulk calls
   - Mock repository test: 10 segments → each batch method called exactly once
   - Integration test: definition fetch issues ≤ 4 total DB queries regardless of segment count
