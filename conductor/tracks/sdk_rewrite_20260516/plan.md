@@ -31,7 +31,7 @@ are pinned before downstream phases reference them.
   - Reuse types from `proto/flags/v1/*` + `proto/segments/v1/*` where possible
   - TDD: schema-validation test that compiles every `.proto` with `protoc`
 
-- [ ] Task 4: Author OpenAPI 3.1 contracts (`sdks/spec/openapi/sdk.yaml`)
+- [x] Task 4: Author OpenAPI 3.1 contracts (`sdks/spec/openapi/sdk.yaml`)
   - `POST /v1/sdk/segments/list:batch` — request/response schemas
   - `POST /v1/sdk/events:batch` — request schema (202 Accepted, no body)
   - Reference the JSON Schemas from Task 5 via `$ref`

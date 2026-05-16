@@ -1,0 +1,367 @@
+openapi: 3.1.0
+
+info:
+  title: Stitchd Feature Flag — SDK REST API
+  version: 1.0.0
+  description: |
+    REST endpoints exposed by `stitchd-gateway` for embedded SDKs.
+
+    These endpoints are the **REST half** of the SDK ↔ gateway contract. The
+    other half is the gRPC `SdkService` defined in
+    `sdks/spec/proto/sdk/v1/service.proto` (used for periodic definition
+    polling).
+
+    **Authentication**
+
+    Every endpoint requires the `x-sdk-key` HTTP header. The gateway validates
+    it via its `SdkKeyCache` (reused from `db_optim_20260516`) and resolves
+    `(environment_id, project_id, organization_id)`. Backend microservices the
+    gateway forwards to **do not re-validate** the key — see
+    `sdks/spec/docs/01-overview.md`.
+
+    **Streaming**
+
+    All endpoints are unary request/response. Streaming variants (SSE,
+    WebSocket push) are out of scope for this revision.
+
+servers:
+  - url: http://localhost:8081
+    description: Local dev gateway
+  - url: https://gateway.example.com
+    description: Production gateway (placeholder)
+
+paths:
+
+  /v1/sdk/segments/list:batch:
+    post:
+      operationId: batchCheckListSegmentMembership
+      summary: Batch check list-segment membership for multiple contexts
+      description: |
+        Returns the membership matrix for every `(context_type, context_key)`
+        tuple in the request, across the supplied list-segment ids.
+
+        The SDK uses this endpoint in two scenarios:
+        1. **LRU on-miss fetch** — single-query batch (one element), called
+           synchronously from `evaluate()` when a context is not in the LRU.
+        2. **LRU background refresh** — multi-query batch, called by the
+           background refresh task every `list_segment_refresh_interval`
+           (default 60s) to update all currently-resident LRU entries.
+
+        In both cases, `segment_ids` in each query SHOULD list ALL list
+        segments currently referenced by any flag rule (to amortise round-trips).
+
+      security:
+        - SdkKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchListMembershipRequest'
+            examples:
+              singleQueryOnMiss:
+                summary: LRU on-miss single-context fetch
+                value:
+                  queries:
+                    - context_type: user
+                      context_key: alice
+                      segment_ids:
+                        - 11111111-1111-1111-1111-111111111111
+                        - 22222222-2222-2222-2222-222222222222
+              multiQueryRefresh:
+                summary: Background refresh for 3 resident LRU entries
+                value:
+                  queries:
+                    - context_type: user
+                      context_key: alice
+                      segment_ids: [11111111-1111-1111-1111-111111111111]
+                    - context_type: user
+                      context_key: bob
+                      segment_ids: [11111111-1111-1111-1111-111111111111]
+                    - context_type: org
+                      context_key: acme
+                      segment_ids: [22222222-2222-2222-2222-222222222222]
+      responses:
+        '200':
+          description: Membership matrix returned successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchListMembershipResponse'
+        '400':
+          description: Malformed request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: SDK key missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Gateway or backend temporarily unavailable. SDK should retry with backoff.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/sdk/events:batch:
+    post:
+      operationId: ingestSdkEvents
+      summary: Submit a batch of flag-evaluation events
+      description: |
+        Accepts a batch of `FlagEvaluationEvent` objects emitted by the SDK
+        and forwards to the backend `FlagSdkBackendService.IngestSdkEvalLog`,
+        which routes them to the existing eval-log writer pipeline (ClickHouse
+        `flag_evaluation_log_v2`).
+
+        Delivery is **at-least-once**: in the case of network retries on flush,
+        the same event may arrive twice. Downstream analytics SHOULD dedupe
+        on `(flag_key, environment_id, context_type, context_key, evaluated_at)`
+        if exact-once semantics matter.
+
+        The `environment_id` field on each event MUST be left empty by the SDK;
+        the gateway populates it from the resolved SDK key context.
+      security:
+        - SdkKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestEventsRequest'
+            examples:
+              singleEvent:
+                summary: Single evaluation event
+                value:
+                  events:
+                    - flag_key: checkout-flow
+                      variant_key: treatment
+                      context_type: user
+                      context_key: alice
+                      evaluated_at: '2026-05-16T18:32:14.123Z'
+                      matched_rule_id: cccccccc-cccc-cccc-cccc-cccccccccccc
+                      outcome: matched
+                      reasoning_included: false
+              batchFlush:
+                summary: Buffered batch of 3 events
+                value:
+                  events:
+                    - flag_key: checkout-flow
+                      variant_key: treatment
+                      context_type: user
+                      context_key: alice
+                      evaluated_at: '2026-05-16T18:32:14.123Z'
+                      matched_rule_id: cccccccc-cccc-cccc-cccc-cccccccccccc
+                      outcome: matched
+                      reasoning_included: false
+                    - flag_key: checkout-flow
+                      variant_key: control
+                      context_type: user
+                      context_key: bob
+                      evaluated_at: '2026-05-16T18:32:14.456Z'
+                      matched_rule_id: ''
+                      outcome: default_rule
+                      reasoning_included: false
+                    - flag_key: new-pricing
+                      variant_key: 'false'
+                      context_type: org
+                      context_key: acme
+                      evaluated_at: '2026-05-16T18:32:14.789Z'
+                      matched_rule_id: ''
+                      outcome: disabled
+                      reasoning_included: true
+      responses:
+        '202':
+          description: Batch accepted for ingestion. No response body.
+        '400':
+          description: Malformed request body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: SDK key missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          description: |
+            Batch exceeds the gateway's per-request size limit. SDK SHOULD split
+            the batch in half and retry. (Current cap TBD; SDKs without batch
+            splitting MAY rely on `event_batch_size` being well below the cap.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Gateway or backend temporarily unavailable. SDK should re-enqueue and retry next interval.
+
+components:
+
+  securitySchemes:
+    SdkKeyAuth:
+      type: apiKey
+      in: header
+      name: x-sdk-key
+      description: SDK key scoped to a single (project, environment) pair.
+
+  schemas:
+
+    # ── Membership ─────────────────────────────────────────────────────────
+
+    BatchListMembershipRequest:
+      type: object
+      required: [queries]
+      properties:
+        queries:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/MembershipQuery'
+
+    MembershipQuery:
+      type: object
+      required: [context_type, context_key, segment_ids]
+      properties:
+        context_type:
+          type: string
+          minLength: 1
+          description: e.g. "user", "device", "org"
+        context_key:
+          type: string
+          minLength: 1
+          description: Unique identifier within this context type.
+        segment_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: |
+            List-segment ids to look up membership for. May be empty (returns
+            empty memberships map). SDK populates with all flag-referenced
+            list-segment ids to amortise round-trips.
+
+    BatchListMembershipResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          description: |
+            One result per request query, in the same order. Length is
+            guaranteed equal to request.queries.length.
+          items:
+            $ref: '#/components/schemas/MembershipResult'
+
+    MembershipResult:
+      type: object
+      required: [context_type, context_key, memberships]
+      properties:
+        context_type:
+          type: string
+          description: Echoes the request query's context_type.
+        context_key:
+          type: string
+          description: Echoes the request query's context_key.
+        memberships:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: |
+            Map from `segment_id` (UUID string) to `bool`. Segments not present
+            in the map default to `false`. Backend MAY omit `false` entries.
+
+    # ── Events ─────────────────────────────────────────────────────────────
+
+    IngestEventsRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/FlagEvaluationEvent'
+
+    FlagEvaluationEvent:
+      type: object
+      required: [flag_key, variant_key, context_type, context_key, evaluated_at, outcome, reasoning_included]
+      properties:
+        flag_key:
+          type: string
+          minLength: 1
+        variant_key:
+          type: string
+          description: |
+            Variant key returned by the evaluation. For `outcome =
+            "flag_not_found"`, this is the default-for-type value stringified.
+        context_type:
+          type: string
+          minLength: 1
+        context_key:
+          type: string
+          minLength: 1
+        evaluated_at:
+          type: string
+          format: date-time
+          description: RFC3339 UTC, millisecond precision.
+        matched_rule_id:
+          type: string
+          description: |
+            UUID of the rule that matched, or empty string for outcomes other
+            than "matched". (Empty rather than null to keep the on-wire shape
+            stable across JSON-serialising languages with strict null handling.)
+        outcome:
+          type: string
+          enum: [matched, default_rule, disabled, flag_not_found]
+        reasoning_included:
+          type: boolean
+          description: |
+            Whether the caller invoked `evaluate_with_reasoning`. The reasoning
+            trace itself is NOT included in the event payload — this flag is
+            for analytics segmentation only.
+        context_parameters:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ParameterValue'
+          description: |
+            Context parameters minus those listed in `private_parameters` on
+            the original Context. Omit / unset if all parameters were marked
+            private (NOT `null`).
+        environment_id:
+          type: string
+          format: uuid
+          description: |
+            Populated by the gateway from the SDK key during forwarding. SDKs
+            MUST leave this empty in outbound payloads — the gateway will
+            inject it before forwarding to the backend.
+
+    # ── Shared ─────────────────────────────────────────────────────────────
+
+    ParameterValue:
+      oneOf:
+        - { type: integer, format: int64 }
+        - { type: number, format: double }
+        - { type: string }
+        - { type: boolean }
+      description: |
+        Polymorphic typed value matching `stitchd.common.v1.ParameterValue`
+        (proto). Strings may also carry semver (parsed by the consumer based
+        on the rule schema, not the payload type tag).
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable error code, e.g. "invalid_sdk_key", "malformed_request".
+        message:
+          type: string
+          description: Human-readable explanation. Safe to log; never includes the SDK key.
