@@ -188,11 +188,15 @@ The actual SDK. Built incrementally with TDD.
   - Implement as `tokio::spawn` task launched from `SdkClient::init`
   - Uses tonic client to gateway gRPC port
 
-- [ ] Task 6: LRU background refresh task
+- [x] Task 6: LRU background refresh task
   - TDD: refresh task batches all resident LRU keys, calls gateway REST
     `POST /v1/sdk/segments/list:batch`, updates entries in place;
     only requests memberships for segments referenced by current flag defs
   - Filter computed from current `DefinitionSnapshot`
+  - NOTE: filter is currently "all list_segments in snapshot" — the
+    "referenced by flag rules" narrowing lands in Task 8 alongside the
+    rule-walking logic needed by evaluate(). Functional correctness
+    unaffected; broader filter just wastes some bandwidth.
 
 - [ ] Task 7: `SdkClient::init()` wiring
   - TDD: init blocks until first successful definition sync; failure propagates
