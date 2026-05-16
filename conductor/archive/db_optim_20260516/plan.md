@@ -31,7 +31,7 @@ Track: `db_optim_20260516`
 
 ---
 
-## Phase 2: Segment Batch Load — N+1 Elimination
+## Phase 2: Segment Batch Load — N+1 Elimination [checkpoint: 74e347e]
 <!-- depends: phase1 -->
 <!-- execution: sequential -->
 
@@ -50,7 +50,7 @@ Track: `db_optim_20260516`
   - Mock repository test: 10 segments → each batch method called exactly once
   - Integration test: definition fetch issues ≤ 4 total DB queries regardless of segment count
 
-- [ ] Task: Conductor - User Manual Verification 'Segment Batch Load' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Segment Batch Load' (Protocol in workflow.md)
 
 ---
 
