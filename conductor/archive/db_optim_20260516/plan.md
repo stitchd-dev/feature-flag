@@ -114,24 +114,24 @@ Track: `db_optim_20260516`
 <!-- depends: -->
 <!-- execution: sequential -->
 
-- [ ] Task 1: Shared pagination types in stitchd-gateway
+- [x] Task 1: Shared pagination types in stitchd-gateway (b53e0ee)
   - `struct PaginationParams { page: u32, per_page: u32 }` — default page=1,
     per_page=50, max cap=200 (enforced in extractor)
   - `struct PaginatedResponse<T> { items: Vec<T>, total: u64, page: u32, per_page: u32 }`
   - Unit tests: defaults applied, per_page capped at 200, page=0 normalised to 1
 
-- [ ] Task 2: Paginate flag list endpoint
+- [x] Task 2: Paginate flag list endpoint (b53e0ee)
   - Repository: `list_by_project_paginated(project_id, offset, limit) -> (Vec<Flag>, u64)`
     using `COUNT(*) OVER()` window function
   - Route: `GET /v1/projects/:pid/flags?page=N&per_page=N` → `PaginatedResponse<FlagJson>`
   - Backwards-compatible: no params → page 1, per_page 50
   - sqlx::test: page 1 of 2, page 2 of 2, total count accurate
 
-- [ ] Task 3: Paginate segment list endpoint
-  - Repository: `list_by_environment_paginated` + `list_entries_paginated`
-  - Routes: `GET /v1/segments?env_id=...&page=N` and
-    `GET /v1/segments/:id/entries?page=N`
-  - sqlx::test: correct slicing and total count
+- [x] Task 3: Paginate segment list endpoint (65c63ff)
+  - Repository: `list_by_environment_paginated(env_id, offset, limit) -> (Vec<Segment>, u64)`
+  - Proto: page/per_page on ListAdminSegmentsRequest, total on ListAdminSegmentsResponse
+  - Route: `GET /v1/segments?env_id=...&page=N` → `PaginatedResponse<AdminSegmentJson>`
+  - sqlx::test: 4 tests — page slicing, remainder, total count, empty env
 
 - [ ] Task 4: Paginate remaining admin endpoints
   - Experiments: `GET /v1/environments/:eid/experiments?page=N`

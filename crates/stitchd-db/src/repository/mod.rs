@@ -114,6 +114,16 @@ pub trait SdkKeyRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<SdkKey>, RepositoryError>;
 
+    /// List SDK keys for an environment with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)`.
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<stitchd_core::tenant::SdkKey>, u64), RepositoryError>;
+
     /// Persist a new SDK key.
     async fn create(&self, key: &SdkKey) -> Result<(), RepositoryError>;
 
@@ -497,6 +507,17 @@ pub trait ExperimentRepository: Send + Sync {
         env_id: EnvironmentId,
         status_filter: Option<ExperimentStatus>,
     ) -> Result<Vec<Experiment>, RepositoryError>;
+
+    /// List non-deleted experiments in an environment with offset pagination.
+    ///
+    /// Returns `(page_items, total_count)` where `total_count` is the count of
+    /// all non-deleted experiments for the environment (regardless of offset/limit).
+    async fn list_by_environment_paginated(
+        &self,
+        env_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<Experiment>, u64), RepositoryError>;
 
     /// Persist a new experiment.
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError>;

@@ -300,6 +300,15 @@ mod tests {
         ) -> Result<Vec<(User, OrgRole)>, RepositoryError> {
             Ok(vec![])
         }
+
+        async fn list_org_users_paginated(
+            &self,
+            _: stitchd_core::id::OrganisationId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
     }
 
     struct StubMembershipRepo {
@@ -460,6 +469,15 @@ mod tests {
                 .filter(|k| k.environment_id == env_id)
                 .cloned()
                 .collect())
+        }
+
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
+            Ok((vec![], 0))
         }
 
         async fn find_active_by_hash(&self, hash: &str) -> Result<SdkKey, RepositoryError> {

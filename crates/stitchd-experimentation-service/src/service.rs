@@ -226,9 +226,17 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .map_err(|_| Status::invalid_argument("invalid environment_id UUID"))?;
         let env_id = EnvironmentId::from_uuid(env_uuid);
 
-        let experiments = self
+        let page = if req.page == 0 { 1u64 } else { req.page as u64 };
+        let per_page = if req.per_page == 0 {
+            50u64
+        } else {
+            (req.per_page as u64).min(200)
+        };
+        let offset = (page - 1) * per_page;
+
+        let (experiments, total) = self
             .experiment_repo
-            .list_by_environment(env_id, None)
+            .list_by_environment_paginated(env_id, offset, per_page)
             .await
             .map_err(repo_err_to_status)?;
 
@@ -236,6 +244,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
         metrics::counter!("experimentation_service.list_experiments.ok").increment(1);
         Ok(Response::new(ListExperimentsResponse {
             experiments: protos,
+            total,
         }))
     }
 
@@ -546,6 +555,16 @@ mod tests {
             Ok(vec![make_experiment(self.env_id)])
         }
 
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+            let exp = make_experiment(self.env_id);
+            Ok((vec![exp], 1))
+        }
+
         async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
             Ok(())
         }
@@ -591,6 +610,17 @@ mod tests {
             env_id: EnvironmentId,
             _status_filter: Option<ExperimentStatus>,
         ) -> Result<Vec<Experiment>, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: env_id.to_string(),
+            })
+        }
+
+        async fn list_by_environment_paginated(
+            &self,
+            env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
             Err(RepositoryError::NotFound {
                 id: env_id.to_string(),
             })
@@ -1093,6 +1123,7 @@ mod tests {
         let svc = make_service(env_id);
         let req = tonic::Request::new(ListExperimentsRequest {
             environment_id: env_id_str,
+            ..Default::default()
         });
         let result = svc.list_experiments(req).await;
         assert!(result.is_ok());
@@ -1106,6 +1137,7 @@ mod tests {
         let svc = make_service(env_id);
         let req = tonic::Request::new(ListExperimentsRequest {
             environment_id: "bad-uuid".to_string(),
+            ..Default::default()
         });
         let result = svc.list_experiments(req).await;
         assert!(result.is_err());
@@ -1122,6 +1154,7 @@ mod tests {
         );
         let req = tonic::Request::new(ListExperimentsRequest {
             environment_id: EnvironmentId::new().to_string(),
+            ..Default::default()
         });
         let result = svc.list_experiments(req).await;
         assert!(result.is_err());

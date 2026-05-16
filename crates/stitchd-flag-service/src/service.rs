@@ -1093,6 +1093,15 @@ mod tests {
                 .collect())
         }
 
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
+
         async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
             self.active_keys
                 .iter()

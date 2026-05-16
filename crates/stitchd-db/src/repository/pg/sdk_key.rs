@@ -79,6 +79,56 @@ impl SdkKeyRepository for PgSdkKeyRepository {
         .map_err(RepositoryError::Database)
     }
 
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
+        use sqlx::Row as _;
+
+        let rows = sqlx::query(
+            r"
+            SELECT id, environment_id, key_hash, is_active, created_at, revoked_at,
+                   COUNT(*) OVER() AS total_count
+            FROM sdk_keys
+            WHERE environment_id = $1
+            ORDER BY created_at
+            LIMIT $2 OFFSET $3
+            ",
+        )
+        .bind(environment_id.as_uuid())
+        .bind(limit as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let total = rows
+            .first()
+            .map(|r| {
+                let n: i64 = r.get("total_count");
+                n.max(0) as u64
+            })
+            .unwrap_or(0);
+
+        let keys = rows
+            .iter()
+            .map(|r| {
+                Ok(SdkKey {
+                    id: SdkKeyId::from_uuid(r.get("id")),
+                    environment_id: EnvironmentId::from_uuid(r.get("environment_id")),
+                    key_hash: r.get("key_hash"),
+                    is_active: r.get("is_active"),
+                    created_at: r.get("created_at"),
+                    revoked_at: r.get("revoked_at"),
+                })
+            })
+            .collect::<Result<Vec<_>, RepositoryError>>()?;
+
+        Ok((keys, total))
+    }
+
     async fn create(&self, key: &SdkKey) -> Result<(), RepositoryError> {
         sqlx::query!(
             r#"

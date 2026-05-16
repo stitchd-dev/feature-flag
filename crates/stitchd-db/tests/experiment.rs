@@ -888,3 +888,83 @@ async fn test_soft_delete_while_stopped_succeeds(pool: sqlx::PgPool) {
         "deleted_at must be set after soft delete"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Paginated experiment list tests
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_page_1_returns_first_slice(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    for i in 0..5u32 {
+        let mut exp = make_experiment(env_id, rule_id);
+        exp.id = ExperimentId::new();
+        exp.name = format!("exp-{i:02}");
+        repo.create(&exp).await.unwrap();
+    }
+
+    let (page, total) = repo
+        .list_by_environment_paginated(env_id, 0, 3)
+        .await
+        .unwrap();
+    assert_eq!(total, 5);
+    assert_eq!(page.len(), 3);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_page_2_returns_remainder(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    for i in 0..5u32 {
+        let mut exp = make_experiment(env_id, rule_id);
+        exp.id = ExperimentId::new();
+        exp.name = format!("exp-{i:02}");
+        repo.create(&exp).await.unwrap();
+    }
+
+    let (page, total) = repo
+        .list_by_environment_paginated(env_id, 3, 3)
+        .await
+        .unwrap();
+    assert_eq!(total, 5);
+    assert_eq!(page.len(), 2);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_total_count_accurate(pool: sqlx::PgPool) {
+    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    for i in 0..10u32 {
+        let mut exp = make_experiment(env_id, rule_id);
+        exp.id = ExperimentId::new();
+        exp.name = format!("exp-{i:02}");
+        repo.create(&exp).await.unwrap();
+    }
+
+    let (_items, total) = repo
+        .list_by_environment_paginated(env_id, 0, 1)
+        .await
+        .unwrap();
+    assert_eq!(total, 10);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_empty_returns_zero_total(pool: sqlx::PgPool) {
+    let (env_id, _rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let (items, total) = repo
+        .list_by_environment_paginated(env_id, 0, 50)
+        .await
+        .unwrap();
+    assert_eq!(total, 0);
+    assert!(items.is_empty());
+}

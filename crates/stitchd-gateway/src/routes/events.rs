@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ use utoipa::ToSchema;
 use stitchd_proto::events::v1::{Event, IngestRequest, MetricValue, metric_value};
 
 use crate::error::GatewayError;
+use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
@@ -134,7 +135,7 @@ pub async fn ingest_batch(
     tag = "events",
     params(("env_id" = String, Path, description = "Environment ID")),
     responses(
-        (status = 200, description = "List of event definitions"),
+        (status = 200, description = "Paginated list of event definitions"),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_jwt" = []))
@@ -142,11 +143,16 @@ pub async fn ingest_batch(
 pub async fn list_event_definitions(
     State(_state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
+    Query(pagination): Query<PaginationParams>,
 ) -> impl IntoResponse {
     // Event definitions are managed by the Event Service.
-    // Stub: return empty list (full proxy implementation omitted as EventIngestionService
-    // does not have a ListEventDefinitions RPC in the current proto).
-    Json(serde_json::json!({ "event_definitions": [] }))
+    // Stub: return empty paginated response (full proxy implementation omitted as
+    // EventIngestionService does not have a ListEventDefinitions RPC in the current proto).
+    Json(PaginatedResponse::new(
+        Vec::<serde_json::Value>::new(),
+        0,
+        &pagination,
+    ))
 }
 
 /// `POST /v1/environments/{env_id}/event-definitions`

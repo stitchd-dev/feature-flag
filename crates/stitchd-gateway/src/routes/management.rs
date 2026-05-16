@@ -2,7 +2,7 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -17,6 +17,7 @@ use stitchd_proto::management::v1::{
 };
 
 use crate::error::GatewayError;
+use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
@@ -262,6 +263,13 @@ pub struct ListSdkKeysJson {
     pub sdk_keys: Vec<SdkKeySummaryJson>,
 }
 
+/// Query parameters for listing SDK keys.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListSdkKeysQuery {
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
+}
+
 // ─── New handlers ─────────────────────────────────────────────────────────────
 
 /// `GET /v1/management/orgs/{org_id}/projects`
@@ -380,15 +388,20 @@ pub async fn delete_environment(
 pub async fn list_sdk_keys(
     State(state): State<Arc<GatewayState>>,
     Path(environment_id): Path<String>,
+    Query(query): Query<ListSdkKeysQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(ListSdkKeysRequest { environment_id });
+    let req = tonic::Request::new(ListSdkKeysRequest {
+        environment_id,
+        page: query.pagination.effective_page(),
+        per_page: query.pagination.effective_per_page(),
+    });
     let mut client = state.management_client.lock().await;
     let resp = client
         .list_sdk_keys(req)
         .await
         .map_err(GatewayError::from)?;
-    let sdk_keys = resp
-        .into_inner()
+    let inner = resp.into_inner();
+    let sdk_keys: Vec<SdkKeySummaryJson> = inner
         .sdk_keys
         .into_iter()
         .map(|k| SdkKeySummaryJson {
@@ -402,7 +415,11 @@ pub async fn list_sdk_keys(
             },
         })
         .collect();
-    Ok(Json(ListSdkKeysJson { sdk_keys }))
+    Ok(Json(PaginatedResponse::new(
+        sdk_keys,
+        inner.total,
+        &query.pagination,
+    )))
 }
 
 /// `DELETE /v1/management/environments/{environment_id}/sdk-keys/{sdk_key_id}`

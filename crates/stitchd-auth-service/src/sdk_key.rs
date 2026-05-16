@@ -153,6 +153,15 @@ mod tests {
                 .collect())
         }
 
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
+
         async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
             self.active_keys
                 .iter()
@@ -219,6 +228,7 @@ mod tests {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
             async fn list_by_environment(&self, _: EnvironmentId) -> Result<Vec<SdkKey>, RepositoryError> { Ok(vec![]) }
+            async fn list_by_environment_paginated(&self, _: EnvironmentId, _: u64, _: u64) -> Result<(Vec<SdkKey>, u64), RepositoryError> { Ok((vec![], 0)) }
             async fn create(&self, _: &SdkKey) -> Result<(), RepositoryError> { Ok(()) }
             async fn revoke(&self, _: SdkKeyId) -> Result<(), RepositoryError> { Ok(()) }
             async fn find_active_by_environment(&self, _: EnvironmentId) -> Result<Vec<SdkKey>, RepositoryError> { Ok(vec![]) }

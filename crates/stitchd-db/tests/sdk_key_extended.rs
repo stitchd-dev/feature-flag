@@ -195,3 +195,81 @@ async fn test_sdk_key_revoke_already_revoked_is_noop(pool: sqlx::PgPool) {
     let found = repo.find_by_id(key1.id).await.unwrap();
     assert!(!found.is_active);
 }
+
+// ---------------------------------------------------------------------------
+// Paginated SDK key list tests
+// ---------------------------------------------------------------------------
+
+fn make_sdk_key(env_id: EnvironmentId) -> SdkKey {
+    SdkKey {
+        id: SdkKeyId::new(),
+        environment_id: env_id,
+        key_hash: uuid::Uuid::new_v4().to_string(),
+        is_active: true,
+        created_at: chrono::Utc::now(),
+        revoked_at: None,
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_page_1_returns_first_slice(pool: sqlx::PgPool) {
+    let (audit, env_id) = setup(&pool).await;
+    let repo = PgSdkKeyRepository::new(pool, audit);
+
+    for _ in 0..5 {
+        repo.create(&make_sdk_key(env_id)).await.unwrap();
+    }
+
+    let (page, total) = repo
+        .list_by_environment_paginated(env_id, 0, 3)
+        .await
+        .unwrap();
+    assert_eq!(total, 5);
+    assert_eq!(page.len(), 3);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_page_2_returns_remainder(pool: sqlx::PgPool) {
+    let (audit, env_id) = setup(&pool).await;
+    let repo = PgSdkKeyRepository::new(pool, audit);
+
+    for _ in 0..5 {
+        repo.create(&make_sdk_key(env_id)).await.unwrap();
+    }
+
+    let (page, total) = repo
+        .list_by_environment_paginated(env_id, 3, 3)
+        .await
+        .unwrap();
+    assert_eq!(total, 5);
+    assert_eq!(page.len(), 2);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_total_count_accurate(pool: sqlx::PgPool) {
+    let (audit, env_id) = setup(&pool).await;
+    let repo = PgSdkKeyRepository::new(pool, audit);
+
+    for _ in 0..10 {
+        repo.create(&make_sdk_key(env_id)).await.unwrap();
+    }
+
+    let (_items, total) = repo
+        .list_by_environment_paginated(env_id, 0, 1)
+        .await
+        .unwrap();
+    assert_eq!(total, 10);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_paginated_empty_returns_zero_total(pool: sqlx::PgPool) {
+    let (audit, env_id) = setup(&pool).await;
+    let repo = PgSdkKeyRepository::new(pool, audit);
+
+    let (items, total) = repo
+        .list_by_environment_paginated(env_id, 0, 50)
+        .await
+        .unwrap();
+    assert_eq!(total, 0);
+    assert!(items.is_empty());
+}
