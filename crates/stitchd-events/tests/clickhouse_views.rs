@@ -14,6 +14,25 @@ use stitchd_core::event::{EventContext, EventPayload, EventValue};
 use stitchd_events::{migrations, writer::EventWriter};
 use uuid::Uuid;
 
+fn experiment_payload(
+    metric_key: &str,
+    value: EventValue,
+    experiment_id: &str,
+    variant_key: &str,
+    user_key: &str,
+) -> EventPayload {
+    EventPayload {
+        contexts: vec![
+            EventContext { context_type: "experiment".into(), key: experiment_id.into() },
+            EventContext { context_type: "variant".into(), key: variant_key.into() },
+            EventContext { context_type: "user".into(), key: user_key.into() },
+        ],
+        metric_key: metric_key.to_string(),
+        value,
+        timestamp: Utc::now(),
+    }
+}
+
 fn make_client() -> Client {
     Client::default()
         .with_url("http://localhost:8123")
@@ -267,4 +286,84 @@ async fn write_batch_populates_events_count() {
         "expected at least 3 events, got {}",
         row.unwrap().event_count
     );
+}
+
+// ── events_experiment_daily_mv tests ─────────────────────────────────────────
+
+#[derive(Debug, clickhouse::Row, Deserialize)]
+struct ExperimentDailyRow {
+    variant_key: String,
+    count: u64,
+}
+
+async fn query_experiment_daily(
+    client: &Client,
+    env_id: Uuid,
+    experiment_id: &str,
+    metric_key: &str,
+) -> Vec<ExperimentDailyRow> {
+    // Use finalizeAggregation to materialize aggregate states into scalar values.
+    let sql = format!(
+        "SELECT variant_key, toUInt64(finalizeAggregation(count_state)) AS count \
+         FROM events_experiment_daily \
+         WHERE env_id = '{env_id}' \
+           AND experiment_id = '{experiment_id}' \
+           AND metric_key = '{metric_key}' \
+         GROUP BY variant_key"
+    );
+    client.query(&sql).fetch_all().await.unwrap()
+}
+
+#[tokio::test]
+async fn events_experiment_daily_mv_populates_on_insert() {
+    let client = make_client();
+    setup_migrations(&client).await;
+    let writer = make_writer();
+    let env_id = Uuid::new_v4();
+    let exp_id = Uuid::new_v4().to_string();
+
+    // Write 3 control + 2 treatment events.
+    for _ in 0..3 {
+        writer
+            .write(env_id, &experiment_payload("purchase", EventValue::Bool(true), &exp_id, "control", "u1"))
+            .await
+            .unwrap();
+    }
+    for _ in 0..2 {
+        writer
+            .write(env_id, &experiment_payload("purchase", EventValue::Bool(true), &exp_id, "treatment", "u2"))
+            .await
+            .unwrap();
+    }
+
+    wait_for_merge(&client, "events_experiment_daily").await;
+
+    let rows = query_experiment_daily(&client, env_id, &exp_id, "purchase").await;
+    let control = rows.iter().find(|r| r.variant_key == "control");
+    let treatment = rows.iter().find(|r| r.variant_key == "treatment");
+
+    assert!(control.is_some(), "expected control variant in events_experiment_daily");
+    assert!(treatment.is_some(), "expected treatment variant in events_experiment_daily");
+    assert!(control.unwrap().count >= 3, "expected >= 3 control events");
+    assert!(treatment.unwrap().count >= 2, "expected >= 2 treatment events");
+}
+
+#[tokio::test]
+async fn events_without_experiment_context_not_in_mv() {
+    let client = make_client();
+    setup_migrations(&client).await;
+    let writer = make_writer();
+    let env_id = Uuid::new_v4();
+    let exp_id = Uuid::new_v4().to_string();
+
+    // Write a plain event with no experiment context — must NOT appear in MV.
+    writer
+        .write(env_id, &payload(env_id, "plain_metric", EventValue::Int(1)))
+        .await
+        .unwrap();
+
+    wait_for_merge(&client, "events_experiment_daily").await;
+
+    let rows = query_experiment_daily(&client, env_id, &exp_id, "plain_metric").await;
+    assert!(rows.is_empty(), "non-experiment events must not appear in events_experiment_daily");
 }
