@@ -49,7 +49,7 @@ function SegmentConditionEditor({
         version: segment.version,
       })
       setDirty(false)
-      onSaved(updated)
+      onSaved(updated.data)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Save failed')
     } finally {
@@ -132,13 +132,6 @@ function CsvImportModal({ contextType, onClose, onApply, saving }: CsvImportModa
     merge: 'Add CSV keys to the existing list (union)',
     replace: 'Replace the entire list with CSV keys',
     remove: 'Remove CSV keys from the list',
-  }
-
-  // Map UI action names to API action values
-  const apiAction: Record<CsvAction, string> = {
-    merge: 'add',
-    replace: 'replace',
-    remove: 'remove',
   }
 
   return (

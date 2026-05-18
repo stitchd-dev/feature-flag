@@ -10,7 +10,7 @@ type AuthMethod = 'password' | 'oidc' | 'saml'
 const DOCKER_SNIPPET = `$ docker compose up stitchd
 ✓ stitchd-gateway     :8080
 ✓ stitchd-flag-service
-✓ stitchd-event-service
+✓ stitchd-analytics-service
 ✓ stitchd-experimentation-service
 ✓ stitchd-segmentation-service
 ✓ stitchd-auth-service
