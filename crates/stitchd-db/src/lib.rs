@@ -29,6 +29,7 @@ pub use experiment_results::{
     ExperimentResultRow, ExperimentResultsRepository, PgExperimentResultsRepository,
     UpsertResultRow,
 };
+pub use stitchd_core::id::ExperimentIterationId;
 pub use repository::{
     AuditLogger, ContextRegistryRepository, EnvironmentRepository, EventDefinitionRepository,
     ExperimentRepository, FlagRepository, ListContextCounts, ListSegmentSummary,

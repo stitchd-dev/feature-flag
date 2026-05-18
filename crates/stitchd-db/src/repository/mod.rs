@@ -615,6 +615,17 @@ pub trait ExperimentRepository: Send + Sync {
         to: ExperimentStatus,
         actor_id: Option<UserId>,
     ) -> Result<Experiment, RepositoryError>;
+
+    /// List all running experiments across all environments (for stats-service polling).
+    ///
+    /// Returns only experiments with `status = 'running'` and `deleted_at IS NULL`.
+    async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError>;
+
+    /// Fetch a single iteration by its ID.
+    async fn find_iteration_by_id(
+        &self,
+        iteration_id: crate::ExperimentIterationId,
+    ) -> Result<ExperimentIteration, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

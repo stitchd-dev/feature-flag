@@ -637,4 +637,93 @@ impl ExperimentRepository for PgExperimentRepository {
 
         Ok(updated)
     }
+
+    async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+        use sqlx::Row as _;
+        let rows = sqlx::query(
+            r"
+            SELECT
+                id, env_id, flag_rule_id, name, description, hypothesis, status,
+                metric_keys, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
+                scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at
+            FROM experiments
+            WHERE status = 'running' AND deleted_at IS NULL
+            ORDER BY created_at
+            ",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        rows.iter()
+            .map(|r| {
+                let status_str: &str = r.get("status");
+                let status = match status_str {
+                    "running" => ExperimentStatus::Running,
+                    "paused" => ExperimentStatus::Paused,
+                    "stopped" => ExperimentStatus::Stopped,
+                    _ => ExperimentStatus::Draft,
+                };
+                Ok(Experiment {
+                    id: ExperimentId::from_uuid(r.get("id")),
+                    environment_id: EnvironmentId::from_uuid(r.get("env_id")),
+                    flag_rule_id: RuleId::from_uuid(r.get("flag_rule_id")),
+                    name: r.get("name"),
+                    description: r.get("description"),
+                    hypothesis: r.get("hypothesis"),
+                    status,
+                    metric_keys: r.get("metric_keys"),
+                    traffic_allocation: {
+                        let v: f64 = r.get("traffic_allocation");
+                        v
+                    },
+                    min_sample_size: r.get("min_sample_size"),
+                    scheduled_start_at: r.get("scheduled_start_at"),
+                    scheduled_end_at: r.get("scheduled_end_at"),
+                    version: r.get("version"),
+                    created_at: r.get("created_at"),
+                    updated_at: r.get("updated_at"),
+                    deleted_at: r.get("deleted_at"),
+                })
+            })
+            .collect::<Result<Vec<_>, RepositoryError>>()
+    }
+
+    async fn find_iteration_by_id(
+        &self,
+        iteration_id: ExperimentIterationId,
+    ) -> Result<ExperimentIteration, RepositoryError> {
+        use sqlx::Row as _;
+        let row = sqlx::query(
+            r"
+            SELECT
+                id, experiment_id, iteration_number, started_at, ended_at,
+                metric_keys, traffic_allocation::float8 AS traffic_allocation, min_sample_size
+            FROM experiment_iterations
+            WHERE id = $1
+            ",
+        )
+        .bind(iteration_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let row = row.ok_or_else(|| RepositoryError::NotFound {
+            id: iteration_id.to_string(),
+        })?;
+
+        Ok(ExperimentIteration {
+            id: ExperimentIterationId::from_uuid(row.get("id")),
+            experiment_id: ExperimentId::from_uuid(row.get("experiment_id")),
+            iteration_number: row.get("iteration_number"),
+            started_at: row.get("started_at"),
+            ended_at: row.get("ended_at"),
+            metric_keys: row.get("metric_keys"),
+            traffic_allocation: {
+                let v: f64 = row.get("traffic_allocation");
+                v
+            },
+            min_sample_size: row.get("min_sample_size"),
+        })
+    }
 }

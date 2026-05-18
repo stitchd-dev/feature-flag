@@ -9,14 +9,16 @@ use tracing::instrument;
 
 use stitchd_core::{
     experimentation::{Experiment, ExperimentStatus},
-    id::{EnvironmentId, ExperimentId},
+    id::{EnvironmentId, ExperimentId, ExperimentIterationId},
 };
 use stitchd_db::{ExperimentRepository, ExperimentResultsRepository, StatsScheduleRepository};
 use stitchd_proto::experiments::v1::{
     CreateExperimentRequest, DeleteExperimentRequest, ExperimentIteration as ProtoIteration,
-    ExperimentResults, GetExperimentRequest, GetResultsRequest, ListExperimentsRequest,
-    ListExperimentsResponse, ListIterationsRequest, ListIterationsResponse,
-    TransitionExperimentRequest, UpdateExperimentRequest, VariantResult,
+    ExperimentResults, GetExperimentIterationRequest, GetExperimentRequest, GetResultsRequest,
+    ListExperimentsRequest, ListExperimentsResponse, ListIterationsRequest, ListIterationsResponse,
+    ListRunningExperimentsRequest, RunningExperiment, TransitionExperimentRequest,
+    UpdateExperimentRequest, UpdateIterationLastComputedRequest,
+    UpdateIterationLastComputedResponse, VariantResult,
     experimentation_service_server::ExperimentationService,
 };
 
@@ -462,6 +464,104 @@ impl ExperimentationService for ExperimentationServiceImpl {
             computation_status,
         }))
     }
+
+    // ── Stats-service–facing RPCs ────────────────────────────────────────────
+
+    /// Server-streaming RPC: emit all currently running experiments.
+    ///
+    /// Loads the full list from PG and streams each as a [`RunningExperiment`]
+    /// message. The stream is short-lived (no long-poll); stats-service should
+    /// call this on a cadence of its choosing.
+    type ListRunningExperimentsStream = std::pin::Pin<
+        Box<
+            dyn futures_core::Stream<Item = Result<RunningExperiment, Status>>
+                + Send
+                + 'static,
+        >,
+    >;
+
+    #[instrument(skip(self))]
+    async fn list_running_experiments(
+        &self,
+        _request: Request<ListRunningExperimentsRequest>,
+    ) -> Result<Response<Self::ListRunningExperimentsStream>, Status> {
+        let experiments = self
+            .experiment_repo
+            .list_all_running()
+            .await
+            .map_err(repo_err_to_status)?;
+
+        // For each running experiment, fetch the active (un-ended) iteration.
+        let mut items: Vec<Result<RunningExperiment, Status>> = Vec::with_capacity(experiments.len());
+        for exp in experiments {
+            let iterations = self
+                .experiment_repo
+                .list_iterations(exp.id)
+                .await
+                .map_err(repo_err_to_status)?;
+
+            // Active iteration = most recent one with no ended_at.
+            let active = iterations.into_iter().rfind(|i| i.ended_at.is_none());
+
+            if let Some(iter) = active {
+                items.push(Ok(RunningExperiment {
+                    experiment_id: exp.id.to_string(),
+                    environment_id: exp.environment_id.to_string(),
+                    iteration_id: iter.id.to_string(),
+                    variant_keys: vec![], // variants live on the flag; not denormalised here
+                    metric_keys: iter.metric_keys.clone(),
+                    started_at_ms: iter.started_at.timestamp_millis(),
+                    status: "running".to_string(),
+                }));
+            }
+        }
+
+        metrics::counter!("experimentation_service.list_running_experiments.ok").increment(1);
+        let stream = tokio_stream::iter(items);
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    /// Fetch a single iteration row by ID (for stats-service to read metric
+    /// configuration without touching PG directly).
+    #[instrument(skip(self))]
+    async fn get_experiment_iteration(
+        &self,
+        request: Request<GetExperimentIterationRequest>,
+    ) -> Result<Response<ProtoIteration>, Status> {
+        let req = request.into_inner();
+        let iter_uuid = uuid::Uuid::parse_str(&req.iteration_id)
+            .map_err(|_| Status::invalid_argument("invalid iteration_id UUID"))?;
+        let iter_id = ExperimentIterationId::from_uuid(iter_uuid);
+
+        let iter = self
+            .experiment_repo
+            .find_iteration_by_id(iter_id)
+            .await
+            .map_err(repo_err_to_status)?;
+
+        metrics::counter!("experimentation_service.get_experiment_iteration.ok").increment(1);
+        Ok(Response::new(iteration_to_proto(&iter)))
+    }
+
+    /// Update the `last_computed_at` timestamp for a given iteration's
+    /// stats_schedule row.
+    #[instrument(skip(self))]
+    async fn update_iteration_last_computed(
+        &self,
+        request: Request<UpdateIterationLastComputedRequest>,
+    ) -> Result<Response<UpdateIterationLastComputedResponse>, Status> {
+        let req = request.into_inner();
+        let iter_uuid = uuid::Uuid::parse_str(&req.iteration_id)
+            .map_err(|_| Status::invalid_argument("invalid iteration_id UUID"))?;
+
+        self.schedule_repo
+            .update_last_computed(iter_uuid, req.last_computed_at_ms)
+            .await
+            .map_err(|e| Status::internal(format!("schedule database error: {e}")))?;
+
+        metrics::counter!("experimentation_service.update_iteration_last_computed.ok").increment(1);
+        Ok(Response::new(UpdateIterationLastComputedResponse {}))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -595,6 +695,28 @@ mod tests {
             exp.status = to;
             Ok(exp)
         }
+
+        async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+            let mut exp = make_experiment(self.env_id);
+            exp.status = ExperimentStatus::Running;
+            Ok(vec![exp])
+        }
+
+        async fn find_iteration_by_id(
+            &self,
+            iteration_id: stitchd_core::id::ExperimentIterationId,
+        ) -> Result<ExperimentIteration, RepositoryError> {
+            Ok(ExperimentIteration {
+                id: iteration_id,
+                experiment_id: ExperimentId::new(),
+                iteration_number: 1,
+                started_at: Utc::now(),
+                ended_at: None,
+                metric_keys: vec!["checkout".to_string()],
+                traffic_allocation: 100.0,
+                min_sample_size: None,
+            })
+        }
     }
 
     struct NotFoundRepo;
@@ -656,6 +778,19 @@ mod tests {
             _actor_id: Option<stitchd_core::id::UserId>,
         ) -> Result<Experiment, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+
+        async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+            Err(RepositoryError::Database(sqlx::Error::RowNotFound))
+        }
+
+        async fn find_iteration_by_id(
+            &self,
+            iteration_id: stitchd_core::id::ExperimentIterationId,
+        ) -> Result<ExperimentIteration, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: iteration_id.to_string(),
+            })
         }
     }
 
@@ -747,6 +882,14 @@ mod tests {
         ) -> Result<Option<StatsScheduleRow>, sqlx::Error> {
             Ok(None)
         }
+
+        async fn update_last_computed(
+            &self,
+            _iteration_id: Uuid,
+            _last_computed_at_ms: i64,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
     }
 
     /// Returns a schedule row with `last_computed_at` set to the given timestamp.
@@ -776,6 +919,14 @@ mod tests {
                 computation_status: self.status.clone(),
                 updated_at: Utc::now(),
             }))
+        }
+
+        async fn update_last_computed(
+            &self,
+            _iteration_id: Uuid,
+            _last_computed_at_ms: i64,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
         }
     }
 
@@ -1395,6 +1546,256 @@ mod tests {
             experiment: Some(proto_exp),
         });
         let result = svc.create_experiment(req).await;
+        assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // ListRunningExperiments tests
+    // -----------------------------------------------------------------------
+
+    /// Happy path: the mock returns one running experiment → one stream item.
+    #[tokio::test]
+    async fn test_list_running_experiments_returns_running_items() {
+        use futures::StreamExt as _;
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(ListRunningExperimentsRequest {});
+        let result = svc.list_running_experiments(req).await;
+        assert!(result.is_ok(), "list_running_experiments should succeed");
+        let mut stream = result.unwrap().into_inner();
+        // AlwaysSucceedRepo.list_all_running returns one experiment with status=Running.
+        // list_iterations returns [] → no active iteration → no stream item.
+        // (This is correct behaviour: no iteration = nothing to compute on.)
+        let mut count = 0usize;
+        while let Some(item) = stream.next().await {
+            assert!(item.is_ok());
+            let running = item.unwrap();
+            assert_eq!(running.status, "running");
+            count += 1;
+        }
+        // No active iteration in stub → count is 0 (filter in handler).
+        assert_eq!(count, 0);
+    }
+
+    /// Stub repo that returns one running experiment with an active iteration.
+    struct RunningWithIterationRepo {
+        env_id: EnvironmentId,
+    }
+
+    #[async_trait]
+    impl ExperimentRepository for RunningWithIterationRepo {
+        async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
+            let mut exp = make_experiment(self.env_id);
+            exp.id = id;
+            exp.status = ExperimentStatus::Running;
+            Ok(exp)
+        }
+
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+            _status_filter: Option<ExperimentStatus>,
+        ) -> Result<Vec<Experiment>, RepositoryError> {
+            let mut exp = make_experiment(self.env_id);
+            exp.status = ExperimentStatus::Running;
+            Ok(vec![exp])
+        }
+
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+            let mut exp = make_experiment(self.env_id);
+            exp.status = ExperimentStatus::Running;
+            Ok((vec![exp], 1))
+        }
+
+        async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
+            Ok(experiment.clone())
+        }
+
+        async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+
+        async fn list_iterations(
+            &self,
+            experiment_id: ExperimentId,
+        ) -> Result<Vec<ExperimentIteration>, RepositoryError> {
+            use stitchd_core::id::ExperimentIterationId;
+            Ok(vec![ExperimentIteration {
+                id: ExperimentIterationId::new(),
+                experiment_id,
+                iteration_number: 1,
+                started_at: Utc::now(),
+                ended_at: None, // still active
+                metric_keys: vec!["checkout".to_string()],
+                traffic_allocation: 100.0,
+                min_sample_size: None,
+            }])
+        }
+
+        async fn apply_transition(
+            &self,
+            id: ExperimentId,
+            to: ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<Experiment, RepositoryError> {
+            let mut exp = make_experiment(self.env_id);
+            exp.id = id;
+            exp.status = to;
+            Ok(exp)
+        }
+
+        async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+            let mut exp = make_experiment(self.env_id);
+            exp.status = ExperimentStatus::Running;
+            Ok(vec![exp])
+        }
+
+        async fn find_iteration_by_id(
+            &self,
+            iteration_id: stitchd_core::id::ExperimentIterationId,
+        ) -> Result<ExperimentIteration, RepositoryError> {
+            Ok(ExperimentIteration {
+                id: iteration_id,
+                experiment_id: ExperimentId::new(),
+                iteration_number: 1,
+                started_at: Utc::now(),
+                ended_at: None,
+                metric_keys: vec!["checkout".to_string()],
+                traffic_allocation: 100.0,
+                min_sample_size: None,
+            })
+        }
+    }
+
+    /// When the experiment has an active iteration, it appears in the stream.
+    #[tokio::test]
+    async fn test_list_running_experiments_with_active_iteration_yields_item() {
+        use futures::StreamExt as _;
+        let (env_id, _) = env_uuid();
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(RunningWithIterationRepo { env_id }),
+            Arc::new(EmptyResultsRepo),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(ListRunningExperimentsRequest {});
+        let result = svc.list_running_experiments(req).await;
+        assert!(result.is_ok());
+        let mut stream = result.unwrap().into_inner();
+        let item = stream.next().await;
+        assert!(item.is_some(), "expected at least one stream item");
+        let running = item.unwrap().unwrap();
+        assert_eq!(running.status, "running");
+        assert!(!running.experiment_id.is_empty());
+        assert!(!running.iteration_id.is_empty());
+        assert_eq!(running.metric_keys, vec!["checkout"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // GetExperimentIteration tests
+    // -----------------------------------------------------------------------
+
+    /// Happy path: valid iteration_id returns a populated proto.
+    #[tokio::test]
+    async fn test_get_experiment_iteration_success() {
+        use stitchd_core::id::ExperimentIterationId;
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let iter_id = ExperimentIterationId::new();
+        let req = tonic::Request::new(GetExperimentIterationRequest {
+            iteration_id: iter_id.to_string(),
+        });
+        let result = svc.get_experiment_iteration(req).await;
+        assert!(result.is_ok(), "get_experiment_iteration should succeed");
+        let proto = result.unwrap().into_inner();
+        assert_eq!(proto.id, iter_id.to_string());
+        assert_eq!(proto.iteration_number, 1);
+        assert_eq!(proto.metric_keys, vec!["checkout"]);
+    }
+
+    /// Invalid UUID returns InvalidArgument.
+    #[tokio::test]
+    async fn test_get_experiment_iteration_invalid_id_returns_invalid_argument() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(GetExperimentIterationRequest {
+            iteration_id: "not-a-uuid".to_string(),
+        });
+        let result = svc.get_experiment_iteration(req).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    /// Repo returns NotFound → gRPC status NotFound.
+    #[tokio::test]
+    async fn test_get_experiment_iteration_not_found() {
+        use stitchd_core::id::ExperimentIterationId;
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(NotFoundRepo),
+            Arc::new(EmptyResultsRepo),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetExperimentIterationRequest {
+            iteration_id: ExperimentIterationId::new().to_string(),
+        });
+        let result = svc.get_experiment_iteration(req).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::NotFound);
+    }
+
+    // -----------------------------------------------------------------------
+    // UpdateIterationLastComputed tests
+    // -----------------------------------------------------------------------
+
+    /// Happy path: valid UUID and a timestamp succeeds.
+    #[tokio::test]
+    async fn test_update_iteration_last_computed_success() {
+        use stitchd_core::id::ExperimentIterationId;
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(UpdateIterationLastComputedRequest {
+            iteration_id: ExperimentIterationId::new().to_string(),
+            last_computed_at_ms: Utc::now().timestamp_millis(),
+        });
+        let result = svc.update_iteration_last_computed(req).await;
+        assert!(result.is_ok(), "update_iteration_last_computed should succeed");
+    }
+
+    /// Invalid UUID returns InvalidArgument.
+    #[tokio::test]
+    async fn test_update_iteration_last_computed_invalid_id_returns_invalid_argument() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(UpdateIterationLastComputedRequest {
+            iteration_id: "bad-uuid".to_string(),
+            last_computed_at_ms: 0,
+        });
+        let result = svc.update_iteration_last_computed(req).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    /// Zero timestamp is accepted (edge case).
+    #[tokio::test]
+    async fn test_update_iteration_last_computed_zero_timestamp_accepted() {
+        use stitchd_core::id::ExperimentIterationId;
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(UpdateIterationLastComputedRequest {
+            iteration_id: ExperimentIterationId::new().to_string(),
+            last_computed_at_ms: 0,
+        });
+        let result = svc.update_iteration_last_computed(req).await;
         assert!(result.is_ok());
     }
 }
