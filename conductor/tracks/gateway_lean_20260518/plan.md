@@ -53,17 +53,17 @@
 
 ## Phase 4: Analytics Reads Migration
 
-- [ ] Task 1: Move eval stats ClickHouse queries
+- [x] Task 1: Move eval stats ClickHouse queries
   - Copy gateway's `eval_stats.rs` query logic →
     `analytics-service/src/eval_stats.rs`
   - Implement `GetEvalStats` gRPC handler
 
-- [ ] Task 2: Move context intelligence ClickHouse queries
+- [x] Task 2: Move context intelligence ClickHouse queries
   - Copy gateway's `context_intel.rs` query logic →
     `analytics-service/src/context_intel.rs`
   - Implement `GetContextIntelligence` gRPC handler
 
-- [ ] Task 3: Tests
+- [x] Task 3: Tests
   - Unit tests for both query modules (mock ClickHouse client)
   - Integration tests against live ClickHouse
 

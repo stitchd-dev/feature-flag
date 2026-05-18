@@ -12,9 +12,11 @@ use stitchd_proto::analytics::v1::{
 };
 use stitchd_proto::events::v1::{IngestRequest, IngestResponse};
 
+use super::context_intel::handle_get_context_intelligence;
 use super::context_registry::{
     handle_list_context_params, handle_list_context_types, handle_register_context,
 };
+use super::eval_stats::handle_get_eval_stats;
 use super::event_ingestion::{EventIngestionState, handle_ingest_event};
 
 pub struct ServiceState {
@@ -75,17 +77,15 @@ impl AnalyticsService for AnalyticsServiceImpl {
 
     async fn get_eval_stats(
         &self,
-        _request: Request<GetEvalStatsRequest>,
+        request: Request<GetEvalStatsRequest>,
     ) -> Result<Response<GetEvalStatsResponse>, Status> {
-        Err(Status::unimplemented("GetEvalStats: Phase 4 pending"))
+        handle_get_eval_stats(&self.state.ch_client, request).await
     }
 
     async fn get_context_intelligence(
         &self,
-        _request: Request<GetContextIntelligenceRequest>,
+        request: Request<GetContextIntelligenceRequest>,
     ) -> Result<Response<GetContextIntelligenceResponse>, Status> {
-        Err(Status::unimplemented(
-            "GetContextIntelligence: Phase 4 pending",
-        ))
+        handle_get_context_intelligence(&self.state.context_registry, request).await
     }
 }
