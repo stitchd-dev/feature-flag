@@ -19,12 +19,26 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use stitchd_core::id::SegmentId;
 
 use crate::{
     repository::{ListContextCounts, ListSegmentSummary},
     scylla::{ScyllaClient, ScyllaError},
 };
+
+/// A superseded generation that is safe to delete after the retention window.
+#[derive(Debug, Clone)]
+pub struct OrphanedGeneration {
+    /// Segment this generation belongs to.
+    pub segment_id: SegmentId,
+    /// Context type (e.g. `"user"`, `"org"`).
+    pub context_type: String,
+    /// The orphaned generation number.
+    pub generation: i64,
+    /// When the generation was superseded (used for retention window checks).
+    pub orphaned_at: DateTime<Utc>,
+}
 
 /// ScyllaDB-backed store for list-segment entries.
 ///
@@ -165,7 +179,8 @@ impl ScyllaSegmentStore {
                  IF active_generation = ?"
             );
             let cas_stmt = self.client.prepare(&cas_cql).await?;
-            self.client
+            let resp = self
+                .client
                 .session()
                 .execute_unpaged(
                     &cas_stmt,
@@ -173,6 +188,29 @@ impl ScyllaSegmentStore {
                 )
                 .await
                 .map_err(|e| ScyllaError::Query(format!("CAS update generation: {e}")))?;
+
+            // Check if the CAS succeeded (applied = true means we won).
+            // Extract the [applied] column from the LWT response.
+            let cas_applied = 'cas: {
+                let Ok(row_result) = resp.into_rows_result() else {
+                    break 'cas false;
+                };
+                let Ok(mut iter) = row_result.rows::<(bool,)>() else {
+                    break 'cas false;
+                };
+                iter.next()
+                    .and_then(Result::ok)
+                    .map_or(false, |(applied,)| applied)
+            };
+
+            if cas_applied {
+                // We won the CAS — track the old generation as orphaned.
+                // Ignore errors: failure to track just means the sweeper won't
+                // clean it up, but gc_grace_seconds handles that eventually.
+                let _ = self
+                    .track_orphaned_generation(seg_uuid, context_type, current_gen)
+                    .await;
+            }
             // If the CAS lost (applied = false), another writer won.
             // Our new_gen partition will be GC'd by the sweeper. Return Ok.
         }
@@ -379,6 +417,136 @@ impl ScyllaSegmentStore {
         }
 
         Ok(summary)
+    }
+
+    // -----------------------------------------------------------------------
+    // Sweeper API
+    // -----------------------------------------------------------------------
+
+    /// Record a superseded generation in the orphaned-gens table.
+    ///
+    /// Called by `set_list_entries` after a successful CAS flip. The sweeper
+    /// uses this table to discover generations safe to delete.
+    async fn track_orphaned_generation(
+        &self,
+        segment_id: uuid::Uuid,
+        context_type: &str,
+        generation: i64,
+    ) -> Result<(), ScyllaError> {
+        let ks = self.client.keyspace();
+        let now = scylla::value::CqlTimestamp(chrono::Utc::now().timestamp_millis());
+        let cql = format!(
+            "INSERT INTO {ks}.segment_list_orphaned_gens \
+             (segment_id, context_type, generation, orphaned_at) \
+             VALUES (?, ?, ?, ?)"
+        );
+        let stmt = self.client.prepare(&cql).await?;
+        self.client
+            .session()
+            .execute_unpaged(&stmt, (segment_id, context_type, generation, now))
+            .await
+            .map_err(|e| ScyllaError::Query(format!("track_orphaned_generation: {e}")))?;
+        Ok(())
+    }
+
+    /// Return all orphaned generations that became orphaned before `cutoff`.
+    ///
+    /// Called by the sweeper to find generations safe to delete.
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError`] if the query fails.
+    pub async fn list_orphaned_older_than(
+        &self,
+        cutoff: DateTime<Utc>,
+    ) -> Result<Vec<OrphanedGeneration>, ScyllaError> {
+        let ks = self.client.keyspace();
+        // ALLOW FILTERING is acceptable here: the orphaned table is small
+        // (one row per completed set_list_entries) and is pruned by the sweeper.
+        let cql = format!(
+            "SELECT segment_id, context_type, generation, orphaned_at \
+             FROM {ks}.segment_list_orphaned_gens \
+             WHERE orphaned_at < ? ALLOW FILTERING"
+        );
+        let stmt = self.client.prepare(&cql).await?;
+        let cutoff_ts = scylla::value::CqlTimestamp(cutoff.timestamp_millis());
+        let rows = self
+            .client
+            .session()
+            .execute_unpaged(&stmt, (cutoff_ts,))
+            .await
+            .map_err(|e| ScyllaError::Query(format!("list_orphaned: {e}")))?;
+
+        let mut result = Vec::new();
+        if let Ok(row_result) = rows.into_rows_result() {
+            type Row = (uuid::Uuid, String, i64, scylla::value::CqlTimestamp);
+            if let Ok(iter) = row_result.rows::<Row>() {
+                for row in iter {
+                    let (seg_uuid, context_type, generation, orphaned_at_ts) =
+                        row.map_err(|e| ScyllaError::Query(format!("orphaned row: {e}")))?;
+                    let orphaned_at =
+                        DateTime::from_timestamp_millis(orphaned_at_ts.0).unwrap_or_else(Utc::now);
+                    result.push(OrphanedGeneration {
+                        segment_id: SegmentId::from_uuid(seg_uuid),
+                        context_type,
+                        generation,
+                        orphaned_at,
+                    });
+                }
+            }
+        }
+        Ok(result)
+    }
+
+    /// Delete all entries in `segment_list_entries` for the given orphaned generation.
+    ///
+    /// Scylla supports `DELETE … WHERE partition_key = ?` to drop an entire partition.
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError`] if the query fails.
+    pub async fn delete_generation_entries(
+        &self,
+        id: SegmentId,
+        context_type: &str,
+        generation: i64,
+    ) -> Result<(), ScyllaError> {
+        let ks = self.client.keyspace();
+        let seg_uuid = id.as_uuid();
+        let cql = format!(
+            "DELETE FROM {ks}.segment_list_entries \
+             WHERE segment_id = ? AND context_type = ? AND generation = ?"
+        );
+        let stmt = self.client.prepare(&cql).await?;
+        self.client
+            .session()
+            .execute_unpaged(&stmt, (seg_uuid, context_type, generation))
+            .await
+            .map_err(|e| ScyllaError::Query(format!("delete_generation_entries: {e}")))?;
+        Ok(())
+    }
+
+    /// Remove a completed sweep record from `segment_list_orphaned_gens`.
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError`] if the query fails.
+    pub async fn mark_generation_swept(
+        &self,
+        id: SegmentId,
+        context_type: &str,
+        generation: i64,
+    ) -> Result<(), ScyllaError> {
+        let ks = self.client.keyspace();
+        let seg_uuid = id.as_uuid();
+        let cql = format!(
+            "DELETE FROM {ks}.segment_list_orphaned_gens \
+             WHERE segment_id = ? AND context_type = ? AND generation = ?"
+        );
+        let stmt = self.client.prepare(&cql).await?;
+        self.client
+            .session()
+            .execute_unpaged(&stmt, (seg_uuid, context_type, generation))
+            .await
+            .map_err(|e| ScyllaError::Query(format!("mark_generation_swept: {e}")))?;
+        Ok(())
     }
 
     // -----------------------------------------------------------------------

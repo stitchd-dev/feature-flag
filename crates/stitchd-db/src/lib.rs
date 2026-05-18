@@ -12,6 +12,8 @@ pub mod experiment_results;
 pub mod repository;
 /// ScyllaDB client, migration applier, and list-segment repository.
 pub mod scylla;
+
+pub use scylla::segment::OrphanedGeneration;
 pub mod stats_jobs;
 pub mod stats_schedule;
 

@@ -28,6 +28,7 @@ use stitchd_proto::sdk::v1::segmentation_sdk_backend_service_server::Segmentatio
 use stitchd_proto::segments::v1::segmentation_service_server::SegmentationServiceServer;
 use stitchd_segmentation_service::grpc::sdk_backend::SegmentationSdkBackendServiceImpl;
 use stitchd_segmentation_service::grpc::service::{AppState, SegmentationServiceImpl};
+use stitchd_segmentation_service::sweeper::GenerationSweeper;
 
 /// Default gRPC listen port.
 const DEFAULT_PORT: u16 = 50053;
@@ -96,6 +97,34 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("ScyllaDB migrations applied");
 
     let scylla_store = Arc::new(ScyllaSegmentStore::new(scylla_client));
+
+    // ── Generation sweeper ────────────────────────────────────────────────────
+    // Reads retention/interval from environment with sensible defaults.
+    let sweeper_retention_secs: u64 = std::env::var("SWEEPER_RETENTION_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24 * 3600); // default: 24 hours
+    let sweeper_interval_secs: u64 = std::env::var("SWEEPER_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3600); // default: run every hour
+
+    // Clone is cheap — ScyllaSegmentStore wraps an Arc<Session> internally.
+    let sweeper_store = (*scylla_store).clone();
+    tokio::spawn(async move {
+        let sweeper = GenerationSweeper::new(
+            sweeper_store,
+            std::time::Duration::from_secs(sweeper_retention_secs),
+        );
+        sweeper
+            .run(std::time::Duration::from_secs(sweeper_interval_secs))
+            .await;
+    });
+    tracing::info!(
+        retention_secs = sweeper_retention_secs,
+        interval_secs = sweeper_interval_secs,
+        "generation sweeper started"
+    );
 
     // Composite repository: PG for metadata, Scylla for list-entry operations.
     let segment_repo: Arc<dyn SegmentRepository> = Arc::new(CompositeSegmentRepository::new(
