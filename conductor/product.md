@@ -1,6 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
-<!-- Last refreshed: 2026-05-16 -->
+<!-- Last refreshed: 2026-05-18 -->
 
 # Product Guide
 
@@ -47,7 +47,7 @@ a registry of known context types, their properties, and observed value ranges/e
 Exposed as an API for the Admin UI (coming later) to power dropdown/autocomplete 
 behaviour (e.g. when building segment rules or flag targeting conditions).
 
-## Implementation Status (as of 2026-05-16)
+## Implementation Status (as of 2026-05-18)
 
 | Module | Status |
 |---|---|
@@ -65,13 +65,16 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 | Flag Evaluation Preview (rule traces, rollout debug, OR/AND missing-context fix) | ✅ Complete |
 | Context Intelligence (eval telemetry, context registry, autocomplete, explorer) | ✅ Complete |
 | Database & Query Optimizations (PG indexes, N+1 elimination, SDK key cache, ClickHouse MVs, offset pagination) | ✅ Complete |
+| ScyllaDB list-segment storage (generation swap, sweeper, metrics, OTel spans) | ✅ Complete |
 
 ## Modules
 
 ### 1. Segmentation
 - Rule-Based Segments: rules evaluated against client Contexts
 - List-Based Segments: per context-type include/exclude key lists
-  - Persistence: monthly range-partitioned storage for list entries via pg_partman
+  - Persistence: **ScyllaDB** — wide-row tables partitioned by `(segment_id, context_type)`;
+    atomic generation swap via LWT CAS; orphaned generations cleaned up by background sweeper.
+    PostgreSQL retains segment metadata (name, type, counts, audit log) only.
 
 ### 2. Feature Flags
 - Typed flags: `int | double | bool | string | json`; variants must match flag type
@@ -115,7 +118,8 @@ The admin console (`admin/`) is a React 19 + Vite SPA with full feature parity:
 - Future: streaming layer for server-pushed flag updates; direct event submission via SDK key.
 
 ## Data Stores
-- PostgreSQL: flag/segment configuration, tenants, environments, SDK keys
+- PostgreSQL: flag/segment configuration, tenants, environments, SDK keys, audit logs
+- ScyllaDB: list-segment entry storage (include/exclude lists, up to millions of entries per segment)
 - ClickHouse: events, experiment results, metric aggregations
 
 ## ClickHouse Query Optimisations (Completed — db_optim_20260516)

@@ -54,7 +54,9 @@ pub mod polling;
 pub mod refresh;
 pub mod snapshot;
 
-pub use client::{EvalOutcome, EvalRequest, EvalResult, EvalResultWithReasoning, ReasoningTrace, SdkClient};
+pub use client::{
+    EvalOutcome, EvalRequest, EvalResult, EvalResultWithReasoning, ReasoningTrace, SdkClient,
+};
 pub use config::SdkConfig;
 pub use error::SdkError;
 pub use events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, ParameterValue};

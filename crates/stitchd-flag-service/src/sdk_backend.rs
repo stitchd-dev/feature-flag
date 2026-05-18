@@ -81,9 +81,12 @@ fn env_id_from_metadata(req: &Request<impl Sized>) -> Result<EnvironmentId, Stat
         .get(ENV_ID_METADATA_KEY)
         .ok_or_else(|| Status::unauthenticated(format!("missing {ENV_ID_METADATA_KEY} metadata")))?
         .to_str()
-        .map_err(|_| Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not valid UTF-8")))?;
-    let uuid = uuid::Uuid::parse_str(raw)
-        .map_err(|_| Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not a valid UUID")))?;
+        .map_err(|_| {
+            Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not valid UTF-8"))
+        })?;
+    let uuid = uuid::Uuid::parse_str(raw).map_err(|_| {
+        Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not a valid UUID"))
+    })?;
     Ok(EnvironmentId::from_uuid(uuid))
 }
 
@@ -109,9 +112,7 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
                 .variant_repo
                 .find_by_flag(record.id)
                 .await
-                .map_err(|e| {
-                    Status::internal(format!("variant_repo.find_by_flag failed: {e}"))
-                })?;
+                .map_err(|e| Status::internal(format!("variant_repo.find_by_flag failed: {e}")))?;
             let rules = self
                 .flag_repo
                 .find_rules(record.id)
@@ -141,16 +142,9 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
             .segment_repo
             .find_rules_batch(&rule_ids)
             .await
-            .map_err(|e| {
-                Status::internal(format!("segment_repo.find_rules_batch failed: {e}"))
-            })?;
-        let list_payloads = self
-            .segment_repo
-            .find_lists_batch(&list_ids)
-            .await
-            .map_err(|e| {
-                Status::internal(format!("segment_repo.find_lists_batch failed: {e}"))
-            })?;
+            .map_err(|e| Status::internal(format!("segment_repo.find_rules_batch failed: {e}")))?;
+        // List segment defs not returned until Phase 4 Scylla membership reads.
+        let _ = list_ids;
 
         // 5. Build proto rule-segments (with serialized rule tree in `rule_payload`).
         //    For each rule-based segment we emit one entry; `context_type` is empty
@@ -172,41 +166,16 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
             })
             .collect::<Vec<_>>();
 
-        // 6. Build proto list-segment metadata. A list segment can target multiple
-        //    context types (HashMap keyed on context_type). We emit ONE entry per
-        //    (segment_id, context_type) pair so the SDK's LRU resolution stays
-        //    well-defined. If the segment has no entries yet, context_type is empty.
-        //    NOTE: This duplicates `id` across rows for multi-context-type segments;
-        //    the SDK's snapshot dedupes by (id, context_type).
+        // 6. Build proto list-segment metadata. List payloads are empty until Phase 4
+        //    Scylla membership reads are wired. For now emit one entry per segment
+        //    with an empty context_type (pristine/pending state).
         let mut list_segments = Vec::new();
         for s in &list_segment_records {
-            if let Some(lb) = list_payloads.get(&s.id) {
-                if lb.lists.is_empty() {
-                    list_segments.push(stitchd_proto::segments::v1::ListSegmentMeta {
-                        id: s.id.to_string(),
-                        key: s.key.clone(),
-                        context_type: String::new(),
-                    });
-                } else {
-                    // Sort context types for deterministic output (important for tests).
-                    let mut ctx_types: Vec<&String> = lb.lists.keys().collect();
-                    ctx_types.sort();
-                    for ct in ctx_types {
-                        list_segments.push(stitchd_proto::segments::v1::ListSegmentMeta {
-                            id: s.id.to_string(),
-                            key: s.key.clone(),
-                            context_type: ct.clone(),
-                        });
-                    }
-                }
-            } else {
-                // Segment exists but has no list rows yet (pristine state).
-                list_segments.push(stitchd_proto::segments::v1::ListSegmentMeta {
-                    id: s.id.to_string(),
-                    key: s.key.clone(),
-                    context_type: String::new(),
-                });
-            }
+            list_segments.push(stitchd_proto::segments::v1::ListSegmentMeta {
+                id: s.id.to_string(),
+                key: s.key.clone(),
+                context_type: String::new(),
+            });
         }
 
         let server_timestamp_ms = SystemTime::now()
@@ -282,9 +251,7 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
                 row_count = rows.len(),
                 "ingest_sdk_eval_log: clickhouse insert failed"
             );
-            return Err(Status::internal(format!(
-                "eval log insert failed: {e}"
-            )));
+            return Err(Status::internal(format!("eval log insert failed: {e}")));
         }
 
         Ok(Response::new(IngestSdkEvalLogResponse {}))
@@ -298,9 +265,8 @@ fn param_value_to_json(pv: stitchd_proto::common::v1::ParameterValue) -> serde_j
     use stitchd_proto::common::v1::parameter_value::Value;
     match pv.value {
         Some(Value::IntValue(i)) => serde_json::Value::from(i),
-        Some(Value::DoubleValue(d)) => {
-            serde_json::Number::from_f64(d).map_or(serde_json::Value::Null, serde_json::Value::Number)
-        }
+        Some(Value::DoubleValue(d)) => serde_json::Number::from_f64(d)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
         Some(Value::StringValue(s)) => serde_json::Value::String(s),
         Some(Value::BoolValue(b)) => serde_json::Value::Bool(b),
         Some(Value::SemverValue(s)) => serde_json::Value::String(s),
@@ -317,7 +283,12 @@ fn event_to_row(ev: FlagEvaluationEvent, env_id: EnvironmentId) -> Result<EvalLo
         .evaluated_at
         .parse::<DateTime<chrono::FixedOffset>>()
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|_| format!("evaluated_at is not a valid RFC3339 timestamp: {:?}", ev.evaluated_at))?;
+        .map_err(|_| {
+            format!(
+                "evaluated_at is not a valid RFC3339 timestamp: {:?}",
+                ev.evaluated_at
+            )
+        })?;
     // params_json: serialise non-private parameters; private ones are already
     // stripped by the SDK before sending (per sdks/spec/docs/05-events.md).
     // The proto's ParameterValue doesn't impl Serialize directly (generated
@@ -329,8 +300,7 @@ fn event_to_row(ev: FlagEvaluationEvent, env_id: EnvironmentId) -> Result<EvalLo
         for (k, v) in ev.context_parameters {
             obj.insert(k, param_value_to_json(v));
         }
-        serde_json::to_string(&serde_json::Value::Object(obj))
-            .unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_else(|_| "{}".to_string())
     };
     Ok(EvalLogRow {
         env_id: env_id.as_uuid(),
@@ -359,9 +329,7 @@ mod tests {
     use stitchd_core::context::Context;
     use stitchd_core::flag::{FlagRecord, FlagRule, FlagValueType, Variant};
     use stitchd_core::id::{FlagId, FlagKey, ProjectId, SegmentId, VariantId};
-    use stitchd_core::segment::{
-        ContextList, ListBasedSegment, RuleBasedSegment, Segment, SegmentType,
-    };
+    use stitchd_core::segment::{RuleBasedSegment, Segment, SegmentType};
     use stitchd_db::{ContextMembership, RepositoryError};
 
     // ── Stub repositories ───────────────────────────────────────────────────
@@ -457,10 +425,7 @@ mod tests {
         ) -> Result<(), RepositoryError> {
             unimplemented!()
         }
-        async fn find_rules(
-            &self,
-            flag_id: FlagId,
-        ) -> Result<Vec<FlagRule>, RepositoryError> {
+        async fn find_rules(&self, flag_id: FlagId) -> Result<Vec<FlagRule>, RepositoryError> {
             Ok(self
                 .rules_by_flag
                 .lock()
@@ -481,10 +446,7 @@ mod tests {
     struct StubVariantRepo;
     #[async_trait]
     impl VariantRepository for StubVariantRepo {
-        async fn find_by_flag(
-            &self,
-            _flag_id: FlagId,
-        ) -> Result<Vec<Variant>, RepositoryError> {
+        async fn find_by_flag(&self, _flag_id: FlagId) -> Result<Vec<Variant>, RepositoryError> {
             Ok(vec![])
         }
         async fn create(
@@ -513,7 +475,6 @@ mod tests {
     struct StubSegmentRepo {
         segments_by_env: Mutex<HashMap<EnvironmentId, Vec<Segment>>>,
         rules: Mutex<HashMap<SegmentId, RuleBasedSegment>>,
-        lists: Mutex<HashMap<SegmentId, ListBasedSegment>>,
     }
     impl StubSegmentRepo {
         fn arc() -> Arc<Self> {
@@ -527,17 +488,11 @@ mod tests {
                 .or_default()
                 .push(s);
         }
-        fn with_list_payload(self: &Arc<Self>, id: SegmentId, lb: ListBasedSegment) {
-            self.lists.lock().unwrap().insert(id, lb);
-        }
     }
 
     #[async_trait]
     impl SegmentRepository for StubSegmentRepo {
-        async fn find_by_id(
-            &self,
-            _id: SegmentId,
-        ) -> Result<Segment, RepositoryError> {
+        async fn find_by_id(&self, _id: SegmentId) -> Result<Segment, RepositoryError> {
             unimplemented!()
         }
         async fn find_by_key(
@@ -551,12 +506,6 @@ mod tests {
             &self,
             _id: SegmentId,
         ) -> Result<RuleBasedSegment, RepositoryError> {
-            unimplemented!()
-        }
-        async fn find_with_list(
-            &self,
-            _id: SegmentId,
-        ) -> Result<ListBasedSegment, RepositoryError> {
             unimplemented!()
         }
         async fn list_by_environment(
@@ -645,14 +594,34 @@ mod tests {
             ids: &[SegmentId],
         ) -> Result<HashMap<SegmentId, RuleBasedSegment>, RepositoryError> {
             let rules = self.rules.lock().unwrap();
-            Ok(ids.iter().filter_map(|id| rules.get(id).map(|r| (*id, r.clone()))).collect())
+            Ok(ids
+                .iter()
+                .filter_map(|id| rules.get(id).map(|r| (*id, r.clone())))
+                .collect())
         }
-        async fn find_lists_batch(
+        async fn add_entries(
             &self,
-            ids: &[SegmentId],
-        ) -> Result<HashMap<SegmentId, ListBasedSegment>, RepositoryError> {
-            let lists = self.lists.lock().unwrap();
-            Ok(ids.iter().filter_map(|id| lists.get(id).map(|l| (*id, l.clone()))).collect())
+            _id: SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn remove_entries(
+            &self,
+            _id: SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn get_list_segment_summary(
+            &self,
+            _id: SegmentId,
+        ) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> {
+            Ok(stitchd_db::ListSegmentSummary::default())
         }
         async fn find_memberships_batch(
             &self,
@@ -748,7 +717,10 @@ mod tests {
     async fn sync_definitions_returns_empty_snapshot_for_unknown_env() {
         let env_id = EnvironmentId::new();
         let svc = make_service(StubFlagRepo::arc(), StubSegmentRepo::arc());
-        let resp = svc.sync_definitions(make_request_with_env(env_id)).await.unwrap();
+        let resp = svc
+            .sync_definitions(make_request_with_env(env_id))
+            .await
+            .unwrap();
         let resp = resp.into_inner();
         assert_eq!(resp.flags.len(), 0);
         assert_eq!(resp.rule_segments.len(), 0);
@@ -783,25 +755,11 @@ mod tests {
 
         let rule_seg = make_segment(env_id, "pro-users", SegmentType::Rule);
         let list_seg = make_segment(env_id, "early-access", SegmentType::List);
-        let list_seg_id = list_seg.id;
         segment_repo.with_segment(env_id, rule_seg);
         segment_repo.with_segment(env_id, list_seg);
 
-        // Seed a list-based payload spanning two context types.
-        let mut lists = HashMap::new();
-        let mut user_include = std::collections::HashSet::new();
-        user_include.insert("alice".to_string());
-        lists.insert(
-            "user".to_string(),
-            ContextList { include: user_include, exclude: std::collections::HashSet::new() },
-        );
-        let mut org_include = std::collections::HashSet::new();
-        org_include.insert("acme".to_string());
-        lists.insert(
-            "org".to_string(),
-            ContextList { include: org_include, exclude: std::collections::HashSet::new() },
-        );
-        segment_repo.with_list_payload(list_seg_id, ListBasedSegment { id: list_seg_id, lists });
+        // NOTE: list_payloads is empty until Phase 4 Scylla wiring.
+        // List segments appear with empty context_type (pristine state).
 
         let svc = make_service(StubFlagRepo::arc(), segment_repo);
         let resp = svc
@@ -813,13 +771,10 @@ mod tests {
         assert_eq!(resp.rule_segments.len(), 1);
         assert_eq!(resp.rule_segments[0].key, "pro-users");
 
-        // Multi-context-type list segment becomes two ListSegmentMeta entries,
-        // one per context type, sorted alphabetically.
-        assert_eq!(resp.list_segments.len(), 2);
-        let ctx_types: Vec<_> = resp.list_segments.iter().map(|m| m.context_type.as_str()).collect();
-        assert_eq!(ctx_types, vec!["org", "user"]);
-        // Both share the same segment id (the dedup-by-(id,context_type) invariant).
-        assert_eq!(resp.list_segments[0].id, resp.list_segments[1].id);
+        // List segment appears once with empty context_type (pending Phase 4 Scylla wiring).
+        assert_eq!(resp.list_segments.len(), 1);
+        assert_eq!(resp.list_segments[0].context_type, "");
+        assert_eq!(resp.list_segments[0].key, "early-access");
     }
 
     #[tokio::test]
@@ -887,7 +842,9 @@ mod tests {
             context_parameters: std::collections::HashMap::new(),
             environment_id: String::new(),
         };
-        let mut req = Request::new(IngestSdkEvalLogRequest { events: vec![event] });
+        let mut req = Request::new(IngestSdkEvalLogRequest {
+            events: vec![event],
+        });
         req.metadata_mut()
             .insert("x-env-id", env_id.to_string().parse().unwrap());
         let _ = svc.ingest_sdk_eval_log(req).await.unwrap();

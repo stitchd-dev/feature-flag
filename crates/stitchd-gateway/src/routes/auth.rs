@@ -185,7 +185,10 @@ pub async fn refresh(
         refresh_token: body.refresh_token,
     });
     let mut client = state.auth_client.lock().await;
-    let resp = client.refresh_token(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .refresh_token(req)
+        .await
+        .map_err(GatewayError::from)?;
     let r = resp.into_inner();
     Ok(Json(RefreshJson {
         access_token: r.access_token,

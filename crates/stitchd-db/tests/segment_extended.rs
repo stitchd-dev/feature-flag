@@ -111,9 +111,14 @@ fn make_segment(env_id: EnvironmentId, key: &str) -> Segment {
 async fn list_by_environment_paginated_page_1_returns_first_slice(pool: sqlx::PgPool) {
     let (repo, env_id) = setup(&pool).await;
     for i in 0..5 {
-        repo.create(&make_segment(env_id, &format!("seg-{i:02}"))).await.unwrap();
+        repo.create(&make_segment(env_id, &format!("seg-{i:02}")))
+            .await
+            .unwrap();
     }
-    let (page, total) = repo.list_by_environment_paginated(env_id, 0, 3).await.unwrap();
+    let (page, total) = repo
+        .list_by_environment_paginated(env_id, 0, 3)
+        .await
+        .unwrap();
     assert_eq!(total, 5);
     assert_eq!(page.len(), 3);
 }
@@ -122,9 +127,14 @@ async fn list_by_environment_paginated_page_1_returns_first_slice(pool: sqlx::Pg
 async fn list_by_environment_paginated_page_2_returns_remainder(pool: sqlx::PgPool) {
     let (repo, env_id) = setup(&pool).await;
     for i in 0..5 {
-        repo.create(&make_segment(env_id, &format!("seg-{i:02}"))).await.unwrap();
+        repo.create(&make_segment(env_id, &format!("seg-{i:02}")))
+            .await
+            .unwrap();
     }
-    let (page, total) = repo.list_by_environment_paginated(env_id, 3, 3).await.unwrap();
+    let (page, total) = repo
+        .list_by_environment_paginated(env_id, 3, 3)
+        .await
+        .unwrap();
     assert_eq!(total, 5);
     assert_eq!(page.len(), 2);
 }
@@ -133,16 +143,24 @@ async fn list_by_environment_paginated_page_2_returns_remainder(pool: sqlx::PgPo
 async fn list_by_environment_paginated_total_count_accurate(pool: sqlx::PgPool) {
     let (repo, env_id) = setup(&pool).await;
     for i in 0..10 {
-        repo.create(&make_segment(env_id, &format!("seg-{i:02}"))).await.unwrap();
+        repo.create(&make_segment(env_id, &format!("seg-{i:02}")))
+            .await
+            .unwrap();
     }
-    let (_items, total) = repo.list_by_environment_paginated(env_id, 0, 1).await.unwrap();
+    let (_items, total) = repo
+        .list_by_environment_paginated(env_id, 0, 1)
+        .await
+        .unwrap();
     assert_eq!(total, 10);
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn list_by_environment_paginated_empty_returns_zero_total(pool: sqlx::PgPool) {
     let (repo, env_id) = setup(&pool).await;
-    let (items, total) = repo.list_by_environment_paginated(env_id, 0, 50).await.unwrap();
+    let (items, total) = repo
+        .list_by_environment_paginated(env_id, 0, 50)
+        .await
+        .unwrap();
     assert_eq!(total, 0);
     assert!(items.is_empty());
 }
@@ -241,116 +259,9 @@ async fn test_check_list_membership_empty_keys(pool: sqlx::PgPool) {
     assert!(result.is_empty());
 }
 
-/// Test check_list_membership with known include/exclude entries.
-#[sqlx::test(migrations = "./migrations")]
-async fn test_check_list_membership_included(pool: sqlx::PgPool) {
-    let (repo, env_id) = setup(&pool).await;
-
-    let seg = Segment {
-        id: SegmentId::new(),
-        environment_id: env_id,
-        key: "membership-seg".to_string(),
-        name: String::new(),
-        description: String::new(),
-        tags: vec![],
-        segment_type: SegmentType::List,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
-    repo.create(&seg).await.unwrap();
-
-    repo.set_list_entries(
-        seg.id,
-        "user",
-        &["alice".to_string(), "bob".to_string()],
-        &["charlie".to_string()],
-    )
-    .await
-    .unwrap();
-
-    let result = repo
-        .check_list_membership(env_id, "user", "alice", &["membership-seg".to_string()])
-        .await
-        .unwrap();
-    assert!(*result.get("membership-seg").unwrap());
-
-    // charlie is excluded
-    let result_charlie = repo
-        .check_list_membership(env_id, "user", "charlie", &["membership-seg".to_string()])
-        .await
-        .unwrap();
-    assert!(!(*result_charlie.get("membership-seg").unwrap()));
-
-    // dave is not in either list
-    let result_dave = repo
-        .check_list_membership(env_id, "user", "dave", &["membership-seg".to_string()])
-        .await
-        .unwrap();
-    assert!(!(*result_dave.get("membership-seg").unwrap()));
-}
-
-/// Test batch_check_list_membership with empty inputs returns empty.
-#[sqlx::test(migrations = "./migrations")]
-async fn test_batch_check_empty_inputs(pool: sqlx::PgPool) {
-    let (repo, env_id) = setup(&pool).await;
-
-    // Empty contexts
-    let r1 = repo
-        .batch_check_list_membership(env_id, &[], &["seg".to_string()])
-        .await
-        .unwrap();
-    assert!(r1.is_empty());
-
-    // Empty segment_keys
-    let r2 = repo
-        .batch_check_list_membership(env_id, &[("user".to_string(), "alice".to_string())], &[])
-        .await
-        .unwrap();
-    assert!(r2.is_empty());
-}
-
-/// Test batch_check_list_membership returns results for multiple contexts.
-#[sqlx::test(migrations = "./migrations")]
-async fn test_batch_check_list_membership(pool: sqlx::PgPool) {
-    let (repo, env_id) = setup(&pool).await;
-
-    let seg = Segment {
-        id: SegmentId::new(),
-        environment_id: env_id,
-        key: "batch-seg".to_string(),
-        name: String::new(),
-        description: String::new(),
-        tags: vec![],
-        segment_type: SegmentType::List,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-        deleted_at: None,
-        version: 1,
-    };
-    repo.create(&seg).await.unwrap();
-
-    repo.set_list_entries(seg.id, "user", &["alice".to_string()], &[])
-        .await
-        .unwrap();
-
-    let contexts = vec![
-        ("user".to_string(), "alice".to_string()),
-        ("user".to_string(), "bob".to_string()),
-    ];
-
-    let results = repo
-        .batch_check_list_membership(env_id, &contexts, &["batch-seg".to_string()])
-        .await
-        .unwrap();
-
-    assert_eq!(results.len(), 2);
-    let alice = results.iter().find(|r| r.context_key == "alice").unwrap();
-    assert!(*alice.memberships.get("batch-seg").unwrap());
-    let bob = results.iter().find(|r| r.context_key == "bob").unwrap();
-    assert!(!(*bob.memberships.get("batch-seg").unwrap()));
-}
+// test_check_list_membership_included, test_batch_check_empty_inputs,
+// test_batch_check_list_membership — removed in Phase 3.
+// List-entry membership is now Scylla-backed (see tests/scylla_segment_membership.rs).
 
 /// Test find_by_key returns NotFound for missing segment.
 #[sqlx::test(migrations = "./migrations")]

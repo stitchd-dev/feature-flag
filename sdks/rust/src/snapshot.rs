@@ -364,11 +364,7 @@ mod tests {
 
     #[test]
     fn store_load_returns_stored_snapshot() {
-        let store = DefinitionStore::from_snapshot(snapshot_with(
-            vec![flag("a")],
-            vec![],
-            vec![],
-        ));
+        let store = DefinitionStore::from_snapshot(snapshot_with(vec![flag("a")], vec![], vec![]));
         let snap = store.load();
         assert_eq!(snap.flag_count(), 1);
         assert!(snap.flag("a").is_some());
@@ -394,11 +390,8 @@ mod tests {
     fn store_load_returns_stable_arc_across_swap() {
         // Critical invariant — a reader that loaded an Arc continues to
         // see its snapshot even after the store has swapped to a new one.
-        let store = DefinitionStore::from_snapshot(snapshot_with(
-            vec![flag("original")],
-            vec![],
-            vec![],
-        ));
+        let store =
+            DefinitionStore::from_snapshot(snapshot_with(vec![flag("original")], vec![], vec![]));
         let reader_snap = store.load();
         // Swap on a different thread (via the same store handle).
         let store_clone = store.clone();

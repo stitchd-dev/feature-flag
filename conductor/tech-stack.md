@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-05-16 -->
+<!-- Last refreshed: 2026-05-18 -->
 
 ## Architecture
 
@@ -10,7 +10,7 @@ The system is decomposed into six Cargo workspace crates, each a standalone gRPC
 | `stitchd-gateway` | REST API facade — translates JSON ↔ gRPC, calls all domain services; hosts OpenAPI spec |
 | `stitchd-auth-service` | JWT / SDK-key credential validation; RBAC context assembly |
 | `stitchd-flag-service` | Flag + variant CRUD; server-streaming definition sync for SDK |
-| `stitchd-segmentation-service` | Segment CRUD; rule-based + list-based membership evaluation |
+| `stitchd-segmentation-service` | Segment CRUD; rule-based + list-based membership evaluation; ScyllaDB-backed list entry storage |
 | `stitchd-event-service` | Event definition registry; ClickHouse ingestion gRPC |
 | `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from PostgreSQL |
 | `stitchd-stats-service` | Scheduled stats computation (60-min interval); writes pre-aggregated experiment results to PostgreSQL `experiment_results` table |
@@ -26,6 +26,7 @@ Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous m
 | Internal RPC | gRPC (tonic 0.13 + prost 0.13) |
 | Config / Flag Store | PostgreSQL 16+ (sqlx 0.8) — offline cache (`.sqlx/`) for compile-time safety in CI |
 | DB Extensions | pg_partman (for segment list partitioning) |
+| List-Entry Store | ScyllaDB 6+ (scylla 1.5, Cassandra-compatible CQL) — wide-row tables per segment; LWT-based generation swap |
 | Events / Experiments Store | ClickHouse 24+ |
 | Human Auth | JWT (jsonwebtoken 9) + OAuth2/OIDC (openidconnect 3) + SAML 2.0 (quick-xml 0.36 + flate2) |
 | SDK Auth | SDK Key — scoped to project + environment; min 1 active enforced; Project Admin manages create/revoke |
@@ -104,6 +105,7 @@ Routes in `stitchd-gateway/src/routes/context_intel.rs`:
 | `governor` + `tower_governor` | 0.10 / 0.8 | Auth endpoint rate limiting |
 | `secrecy` | 0.10 | Zero-on-drop secret wrapping |
 | `siphasher` + `murmur3` + `sha2` | 1 / 0.5 / 0.10 | Consistent hashing (flag evaluation) |
+| `scylla` | 1.5 | ScyllaDB async CQL driver (`metrics` feature enabled) |
 | `utoipa` + `utoipa-axum` | 5 / 0.2 | OpenAPI 3.1 spec generation |
 
 ## Build Tools
@@ -175,4 +177,5 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
 - ClickHouse 24+ for events, experiment data, metric aggregations
-- Docker Compose orchestrates all seven service containers with health-checked dependencies
+- ScyllaDB 6+ for list-segment entry storage (wide rows, million-scale per segment)
+- Docker Compose orchestrates all service containers with health-checked dependencies (scylladb service added in `segment_scylla_20260516`)

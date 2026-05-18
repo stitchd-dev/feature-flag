@@ -111,7 +111,10 @@ impl PollTask {
             }
         });
 
-        Self { handle, shutdown_tx: Some(shutdown_tx) }
+        Self {
+            handle,
+            shutdown_tx: Some(shutdown_tx),
+        }
     }
 
     /// Signal the task to stop and await its exit. Idempotent.
@@ -243,7 +246,10 @@ mod tests {
         task.shutdown().await;
 
         let snap = store.load();
-        assert!(snap.flag("fresh").is_some(), "snapshot should have been swapped");
+        assert!(
+            snap.flag("fresh").is_some(),
+            "snapshot should have been swapped"
+        );
         assert!(snap.flag("initial").is_none(), "old snapshot must be gone");
         assert!(fetcher.call_count() >= 1);
     }

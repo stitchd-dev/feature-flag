@@ -17,7 +17,7 @@ pub struct EvalLogRow {
     /// FK → environments.id.
     #[serde(with = "clickhouse::serde::uuid")]
     pub env_id: Uuid,
-    /// FK → feature_flags.id.
+    /// FK → `feature_flags.id`.
     #[serde(with = "clickhouse::serde::uuid")]
     pub flag_id: Uuid,
     /// Human-readable flag key.
@@ -44,6 +44,9 @@ pub struct EvalLogRow {
 /// Returns the underlying ClickHouse error if the insert fails. The caller
 /// should log and discard the error — it must not propagate to the evaluation
 /// response path.
+///
+/// # Errors
+/// Returns [`clickhouse::error::Error`] if the ClickHouse insert fails.
 pub async fn insert_eval_log_rows(
     client: &Client,
     rows: &[EvalLogRow],

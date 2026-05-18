@@ -7,6 +7,8 @@
 //! - `SEGMENTATION_SERVICE_PORT` — gRPC listen port (default: `50053`)
 //! - `SEGMENTATION_METRICS_PORT` — Prometheus metrics port (default: `9053`)
 //! - `DATABASE_URL` — PostgreSQL connection string (required)
+//! - `SCYLLA_URI` — ScyllaDB contact point (default: `127.0.0.1:9042`)
+//! - `SCYLLA_KEYSPACE` — ScyllaDB keyspace (default: `stitchd`)
 //! - `RUST_LOG` — log filter directive (default: `info`)
 
 use std::sync::Arc;
@@ -18,11 +20,15 @@ use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use stitchd_db::{PgAuditLogger, PgSegmentRepository, SegmentRepository};
+use stitchd_db::scylla::{ScyllaConfig, migrate as scylla_migrate, segment::ScyllaSegmentStore};
+use stitchd_db::{
+    CompositeSegmentRepository, PgAuditLogger, PgSegmentRepository, SegmentRepository,
+};
 use stitchd_proto::sdk::v1::segmentation_sdk_backend_service_server::SegmentationSdkBackendServiceServer;
 use stitchd_proto::segments::v1::segmentation_service_server::SegmentationServiceServer;
 use stitchd_segmentation_service::grpc::sdk_backend::SegmentationSdkBackendServiceImpl;
 use stitchd_segmentation_service::grpc::service::{AppState, SegmentationServiceImpl};
+use stitchd_segmentation_service::sweeper::GenerationSweeper;
 
 /// Default gRPC listen port.
 const DEFAULT_PORT: u16 = 50053;
@@ -71,8 +77,75 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to connect to PostgreSQL")?;
 
     let audit_logger = Arc::new(PgAuditLogger::new(pool.clone()));
-    let segment_repo: Arc<dyn SegmentRepository> =
-        Arc::new(PgSegmentRepository::new(pool.clone(), audit_logger));
+    let pg_segment_repo = Arc::new(PgSegmentRepository::new(pool.clone(), audit_logger));
+
+    // ── ScyllaDB ──────────────────────────────────────────────────────────────
+    let scylla_config = ScyllaConfig::from_env();
+    tracing::info!(uri = %scylla_config.uri, keyspace = %scylla_config.keyspace, "connecting to ScyllaDB");
+
+    let scylla_client = stitchd_db::scylla::ScyllaClient::connect(&scylla_config)
+        .await
+        .context("failed to connect to ScyllaDB")?;
+
+    let migrations_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/stitchd-db/scylla-migrations"
+    );
+    scylla_migrate::run(&scylla_client, migrations_dir)
+        .await
+        .context("ScyllaDB migrations failed")?;
+    tracing::info!("ScyllaDB migrations applied");
+
+    // Clone the client before moving into ScyllaSegmentStore — the clone is
+    // cheap because `ScyllaClient` wraps an `Arc<Session>` internally.
+    let metrics_poll_client = scylla_client.clone();
+    let scylla_store = Arc::new(ScyllaSegmentStore::new(scylla_client));
+
+    // ── Scylla metrics polling ────────────────────────────────────────────────
+    // Polls the Scylla driver's internal metrics every 15 s and emits them as
+    // Prometheus gauges via the `metrics` crate.
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            metrics_poll_client.record_metrics().await;
+        }
+    });
+    tracing::info!("scylla metrics polling started (interval=15s)");
+
+    // ── Generation sweeper ────────────────────────────────────────────────────
+    // Reads retention/interval from environment with sensible defaults.
+    let sweeper_retention_secs: u64 = std::env::var("SWEEPER_RETENTION_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(24 * 3600); // default: 24 hours
+    let sweeper_interval_secs: u64 = std::env::var("SWEEPER_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3600); // default: run every hour
+
+    // Clone is cheap — ScyllaSegmentStore wraps an Arc<Session> internally.
+    let sweeper_store = (*scylla_store).clone();
+    tokio::spawn(async move {
+        let sweeper = GenerationSweeper::new(
+            sweeper_store,
+            std::time::Duration::from_secs(sweeper_retention_secs),
+        );
+        sweeper
+            .run(std::time::Duration::from_secs(sweeper_interval_secs))
+            .await;
+    });
+    tracing::info!(
+        retention_secs = sweeper_retention_secs,
+        interval_secs = sweeper_interval_secs,
+        "generation sweeper started"
+    );
+
+    // Composite repository: PG for metadata, Scylla for list-entry operations.
+    let segment_repo: Arc<dyn SegmentRepository> = Arc::new(CompositeSegmentRepository::new(
+        pg_segment_repo.clone(),
+        scylla_store,
+    ));
 
     // ── gRPC server ───────────────────────────────────────────────────────────
     let addr: std::net::SocketAddr = format!("0.0.0.0:{port}")
@@ -85,8 +158,9 @@ async fn main() -> anyhow::Result<()> {
     let service = SegmentationServiceImpl::new(state);
     let svc = SegmentationServiceServer::new(service);
 
-    let sdk_backend_svc =
-        SegmentationSdkBackendServiceServer::new(SegmentationSdkBackendServiceImpl::new(segment_repo));
+    let sdk_backend_svc = SegmentationSdkBackendServiceServer::new(
+        SegmentationSdkBackendServiceImpl::new(segment_repo),
+    );
 
     tracing::info!(%addr, "starting segmentation service gRPC server");
 

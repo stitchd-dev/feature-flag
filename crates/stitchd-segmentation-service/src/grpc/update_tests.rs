@@ -143,8 +143,11 @@ mod tests {
     // GetSegment — list-type segment
     // -------------------------------------------------------------------------
 
+    /// Phase 4: GetSegment for a list-type segment returns `ListSegmentMeta` in the bundle —
+    /// metadata only (key + context_type + id), no entry keys.
+    /// Entry keys are never sent over the wire; membership is evaluated server-side via Scylla.
     #[tokio::test]
-    async fn get_segment_list_type_returns_bundle_with_list_entries() {
+    async fn get_segment_list_type_returns_meta_bundle_without_keys() {
         let repo = MockSegmentRepoForTest::new();
         let (env_id, env_id_str) = make_env_id();
 
@@ -159,7 +162,7 @@ mod tests {
                 exclude: std::iter::once("u3".to_string()).collect(),
             },
         );
-        repo.insert_list_segment(env_id, "my-list-seg", lists);
+        let seg = repo.insert_list_segment(env_id, "my-list-seg", lists);
 
         let svc = make_service(repo);
         let resp = svc
@@ -171,14 +174,17 @@ mod tests {
             .expect("get_segment should succeed");
 
         let bundle = resp.into_inner();
-        assert_eq!(bundle.list_segments.len(), 1);
-        assert_eq!(bundle.rule_segments.len(), 0);
-        assert_eq!(bundle.list_segments[0].key, "my-list-seg");
-        assert!(
-            bundle.list_segments[0]
-                .included_keys
-                .contains(&"u1".to_string())
+        assert_eq!(
+            bundle.list_segments.len(),
+            1,
+            "should have one list segment meta"
         );
+        assert_eq!(bundle.rule_segments.len(), 0);
+        let meta = &bundle.list_segments[0];
+        assert_eq!(meta.key, "my-list-seg");
+        // id must be set to the segment UUID so the SDK can correlate ConditionExpr refs.
+        assert_eq!(meta.id, seg.id.to_string());
+        // Entry keys are NOT present — membership is server-side only.
     }
 
     // -------------------------------------------------------------------------

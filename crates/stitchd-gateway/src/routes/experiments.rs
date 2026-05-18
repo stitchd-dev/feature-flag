@@ -170,7 +170,8 @@ pub async fn list_experiments(
         .await
         .map_err(GatewayError::from)?;
     let inner = resp.into_inner();
-    let experiments: Vec<ExperimentJson> = inner.experiments.iter().map(experiment_to_json).collect();
+    let experiments: Vec<ExperimentJson> =
+        inner.experiments.iter().map(experiment_to_json).collect();
     Ok(Json(PaginatedResponse::new(
         experiments,
         inner.total,

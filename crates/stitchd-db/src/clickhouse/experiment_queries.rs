@@ -3,7 +3,7 @@
 //! Three query families are provided:
 //!
 //! - [`query_count_metric`] — count / conversion metrics queried from the
-//!   `events_experiment_daily` pre-aggregated AggregatingMergeTree table via
+//!   `events_experiment_daily` pre-aggregated `AggregatingMergeTree` table via
 //!   `countMerge`/`uniqMerge`. Avoids full `arrayFirst`/`arrayExists` raw
 //!   event scans for the most common query type.
 //! - [`query_numeric_metric`] — numeric sum / avg / percentile metrics queried
@@ -89,11 +89,11 @@ pub struct FunnelStepRow {
 
 /// Build the SQL string for a count/conversion metric query.
 ///
-/// Reads from `events_experiment_daily` (pre-aggregated AggregatingMergeTree)
+/// Reads from `events_experiment_daily` (pre-aggregated `AggregatingMergeTree`)
 /// rather than scanning raw events. `countMerge` and `uniqMerge` finalise the
 /// stored aggregate states across all matched day partitions.
 ///
-/// `sample_size` is an HyperLogLog approximation via `uniqMerge` (vs the
+/// `sample_size` is an `HyperLogLog` approximation via `uniqMerge` (vs the
 /// previous `uniqExact` on raw events). For experiment analysis at scale the
 /// approximation error is negligible.
 ///
@@ -396,8 +396,14 @@ mod tests {
     #[test]
     fn count_metric_sql_uses_merge_aggregates() {
         let sql = build_count_metric_sql();
-        assert!(sql.contains("countMerge"), "must use countMerge to finalise count_state");
-        assert!(sql.contains("uniqMerge"), "must use uniqMerge to finalise uniq_ctx_state");
+        assert!(
+            sql.contains("countMerge"),
+            "must use countMerge to finalise count_state"
+        );
+        assert!(
+            sql.contains("uniqMerge"),
+            "must use uniqMerge to finalise uniq_ctx_state"
+        );
     }
 
     #[test]
@@ -409,7 +415,10 @@ mod tests {
     #[test]
     fn count_metric_sql_filters_experiment_id_column() {
         let sql = build_count_metric_sql();
-        assert!(sql.contains("experiment_id"), "must filter by experiment_id column in MV");
+        assert!(
+            sql.contains("experiment_id"),
+            "must filter by experiment_id column in MV"
+        );
     }
 
     #[test]
@@ -429,7 +438,10 @@ mod tests {
     fn count_metric_sql_has_five_bind_placeholders() {
         let sql = build_count_metric_sql();
         let count = sql.chars().filter(|&c| c == '?').count();
-        assert_eq!(count, 5, "expected 5 bind params: env_id, experiment_id, metric_key, date_from, date_to");
+        assert_eq!(
+            count, 5,
+            "expected 5 bind params: env_id, experiment_id, metric_key, date_from, date_to"
+        );
     }
 
     #[test]

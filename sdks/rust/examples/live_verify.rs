@@ -17,8 +17,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::WARN)
         .init();
 
-    let sdk_key = std::env::var("STITCHD_SDK_KEY")
-        .unwrap_or_else(|_| "sdk_live_test_key_001".to_string());
+    let sdk_key =
+        std::env::var("STITCHD_SDK_KEY").unwrap_or_else(|_| "sdk_live_test_key_001".to_string());
     let gateway_url = std::env::var("STITCHD_GATEWAY_URL")
         .unwrap_or_else(|_| "http://localhost:8081".to_string());
 
@@ -161,7 +161,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let acme_member = acme["memberships"]["bd5af427-0d22-4531-9a5a-07b22d8e0c8f"]
         .as_bool()
         .expect("bool membership value");
-    assert!(!acme_member, "acme-corp (excluded) should not be a member of beta-orgs");
+    assert!(
+        !acme_member,
+        "acme-corp (excluded) should not be a member of beta-orgs"
+    );
 
     println!("  globex-inc member: {globex_member}  (expected true)  ✓");
     println!("  acme-corp  member: {acme_member}  (expected false) ✓");

@@ -10,7 +10,7 @@ use uuid::Uuid;
 use stitchd_core::{
     id::{EnvironmentId, RuleId, SegmentId, VariantId},
     rule_engine::types::{ConditionExpr, Rule, RuleOutput},
-    segment::{ContextList, ListBasedSegment, RuleBasedSegment, Segment, SegmentType},
+    segment::{RuleBasedSegment, Segment, SegmentType},
 };
 
 use crate::{
@@ -27,7 +27,7 @@ fn row_to_segment(row: &sqlx::postgres::PgRow) -> Result<Segment, RepositoryErro
         other => {
             return Err(RepositoryError::Database(sqlx::Error::Decode(
                 format!("unknown segment_type: {other}").into(),
-            )))
+            )));
         }
     };
     let tags: Vec<String> = row.get("tags");
@@ -174,19 +174,26 @@ impl SegmentRepository for PgSegmentRepository {
             ",
         )
         .bind(environment_id.as_uuid())
-        .bind(limit as i64)
-        .bind(offset as i64)
+        .bind({
+            #[allow(clippy::cast_possible_wrap)]
+            let v = limit as i64;
+            v
+        })
+        .bind({
+            #[allow(clippy::cast_possible_wrap)]
+            let v = offset as i64;
+            v
+        })
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let total = rows
-            .first()
-            .map(|r| {
-                let n: i64 = r.get("total_count");
-                n.max(0) as u64
-            })
-            .unwrap_or(0);
+        let total = rows.first().map_or(0, |r| {
+            let n: i64 = r.get("total_count");
+            #[allow(clippy::cast_sign_loss)]
+            let result = n.max(0) as u64;
+            result
+        });
 
         let segments = rows
             .iter()
@@ -419,43 +426,6 @@ impl SegmentRepository for PgSegmentRepository {
         Ok(RuleBasedSegment { id, rules })
     }
 
-    async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
-        let segment = self.find_by_id(id).await?;
-        if segment.segment_type != SegmentType::List {
-            return Err(RepositoryError::NotFound { id: id.to_string() });
-        }
-
-        let entries = sqlx::query!(
-            r#"
-            SELECT context_type, entry_key, list_type
-            FROM segment_list_entries
-            WHERE segment_id = $1
-            "#,
-            id as SegmentId
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        let mut lists = HashMap::new();
-        for row in entries {
-            let list = lists
-                .entry(row.context_type)
-                .or_insert_with(ContextList::default);
-            match row.list_type.as_str() {
-                "include" => {
-                    list.include.insert(row.entry_key);
-                }
-                "exclude" => {
-                    list.exclude.insert(row.entry_key);
-                }
-                _ => {}
-            }
-        }
-
-        Ok(ListBasedSegment { id, lists })
-    }
-
     async fn upsert_rules(&self, id: SegmentId, rules: &[Rule]) -> Result<(), RepositoryError> {
         let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
 
@@ -510,81 +480,14 @@ impl SegmentRepository for PgSegmentRepository {
 
     async fn set_list_entries(
         &self,
-        id: SegmentId,
-        context_type: &str,
-        include: &[String],
-        exclude: &[String],
+        _id: SegmentId,
+        _context_type: &str,
+        _include: &[String],
+        _exclude: &[String],
     ) -> Result<(), RepositoryError> {
-        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
-
-        // Delete existing for this context_type
-        sqlx::query!(
-            r#"DELETE FROM segment_list_entries WHERE segment_id = $1 AND context_type = $2"#,
-            id as SegmentId,
-            context_type
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        // Insert include
-        for key in include {
-            sqlx::query!(
-                r#"
-                INSERT INTO segment_list_entries (segment_id, context_type, entry_key, list_type)
-                VALUES ($1, $2, $3, 'include')
-                "#,
-                id as SegmentId,
-                context_type,
-                key
-            )
-            .execute(&mut *tx)
-            .await
-            .map_err(RepositoryError::Database)?;
-        }
-
-        // Insert exclude
-        for key in exclude {
-            sqlx::query!(
-                r#"
-                INSERT INTO segment_list_entries (segment_id, context_type, entry_key, list_type)
-                VALUES ($1, $2, $3, 'exclude')
-                "#,
-                id as SegmentId,
-                context_type,
-                key
-            )
-            .execute(&mut *tx)
-            .await
-            .map_err(RepositoryError::Database)?;
-        }
-
-        // Update segment updated_at and version
-        sqlx::query!(
-            r#"UPDATE segments SET updated_at = NOW(), version = version + 1 WHERE id = $1"#,
-            id as SegmentId
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        tx.commit().await.map_err(RepositoryError::Database)?;
-
-        self.audit
-            .log(
-                None,
-                "segment",
-                id.as_uuid(),
-                "set_list_entries",
-                serde_json::json!({
-                    "context_type": context_type,
-                    "include_count": include.len(),
-                    "exclude_count": exclude.len(),
-                }),
-            )
-            .await?;
-
-        Ok(())
+        Err(RepositoryError::Unexpected(anyhow::anyhow!(
+            "set_list_entries is not supported by the PostgreSQL backend; use the Scylla-backed implementation"
+        )))
     }
 
     async fn check_list_membership(
@@ -690,7 +593,10 @@ impl SegmentRepository for PgSegmentRepository {
             return Ok(results);
         }
 
-        let segment_uuids: Vec<uuid::Uuid> = segment_ids.iter().map(|id| id.as_uuid()).collect();
+        let segment_uuids: Vec<uuid::Uuid> = segment_ids
+            .iter()
+            .map(stitchd_core::id::SegmentId::as_uuid)
+            .collect();
         let context_types: Vec<String> = contexts.iter().map(|(t, _)| t.clone()).collect();
         let context_keys: Vec<String> = contexts.iter().map(|(_, k)| k.clone()).collect();
 
@@ -756,14 +662,14 @@ impl SegmentRepository for PgSegmentRepository {
         Ok(results)
     }
 
-    async fn find_batch_by_ids(
-        &self,
-        ids: &[SegmentId],
-    ) -> Result<Vec<Segment>, RepositoryError> {
+    async fn find_batch_by_ids(&self, ids: &[SegmentId]) -> Result<Vec<Segment>, RepositoryError> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let uuids: Vec<uuid::Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let uuids: Vec<uuid::Uuid> = ids
+            .iter()
+            .map(stitchd_core::id::SegmentId::as_uuid)
+            .collect();
         let rows = sqlx::query(
             r"
             SELECT id, environment_id, key, name, description, tags,
@@ -791,7 +697,10 @@ impl SegmentRepository for PgSegmentRepository {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let uuids: Vec<uuid::Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        let uuids: Vec<uuid::Uuid> = ids
+            .iter()
+            .map(stitchd_core::id::SegmentId::as_uuid)
+            .collect();
 
         // Load all segment_rules rows for these IDs in one query.
         let rule_rows = sqlx::query(
@@ -825,8 +734,10 @@ impl SegmentRepository for PgSegmentRepository {
             .collect();
 
         if !ids_needing_fallback.is_empty() {
-            let fallback_uuids: Vec<uuid::Uuid> =
-                ids_needing_fallback.iter().map(|id| id.as_uuid()).collect();
+            let fallback_uuids: Vec<uuid::Uuid> = ids_needing_fallback
+                .iter()
+                .map(stitchd_core::id::SegmentId::as_uuid)
+                .collect();
             let fallback_rows = sqlx::query(
                 r"SELECT id, condition_expr FROM segments WHERE id = ANY($1) AND condition_expr IS NOT NULL",
             )
@@ -852,54 +763,48 @@ impl SegmentRepository for PgSegmentRepository {
 
         Ok(ids
             .iter()
-            .map(|&id| (id, RuleBasedSegment { id, rules: rules_by_id.remove(&id).unwrap_or_default() }))
+            .map(|&id| {
+                (
+                    id,
+                    RuleBasedSegment {
+                        id,
+                        rules: rules_by_id.remove(&id).unwrap_or_default(),
+                    },
+                )
+            })
             .collect())
     }
 
-    async fn find_lists_batch(
+    async fn add_entries(
         &self,
-        ids: &[SegmentId],
-    ) -> Result<HashMap<SegmentId, ListBasedSegment>, RepositoryError> {
-        if ids.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let uuids: Vec<uuid::Uuid> = ids.iter().map(|id| id.as_uuid()).collect();
+        _id: SegmentId,
+        _context_type: &str,
+        _list_type: &str,
+        _keys: &[String],
+    ) -> Result<(), RepositoryError> {
+        Err(RepositoryError::Unexpected(anyhow::anyhow!(
+            "add_entries is not supported by the PostgreSQL backend; use the Scylla-backed implementation"
+        )))
+    }
 
-        let rows = sqlx::query(
-            r"
-            SELECT segment_id, context_type, entry_key, list_type
-            FROM segment_list_entries
-            WHERE segment_id = ANY($1)
-            ",
-        )
-        .bind(&uuids)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
+    async fn remove_entries(
+        &self,
+        _id: SegmentId,
+        _context_type: &str,
+        _list_type: &str,
+        _keys: &[String],
+    ) -> Result<(), RepositoryError> {
+        Err(RepositoryError::Unexpected(anyhow::anyhow!(
+            "remove_entries is not supported by the PostgreSQL backend; use the Scylla-backed implementation"
+        )))
+    }
 
-        let mut lists_by_id: HashMap<SegmentId, HashMap<String, ContextList>> = HashMap::new();
-        for row in rows {
-            let seg_uuid: uuid::Uuid = row.get("segment_id");
-            let seg_id = SegmentId::from_uuid(seg_uuid);
-            let context_type: String = row.get("context_type");
-            let entry_key: String = row.get("entry_key");
-            let list_type: String = row.get("list_type");
-
-            let lists = lists_by_id.entry(seg_id).or_default();
-            let ctx_list = lists.entry(context_type).or_default();
-            match list_type.as_str() {
-                "include" => { ctx_list.include.insert(entry_key); }
-                "exclude" => { ctx_list.exclude.insert(entry_key); }
-                _ => {}
-            }
-        }
-
-        Ok(ids
-            .iter()
-            .map(|&id| {
-                let lists = lists_by_id.remove(&id).unwrap_or_default();
-                (id, ListBasedSegment { id, lists })
-            })
-            .collect())
+    async fn get_list_segment_summary(
+        &self,
+        _id: SegmentId,
+    ) -> Result<crate::repository::ListSegmentSummary, RepositoryError> {
+        Err(RepositoryError::Unexpected(anyhow::anyhow!(
+            "get_list_segment_summary is not supported by the PostgreSQL backend; use the Scylla-backed implementation"
+        )))
     }
 }

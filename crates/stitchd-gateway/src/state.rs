@@ -220,29 +220,45 @@ struct NoopContextRegistry;
 #[async_trait::async_trait]
 impl ContextRegistryRepository for NoopContextRegistry {
     async fn upsert_context_type(
-        &self, _: stitchd_core::id::EnvironmentId, _: &str,
-    ) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        &self,
+        _: stitchd_core::id::EnvironmentId,
+        _: &str,
+    ) -> Result<(), stitchd_db::RepositoryError> {
+        Ok(())
+    }
 
     async fn upsert_param(
-        &self, _: stitchd_core::id::EnvironmentId, _: &str, _: &str,
-        _: stitchd_core::context::InferredType, _: bool,
-    ) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        &self,
+        _: stitchd_core::id::EnvironmentId,
+        _: &str,
+        _: &str,
+        _: stitchd_core::context::InferredType,
+        _: bool,
+    ) -> Result<(), stitchd_db::RepositoryError> {
+        Ok(())
+    }
 
     async fn list_types(
-        &self, _: stitchd_core::id::EnvironmentId,
+        &self,
+        _: stitchd_core::id::EnvironmentId,
     ) -> Result<Vec<stitchd_core::context::ContextTypeRecord>, stitchd_db::RepositoryError> {
         Ok(vec![])
     }
 
     async fn list_params(
-        &self, _: stitchd_core::id::EnvironmentId, _: &str,
+        &self,
+        _: stitchd_core::id::EnvironmentId,
+        _: &str,
     ) -> Result<Vec<stitchd_core::context::ContextParamRecord>, stitchd_db::RepositoryError> {
         Ok(vec![])
     }
 
     async fn purge_stale(
-        &self, _: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), stitchd_db::RepositoryError> { Ok(()) }
+        &self,
+        _: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), stitchd_db::RepositoryError> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

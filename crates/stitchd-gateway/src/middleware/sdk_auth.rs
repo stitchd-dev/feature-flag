@@ -100,7 +100,10 @@ pub async fn sdk_auth_middleware(
     next: Next,
 ) -> Response {
     let Some(sdk_key) = extract_sdk_key(&req) else {
-        return unauthorized("missing_sdk_key", "x-sdk-key header required for SDK routes");
+        return unauthorized(
+            "missing_sdk_key",
+            "x-sdk-key header required for SDK routes",
+        );
     };
 
     let credential_req = CredentialRequest {

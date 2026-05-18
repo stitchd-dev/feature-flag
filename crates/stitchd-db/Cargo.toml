@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
+scylla = { workspace = true }
 sqlx = { workspace = true }
 clickhouse = { workspace = true }
 tokio = { workspace = true }
@@ -21,3 +22,8 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
+metrics = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }

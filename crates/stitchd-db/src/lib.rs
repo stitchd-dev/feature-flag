@@ -10,6 +10,10 @@ pub mod clickhouse;
 pub mod error;
 pub mod experiment_results;
 pub mod repository;
+/// `ScyllaDB` client, migration applier, and list-segment repository.
+pub mod scylla;
+
+pub use scylla::segment::OrphanedGeneration;
 pub mod stats_jobs;
 pub mod stats_schedule;
 
@@ -27,8 +31,10 @@ pub use experiment_results::{
 };
 pub use repository::{
     AuditLogger, ContextRegistryRepository, EnvironmentRepository, EventDefinitionRepository,
-    ExperimentRepository, FlagRepository, OrganisationRepository, ProjectRepository,
-    RoleRepository, SdkKeyRepository, SegmentRepository, UserRepository, VariantRepository,
+    ExperimentRepository, FlagRepository, ListContextCounts, ListSegmentSummary,
+    OrganisationRepository, ProjectRepository, RoleRepository, SdkKeyRepository, SegmentRepository,
+    UserRepository, VariantRepository,
+    composite::CompositeSegmentRepository,
     pg::{
         PgAuditLogger, PgContextRegistryRepository, PgEnvironmentRepository,
         PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository,

@@ -7,3 +7,4 @@
 pub mod error;
 pub mod grpc;
 pub mod segment;
+pub mod sweeper;

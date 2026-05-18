@@ -278,13 +278,12 @@ impl FlagRepository for PgFlagRepository {
         .await
         .map_err(RepositoryError::Database)?;
 
-        let total = rows
-            .first()
-            .map(|r| {
-                let n: i64 = r.get("total_count");
-                n.max(0) as u64
-            })
-            .unwrap_or(0);
+        let total = rows.first().map_or(0, |r| {
+            let n: i64 = r.get("total_count");
+            #[allow(clippy::cast_sign_loss)]
+            let result = n.max(0) as u64;
+            result
+        });
 
         let flags = rows
             .into_iter()

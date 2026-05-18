@@ -225,7 +225,9 @@ mod tests {
 
     #[test]
     fn validate_accepts_default_config() {
-        ok_config().validate().expect("default config must validate");
+        ok_config()
+            .validate()
+            .expect("default config must validate");
     }
 
     #[test]
@@ -293,72 +295,96 @@ mod tests {
     fn validate_rejects_zero_grpc_port() {
         let mut cfg = ok_config();
         cfg.gateway_grpc_port = 0;
-        assert!(cfg.validate().unwrap_err().to_string().contains("gateway_grpc_port"));
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("gateway_grpc_port")
+        );
     }
 
     #[test]
     fn validate_rejects_zero_definition_poll_interval() {
         let mut cfg = ok_config();
         cfg.definition_poll_interval = Duration::ZERO;
-        assert!(cfg
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("definition_poll_interval"));
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("definition_poll_interval")
+        );
     }
 
     #[test]
     fn validate_rejects_zero_refresh_interval() {
         let mut cfg = ok_config();
         cfg.list_segment_refresh_interval = Duration::ZERO;
-        assert!(cfg
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("list_segment_refresh_interval"));
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("list_segment_refresh_interval")
+        );
     }
 
     #[test]
     fn validate_rejects_zero_event_flush_interval() {
         let mut cfg = ok_config();
         cfg.event_flush_interval = Duration::ZERO;
-        assert!(cfg
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("event_flush_interval"));
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("event_flush_interval")
+        );
     }
 
     #[test]
     fn validate_rejects_zero_request_timeout() {
         let mut cfg = ok_config();
         cfg.request_timeout = Duration::ZERO;
-        assert!(cfg.validate().unwrap_err().to_string().contains("request_timeout"));
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("request_timeout")
+        );
     }
 
     #[test]
     fn validate_rejects_zero_lru_max_entries() {
         let mut cfg = ok_config();
         cfg.lru_max_entries = 0;
-        assert!(cfg.validate().unwrap_err().to_string().contains("lru_max_entries"));
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("lru_max_entries")
+        );
     }
 
     #[test]
     fn validate_rejects_zero_event_batch_size() {
         let mut cfg = ok_config();
         cfg.event_batch_size = 0;
-        assert!(cfg.validate().unwrap_err().to_string().contains("event_batch_size"));
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("event_batch_size")
+        );
     }
 
     #[test]
     fn validate_rejects_zero_event_buffer_capacity() {
         let mut cfg = ok_config();
         cfg.event_buffer_capacity = 0;
-        assert!(cfg
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("event_buffer_capacity"));
+        assert!(
+            cfg.validate()
+                .unwrap_err()
+                .to_string()
+                .contains("event_buffer_capacity")
+        );
     }
 
     #[test]

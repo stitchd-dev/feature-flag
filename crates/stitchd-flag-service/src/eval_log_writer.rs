@@ -128,7 +128,11 @@ mod tests {
             Context::new("org", "acme"),
         ]);
         let rows = build_eval_log_rows(
-            env_id, flag_id, "my-flag", false, Utc::now(),
+            env_id,
+            flag_id,
+            "my-flag",
+            false,
+            Utc::now(),
             &[(ec, "on".to_string())],
         );
         assert_eq!(rows.len(), 2);
@@ -144,11 +148,12 @@ mod tests {
         let ec1 = eval_ctx(vec![Context::new("user", "alice")]);
         let ec2 = eval_ctx(vec![Context::new("user", "bob")]);
         let rows = build_eval_log_rows(
-            env_id, flag_id, "flag", false, Utc::now(),
-            &[
-                (ec1, "on".to_string()),
-                (ec2, "off".to_string()),
-            ],
+            env_id,
+            flag_id,
+            "flag",
+            false,
+            Utc::now(),
+            &[(ec1, "on".to_string()), (ec2, "off".to_string())],
         );
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].variant_key, "on");
@@ -163,7 +168,11 @@ mod tests {
             .with_parameter("plan", ParameterValue::Str("pro".into()))
             .with_private_parameter("email");
         let rows = build_eval_log_rows(
-            env_id, flag_id, "flag", false, Utc::now(),
+            env_id,
+            flag_id,
+            "flag",
+            false,
+            Utc::now(),
             &[(eval_ctx(vec![ctx]), "on".to_string())],
         );
         assert_eq!(rows.len(), 1);
@@ -181,9 +190,16 @@ mod tests {
             .with_parameter("i", ParameterValue::Int(42))
             .with_parameter("d", ParameterValue::Double(3.14))
             .with_parameter("s", ParameterValue::Str("hello".into()))
-            .with_parameter("v", ParameterValue::SemVer(Version::parse("1.2.3").unwrap()));
+            .with_parameter(
+                "v",
+                ParameterValue::SemVer(Version::parse("1.2.3").unwrap()),
+            );
         let rows = build_eval_log_rows(
-            env_id, flag_id, "flag", false, Utc::now(),
+            env_id,
+            flag_id,
+            "flag",
+            false,
+            Utc::now(),
             &[(eval_ctx(vec![ctx]), "on".to_string())],
         );
         let params: serde_json::Value = serde_json::from_str(&rows[0].params_json).unwrap();
@@ -197,9 +213,7 @@ mod tests {
     #[test]
     fn empty_contexts_produces_no_rows() {
         let (env_id, flag_id) = nil_ids();
-        let rows = build_eval_log_rows(
-            env_id, flag_id, "flag", false, Utc::now(), &[],
-        );
+        let rows = build_eval_log_rows(env_id, flag_id, "flag", false, Utc::now(), &[]);
         assert!(rows.is_empty());
     }
 
@@ -208,7 +222,11 @@ mod tests {
         let (env_id, flag_id) = nil_ids();
         let ctx = Context::new("user", "alice");
         let rows = build_eval_log_rows(
-            env_id, flag_id, "flag", true, Utc::now(),
+            env_id,
+            flag_id,
+            "flag",
+            true,
+            Utc::now(),
             &[(eval_ctx(vec![ctx]), "__disabled__".to_string())],
         );
         assert_eq!(rows.len(), 1);

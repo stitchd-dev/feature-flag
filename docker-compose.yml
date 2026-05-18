@@ -20,6 +20,24 @@ services:
       retries: 10
       start_period: 10s
 
+  scylladb:
+    image: scylladb/scylla:6.2
+    container_name: stitchd-scylladb
+    restart: unless-stopped
+    command: --smp 1 --memory 512M --overprovisioned 1 --developer-mode 1
+    ports:
+      - "${SCYLLA_CQL_PORT:-9042}:9042"
+    volumes:
+      - scylladb_data:/var/lib/scylla
+    networks:
+      - stitchd
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe cluster' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
   clickhouse:
     image: clickhouse/clickhouse-server:24-alpine
     container_name: stitchd-clickhouse
@@ -109,6 +127,8 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      SCYLLA_URI: scylladb:9042
+      SCYLLA_KEYSPACE: ${SCYLLA_KEYSPACE:-stitchd}
       SEGMENTATION_SERVICE_PORT: "50053"
       RUST_LOG: ${RUST_LOG:-info}
     ports:
@@ -117,6 +137,8 @@ services:
       - stitchd
     depends_on:
       postgres:
+        condition: service_healthy
+      scylladb:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "grpc_health_probe -addr=:50053 || exit 1"]
@@ -267,6 +289,8 @@ volumes:
   postgres_data:
     driver: local
   clickhouse_data:
+    driver: local
+  scylladb_data:
     driver: local
 
 networks:

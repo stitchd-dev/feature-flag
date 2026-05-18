@@ -23,11 +23,11 @@
 //! They are `pub(crate)` to let integration tests inject stubs; the stable
 //! public API is `SdkClient::init(SdkConfig)`.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::warn;
 use uuid::Uuid;
@@ -131,13 +131,13 @@ pub(crate) struct GrpcDefinitionFetcher {
 }
 
 impl GrpcDefinitionFetcher {
-    pub(crate) fn new(
-        channel: tonic::transport::Channel,
-        sdk_key: &str,
-    ) -> Result<Self, SdkError> {
+    pub(crate) fn new(channel: tonic::transport::Channel, sdk_key: &str) -> Result<Self, SdkError> {
         let meta = tonic::metadata::MetadataValue::try_from(sdk_key)
             .map_err(|_| SdkError::Config("sdk_key contains non-ASCII characters".into()))?;
-        Ok(Self { channel, sdk_key: meta })
+        Ok(Self {
+            channel,
+            sdk_key: meta,
+        })
     }
 }
 
@@ -146,8 +146,7 @@ impl DefinitionFetcher for GrpcDefinitionFetcher {
     async fn fetch(&self) -> Result<DefinitionSnapshot, SdkError> {
         let mut client = SdkServiceClient::new(self.channel.clone());
         let mut req = tonic::Request::new(SyncDefinitionsRequest {});
-        req.metadata_mut()
-            .insert("x-sdk-key", self.sdk_key.clone());
+        req.metadata_mut().insert("x-sdk-key", self.sdk_key.clone());
         let resp = client.sync_definitions(req).await.map_err(|s| {
             if s.code() == tonic::Code::Unauthenticated {
                 SdkError::Auth(s.message().to_string())
@@ -173,13 +172,13 @@ pub(crate) struct HttpMembershipFetcher {
 }
 
 impl HttpMembershipFetcher {
-    pub(crate) fn new(
-        base_url: &str,
-        sdk_key: impl Into<String>,
-        client: reqwest::Client,
-    ) -> Self {
+    pub(crate) fn new(base_url: &str, sdk_key: impl Into<String>, client: reqwest::Client) -> Self {
         let endpoint = format!("{base_url}/v1/sdk/segments/list:batch");
-        Self { endpoint, sdk_key: sdk_key.into(), client }
+        Self {
+            endpoint,
+            sdk_key: sdk_key.into(),
+            client,
+        }
     }
 }
 
@@ -274,13 +273,13 @@ pub(crate) struct HttpEventSink {
 }
 
 impl HttpEventSink {
-    pub(crate) fn new(
-        base_url: &str,
-        sdk_key: impl Into<String>,
-        client: reqwest::Client,
-    ) -> Self {
+    pub(crate) fn new(base_url: &str, sdk_key: impl Into<String>, client: reqwest::Client) -> Self {
         let endpoint = format!("{base_url}/v1/sdk/events:batch");
-        Self { endpoint, sdk_key: sdk_key.into(), client }
+        Self {
+            endpoint,
+            sdk_key: sdk_key.into(),
+            client,
+        }
     }
 }
 
@@ -353,7 +352,10 @@ impl EventSink for HttpEventSink {
         if resp.status().is_success() || resp.status().as_u16() == 202 {
             Ok(())
         } else {
-            Err(SdkError::Network(format!("event flush: HTTP {}", resp.status())))
+            Err(SdkError::Network(format!(
+                "event flush: HTTP {}",
+                resp.status()
+            )))
         }
     }
 }
@@ -381,7 +383,10 @@ impl std::fmt::Debug for SdkClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SdkClient")
             .field("definition_store", &self.definition_store)
-            .field("membership_cache_entries", &self.membership_cache.entry_count())
+            .field(
+                "membership_cache_entries",
+                &self.membership_cache.entry_count(),
+            )
             .field("event_queue_len", &self.event_queue.len())
             .finish_non_exhaustive()
     }
@@ -483,8 +488,9 @@ impl SdkClient {
         let snapshot = self.definition_store.load();
         let mut results = Vec::with_capacity(requests.len());
         for req in requests {
-            let (variant_key, variant_value, outcome, _trace) =
-                self.evaluate_inner(&snapshot, &req.flag_key, &req.context, false).await;
+            let (variant_key, variant_value, outcome, _trace) = self
+                .evaluate_inner(&snapshot, &req.flag_key, &req.context, false)
+                .await;
             let event = build_event(
                 &req.flag_key,
                 find_flag_id(&snapshot, &req.flag_key),
@@ -495,7 +501,12 @@ impl SdkClient {
                 &req.context,
             );
             self.event_queue.send(event);
-            results.push(EvalResult { flag_key: req.flag_key.clone(), variant_key, variant_value, outcome });
+            results.push(EvalResult {
+                flag_key: req.flag_key.clone(),
+                variant_key,
+                variant_value,
+                outcome,
+            });
         }
         results
     }
@@ -508,8 +519,9 @@ impl SdkClient {
         let snapshot = self.definition_store.load();
         let mut results = Vec::with_capacity(requests.len());
         for req in requests {
-            let (variant_key, variant_value, outcome, trace) =
-                self.evaluate_inner(&snapshot, &req.flag_key, &req.context, true).await;
+            let (variant_key, variant_value, outcome, trace) = self
+                .evaluate_inner(&snapshot, &req.flag_key, &req.context, true)
+                .await;
             let reasoning = trace.unwrap_or_else(|| ReasoningTrace {
                 outcome: outcome.clone(),
                 matched_rule_index: None,
@@ -569,14 +581,24 @@ impl SdkClient {
         flag_key: &str,
         context: &Context,
         build_reasoning: bool,
-    ) -> (String, serde_json::Value, EvalOutcome, Option<ReasoningTrace>) {
+    ) -> (
+        String,
+        serde_json::Value,
+        EvalOutcome,
+        Option<ReasoningTrace>,
+    ) {
         let Some(flag) = snapshot.flag(flag_key) else {
             let trace = build_reasoning.then_some(ReasoningTrace {
                 outcome: EvalOutcome::FlagNotFound,
                 matched_rule_index: None,
                 matched_rule_name: None,
             });
-            return (String::new(), serde_json::Value::Null, EvalOutcome::FlagNotFound, trace);
+            return (
+                String::new(),
+                serde_json::Value::Null,
+                EvalOutcome::FlagNotFound,
+                trace,
+            );
         };
 
         if flag.archived {
@@ -617,9 +639,7 @@ impl SdkClient {
         }
 
         // ── Resolve segment membership ────────────────────────────────────
-        let resolved_segments = self
-            .resolve_segments(snapshot, context, &all_seg_ids)
-            .await;
+        let resolved_segments = self.resolve_segments(snapshot, context, &all_seg_ids).await;
 
         // ── Evaluate rules ────────────────────────────────────────────────
         let input = EvaluationInput {
@@ -646,7 +666,11 @@ impl SdkClient {
                         }
                         None => continue,
                     };
-                    let rule_name = if rule.name.is_empty() { None } else { Some(rule.name.clone()) };
+                    let rule_name = if rule.name.is_empty() {
+                        None
+                    } else {
+                        Some(rule.name.clone())
+                    };
                     let outcome = EvalOutcome::Matched { rule_index: *idx };
                     let trace = build_reasoning.then_some(ReasoningTrace {
                         outcome: outcome.clone(),
@@ -707,7 +731,10 @@ impl SdkClient {
                 }
             } else if snapshot.list_segment(&id_str).is_some() {
                 // Check LRU first.
-                if let Some(map) = self.membership_cache.get(&context.context_type, &context.key) {
+                if let Some(map) = self
+                    .membership_cache
+                    .get(&context.context_type, &context.key)
+                {
                     if *map.get(&id_str).unwrap_or(&false) {
                         resolved.insert(seg_id);
                     }
@@ -737,11 +764,8 @@ impl SdkClient {
                         }
                     }
                     // Insert into LRU for future evaluations.
-                    self.membership_cache.insert(
-                        &context.context_type,
-                        &context.key,
-                        membership,
-                    );
+                    self.membership_cache
+                        .insert(&context.context_type, &context.key, membership);
                 }
                 Ok(_) => {}
                 Err(e) => {
@@ -817,9 +841,7 @@ fn lookup_variant_value(flag: &FeatureFlag, variant_key: &str) -> serde_json::Va
 }
 
 /// Convert a proto `VariantValue` to `serde_json::Value`.
-fn proto_variant_value_to_json(
-    v: &stitchd_proto::flags::v1::VariantValue,
-) -> serde_json::Value {
+fn proto_variant_value_to_json(v: &stitchd_proto::flags::v1::VariantValue) -> serde_json::Value {
     use stitchd_proto::flags::v1::variant_value::Value;
     match &v.value {
         Some(Value::BoolValue(b)) => serde_json::Value::Bool(*b),
@@ -944,19 +966,17 @@ fn build_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use stitchd_core::context::ParameterValue as CoreParam;
     use stitchd_core::id::RuleId;
     use stitchd_core::rule_engine::condition::Condition;
     use stitchd_core::rule_engine::types::{ConditionExpr, Rule, RuleOutput};
-    use stitchd_proto::flags::v1::{
-        FeatureFlag, FlagRule as ProtoFlagRule, Variant, VariantValue,
-    };
     use stitchd_proto::flags::v1::flag_rule::Output;
     use stitchd_proto::flags::v1::variant_value::Value as VVal;
+    use stitchd_proto::flags::v1::{FeatureFlag, FlagRule as ProtoFlagRule, Variant, VariantValue};
     use stitchd_proto::sdk::v1::SyncDefinitionsResponse;
     use stitchd_proto::segments::v1::{ListSegmentMeta, RuleSegment};
 
@@ -965,14 +985,18 @@ mod tests {
     fn bool_variant(key: &str, value: bool) -> Variant {
         Variant {
             key: key.to_string(),
-            value: Some(VariantValue { value: Some(VVal::BoolValue(value)) }),
+            value: Some(VariantValue {
+                value: Some(VVal::BoolValue(value)),
+            }),
         }
     }
 
     fn string_variant(key: &str, value: &str) -> Variant {
         Variant {
             key: key.to_string(),
-            value: Some(VariantValue { value: Some(VVal::StringValue(value.to_string())) }),
+            value: Some(VariantValue {
+                value: Some(VVal::StringValue(value.to_string())),
+            }),
         }
     }
 
@@ -1010,11 +1034,7 @@ mod tests {
         let event_queue = EventQueue::new(1000, 100);
 
         let sink: Arc<dyn EventSink> = Arc::new(NoopSink);
-        let flush_task = FlushTask::spawn(
-            event_queue.clone(),
-            sink,
-            Duration::from_secs(60),
-        );
+        let flush_task = FlushTask::spawn(event_queue.clone(), sink, Duration::from_secs(60));
 
         let membership_fetcher: Arc<dyn MembershipBatchFetcher> = Arc::new(NoopMembershipFetcher);
         let poll_fetcher: Arc<dyn DefinitionFetcher> = Arc::new(NoopFetcher);
@@ -1050,11 +1070,7 @@ mod tests {
         let event_queue = EventQueue::new(1000, 100);
 
         let sink: Arc<dyn EventSink> = Arc::new(NoopSink);
-        let flush_task = FlushTask::spawn(
-            event_queue.clone(),
-            sink,
-            Duration::from_secs(60),
-        );
+        let flush_task = FlushTask::spawn(event_queue.clone(), sink, Duration::from_secs(60));
 
         let poll_fetcher: Arc<dyn DefinitionFetcher> = Arc::new(NoopFetcher);
         let poll_task = PollTask::spawn(
@@ -1188,7 +1204,10 @@ mod tests {
             gateway_grpc_port: 50050,
             ..SdkConfig::new("http://localhost:8081", "12345678")
         };
-        assert_eq!(grpc_uri_from_config(&cfg).unwrap(), "http://localhost:50050");
+        assert_eq!(
+            grpc_uri_from_config(&cfg).unwrap(),
+            "http://localhost:50050"
+        );
     }
 
     #[test]
@@ -1208,7 +1227,10 @@ mod tests {
     async fn init_returns_config_error_on_bad_config() {
         let bad = SdkConfig::new("not_a_url", "key");
         let err = SdkClient::init(bad).await.unwrap_err();
-        assert!(matches!(err, SdkError::Config(_)), "expected Config error, got {err}");
+        assert!(
+            matches!(err, SdkError::Config(_)),
+            "expected Config error, got {err}"
+        );
     }
 
     // ── Task 8: evaluate — flag not found ────────────────────────────────────
@@ -1219,7 +1241,10 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
         let results = client
-            .evaluate(&[EvalRequest { flag_key: "no-such-flag".into(), context: ctx }])
+            .evaluate(&[EvalRequest {
+                flag_key: "no-such-flag".into(),
+                context: ctx,
+            }])
             .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].outcome, EvalOutcome::FlagNotFound);
@@ -1241,7 +1266,10 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
         let results = client
-            .evaluate(&[EvalRequest { flag_key: "feature-x".into(), context: ctx }])
+            .evaluate(&[EvalRequest {
+                flag_key: "feature-x".into(),
+                context: ctx,
+            }])
             .await;
         assert_eq!(results[0].outcome, EvalOutcome::Disabled);
         assert_eq!(results[0].variant_key, "false");
@@ -1262,7 +1290,10 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
         let results = client
-            .evaluate(&[EvalRequest { flag_key: "show-banner".into(), context: ctx }])
+            .evaluate(&[EvalRequest {
+                flag_key: "show-banner".into(),
+                context: ctx,
+            }])
             .await;
         assert_eq!(results[0].outcome, EvalOutcome::DefaultRule);
         assert_eq!(results[0].variant_key, "true");
@@ -1300,10 +1331,13 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
 
         // Context WITH plan=pro → should match rule
-        let ctx_pro = Context::new("user", "alice")
-            .with_parameter("plan", CoreParam::Str("pro".into()));
+        let ctx_pro =
+            Context::new("user", "alice").with_parameter("plan", CoreParam::Str("pro".into()));
         let res = client
-            .evaluate(&[EvalRequest { flag_key: "checkout-flow".into(), context: ctx_pro }])
+            .evaluate(&[EvalRequest {
+                flag_key: "checkout-flow".into(),
+                context: ctx_pro,
+            }])
             .await;
         assert_eq!(res[0].outcome, EvalOutcome::Matched { rule_index: 0 });
         assert_eq!(res[0].variant_key, "new-checkout");
@@ -1311,7 +1345,10 @@ mod tests {
         // Context WITHOUT plan → no match, default
         let ctx_free = Context::new("user", "bob");
         let res2 = client
-            .evaluate(&[EvalRequest { flag_key: "checkout-flow".into(), context: ctx_free }])
+            .evaluate(&[EvalRequest {
+                flag_key: "checkout-flow".into(),
+                context: ctx_free,
+            }])
             .await;
         assert_eq!(res2[0].outcome, EvalOutcome::DefaultRule);
         assert_eq!(res2[0].variant_key, "old-checkout");
@@ -1370,10 +1407,13 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
 
         // pro user → member of segment → treatment
-        let ctx_pro = Context::new("user", "alice")
-            .with_parameter("plan", CoreParam::Str("pro".into()));
+        let ctx_pro =
+            Context::new("user", "alice").with_parameter("plan", CoreParam::Str("pro".into()));
         let res = client
-            .evaluate(&[EvalRequest { flag_key: "feature-flag".into(), context: ctx_pro }])
+            .evaluate(&[EvalRequest {
+                flag_key: "feature-flag".into(),
+                context: ctx_pro,
+            }])
             .await;
         assert_eq!(res[0].outcome, EvalOutcome::Matched { rule_index: 0 });
         assert_eq!(res[0].variant_key, "treatment");
@@ -1381,7 +1421,10 @@ mod tests {
         // free user → not member → control
         let ctx_free = Context::new("user", "bob");
         let res2 = client
-            .evaluate(&[EvalRequest { flag_key: "feature-flag".into(), context: ctx_free }])
+            .evaluate(&[EvalRequest {
+                flag_key: "feature-flag".into(),
+                context: ctx_free,
+            }])
             .await;
         assert_eq!(res2[0].outcome, EvalOutcome::DefaultRule);
         assert_eq!(res2[0].variant_key, "control");
@@ -1435,7 +1478,10 @@ mod tests {
 
         let ctx = Context::new("user", "alice");
         let res = client
-            .evaluate(&[EvalRequest { flag_key: "new-ui".into(), context: ctx }])
+            .evaluate(&[EvalRequest {
+                flag_key: "new-ui".into(),
+                context: ctx,
+            }])
             .await;
 
         assert_eq!(res[0].outcome, EvalOutcome::Matched { rule_index: 0 });
@@ -1494,11 +1540,18 @@ mod tests {
 
         let ctx = Context::new("user", "alice");
         let res = client
-            .evaluate(&[EvalRequest { flag_key: "vip-feature".into(), context: ctx }])
+            .evaluate(&[EvalRequest {
+                flag_key: "vip-feature".into(),
+                context: ctx,
+            }])
             .await;
 
         // Fetch should have been called once
-        assert_eq!(recording_fetcher.call_count(), 1, "expected 1 on-demand fetch");
+        assert_eq!(
+            recording_fetcher.call_count(),
+            1,
+            "expected 1 on-demand fetch"
+        );
         // Variant should be "vip" (alice is a member)
         assert_eq!(res[0].variant_key, "vip");
         assert_eq!(res[0].outcome, EvalOutcome::Matched { rule_index: 0 });
@@ -1523,7 +1576,10 @@ mod tests {
         let flag = FeatureFlag {
             key: "vip-feature".into(),
             enabled: true,
-            variants: vec![string_variant("vip", "special"), string_variant("default", "normal")],
+            variants: vec![
+                string_variant("vip", "special"),
+                string_variant("default", "normal"),
+            ],
             default_variant_key: "default".into(),
             rules: vec![simple_rule(
                 ConditionExpr::Leaf(Condition::InSegment(seg_id)),
@@ -1551,12 +1607,26 @@ mod tests {
         let ctx = || Context::new("user", "alice");
 
         // First call → miss → fetch
-        client.evaluate(&[EvalRequest { flag_key: "vip-feature".into(), context: ctx() }]).await;
+        client
+            .evaluate(&[EvalRequest {
+                flag_key: "vip-feature".into(),
+                context: ctx(),
+            }])
+            .await;
         assert_eq!(recording_fetcher.call_count(), 1);
 
         // Second call → LRU hit → no fetch
-        client.evaluate(&[EvalRequest { flag_key: "vip-feature".into(), context: ctx() }]).await;
-        assert_eq!(recording_fetcher.call_count(), 1, "second call must use LRU, not fetcher");
+        client
+            .evaluate(&[EvalRequest {
+                flag_key: "vip-feature".into(),
+                context: ctx(),
+            }])
+            .await;
+        assert_eq!(
+            recording_fetcher.call_count(),
+            1,
+            "second call must use LRU, not fetcher"
+        );
     }
 
     // ── Task 8: evaluate — reasoning trace ───────────────────────────────────
@@ -1591,18 +1661,24 @@ mod tests {
             environment_id: "env-1".into(),
         });
         let client = sdk_client_with_snapshot(snap);
-        let ctx = Context::new("user", "alice")
-            .with_parameter("plan", CoreParam::Str("pro".into()));
+        let ctx =
+            Context::new("user", "alice").with_parameter("plan", CoreParam::Str("pro".into()));
 
         let results = client
-            .evaluate_with_reasoning(&[EvalRequest { flag_key: "upgrade-cta".into(), context: ctx }])
+            .evaluate_with_reasoning(&[EvalRequest {
+                flag_key: "upgrade-cta".into(),
+                context: ctx,
+            }])
             .await;
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert_eq!(r.variant_key, "treatment");
         assert_eq!(r.outcome, EvalOutcome::Matched { rule_index: 0 });
         assert_eq!(r.reasoning.matched_rule_index, Some(0));
-        assert_eq!(r.reasoning.matched_rule_name.as_deref(), Some("pro-user-rule"));
+        assert_eq!(
+            r.reasoning.matched_rule_name.as_deref(),
+            Some("pro-user-rule")
+        );
     }
 
     #[tokio::test]
@@ -1677,8 +1753,14 @@ mod tests {
         assert_eq!(client.event_queue.len(), 0);
         client
             .evaluate(&[
-                EvalRequest { flag_key: "test-flag".into(), context: ctx.clone() },
-                EvalRequest { flag_key: "test-flag".into(), context: ctx },
+                EvalRequest {
+                    flag_key: "test-flag".into(),
+                    context: ctx.clone(),
+                },
+                EvalRequest {
+                    flag_key: "test-flag".into(),
+                    context: ctx,
+                },
             ])
             .await;
         assert_eq!(client.event_queue.len(), 2, "one event per EvalRequest");
@@ -1745,8 +1827,7 @@ pub mod testing {
 
         let event_queue = EventQueue::new(1000, 100);
         let sink: Arc<dyn EventSink> = Arc::new(NoopSink);
-        let flush_task =
-            FlushTask::spawn(event_queue.clone(), sink, Duration::from_secs(60));
+        let flush_task = FlushTask::spawn(event_queue.clone(), sink, Duration::from_secs(60));
 
         let poll_fetcher: Arc<dyn DefinitionFetcher> = Arc::new(NoopDefinitionFetcher);
         let poll_task = PollTask::spawn(
@@ -1774,10 +1855,6 @@ pub mod testing {
 
     /// Simpler variant with a no-op membership fetcher and empty LRU.
     pub fn sdk_client_simple(snapshot: DefinitionSnapshot) -> Arc<SdkClient> {
-        sdk_client_with_snapshot_and_lru(
-            snapshot,
-            Arc::new(NoopMembershipFetcher),
-            vec![],
-        )
+        sdk_client_with_snapshot_and_lru(snapshot, Arc::new(NoopMembershipFetcher), vec![])
     }
 }

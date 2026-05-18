@@ -84,11 +84,8 @@ impl FlagServiceImpl {
             .find_rules_batch(&rule_ids)
             .await
             .map_err(|e| Status::internal(format!("rules batch lookup failed: {e}")))?;
-        let lists_map = self
-            .segment_repo
-            .find_lists_batch(&list_ids)
-            .await
-            .map_err(|e| Status::internal(format!("lists batch lookup failed: {e}")))?;
+        // List segment defs not returned until Phase 4 Scylla membership reads.
+        let _ = list_ids;
 
         let mut definitions = Vec::with_capacity(segments.len());
         for seg in &segments {
@@ -100,13 +97,8 @@ impl FlagServiceImpl {
                         continue;
                     }
                 }
-                SegmentType::List => {
-                    if let Some(list_seg) = lists_map.get(&seg.id) {
-                        SegmentDefinition::ListBased(list_seg.clone())
-                    } else {
-                        continue;
-                    }
-                }
+                // List segment defs pending Phase 4 Scylla migration — skip for now.
+                SegmentType::List => continue,
             };
             definitions.push(definition);
         }
@@ -228,7 +220,11 @@ impl FlagService for FlagServiceImpl {
         // page > 0 signals the caller wants paginated results.
         let use_pagination = req.page > 0 && project_id.is_some();
         let page = if req.page == 0 { 1u64 } else { req.page as u64 };
-        let per_page = if req.per_page == 0 { 50u64 } else { (req.per_page as u64).min(200) };
+        let per_page = if req.per_page == 0 {
+            50u64
+        } else {
+            (req.per_page as u64).min(200)
+        };
         let offset = (page - 1) * per_page;
 
         let (flag_records, total) = if let Some(pid) = project_id {
@@ -240,14 +236,16 @@ impl FlagService for FlagServiceImpl {
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?
             } else if req.include_archived {
-                let flags = self.flag_repo
+                let flags = self
+                    .flag_repo
                     .list_by_project_all(pid)
                     .await
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
                 (flags, 0)
             } else {
-                let flags = self.flag_repo
+                let flags = self
+                    .flag_repo
                     .list_by_project(pid)
                     .await
                     .map_err(FlagServiceError::from)
@@ -292,7 +290,10 @@ impl FlagService for FlagServiceImpl {
             proto_flags.push(mapping::build_feature_flag_proto(record, variants, &rules));
         }
 
-        Ok(Response::new(ListFlagsResponse { flags: proto_flags, total }))
+        Ok(Response::new(ListFlagsResponse {
+            flags: proto_flags,
+            total,
+        }))
     }
 
     async fn mutate_flag(
@@ -792,7 +793,9 @@ mod tests {
         id::{EnvironmentId, FlagId, FlagKey, ProjectId, SdkKeyId, VariantId},
         tenant::SdkKey,
     };
-    use stitchd_db::{FlagRepository, RepositoryError, SdkKeyRepository, SegmentRepository, VariantRepository};
+    use stitchd_db::{
+        FlagRepository, RepositoryError, SdkKeyRepository, SegmentRepository, VariantRepository,
+    };
     use tokio_stream::StreamExt as _;
 
     // ── Stub repositories ──────────────────────────────────────────────────────
@@ -977,7 +980,9 @@ mod tests {
 
     impl StubVariantRepoWithData {
         fn with_variants(variants: Vec<stitchd_core::flag::Variant>) -> Arc<Self> {
-            Arc::new(Self { variants: Mutex::new(variants) })
+            Arc::new(Self {
+                variants: Mutex::new(variants),
+            })
         }
     }
 
@@ -989,10 +994,29 @@ mod tests {
         ) -> Result<Vec<stitchd_core::flag::Variant>, RepositoryError> {
             Ok(self.variants.lock().unwrap().clone())
         }
-        async fn create(&self, _flag_id: FlagId, _variant: &stitchd_core::flag::Variant) -> Result<(), RepositoryError> { Ok(()) }
-        async fn update(&self, variant: &stitchd_core::flag::Variant) -> Result<stitchd_core::flag::Variant, RepositoryError> { Ok(variant.clone()) }
-        async fn delete(&self, _id: VariantId) -> Result<(), RepositoryError> { Ok(()) }
-        async fn replace_all_for_flag(&self, _flag_id: FlagId, _variants: &[stitchd_core::flag::Variant]) -> Result<(), RepositoryError> { Ok(()) }
+        async fn create(
+            &self,
+            _flag_id: FlagId,
+            _variant: &stitchd_core::flag::Variant,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(
+            &self,
+            variant: &stitchd_core::flag::Variant,
+        ) -> Result<stitchd_core::flag::Variant, RepositoryError> {
+            Ok(variant.clone())
+        }
+        async fn delete(&self, _id: VariantId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn replace_all_for_flag(
+            &self,
+            _flag_id: FlagId,
+            _variants: &[stitchd_core::flag::Variant],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
     }
 
     #[derive(Default)]
@@ -1118,33 +1142,155 @@ mod tests {
 
     #[async_trait]
     impl SegmentRepository for StubSegmentRepo {
-        async fn find_by_id(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+        async fn find_by_id(
+            &self,
+            id: stitchd_core::id::SegmentId,
+        ) -> Result<stitchd_core::segment::Segment, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
-        async fn find_by_key(&self, key: &str, _env_id: EnvironmentId) -> Result<stitchd_core::segment::Segment, RepositoryError> {
-            Err(RepositoryError::NotFound { id: key.to_string() })
+        async fn find_by_key(
+            &self,
+            key: &str,
+            _env_id: EnvironmentId,
+        ) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: key.to_string(),
+            })
         }
-        async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
-        async fn list_by_environment_paginated(&self, _env_id: EnvironmentId, _offset: u64, _limit: u64) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError> { Ok((vec![], 0)) }
-        async fn create(&self, _seg: &stitchd_core::segment::Segment) -> Result<(), RepositoryError> { Ok(()) }
-        async fn update(&self, seg: &stitchd_core::segment::Segment) -> Result<stitchd_core::segment::Segment, RepositoryError> { Ok(seg.clone()) }
-        async fn find_with_rules(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+        ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
+        async fn create(
+            &self,
+            _seg: &stitchd_core::segment::Segment,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(
+            &self,
+            seg: &stitchd_core::segment::Segment,
+        ) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+            Ok(seg.clone())
+        }
+        async fn find_with_rules(
+            &self,
+            id: stitchd_core::id::SegmentId,
+        ) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
-        async fn find_with_list(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::ListBasedSegment, RepositoryError> {
-            Err(RepositoryError::NotFound { id: id.to_string() })
+        async fn upsert_rules(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _rules: &[stitchd_core::rule_engine::types::Rule],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
         }
-        async fn upsert_rules(&self, _id: stitchd_core::id::SegmentId, _rules: &[stitchd_core::rule_engine::types::Rule]) -> Result<(), RepositoryError> { Ok(()) }
-        async fn set_list_entries(&self, _id: stitchd_core::id::SegmentId, _ctx_type: &str, _include: &[String], _exclude: &[String]) -> Result<(), RepositoryError> { Ok(()) }
-        async fn get_condition_expr(&self, _id: stitchd_core::id::SegmentId) -> Result<Option<serde_json::Value>, RepositoryError> { Ok(None) }
-        async fn set_condition_expr(&self, _id: stitchd_core::id::SegmentId, _expr: Option<&serde_json::Value>) -> Result<(), RepositoryError> { Ok(()) }
-        async fn soft_delete(&self, _id: stitchd_core::id::SegmentId) -> Result<(), RepositoryError> { Ok(()) }
-        async fn check_list_membership(&self, _env_id: EnvironmentId, _context_type: &str, _context_key: &str, _segment_keys: &[String]) -> Result<std::collections::HashMap<String, bool>, RepositoryError> { Ok(std::collections::HashMap::new()) }
-        async fn batch_check_list_membership(&self, _env_id: EnvironmentId, _contexts: &[(String, String)], _segment_keys: &[String]) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> { Ok(vec![]) }
-        async fn find_batch_by_ids(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
-        async fn find_rules_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError> { Ok(std::collections::HashMap::new()) }
-        async fn find_lists_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>, RepositoryError> { Ok(std::collections::HashMap::new()) }
-        async fn find_memberships_batch(&self, _env_id: stitchd_core::id::EnvironmentId, _contexts: &[(String, String)], _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_db::SegmentIdMembership>, RepositoryError> { Ok(Vec::new()) }
+        async fn set_list_entries(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _ctx_type: &str,
+            _include: &[String],
+            _exclude: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn add_entries(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn remove_entries(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn get_list_segment_summary(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+        ) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> {
+            Ok(stitchd_db::ListSegmentSummary::default())
+        }
+        async fn get_condition_expr(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+        ) -> Result<Option<serde_json::Value>, RepositoryError> {
+            Ok(None)
+        }
+        async fn set_condition_expr(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _expr: Option<&serde_json::Value>,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn soft_delete(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn check_list_membership(
+            &self,
+            _env_id: EnvironmentId,
+            _context_type: &str,
+            _context_key: &str,
+            _segment_keys: &[String],
+        ) -> Result<std::collections::HashMap<String, bool>, RepositoryError> {
+            Ok(std::collections::HashMap::new())
+        }
+        async fn batch_check_list_membership(
+            &self,
+            _env_id: EnvironmentId,
+            _contexts: &[(String, String)],
+            _segment_keys: &[String],
+        ) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn find_batch_by_ids(
+            &self,
+            _ids: &[stitchd_core::id::SegmentId],
+        ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn find_rules_batch(
+            &self,
+            _ids: &[stitchd_core::id::SegmentId],
+        ) -> Result<
+            std::collections::HashMap<
+                stitchd_core::id::SegmentId,
+                stitchd_core::segment::RuleBasedSegment,
+            >,
+            RepositoryError,
+        > {
+            Ok(std::collections::HashMap::new())
+        }
+        async fn find_memberships_batch(
+            &self,
+            _env_id: stitchd_core::id::EnvironmentId,
+            _contexts: &[(String, String)],
+            _ids: &[stitchd_core::id::SegmentId],
+        ) -> Result<Vec<stitchd_db::SegmentIdMembership>, RepositoryError> {
+            Ok(Vec::new())
+        }
     }
 
     fn make_flag_record() -> FlagRecord {
@@ -1671,17 +1817,27 @@ mod tests {
 
     use stitchd_core::{
         context::{Context, EvaluationContext, ParameterValue},
-        rule_engine::types::{ConditionExpr, Rule, RuleOutput},
         id::RuleId,
+        rule_engine::types::{ConditionExpr, Rule, RuleOutput},
     };
 
-    fn make_bool_variants(flag_id: FlagId) -> (Vec<stitchd_core::flag::Variant>, VariantId, VariantId) {
+    fn make_bool_variants(
+        flag_id: FlagId,
+    ) -> (Vec<stitchd_core::flag::Variant>, VariantId, VariantId) {
         let on_id = VariantId::new();
         let off_id = VariantId::new();
         let _ = flag_id; // variants are associated by id stored in FlagRecord.default_variant_id
         let variants = vec![
-            stitchd_core::flag::Variant { id: on_id, key: "on".to_string(), value: stitchd_core::variants::VariantValue::BoolValue(true) },
-            stitchd_core::flag::Variant { id: off_id, key: "off".to_string(), value: stitchd_core::variants::VariantValue::BoolValue(false) },
+            stitchd_core::flag::Variant {
+                id: on_id,
+                key: "on".to_string(),
+                value: stitchd_core::variants::VariantValue::BoolValue(true),
+            },
+            stitchd_core::flag::Variant {
+                id: off_id,
+                key: "off".to_string(),
+                value: stitchd_core::variants::VariantValue::BoolValue(false),
+            },
         ];
         (variants, on_id, off_id)
     }
@@ -1711,10 +1867,16 @@ mod tests {
 
         let flag_repo = StubFlagRepo::with_flags(vec![record.clone()]);
         let variant_repo = StubVariantRepoWithData::with_variants(variants);
-        let svc = FlagServiceImpl::new(flag_repo, variant_repo, StubSdkKeyRepo::empty(), Arc::new(StubSegmentRepo));
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            variant_repo,
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        );
 
-        let ec = EvaluationContext::new()
-            .with_context(Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)));
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
         let contexts_json = serde_json::to_string(&[ec]).unwrap();
 
         let req = Request::new(EvaluatePreviewRequest {
@@ -1746,24 +1908,35 @@ mod tests {
             rule: Rule {
                 id: RuleId::new(),
                 name: Some("beta rule".to_string()),
-                condition: ConditionExpr::Leaf(stitchd_core::rule_engine::condition::Condition::Eq {
-                    context_type: "user".to_string(),
-                    param: "beta".to_string(),
-                    value: ParameterValue::Bool(true),
-                }),
+                condition: ConditionExpr::Leaf(
+                    stitchd_core::rule_engine::condition::Condition::Eq {
+                        context_type: "user".to_string(),
+                        param: "beta".to_string(),
+                        value: ParameterValue::Bool(true),
+                    },
+                ),
                 output: RuleOutput::Variant(on_id),
             },
         };
 
         let flag_repo = Arc::new(StubFlagRepo {
             flags: Mutex::new(vec![record.clone()]),
-            rules: Mutex::new(std::collections::HashMap::from([(flag_id, vec![flag_rule])])),
+            rules: Mutex::new(std::collections::HashMap::from([(
+                flag_id,
+                vec![flag_rule],
+            )])),
         });
         let variant_repo = StubVariantRepoWithData::with_variants(variants);
-        let svc = FlagServiceImpl::new(flag_repo, variant_repo, StubSdkKeyRepo::empty(), Arc::new(StubSegmentRepo));
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            variant_repo,
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        );
 
-        let ec = EvaluationContext::new()
-            .with_context(Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)));
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
         let contexts_json = serde_json::to_string(&[ec]).unwrap();
 
         let req = Request::new(EvaluatePreviewRequest {
@@ -1798,75 +1971,192 @@ mod tests {
 
     // ── Phase 2 Task 2: fetch_segment_definitions uses batch methods ─────────
 
-    /// A spy implementation that tracks call counts for the three batch methods.
+    /// A spy implementation that tracks call counts for the batch methods.
     struct SpySegmentRepo {
         /// Segments returned from find_batch_by_ids (keyed by id).
         segments: Vec<stitchd_core::segment::Segment>,
         /// Rules returned from find_rules_batch.
-        rules: std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>,
-        /// Lists returned from find_lists_batch.
-        lists: std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>,
+        rules: std::collections::HashMap<
+            stitchd_core::id::SegmentId,
+            stitchd_core::segment::RuleBasedSegment,
+        >,
         /// Call counters.
         batch_by_ids_calls: std::sync::atomic::AtomicUsize,
         rules_batch_calls: std::sync::atomic::AtomicUsize,
-        lists_batch_calls: std::sync::atomic::AtomicUsize,
     }
 
     impl SpySegmentRepo {
         fn new(
             segments: Vec<stitchd_core::segment::Segment>,
-            rules: std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>,
-            lists: std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>,
+            rules: std::collections::HashMap<
+                stitchd_core::id::SegmentId,
+                stitchd_core::segment::RuleBasedSegment,
+            >,
         ) -> Self {
             Self {
                 segments,
                 rules,
-                lists,
                 batch_by_ids_calls: std::sync::atomic::AtomicUsize::new(0),
                 rules_batch_calls: std::sync::atomic::AtomicUsize::new(0),
-                lists_batch_calls: std::sync::atomic::AtomicUsize::new(0),
             }
         }
     }
 
     #[async_trait]
     impl SegmentRepository for SpySegmentRepo {
-        async fn find_by_id(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+        async fn find_by_id(
+            &self,
+            id: stitchd_core::id::SegmentId,
+        ) -> Result<stitchd_core::segment::Segment, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
-        async fn find_by_key(&self, key: &str, _env_id: EnvironmentId) -> Result<stitchd_core::segment::Segment, RepositoryError> {
-            Err(RepositoryError::NotFound { id: key.to_string() })
+        async fn find_by_key(
+            &self,
+            key: &str,
+            _env_id: EnvironmentId,
+        ) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: key.to_string(),
+            })
         }
-        async fn list_by_environment(&self, _env_id: EnvironmentId) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> { Ok(vec![]) }
-        async fn list_by_environment_paginated(&self, _env_id: EnvironmentId, _offset: u64, _limit: u64) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError> { Ok((vec![], 0)) }
-        async fn create(&self, _seg: &stitchd_core::segment::Segment) -> Result<(), RepositoryError> { Ok(()) }
-        async fn update(&self, seg: &stitchd_core::segment::Segment) -> Result<stitchd_core::segment::Segment, RepositoryError> { Ok(seg.clone()) }
-        async fn find_with_rules(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+        ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
+        async fn create(
+            &self,
+            _seg: &stitchd_core::segment::Segment,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(
+            &self,
+            seg: &stitchd_core::segment::Segment,
+        ) -> Result<stitchd_core::segment::Segment, RepositoryError> {
+            Ok(seg.clone())
+        }
+        async fn find_with_rules(
+            &self,
+            id: stitchd_core::id::SegmentId,
+        ) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
         }
-        async fn find_with_list(&self, id: stitchd_core::id::SegmentId) -> Result<stitchd_core::segment::ListBasedSegment, RepositoryError> {
-            Err(RepositoryError::NotFound { id: id.to_string() })
+        async fn upsert_rules(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _rules: &[stitchd_core::rule_engine::types::Rule],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
         }
-        async fn upsert_rules(&self, _id: stitchd_core::id::SegmentId, _rules: &[stitchd_core::rule_engine::types::Rule]) -> Result<(), RepositoryError> { Ok(()) }
-        async fn set_list_entries(&self, _id: stitchd_core::id::SegmentId, _ctx_type: &str, _include: &[String], _exclude: &[String]) -> Result<(), RepositoryError> { Ok(()) }
-        async fn get_condition_expr(&self, _id: stitchd_core::id::SegmentId) -> Result<Option<serde_json::Value>, RepositoryError> { Ok(None) }
-        async fn set_condition_expr(&self, _id: stitchd_core::id::SegmentId, _expr: Option<&serde_json::Value>) -> Result<(), RepositoryError> { Ok(()) }
-        async fn soft_delete(&self, _id: stitchd_core::id::SegmentId) -> Result<(), RepositoryError> { Ok(()) }
-        async fn check_list_membership(&self, _env_id: EnvironmentId, _ctx_type: &str, _ctx_key: &str, _keys: &[String]) -> Result<std::collections::HashMap<String, bool>, RepositoryError> { Ok(std::collections::HashMap::new()) }
-        async fn batch_check_list_membership(&self, _env_id: EnvironmentId, _contexts: &[(String, String)], _keys: &[String]) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> { Ok(vec![]) }
-        async fn find_batch_by_ids(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> {
-            self.batch_by_ids_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async fn set_list_entries(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _ctx_type: &str,
+            _include: &[String],
+            _exclude: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn add_entries(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn remove_entries(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn get_list_segment_summary(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+        ) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> {
+            Ok(stitchd_db::ListSegmentSummary::default())
+        }
+        async fn get_condition_expr(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+        ) -> Result<Option<serde_json::Value>, RepositoryError> {
+            Ok(None)
+        }
+        async fn set_condition_expr(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _expr: Option<&serde_json::Value>,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn soft_delete(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn check_list_membership(
+            &self,
+            _env_id: EnvironmentId,
+            _ctx_type: &str,
+            _ctx_key: &str,
+            _keys: &[String],
+        ) -> Result<std::collections::HashMap<String, bool>, RepositoryError> {
+            Ok(std::collections::HashMap::new())
+        }
+        async fn batch_check_list_membership(
+            &self,
+            _env_id: EnvironmentId,
+            _contexts: &[(String, String)],
+            _keys: &[String],
+        ) -> Result<Vec<stitchd_db::ContextMembership>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn find_batch_by_ids(
+            &self,
+            _ids: &[stitchd_core::id::SegmentId],
+        ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError> {
+            self.batch_by_ids_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(self.segments.clone())
         }
-        async fn find_rules_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError> {
-            self.rules_batch_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        async fn find_rules_batch(
+            &self,
+            _ids: &[stitchd_core::id::SegmentId],
+        ) -> Result<
+            std::collections::HashMap<
+                stitchd_core::id::SegmentId,
+                stitchd_core::segment::RuleBasedSegment,
+            >,
+            RepositoryError,
+        > {
+            self.rules_batch_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(self.rules.clone())
         }
-        async fn find_lists_batch(&self, _ids: &[stitchd_core::id::SegmentId]) -> Result<std::collections::HashMap<stitchd_core::id::SegmentId, stitchd_core::segment::ListBasedSegment>, RepositoryError> {
-            self.lists_batch_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok(self.lists.clone())
+        async fn find_memberships_batch(
+            &self,
+            _env_id: stitchd_core::id::EnvironmentId,
+            _contexts: &[(String, String)],
+            _ids: &[stitchd_core::id::SegmentId],
+        ) -> Result<Vec<stitchd_db::SegmentIdMembership>, RepositoryError> {
+            Ok(Vec::new())
         }
-        async fn find_memberships_batch(&self, _env_id: stitchd_core::id::EnvironmentId, _contexts: &[(String, String)], _ids: &[stitchd_core::id::SegmentId]) -> Result<Vec<stitchd_db::SegmentIdMembership>, RepositoryError> { Ok(Vec::new()) }
     }
 
     #[tokio::test]
@@ -1897,12 +2187,15 @@ mod tests {
             .map(|s| {
                 (
                     s.id,
-                    RuleBasedSegment { id: s.id, rules: vec![] },
+                    RuleBasedSegment {
+                        id: s.id,
+                        rules: vec![],
+                    },
                 )
             })
             .collect();
 
-        let spy = Arc::new(SpySegmentRepo::new(segments.clone(), rules, HashMap::new()));
+        let spy = Arc::new(SpySegmentRepo::new(segments.clone(), rules));
         let svc = FlagServiceImpl {
             flag_repo: StubFlagRepo::empty(),
             variant_repo: Arc::new(StubVariantRepo),
@@ -1916,27 +2209,30 @@ mod tests {
 
         assert_eq!(result.len(), 10, "all 10 definitions must be returned");
         assert_eq!(
-            spy.batch_by_ids_calls.load(std::sync::atomic::Ordering::SeqCst),
+            spy.batch_by_ids_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
             1,
             "find_batch_by_ids must be called exactly once"
         );
         assert_eq!(
-            spy.rules_batch_calls.load(std::sync::atomic::Ordering::SeqCst),
+            spy.rules_batch_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
             1,
             "find_rules_batch must be called exactly once"
         );
-        assert_eq!(
-            spy.lists_batch_calls.load(std::sync::atomic::Ordering::SeqCst),
-            1,
-            "find_lists_batch must be called exactly once"
-        );
+        // find_lists_batch removed — list segment defs pending Phase 4 Scylla migration.
     }
 
     #[tokio::test]
     async fn evaluate_preview_invalid_contexts_json_returns_error() {
         let record = make_flag_record_with_default(None);
         let flag_repo = StubFlagRepo::with_flags(vec![record.clone()]);
-        let svc = FlagServiceImpl::new(flag_repo, Arc::new(StubVariantRepo), StubSdkKeyRepo::empty(), Arc::new(StubSegmentRepo));
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        );
 
         let req = Request::new(EvaluatePreviewRequest {
             project_id: record.project_id.to_string(),

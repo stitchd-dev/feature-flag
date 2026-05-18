@@ -73,7 +73,10 @@ pub mod tests {
                 id: seg_id,
                 environment_id: env_id,
                 key: key.to_string(),
-                segment_type: SegmentType::Rule, name: String::new(), description: String::new(), tags: vec![],
+                segment_type: SegmentType::Rule,
+                name: String::new(),
+                description: String::new(),
+                tags: vec![],
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 deleted_at: None,
@@ -102,7 +105,10 @@ pub mod tests {
                 id: seg_id,
                 environment_id: env_id,
                 key: key.to_string(),
-                segment_type: SegmentType::List, name: String::new(), description: String::new(), tags: vec![],
+                segment_type: SegmentType::List,
+                name: String::new(),
+                description: String::new(),
+                tags: vec![],
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
                 deleted_at: None,
@@ -197,7 +203,11 @@ pub mod tests {
                 .cloned()
                 .collect();
             let total = all.len() as u64;
-            let page = all.into_iter().skip(offset as usize).take(limit as usize).collect();
+            let page = all
+                .into_iter()
+                .skip(offset as usize)
+                .take(limit as usize)
+                .collect();
             Ok((page, total))
         }
 
@@ -226,15 +236,6 @@ pub mod tests {
             id: SegmentId,
         ) -> Result<RuleBasedSegment, RepositoryError> {
             self.rule_defs
-                .lock()
-                .unwrap()
-                .get(&id)
-                .cloned()
-                .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })
-        }
-
-        async fn find_with_list(&self, id: SegmentId) -> Result<ListBasedSegment, RepositoryError> {
-            self.list_defs
                 .lock()
                 .unwrap()
                 .get(&id)
@@ -276,6 +277,31 @@ pub mod tests {
             );
             drop(defs);
             Ok(())
+        }
+
+        async fn add_entries(
+            &self,
+            _id: SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn remove_entries(
+            &self,
+            _id: SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn get_list_segment_summary(
+            &self,
+            _id: SegmentId,
+        ) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> {
+            Ok(stitchd_db::ListSegmentSummary::default())
         }
 
         async fn soft_delete(&self, id: SegmentId) -> Result<(), RepositoryError> {
@@ -375,7 +401,8 @@ pub mod tests {
         async fn find_rules_batch(
             &self,
             ids: &[SegmentId],
-        ) -> Result<std::collections::HashMap<SegmentId, RuleBasedSegment>, RepositoryError> {
+        ) -> Result<std::collections::HashMap<SegmentId, RuleBasedSegment>, RepositoryError>
+        {
             let defs = self.rule_defs.lock().unwrap();
             let result = ids
                 .iter()
@@ -384,17 +411,6 @@ pub mod tests {
             Ok(result)
         }
 
-        async fn find_lists_batch(
-            &self,
-            ids: &[SegmentId],
-        ) -> Result<std::collections::HashMap<SegmentId, ListBasedSegment>, RepositoryError> {
-            let defs = self.list_defs.lock().unwrap();
-            let result = ids
-                .iter()
-                .filter_map(|id| defs.get(id).map(|d| (*id, d.clone())))
-                .collect();
-            Ok(result)
-        }
         async fn find_memberships_batch(
             &self,
             _env_id: stitchd_core::id::EnvironmentId,
@@ -410,7 +426,8 @@ pub mod tests {
     // -------------------------------------------------------------------------
 
     fn eq_rule(context_type: &str, param: &str, value: &str) -> Rule {
-        Rule { name: None,
+        Rule {
+            name: None,
             id: RuleId::new(),
             condition: ConditionExpr::Leaf(Condition::Eq {
                 context_type: context_type.to_string(),
@@ -546,7 +563,8 @@ pub mod tests {
         let (env_id, env_id_str) = env_id();
 
         // Rule containing an invalid InSegment condition.
-        let bad_rule = Rule { name: None,
+        let bad_rule = Rule {
+            name: None,
             id: RuleId::new(),
             condition: ConditionExpr::Leaf(Condition::InSegment(SegmentId::new())),
             output: RuleOutput::Variant(VariantId::new()),
