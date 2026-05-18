@@ -30,21 +30,21 @@ sequenceDiagram
 
 ## Event Ingestion
 
-An SDK client records a metric event. The gateway authenticates the SDK key, then forwards the event to the event service for storage and downstream processing.
+An SDK client records a metric event. The gateway authenticates the SDK key, then forwards the event to the analytics service for storage and downstream processing.
 
 ```mermaid
 sequenceDiagram
     participant SDK as SDK Client
     participant GW as stitchd-gateway<br/>(REST :8080)
     participant FS as stitchd-flag-service<br/>(gRPC :50051)
-    participant ES as stitchd-event-service<br/>(gRPC :50054)
+    participant ANS as stitchd-analytics-service<br/>(gRPC :50053)
 
     SDK->>GW: POST /v1/environments/{env}/events<br/>x-sdk-key: sdk_live_...
     GW->>FS: ValidateSdkKey(environment_id, sdk_key)
     FS-->>GW: Ok(environment)
 
-    GW->>ES: IngestEvent(events: [{ metric_key, context_type, context_key, value }])
-    ES-->>GW: IngestResponse(accepted_count, rejected_keys)
+    GW->>ANS: IngestEvent(events: [{ metric_key, context_type, context_key, value }])
+    ANS-->>GW: IngestResponse(accepted_count, rejected_keys)
 
     GW-->>SDK: 200 { accepted_count, rejected_keys }
 ```

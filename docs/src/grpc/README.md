@@ -23,6 +23,6 @@ Run `cargo xtask docs` to regenerate.
 
 - [Analytics](analytics_v1_analytics.md)
 - [Event](events_v1_event.md)
-- [Event Service](events_v1_event_service.md)
+- [Event Ingestion (analytics-service)](events_v1_event_service.md)
 - [Experimentation Service](experiments_v1_experimentation_service.md)
 - [Stats Service](stats_v1_stats_service.md)

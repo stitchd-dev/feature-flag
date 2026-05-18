@@ -60,7 +60,7 @@ fn docs() -> Result<()> {
     generate_grpc_docs(&root)?;
     // Step 2: Export OpenAPI JSON from the server binary
     export_openapi(&root)?;
-    // Step 3: Build rustdoc for stitchd-sdk and copy into docs/
+    // Step 3: Build rustdoc for stitchd-sdk-rust and copy into docs/
     generate_sdk_rustdoc(&root)?;
 
     // Step 4: build the mdBook site
@@ -588,14 +588,14 @@ fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
     println!("Generating SDK rustdoc → {}", out_dir.display());
 
     let status = Command::new("cargo")
-        .args(["doc", "--no-deps", "-p", "stitchd-sdk"])
+        .args(["doc", "--no-deps", "-p", "stitchd-sdk-rust"])
         .current_dir(root)
         .status()
         .context("failed to run `cargo doc`")?;
     anyhow::ensure!(status.success(), "`cargo doc` exited with {status}");
 
-    // Copy target/doc/stitchd_sdk → docs/book/rustdoc/
-    let src = root.join("target/doc/stitchd_sdk");
+    // Copy target/doc/stitchd_sdk_rust → docs/book/rustdoc/
+    let src = root.join("target/doc/stitchd_sdk_rust");
     if src.exists() {
         copy_dir_all(&src, &out_dir)
             .with_context(|| format!("failed to copy rustdoc from {}", src.display()))?;

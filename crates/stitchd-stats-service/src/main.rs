@@ -1,13 +1,13 @@
 //! `stitchd-stats-service` — Scheduled Statistics Processing Service.
 //!
 //! Runs a periodic scheduler computing experiment results for all running experiments.
-//! Exposes health and Prometheus metrics on `STATS_HTTP_PORT` (default: 9200).
-//! Exposes gRPC `StatsService` on `STATS_GRPC_PORT` (default: 50056).
+//! Exposes health and Prometheus metrics on `STITCHD_STATS_SERVICE_HTTP_PORT` (default: 9200).
+//! Exposes gRPC `StatsService` on `STITCHD_STATS_SERVICE_GRPC_PORT` (default: 50056).
 //!
 //! ## gRPC Clients
-//! - `EXPERIMENTATION_SERVICE_GRPC_URL` — experimentation-service endpoint
+//! - `STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL` — experimentation-service endpoint
 //!   (default: `http://localhost:50054`).
-//! - `ANALYTICS_SERVICE_GRPC_URL` — analytics-service endpoint
+//! - `STITCHD_ANALYTICS_SERVICE_GRPC_URL` — analytics-service endpoint
 //!   (default: `http://localhost:50055`).
 
 use std::net::SocketAddr;
@@ -63,8 +63,8 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to connect to PostgreSQL")?;
 
     // ── ClickHouse client ─────────────────────────────────────────────────────
-    let ch_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
-    let ch_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+    let ch_user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let ch_password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_default();
     let ch_client = clickhouse::Client::default()
         .with_url(&config.clickhouse_url)
         .with_database(&config.clickhouse_db)
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
         "Connecting to experimentation-service gRPC"
     );
     let exp_channel = Channel::from_shared(config.experimentation_service_grpc_url.clone())
-        .context("Invalid EXPERIMENTATION_SERVICE_GRPC_URL")?
+        .context("Invalid STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL")?
         .connect()
         .await
         .context("Failed to connect to experimentation-service gRPC")?;
@@ -88,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
         "Connecting to analytics-service gRPC"
     );
     let analytics_channel = Channel::from_shared(config.analytics_service_grpc_url.clone())
-        .context("Invalid ANALYTICS_SERVICE_GRPC_URL")?
+        .context("Invalid STITCHD_ANALYTICS_SERVICE_GRPC_URL")?
         .connect()
         .await
         .context("Failed to connect to analytics-service gRPC")?;

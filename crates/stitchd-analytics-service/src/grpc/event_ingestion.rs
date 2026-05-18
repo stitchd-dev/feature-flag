@@ -1,4 +1,4 @@
-//! Event ingestion logic — ported from stitchd-event-service.
+//! Event ingestion logic — handles event ingestion for the analytics service.
 //!
 //! # Protocol
 //! - The SDK key is read from the `x-sdk-key` gRPC metadata header.
@@ -7,7 +7,7 @@
 //! - Each event's `metric_key` is validated against the pre-registered event
 //!   definitions for that environment.
 //! - Unknown keys (and type-mismatched keys) are rejected; the rest are written
-//!   to ClickHouse via the `stitchd-events` crate.
+//!   to ClickHouse via the `stitchd-event-writer` crate.
 
 use std::sync::Arc;
 
@@ -17,7 +17,7 @@ use tracing::instrument;
 
 use stitchd_core::event::EventValueType;
 use stitchd_db::{EventDefinitionRepository, SdkKeyRepository};
-use stitchd_events::writer::EventWriter;
+use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{IngestEventRequest, IngestEventResponse};
 
 /// State needed exclusively for event ingestion.
@@ -89,7 +89,7 @@ pub async fn handle_ingest_event(
 
     let mut accepted_count: u32 = 0;
     let mut rejected_keys: Vec<String> = Vec::new();
-    let mut ch_rows: Vec<stitchd_events::writer::EventRow> = Vec::new();
+    let mut ch_rows: Vec<stitchd_event_writer::writer::EventRow> = Vec::new();
 
     for event in &inner.events {
         let Some(expected_type) = registry.get(&event.metric_key) else {
@@ -130,7 +130,7 @@ pub async fn handle_ingest_event(
             _ => unreachable!("type_ok guarantees one branch"),
         };
 
-        ch_rows.push(stitchd_events::writer::EventRow {
+        ch_rows.push(stitchd_event_writer::writer::EventRow {
             env_id: env_id.as_uuid(),
             contexts: vec![(event.context_type.clone(), event.context_key.clone())],
             metric_key: event.metric_key.clone(),

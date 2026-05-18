@@ -6,7 +6,7 @@ All configuration is passed via environment variables. There are no config files
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string, e.g. `postgres://user:pass@host/stitchd` |
+| `STITCHD_DATABASE_URL` | PostgreSQL connection string, e.g. `postgres://user:pass@host/stitchd` |
 
 ## Optional
 
@@ -20,7 +20,7 @@ All configuration is passed via environment variables. There are no config files
 ## Example `.env`
 
 ```dotenv
-DATABASE_URL=postgres://stitchd:secret@localhost/stitchd
+STITCHD_DATABASE_URL=postgres://stitchd:secret@localhost/stitchd
 HTTP_PORT=8080
 GRPC_PORT=9090
 APP_ENV=production

@@ -27,13 +27,6 @@ pub mod segments {
     }
 }
 
-/// Event ingestion service types and client/server stubs.
-pub mod events {
-    pub mod v1 {
-        tonic::include_proto!("stitchd.events.v1");
-    }
-}
-
 /// Auth service — credential validation and RBAC context.
 pub mod auth {
     pub mod v1 {

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use stitchd_db::{ContextRegistryRepository, EventDefinitionRepository, SdkKeyRepository};
-use stitchd_events::writer::EventWriter;
+use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
     ExperimentResult, GetContextIntelligenceRequest, GetContextIntelligenceResponse,
     GetEvalStatsRequest, GetEvalStatsResponse, GetExperimentResultRequest,

@@ -1,6 +1,6 @@
 //! Superadmin bootstrap — runs once on auth-service startup.
 //!
-//! If `SUPERADMIN_EMAIL` and `SUPERADMIN_PASSWORD` are set and no user with
+//! If `STITCHD_SUPERADMIN_EMAIL` and `STITCHD_SUPERADMIN_PASSWORD` are set and no user with
 //! that email exists, a platform superadmin user is created in the database
 //! together with a "System" organisation and an `org_admin` membership so the
 //! account can immediately call `POST /v1/auth/login` and manage resources.
@@ -22,8 +22,8 @@ use stitchd_db::{AuthUserRepository, OrgMembershipRepository, OrganisationReposi
 /// Seed the superadmin user and a "System" organisation from environment
 /// variables.
 ///
-/// - `SUPERADMIN_EMAIL`    — the admin's email / username
-/// - `SUPERADMIN_PASSWORD` — plaintext password; hashed with Argon2id before storage
+/// - `STITCHD_SUPERADMIN_EMAIL`    — the admin's email / username
+/// - `STITCHD_SUPERADMIN_PASSWORD` — plaintext password; hashed with Argon2id before storage
 ///
 /// Does nothing if either variable is unset or empty.
 ///
@@ -35,18 +35,18 @@ pub async fn seed_superadmin(
     org_repo: &Arc<dyn OrganisationRepository>,
     membership_repo: &Arc<dyn OrgMembershipRepository>,
 ) -> anyhow::Result<()> {
-    let Some(email) = std::env::var("SUPERADMIN_EMAIL")
+    let Some(email) = std::env::var("STITCHD_SUPERADMIN_EMAIL")
         .ok()
         .filter(|v| !v.is_empty())
     else {
-        info!("SUPERADMIN_EMAIL not set — skipping superadmin bootstrap");
+        info!("STITCHD_SUPERADMIN_EMAIL not set — skipping superadmin bootstrap");
         return Ok(());
     };
-    let Some(password) = std::env::var("SUPERADMIN_PASSWORD")
+    let Some(password) = std::env::var("STITCHD_SUPERADMIN_PASSWORD")
         .ok()
         .filter(|v| !v.is_empty())
     else {
-        warn!("SUPERADMIN_EMAIL is set but SUPERADMIN_PASSWORD is missing — skipping bootstrap");
+        warn!("STITCHD_SUPERADMIN_EMAIL is set but STITCHD_SUPERADMIN_PASSWORD is missing — skipping bootstrap");
         return Ok(());
     };
 

@@ -6,7 +6,7 @@
 //!
 //! Run with:
 //! ```
-//! cargo test --features test-util -p stitchd-sdk --test conformance
+//! cargo test --features test-util -p stitchd-sdk-rust --test conformance
 //! ```
 
 use std::collections::HashMap;
@@ -28,11 +28,11 @@ use stitchd_proto::flags::v1::{
 use stitchd_proto::sdk::v1::SyncDefinitionsResponse;
 use stitchd_proto::segments::v1::{ListSegmentMeta, RuleSegment};
 
-use stitchd_sdk::client::testing;
-use stitchd_sdk::lru::MembershipMap;
-use stitchd_sdk::refresh::MembershipBatchFetcher;
-use stitchd_sdk::snapshot::DefinitionSnapshot;
-use stitchd_sdk::{EvalOutcome, EvalRequest, SdkError};
+use stitchd_sdk_rust::client::testing;
+use stitchd_sdk_rust::lru::MembershipMap;
+use stitchd_sdk_rust::refresh::MembershipBatchFetcher;
+use stitchd_sdk_rust::snapshot::DefinitionSnapshot;
+use stitchd_sdk_rust::{EvalOutcome, EvalRequest, SdkError};
 
 // ============================================================================
 // Fixture serde types

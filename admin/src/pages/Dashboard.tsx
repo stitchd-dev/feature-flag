@@ -6,9 +6,9 @@ import { FLAGS, EXPERIMENTS } from '../lib/mockData'
 const SERVICES = [
   ['gateway', '8080', 'healthy'],
   ['flag-service', '50051', 'healthy'],
-  ['segmentation', '50052', 'healthy'],
-  ['event-service', '50053', 'healthy'],
-  ['experimentation', '50054', 'healthy'],
+  ['segmentation-service', '50052', 'healthy'],
+  ['analytics-service', '50053', 'healthy'],
+  ['experimentation-service', '50054', 'healthy'],
   ['auth-service', '50055', 'healthy'],
 ]
 

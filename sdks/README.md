@@ -13,7 +13,7 @@ sdks/
 │   ├── schemas/   JSON Schema definitions for events, eval req/resp, config
 │   └── fixtures/  Conformance test vectors (input → expected output) every SDK must pass
 │
-└── rust/          Server-side Rust SDK (crate name: stitchd-sdk)
+└── rust/          Server-side Rust SDK (crate name: stitchd-sdk-rust)
     ├── src/
     ├── tests/
     └── Cargo.toml

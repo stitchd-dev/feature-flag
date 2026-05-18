@@ -28,7 +28,7 @@ impl ProviderCaches {
     /// Zero providers are loaded; caches start empty.
     #[must_use]
     pub fn from_env() -> Self {
-        let secs: u64 = std::env::var("PROVIDER_CACHE_TTL_SECS")
+        let secs: u64 = std::env::var("STITCHD_PROVIDER_CACHE_TTL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(3600);

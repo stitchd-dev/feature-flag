@@ -11,7 +11,7 @@ Protobuf definitions and generated tonic stubs for all Stitchd gRPC services.
 | `flags.v1` | `FlagService` | `stitchd-flag-service :50052` |
 | `flags.v1` | `FlagSyncService` | `stitchd-flag-service :50052` |
 | `segments.v1` | `SegmentationService` | `stitchd-segmentation-service :50053` |
-| `events.v1` | `EventIngestionService` | `stitchd-event-service :50054` |
+| `events.v1` | `EventIngestionService` | `stitchd-analytics-service :50053` |
 | `experiments.v1` | `ExperimentationService` | `stitchd-experimentation-service :50055` |
 | `common.v1` | Shared message types (Context, etc.) | — |
 

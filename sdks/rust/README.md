@@ -14,7 +14,7 @@ tokio            = { version = "1", features = ["full"] }
 ## Quickstart
 
 ```rust
-use stitchd_sdk::{SdkClient, SdkConfig, EvalRequest};
+use stitchd_sdk_rust::{SdkClient, SdkConfig, EvalRequest};
 use stitchd_core::context::Context;
 
 #[tokio::main]

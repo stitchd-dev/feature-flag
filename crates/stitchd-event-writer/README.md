@@ -1,6 +1,6 @@
-# stitchd-events
+# stitchd-event-writer
 
-ClickHouse event ingestion library. Provides the `EventWriter` and schema migration helpers used by `stitchd-event-service`.
+ClickHouse event ingestion library. Provides the `EventWriter` and schema migration helpers used by `stitchd-analytics-service`.
 
 ## Modules
 
@@ -12,15 +12,15 @@ ClickHouse event ingestion library. Provides the `EventWriter` and schema migrat
 
 ## Usage
 
-This crate is an internal library — `stitchd-event-service` is the only binary that depends on it. It is not intended to be used directly by application code.
+This crate is an internal library — `stitchd-analytics-service` is the only binary that depends on it. It is not intended to be used directly by application code.
 
 ## ClickHouse Schema
 
-Migration files live in `migrations/`. Run them via the migration helper before starting `stitchd-event-service`:
+Migration files live in `migrations/`. Run them via the migration helper before starting `stitchd-analytics-service`:
 
 ```bash
 # Migrations are applied automatically at service startup
-cargo run -p stitchd-event-service
+cargo run -p stitchd-analytics-service
 ```
 
 ## Dependencies

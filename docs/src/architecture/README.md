@@ -22,7 +22,7 @@ graph TB
         AS[stitchd-auth-service\n:50051]
         FS[stitchd-flag-service\n:50052]
         SS[stitchd-segmentation-service\n:50053]
-        ES[stitchd-event-service\n:50054]
+        ANS[stitchd-analytics-service\n:50054]
         XS[stitchd-experimentation-service\n:50055]
     end
 
@@ -39,7 +39,7 @@ graph TB
     REST -->|gRPC| AS
     REST -->|gRPC| FS
     REST -->|gRPC| SS
-    REST -->|gRPC| ES
+    REST -->|gRPC| ANS
     REST -->|gRPC| XS
     GRPC_GW -->|gRPC proxy| FS
 
@@ -47,8 +47,8 @@ graph TB
     FS -->|sqlx| PG
     SS -->|sqlx| PG
     XS -->|sqlx| PG
-    ES -->|sqlx| PG
-    ES -->|ClickHouse client| CH
+    ANS -->|sqlx| PG
+    ANS -->|ClickHouse client| CH
 ```
 
 ## Crate Map
@@ -59,14 +59,14 @@ graph TB
 | `stitchd-auth-service` | Authentication (login, JWT) and organisation/project management | Binary |
 | `stitchd-flag-service` | Flag definitions, variant management, SDK flag-sync streaming | Binary |
 | `stitchd-segmentation-service` | Segment membership evaluation and list-segment checks | Binary |
-| `stitchd-event-service` | Experiment event ingestion, forwarded to ClickHouse | Binary |
+| `stitchd-analytics-service` | Experiment event ingestion, forwarded to ClickHouse | Binary |
 | `stitchd-experimentation-service` | Experiment CRUD and result aggregation | Binary |
 | `stitchd-stats-service` | Scheduled statistics computation (60-min loop), on-demand recompute jobs, `stats_jobs` + `stats_schedule` management | Binary |
-| `stitchd-sdk` | Server-side Rust SDK — in-process flag evaluation | Library |
+| `stitchd-sdk-rust` | Server-side Rust SDK — in-process flag evaluation | Library |
 | `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types | Library |
 | `stitchd-db` | Database access layer (sqlx repositories + ClickHouse) | Library |
 | `stitchd-proto` | Protobuf definitions and generated tonic stubs for all services | Library |
-| `stitchd-events` | ClickHouse event ingestion and migration helpers | Library |
+| `stitchd-event-writer` | ClickHouse event ingestion and migration helpers | Library |
 | `xtask` | Build tool: mdBook docs generation, tool installation | Binary |
 
 ## Design Principles

@@ -93,7 +93,6 @@ use utoipa::{
             crate::routes::management::UserJson,
             // Flags
             crate::routes::flags::FlagMutateRequest,
-            crate::routes::flags::FlagJson,
             crate::routes::flags::HashingConfigItem,
             crate::routes::flags::UpdateHashingBody,
             crate::routes::flags::HashingConfigJson,

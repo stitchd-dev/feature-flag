@@ -26,7 +26,7 @@ services:
     restart: unless-stopped
     command: --smp 1 --memory 512M --overprovisioned 1 --developer-mode 1
     ports:
-      - "${SCYLLA_CQL_PORT:-9042}:9042"
+      - "${STITCHD_SCYLLA_CQL_PORT:-9042}:9042"
     volumes:
       - scylladb_data:/var/lib/scylla
     networks:
@@ -43,9 +43,9 @@ services:
     container_name: stitchd-clickhouse
     restart: unless-stopped
     environment:
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-stitchd}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-stitchd}
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-stitchd}
+      CLICKHOUSE_USER: ${STITCHD_CLICKHOUSE_USER:-stitchd}
+      CLICKHOUSE_PASSWORD: ${STITCHD_CLICKHOUSE_PASSWORD:-stitchd}
+      CLICKHOUSE_DB: ${STITCHD_CLICKHOUSE_DB:-stitchd}
     ports:
       - "${CLICKHOUSE_HTTP_PORT:-8123}:8123"   # HTTP interface
       - "${CLICKHOUSE_NATIVE_PORT:-9000}:9000" # Native (TCP) interface
@@ -75,14 +75,15 @@ services:
     container_name: stitchd-auth-service
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
-      AUTH_SERVICE_PORT: "50051"
-      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-in-prod}
-      SUPERADMIN_EMAIL: ${SUPERADMIN_EMAIL:-admin@stitchd.io}
-      SUPERADMIN_PASSWORD: ${SUPERADMIN_PASSWORD:-changeme}
+      STITCHD_DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      STITCHD_AUTH_SERVICE_GRPC_PORT: "50051"
+      STITCHD_AUTH_SERVICE_METRICS_PORT: "9091"
+      STITCHD_JWT_SECRET: ${STITCHD_JWT_SECRET:-dev-secret-change-in-prod}
+      STITCHD_SUPERADMIN_EMAIL: ${STITCHD_SUPERADMIN_EMAIL:-admin@stitchd.io}
+      STITCHD_SUPERADMIN_PASSWORD: ${STITCHD_SUPERADMIN_PASSWORD:-changeme}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${AUTH_SERVICE_PORT:-50051}:50051"
+      - "${STITCHD_AUTH_SERVICE_GRPC_PORT:-50051}:50051"
     networks:
       - stitchd
     depends_on:
@@ -102,12 +103,12 @@ services:
     container_name: stitchd-flag-service
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
-      FLAG_SERVICE_PORT: "50052"
-      ANALYTICS_SERVICE_ADDR: http://analytics-service:50054
+      STITCHD_DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      STITCHD_FLAG_SERVICE_GRPC_PORT: "50052"
+      STITCHD_ANALYTICS_SERVICE_ADDR: http://analytics-service:50054
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${FLAG_SERVICE_PORT:-50052}:50052"
+      - "${STITCHD_FLAG_SERVICE_GRPC_PORT:-50052}:50052"
     networks:
       - stitchd
     depends_on:
@@ -129,13 +130,13 @@ services:
     container_name: stitchd-segmentation-service
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
-      SCYLLA_URI: scylladb:9042
-      SCYLLA_KEYSPACE: ${SCYLLA_KEYSPACE:-stitchd}
-      SEGMENTATION_SERVICE_PORT: "50053"
+      STITCHD_DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      STITCHD_SCYLLA_URI: scylladb:9042
+      STITCHD_SCYLLA_KEYSPACE: ${STITCHD_SCYLLA_KEYSPACE:-stitchd_segments}
+      STITCHD_SEGMENTATION_SERVICE_GRPC_PORT: "50053"
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${SEGMENTATION_SERVICE_PORT:-50053}:50053"
+      - "${STITCHD_SEGMENTATION_SERVICE_GRPC_PORT:-50053}:50053"
     networks:
       - stitchd
     depends_on:
@@ -157,12 +158,12 @@ services:
     container_name: stitchd-experimentation-service
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
-      FLAG_SERVICE_ADDR: http://flag-service:50052
-      EXPERIMENTATION_SERVICE_PORT: "50055"
+      STITCHD_DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      STITCHD_FLAG_SERVICE_ADDR: http://flag-service:50052
+      STITCHD_EXPERIMENTATION_SERVICE_GRPC_PORT: "50055"
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${EXPERIMENTATION_SERVICE_PORT:-50055}:50055"
+      - "${STITCHD_EXPERIMENTATION_SERVICE_GRPC_PORT:-50055}:50055"
     networks:
       - stitchd
     depends_on:
@@ -184,15 +185,15 @@ services:
     container_name: stitchd-stats-service
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
-      CLICKHOUSE_URL: http://${CLICKHOUSE_USER:-stitchd}:${CLICKHOUSE_PASSWORD:-stitchd}@clickhouse:8123/${CLICKHOUSE_DB:-stitchd}
-      STATS_SERVICE_PORT: "50056"
-      STATS_HTTP_PORT: "9200"
-      SCHEDULER_INTERVAL_SECS: "3600"
+      STITCHD_DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      STITCHD_CLICKHOUSE_URL: http://${STITCHD_CLICKHOUSE_USER:-stitchd}:${STITCHD_CLICKHOUSE_PASSWORD:-stitchd}@clickhouse:8123/${STITCHD_CLICKHOUSE_DB:-stitchd}
+      STITCHD_STATS_SERVICE_GRPC_PORT: "50056"
+      STITCHD_STATS_SERVICE_HTTP_PORT: "9200"
+      STITCHD_STATS_SCHEDULER_INTERVAL_SECS: "3600"
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${STATS_SERVICE_PORT:-50056}:50056"
-      - "${STATS_HTTP_PORT:-9200}:9200"
+      - "${STITCHD_STATS_SERVICE_GRPC_PORT:-50056}:50056"
+      - "${STITCHD_STATS_SERVICE_HTTP_PORT:-9200}:9200"
     networks:
       - stitchd
     depends_on:
@@ -214,17 +215,17 @@ services:
     container_name: stitchd-analytics-service
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
-      CLICKHOUSE_URL: http://clickhouse:8123
-      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-stitchd}
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-stitchd}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-stitchd}
-      ANALYTICS_GRPC_PORT: "50054"
-      METRICS_PORT: "9104"
+      STITCHD_DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      STITCHD_CLICKHOUSE_URL: http://clickhouse:8123
+      STITCHD_CLICKHOUSE_DB: ${STITCHD_CLICKHOUSE_DB:-stitchd}
+      STITCHD_CLICKHOUSE_USER: ${STITCHD_CLICKHOUSE_USER:-stitchd}
+      STITCHD_CLICKHOUSE_PASSWORD: ${STITCHD_CLICKHOUSE_PASSWORD:-stitchd}
+      STITCHD_ANALYTICS_SERVICE_GRPC_PORT: "50054"
+      STITCHD_ANALYTICS_SERVICE_METRICS_PORT: "9104"
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${ANALYTICS_SERVICE_PORT:-50054}:50054"
-      - "${ANALYTICS_METRICS_PORT:-9104}:9104"
+      - "${STITCHD_ANALYTICS_SERVICE_GRPC_PORT:-50054}:50054"
+      - "${STITCHD_ANALYTICS_SERVICE_METRICS_PORT:-9104}:9104"
     networks:
       - stitchd
     depends_on:
@@ -246,18 +247,18 @@ services:
     container_name: stitchd-gateway
     restart: unless-stopped
     environment:
-      GATEWAY_PORT: "8080"
-      METRICS_PORT: "9080"
-      AUTH_SERVICE_ADDR: http://auth-service:50051
-      FLAG_SERVICE_ADDR: http://flag-service:50052
-      SEGMENTATION_SERVICE_ADDR: http://segmentation-service:50053
-      ANALYTICS_SERVICE_ADDR: http://analytics-service:50054
-      EXPERIMENTATION_SERVICE_ADDR: http://experimentation-service:50055
-      STATS_SERVICE_ADDR: http://stats-service:50056
+      STITCHD_GATEWAY_HTTP_PORT: "8080"
+      STITCHD_GATEWAY_METRICS_PORT: "9080"
+      STITCHD_AUTH_SERVICE_ADDR: http://auth-service:50051
+      STITCHD_FLAG_SERVICE_ADDR: http://flag-service:50052
+      STITCHD_SEGMENTATION_SERVICE_ADDR: http://segmentation-service:50053
+      STITCHD_ANALYTICS_SERVICE_ADDR: http://analytics-service:50054
+      STITCHD_EXPERIMENTATION_SERVICE_ADDR: http://experimentation-service:50055
+      STITCHD_STATS_SERVICE_ADDR: http://stats-service:50056
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      - "${GATEWAY_PORT:-8080}:8080"
-      - "${GATEWAY_METRICS_PORT:-9080}:9080"
+      - "${STITCHD_GATEWAY_HTTP_PORT:-8080}:8080"
+      - "${STITCHD_GATEWAY_METRICS_PORT:-9080}:9080"
     networks:
       - stitchd
     depends_on:

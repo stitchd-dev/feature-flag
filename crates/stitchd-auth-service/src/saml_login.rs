@@ -128,7 +128,7 @@ impl SamlLoginServiceImpl {
     }
 
     fn sp_base_url() -> String {
-        std::env::var("SP_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+        std::env::var("STITCHD_SP_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
     }
 
     fn acs_url(provider_id: AuthProviderId) -> String {

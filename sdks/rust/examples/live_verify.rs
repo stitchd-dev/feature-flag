@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use stitchd_core::context::Context;
-use stitchd_sdk::{EvalOutcome, EvalRequest, SdkClient, SdkConfig};
+use stitchd_sdk_rust::{EvalOutcome, EvalRequest, SdkClient, SdkConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

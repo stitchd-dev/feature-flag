@@ -3,15 +3,15 @@
 use stitchd_core::{id::EnvironmentId, rule_engine::types::Rule, segment::Segment};
 use stitchd_proto::segments::v1::{ListSegment, ListSegmentMeta, RuleSegment};
 
-use crate::error::ServiceError;
+use crate::error::SegmentationServiceError;
 
 /// Convert a [`Segment`] record plus its definition into a [`RuleSegment`] proto message.
 ///
 /// # Errors
-/// Returns [`ServiceError::Internal`] if rule serialisation fails.
-pub fn segment_to_rule_proto(seg: &Segment, rules: &[Rule]) -> Result<RuleSegment, ServiceError> {
+/// Returns [`SegmentationServiceError::Internal`] if rule serialisation fails.
+pub fn segment_to_rule_proto(seg: &Segment, rules: &[Rule]) -> Result<RuleSegment, SegmentationServiceError> {
     let rule_payload = serde_json::to_vec(rules)
-        .map_err(|e| ServiceError::Internal(format!("rule serialisation: {e}")))?;
+        .map_err(|e| SegmentationServiceError::Internal(format!("rule serialisation: {e}")))?;
 
     Ok(RuleSegment {
         key: seg.key.clone(),
@@ -57,11 +57,11 @@ pub fn segment_to_list_proto(
 /// Parse an environment ID from a string.
 ///
 /// # Errors
-/// Returns [`ServiceError::InvalidArgument`] if the string is not a valid UUID.
-pub fn parse_env_id(s: &str) -> Result<EnvironmentId, ServiceError> {
+/// Returns [`SegmentationServiceError::InvalidArgument`] if the string is not a valid UUID.
+pub fn parse_env_id(s: &str) -> Result<EnvironmentId, SegmentationServiceError> {
     s.parse::<uuid::Uuid>()
         .map(EnvironmentId::from_uuid)
-        .map_err(|_| ServiceError::InvalidArgument(format!("invalid environment_id: {s}")))
+        .map_err(|_| SegmentationServiceError::InvalidArgument(format!("invalid environment_id: {s}")))
 }
 
 #[cfg(test)]
@@ -140,6 +140,6 @@ mod tests {
     #[test]
     fn parse_env_id_rejects_invalid_string() {
         let result = parse_env_id("not-a-uuid");
-        assert!(matches!(result, Err(ServiceError::InvalidArgument(_))));
+        assert!(matches!(result, Err(SegmentationServiceError::InvalidArgument(_))));
     }
 }

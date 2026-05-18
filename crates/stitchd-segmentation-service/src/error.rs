@@ -5,7 +5,7 @@ use tonic::Status;
 
 /// Errors returned by the segmentation service.
 #[derive(Debug, thiserror::Error)]
-pub enum ServiceError {
+pub enum SegmentationServiceError {
     /// The requested resource was not found.
     #[error("not found: {0}")]
     NotFound(String),
@@ -35,7 +35,7 @@ pub enum ServiceError {
     Internal(String),
 }
 
-impl From<RepositoryError> for ServiceError {
+impl From<RepositoryError> for SegmentationServiceError {
     fn from(e: RepositoryError) -> Self {
         match e {
             RepositoryError::NotFound { id } => Self::NotFound(id),
@@ -48,18 +48,18 @@ impl From<RepositoryError> for ServiceError {
     }
 }
 
-impl From<ServiceError> for Status {
-    fn from(e: ServiceError) -> Self {
+impl From<SegmentationServiceError> for Status {
+    fn from(e: SegmentationServiceError) -> Self {
         match e {
-            ServiceError::NotFound(msg) => Self::not_found(msg),
-            ServiceError::VersionConflict { expected, actual } => Self::aborted(format!(
+            SegmentationServiceError::NotFound(msg) => Self::not_found(msg),
+            SegmentationServiceError::VersionConflict { expected, actual } => Self::aborted(format!(
                 "version conflict: expected {expected}, actual {actual}"
             )),
-            ServiceError::UniqueViolation { field } => {
+            SegmentationServiceError::UniqueViolation { field } => {
                 Self::already_exists(format!("unique violation on: {field}"))
             }
-            ServiceError::InvalidArgument(msg) => Self::invalid_argument(msg),
-            ServiceError::Internal(msg) => Self::internal(msg),
+            SegmentationServiceError::InvalidArgument(msg) => Self::invalid_argument(msg),
+            SegmentationServiceError::Internal(msg) => Self::internal(msg),
         }
     }
 }
@@ -73,8 +73,8 @@ mod tests {
         let repo_err = RepositoryError::NotFound {
             id: "segment-abc".to_string(),
         };
-        let svc_err = ServiceError::from(repo_err);
-        assert!(matches!(svc_err, ServiceError::NotFound(_)));
+        let svc_err = SegmentationServiceError::from(repo_err);
+        assert!(matches!(svc_err, SegmentationServiceError::NotFound(_)));
         assert!(svc_err.to_string().contains("segment-abc"));
     }
 
@@ -84,8 +84,8 @@ mod tests {
             expected: 1,
             actual: 3,
         };
-        let svc_err = ServiceError::from(repo_err);
-        assert!(matches!(svc_err, ServiceError::VersionConflict { .. }));
+        let svc_err = SegmentationServiceError::from(repo_err);
+        assert!(matches!(svc_err, SegmentationServiceError::VersionConflict { .. }));
     }
 
     #[test]
@@ -93,8 +93,8 @@ mod tests {
         let repo_err = RepositoryError::UniqueViolation {
             field: "key".to_string(),
         };
-        let svc_err = ServiceError::from(repo_err);
-        assert!(matches!(svc_err, ServiceError::UniqueViolation { .. }));
+        let svc_err = SegmentationServiceError::from(repo_err);
+        assert!(matches!(svc_err, SegmentationServiceError::UniqueViolation { .. }));
     }
 
     #[test]
@@ -102,35 +102,35 @@ mod tests {
         let repo_err = RepositoryError::InvalidState {
             reason: "experiment is running".to_string(),
         };
-        let svc_err = ServiceError::from(repo_err);
-        assert!(matches!(svc_err, ServiceError::Internal(_)));
+        let svc_err = SegmentationServiceError::from(repo_err);
+        assert!(matches!(svc_err, SegmentationServiceError::Internal(_)));
     }
 
     #[test]
     fn service_error_display_messages() {
         assert!(
-            ServiceError::NotFound("x".to_string())
+            SegmentationServiceError::NotFound("x".to_string())
                 .to_string()
                 .contains('x')
         );
         assert!(
-            ServiceError::InvalidArgument("bad".to_string())
+            SegmentationServiceError::InvalidArgument("bad".to_string())
                 .to_string()
                 .contains("bad")
         );
         assert!(
-            ServiceError::Internal("oops".to_string())
+            SegmentationServiceError::Internal("oops".to_string())
                 .to_string()
                 .contains("oops")
         );
         assert!(
-            ServiceError::UniqueViolation {
+            SegmentationServiceError::UniqueViolation {
                 field: "key".to_string()
             }
             .to_string()
             .contains("key")
         );
-        let vc = ServiceError::VersionConflict {
+        let vc = SegmentationServiceError::VersionConflict {
             expected: 1,
             actual: 2,
         };

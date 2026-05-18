@@ -21,7 +21,6 @@ fn main() {
         // Existing SDK-facing services
         proto_root.join("flags/v1/flag_sync.proto"),
         proto_root.join("segments/v1/segment.proto"),
-        proto_root.join("events/v1/event.proto"),
         // New microservice contracts
         proto_root.join("auth/v1/auth_service.proto"),
         proto_root.join("auth/v1/management.proto"),
@@ -29,7 +28,6 @@ fn main() {
         proto_root.join("auth/v1/saml_login.proto"),
         proto_root.join("flags/v1/flag_service.proto"),
         proto_root.join("segments/v1/segmentation_service.proto"),
-        proto_root.join("events/v1/event_service.proto"),
         proto_root.join("experiments/v1/experimentation_service.proto"),
         proto_root.join("management/v1/management_service.proto"),
         proto_root.join("stats/v1/stats_service.proto"),

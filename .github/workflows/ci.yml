@@ -54,6 +54,8 @@ jobs:
     name: SQLx Cache Check
     runs-on: ubuntu-latest
     env:
+      STITCHD_DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
+      # sqlx-cli requires DATABASE_URL; set it as an alias for STITCHD_DATABASE_URL
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
       SQLX_OFFLINE: false
     steps:
@@ -122,7 +124,7 @@ jobs:
     name: Coverage (≥90%)
     runs-on: ubuntu-latest
     env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
+      STITCHD_DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
     steps:
       - uses: actions/checkout@v4
 

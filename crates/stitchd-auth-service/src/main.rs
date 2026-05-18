@@ -1,12 +1,12 @@
 //! Entry point for the `stitchd-auth-service` gRPC microservice.
 //!
 //! Environment variables:
-//! - `AUTH_SERVICE_PORT`         (default: `50051`) — gRPC bind port
-//! - `DATABASE_URL`              — PostgreSQL connection string (required)
-//! - `METRICS_PORT`              (default: `9091`) — Prometheus metrics port
-//! - `SUPERADMIN_EMAIL`          — seed a superadmin user on first boot
-//! - `SUPERADMIN_PASSWORD`       — plaintext password hashed with Argon2id
-//! - `PROVIDER_CACHE_TTL_SECS`   (default: `3600`) — OIDC/SAML provider cache TTL
+//! - `STITCHD_AUTH_SERVICE_GRPC_PORT`         (default: `50051`) — gRPC bind port
+//! - `STITCHD_DATABASE_URL`              — PostgreSQL connection string (required)
+//! - `STITCHD_AUTH_SERVICE_METRICS_PORT`              (default: `9091`) — Prometheus metrics port
+//! - `STITCHD_SUPERADMIN_EMAIL`          — seed a superadmin user on first boot
+//! - `STITCHD_SUPERADMIN_PASSWORD`       — plaintext password hashed with Argon2id
+//! - `STITCHD_PROVIDER_CACHE_TTL_SECS`   (default: `3600`) — OIDC/SAML provider cache TTL
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let metrics_port: u16 = std::env::var("METRICS_PORT")
+    let metrics_port: u16 = std::env::var("STITCHD_AUTH_SERVICE_METRICS_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(9091_u16);
@@ -67,7 +67,7 @@ async fn main() -> anyhow::Result<()> {
     drop(handle);
 
     let database_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL environment variable must be set");
+        std::env::var("STITCHD_DATABASE_URL").expect("STITCHD_DATABASE_URL environment variable must be set");
     let pool = sqlx::PgPool::connect(&database_url).await?;
 
     // Run migrations.
@@ -90,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
     // Provider caches — zero providers loaded at startup; built lazily on first login.
     let provider_caches = Arc::new(ProviderCaches::from_env());
     let auth_provider_repo = Arc::new(PgAuthProviderRepository::new(pool.clone()));
-    let crypto_key = Arc::new(CryptoKey::from_env().expect("AUTH_ENCRYPTION_KEY must be set"));
+    let crypto_key = Arc::new(CryptoKey::from_env().expect("STITCHD_AUTH_ENCRYPTION_KEY must be set"));
 
     // Bootstrap superadmin if configured.
     seed_superadmin(
@@ -100,7 +100,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    let grpc_port: u16 = std::env::var("AUTH_SERVICE_PORT")
+    let grpc_port: u16 = std::env::var("STITCHD_AUTH_SERVICE_GRPC_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(50051_u16);

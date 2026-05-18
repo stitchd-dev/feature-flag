@@ -15,7 +15,7 @@ that must be upheld going forward.
 | `stitchd-analytics-service` | no | compliant |
 | `stitchd-auth-service` | no | compliant |
 | `stitchd-core` | no | compliant |
-| `stitchd-events` | no | compliant |
+| `stitchd-event-writer` | no | compliant |
 | `stitchd-experimentation-service` | no | compliant |
 | `stitchd-flag-service` | no | compliant |
 | `stitchd-gateway` | no | compliant |
