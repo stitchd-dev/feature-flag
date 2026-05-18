@@ -147,32 +147,35 @@
 <!-- execution: sequential -->
 <!-- depends: phase2 -->
 
-- [ ] Task 1: Update protobuf
-  <!-- files: crates/stitchd-proto/proto/segmentation.proto -->
-  - [ ] `GetSegment` for list type returns summary, not full lists
-  - [ ] Add `AddEntries` / `RemoveEntries` RPCs to segmentation proto
-  - [ ] Regenerate bindings; protoc-gen-doc updates
+- [x] Task 1: Update protobuf [d7c46ef]
+  <!-- files: proto/segments/v1/segment.proto, proto/segments/v1/segmentation_service.proto -->
+  - [x] `GetSegment` for list type returns summary, not full lists
+  - [x] `AddEntries` / `RemoveEntries` RPCs added to segmentation proto (already present; bindings regenerated)
+  - [x] `SegmentBundle.list_segments` changed from `repeated ListSegment` → `repeated ListSegmentMeta`
 
-- [ ] Task 2: Write failing service-layer tests (Red)
-  <!-- files: crates/stitchd-segmentation-service/src/grpc/crud_tests.rs, crates/stitchd-segmentation-service/src/grpc/update_tests.rs -->
-  - [ ] `GetSegment` returns summary metadata for list segments
-  - [ ] `AddEntries` / `RemoveEntries` work end-to-end
-  - [ ] Existing Create/Update flows use new repo surface
+- [x] Task 2: Write failing service-layer tests (Red → Green) [d7c46ef]
+  <!-- files: crates/stitchd-segmentation-service/src/grpc/update_tests.rs -->
+  - [x] `get_segment_list_type_returns_meta_bundle_without_keys` — asserts ListSegmentMeta (key+id, no entry keys)
+  - [x] All 56 segmentation-service unit tests pass
 
-- [ ] Task 3: Wire `ScyllaClient` into segmentation-service startup
-  <!-- files: crates/stitchd-segmentation-service/src/main.rs, crates/stitchd-segmentation-service/src/lib.rs -->
-  - [ ] Initialise on startup, fail-fast on errors
-  - [ ] Apply Scylla migrations before serving
-  - [ ] Inject into service state alongside PG pool
+- [x] Task 3: Wire `ScyllaClient` into segmentation-service startup [d7c46ef]
+  <!-- files: crates/stitchd-segmentation-service/src/main.rs -->
+  - [x] `ScyllaSegmentStore` created from `scylla_client` on startup
+  - [x] `CompositeSegmentRepository` built (PG metadata + Scylla list ops), injected as `AppState.segment_repo`
+  - [x] Scylla migrations applied before serving (already wired in Phase 1 Task 8)
 
-- [ ] Task 4: Refactor service layer to new repo surface
-  <!-- files: crates/stitchd-segmentation-service/src/grpc/service.rs, crates/stitchd-segmentation-service/src/grpc/sdk_backend.rs, crates/stitchd-segmentation-service/src/grpc/evaluation_tests.rs, crates/stitchd-segmentation-service/src/grpc/list_membership_tests.rs -->
-  - [ ] `grpc/service.rs` — replace `find_with_list` / `set_list_entries` call sites
-  - [ ] Update `evaluation_tests.rs`, `update_tests.rs`, `crud_tests.rs`, `list_membership_tests.rs`, `sdk_backend.rs`
+- [x] Task 4: Refactor service layer to new repo surface [d7c46ef]
+  <!-- files: crates/stitchd-db/src/repository/composite.rs, crates/stitchd-segmentation-service/src/grpc/service.rs -->
+  - [x] `CompositeSegmentRepository` implements `SegmentRepository` — PG for metadata, Scylla for list ops
+  - [x] `GetSegment` list path: pushes `ListSegmentMeta` to bundle
+  - [x] `AddEntries` / `RemoveEntries` RPC handlers implemented
+  - [x] `LookupSegmentEntry` wired via `check_list_membership`
+  - [x] `find_memberships_batch` now Scylla-backed via composite
 
-- [ ] Task 5: Update flag-service mock repo impls
+- [x] Task 5: Update flag-service mock repo impls [d7c46ef]
   <!-- files: crates/stitchd-flag-service/src/service.rs, crates/stitchd-flag-service/src/sdk_backend.rs -->
-  - [ ] `service.rs` and `sdk_backend.rs` mocks updated for new trait surface
+  - [x] All list methods already stubbed correctly (no changes needed)
+  - [x] 65 flag-service unit tests pass
 
 - [ ] Task 6: Conductor - User Manual Verification 'gRPC & Service Layer Wiring' (Protocol in workflow.md)
 
