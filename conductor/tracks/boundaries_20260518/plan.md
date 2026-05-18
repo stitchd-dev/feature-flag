@@ -42,12 +42,13 @@
   - [x] Remove `PgExperimentResultsRepository` from experimentation-service entirely
   - [x] Run tests
 
-- [ ] Task 6: Drop `experiment_results` PostgreSQL table + repo
+- [x] Task 6: Drop `experiment_results` PostgreSQL table + repo [25779a9]
   <!-- files: crates/stitchd-db/migrations/, crates/stitchd-db/src/experiment_results.rs, crates/stitchd-db/src/lib.rs -->
   <!-- depends: task4, task5 -->
-  - [ ] Add drop migration
-  - [ ] Delete repo module + trait export
-  - [ ] `cargo sqlx prepare --workspace`; `cargo test --workspace`
+  - [x] Add drop migration `20260519000001_drop_experiment_results.sql`
+  - [x] Delete repo module (665 lines) + lib.rs re-export
+  - [x] `.sqlx/` cache already clean (no entries referenced the dropped table)
+  - [x] `cargo build --workspace` clean; clippy clean except for one pre-existing `type_complexity` failure in `stitchd-gateway/src/grpc_server.rs:149` — filed as discovered work `feature-flag-ysh`
 
 - [x] Task 7: Verify ScyllaDB containment [2ebee8b]
   <!-- files: crates/*/Cargo.toml -->

@@ -105,3 +105,19 @@ Workspace `cargo check --workspace` clean after both merges.
 - **`--features test-util` required for SDK clippy `--all-targets`**. The conformance test uses test-only helpers behind a feature flag. Without `--features test-util`, `cargo clippy -p stitchd-sdk --all-targets` fails with unresolved imports. Document this in the SDK README's testing section eventually.
 
 ---
+
+## [2026-05-19 01:05] Wave 3 — Phase 1 task 1.6 (1 worker)
+
+**Tasks completed:** 1.6 (drop PG experiment_results table + repo). Single worker, single commit `25779a9`.
+
+665-line `experiment_results.rs` deleted; drop migration `20260519000001_drop_experiment_results.sql` added; `.sqlx/` cache was already clean (no stale entries referenced the dropped table).
+
+**Patterns / gotchas:**
+
+- **`.sqlx/` offline cache can be "clean" even when a repo is deleted.** The deleted `experiment_results.rs` had `sqlx::query!`/`query_as!` macros but no cached entries in `.sqlx/` referenced the `experiment_results` table — likely because the repo's queries were never compiled in offline mode (or were generated using `sqlx::query_as::<_, Row>(r"...")` raw strings instead of macros). Useful: don't assume cache regeneration is mandatory on repo deletion — grep `.sqlx/` first.
+
+- **Discovered work pattern: file as bug with `discovered-from`-style note.** Worker 12 found a pre-existing `clippy::type_complexity` failure in `stitchd-gateway/src/grpc_server.rs:149` (function `stub_clients()`). Filed as separate beads bug `feature-flag-ysh` rather than in-scope fix, because (a) it's pre-existing on the base branch, and (b) Phase 2 (URL canonical rewrite) will likely touch `grpc_server.rs` significantly and can fold the fix in. Pattern: **when a worker finds work that's clearly out-of-scope but should not be lost, file a new beads bug with priority 2 and reference it from the report-back.**
+
+**Phase 1 + Phase 6 are now CODE-COMPLETE.** Only the two user-manual-verification tasks remain (`feature-flag-mwk.1.8` and `feature-flag-mwk.6.6`). No more parallel waves until user verifies.
+
+---
