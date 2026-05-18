@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::events::v1::{
-    Event, IngestRequest, MetricValue, metric_value::Value as MetricVal,
+use stitchd_proto::analytics::v1::{
+    IngestEventRequest, MetricEvent, MetricValue, metric_value::Value as MetricVal,
 };
 use stitchd_proto::segments::v1::EvaluateMembershipRequest;
 
@@ -62,7 +62,7 @@ pub struct ListCheckResponse {
     pub is_member: bool,
 }
 
-fn sdk_event_to_proto(body: &SdkEventBody) -> Event {
+fn sdk_event_to_proto(body: &SdkEventBody) -> MetricEvent {
     let value = body.value.as_ref().and_then(|v| {
         if let Some(b) = v.as_bool() {
             Some(MetricValue {
@@ -78,7 +78,7 @@ fn sdk_event_to_proto(body: &SdkEventBody) -> Event {
             })
         }
     });
-    Event {
+    MetricEvent {
         metric_key: body.metric_key.clone(),
         context_key: body.context_key.clone(),
         context_type: body.context_type.clone(),
@@ -134,7 +134,7 @@ pub async fn ingest_event(
     Json(body): Json<SdkEventBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let event = sdk_event_to_proto(&body);
-    let req = tonic::Request::new(IngestRequest {
+    let req = tonic::Request::new(IngestEventRequest {
         events: vec![event],
     });
     let mut client = state.analytics_client.lock().await;
@@ -168,8 +168,8 @@ pub async fn ingest_batch_events(
     Path(_env_id): Path<String>,
     Json(bodies): Json<Vec<SdkEventBody>>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let events: Vec<Event> = bodies.iter().map(sdk_event_to_proto).collect();
-    let req = tonic::Request::new(IngestRequest { events });
+    let events: Vec<MetricEvent> = bodies.iter().map(sdk_event_to_proto).collect();
+    let req = tonic::Request::new(IngestEventRequest { events });
     let mut client = state.analytics_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();

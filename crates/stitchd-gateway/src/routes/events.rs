@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::events::v1::{Event, IngestRequest, MetricValue, metric_value};
+use stitchd_proto::analytics::v1::{IngestEventRequest, MetricEvent, MetricValue, metric_value};
 
 use crate::error::GatewayError;
 use crate::pagination::{PaginatedResponse, PaginationParams};
@@ -38,7 +38,7 @@ pub struct IngestResponseJson {
     pub rejected_keys: Vec<String>,
 }
 
-fn body_to_event(b: &EventBody) -> Event {
+fn body_to_event(b: &EventBody) -> MetricEvent {
     let value = b.value.as_ref().map(|v| {
         if let Some(b) = v.as_bool() {
             MetricValue {
@@ -56,7 +56,7 @@ fn body_to_event(b: &EventBody) -> Event {
             MetricValue { value: None }
         }
     });
-    Event {
+    MetricEvent {
         metric_key: b.metric_key.clone(),
         context_type: b.context_type.clone(),
         context_key: b.context_key.clone(),
@@ -86,7 +86,7 @@ pub async fn ingest_event(
     Path(_env_id): Path<String>,
     Json(body): Json<EventBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(IngestRequest {
+    let req = tonic::Request::new(IngestEventRequest {
         events: vec![body_to_event(&body)],
     });
     let mut client = state.analytics_client.lock().await;
@@ -118,7 +118,7 @@ pub async fn ingest_batch(
     Json(body): Json<BatchEventBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let events = body.events.iter().map(body_to_event).collect();
-    let req = tonic::Request::new(IngestRequest { events });
+    let req = tonic::Request::new(IngestEventRequest { events });
     let mut client = state.analytics_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
