@@ -1,17 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import type { ContextTypeSuggestion, ContextParamSuggestion } from '../lib/api'
 
-export interface ContextTypeSuggestion {
-  context_type: string
-  last_seen_at: string
-}
-
-export interface ContextParamSuggestion {
-  param_key: string
-  inferred_type: string
-  is_private: boolean
-  last_seen_at: string
-}
+export type { ContextTypeSuggestion, ContextParamSuggestion }
 
 interface SuggestionsState<T> {
   data: T[]

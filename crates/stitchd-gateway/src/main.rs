@@ -3,13 +3,15 @@
 //! Environment variables:
 //! - `GATEWAY_PORT` (default: `8080`) — REST listen port
 //! - `GATEWAY_GRPC_PORT` (default: `50050`) — SDK gRPC listen port
-//! - `METRICS_PORT` (default: `9080`) — Prometheus metrics port
 //! - `AUTH_SERVICE_ADDR` (default: `http://localhost:50051`)
 //! - `FLAG_SERVICE_ADDR` (default: `http://localhost:50052`)
 //! - `SEGMENTATION_SERVICE_ADDR` (default: `http://localhost:50053`)
 //! - `ANALYTICS_SERVICE_ADDR` (default: `http://localhost:50054`)
 //! - `EXPERIMENTATION_SERVICE_ADDR` (default: `http://localhost:50055`)
 //! - `STATS_SERVICE_ADDR` (default: `http://localhost:50056`)
+//!
+//! Prometheus metrics are served at `GET /v1/metrics` on the same port as the
+//! REST API (Prometheus text exposition format, `text/plain; version=0.0.4`).
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -46,12 +48,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let metrics_port: u16 = env_or("METRICS_PORT", "9080").parse().unwrap_or(9080);
-    let metrics_addr: SocketAddr = format!("0.0.0.0:{metrics_port}").parse()?;
-    PrometheusBuilder::new()
-        .with_http_listener(metrics_addr)
-        .install()?;
-    info!(%metrics_addr, "prometheus metrics ready");
+    // Install Prometheus recorder and obtain a handle for the /v1/metrics handler.
+    // The handle is passed into the router so the GET /v1/metrics route can call
+    // handle.render() to return real Prometheus exposition text on the main port.
+    let metrics_handle = PrometheusBuilder::new().install_recorder()?;
+    // Emit a startup counter so the exposition is never completely empty even
+    // before request-level metrics are recorded.
+    metrics::counter!("gateway_up_total").increment(1);
+    info!("prometheus metrics recorder installed (served at GET /v1/metrics)");
 
     let state = GatewayState::connect(
         env_or("AUTH_SERVICE_ADDR", "http://localhost:50051"),
@@ -77,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
     let auth_client_for_grpc = Arc::clone(&state_arc.auth_client);
     let flag_sdk_backend_for_grpc = Arc::clone(&state_arc.flag_sdk_backend_client);
 
-    let app = build_router(Arc::clone(&state_arc));
+    let app = build_router(Arc::clone(&state_arc), metrics_handle);
 
     info!(%addr, %grpc_addr, "stitchd-gateway starting (REST + SDK gRPC)");
 

@@ -1,5 +1,7 @@
 import axios from 'axios'
 import { auth } from './auth'
+import type { AdminFlagResponse, PaginatedResponse } from './types'
+import type { Segment, CreateSegmentRequest, UpdateSegmentRequest } from '../pages/segments/types'
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
@@ -256,12 +258,12 @@ export interface OrgSummary {
 }
 
 export async function listOrgs(signal?: AbortSignal): Promise<OrgSummary[]> {
-  const { data } = await api.get<{ orgs: OrgSummary[] }>('/v1/admin/orgs', { signal })
+  const { data } = await api.get<{ orgs: OrgSummary[] }>('/v1/superadmin/orgs', { signal })
   return data.orgs
 }
 
 export async function getOrg(orgId: string, signal?: AbortSignal): Promise<OrgSummary> {
-  const { data } = await api.get<OrgSummary>(`/v1/admin/orgs/${orgId}`, { signal })
+  const { data } = await api.get<OrgSummary>(`/v1/superadmin/orgs/${orgId}`, { signal })
   return data
 }
 
@@ -274,17 +276,17 @@ export interface OrgUserSummary {
 }
 
 export async function listOrgUsers(orgId: string, signal?: AbortSignal): Promise<OrgUserSummary[]> {
-  const { data } = await api.get<{ users: OrgUserSummary[] }>(`/v1/admin/orgs/${orgId}/users`, { signal })
+  const { data } = await api.get<{ users: OrgUserSummary[] }>(`/v1/superadmin/orgs/${orgId}/users`, { signal })
   return data.users
 }
 
 export async function removeOrgUser(orgId: string, userId: string): Promise<void> {
-  await api.delete(`/v1/admin/orgs/${orgId}/users/${userId}`)
+  await api.delete(`/v1/superadmin/orgs/${orgId}/users/${userId}`)
 }
 
 export async function createOrg(name: string): Promise<OrgSummary> {
   const { data } = await api.post<{ org_id: string; org_name: string; created_at?: string }>(
-    '/v1/admin/orgs',
+    '/v1/superadmin/orgs',
     { name },
   )
   return { org_id: data.org_id, org_name: data.org_name, created_at: data.created_at ?? null }
@@ -300,6 +302,342 @@ export async function seedUser(
   orgId: string,
   body: { email: string; display_name?: string; password?: string; org_role?: string },
 ): Promise<SeedUserResponse> {
-  const { data } = await api.post<SeedUserResponse>(`/v1/admin/orgs/${orgId}/users`, body)
+  const { data } = await api.post<SeedUserResponse>(`/v1/superadmin/orgs/${orgId}/users`, body)
+  return data
+}
+
+// ─── Auth Providers ───────────────────────────────────────────────────────────
+
+export interface AuthProviderSummary {
+  auth_provider_id: string
+  provider_type: string
+  display_name: string
+  is_enabled: boolean
+  created_at: string
+}
+
+export async function listAuthProviders(orgId: string, signal?: AbortSignal): Promise<AuthProviderSummary[]> {
+  const { data } = await api.get<AuthProviderSummary[]>(`/v1/orgs/${orgId}/auth-providers`, { signal })
+  return data
+}
+
+export async function getAuthProvider(orgId: string, authProviderId: string, signal?: AbortSignal): Promise<AuthProviderSummary> {
+  const { data } = await api.get<AuthProviderSummary>(
+    `/v1/orgs/${orgId}/auth-providers/${authProviderId}`,
+    { signal },
+  )
+  return data
+}
+
+export async function createAuthProvider(
+  orgId: string,
+  body: { provider_type: string; display_name: string; config: Record<string, unknown> },
+): Promise<AuthProviderSummary> {
+  const { data } = await api.post<AuthProviderSummary>(`/v1/orgs/${orgId}/auth-providers`, body)
+  return data
+}
+
+export async function updateAuthProvider(
+  orgId: string,
+  authProviderId: string,
+  body: { display_name?: string; config?: Record<string, unknown>; is_enabled?: boolean },
+): Promise<AuthProviderSummary> {
+  const { data } = await api.put<AuthProviderSummary>(
+    `/v1/orgs/${orgId}/auth-providers/${authProviderId}`,
+    body,
+  )
+  return data
+}
+
+export async function deleteAuthProvider(orgId: string, authProviderId: string): Promise<void> {
+  await api.delete(`/v1/orgs/${orgId}/auth-providers/${authProviderId}`)
+}
+
+export async function getSamlSpMetadata(orgId: string, authProviderId: string): Promise<string> {
+  const { data } = await api.get<string>(
+    `/v1/orgs/${orgId}/auth-providers/${authProviderId}/saml/metadata`,
+  )
+  return data
+}
+
+// ─── Flags ────────────────────────────────────────────────────────────────────
+
+export async function listFlags(
+  projectId: string,
+  params?: { page?: number; per_page?: number; include_archived?: boolean },
+  signal?: AbortSignal,
+): Promise<PaginatedResponse<AdminFlagResponse>> {
+  const qs = new URLSearchParams()
+  if (params?.page != null) qs.set('page', String(params.page))
+  if (params?.per_page != null) qs.set('per_page', String(params.per_page))
+  if (params?.include_archived) qs.set('include_archived', 'true')
+  const { data } = await api.get<PaginatedResponse<AdminFlagResponse>>(
+    `/v1/projects/${projectId}/flags?${qs}`,
+    { signal },
+  )
+  return data
+}
+
+export async function getFlag(projectId: string, flagKey: string, signal?: AbortSignal): Promise<AdminFlagResponse> {
+  const { data } = await api.get<AdminFlagResponse>(
+    `/v1/projects/${projectId}/flags/${flagKey}`,
+    { signal },
+  )
+  return data
+}
+
+export async function createFlag(
+  projectId: string,
+  body: {
+    key: string
+    name: string
+    description?: string
+    enabled?: boolean
+    value_type: string
+    variants?: { key: string; value: unknown }[]
+  },
+): Promise<AdminFlagResponse> {
+  const { data } = await api.post<AdminFlagResponse>(`/v1/projects/${projectId}/flags`, body)
+  return data
+}
+
+export async function updateFlag(
+  projectId: string,
+  flagKey: string,
+  body: Partial<AdminFlagResponse> & { version: number },
+): Promise<AdminFlagResponse> {
+  const { data } = await api.put<AdminFlagResponse>(
+    `/v1/projects/${projectId}/flags/${flagKey}`,
+    body,
+  )
+  return data
+}
+
+export async function deleteFlag(projectId: string, flagKey: string): Promise<void> {
+  await api.delete(`/v1/projects/${projectId}/flags/${flagKey}`)
+}
+
+export async function archiveFlag(projectId: string, flagKey: string): Promise<void> {
+  await api.post(`/v1/projects/${projectId}/flags/${flagKey}/archive`, {})
+}
+
+export async function updateFlagVariants(
+  projectId: string,
+  flagKey: string,
+  body: { variants: { key: string; value: unknown }[]; version: number },
+): Promise<AdminFlagResponse> {
+  const { data } = await api.put<AdminFlagResponse>(
+    `/v1/projects/${projectId}/flags/${flagKey}/variants`,
+    body,
+  )
+  return data
+}
+
+export async function updateFlagRules(
+  projectId: string,
+  flagKey: string,
+  body: { rules: unknown[]; version: number },
+): Promise<AdminFlagResponse> {
+  const { data } = await api.put<AdminFlagResponse>(
+    `/v1/projects/${projectId}/flags/${flagKey}/rules`,
+    body,
+  )
+  return data
+}
+
+export async function evaluatePreview(
+  projectId: string,
+  flagKey: string,
+  body: { contexts: unknown[]; environment_id: string },
+): Promise<{ results: unknown[] }> {
+  const { data } = await api.post<{ results: unknown[] }>(
+    `/v1/projects/${projectId}/flags/${flagKey}/evaluate-preview`,
+    body,
+  )
+  return data
+}
+
+export async function getEvalStats(
+  projectId: string,
+  flagKey: string,
+  params: { from: string; to: string; granularity?: string },
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const qs = new URLSearchParams(params as Record<string, string>)
+  const { data } = await api.get<unknown>(
+    `/v1/projects/${projectId}/flags/${flagKey}/eval-stats?${qs}`,
+    { signal },
+  )
+  return data
+}
+
+// ─── Segments ─────────────────────────────────────────────────────────────────
+
+export async function listSegments(
+  environmentId: string,
+  params?: { page?: number; per_page?: number },
+  signal?: AbortSignal,
+): Promise<PaginatedResponse<Segment>> {
+  const qs = new URLSearchParams({ env_id: environmentId })
+  if (params?.page != null) qs.set('page', String(params.page))
+  if (params?.per_page != null) qs.set('per_page', String(params.per_page))
+  const { data } = await api.get<PaginatedResponse<Segment>>(
+    `/v1/segments?${qs}`,
+    { signal },
+  )
+  return data
+}
+
+export async function getSegment(segmentId: string, signal?: AbortSignal): Promise<Segment> {
+  const { data } = await api.get<Segment>(
+    `/v1/segments/${segmentId}`,
+    { signal },
+  )
+  return data
+}
+
+export async function createSegment(
+  body: CreateSegmentRequest,
+): Promise<Segment> {
+  const { data } = await api.post<Segment>('/v1/segments', body)
+  return data
+}
+
+export async function updateSegment(
+  segmentId: string,
+  body: UpdateSegmentRequest,
+): Promise<Segment> {
+  const { data } = await api.put<Segment>(
+    `/v1/segments/${segmentId}`,
+    body,
+  )
+  return data
+}
+
+export async function deleteSegment(segmentId: string): Promise<void> {
+  await api.delete(`/v1/segments/${segmentId}`)
+}
+
+export async function patchSegmentEntries(
+  segmentId: string,
+  body: { op: string; keys: string[] },
+): Promise<{ include_count: number; exclude_count: number }> {
+  const { data } = await api.post<{ include_count: number; exclude_count: number }>(
+    `/v1/segments/${segmentId}/entries`,
+    body,
+  )
+  return data
+}
+
+export async function lookupSegmentEntry(
+  segmentId: string,
+  params: { context_type: string; key: string },
+): Promise<{ in_include: boolean; in_exclude: boolean }> {
+  const qs = new URLSearchParams(params)
+  const { data } = await api.get<{ in_include: boolean; in_exclude: boolean }>(
+    `/v1/segments/${segmentId}/entries/lookup?${qs}`,
+  )
+  return data
+}
+
+export async function createSegmentInEnv(
+  environmentId: string,
+  body: CreateSegmentRequest,
+): Promise<Segment> {
+  const { data } = await api.post<Segment>(
+    `/v1/environments/${environmentId}/segments`,
+    body,
+  )
+  return data
+}
+
+// ─── Experiments ──────────────────────────────────────────────────────────────
+
+export interface ExperimentSummary {
+  experiment_id: string
+  environment_id: string
+  key: string
+  name: string
+  description: string
+  flag_key: string
+  status: string
+  model: string
+  primary_metric: string
+  variants: number
+  started_at: string | null
+  ended_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listExperiments(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<{ items: ExperimentSummary[]; total: number }> {
+  const { data } = await api.get<{ items: ExperimentSummary[]; total: number }>(
+    `/v1/environments/${environmentId}/experiments`,
+    { signal },
+  )
+  return data
+}
+
+export async function getExperiment(
+  environmentId: string,
+  experimentKey: string,
+  signal?: AbortSignal,
+): Promise<ExperimentSummary> {
+  const { data } = await api.get<ExperimentSummary>(
+    `/v1/environments/${environmentId}/experiments/${experimentKey}`,
+    { signal },
+  )
+  return data
+}
+
+export async function getExperimentResults(
+  environmentId: string,
+  experimentKey: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const { data } = await api.get<unknown>(
+    `/v1/environments/${environmentId}/experiments/${experimentKey}/results`,
+    { signal },
+  )
+  return data
+}
+
+// ─── Context intelligence ─────────────────────────────────────────────────────
+
+export interface ContextTypeSuggestion {
+  context_type: string
+  last_seen_at: string
+}
+
+export interface ContextParamSuggestion {
+  param_key: string
+  inferred_type: string
+  is_private: boolean
+  last_seen_at: string
+}
+
+export async function listContextTypes(
+  environmentId: string,
+  signal?: AbortSignal,
+): Promise<ContextTypeSuggestion[]> {
+  const { data } = await api.get<ContextTypeSuggestion[]>(
+    `/v1/environments/${environmentId}/context-types`,
+    { signal },
+  )
+  return data
+}
+
+export async function listContextParams(
+  environmentId: string,
+  contextType: string,
+  signal?: AbortSignal,
+): Promise<ContextParamSuggestion[]> {
+  const { data } = await api.get<ContextParamSuggestion[]>(
+    `/v1/environments/${environmentId}/context-types/${contextType}/params`,
+    { signal },
+  )
   return data
 }

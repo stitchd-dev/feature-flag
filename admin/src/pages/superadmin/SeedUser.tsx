@@ -6,7 +6,7 @@
  *
  * "Create new" — full form; creates a new platform user and adds them.
  *
- * The same endpoint (POST /v1/admin/orgs/:orgId/users) handles both: if the
+ * The same endpoint (POST /v1/superadmin/orgs/:orgId/users) handles both: if the
  * email is known the backend reuses the existing record; if not it requires a
  * password to create a fresh one.
  */
@@ -79,7 +79,7 @@ export function SeedUser() {
         body.display_name = displayName.trim()
         body.password     = password
       }
-      const { data } = await api.post<CreatedUser>(`/v1/admin/orgs/${orgId}/users`, body)
+      const { data } = await api.post<CreatedUser>(`/v1/superadmin/orgs/${orgId}/users`, body)
       setResult(data)
       setEmail(''); setDisplayName(''); setPassword('')
     } catch (err: unknown) {

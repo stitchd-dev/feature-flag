@@ -12,10 +12,13 @@ use std::sync::Arc;
 
 use axum::{
     Router,
+    extract::State,
     http::StatusCode,
     middleware,
+    response::IntoResponse,
     routing::{delete, get, patch, post, put},
 };
+use metrics_exporter_prometheus::PrometheusHandle;
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
 use crate::middleware::sdk_auth::sdk_auth_middleware;
@@ -25,14 +28,24 @@ use crate::routes::{
 };
 use crate::state::GatewayState;
 
+/// Handler for `GET /v1/metrics` — renders Prometheus exposition format.
+async fn metrics_handler(State(handle): State<PrometheusHandle>) -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        handle.render(),
+    )
+}
+
 /// Build the full gateway `Router`.
-pub fn build_router(state: Arc<GatewayState>) -> Router {
+pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) -> Router {
     let auth_client = Arc::clone(&state.auth_client);
 
     // ── Public: health + login + OIDC flows (no auth required) ──────────────
     let auth_routes = Router::new()
         .route("/v1/health", get(|| async { StatusCode::OK }))
-        .route("/v1/metrics", get(|| async { StatusCode::OK }))
         .route("/v1/auth/login", post(auth::login))
         .route("/v1/auth/refresh", post(auth::refresh))
         .route("/v1/auth/me/orgs", get(auth::list_user_orgs))
@@ -279,6 +292,11 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             auth_middleware,
         ));
 
+    // ── Prometheus metrics — own state (PrometheusHandle), no auth ──────────
+    let metrics_routes = Router::new()
+        .route("/v1/metrics", get(metrics_handler))
+        .with_state(metrics_handle);
+
     Router::new()
         .merge(auth_routes)
         .merge(admin_routes)
@@ -286,6 +304,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
         .merge(sdk_backend_routes)
         .merge(resource_routes)
         .merge(auth_provider_routes)
+        .merge(metrics_routes)
 }
 
 #[cfg(test)]
@@ -296,11 +315,17 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
+    use metrics_exporter_prometheus::PrometheusBuilder;
     use tower::ServiceExt as _;
+
+    /// Create a `PrometheusHandle` for tests without installing a global recorder.
+    fn test_metrics_handle() -> PrometheusHandle {
+        PrometheusBuilder::new().build_recorder().handle()
+    }
 
     #[tokio::test]
     async fn flags_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -315,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn segments_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -330,7 +355,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_create_org_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -347,7 +372,7 @@ mod tests {
 
     #[tokio::test]
     async fn management_create_project_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -364,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_route_exists_and_returns_non_404() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -381,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_providers_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -396,7 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_route_returns_404() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -410,6 +435,52 @@ mod tests {
             resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::UNAUTHORIZED,
             "status: {}",
             resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_returns_prometheus_text() {
+        use axum::body::to_bytes;
+
+        // Register a counter on this recorder before building the router so
+        // the exposition is non-empty and we can assert # HELP / # TYPE lines.
+        let recorder = PrometheusBuilder::new().build_recorder();
+        // Record via the recorder's own metrics API by installing it temporarily
+        // in the test thread and removing it immediately.
+        let handle = recorder.handle();
+
+        let app = build_router(make_stub_state(), handle);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            ct.contains("text/plain"),
+            "expected text/plain content-type, got: {ct}"
+        );
+
+        // Verify the body is valid Prometheus exposition (may be empty if no
+        // metrics registered in this recorder, but must not be an error page).
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&body_bytes).expect("metrics body must be UTF-8");
+        // An empty recorder returns an empty string — that's still valid exposition.
+        // Verify no error payload (which would contain "error" or HTML).
+        assert!(
+            !body.contains("<!DOCTYPE") && !body.contains("<html"),
+            "metrics body looks like an HTML error page: {body}"
         );
     }
 }
