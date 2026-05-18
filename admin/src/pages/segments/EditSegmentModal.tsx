@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
 import { api } from '../../lib/api'
+import { extractErrorMessage } from '../../lib/errors'
 import type { Segment } from './types'
 import { isListSegment } from './helpers'
 
@@ -69,8 +70,7 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
       const { data } = await api.put<Segment>(`/v1/segments/${segment.id}`, body)
       onSaved(data)
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { message?: string } }; message?: string }
-      setError(e?.response?.data?.message ?? e?.message ?? 'Failed to update segment')
+      setError(extractErrorMessage(err))
     } finally {
       setSaving(false)
     }

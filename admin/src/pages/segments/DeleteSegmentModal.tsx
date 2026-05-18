@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
 import { api } from '../../lib/api'
+import { extractErrorMessage } from '../../lib/errors'
 import type { Segment } from './types'
 
 interface SegmentDetail extends Segment {
@@ -32,8 +33,7 @@ export function DeleteSegmentModal({ segment, onClose, onDeleted }: Props) {
       await api.delete(`/v1/segments/${segment.id}`)
       onDeleted()
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { message?: string } }; message?: string }
-      setError(e?.response?.data?.message ?? e?.message ?? 'Failed to delete segment')
+      setError(extractErrorMessage(err))
       setDeleting(false)
     }
   }

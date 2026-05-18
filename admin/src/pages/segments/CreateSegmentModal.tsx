@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
 import { api } from '../../lib/api'
+import { extractErrorMessage } from '../../lib/errors'
 import type { Segment, SegmentType } from './types'
 
 interface Props {
@@ -76,8 +77,7 @@ export function CreateSegmentModal({ envId, orgId, projectId, onClose, onCreated
       const { data } = await api.post<Segment>('/v1/segments', body)
       onCreated(data)
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { message?: string } }; message?: string }
-      setError(e?.response?.data?.message ?? e?.message ?? 'Failed to create segment')
+      setError(extractErrorMessage(err))
     } finally {
       setSaving(false)
     }

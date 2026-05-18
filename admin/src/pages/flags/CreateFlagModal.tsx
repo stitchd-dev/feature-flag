@@ -5,6 +5,7 @@ import { Modal } from '../../components/Modal'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { slugify } from '../../lib/utils'
+import { extractErrorMessage } from '../../lib/errors'
 import type { AdminFlagResponse } from '../../lib/types'
 
 type FlagType = 'bool' | 'string' | 'int' | 'double' | 'json'
@@ -131,8 +132,7 @@ export function CreateFlagModal({ onClose }: Props) {
       onClose()
       navigate(`/org/${orgId}/flags/${data.key}`)
     } catch (err: unknown) {
-      const message = (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message ?? (err as { message?: string })?.message ?? 'Failed to create flag'
-      setError(message)
+      setError(extractErrorMessage(err))
     } finally {
       setSaving(false)
     }

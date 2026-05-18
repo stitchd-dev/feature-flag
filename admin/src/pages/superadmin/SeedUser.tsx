@@ -15,6 +15,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api, getOrg } from '../../lib/api'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
+import { extractErrorMessage } from '../../lib/errors'
 
 interface CreatedUser {
   user_id: string
@@ -84,8 +85,7 @@ export function SeedUser() {
       setEmail(''); setDisplayName(''); setPassword('')
     } catch (err: unknown) {
       // If backend says "password required" the user doesn't exist → nudge to create-new
-      const msg: string = (err as { response?: { data?: { message?: string } } })
-        ?.response?.data?.message ?? (err instanceof Error ? err.message : 'Request failed')
+      const msg = extractErrorMessage(err)
       if (mode === 'existing' && msg.toLowerCase().includes('password')) {
         setError(`No platform account found for "${email.trim()}". Switch to Create New to register them first.`)
       } else {

@@ -5,6 +5,7 @@ import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
+import { extractErrorMessage } from '../../lib/errors'
 import type { Segment } from './types'
 import { EditSegmentModal } from './EditSegmentModal'
 import { ConditionExprEditor } from '../../components/rules/RuleCard'
@@ -322,8 +323,7 @@ export function SegmentDetail() {
         setExcludedCount(data.exclude_count ?? 0)
       })
       .catch((err: unknown) => {
-        const e = err as { response?: { data?: { message?: string } }; message?: string }
-        setError(e?.response?.data?.message ?? e?.message ?? 'Failed to load segment')
+        setError(extractErrorMessage(err))
       })
       .finally(() => setLoading(false))
   }, [segmentId])
@@ -341,8 +341,7 @@ export function SegmentDetail() {
       setIncludedCount(data.include_count)
       setExcludedCount(data.exclude_count)
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { message?: string } }; message?: string }
-      setSaveError(e?.response?.data?.message ?? e?.message ?? 'Failed to save')
+      setSaveError(extractErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -371,8 +370,7 @@ export function SegmentDetail() {
       )
       setLookupResult({ key: lookupQuery.trim(), inInclude: data.in_include, inExclude: data.in_exclude })
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { message?: string } }; message?: string }
-      setLookupError(e?.response?.data?.message ?? e?.message ?? 'Lookup failed')
+      setLookupError(extractErrorMessage(err))
     } finally {
       setLookupLoading(false)
     }
