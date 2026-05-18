@@ -1,4 +1,4 @@
-//! Event ingestion logic — ported from stitchd-event-service.
+//! Event ingestion logic — handles event ingestion for the analytics service.
 //!
 //! # Protocol
 //! - The SDK key is read from the `x-sdk-key` gRPC metadata header.

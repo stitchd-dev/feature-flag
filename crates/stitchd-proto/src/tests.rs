@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod compilation_tests {
-    use crate::{auth, common, events, experiments, flags, sdk, segments};
+    use crate::{auth, common, experiments, flags, sdk, segments};
 
     // ── Existing SDK-facing types ─────────────────────────────────────────────
 
@@ -27,13 +27,6 @@ mod compilation_tests {
         let _: Option<segments::v1::RuleSegment> = None;
         let _: Option<segments::v1::ListSegment> = None;
         let _: Option<segments::v1::SegmentBundle> = None;
-    }
-
-    #[test]
-    fn event_types_accessible() {
-        let _: Option<events::v1::IngestRequest> = None;
-        let _: Option<events::v1::IngestResponse> = None;
-        let _: Option<events::v1::Event> = None;
     }
 
     // ── New microservice contracts ─────────────────────────────────────────────
@@ -63,11 +56,6 @@ mod compilation_tests {
         let _: Option<segments::v1::EvaluateMembershipResponse> = None;
         let _: Option<segments::v1::MutateSegmentRequest> = None;
         let _: Option<segments::v1::MutateSegmentResponse> = None;
-    }
-
-    #[test]
-    fn event_service_types_accessible() {
-        let _: Option<events::v1::EventDefinition> = None;
     }
 
     #[test]

@@ -12,13 +12,13 @@ graph LR
     SS[stitchd-segmentation-service]
     AS[stitchd-auth-service]
     XS[stitchd-experimentation-service]
-    ES[stitchd-event-service]
+    ANS[stitchd-analytics-service]
 
     FS -->|config reads/writes\nsqlx| PG[(PostgreSQL\nconfig store)]
     SS -->|config reads\nsqlx| PG
     AS -->|config reads/writes\nsqlx| PG
     XS -->|config reads/writes\nsqlx| PG
-    ES -->|event writes| CH[(ClickHouse\nevents store)]
+    ANS -->|event writes| CH[(ClickHouse\nevents store)]
 
     SDK[stitchd-sdk] -->|list-segment membership\nREST| GW
     GW -->|gRPC| SS
@@ -62,7 +62,7 @@ reads in PostgreSQL.
 | Experiment results | Pre-aggregated metric values per experiment arm |
 | Telemetry | Optional flag evaluation counts (for dashboards) |
 
-> ClickHouse integration is implemented by `stitchd-events`. The HTTP interface (port 8123)
+> ClickHouse integration is implemented by `stitchd-event-writer`. The HTTP interface (port 8123)
 > is used for writes; native protocol (port 9000) for bulk analytical reads.
 
 ## Choosing the Right Store

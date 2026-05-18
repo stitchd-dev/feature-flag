@@ -19,11 +19,11 @@ Incoming requests are dispatched by path prefix:
 | `/v1/admin/**` | Bearer JWT (system-org only) | `stitchd-auth-service` |
 | `/v1/management/**` | Bearer JWT | `stitchd-auth-service` / `stitchd-flag-service` |
 | `/v1/environments/{id}/evaluate` | `x-sdk-key` | `stitchd-flag-service` |
-| `/v1/environments/{id}/events` | `x-sdk-key` or Bearer JWT | `stitchd-event-service` |
+| `/v1/environments/{id}/events` | `x-sdk-key` or Bearer JWT | `stitchd-analytics-service` |
 | `/v1/environments/{id}/segments/**` | `x-sdk-key` or Bearer JWT | `stitchd-segmentation-service` |
 | `/v1/environments/{id}/flags/**` | Bearer JWT | `stitchd-flag-service` |
 | `/v1/environments/{id}/experiments/**` | Bearer JWT | `stitchd-experimentation-service` |
-| `/v1/environments/{id}/event-definitions/**` | Bearer JWT | `stitchd-event-service` |
+| `/v1/environments/{id}/event-definitions/**` | Bearer JWT | `stitchd-analytics-service` |
 
 ## Auth Header Matrix
 
