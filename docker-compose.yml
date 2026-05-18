@@ -204,6 +204,38 @@ services:
       retries: 5
       start_period: 10s
 
+  analytics-service:
+    build:
+      context: .
+      dockerfile: docker/analytics-service/Dockerfile
+    container_name: stitchd-analytics-service
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-stitchd}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-stitchd}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-stitchd}
+      ANALYTICS_GRPC_PORT: "50054"
+      METRICS_PORT: "9104"
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${ANALYTICS_SERVICE_PORT:-50054}:50054"
+      - "${ANALYTICS_METRICS_PORT:-9104}:9104"
+    networks:
+      - stitchd
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=:50054 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   gateway:
     build:
       context: .
