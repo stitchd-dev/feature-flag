@@ -6,6 +6,7 @@
 //! - `DATABASE_URL` — PostgreSQL connection string (required)
 //! - `EXPERIMENTATION_SERVICE_PORT` — gRPC listen port (default: `50055`)
 //! - `FLAG_SERVICE_ADDR` — Flag Service gRPC address (default: `http://localhost:50052`)
+//! - `ANALYTICS_SERVICE_GRPC_URL` — Analytics Service gRPC address (default: `http://localhost:50054`)
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,11 +18,10 @@ use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use stitchd_db::{
-    PgAuditLogger, PgExperimentRepository, PgExperimentResultsRepository, PgStatsScheduleRepository,
-};
+use stitchd_db::{PgAuditLogger, PgExperimentRepository, PgStatsScheduleRepository};
 use stitchd_experimentation_service::{
-    flag_client::FlagClient, service::ExperimentationServiceImpl,
+    analytics_client::AnalyticsClient, flag_client::FlagClient,
+    service::ExperimentationServiceImpl,
 };
 use stitchd_proto::experiments::v1::experimentation_service_server::ExperimentationServiceServer;
 
@@ -54,8 +54,16 @@ async fn main() -> anyhow::Result<()> {
 
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let experiment_repo = Arc::new(PgExperimentRepository::new(pool.clone(), audit));
-    let results_repo = Arc::new(PgExperimentResultsRepository::new(pool.clone()));
     let schedule_repo = Arc::new(PgStatsScheduleRepository::new(pool));
+
+    // ── Analytics Service gRPC client ─────────────────────────────────────────
+    let analytics_addr = std::env::var("ANALYTICS_SERVICE_GRPC_URL")
+        .unwrap_or_else(|_| "http://localhost:50054".to_string());
+
+    let analytics_client = AnalyticsClient::connect(analytics_addr.clone())
+        .await
+        .context("connect to Analytics Service")?;
+    tracing::info!(addr = %analytics_addr, "Connected to Analytics Service");
 
     // ── Flag Service client ───────────────────────────────────────────────────
     let flag_service_addr =
@@ -85,8 +93,12 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
     tracing::info!(addr = %addr, "Experimentation Service listening");
 
-    let svc =
-        ExperimentationServiceImpl::new(experiment_repo, results_repo, schedule_repo, flag_client);
+    let svc = ExperimentationServiceImpl::new(
+        experiment_repo,
+        Arc::new(analytics_client),
+        schedule_repo,
+        flag_client,
+    );
 
     let (health_reporter, health_service) = health_reporter();
     health_reporter
