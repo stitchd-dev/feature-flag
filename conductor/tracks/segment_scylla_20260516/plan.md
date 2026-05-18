@@ -177,7 +177,10 @@
   - [x] All list methods already stubbed correctly (no changes needed)
   - [x] 65 flag-service unit tests pass
 
-- [ ] Task 6: Conductor - User Manual Verification 'gRPC & Service Layer Wiring' (Protocol in workflow.md)
+- [x] Task 6: Conductor - User Manual Verification 'gRPC & Service Layer Wiring' [checkpoint: f551f9a]
+  - [x] 65/65 segmentation-service unit tests pass after cargo fmt
+  - [x] workspace build clean (cargo build --workspace)
+  - [x] cargo fmt --all applied (f551f9a)
 
 ## Phase 5: Admin UI Updates
 <!-- execution: sequential -->
