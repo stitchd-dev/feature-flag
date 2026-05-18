@@ -17,6 +17,7 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use stitchd_analytics_service::{
     config::Config,
     grpc::service::{AnalyticsServiceImpl, ServiceState},
+    repo::experiment_results::ClickHouseExperimentResultsRepository,
 };
 use stitchd_proto::analytics::v1::analytics_service_server::AnalyticsServiceServer;
 
@@ -64,6 +65,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(stitchd_db::PgContextRegistryRepository::new(pg_pool.clone()));
     let event_writer = stitchd_events::writer::EventWriter::new(ch_client.clone());
 
+    let experiment_results_repo: Arc<dyn stitchd_analytics_service::repo::experiment_results::ExperimentResultsRepository> =
+        Arc::new(ClickHouseExperimentResultsRepository::new(ch_client.clone()));
+
     let state = ServiceState {
         pg_pool: Arc::new(pg_pool),
         ch_client: Arc::new(ch_client),
@@ -71,6 +75,7 @@ async fn main() -> anyhow::Result<()> {
         sdk_key_repo,
         event_writer,
         context_registry,
+        experiment_results_repo,
     };
     let svc = AnalyticsServiceImpl::new(state);
 

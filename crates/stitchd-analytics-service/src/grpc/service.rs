@@ -17,6 +17,7 @@ use super::context_registry::{
 };
 use super::eval_stats::handle_get_eval_stats;
 use super::event_ingestion::{EventIngestionState, handle_ingest_event};
+use crate::repo::experiment_results::ExperimentResultsRepository;
 
 pub struct ServiceState {
     pub pg_pool: Arc<sqlx::PgPool>,
@@ -25,6 +26,8 @@ pub struct ServiceState {
     pub sdk_key_repo: Arc<dyn SdkKeyRepository>,
     pub event_writer: EventWriter,
     pub context_registry: Arc<dyn ContextRegistryRepository>,
+    /// ClickHouse-backed repository for computed experiment results.
+    pub experiment_results_repo: Arc<dyn ExperimentResultsRepository>,
 }
 
 pub struct AnalyticsServiceImpl {
