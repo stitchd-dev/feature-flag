@@ -18,7 +18,7 @@ use stitchd_proto::segments::v1::{
 };
 
 use crate::{
-    error::ServiceError,
+    error::SegmentationServiceError,
     segment::{parse_env_id, segment_to_list_meta_proto, segment_to_rule_proto},
 };
 
@@ -57,7 +57,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .find_by_key(&req.segment_key, env_id)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         let mut bundle = SegmentBundle {
             rule_segments: vec![],
@@ -71,7 +71,7 @@ impl SegmentationService for SegmentationServiceImpl {
                     .segment_repo
                     .find_with_rules(seg.id)
                     .await
-                    .map_err(|e| Status::from(ServiceError::from(e)))?;
+                    .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
                 let proto = segment_to_rule_proto(&seg, &def.rules).map_err(Status::from)?;
                 bundle.rule_segments.push(proto);
             }
@@ -98,7 +98,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .list_by_environment(env_id)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         let mut rule_segments = vec![];
         let mut list_segments = vec![];
@@ -111,7 +111,7 @@ impl SegmentationService for SegmentationServiceImpl {
                         .segment_repo
                         .find_with_rules(seg.id)
                         .await
-                        .map_err(|e| Status::from(ServiceError::from(e)))?;
+                        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
                     let proto = segment_to_rule_proto(seg, &def.rules).map_err(Status::from)?;
                     rule_segments.push(proto);
                 }
@@ -142,7 +142,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .find_by_key(&req.segment_key, env_id)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         let is_member = match seg.segment_type {
             SegmentType::Rule => {
@@ -208,7 +208,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .list_by_environment_paginated(env_id, offset, per_page)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         let mut admin_segments = Vec::with_capacity(segments.len());
         for s in &segments {
@@ -222,7 +222,7 @@ impl SegmentationService for SegmentationServiceImpl {
                     .segment_repo
                     .get_condition_expr(s.id)
                     .await
-                    .map_err(|e| Status::from(ServiceError::from(e)))?
+                    .map_err(|e| Status::from(SegmentationServiceError::from(e)))?
             } else {
                 None
             };
@@ -256,7 +256,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .find_by_id(segment_id)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         // For list-based segments, fetch counts (not full lists).
         let list_counts = if seg.segment_type == SegmentType::List {
@@ -270,7 +270,7 @@ impl SegmentationService for SegmentationServiceImpl {
                 .segment_repo
                 .get_condition_expr(segment_id)
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?
         } else {
             None
         };
@@ -330,14 +330,14 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .create(&seg)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         if seg_type == SegmentType::List {
             self.state
                 .segment_repo
                 .set_list_entries(seg.id, &context_type, &r.user_list, &r.excluded_keys)
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?;
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
         }
 
         // Persist condition_expr for rule-based segments.
@@ -348,7 +348,7 @@ impl SegmentationService for SegmentationServiceImpl {
                 .segment_repo
                 .set_condition_expr(seg.id, Some(&v))
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?;
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             Some(v)
         } else {
             None
@@ -388,7 +388,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .find_by_id(segment_id)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         seg.name = r.name.clone();
         seg.description = r.description.clone();
@@ -399,7 +399,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .update(&seg)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         // Update list entries if this is a list-based segment.
         let list_counts = if updated.segment_type == SegmentType::List {
@@ -412,7 +412,7 @@ impl SegmentationService for SegmentationServiceImpl {
                 .segment_repo
                 .set_list_entries(updated.id, &context_type, &r.user_list, &r.excluded_keys)
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?;
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             Some((
                 context_type,
                 u32::try_from(r.user_list.len()).unwrap_or(u32::MAX),
@@ -432,7 +432,7 @@ impl SegmentationService for SegmentationServiceImpl {
                 .segment_repo
                 .set_condition_expr(updated.id, Some(&v))
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?;
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             Some(v)
         } else {
             // Read back existing condition_expr to include in response.
@@ -440,7 +440,7 @@ impl SegmentationService for SegmentationServiceImpl {
                 .segment_repo
                 .get_condition_expr(updated.id)
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?
         };
 
         Ok(Response::new(segment_to_admin_proto_with_counts(
@@ -467,7 +467,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .soft_delete(segment_id)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         Ok(Response::new(DeleteAdminSegmentResponse {}))
     }
@@ -504,14 +504,14 @@ impl SegmentationService for SegmentationServiceImpl {
                     .segment_repo
                     .add_entries(segment_id, context_type, &r.list_type, &r.keys)
                     .await
-                    .map_err(|e| Status::from(ServiceError::from(e)))?;
+                    .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             }
             "remove" => {
                 self.state
                     .segment_repo
                     .remove_entries(segment_id, context_type, &r.list_type, &r.keys)
                     .await
-                    .map_err(|e| Status::from(ServiceError::from(e)))?;
+                    .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             }
             "replace" => {
                 let deduped: Vec<String> = {
@@ -531,7 +531,7 @@ impl SegmentationService for SegmentationServiceImpl {
                     .segment_repo
                     .set_list_entries(segment_id, context_type, include, exclude)
                     .await
-                    .map_err(|e| Status::from(ServiceError::from(e)))?;
+                    .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             }
             other => {
                 return Err(Status::invalid_argument(format!(
@@ -546,7 +546,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .get_list_segment_summary(segment_id)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
         let counts = summary
             .counts
             .get(context_type)
@@ -578,7 +578,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .find_by_id(segment_id)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         // check_list_membership uses the composite: resolve key→ID via PG, check Scylla.
         // We check both include and exclude lists explicitly.
@@ -592,7 +592,7 @@ impl SegmentationService for SegmentationServiceImpl {
                 std::slice::from_ref(&seg.key),
             )
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         let in_include = *include_map.get(&seg.key).unwrap_or(&false);
 
@@ -651,7 +651,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .add_entries(segment_id, &r.context_type, &r.list_type, &r.keys)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         Ok(Response::new(AddEntriesResponse { added_count }))
     }
@@ -685,7 +685,7 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_repo
             .remove_entries(segment_id, &r.context_type, &r.list_type, &r.keys)
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         Ok(Response::new(RemoveEntriesResponse { removed_count }))
     }
@@ -781,7 +781,7 @@ async fn evaluate_rule_membership(
     let def = repo
         .find_with_rules(seg.id)
         .await
-        .map_err(|e| Status::from(ServiceError::from(e)))?;
+        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
     let ctx = Context::new(&req.context_type, &req.context_key);
     let segment_def = SegmentDefinition::RuleBased(def);
@@ -812,7 +812,7 @@ async fn evaluate_list_membership(
             std::slice::from_ref(&req.segment_key),
         )
         .await
-        .map_err(|e| Status::from(ServiceError::from(e)))?;
+        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
     Ok(*memberships.get(&req.segment_key).unwrap_or(&false))
 }
@@ -856,7 +856,7 @@ async fn mutate_create(
 
     repo.create(&seg)
         .await
-        .map_err(|e| Status::from(ServiceError::from(e)))?;
+        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
     match &req.segment {
         Some(mutate_segment_request::Segment::RuleSegment(r)) => {
@@ -865,7 +865,7 @@ async fn mutate_create(
                     .map_err(|e| Status::invalid_argument(format!("invalid rule payload: {e}")))?;
             repo.upsert_rules(seg.id, &rules)
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?;
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             let proto = segment_to_rule_proto(&seg, &rules).map_err(Status::from)?;
             Ok(Response::new(MutateSegmentResponse {
                 segment: Some(mutate_segment_response::Segment::RuleSegment(proto)),
@@ -875,7 +875,7 @@ async fn mutate_create(
         Some(mutate_segment_request::Segment::ListSegment(l)) => {
             repo.set_list_entries(seg.id, &l.context_type, &l.included_keys, &l.excluded_keys)
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?;
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             Ok(Response::new(MutateSegmentResponse {
                 segment: Some(mutate_segment_response::Segment::ListSegment(l.clone())),
                 version: u64::try_from(seg.version).unwrap_or(0),
@@ -901,13 +901,13 @@ async fn mutate_update(
     let mut seg = repo
         .find_by_key(&seg_key, env_id)
         .await
-        .map_err(|e| Status::from(ServiceError::from(e)))?;
+        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
     seg.version = i64::try_from(req.version).unwrap_or(i64::MAX);
     let updated = repo
         .update(&seg)
         .await
-        .map_err(|e| Status::from(ServiceError::from(e)))?;
+        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
     match &req.segment {
         Some(mutate_segment_request::Segment::RuleSegment(r)) => {
@@ -916,7 +916,7 @@ async fn mutate_update(
                     .map_err(|e| Status::invalid_argument(format!("invalid rule payload: {e}")))?;
             repo.upsert_rules(updated.id, &rules)
                 .await
-                .map_err(|e| Status::from(ServiceError::from(e)))?;
+                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             let proto = segment_to_rule_proto(&updated, &rules).map_err(Status::from)?;
             Ok(Response::new(MutateSegmentResponse {
                 segment: Some(mutate_segment_response::Segment::RuleSegment(proto)),
@@ -931,7 +931,7 @@ async fn mutate_update(
                 &l.excluded_keys,
             )
             .await
-            .map_err(|e| Status::from(ServiceError::from(e)))?;
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
             Ok(Response::new(MutateSegmentResponse {
                 segment: Some(mutate_segment_response::Segment::ListSegment(l.clone())),
                 version: u64::try_from(updated.version).unwrap_or(0),
@@ -957,11 +957,11 @@ async fn mutate_delete(
     let seg = repo
         .find_by_key(&seg_key, env_id)
         .await
-        .map_err(|e| Status::from(ServiceError::from(e)))?;
+        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
     repo.soft_delete(seg.id)
         .await
-        .map_err(|e| Status::from(ServiceError::from(e)))?;
+        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
     Ok(Response::new(MutateSegmentResponse {
         segment: req.segment.map(|s| match s {
@@ -982,21 +982,21 @@ mod tests {
 
     #[test]
     fn service_error_not_found_maps_to_status() {
-        let err = ServiceError::NotFound("seg-123".to_string());
+        let err = SegmentationServiceError::NotFound("seg-123".to_string());
         let status = Status::from(err);
         assert_eq!(status.code(), tonic::Code::NotFound);
     }
 
     #[test]
     fn service_error_invalid_argument_maps_to_status() {
-        let err = ServiceError::InvalidArgument("bad env id".to_string());
+        let err = SegmentationServiceError::InvalidArgument("bad env id".to_string());
         let status = Status::from(err);
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
     }
 
     #[test]
     fn service_error_version_conflict_maps_to_aborted() {
-        let err = ServiceError::VersionConflict {
+        let err = SegmentationServiceError::VersionConflict {
             expected: 1,
             actual: 2,
         };
@@ -1006,7 +1006,7 @@ mod tests {
 
     #[test]
     fn service_error_unique_violation_maps_to_already_exists() {
-        let err = ServiceError::UniqueViolation {
+        let err = SegmentationServiceError::UniqueViolation {
             field: "key".to_string(),
         };
         let status = Status::from(err);
@@ -1015,7 +1015,7 @@ mod tests {
 
     #[test]
     fn service_error_internal_maps_to_internal() {
-        let err = ServiceError::Internal("db error".to_string());
+        let err = SegmentationServiceError::Internal("db error".to_string());
         let status = Status::from(err);
         assert_eq!(status.code(), tonic::Code::Internal);
     }
