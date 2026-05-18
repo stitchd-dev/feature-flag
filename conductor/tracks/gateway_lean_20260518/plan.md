@@ -72,25 +72,25 @@
 ## Phase 5: Gateway Lean-Up
 <!-- depends: phase2, phase3, phase4 -->
 
-- [ ] Task 1: Remove DB clients from `GatewayState`
+- [x] Task 1: Remove DB clients from `GatewayState`
   - Drop `ch_client`, `context_registry` fields
   - Remove `pg_pool` parameter from `GatewayState::connect()`
   - Add `analytics_client: Arc<Mutex<AnalyticsServiceClient<Channel>>>`
   - Update `from_channels()` test constructor
 
-- [ ] Task 2: Rewire `context_intel.rs` and `eval_stats.rs` as thin passthrough
+- [x] Task 2: Rewire `context_intel.rs` and `eval_stats.rs` as thin passthrough
   - Replace direct ClickHouse calls with `analytics_client` gRPC calls
   - Graceful degradation: return empty/default on `Unavailable` status
 
-- [ ] Task 3: Rewire event ingestion route to `analytics_client`
+- [x] Task 3: Rewire event ingestion route to `analytics_client`
   - `routes/events.rs`: swap `event_client` → `analytics_client`
   - Remove `event_client` field from `GatewayState`
 
-- [ ] Task 4: Rewire context registry call sites
+- [x] Task 4: Rewire context registry call sites
   - All `context_registry.upsert_*` calls → `analytics_client.register_context()`
   - Best-effort: log errors, don't fail the request
 
-- [ ] Task 5: Verify `cargo tree` clean
+- [x] Task 5: Verify `cargo tree` clean
   - `cargo tree -p stitchd-gateway | grep -E "clickhouse|sqlx"` must return nothing
   - All existing gateway tests pass
 

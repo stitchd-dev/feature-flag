@@ -3762,35 +3762,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "stitchd-event-service"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "clickhouse",
- "hex",
- "metrics",
- "metrics-exporter-prometheus",
- "prost",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "stitchd-core",
- "stitchd-db",
- "stitchd-events",
- "stitchd-proto",
- "thiserror 2.0.18",
- "tokio",
- "tonic",
- "tonic-health",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "stitchd-events"
 version = "0.1.0"
 dependencies = [
