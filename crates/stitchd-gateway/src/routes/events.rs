@@ -89,7 +89,7 @@ pub async fn ingest_event(
     let req = tonic::Request::new(IngestRequest {
         events: vec![body_to_event(&body)],
     });
-    let mut client = state.event_client.lock().await;
+    let mut client = state.analytics_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     Ok(Json(IngestResponseJson {
@@ -119,7 +119,7 @@ pub async fn ingest_batch(
 ) -> Result<impl IntoResponse, GatewayError> {
     let events = body.events.iter().map(body_to_event).collect();
     let req = tonic::Request::new(IngestRequest { events });
-    let mut client = state.event_client.lock().await;
+    let mut client = state.analytics_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     Ok(Json(IngestResponseJson {

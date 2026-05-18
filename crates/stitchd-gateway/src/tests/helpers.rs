@@ -3,12 +3,12 @@
 use std::sync::Arc;
 use tonic::transport::Channel;
 
+use stitchd_proto::analytics::v1::analytics_service_client::AnalyticsServiceClient;
 use stitchd_proto::auth::v1::{
     auth_provider_service_client::AuthProviderServiceClient,
     auth_service_client::AuthServiceClient, oidc_login_service_client::OidcLoginServiceClient,
     saml_login_service_client::SamlLoginServiceClient,
 };
-use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::management::v1::management_service_client::ManagementServiceClient;
@@ -25,8 +25,8 @@ pub fn make_stub_state() -> Arc<GatewayState> {
     let auth = AuthServiceClient::new(Channel::from_static("http://127.0.0.1:1").connect_lazy());
     let flag = FlagServiceClient::new(flag_channel.clone());
     let seg = SegmentationServiceClient::new(seg_channel.clone());
-    let event =
-        EventIngestionServiceClient::new(Channel::from_static("http://127.0.0.1:4").connect_lazy());
+    let analytics =
+        AnalyticsServiceClient::new(Channel::from_static("http://127.0.0.1:4").connect_lazy());
     let exp = ExperimentationServiceClient::new(
         Channel::from_static("http://127.0.0.1:5").connect_lazy(),
     );
@@ -45,7 +45,7 @@ pub fn make_stub_state() -> Arc<GatewayState> {
         flag_channel,
         seg,
         seg_channel,
-        event,
+        analytics,
         exp,
         mgmt,
         auth_provider,

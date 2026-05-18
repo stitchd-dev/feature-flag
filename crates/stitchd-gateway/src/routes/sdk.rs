@@ -137,7 +137,7 @@ pub async fn ingest_event(
     let req = tonic::Request::new(IngestRequest {
         events: vec![event],
     });
-    let mut client = state.event_client.lock().await;
+    let mut client = state.analytics_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     Ok((
@@ -170,7 +170,7 @@ pub async fn ingest_batch_events(
 ) -> Result<impl IntoResponse, GatewayError> {
     let events: Vec<Event> = bodies.iter().map(sdk_event_to_proto).collect();
     let req = tonic::Request::new(IngestRequest { events });
-    let mut client = state.event_client.lock().await;
+    let mut client = state.analytics_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     Ok((

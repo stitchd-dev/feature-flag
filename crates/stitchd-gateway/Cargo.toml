@@ -30,10 +30,6 @@ http = "1"
 tokio-stream = "0.1"
 async-trait = { workspace = true }
 chrono = { workspace = true }
-clickhouse = { workspace = true }
-stitchd-core = { path = "../stitchd-core" }
-stitchd-db = { path = "../stitchd-db" }
-sqlx = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
