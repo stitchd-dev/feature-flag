@@ -73,6 +73,17 @@ pub trait StatsScheduleRepository: Send + Sync {
         &self,
         experiment_id: Uuid,
     ) -> Result<Option<StatsScheduleRow>, sqlx::Error>;
+
+    /// Update `last_computed_at` for a given iteration's parent experiment.
+    ///
+    /// Sets `last_computed_at` to the provided timestamp (in milliseconds since
+    /// the Unix epoch) and `updated_at` to `NOW()`. If no schedule row exists
+    /// for the experiment yet, this is a no-op (returns `Ok(())`).
+    async fn update_last_computed(
+        &self,
+        iteration_id: Uuid,
+        last_computed_at_ms: i64,
+    ) -> Result<(), sqlx::Error>;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +154,50 @@ impl StatsScheduleRepository for PgStatsScheduleRepository {
         .bind(experiment_id)
         .fetch_optional(&self.pool)
         .await
+    }
+
+    async fn update_last_computed(
+        &self,
+        iteration_id: Uuid,
+        last_computed_at_ms: i64,
+    ) -> Result<(), sqlx::Error> {
+        use chrono::TimeZone as _;
+
+        // Resolve the experiment_id from the iteration.
+        let experiment_id: Option<Uuid> = sqlx::query_scalar(
+            "SELECT experiment_id FROM experiment_iterations WHERE id = $1",
+        )
+        .bind(iteration_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(experiment_id) = experiment_id else {
+            // Iteration not found — no-op.
+            return Ok(());
+        };
+
+        // Convert milliseconds to a timestamp.
+        let secs = last_computed_at_ms / 1000;
+        let nanos = (last_computed_at_ms % 1000) * 1_000_000;
+        let ts = chrono::Utc
+            .timestamp_opt(secs, u32::try_from(nanos).unwrap_or(0))
+            .single()
+            .unwrap_or_else(chrono::Utc::now);
+
+        sqlx::query(
+            r"
+            UPDATE stats_schedule
+            SET last_computed_at = $1,
+                updated_at       = NOW()
+            WHERE experiment_id = $2
+            ",
+        )
+        .bind(ts)
+        .bind(experiment_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }
 

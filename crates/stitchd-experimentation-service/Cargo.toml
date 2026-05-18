@@ -30,6 +30,9 @@ chrono = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 async-trait = { workspace = true }
+tokio-stream = { version = "0.1" }
+futures-core = { version = "0.3" }
 
 [dev-dependencies]
 tokio = { workspace = true }
+futures = { workspace = true }
