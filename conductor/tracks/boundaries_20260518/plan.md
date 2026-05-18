@@ -3,26 +3,26 @@
 ## Phase 1: DDD Service Boundary Restoration (FR1)
 <!-- execution: parallel -->
 
-- [ ] Task 1: Add gRPC RPCs to `analytics-service` for experiment results
+- [x] Task 1: Add gRPC RPCs to `analytics-service` for experiment results [cf91164 → integrated at merge 6f58019]
   <!-- files: proto/analytics/v1/analytics.proto, crates/stitchd-analytics-service/src/grpc/ -->
-  - [ ] Add `WriteExperimentResults`, `ListExperimentResults`, `GetExperimentResult` proto methods
-  - [ ] Write failing unit tests for handlers
-  - [ ] Implement handlers
-  - [ ] Run tests, confirm green
+  - [x] Add `WriteExperimentResults`, `ListExperimentResults`, `GetExperimentResult` proto methods
+  - [x] Write failing unit tests for handlers
+  - [x] Implement handlers (uses Worker 3's canonical `ExperimentResultsRepository` trait)
+  - [x] Run tests, confirm green
 
-- [ ] Task 2: Add gRPC RPCs to `experimentation-service` consumed by stats-service
+- [x] Task 2: Add gRPC RPCs to `experimentation-service` consumed by stats-service [3ef8b4a]
   <!-- files: proto/experiments/v1/experimentation_service.proto, crates/stitchd-experimentation-service/src/grpc/ -->
-  - [ ] Add `ListRunningExperiments`, `GetExperimentIteration`, `UpdateIterationLastComputed`
-  - [ ] Write failing tests
-  - [ ] Implement handlers
-  - [ ] Run tests
+  - [x] Add `ListRunningExperiments`, `GetExperimentIteration`, `UpdateIterationLastComputed`
+  - [x] Write failing tests
+  - [x] Implement handlers
+  - [x] Run tests (9 new tests; 46 total green)
 
-- [ ] Task 3: Create ClickHouse `experiment_results` schema in analytics-service
+- [x] Task 3: Create ClickHouse `experiment_results` schema in analytics-service [81ef9cd]
   <!-- files: crates/stitchd-analytics-service/clickhouse-migrations/, crates/stitchd-analytics-service/src/repo/experiment_results.rs -->
-  - [ ] Add migration `000X_experiment_results.sql` (MergeTree on `(env_id, experiment_id, variant_key, metric_key, iteration_id)`)
-  - [ ] Write integration tests for read/write
-  - [ ] Implement `ExperimentResultsWriter` + `ExperimentResultsReader`
-  - [ ] Wire into FR1.2 handlers
+  - [x] Add migration `0001_experiment_results.sql` (MergeTree on `(env_id, experiment_id, variant_key, metric_key, iteration_id)`)
+  - [x] Write integration tests for read/write (9 unit tests)
+  - [x] Implement `ExperimentResultsRepository` trait + `ClickHouseExperimentResultsRepository`
+  - [x] Wire into FR1.2 handlers via main.rs AppState
 
 - [ ] Task 4: Refactor `stats-service` to consume both services via gRPC
   <!-- files: crates/stitchd-stats-service/src/scheduler.rs, crates/stitchd-stats-service/src/results_writer.rs, crates/stitchd-stats-service/src/main.rs, crates/stitchd-stats-service/Cargo.toml -->
@@ -47,11 +47,11 @@
   - [ ] Delete repo module + trait export
   - [ ] `cargo sqlx prepare --workspace`; `cargo test --workspace`
 
-- [ ] Task 7: Verify ScyllaDB containment
+- [x] Task 7: Verify ScyllaDB containment [2ebee8b]
   <!-- files: crates/*/Cargo.toml -->
-  - [ ] Audit every crate's `Cargo.toml`
-  - [ ] Assert only `stitchd-segmentation-service` + `xtask` depend on `scylla`
-  - [ ] Add CI guard script if useful
+  - [x] Audit every crate's `Cargo.toml`
+  - [x] Found: only `stitchd-db` (library home) + `stitchd-segmentation-service` (binary consumer) have direct `scylla` deps. `xtask` uses transitive dep via `stitchd-db` only — fully compliant.
+  - [x] Added CI guard `scripts/check_scylla_containment.sh` + `crates/stitchd-segmentation-service/SCYLLA_OWNERSHIP.md`
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 1 — DDD Service Boundaries' (Protocol in workflow.md)
   <!-- depends: task4, task5, task6, task7 -->
@@ -228,16 +228,16 @@
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task 1: Document archived flag lifecycle in `sdks/spec/01-overview.md`
-  <!-- files: sdks/spec/01-overview.md -->
+- [x] Task 1: Document archived flag lifecycle in `sdks/spec/docs/01-overview.md` [16fa0a8]
+  <!-- files: sdks/spec/docs/01-overview.md -->
 
-- [ ] Task 2: Document LRU recency note in `sdks/spec/03-caching.md`
-  <!-- files: sdks/spec/03-caching.md -->
+- [x] Task 2: Document LRU recency note in `sdks/spec/docs/03-caching.md` [d3ec5de]
+  <!-- files: sdks/spec/docs/03-caching.md -->
 
-- [ ] Task 3: Add "Crate naming convention" section
+- [x] Task 3: Add Crate Naming Convention at `sdks/spec/00-naming.md` [0fd638d]
   <!-- files: sdks/spec/00-naming.md -->
 
-- [ ] Task 4: Refresh `sdks/rust/README.md` + crate-level doc comment (post-rename)
+- [x] Task 4: Refresh `sdks/rust/README.md` + crate-level doc comment [8ada1cf]
   <!-- files: sdks/rust/README.md, sdks/rust/src/lib.rs -->
 
 - [ ] Task 5: Run SDK conformance suite
