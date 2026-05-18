@@ -54,7 +54,7 @@ pub struct OidcTokenJson {
 #[utoipa::path(
     post,
     path = "/v1/auth/oidc/{provider_id}/authorize",
-    tag = "oidc",
+    tag = "auth",
     params(("provider_id" = String, Path, description = "Provider ID")),
     request_body = OidcAuthorizeBody,
     responses(
@@ -84,7 +84,7 @@ pub async fn oidc_authorize_by_provider(
 #[utoipa::path(
     post,
     path = "/v1/orgs/{org_id}/auth/oidc/authorize",
-    tag = "oidc",
+    tag = "auth",
     params(("org_id" = String, Path, description = "Organisation ID")),
     request_body = OidcAuthorizeBody,
     responses(
@@ -114,7 +114,7 @@ pub async fn oidc_authorize_by_org(
 #[utoipa::path(
     get,
     path = "/v1/auth/oidc/{provider_id}/callback",
-    tag = "oidc",
+    tag = "auth",
     params(
         ("provider_id" = String, Path, description = "Provider ID"),
         ("code" = String, Query, description = "Authorization code from IdP"),

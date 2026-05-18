@@ -42,6 +42,7 @@ pub struct JobStatusJson {
 #[utoipa::path(
     post,
     path = "/v1/experiments/{experiment_id}/recompute",
+    tag = "stats",
     params(("experiment_id" = String, Path, description = "Experiment UUID")),
     responses(
         (status = 202, description = "Recompute job accepted", body = RecomputeJobJson),
@@ -76,6 +77,7 @@ pub async fn trigger_recompute(
 #[utoipa::path(
     get,
     path = "/v1/jobs/{job_id}",
+    tag = "stats",
     params(("job_id" = String, Path, description = "Job UUID")),
     responses(
         (status = 200, description = "Job status", body = JobStatusJson),
