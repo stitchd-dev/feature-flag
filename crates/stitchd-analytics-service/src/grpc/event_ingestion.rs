@@ -18,7 +18,7 @@ use tracing::instrument;
 use stitchd_core::event::EventValueType;
 use stitchd_db::{EventDefinitionRepository, SdkKeyRepository};
 use stitchd_events::writer::EventWriter;
-use stitchd_proto::events::v1::{IngestRequest, IngestResponse};
+use stitchd_proto::analytics::v1::{IngestEventRequest, IngestEventResponse};
 
 /// State needed exclusively for event ingestion.
 pub struct EventIngestionState {
@@ -60,8 +60,8 @@ pub async fn authenticate(
 #[instrument(skip(state, request), name = "analytics.ingest_event")]
 pub async fn handle_ingest_event(
     state: &EventIngestionState,
-    request: Request<IngestRequest>,
-) -> Result<Response<IngestResponse>, Status> {
+    request: Request<IngestEventRequest>,
+) -> Result<Response<IngestEventResponse>, Status> {
     let env_id = authenticate(state, request.metadata()).await?;
 
     let definitions = state
@@ -92,13 +92,13 @@ pub async fn handle_ingest_event(
             (expected_type, value),
             (
                 EventValueType::Bool,
-                Some(stitchd_proto::events::v1::metric_value::Value::BoolValue(_))
+                Some(stitchd_proto::analytics::v1::metric_value::Value::BoolValue(_))
             ) | (
                 EventValueType::Int,
-                Some(stitchd_proto::events::v1::metric_value::Value::IntValue(_))
+                Some(stitchd_proto::analytics::v1::metric_value::Value::IntValue(_))
             ) | (
                 EventValueType::Double,
-                Some(stitchd_proto::events::v1::metric_value::Value::DoubleValue(_))
+                Some(stitchd_proto::analytics::v1::metric_value::Value::DoubleValue(_))
             )
         );
 
@@ -108,13 +108,13 @@ pub async fn handle_ingest_event(
         }
 
         let (value_bool, value_int, value_double) = match value {
-            Some(stitchd_proto::events::v1::metric_value::Value::BoolValue(b)) => {
+            Some(stitchd_proto::analytics::v1::metric_value::Value::BoolValue(b)) => {
                 (Some(*b), None, None)
             }
-            Some(stitchd_proto::events::v1::metric_value::Value::IntValue(i)) => {
+            Some(stitchd_proto::analytics::v1::metric_value::Value::IntValue(i)) => {
                 (None, Some(*i), None)
             }
-            Some(stitchd_proto::events::v1::metric_value::Value::DoubleValue(d)) => {
+            Some(stitchd_proto::analytics::v1::metric_value::Value::DoubleValue(d)) => {
                 (None, None, Some(*d))
             }
             _ => unreachable!("type_ok guarantees one branch"),
@@ -146,7 +146,7 @@ pub async fn handle_ingest_event(
     metrics::counter!("analytics_service.events.rejected")
         .increment(rejected_keys.len() as u64);
 
-    Ok(Response::new(IngestResponse {
+    Ok(Response::new(IngestEventResponse {
         accepted_count,
         rejected_keys,
     }))
@@ -171,7 +171,7 @@ mod tests {
         tenant::SdkKey,
     };
     use stitchd_db::{EventDefinitionRepository, RepositoryError, SdkKeyRepository};
-    use stitchd_proto::events::v1::{Event, IngestRequest, MetricValue, metric_value::Value};
+    use stitchd_proto::analytics::v1::{IngestEventRequest, MetricEvent, MetricValue, metric_value::Value};
 
     use super::*;
 
@@ -361,8 +361,8 @@ mod tests {
         }
     }
 
-    fn make_request_with_sdk_key(events: Vec<Event>, raw_key: &str) -> Request<IngestRequest> {
-        let mut req = Request::new(IngestRequest { events });
+    fn make_request_with_sdk_key(events: Vec<MetricEvent>, raw_key: &str) -> Request<IngestEventRequest> {
+        let mut req = Request::new(IngestEventRequest { events });
         req.metadata_mut().insert(
             "x-sdk-key",
             MetadataValue::try_from(raw_key).expect("valid ascii"),
@@ -394,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_missing_sdk_key_header() {
         let state = make_state(EnvironmentId::new(), vec![]);
-        let req = Request::new(IngestRequest { events: vec![] });
+        let req = Request::new(IngestEventRequest { events: vec![] });
         let err = handle_ingest_event(&state, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
         assert!(err.message().contains("missing x-sdk-key"));
@@ -417,7 +417,7 @@ mod tests {
     async fn rejects_unknown_metric_key() {
         let env_id = EnvironmentId::new();
         let state = make_state(env_id, vec![("click_count".into(), EventValueType::Int)]);
-        let events = vec![Event {
+        let events = vec![MetricEvent {
             metric_key: "unknown_metric".into(),
             context_type: "user".into(),
             context_key: "u1".into(),
@@ -436,7 +436,7 @@ mod tests {
     async fn rejects_type_mismatch_bool_sent_int() {
         let env_id = EnvironmentId::new();
         let state = make_state(env_id, vec![("converted".into(), EventValueType::Bool)]);
-        let events = vec![Event {
+        let events = vec![MetricEvent {
             metric_key: "converted".into(),
             context_type: "user".into(),
             context_key: "u1".into(),
@@ -455,7 +455,7 @@ mod tests {
     async fn rejects_missing_value() {
         let env_id = EnvironmentId::new();
         let state = make_state(env_id, vec![("click_count".into(), EventValueType::Int)]);
-        let events = vec![Event {
+        let events = vec![MetricEvent {
             metric_key: "click_count".into(),
             context_type: "user".into(),
             context_key: "u1".into(),
@@ -475,7 +475,7 @@ mod tests {
     async fn accepts_valid_bool_event() {
         let env_id = EnvironmentId::new();
         let state = make_state(env_id, vec![("converted".into(), EventValueType::Bool)]);
-        let events = vec![Event {
+        let events = vec![MetricEvent {
             metric_key: "converted".into(),
             context_type: "user".into(),
             context_key: "u1".into(),
@@ -494,7 +494,7 @@ mod tests {
     async fn accepts_valid_int_event() {
         let env_id = EnvironmentId::new();
         let state = make_state(env_id, vec![("click_count".into(), EventValueType::Int)]);
-        let events = vec![Event {
+        let events = vec![MetricEvent {
             metric_key: "click_count".into(),
             context_type: "user".into(),
             context_key: "u42".into(),
@@ -513,7 +513,7 @@ mod tests {
     async fn accepts_valid_double_event() {
         let env_id = EnvironmentId::new();
         let state = make_state(env_id, vec![("revenue".into(), EventValueType::Double)]);
-        let events = vec![Event {
+        let events = vec![MetricEvent {
             metric_key: "revenue".into(),
             context_type: "session".into(),
             context_key: "s1".into(),
@@ -543,7 +543,7 @@ mod tests {
             ],
         );
         let events = vec![
-            Event {
+            MetricEvent {
                 metric_key: "converted".into(),
                 context_type: "user".into(),
                 context_key: "u1".into(),
@@ -552,7 +552,7 @@ mod tests {
                 }),
                 timestamp_ms: 1_000,
             },
-            Event {
+            MetricEvent {
                 metric_key: "unknown".into(),
                 context_type: "user".into(),
                 context_key: "u2".into(),
@@ -561,7 +561,7 @@ mod tests {
                 }),
                 timestamp_ms: 1_000,
             },
-            Event {
+            MetricEvent {
                 metric_key: "click_count".into(),
                 context_type: "user".into(),
                 context_key: "u3".into(),
@@ -570,7 +570,7 @@ mod tests {
                 }),
                 timestamp_ms: 1_000,
             },
-            Event {
+            MetricEvent {
                 metric_key: "click_count".into(),
                 context_type: "user".into(),
                 context_key: "u4".into(),

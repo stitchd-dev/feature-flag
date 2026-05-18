@@ -2,7 +2,32 @@ syntax = "proto3";
 
 package stitchd.analytics.v1;
 
-import "events/v1/event.proto";
+// ─── Event Ingestion ──────────────────────────────────────────────────────────
+
+message MetricValue {
+  oneof value {
+    bool   bool_value   = 1;
+    int64  int_value    = 2;
+    double double_value = 3;
+  }
+}
+
+message MetricEvent {
+  string      metric_key   = 1;
+  string      context_type = 2;
+  string      context_key  = 3;
+  MetricValue value        = 4;
+  int64       timestamp_ms = 5;
+}
+
+message IngestEventRequest {
+  repeated MetricEvent events = 1;
+}
+
+message IngestEventResponse {
+  uint32          accepted_count = 1;
+  repeated string rejected_keys  = 2;
+}
 
 // ─── Context Registry ─────────────────────────────────────────────────────────
 
@@ -102,9 +127,7 @@ message GetContextIntelligenceResponse {
 // direct gateway ClickHouse / PostgreSQL calls.
 service AnalyticsService {
   // Ingest a batch of metric events into ClickHouse.
-  // Forwards the events.v1 IngestRequest so existing callers only need to
-  // change their client — not the request/response types.
-  rpc IngestEvent(stitchd.events.v1.IngestRequest) returns (stitchd.events.v1.IngestResponse);
+  rpc IngestEvent(IngestEventRequest) returns (IngestEventResponse);
 
   // Upsert context type and parameters observed during flag evaluation.
   rpc RegisterContext(RegisterContextRequest) returns (RegisterContextResponse);

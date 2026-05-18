@@ -5,12 +5,11 @@ use stitchd_db::{ContextRegistryRepository, EventDefinitionRepository, SdkKeyRep
 use stitchd_events::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
     GetContextIntelligenceRequest, GetContextIntelligenceResponse, GetEvalStatsRequest,
-    GetEvalStatsResponse, ListContextParamsRequest, ListContextParamsResponse,
-    ListContextTypesRequest, ListContextTypesResponse, RegisterContextRequest,
-    RegisterContextResponse,
+    GetEvalStatsResponse, IngestEventRequest, IngestEventResponse, ListContextParamsRequest,
+    ListContextParamsResponse, ListContextTypesRequest, ListContextTypesResponse,
+    RegisterContextRequest, RegisterContextResponse,
     analytics_service_server::AnalyticsService,
 };
-use stitchd_proto::events::v1::{IngestRequest, IngestResponse};
 
 use super::context_intel::handle_get_context_intelligence;
 use super::context_registry::{
@@ -44,8 +43,8 @@ impl AnalyticsServiceImpl {
 impl AnalyticsService for AnalyticsServiceImpl {
     async fn ingest_event(
         &self,
-        request: Request<IngestRequest>,
-    ) -> Result<Response<IngestResponse>, Status> {
+        request: Request<IngestEventRequest>,
+    ) -> Result<Response<IngestEventResponse>, Status> {
         let ingestion_state = EventIngestionState {
             event_def_repo: Arc::clone(&self.state.event_def_repo),
             sdk_key_repo: Arc::clone(&self.state.sdk_key_repo),
