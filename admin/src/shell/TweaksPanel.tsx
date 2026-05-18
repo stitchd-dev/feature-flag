@@ -14,7 +14,7 @@ export function TweaksPanel({ tweaks, setTweak, onClose }: Props) {
     <div style={{ position: 'fixed', top: 16, right: 16, width: 280, background: 'var(--bg-elev)', border: '1px solid var(--border-strong)', borderRadius: 12, boxShadow: 'var(--shadow-lg)', zIndex: 200, fontFamily: 'var(--font-sans)' }}>
       <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: 14 }}>Tweaks</div>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--fg-muted)' }}><I.x size={14} /></button>
+        <button onClick={onClose} className="button-reset icon-btn" style={{ color: 'var(--fg-muted)' }}><I.x size={14} /></button>
       </div>
       <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <Field label="Theme">
