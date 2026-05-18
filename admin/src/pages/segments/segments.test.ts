@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { Segment } from './types'
+import { isListSegment, getListCounts } from './helpers'
 
 // Helper: parse tag input string (comma-separated) into array
 function parseTagsInput(input: string): string[] {
@@ -75,6 +76,8 @@ describe('filterSegments', () => {
     tags: partial.tags ?? [],
     condition_expr: undefined,
     user_list: [],
+    include_count: partial.include_count ?? 0,
+    exclude_count: partial.exclude_count ?? 0,
     condition_count: 0,
     version: 1,
     created_at: '2026-01-01T00:00:00Z',
@@ -110,5 +113,63 @@ describe('filterSegments', () => {
   it('returns empty array when no match', () => {
     const segments = [makeSegment({ name: 'Alpha' }), makeSegment({ name: 'Beta' })]
     expect(filterSegments(segments, 'gamma')).toHaveLength(0)
+  })
+})
+
+// ─── Helpers from ./helpers ───────────────────────────────────────────────────
+
+function makeSegment2(partial: Partial<Segment> & { name: string }): Segment {
+  return {
+    id: 'seg-2',
+    name: partial.name,
+    tags: partial.tags ?? [],
+    user_list: [],          // always empty — deprecated
+    include_count: partial.include_count ?? 0,
+    exclude_count: partial.exclude_count ?? 0,
+    condition_count: partial.condition_count ?? 0,
+    version: 1,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    ...partial,
+  }
+}
+
+describe('isListSegment', () => {
+  it('returns true when segment_type is list', () => {
+    const seg = makeSegment2({ name: 'S', segment_type: 'list', context_type: 'user' })
+    expect(isListSegment(seg)).toBe(true)
+  })
+
+  it('returns false when segment_type is rule', () => {
+    const seg = makeSegment2({ name: 'S', segment_type: 'rule' })
+    expect(isListSegment(seg)).toBe(false)
+  })
+
+  it('returns false when segment_type is absent', () => {
+    const seg = makeSegment2({ name: 'S' })
+    expect(isListSegment(seg)).toBe(false)
+  })
+
+  it('ignores user_list — deprecated, never set by server', () => {
+    // user_list is always [] from the server; type detection must NOT use it
+    const seg = makeSegment2({ name: 'S', segment_type: 'rule', user_list: ['u1', 'u2'] })
+    expect(isListSegment(seg)).toBe(false)
+  })
+})
+
+describe('getListCounts', () => {
+  it('returns include_count and exclude_count from the segment', () => {
+    const seg = makeSegment2({ name: 'S', segment_type: 'list', include_count: 42, exclude_count: 7 })
+    expect(getListCounts(seg)).toEqual({ includeCount: 42, excludeCount: 7 })
+  })
+
+  it('returns zero counts for a newly created list segment', () => {
+    const seg = makeSegment2({ name: 'S', segment_type: 'list', include_count: 0, exclude_count: 0 })
+    expect(getListCounts(seg)).toEqual({ includeCount: 0, excludeCount: 0 })
+  })
+
+  it('works for rule segments too (counts are 0)', () => {
+    const seg = makeSegment2({ name: 'S', segment_type: 'rule' })
+    expect(getListCounts(seg)).toEqual({ includeCount: 0, excludeCount: 0 })
   })
 })

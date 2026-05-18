@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { I } from '../../components/icons'
 import { api } from '../../lib/api'
 import type { Segment } from './types'
+import { isListSegment } from './helpers'
 
 interface Props {
   segment: Segment
@@ -13,7 +14,6 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
   const [name, setName] = useState(segment.name)
   const [description, setDescription] = useState(segment.description ?? '')
   const [tagsInput, setTagsInput] = useState(segment.tags.join(', '))
-  const [userListInput, setUserListInput] = useState(segment.user_list.join('\n'))
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -21,11 +21,9 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
   const [fresh, setFresh] = useState<Segment | null>(null)
   const [contextType, setContextType] = useState(segment.context_type ?? 'user')
 
-  // Infer segment type: list if user_list is non-empty or condition_count == 0 and no condition_expr
   const resolvedFresh = fresh ?? segment
-  const isListType =
-    resolvedFresh.segment_type === 'list' ||
-    (resolvedFresh.segment_type == null && resolvedFresh.user_list.length > 0)
+  // Segment type is always set by the server — never infer from user_list (deprecated, always empty).
+  const isListType = isListSegment(resolvedFresh)
 
   // Fetch latest data for the segment
   useEffect(() => {
@@ -36,7 +34,6 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
         setName(data.name)
         setDescription(data.description ?? '')
         setTagsInput(data.tags.join(', '))
-        setUserListInput(data.user_list.join('\n'))
         setContextType(data.context_type ?? 'user')
       })
       .catch(() => {
@@ -60,10 +57,6 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
       .map((t) => t.trim())
       .filter((t) => t.length > 0)
 
-    const user_list = isListType
-      ? userListInput.split('\n').map((u) => u.trim()).filter((u) => u.length > 0)
-      : []
-
     setSaving(true)
     try {
       const body = {
@@ -71,7 +64,8 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
         description: description.trim() || undefined,
         tags,
         condition_expr: (fresh ?? segment).condition_expr,
-        user_list,
+        // user_list is deprecated — list entries are managed via the detail page (Scylla-backed).
+        user_list: [],
         context_type: isListType ? contextType : undefined,
       }
       const { data } = await api.put<Segment>(`/v1/segments/${segment.id}`, body)
