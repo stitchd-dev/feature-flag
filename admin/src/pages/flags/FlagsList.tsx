@@ -9,6 +9,7 @@ import { Pagination } from '../../components/Pagination'
 import { LoadingSpinner } from '../../components/LoadingSpinner'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { EmptyState } from '../../components/EmptyState'
+import { PermissionGate } from '../../components/PermissionGate'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
@@ -18,21 +19,6 @@ import { CreateFlagModal } from './CreateFlagModal'
 const PER_PAGE = 50
 
 type FlagTypeFilter = 'all' | 'bool' | 'string' | 'int' | 'double' | 'json'
-
-function LockOverlay() {
-  return (
-    <>
-      <PageHeader crumbs={['Flags']} title="Feature Flags" subtitle="Manage feature flags for your project." />
-      <div className="page-body">
-        <div className="card" style={{ padding: 48, textAlign: 'center' }}>
-          <I.lock size={28} stroke="var(--fg-subtle)" style={{ marginBottom: 12 }} />
-          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>Access restricted</div>
-          <div style={{ color: 'var(--fg-muted)', fontSize: 13 }}>You do not have permission to view feature flags.</div>
-        </div>
-      </div>
-    </>
-  )
-}
 
 function Toggle({ on, onClick }: { on: boolean; onClick: (e: React.MouseEvent) => void }) {
   return <span className={`toggle ${on ? 'on' : ''}`} onClick={onClick} />
@@ -94,7 +80,7 @@ export function FlagsList() {
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
   const { projectId, orgId } = useOrgContext()
-  const { can, loading: permLoading } = usePermissions()
+  const { can } = usePermissions()
   const [layout, setLayout] = useState<'table' | 'cards' | 'grouped'>(tweaks.flagsLayout)
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<FlagTypeFilter>('all')
@@ -102,7 +88,6 @@ export function FlagsList() {
   const [optimisticEnabled, setOptimisticEnabled] = useState<Map<string, boolean>>(new Map())
   const [showCreate, setShowCreate] = useState(false)
 
-  const canRead = can(PERMISSIONS.FLAG_READ)
   const canWrite = can(PERMISSIONS.FLAG_WRITE)
 
   const { data: flags, total, loading, error, page, onPageChange, refresh: _refresh } = usePaginatedList<AdminFlagResponse>(
@@ -148,33 +133,47 @@ export function FlagsList() {
   const onCount = filtered.filter((f) => f.enabled).length
   const offCount = filtered.filter((f) => !f.enabled).length
 
-  if (!permLoading && !canRead) return <LockOverlay />
+  const flagsLockFallback = (
+    <>
+      <PageHeader crumbs={['Flags']} title="Feature Flags" subtitle="Manage feature flags for your project." />
+      <div className="page-body">
+        <div className="card" style={{ padding: 48, textAlign: 'center' }}>
+          <I.lock size={28} stroke="var(--fg-subtle)" style={{ marginBottom: 12 }} />
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>Access restricted</div>
+          <div style={{ color: 'var(--fg-muted)', fontSize: 13 }}>You do not have permission to view feature flags.</div>
+        </div>
+      </div>
+    </>
+  )
 
   if (!projectId) {
     return (
-      <>
-        <PageHeader
-          crumbs={['Flags']}
-          title="Feature Flags"
-          subtitle="Manage feature flags for your project."
-        />
-        <div className="page-body">
-          <div className="card">
-            <EmptyState
-              icon={<I.flag size={20} />}
-              title="No project selected"
-              desc="No project selected — set a project ID in environments settings"
-              action={<button className="btn primary" onClick={() => navigate(`/org/${orgId}/environments`)}>Go to Environments</button>}
-            />
+      <PermissionGate permission={PERMISSIONS.FLAG_READ} fallback={flagsLockFallback}>
+        <>
+          <PageHeader
+            crumbs={['Flags']}
+            title="Feature Flags"
+            subtitle="Manage feature flags for your project."
+          />
+          <div className="page-body">
+            <div className="card">
+              <EmptyState
+                icon={<I.flag size={20} />}
+                title="No project selected"
+                desc="No project selected — set a project ID in environments settings"
+                action={<button className="btn primary" onClick={() => navigate(`/org/${orgId}/environments`)}>Go to Environments</button>}
+              />
+            </div>
           </div>
-        </div>
-      </>
+        </>
+      </PermissionGate>
     )
   }
 
   return (
-    <>
-      <PageHeader
+    <PermissionGate permission={PERMISSIONS.FLAG_READ} fallback={flagsLockFallback}>
+      <>
+        <PageHeader
         crumbs={['Flags']}
         title="Feature Flags"
         subtitle={`${total} flags. First-true rule wins; flag types are immutable after creation.`}
@@ -334,6 +333,7 @@ export function FlagsList() {
       </div>
 
       {showCreate && <CreateFlagModal onClose={() => setShowCreate(false)} />}
-    </>
+      </>
+    </PermissionGate>
   )
 }
