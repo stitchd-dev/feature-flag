@@ -7,14 +7,13 @@ Listens on `:50055` and exposes **`ExperimentationService`** — CRUD for experi
 ## Responsibilities
 
 - Experiment and metric definition management (backed by PostgreSQL)
-- Aggregating experiment results from the `experiment_results` table
 - Coordinating with `flag-service` to validate flag and variant references
 - Audit logging for experiment mutations
 
 ## Dependencies
 
 - `stitchd-core` — domain types
-- `stitchd-db` — `PgExperimentRepository`, `PgExperimentResultsRepository`, `PgAuditLogger`
+- `stitchd-db` — `PgExperimentRepository`, `PgAuditLogger`
 - `stitchd-proto` — `experiments.v1` tonic stubs + `flag-service` client for flag validation
 
 ## Environment Variables

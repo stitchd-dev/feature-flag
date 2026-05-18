@@ -8,7 +8,6 @@
 pub mod auth;
 pub mod clickhouse;
 pub mod error;
-pub mod experiment_results;
 pub mod repository;
 /// `ScyllaDB` client, migration applier, and list-segment repository.
 pub mod scylla;
@@ -25,10 +24,6 @@ pub use auth::{
     challenge_token_hash,
 };
 pub use error::RepositoryError;
-pub use experiment_results::{
-    ExperimentResultRow, ExperimentResultsRepository, PgExperimentResultsRepository,
-    UpsertResultRow,
-};
 pub use stitchd_core::id::ExperimentIterationId;
 pub use repository::{
     AuditLogger, ContextRegistryRepository, EnvironmentRepository, EventDefinitionRepository,
