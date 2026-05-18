@@ -2,19 +2,19 @@
 
 ## Phase 1: New `stitchd-analytics-service` Scaffold
 
-- [ ] Task 1: Create crate skeleton
+- [x] Task 1: Create crate skeleton
   - Add `crates/stitchd-analytics-service/` to workspace `Cargo.toml`
   - Scaffold `Cargo.toml`, `src/main.rs`, `src/lib.rs`, `src/config.rs`
   - Dependencies: tonic, tokio, clickhouse, sqlx, tracing, anyhow
 
-- [ ] Task 2: Define `analytics.v1` proto package
+- [x] Task 2: Define `analytics.v1` proto package
   - Add `proto/analytics/v1/analytics.proto`
   - Define RPCs: `IngestEvents`, `RegisterContext`, `ListContextTypes`,
     `ListContextParams`, `GetEvalStats`, `GetContextIntelligence`
   - Re-export `events.v1.IngestEvents` alias for SDK backwards-compat
   - Regenerate proto bindings
 
-- [ ] Task 3: gRPC server skeleton + config
+- [x] Task 3: gRPC server skeleton + config
   - `src/grpc/mod.rs` + `src/grpc/service.rs` with stub `AnalyticsServiceImpl`
   - `src/config.rs`: `ANALYTICS_GRPC_PORT` (default 50054), `DATABASE_URL`,
     `CLICKHOUSE_*` env vars

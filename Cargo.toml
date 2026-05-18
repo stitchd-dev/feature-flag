@@ -9,6 +9,7 @@ members = [
     "crates/stitchd-auth-service",
     "crates/stitchd-flag-service",
     "crates/stitchd-segmentation-service",
+    "crates/stitchd-analytics-service",
     "crates/stitchd-event-service",
     "crates/stitchd-experimentation-service",
     "crates/stitchd-gateway",
