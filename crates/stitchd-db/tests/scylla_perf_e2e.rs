@@ -132,17 +132,18 @@ async fn write_keys_parallel(
         let window_end = (idx + PARALLEL_TASKS).min(chunks.len());
         let mut set = JoinSet::new();
 
-        for chunk in chunks[idx..window_end].iter().cloned() {
+        for chunk in chunks[idx..window_end].iter() {
             let stmt = Arc::clone(&stmt);
             let client = Arc::clone(&client);
             let ctx = ctx.clone();
+            let chunk = chunk.clone();
 
             set.spawn(async move {
                 for key in &chunk {
                     client
                         .session()
                         .execute_unpaged(
-                            &*stmt,
+                            &stmt,
                             (seg_uuid, ctx.as_str(), generation, "include", key.as_str()),
                         )
                         .await
@@ -228,6 +229,7 @@ async fn write_segment(
 // ---------------------------------------------------------------------------
 
 /// 40-segment × 1M-entry bulk load + p50/p90/p99 write and lookup benchmark.
+#[ignore = "perf benchmark; run with: cargo test -p stitchd-db --test scylla_perf_e2e -- --ignored"]
 #[tokio::test]
 async fn perf_40_segments_1m_entries_each() {
     if !scylla_available().await {

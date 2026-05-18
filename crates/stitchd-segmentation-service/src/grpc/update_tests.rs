@@ -143,8 +143,8 @@ mod tests {
     // GetSegment — list-type segment
     // -------------------------------------------------------------------------
 
-    /// Phase 4: GetSegment for a list-type segment returns `ListSegmentMeta` in the bundle —
-    /// metadata only (key + context_type + id), no entry keys.
+    /// Phase 4: `GetSegment` for a list-type segment returns `ListSegmentMeta` in the bundle —
+    /// metadata only (key + `context_type` + id), no entry keys.
     /// Entry keys are never sent over the wire; membership is evaluated server-side via Scylla.
     #[tokio::test]
     async fn get_segment_list_type_returns_meta_bundle_without_keys() {

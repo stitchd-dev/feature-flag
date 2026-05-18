@@ -179,19 +179,16 @@ async fn batch_check_membership_multiple_keys() {
         .await
         .expect("batch_check_membership");
 
-    assert_eq!(
+    assert!(
         *memberships.get("alice").expect("alice"),
-        true,
         "alice is a member"
     );
-    assert_eq!(
-        *memberships.get("bob").expect("bob"),
-        false,
+    assert!(
+        !(*memberships.get("bob").expect("bob")),
         "bob is not a member"
     );
-    assert_eq!(
+    assert!(
         *memberships.get("carol").expect("carol"),
-        true,
         "carol is a member"
     );
 
