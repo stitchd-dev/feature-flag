@@ -8,8 +8,6 @@ use clickhouse::Client as ChClient;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
-use tonic::transport::Channel;
-
 use stitchd_db::{FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository};
 use stitchd_proto::flags::v1::{
     EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
@@ -17,12 +15,8 @@ use stitchd_proto::flags::v1::{
     MutationKind, UpdateFlagHashingRequest, UpdateFlagHashingResponse,
     flag_service_server::FlagService,
 };
-use stitchd_proto::analytics::v1::{
-    ContextParam, RegisterContextRequest,
-    analytics_service_client::AnalyticsServiceClient,
-};
 
-use crate::{error::FlagServiceError, eval_log_writer, mapping};
+use crate::{error::FlagServiceError, mapping};
 
 /// gRPC implementation of [`FlagService`].
 #[allow(clippy::struct_field_names)]
@@ -33,8 +27,6 @@ pub struct FlagServiceImpl {
     segment_repo: Arc<dyn SegmentRepository>,
     /// Optional ClickHouse client for evaluation telemetry. `None` disables logging.
     ch_client: Option<Arc<ChClient>>,
-    /// Optional analytics gRPC client for fire-and-forget context registration.
-    analytics_client: Option<AnalyticsServiceClient<Channel>>,
 }
 
 impl FlagServiceImpl {
@@ -52,7 +44,6 @@ impl FlagServiceImpl {
             sdk_key_repo,
             segment_repo,
             ch_client: None,
-            analytics_client: None,
         }
     }
 
@@ -60,13 +51,6 @@ impl FlagServiceImpl {
     #[must_use]
     pub fn with_clickhouse(mut self, client: Arc<ChClient>) -> Self {
         self.ch_client = Some(client);
-        self
-    }
-
-    /// Attach an analytics gRPC client for fire-and-forget context registration.
-    #[must_use]
-    pub fn with_analytics_client(mut self, client: AnalyticsServiceClient<Channel>) -> Self {
-        self.analytics_client = Some(client);
         self
     }
 
@@ -754,63 +738,10 @@ impl FlagService for FlagServiceImpl {
             env_id,
         );
 
-        // Fire-and-forget eval log write — pairs each context with its evaluated variant.
-        if let Some(ch) = &self.ch_client {
-            let is_disabled = !flag.record.enabled;
-            let contexts_with_variants: Vec<_> = evaluation_contexts
-                .iter()
-                .zip(results.iter())
-                .map(|(ctx, res)| (ctx.clone(), res.variant_key.clone()))
-                .collect();
-            eval_log_writer::spawn_eval_log_write(
-                Arc::clone(ch),
-                env_uuid,
-                flag.record.id.as_uuid(),
-                flag.record.key.to_string(),
-                is_disabled,
-                chrono::Utc::now(),
-                contexts_with_variants,
-            );
-        }
-
-        // Fire-and-forget context registration — drives Context Explorer autocomplete.
-        if let Some(analytics) = &self.analytics_client {
-            let env_id_str = env_uuid.to_string();
-            let mut analytics = analytics.clone();
-            let contexts_to_register: Vec<_> = evaluation_contexts
-                .iter()
-                .flat_map(|ec| ec.contexts.iter())
-                .map(|ctx| {
-                    let params = ctx.parameters.iter().map(|(k, v)| {
-                        let inferred_type = match v {
-                            stitchd_core::context::ParameterValue::Bool(_) => "boolean",
-                            stitchd_core::context::ParameterValue::Int(_) => "number",
-                            stitchd_core::context::ParameterValue::Double(_) => "number",
-                            stitchd_core::context::ParameterValue::SemVer(_) => "string",
-                            stitchd_core::context::ParameterValue::Str(_) => "string",
-                        };
-                        ContextParam {
-                            param_key: k.clone(),
-                            inferred_type: inferred_type.to_string(),
-                            is_private: ctx.is_private(k),
-                        }
-                    }).collect();
-                    RegisterContextRequest {
-                        environment_id: env_id_str.clone(),
-                        context_type: ctx.context_type.clone(),
-                        context_key: ctx.key.clone(),
-                        params,
-                    }
-                })
-                .collect();
-            tokio::spawn(async move {
-                for req in contexts_to_register {
-                    if let Err(e) = analytics.register_context(tonic::Request::new(req)).await {
-                        tracing::warn!("register_context failed: {e}");
-                    }
-                }
-            });
-        }
+        // NOTE: evaluate_preview intentionally does NOT write to flag_evaluation_log.
+        // Per spec (context_intel track): only real SDK evaluations via IngestSdkEvalLog
+        // write to that table. Context intelligence is built by stats-service reading
+        // flag_evaluation_log on a 15-minute cycle.
 
         let results_json = serde_json::to_string(&results)
             .map_err(|e| Status::internal(format!("serialization error: {e}")))?;

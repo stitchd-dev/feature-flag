@@ -37,6 +37,7 @@
         "DATABASE_URL": "postgres://stitchd:stitchd@localhost:5432/stitchd",
         "AUTH_SERVICE_PORT": "50051",
         "JWT_SECRET": "dev-secret-change-in-prod",
+        "AUTH_ENCRYPTION_KEY": "j8D0/H4vfVTCYmjAYVKFxnI0VtIpRauM4w27R7Cxv6w=",
         "SUPERADMIN_EMAIL": "admin@stitchd.io",
         "SUPERADMIN_PASSWORD": "changeme",
         "RUST_LOG": "info"

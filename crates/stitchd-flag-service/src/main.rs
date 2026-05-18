@@ -23,7 +23,6 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use stitchd_db::{PgFlagRepository, PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository};
 use stitchd_flag_service::sdk_backend::FlagSdkBackendServiceImpl;
 use stitchd_flag_service::service::FlagServiceImpl;
-use stitchd_proto::analytics::v1::analytics_service_client::AnalyticsServiceClient;
 use stitchd_proto::flags::v1::flag_service_server::FlagServiceServer;
 use stitchd_proto::sdk::v1::flag_sdk_backend_service_server::FlagSdkBackendServiceServer;
 use tonic::transport::Server;
@@ -82,15 +81,6 @@ async fn main() -> anyhow::Result<()> {
             .with_password(ch_password),
     );
 
-    // ── Analytics Service (optional — context registration) ───────────────────
-    let analytics_addr =
-        std::env::var("ANALYTICS_SERVICE_ADDR").unwrap_or_else(|_| "http://localhost:50054".to_string());
-    let analytics_channel = tonic::transport::Channel::from_shared(analytics_addr.clone())
-        .context("invalid ANALYTICS_SERVICE_ADDR")?
-        .connect_lazy();
-    let analytics_client = AnalyticsServiceClient::new(analytics_channel);
-    info!("analytics service endpoint: {analytics_addr}");
-
     // ── gRPC Server ────────────────────────────────────────────────────────────
     let port: u16 = std::env::var("FLAG_SERVICE_PORT")
         .ok()
@@ -104,8 +94,7 @@ async fn main() -> anyhow::Result<()> {
         sdk_key_repo,
         Arc::clone(&segment_repo),
     )
-    .with_clickhouse(Arc::clone(&ch_client))
-    .with_analytics_client(analytics_client);
+    .with_clickhouse(Arc::clone(&ch_client));
 
     let sdk_backend_svc = FlagSdkBackendServiceImpl::new(
         Arc::clone(&flag_repo),
