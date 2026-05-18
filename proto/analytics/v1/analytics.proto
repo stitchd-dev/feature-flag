@@ -120,6 +120,70 @@ message GetContextIntelligenceResponse {
   repeated ContextIntelligenceType types = 1;
 }
 
+// ─── Experiment Results ───────────────────────────────────────────────────────
+
+// Represents computed statistical analysis for one metric within one
+// experiment iteration.  Field names mirror the `experiment_results` ClickHouse
+// table; JSON columns are serialised as JSON strings.
+message ExperimentResult {
+  string env_id          = 1;   // UUID – environment scope (tenant)
+  string experiment_id   = 2;   // UUID – FK → experiments.id
+  string iteration_id    = 3;   // UUID – FK → experiment_iterations.id
+  string variant_key     = 4;   // e.g. "control", "treatment_a"
+  string metric_key      = 5;
+  string metric_type     = 6;   // "count" | "numeric" | "percentile" | "funnel"
+  // Per-variant sample statistics (serialised JSON).
+  string variant_stats   = 7;
+  // Frequentist analysis result (serialised JSON); absent when not computed.
+  optional string frequentist_result = 8;
+  // Bayesian analysis result (serialised JSON); absent when not computed.
+  optional string bayesian_result    = 9;
+  string recommendation  = 10;
+  // RFC 3339 UTC timestamp the analysis was computed.
+  string computed_at     = 11;
+  // RFC 3339 UTC timestamp the row was first inserted.
+  string created_at      = 12;
+}
+
+// Write (upsert) one experiment result.
+message WriteExperimentResultsRequest {
+  string env_id                 = 1;   // UUID – environment scope
+  string experiment_id          = 2;
+  string iteration_id           = 3;
+  string variant_key            = 4;   // e.g. "control", "treatment_a"
+  string metric_key             = 5;
+  string metric_type            = 6;
+  string variant_stats          = 7;   // serialised JSON
+  optional string frequentist_result = 8;
+  optional string bayesian_result    = 9;
+  string recommendation         = 10;
+  // RFC 3339 UTC.  Defaults to server time when omitted.
+  string computed_at            = 11;
+}
+
+// Empty response — Worker 3's write returns () so no result is echoed back.
+// Callers that need the written row should issue a GetExperimentResult request.
+message WriteExperimentResultsResponse {}
+
+// List all results for the latest iteration of an experiment.
+message ListExperimentResultsRequest {
+  string env_id         = 1;   // UUID – environment scope
+  string experiment_id  = 2;
+  // Optional: if set, list results for this specific iteration rather than
+  // all iterations.
+  optional string iteration_id = 3;
+}
+
+// Get a single result for a specific (variant_key, metric_key) within an iteration.
+message GetExperimentResultRequest {
+  string env_id        = 1;   // UUID – environment scope
+  string experiment_id = 2;
+  string variant_key   = 3;   // e.g. "control", "treatment_a"
+  string metric_key    = 4;
+  // Optional: if omitted, returns the most-recently-computed row.
+  optional string iteration_id = 5;
+}
+
 // ─── Analytics Service ────────────────────────────────────────────────────────
 
 // AnalyticsService consolidates all analytics and context-registry operations.
@@ -143,4 +207,13 @@ service AnalyticsService {
 
   // Query context types + params in one request (used by UI autocomplete).
   rpc GetContextIntelligence(GetContextIntelligenceRequest) returns (GetContextIntelligenceResponse);
+
+  // Upsert a computed experiment result (one metric × one iteration).
+  rpc WriteExperimentResults(WriteExperimentResultsRequest) returns (WriteExperimentResultsResponse);
+
+  // Stream all results for the latest (or specified) iteration of an experiment.
+  rpc ListExperimentResults(ListExperimentResultsRequest) returns (stream ExperimentResult);
+
+  // Fetch a single result for a specific metric key within an iteration.
+  rpc GetExperimentResult(GetExperimentResultRequest) returns (ExperimentResult);
 }
