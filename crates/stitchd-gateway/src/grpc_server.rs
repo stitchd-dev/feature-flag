@@ -146,10 +146,12 @@ pub fn build_grpc_server(
 mod tests {
     use super::*;
 
-    fn stub_clients() -> (
+    type StubClients = (
         Arc<Mutex<AuthServiceClient<Channel>>>,
         Arc<Mutex<FlagSdkBackendServiceClient<Channel>>>,
-    ) {
+    );
+
+    fn stub_clients() -> StubClients {
         // Lazily-connecting channels — never actually establish a connection
         // for short-circuit tests (auth failure paths don't reach the backend).
         let auth_channel = Channel::from_static("http://127.0.0.1:1").connect_lazy();

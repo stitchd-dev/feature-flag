@@ -854,7 +854,7 @@ mod tests {
 
         // u1 is in segment → rule fires → "on"
         let ec_in = EvaluationContext::new().with_context(Context::new("user", "u1"));
-        let results = evaluate_preview(&flag, &[ec_in], &[segment_def.clone()], env_id());
+        let results = evaluate_preview(&flag, &[ec_in], std::slice::from_ref(&segment_def), env_id());
         assert_eq!(results[0].variant_key, "on");
 
         // u2 is NOT in segment → default "off"

@@ -481,11 +481,11 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<ListSdkKeysResponse>, Status> {
         let r = request.into_inner();
         let env_id = parse_env_id(&r.environment_id)?;
-        let page = if r.page == 0 { 1u64 } else { r.page as u64 };
+        let page = if r.page == 0 { 1u64 } else { u64::from(r.page) };
         let per_page = if r.per_page == 0 {
             50u64
         } else {
-            (r.per_page as u64).min(200)
+            u64::from(r.per_page).min(200)
         };
         let offset = (page - 1) * per_page;
         let (keys, total) = self
@@ -547,11 +547,11 @@ impl ManagementService for ManagementServiceImpl {
     ) -> Result<Response<ListOrgUsersResponse>, Status> {
         let r = request.into_inner();
         let org_id = parse_org_id(&r.org_id)?;
-        let page = if r.page == 0 { 1u64 } else { r.page as u64 };
+        let page = if r.page == 0 { 1u64 } else { u64::from(r.page) };
         let per_page = if r.per_page == 0 {
             50u64
         } else {
-            (r.per_page as u64).min(200)
+            u64::from(r.per_page).min(200)
         };
         let offset = (page - 1) * per_page;
         let (user_pairs, total) = self

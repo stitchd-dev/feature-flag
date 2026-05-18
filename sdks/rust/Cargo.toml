@@ -48,6 +48,10 @@ chrono = { workspace = true }
 # Expose test helpers (SdkClient constructor from snapshot) for integration / conformance tests.
 test-util = []
 
+[[test]]
+name = "conformance"
+required-features = ["test-util"]
+
 [dev-dependencies]
 # Integration tests stub out the gateway with wiremock + tonic mock services.
 wiremock = { workspace = true }

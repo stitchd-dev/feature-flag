@@ -450,7 +450,7 @@ mod tests {
         lists.insert(
             "user".to_string(),
             ContextList {
-                include: ["u1".to_string()].iter().cloned().collect(),
+                include: std::iter::once("u1".to_string()).collect(),
                 exclude: std::collections::HashSet::new(),
             },
         );
