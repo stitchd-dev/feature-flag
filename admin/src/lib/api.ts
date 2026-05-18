@@ -1,7 +1,6 @@
 import axios from 'axios'
 import { auth } from './auth'
-import type { AdminFlagResponse, PaginatedResponse } from './types'
-import type { Segment, CreateSegmentRequest, UpdateSegmentRequest } from '../pages/segments/types'
+import type { AdminFlagResponse, PaginatedResponse, Segment, CreateSegmentRequest, UpdateSegmentRequest } from './types'
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',

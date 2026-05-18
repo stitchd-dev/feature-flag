@@ -8,23 +8,7 @@ import { EmptyState } from '../../components/EmptyState'
 import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
-
-interface ExperimentResponse {
-  experiment_id: string
-  environment_id: string
-  key: string
-  name: string
-  description: string
-  flag_key: string
-  status: string // "draft" | "running" | "stopped" | "completed"
-  model: string // "frequentist" | "bayesian"
-  primary_metric: string
-  variants: number
-  started_at: string | null
-  ended_at: string | null
-  created_at: string
-  updated_at: string
-}
+import type { ExperimentResponse } from '../../lib/types'
 
 type StateFilter = 'All' | 'Running' | 'Draft' | 'Stopped' | 'Completed'
 const STATE_FILTERS: StateFilter[] = ['All', 'Running', 'Draft', 'Stopped', 'Completed']
