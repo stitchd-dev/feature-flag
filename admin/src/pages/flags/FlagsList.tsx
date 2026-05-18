@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
 import { usePermissions } from '../../hooks/usePermissions'
+import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { PageHeader, VariantBar, Sparkline } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { Pagination } from '../../components/Pagination'
@@ -91,7 +92,6 @@ function FlagCard({ flag, orgId, onToggle }: { flag: AdminFlagResponse; orgId: s
 
 export function FlagsList() {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
   const { tweaks } = useTweaks()
   const { projectId, orgId } = useOrgContext()
   const { can, loading: permLoading } = usePermissions()
@@ -99,38 +99,28 @@ export function FlagsList() {
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<FlagTypeFilter>('all')
   const [showArchived, setShowArchived] = useState(false)
-  const [flags, setFlags] = useState<AdminFlagResponse[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [optimisticEnabled, setOptimisticEnabled] = useState<Map<string, boolean>>(new Map())
   const [showCreate, setShowCreate] = useState(false)
-
-  const page = Math.max(1, Number(searchParams.get('page') ?? 1))
 
   const canRead = can(PERMISSIONS.FLAG_READ)
   const canWrite = can(PERMISSIONS.FLAG_WRITE)
 
-  useEffect(() => {
-    if (!projectId) return
-    setLoading(true)
-    setError(null)
-    const qs = new URLSearchParams({ page: String(page), per_page: String(PER_PAGE) })
-    if (showArchived) qs.set('include_archived', 'true')
-    api.get<PaginatedResponse<AdminFlagResponse>>(`/v1/projects/${projectId}/flags?${qs}`)
-      .then(({ data }) => {
-        const items = data.items ?? (Array.isArray(data) ? data : [])
-        setFlags(items)
-        setTotal(data.total ?? items.length)
-        setOptimisticEnabled(new Map(items.map((f) => [f.key, f.enabled])))
-      })
-      .catch((err) => setError(err?.response?.data?.message ?? err.message ?? 'Failed to load flags'))
-      .finally(() => setLoading(false))
-  }, [projectId, showArchived, page])
-
-  function onPageChange(p: number) {
-    setSearchParams((prev) => { prev.set('page', String(p)); return prev })
-  }
+  const { data: flags, total, loading, error, page, onPageChange, refresh: _refresh } = usePaginatedList<AdminFlagResponse>(
+    async ({ page: p, perPage, signal }) => {
+      if (!projectId) return { items: [], total: 0 }
+      const qs = new URLSearchParams({ page: String(p), per_page: String(perPage) })
+      if (showArchived) qs.set('include_archived', 'true')
+      const { data } = await api.get<PaginatedResponse<AdminFlagResponse>>(
+        `/v1/projects/${projectId}/flags?${qs}`,
+        { signal },
+      )
+      const items = data.items ?? (Array.isArray(data) ? data : [])
+      setOptimisticEnabled(new Map(items.map((f) => [f.key, f.enabled])))
+      return { items, total: data.total ?? items.length }
+    },
+    [projectId, showArchived],
+    PER_PAGE,
+  )
 
   function toggleFlag(key: string) {
     const current = optimisticEnabled.get(key) ?? flags.find((f) => f.key === key)?.enabled ?? false
@@ -219,7 +209,6 @@ export function FlagsList() {
           <ErrorBanner
             message={error}
             icon={<I.alert size={14} />}
-            onDismiss={() => setError(null)}
           />
         )}
 

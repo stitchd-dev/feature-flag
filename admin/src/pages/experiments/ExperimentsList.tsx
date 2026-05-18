@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { LoadingSpinner } from '../../components/LoadingSpinner'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { EmptyState } from '../../components/EmptyState'
+import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 
@@ -45,19 +46,19 @@ export function ExperimentsList() {
   const { envId, orgId } = useOrgContext()
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState<StateFilter>('All')
-  const [experiments, setExperiments] = useState<ExperimentResponse[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!envId) return
-    setLoading(true)
-    setError(null)
-    api.get<{ items: ExperimentResponse[]; total: number }>(`/v1/environments/${envId}/experiments`)
-      .then(({ data }) => setExperiments(data.items ?? (Array.isArray(data) ? data : [])))
-      .catch((err) => setError(err?.response?.data?.message ?? err.message ?? 'Failed to load experiments'))
-      .finally(() => setLoading(false))
-  }, [envId])
+  const { data: experiments, loading, error } = usePaginatedList<ExperimentResponse>(
+    async ({ signal }) => {
+      if (!envId) return { items: [], total: 0 }
+      const { data } = await api.get<{ items: ExperimentResponse[]; total: number }>(
+        `/v1/environments/${envId}/experiments`,
+        { signal },
+      )
+      const items = data.items ?? (Array.isArray(data) ? data : [])
+      return { items, total: data.total ?? items.length }
+    },
+    [envId],
+  )
 
   const filtered = experiments.filter((e) =>
     stateMatch(e, stateFilter) &&
@@ -110,7 +111,6 @@ export function ExperimentsList() {
           <ErrorBanner
             message={error}
             icon={<I.alert size={14} />}
-            onDismiss={() => setError(null)}
           />
         )}
 

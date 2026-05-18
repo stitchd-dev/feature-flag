@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { Pagination } from '../../components/Pagination'
 import { LoadingSpinner } from '../../components/LoadingSpinner'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { EmptyState } from '../../components/EmptyState'
+import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import type { PaginatedResponse } from '../../lib/types'
@@ -18,47 +19,23 @@ const PER_PAGE = 50
 
 export function SegmentsList() {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
   const { envId, orgId, projectId } = useOrgContext()
   const [search, setSearch] = useState('')
-  const [segments, setSegments] = useState<Segment[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [editSegment, setEditSegment] = useState<Segment | null>(null)
   const [deleteSegment, setDeleteSegment] = useState<Segment | null>(null)
 
-  const page = Math.max(1, Number(searchParams.get('page') ?? 1))
-
-  const [refreshTick, setRefreshTick] = useState(0)
-  function loadSegments() { setRefreshTick((t) => t + 1) }
-
-  function onPageChange(p: number) {
-    setSearchParams((prev) => { prev.set('page', String(p)); return prev })
-  }
-
-  useEffect(() => {
-    if (!envId) return
-    let cancelled = false
-    setLoading(true) // eslint-disable-line react-hooks/set-state-in-effect
-    setError(null)
-    const qs = new URLSearchParams({ env_id: envId, page: String(page), per_page: String(PER_PAGE) })
-    api.get<PaginatedResponse<Segment>>(`/v1/segments?${qs}`)
-      .then(({ data }) => {
-        if (cancelled) return
-        const items = data.items ?? (Array.isArray(data) ? data : [])
-        setSegments(items)
-        setTotal(data.total ?? items.length)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        const e = err as { response?: { data?: { message?: string } }; message?: string }
-        setError(e?.response?.data?.message ?? e?.message ?? 'Failed to load segments')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [envId, refreshTick, page])
+  const { data: segments, total, loading, error, page, onPageChange, refresh: loadSegments } = usePaginatedList<Segment>(
+    async ({ page: p, perPage, signal }) => {
+      if (!envId) return { items: [], total: 0 }
+      const qs = new URLSearchParams({ env_id: envId, page: String(p), per_page: String(perPage) })
+      const { data } = await api.get<PaginatedResponse<Segment>>(`/v1/segments?${qs}`, { signal })
+      const items = data.items ?? (Array.isArray(data) ? data : [])
+      return { items, total: data.total ?? items.length }
+    },
+    [envId],
+    PER_PAGE,
+  )
 
   const filtered = segments.filter((s) =>
     !search ||
@@ -112,7 +89,6 @@ export function SegmentsList() {
           <ErrorBanner
             message={error}
             icon={<I.alert size={14} />}
-            onDismiss={() => setError(null)}
           />
         )}
 
@@ -245,8 +221,8 @@ export function SegmentsList() {
           segment={deleteSegment}
           onClose={() => setDeleteSegment(null)}
           onDeleted={() => {
-            setSegments((prev) => prev.filter((s) => s.id !== deleteSegment.id))
             setDeleteSegment(null)
+            loadSegments()
           }}
         />
       )}
