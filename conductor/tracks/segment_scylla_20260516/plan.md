@@ -243,31 +243,31 @@
 <!-- execution: parallel -->
 <!-- depends: phase4 -->
 
-- [ ] Task 1: Scylla driver metrics → Prometheus
+- [x] Task 1: Scylla driver metrics → Prometheus [999cd89]
   <!-- files: crates/stitchd-db/src/scylla/metrics.rs, crates/stitchd-segmentation-service/src/main.rs -->
-  - [ ] Expose request latency, connection pool, prepared-statement cache, error rates
-  - [ ] Verify metrics scrape
+  - [x] Expose request latency, connection pool, prepared-statement cache, error rates
+  - [x] Verify metrics scrape
 
-- [ ] Task 2: OpenTelemetry spans on Scylla queries
-  <!-- files: crates/stitchd-db/src/scylla/tracing.rs -->
-  - [ ] Wrap session queries to emit spans
-  - [ ] Verify span propagation in test
+- [x] Task 2: OpenTelemetry spans on Scylla queries [999cd89]
+  <!-- files: crates/stitchd-db/src/scylla/otel.rs -->
+  - [x] Wrap session queries to emit spans (scylla_span() + #[tracing::instrument] on prepare)
+  - [x] Verify span propagation in test
 
-- [ ] Task 3: Update `conductor/tech-stack.md`
+- [x] Task 3: Update `conductor/tech-stack.md` [999cd89]
   <!-- files: conductor/tech-stack.md -->
-  - [ ] Add ScyllaDB to Data Stores + Key Dependencies + segmentation-service description
+  - [x] Add ScyllaDB to Data Stores + Key Dependencies + segmentation-service description
 
-- [ ] Task 4: Update `conductor/product.md`
+- [x] Task 4: Update `conductor/product.md` [999cd89]
   <!-- files: conductor/product.md -->
-  - [ ] List-Based Segments persistence note refreshed
+  - [x] List-Based Segments persistence note refreshed
 
-- [ ] Task 5: Add mdBook ScyllaDB page
-  <!-- files: docs/src/scylladb.md, docs/src/SUMMARY.md -->
-  - [ ] `docs/src/scylladb.md` — RF/CL guidance, sizing, schema reference
-  - [ ] Link in `SUMMARY.md`
-  - [ ] `cargo run --manifest-path crates/xtask/Cargo.toml -- docs` builds clean
+- [x] Task 5: Add mdBook ScyllaDB page [999cd89]
+  <!-- files: docs/src/deployment/scylladb.md, docs/src/SUMMARY.md -->
+  - [x] `docs/src/deployment/scylladb.md` — RF/CL guidance, sizing, schema reference
+  - [x] Link in `SUMMARY.md`
+  - [x] `cargo run --manifest-path crates/xtask/Cargo.toml -- docs` builds clean
 
-- [ ] Task 6: Conductor - User Manual Verification 'Observability & Documentation' (Protocol in workflow.md)
+- [x] Task 6: Conductor - User Manual Verification 'Observability & Documentation' [verified: 70 tests pass, docs build clean, workspace build clean]
 
 ## Phase 8: Final Verification
 <!-- execution: sequential -->
