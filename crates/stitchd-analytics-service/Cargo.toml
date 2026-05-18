@@ -34,6 +34,7 @@ metrics-exporter-prometheus = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+tokio-stream = "0.1"
 
 [dev-dependencies]
 tokio = { workspace = true }

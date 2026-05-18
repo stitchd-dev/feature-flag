@@ -120,6 +120,63 @@ message GetContextIntelligenceResponse {
   repeated ContextIntelligenceType types = 1;
 }
 
+// ─── Experiment Results ───────────────────────────────────────────────────────
+
+// Represents computed statistical analysis for one metric within one
+// experiment iteration.  Field names mirror the `experiment_results` PG table;
+// JSONB columns are serialised as JSON strings.
+message ExperimentResult {
+  string id              = 1;   // UUID
+  string experiment_id   = 2;   // UUID – FK → experiments.id
+  string iteration_id    = 3;   // UUID – FK → experiment_iterations.id
+  string metric_key      = 4;
+  string metric_type     = 5;   // "count" | "numeric" | "percentile" | "funnel"
+  // Per-variant sample statistics (serialised JSON).
+  string variant_stats   = 6;
+  // Frequentist analysis result (serialised JSON); absent when not computed.
+  optional string frequentist_result = 7;
+  // Bayesian analysis result (serialised JSON); absent when not computed.
+  optional string bayesian_result    = 8;
+  string recommendation  = 9;
+  // RFC 3339 UTC timestamp the analysis was computed.
+  string computed_at     = 10;
+  // RFC 3339 UTC timestamp the row was first inserted.
+  string created_at      = 11;
+}
+
+// Write (upsert) one experiment result.
+message WriteExperimentResultsRequest {
+  string experiment_id          = 1;
+  string iteration_id           = 2;
+  string metric_key             = 3;
+  string metric_type            = 4;
+  string variant_stats          = 5;   // serialised JSON
+  optional string frequentist_result = 6;
+  optional string bayesian_result    = 7;
+  string recommendation         = 8;
+  // RFC 3339 UTC.  Defaults to server time when omitted.
+  string computed_at            = 9;
+}
+
+message WriteExperimentResultsResponse {
+  ExperimentResult result = 1;
+}
+
+// List all results for the latest iteration of an experiment.
+message ListExperimentResultsRequest {
+  string experiment_id  = 1;
+  // Optional: if set, list results for this specific iteration rather than
+  // the latest one.
+  optional string iteration_id = 2;
+}
+
+// Get a single result for a specific metric key.
+message GetExperimentResultRequest {
+  string experiment_id = 1;
+  string iteration_id  = 2;
+  string metric_key    = 3;
+}
+
 // ─── Analytics Service ────────────────────────────────────────────────────────
 
 // AnalyticsService consolidates all analytics and context-registry operations.
@@ -143,4 +200,13 @@ service AnalyticsService {
 
   // Query context types + params in one request (used by UI autocomplete).
   rpc GetContextIntelligence(GetContextIntelligenceRequest) returns (GetContextIntelligenceResponse);
+
+  // Upsert a computed experiment result (one metric × one iteration).
+  rpc WriteExperimentResults(WriteExperimentResultsRequest) returns (WriteExperimentResultsResponse);
+
+  // Stream all results for the latest (or specified) iteration of an experiment.
+  rpc ListExperimentResults(ListExperimentResultsRequest) returns (stream ExperimentResult);
+
+  // Fetch a single result for a specific metric key within an iteration.
+  rpc GetExperimentResult(GetExperimentResultRequest) returns (ExperimentResult);
 }

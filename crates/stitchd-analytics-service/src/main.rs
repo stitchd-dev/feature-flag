@@ -16,9 +16,43 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use stitchd_analytics_service::{
     config::Config,
-    grpc::service::{AnalyticsServiceImpl, ServiceState},
+    grpc::{
+        experiment_results::{ExperimentResultsRepository, RepoError, ResultRow, WriteResultInput},
+        service::{AnalyticsServiceImpl, ServiceState},
+    },
 };
 use stitchd_proto::analytics::v1::analytics_service_server::AnalyticsServiceServer;
+
+// ---------------------------------------------------------------------------
+// Temporary stub — remove once Worker 3's ClickHouse impl lands.
+// TODO(merge): delete this struct and wire ChExperimentResultsRepository.
+// ---------------------------------------------------------------------------
+
+struct UnimplementedExperimentResultsRepo;
+
+#[async_trait::async_trait]
+impl ExperimentResultsRepository for UnimplementedExperimentResultsRepo {
+    async fn write(&self, _input: &WriteResultInput) -> Result<ResultRow, RepoError> {
+        Err(RepoError::Internal("experiment_results backend not yet wired".into()))
+    }
+
+    async fn list(
+        &self,
+        _experiment_id: uuid::Uuid,
+        _iteration_id: Option<uuid::Uuid>,
+    ) -> Result<Vec<ResultRow>, RepoError> {
+        Err(RepoError::Internal("experiment_results backend not yet wired".into()))
+    }
+
+    async fn get(
+        &self,
+        _experiment_id: uuid::Uuid,
+        _iteration_id: uuid::Uuid,
+        _metric_key: &str,
+    ) -> Result<ResultRow, RepoError> {
+        Err(RepoError::Internal("experiment_results backend not yet wired".into()))
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -64,6 +98,12 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(stitchd_db::PgContextRegistryRepository::new(pg_pool.clone()));
     let event_writer = stitchd_events::writer::EventWriter::new(ch_client.clone());
 
+    // TODO(merge): Replace with the real ClickHouse-backed
+    // `ChExperimentResultsRepository` once Worker 3's impl lands.
+    // This stub satisfies the compiler during parallel development.
+    let experiment_results_repo: Arc<dyn ExperimentResultsRepository> =
+        Arc::new(UnimplementedExperimentResultsRepo);
+
     let state = ServiceState {
         pg_pool: Arc::new(pg_pool),
         ch_client: Arc::new(ch_client),
@@ -71,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
         sdk_key_repo,
         event_writer,
         context_registry,
+        experiment_results_repo,
     };
     let svc = AnalyticsServiceImpl::new(state);
 

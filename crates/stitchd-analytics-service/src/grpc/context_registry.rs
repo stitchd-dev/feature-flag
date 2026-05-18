@@ -107,6 +107,7 @@ pub async fn handle_list_context_params(
     Ok(Response::new(ListContextParamsResponse { params }))
 }
 
+#[allow(clippy::result_large_err)]
 fn parse_env_id(s: &str) -> Result<EnvironmentId, Status> {
     s.parse::<uuid::Uuid>()
         .map(EnvironmentId::from_uuid)
