@@ -99,13 +99,13 @@
 ## Phase 6: Retire `stitchd-event-service`
 <!-- depends: phase5 -->
 
-- [ ] Task 1: Remove event-service from workspace
+- [x] Task 1: Remove event-service from workspace
   - Delete `crates/stitchd-event-service/`
   - Remove from workspace `Cargo.toml` members
   - Remove from `docker-compose.yml`
   - Update CI workflow files that reference event-service
 
-- [ ] Task 2: Update startup documentation + scripts
+- [x] Task 2: Update startup documentation + scripts
   - Update any README / dev-startup scripts
   - Verify full `cargo build --workspace` succeeds
 

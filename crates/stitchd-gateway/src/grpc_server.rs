@@ -84,6 +84,7 @@ impl GatewaySdkServiceImpl {
 
 /// Build a `tonic::Request` carrying the inbound payload plus an `x-env-id`
 /// metadata header. Used for every forwarded backend call.
+#[allow(clippy::result_large_err)]
 fn forward_request<T>(payload: T, env_id: &str) -> Result<Request<T>, Status> {
     let mut req = Request::new(payload);
     let value = env_id

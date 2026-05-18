@@ -17,20 +17,7 @@ use stitchd_proto::analytics::v1::{ListContextParamsRequest, ListContextTypesReq
 use crate::error::GatewayError;
 use crate::state::GatewayState;
 
-fn require_permission(req: &axum::extract::Request, permission: &str) -> Result<(), GatewayError> {
-    match req
-        .extensions()
-        .get::<stitchd_proto::auth::v1::RbacContext>()
-    {
-        Some(ctx) if ctx.permissions.iter().any(|p| p == permission) => Ok(()),
-        Some(_) => Err(GatewayError::Unauthorized(format!(
-            "missing permission: {permission}"
-        ))),
-        None => Err(GatewayError::Unauthorized(
-            "missing credentials".to_string(),
-        )),
-    }
-}
+use super::require_permission;
 
 #[derive(Debug, Serialize)]
 pub struct ContextTypeJson {
