@@ -39,13 +39,13 @@
 
 ## Phase 3: Context Registry Migration
 
-- [ ] Task 1: Move context registry repository + PG logic
+- [x] Task 1: Move context registry repository + PG logic
   - Copy `event-service/src/registry.rs` →
     `analytics-service/src/context_registry.rs`
   - Implement `RegisterContext`, `ListContextTypes`, `ListContextParams` gRPC handlers
   - Wire PG pool in analytics-service `main.rs`
 
-- [ ] Task 2: Tests
+- [x] Task 2: Tests
   - Port existing registry tests from event-service
   - Add tests for all three new gRPC methods
 

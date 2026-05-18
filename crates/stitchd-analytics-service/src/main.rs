@@ -60,6 +60,8 @@ async fn main() -> anyhow::Result<()> {
     let sdk_key_repo: Arc<dyn stitchd_db::SdkKeyRepository> = Arc::new(
         stitchd_db::PgSdkKeyRepository::new(pg_pool.clone(), audit_logger.clone()),
     );
+    let context_registry: Arc<dyn stitchd_db::ContextRegistryRepository> =
+        Arc::new(stitchd_db::PgContextRegistryRepository::new(pg_pool.clone()));
     let event_writer = stitchd_events::writer::EventWriter::new(ch_client.clone());
 
     let state = ServiceState {
@@ -68,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
         event_def_repo,
         sdk_key_repo,
         event_writer,
+        context_registry,
     };
     let svc = AnalyticsServiceImpl::new(state);
 

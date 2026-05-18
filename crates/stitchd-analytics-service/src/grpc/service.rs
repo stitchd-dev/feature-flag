@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
-use stitchd_db::{EventDefinitionRepository, SdkKeyRepository};
+use stitchd_db::{ContextRegistryRepository, EventDefinitionRepository, SdkKeyRepository};
 use stitchd_events::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
     GetContextIntelligenceRequest, GetContextIntelligenceResponse, GetEvalStatsRequest,
@@ -12,6 +12,9 @@ use stitchd_proto::analytics::v1::{
 };
 use stitchd_proto::events::v1::{IngestRequest, IngestResponse};
 
+use super::context_registry::{
+    handle_list_context_params, handle_list_context_types, handle_register_context,
+};
 use super::event_ingestion::{EventIngestionState, handle_ingest_event};
 
 pub struct ServiceState {
@@ -20,6 +23,7 @@ pub struct ServiceState {
     pub event_def_repo: Arc<dyn EventDefinitionRepository>,
     pub sdk_key_repo: Arc<dyn SdkKeyRepository>,
     pub event_writer: EventWriter,
+    pub context_registry: Arc<dyn ContextRegistryRepository>,
 }
 
 pub struct AnalyticsServiceImpl {
@@ -50,23 +54,23 @@ impl AnalyticsService for AnalyticsServiceImpl {
 
     async fn register_context(
         &self,
-        _request: Request<RegisterContextRequest>,
+        request: Request<RegisterContextRequest>,
     ) -> Result<Response<RegisterContextResponse>, Status> {
-        Err(Status::unimplemented("RegisterContext: Phase 3 pending"))
+        handle_register_context(&self.state.context_registry, request).await
     }
 
     async fn list_context_types(
         &self,
-        _request: Request<ListContextTypesRequest>,
+        request: Request<ListContextTypesRequest>,
     ) -> Result<Response<ListContextTypesResponse>, Status> {
-        Err(Status::unimplemented("ListContextTypes: Phase 3 pending"))
+        handle_list_context_types(&self.state.context_registry, request).await
     }
 
     async fn list_context_params(
         &self,
-        _request: Request<ListContextParamsRequest>,
+        request: Request<ListContextParamsRequest>,
     ) -> Result<Response<ListContextParamsResponse>, Status> {
-        Err(Status::unimplemented("ListContextParams: Phase 3 pending"))
+        handle_list_context_params(&self.state.context_registry, request).await
     }
 
     async fn get_eval_stats(
