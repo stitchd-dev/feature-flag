@@ -48,3 +48,9 @@ This file tracks all major tracks for the project.
 <!-- Archived (continued):
 - gateway_lean_20260518 (Gateway Lean Refactor — strip DB connections, new analytics-service, retire event-service)
 -->
+
+
+---
+
+## [ ] Track: Boundary Hardening Refactor — DDD service boundaries, URL canonical rewrite, naming conventions, admin UI patterns, Formik migration, SDK spec alignment
+*Link: [./conductor/tracks/boundaries_20260518/](./conductor/tracks/boundaries_20260518/)*

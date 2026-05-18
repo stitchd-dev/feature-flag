@@ -1,0 +1,13 @@
+{
+  "track_id": "boundaries_20260518",
+  "type": "refactor",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-18T18:11:15Z",
+  "updated_at": "2026-05-18T18:11:15Z",
+  "description": "Pre-launch boundary hardening refactor — fix DDD service boundary violations, rewrite REST URL space to canonical org→project→env hierarchy, standardize naming (STITCHD_ env vars, crate renames, Scylla keyspace), consolidate admin UI patterns (Dropdown/Modal/EmptyState/usePaginatedList primitives), migrate admin forms to Formik+Yup, align SDK spec with Rust implementation.",
+  "git_branch": "track/boundaries_20260518",
+  "worktree_path": ".worktrees/boundaries_20260518"
+}
