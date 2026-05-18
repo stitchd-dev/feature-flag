@@ -36,3 +36,4 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }
 serial_test = { workspace = true }
+tokio-stream = { version = "0.1", features = ["net"] }

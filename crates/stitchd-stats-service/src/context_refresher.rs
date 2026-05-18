@@ -199,6 +199,7 @@ mod tests {
     }
 
     #[derive(Default)]
+    #[allow(clippy::type_complexity)]
     struct FakeRegistry {
         upserted_types: Mutex<Vec<(EnvironmentId, String)>>,
         upserted_params: Mutex<Vec<(EnvironmentId, String, String, InferredType, bool)>>,
