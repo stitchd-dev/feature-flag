@@ -7,6 +7,118 @@
       "runtimeArgs": ["run", "dev", "--", "--port", "5173"],
       "cwd": "admin",
       "port": 5173
+    },
+    {
+      "name": "gateway",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "stitchd-gateway"],
+      "cwd": ".",
+      "port": 8080,
+      "env": {
+        "DATABASE_URL": "postgres://stitchd:stitchd@localhost:5432/stitchd",
+        "GATEWAY_PORT": "8080",
+        "METRICS_PORT": "9080",
+        "AUTH_SERVICE_ADDR": "http://localhost:50051",
+        "FLAG_SERVICE_ADDR": "http://localhost:50052",
+        "SEGMENTATION_SERVICE_ADDR": "http://localhost:50053",
+        "ANALYTICS_SERVICE_ADDR": "http://localhost:50054",
+        "EXPERIMENTATION_SERVICE_ADDR": "http://localhost:50055",
+        "STATS_SERVICE_ADDR": "http://localhost:50056",
+        "RUST_LOG": "info"
+      }
+    },
+    {
+      "name": "auth-service",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "stitchd-auth-service"],
+      "cwd": ".",
+      "port": 50051,
+      "env": {
+        "DATABASE_URL": "postgres://stitchd:stitchd@localhost:5432/stitchd",
+        "AUTH_SERVICE_PORT": "50051",
+        "JWT_SECRET": "dev-secret-change-in-prod",
+        "SUPERADMIN_EMAIL": "admin@stitchd.io",
+        "SUPERADMIN_PASSWORD": "changeme",
+        "RUST_LOG": "info"
+      }
+    },
+    {
+      "name": "flag-service",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "stitchd-flag-service"],
+      "cwd": ".",
+      "port": 50052,
+      "env": {
+        "DATABASE_URL": "postgres://stitchd:stitchd@localhost:5432/stitchd",
+        "FLAG_SERVICE_PORT": "50052",
+        "FLAG_METRICS_PORT": "9052",
+        "ANALYTICS_SERVICE_ADDR": "http://localhost:50054",
+        "CLICKHOUSE_URL": "http://localhost:8123",
+        "CLICKHOUSE_DB": "stitchd",
+        "CLICKHOUSE_USER": "stitchd",
+        "CLICKHOUSE_PASSWORD": "stitchd",
+        "RUST_LOG": "info"
+      }
+    },
+    {
+      "name": "segmentation-service",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "stitchd-segmentation-service"],
+      "cwd": ".",
+      "port": 50053,
+      "env": {
+        "DATABASE_URL": "postgres://stitchd:stitchd@localhost:5432/stitchd",
+        "SEGMENTATION_SERVICE_PORT": "50053",
+        "SCYLLA_URI": "localhost:9042",
+        "SCYLLA_KEYSPACE": "stitchd",
+        "RUST_LOG": "info"
+      }
+    },
+    {
+      "name": "analytics-service",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "stitchd-analytics-service"],
+      "cwd": ".",
+      "port": 50054,
+      "env": {
+        "DATABASE_URL": "postgres://stitchd:stitchd@localhost:5432/stitchd",
+        "ANALYTICS_GRPC_PORT": "50054",
+        "METRICS_PORT": "9104",
+        "CLICKHOUSE_URL": "http://stitchd:stitchd@localhost:8123/stitchd",
+        "CLICKHOUSE_DB": "stitchd",
+        "CLICKHOUSE_USER": "stitchd",
+        "CLICKHOUSE_PASSWORD": "stitchd",
+        "RUST_LOG": "info"
+      }
+    },
+    {
+      "name": "experimentation-service",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "stitchd-experimentation-service"],
+      "cwd": ".",
+      "port": 50055,
+      "env": {
+        "DATABASE_URL": "postgres://stitchd:stitchd@localhost:5432/stitchd",
+        "EXPERIMENTATION_SERVICE_PORT": "50055",
+        "RUST_LOG": "info"
+      }
+    },
+    {
+      "name": "stats-service",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-p", "stitchd-stats-service"],
+      "cwd": ".",
+      "port": 50056,
+      "env": {
+        "DATABASE_URL": "postgres://stitchd:stitchd@localhost:5432/stitchd",
+        "STATS_SERVICE_PORT": "50056",
+        "STATS_HTTP_PORT": "9200",
+        "CLICKHOUSE_URL": "http://stitchd:stitchd@localhost:8123/stitchd",
+        "CLICKHOUSE_DB": "stitchd",
+        "CLICKHOUSE_USER": "stitchd",
+        "CLICKHOUSE_PASSWORD": "stitchd",
+        "RUST_LOG": "info"
+      }
     }
   ]
 }

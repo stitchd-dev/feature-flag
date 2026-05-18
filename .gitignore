@@ -9,6 +9,10 @@ coverage
 # Build artifacts
 target/
 
+# Local dev runner
+.dev-logs/
+.dev-pids
+
 # Generated mdBook output
 docs/book/
 
