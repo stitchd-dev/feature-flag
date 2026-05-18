@@ -17,6 +17,12 @@ pub struct StatsConfig {
     pub http_port: u16,
     /// Port for the gRPC server (`STATS_GRPC_PORT`, default: 50056).
     pub grpc_port: u16,
+    /// gRPC endpoint for experimentation-service
+    /// (`EXPERIMENTATION_SERVICE_GRPC_URL`, default: `http://localhost:50054`).
+    pub experimentation_service_grpc_url: String,
+    /// gRPC endpoint for analytics-service
+    /// (`ANALYTICS_SERVICE_GRPC_URL`, default: `http://localhost:50055`).
+    pub analytics_service_grpc_url: String,
 }
 
 impl StatsConfig {
@@ -49,6 +55,13 @@ impl StatsConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(50056);
 
+        let experimentation_service_grpc_url =
+            std::env::var("EXPERIMENTATION_SERVICE_GRPC_URL")
+                .unwrap_or_else(|_| "http://localhost:50054".to_string());
+
+        let analytics_service_grpc_url = std::env::var("ANALYTICS_SERVICE_GRPC_URL")
+            .unwrap_or_else(|_| "http://localhost:50055".to_string());
+
         Ok(Self {
             database_url,
             clickhouse_url,
@@ -56,6 +69,8 @@ impl StatsConfig {
             scheduler_interval: Duration::from_secs(scheduler_interval_secs),
             http_port,
             grpc_port,
+            experimentation_service_grpc_url,
+            analytics_service_grpc_url,
         })
     }
 }
@@ -174,5 +189,69 @@ mod tests {
         }
         let config = StatsConfig::from_env().unwrap();
         assert_eq!(config.http_port, 9200);
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_defaults_experimentation_service_grpc_url() {
+        let _g_db = EnvGuard::new("DATABASE_URL");
+        let _g = EnvGuard::new("EXPERIMENTATION_SERVICE_GRPC_URL");
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
+            std::env::remove_var("EXPERIMENTATION_SERVICE_GRPC_URL");
+        }
+        let config = StatsConfig::from_env().unwrap();
+        assert_eq!(
+            config.experimentation_service_grpc_url,
+            "http://localhost:50054"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_loads_experimentation_service_grpc_url() {
+        let _g_db = EnvGuard::new("DATABASE_URL");
+        let _g = EnvGuard::new("EXPERIMENTATION_SERVICE_GRPC_URL");
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
+            std::env::set_var(
+                "EXPERIMENTATION_SERVICE_GRPC_URL",
+                "http://exp-svc:50054",
+            );
+        }
+        let config = StatsConfig::from_env().unwrap();
+        assert_eq!(
+            config.experimentation_service_grpc_url,
+            "http://exp-svc:50054"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_defaults_analytics_service_grpc_url() {
+        let _g_db = EnvGuard::new("DATABASE_URL");
+        let _g = EnvGuard::new("ANALYTICS_SERVICE_GRPC_URL");
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
+            std::env::remove_var("ANALYTICS_SERVICE_GRPC_URL");
+        }
+        let config = StatsConfig::from_env().unwrap();
+        assert_eq!(config.analytics_service_grpc_url, "http://localhost:50055");
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_loads_analytics_service_grpc_url() {
+        let _g_db = EnvGuard::new("DATABASE_URL");
+        let _g = EnvGuard::new("ANALYTICS_SERVICE_GRPC_URL");
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgresql://x:x@localhost/x");
+            std::env::set_var("ANALYTICS_SERVICE_GRPC_URL", "http://analytics:50055");
+        }
+        let config = StatsConfig::from_env().unwrap();
+        assert_eq!(
+            config.analytics_service_grpc_url,
+            "http://analytics:50055"
+        );
     }
 }
