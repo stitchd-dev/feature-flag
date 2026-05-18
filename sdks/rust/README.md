@@ -1,8 +1,15 @@
-# stitchd-sdk — Rust Server-Side Feature Flag SDK
+# stitchd-sdk-rust — Rust Server-Side Feature Flag SDK
 
-Server-side Rust SDK for Stitchd Feature Flag. Evaluates flags in-process
-using a locally-cached definition snapshot polled from the Stitchd gateway.
-Conforms to the language-agnostic contract in [`sdks/spec/`](../spec/).
+`stitchd-sdk-rust` is a server-side Rust SDK for the Stitchd Feature Flag platform. It evaluates flags entirely in-process using a locally-cached definition snapshot that is continuously synchronized from the Stitchd gateway via gRPC polling. Optional LFU list-segment membership is maintained in a bounded LRU cache, and evaluation events are submitted to the gateway asynchronously via a fire-and-forget batch flush — keeping the hot evaluation path free of network I/O. Conforms to the language-agnostic contract in [`sdks/spec/`](../spec/).
+
+## Installation
+
+```toml
+[dependencies]
+stitchd-sdk-rust = "0.1"
+stitchd-core     = { path = "crates/stitchd-core" }   # for Context, ParameterValue
+tokio            = { version = "1", features = ["full"] }
+```
 
 ## Quickstart
 
@@ -24,10 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_parameter("plan", "pro".into());
 
     let results = client
-        .evaluate(&[EvalRequest {
-            flag_key: "checkout-flow".to_string(),
-            context,
-        }])
+        .evaluate(&[EvalRequest::flag("checkout-flow", context)])
         .await;
 
     println!("variant = {}", results[0].variant_key);
@@ -35,15 +39,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.shutdown().await;
     Ok(())
 }
-```
-
-## Installation
-
-```toml
-[dependencies]
-stitchd-sdk   = { path = "sdks/rust" }
-stitchd-core  = { path = "crates/stitchd-core" }   # for Context, ParameterValue
-tokio          = { version = "1", features = ["full"] }
 ```
 
 ## Configuration (`SdkConfig`)
@@ -111,7 +106,7 @@ delivery semantics, read:
 ### Unit tests
 
 ```bash
-cargo test -p stitchd-sdk
+cargo test -p stitchd-sdk-rust
 ```
 
 ### Conformance tests
@@ -120,7 +115,7 @@ Conformance fixtures live in `sdks/spec/fixtures/evaluation/`. Run with the
 `test-util` feature which enables the in-memory test helpers:
 
 ```bash
-cargo test --features test-util -p stitchd-sdk --test conformance
+cargo test --features test-util -p stitchd-sdk-rust --test conformance
 ```
 
 All 8 scenarios covering bool flags, string rules, percentage rollout,
