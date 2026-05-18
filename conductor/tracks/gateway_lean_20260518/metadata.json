@@ -1,0 +1,13 @@
+{
+  "track_id": "gateway_lean_20260518",
+  "type": "refactor",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-18T00:00:00Z",
+  "updated_at": "2026-05-18T00:00:00Z",
+  "description": "Make gateway lean: strip ClickHouse + PostgreSQL direct connections, fold event-service into new analytics-service, moderate trim of heavy route handlers.",
+  "git_branch": "track/gateway_lean_20260518",
+  "worktree_path": ".worktrees/gateway_lean_20260518"
+}

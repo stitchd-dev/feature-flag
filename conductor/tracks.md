@@ -44,3 +44,7 @@ This file tracks all major tracks for the project.
 - segment_scylla_20260516 (List-Based Segment Storage on ScyllaDB)
 -->
 
+---
+
+## [ ] Track: Gateway Lean Refactor — strip DB connections, new analytics-service, retire event-service
+*Link: [./conductor/tracks/gateway_lean_20260518/](./conductor/tracks/gateway_lean_20260518/)*
