@@ -39,8 +39,8 @@ This file tracks all major tracks for the project.
 - sdk_rewrite_20260516 (Clean SDK Implementation — sdks/ Foundation + Rust Server-Side SDK)
 -->
 
----
 
-## [x] Track: List-Based Segment Storage on ScyllaDB
-*Link: [./conductor/tracks/segment_scylla_20260516/](./conductor/tracks/segment_scylla_20260516/)*
+<!-- Archived (continued):
+- segment_scylla_20260516 (List-Based Segment Storage on ScyllaDB)
+-->
 

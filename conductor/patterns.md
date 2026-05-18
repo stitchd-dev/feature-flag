@@ -92,3 +92,12 @@ Last refreshed: 2026-05-16
 - **gRPC service registration gotcha:** Implementing a tonic service trait (`impl XxxService for Impl`) is not sufficient — the service MUST also be registered via `.add_service(XxxServiceServer::new(impl_))` in `main.rs`. Unregistered services return `Unimplemented` with no startup warning. Always audit `main.rs` after adding a new `impl XxxService`. (from: sdk_rewrite_20260516, archived 2026-05-16)
 - **ClickHouse credentials required at startup:** Services that write to ClickHouse must be started with `CLICKHOUSE_USER=stitchd CLICKHOUSE_PASSWORD=stitchd CLICKHOUSE_DB=stitchd`. The ClickHouse-rs client defaults to `user=default` with no password, which fails auth and causes 502 from the gateway with no clear message. (from: sdk_rewrite_20260516, archived 2026-05-16)
 - **Stale worktree binary on shared port:** When restarting services for testing after a new build, verify with `ps -o comm=` that the binary serving a port is the one from the current worktree. Old binaries from previous tracks may still be listening and will silently lack new gRPC methods, returning `Unimplemented`. (from: sdk_rewrite_20260516, archived 2026-05-16)
+
+## ScyllaDB
+
+- **CQL TIMESTAMP type mapping:** Use `scylla::value::CqlTimestamp(millis_i64)` for TIMESTAMP columns — NOT raw `i64` or `chrono::DateTime`. Passing the wrong type produces a driver-level type error at runtime, not compile time. (from: segment_scylla_20260516, archived 2026-05-18)
+- **Random generation IDs prevent CAS collisions:** In generation-swap CAS patterns (INSERT IF NOT EXISTS with a `(segment_id, generation)` key), always use a random i64 (e.g., `rand::random::<i64>()`) rather than `current_gen + 1`. Sequential IDs cause silent data merging: two concurrent writers both compute `next = 1`, both CAS succeed on different replicas, and their entries coexist in the same partition. (from: segment_scylla_20260516, archived 2026-05-18)
+
+## Gateway
+
+- **JSON/payload body size limit:** actix-web defaults to ~256 KB for JSON request bodies. Bulk import endpoints that receive large payloads (e.g., CSV-sourced key lists serialised as JSON) will return 502 unless the limit is raised via `web::PayloadConfig::default().limit(bytes)` or `web::JsonConfig::default().limit(bytes)` in the route configuration. (from: segment_scylla_20260516, archived 2026-05-18)
