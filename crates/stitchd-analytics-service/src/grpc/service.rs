@@ -1,8 +1,8 @@
-//! AnalyticsServiceImpl — stub that will be filled in during Phases 2–4.
-
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
+use stitchd_db::{EventDefinitionRepository, SdkKeyRepository};
+use stitchd_events::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
     GetContextIntelligenceRequest, GetContextIntelligenceResponse, GetEvalStatsRequest,
     GetEvalStatsResponse, ListContextParamsRequest, ListContextParamsResponse,
@@ -12,13 +12,18 @@ use stitchd_proto::analytics::v1::{
 };
 use stitchd_proto::events::v1::{IngestRequest, IngestResponse};
 
+use super::event_ingestion::{EventIngestionState, handle_ingest_event};
+
 pub struct ServiceState {
     pub pg_pool: Arc<sqlx::PgPool>,
     pub ch_client: Arc<clickhouse::Client>,
+    pub event_def_repo: Arc<dyn EventDefinitionRepository>,
+    pub sdk_key_repo: Arc<dyn SdkKeyRepository>,
+    pub event_writer: EventWriter,
 }
 
 pub struct AnalyticsServiceImpl {
-    pub state: Arc<ServiceState>,
+    state: Arc<ServiceState>,
 }
 
 impl AnalyticsServiceImpl {
@@ -33,10 +38,14 @@ impl AnalyticsServiceImpl {
 impl AnalyticsService for AnalyticsServiceImpl {
     async fn ingest_event(
         &self,
-        _request: Request<IngestRequest>,
+        request: Request<IngestRequest>,
     ) -> Result<Response<IngestResponse>, Status> {
-        // Implemented in Phase 2.
-        Err(Status::unimplemented("IngestEvent: Phase 2 pending"))
+        let ingestion_state = EventIngestionState {
+            event_def_repo: Arc::clone(&self.state.event_def_repo),
+            sdk_key_repo: Arc::clone(&self.state.sdk_key_repo),
+            event_writer: self.state.event_writer.clone(),
+        };
+        handle_ingest_event(&ingestion_state, request).await
     }
 
     async fn register_context(

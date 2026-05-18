@@ -53,9 +53,21 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("Failed to connect to PostgreSQL")?;
 
+    let audit_logger = Arc::new(stitchd_db::PgAuditLogger::new(pg_pool.clone()));
+    let event_def_repo: Arc<dyn stitchd_db::EventDefinitionRepository> = Arc::new(
+        stitchd_db::PgEventDefinitionRepository::new(pg_pool.clone(), audit_logger.clone()),
+    );
+    let sdk_key_repo: Arc<dyn stitchd_db::SdkKeyRepository> = Arc::new(
+        stitchd_db::PgSdkKeyRepository::new(pg_pool.clone(), audit_logger.clone()),
+    );
+    let event_writer = stitchd_events::writer::EventWriter::new(ch_client.clone());
+
     let state = ServiceState {
         pg_pool: Arc::new(pg_pool),
         ch_client: Arc::new(ch_client),
+        event_def_repo,
+        sdk_key_repo,
+        event_writer,
     };
     let svc = AnalyticsServiceImpl::new(state);
 

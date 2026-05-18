@@ -25,13 +25,13 @@
 
 ## Phase 2: Event Ingestion Migration
 
-- [ ] Task 1: Move event ingestion gRPC handler
+- [x] Task 1: Move event ingestion gRPC handler
   - Copy `event-service/src/grpc/event_ingestion.rs` →
     `analytics-service/src/grpc/event_ingestion.rs`
   - Adapt imports; register on `AnalyticsServiceImpl`
   - Port all existing tests from event-service
 
-- [ ] Task 2: Verify parity + coverage
+- [x] Task 2: Verify parity + coverage
   - Run `cargo test -p stitchd-analytics-service` — all ingestion tests pass
   - Coverage ≥ 90% on new module
 
