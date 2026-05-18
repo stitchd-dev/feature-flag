@@ -3718,6 +3718,7 @@ dependencies = [
  "chrono",
  "clickhouse",
  "hex",
+ "metrics",
  "scylla",
  "serde",
  "serde_json",
@@ -3727,6 +3728,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

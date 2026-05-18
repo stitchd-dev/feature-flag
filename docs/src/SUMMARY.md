@@ -16,6 +16,9 @@
 
 - [gRPC Services](./grpc/README.md)
   - [Auth Service](./grpc/auth_v1_auth_service.md)
+  - [Management](./grpc/auth_v1_management.md)
+  - [Oidc Login](./grpc/auth_v1_oidc_login.md)
+  - [Saml Login](./grpc/auth_v1_saml_login.md)
   - [Management Service](./grpc/management_v1_management_service.md)
   - [Context](./grpc/common_v1_context.md)
   - [Flag Service](./grpc/flags_v1_flag_service.md)
@@ -25,6 +28,7 @@
   - [Event](./grpc/events_v1_event.md)
   - [Event Service](./grpc/events_v1_event_service.md)
   - [Experimentation Service](./grpc/experiments_v1_experimentation_service.md)
+  - [Stats Service](./grpc/stats_v1_stats_service.md)
 
 # Service Coordination Flows
 
@@ -40,6 +44,7 @@
 - [Overview](./deployment/README.md)
 - [PostgreSQL Setup](./deployment/postgres.md)
 - [ClickHouse Setup](./deployment/clickhouse.md)
+- [ScyllaDB Setup](./deployment/scylladb.md)
 - [Environment Variables](./deployment/env-vars.md)
 - [SDK Keys](./deployment/sdk-keys.md)
 

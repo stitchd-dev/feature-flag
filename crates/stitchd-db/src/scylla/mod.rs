@@ -1,6 +1,15 @@
 /// CQL migration applier for bootstrapping and evolving the Scylla schema.
 pub mod migrate;
 
+/// Scylla driver metrics → Prometheus bridge.
+pub mod metrics;
+
+/// OpenTelemetry-compatible tracing helpers for Scylla operations.
+///
+/// Named `otel` (not `tracing`) to avoid shadowing the `tracing` crate in
+/// this module's namespace, which would break `#[tracing::instrument]`.
+pub mod otel;
+
 /// ScyllaDB-backed list-segment store.
 pub mod segment;
 
@@ -101,8 +110,12 @@ impl ScyllaClient {
 
     /// Prepare a CQL statement, returning the cached version if already prepared.
     ///
+    /// Emits a `scylla.query` tracing span (OTel-compatible via `tracing-opentelemetry`)
+    /// so preparation round-trips appear in distributed traces.
+    ///
     /// # Errors
     /// Returns [`ScyllaError::Prepare`] if the statement cannot be parsed by the server.
+    #[tracing::instrument(skip(self), fields(db.system = "scylladb", db.operation = "prepare"))]
     pub async fn prepare(&self, cql: &str) -> Result<PreparedStatement, ScyllaError> {
         {
             let cache = self.prepared.read().await;
@@ -127,5 +140,17 @@ impl ScyllaClient {
     /// Return the number of statements currently in the prepared-statement cache.
     pub async fn cached_statement_count(&self) -> usize {
         self.prepared.read().await.len()
+    }
+
+    /// Collect a [`metrics::ScyllaMetricsSnapshot`] and emit all values to the
+    /// global `metrics` recorder.
+    ///
+    /// Call this on a periodic background interval (e.g. every 15 s) to keep
+    /// the Prometheus endpoint up to date.
+    pub async fn record_metrics(&self) {
+        let driver_metrics = self.session.get_metrics();
+        let cache_size = self.cached_statement_count().await as u64;
+        let snapshot = self::metrics::ScyllaMetricsSnapshot::collect(&driver_metrics, cache_size);
+        self::metrics::emit_metrics(&snapshot);
     }
 }

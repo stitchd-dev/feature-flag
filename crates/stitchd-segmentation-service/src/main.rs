@@ -96,7 +96,22 @@ async fn main() -> anyhow::Result<()> {
         .context("ScyllaDB migrations failed")?;
     tracing::info!("ScyllaDB migrations applied");
 
+    // Clone the client before moving into ScyllaSegmentStore — the clone is
+    // cheap because `ScyllaClient` wraps an `Arc<Session>` internally.
+    let metrics_poll_client = scylla_client.clone();
     let scylla_store = Arc::new(ScyllaSegmentStore::new(scylla_client));
+
+    // ── Scylla metrics polling ────────────────────────────────────────────────
+    // Polls the Scylla driver's internal metrics every 15 s and emits them as
+    // Prometheus gauges via the `metrics` crate.
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));
+        loop {
+            interval.tick().await;
+            metrics_poll_client.record_metrics().await;
+        }
+    });
+    tracing::info!("scylla metrics polling started (interval=15s)");
 
     // ── Generation sweeper ────────────────────────────────────────────────────
     // Reads retention/interval from environment with sensible defaults.
