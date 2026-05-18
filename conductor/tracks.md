@@ -46,5 +46,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Gateway Lean Refactor — strip DB connections, new analytics-service, retire event-service
+## [x] Track: Gateway Lean Refactor — strip DB connections, new analytics-service, retire event-service
 *Link: [./conductor/tracks/gateway_lean_20260518/](./conductor/tracks/gateway_lean_20260518/)*
