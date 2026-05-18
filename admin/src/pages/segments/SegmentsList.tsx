@@ -1,8 +1,12 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { Pagination } from '../../components/Pagination'
+import { LoadingSpinner } from '../../components/LoadingSpinner'
+import { ErrorBanner } from '../../components/ErrorBanner'
+import { EmptyState } from '../../components/EmptyState'
+import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import type { PaginatedResponse } from '../../lib/types'
@@ -15,47 +19,23 @@ const PER_PAGE = 50
 
 export function SegmentsList() {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
   const { envId, orgId, projectId } = useOrgContext()
   const [search, setSearch] = useState('')
-  const [segments, setSegments] = useState<Segment[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [editSegment, setEditSegment] = useState<Segment | null>(null)
   const [deleteSegment, setDeleteSegment] = useState<Segment | null>(null)
 
-  const page = Math.max(1, Number(searchParams.get('page') ?? 1))
-
-  const [refreshTick, setRefreshTick] = useState(0)
-  function loadSegments() { setRefreshTick((t) => t + 1) }
-
-  function onPageChange(p: number) {
-    setSearchParams((prev) => { prev.set('page', String(p)); return prev })
-  }
-
-  useEffect(() => {
-    if (!envId) return
-    let cancelled = false
-    setLoading(true) // eslint-disable-line react-hooks/set-state-in-effect
-    setError(null)
-    const qs = new URLSearchParams({ env_id: envId, page: String(page), per_page: String(PER_PAGE) })
-    api.get<PaginatedResponse<Segment>>(`/v1/segments?${qs}`)
-      .then(({ data }) => {
-        if (cancelled) return
-        const items = data.items ?? (Array.isArray(data) ? data : [])
-        setSegments(items)
-        setTotal(data.total ?? items.length)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        const e = err as { response?: { data?: { message?: string } }; message?: string }
-        setError(e?.response?.data?.message ?? e?.message ?? 'Failed to load segments')
-      })
-      .finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [envId, refreshTick, page])
+  const { data: segments, total, loading, error, page, onPageChange, refresh: loadSegments } = usePaginatedList<Segment>(
+    async ({ page: p, perPage, signal }) => {
+      if (!envId) return { items: [], total: 0 }
+      const qs = new URLSearchParams({ env_id: envId, page: String(p), per_page: String(perPage) })
+      const { data } = await api.get<PaginatedResponse<Segment>>(`/v1/segments?${qs}`, { signal })
+      const items = data.items ?? (Array.isArray(data) ? data : [])
+      return { items, total: data.total ?? items.length }
+    },
+    [envId],
+    PER_PAGE,
+  )
 
   const filtered = segments.filter((s) =>
     !search ||
@@ -74,14 +54,12 @@ export function SegmentsList() {
         />
         <div className="page-body">
           <div className="card">
-            <div className="empty">
-              <div className="empty-icon"><I.segment size={20} /></div>
-              <div className="empty-title">No environment selected</div>
-              <div className="empty-desc">Select an environment to view segments.</div>
-              <button className="btn primary" style={{ marginTop: 8 }} onClick={() => navigate(`/org/${orgId}/environments`)}>
-                Go to Environments
-              </button>
-            </div>
+            <EmptyState
+              icon={<I.segment size={20} />}
+              title="No environment selected"
+              desc="Select an environment to view segments."
+              action={<button className="btn primary" onClick={() => navigate(`/org/${orgId}/environments`)}>Go to Environments</button>}
+            />
           </div>
         </div>
       </>
@@ -103,15 +81,15 @@ export function SegmentsList() {
       <div className="page-body">
         {loading && (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
-            <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading segments…</span>
+            <LoadingSpinner label="Loading segments…" />
           </div>
         )}
 
         {error && !loading && (
-          <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 8, color: 'var(--danger)', fontSize: 13, marginBottom: 16 }}>
-            <I.alert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            {error}
-          </div>
+          <ErrorBanner
+            message={error}
+            icon={<I.alert size={14} />}
+          />
         )}
 
         {!loading && !error && (
@@ -130,14 +108,12 @@ export function SegmentsList() {
 
             {segments.length === 0 && (
               <div className="card">
-                <div className="empty">
-                  <div className="empty-icon"><I.segment size={20} /></div>
-                  <div className="empty-title">No segments yet</div>
-                  <div className="empty-desc">Create your first segment to start grouping users for targeting.</div>
-                  <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowCreate(true)}>
-                    <I.plus size={13} /> New segment
-                  </button>
-                </div>
+                <EmptyState
+                  icon={<I.segment size={20} />}
+                  title="No segments yet"
+                  desc="Create your first segment to start grouping users for targeting."
+                  action={<button className="btn primary" onClick={() => setShowCreate(true)}><I.plus size={13} /> New segment</button>}
+                />
               </div>
             )}
 
@@ -245,8 +221,8 @@ export function SegmentsList() {
           segment={deleteSegment}
           onClose={() => setDeleteSegment(null)}
           onDeleted={() => {
-            setSegments((prev) => prev.filter((s) => s.id !== deleteSegment.id))
             setDeleteSegment(null)
+            loadSegments()
           }}
         />
       )}

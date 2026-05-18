@@ -9,6 +9,7 @@ import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
+import { extractErrorMessage } from '../../lib/errors'
 import type { AdminFlagResponse, VariantJson } from '../../lib/types'
 import { PreviewTab } from './PreviewTab'
 import { AnalyticsTab } from './AnalyticsTab'
@@ -58,11 +59,6 @@ function parseValue(raw: string, flagType: string): unknown {
   return raw
 }
 
-function extractMessage(err: unknown): string {
-  return (err as { response?: { data?: { message?: string } }; message?: string })?.response?.data?.message
-    ?? (err as { message?: string })?.message
-    ?? 'Unknown error'
-}
 
 function isConflict(err: unknown): boolean {
   return (err as { response?: { status?: number } })?.response?.status === 409
@@ -171,7 +167,7 @@ function VariantsPanel({
       onSaved(data)
     } catch (err: unknown) {
       if (isConflict(err)) { onConflict(); return }
-      setError(extractMessage(err))
+      setError(extractErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -357,7 +353,7 @@ function TargetingPanel({
       onSaved(data)
     } catch (err: unknown) {
       if (isConflict(err)) { onConflict(); return }
-      setError(extractMessage(err))
+      setError(extractErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -523,7 +519,7 @@ function MetadataEditor({
       onSaved(data)
     } catch (err: unknown) {
       if (isConflict(err)) { onConflict(); return }
-      setError(extractMessage(err))
+      setError(extractErrorMessage(err))
     } finally {
       setSaving(false)
     }
@@ -590,7 +586,7 @@ export function FlagDetail() {
         setFlag(data)
         setEnabled(data.enabled)
       })
-      .catch((err) => setLoadError(err?.response?.data?.message ?? err.message ?? 'Failed to load flag'))
+      .catch((err) => setLoadError(extractErrorMessage(err)))
       .finally(() => setLoading(false))
   }, [projectId, key])
 
@@ -624,7 +620,7 @@ export function FlagDetail() {
     } catch (err: unknown) {
       setEnabled(!next)
       if (isConflict(err)) { handleConflict(); return }
-      toast(extractMessage(err), 'error')
+      toast(extractErrorMessage(err), 'error')
     } finally {
       setTogglingEnabled(false)
     }
@@ -638,7 +634,7 @@ export function FlagDetail() {
       toast('Flag archived', 'success')
       setTimeout(() => navigate(`/org/${orgId}/flags`), 1200)
     } catch (err: unknown) {
-      toast(extractMessage(err), 'error')
+      toast(extractErrorMessage(err), 'error')
     }
   }
 

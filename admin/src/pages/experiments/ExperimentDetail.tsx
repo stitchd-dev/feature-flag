@@ -7,6 +7,7 @@ import { EXPERIMENTS } from '../../lib/mockData'
 import type { Experiment } from '../../lib/mockData'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
+import { extractErrorMessage } from '../../lib/errors'
 
 interface ExperimentResponse {
   experiment_id: string
@@ -410,7 +411,7 @@ export function ExperimentDetail() {
           .then(({ data: results }) => setApiResults(results))
           .catch(() => { /* results may not exist yet */ })
       })
-      .catch((err) => setApiError(err?.response?.data?.message ?? err.message ?? 'Failed to load experiment'))
+      .catch((err) => setApiError(extractErrorMessage(err)))
       .finally(() => setApiLoading(false))
   }, [envId, key])
 
