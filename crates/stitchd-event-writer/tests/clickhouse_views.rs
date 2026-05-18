@@ -11,7 +11,7 @@ use chrono::Utc;
 use clickhouse::Client;
 use serde::Deserialize;
 use stitchd_core::event::{EventContext, EventPayload, EventValue};
-use stitchd_events::{migrations, writer::EventWriter};
+use stitchd_event_writer::{migrations, writer::EventWriter};
 use uuid::Uuid;
 
 fn experiment_payload(

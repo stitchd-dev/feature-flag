@@ -1,4 +1,4 @@
-# stitchd-events
+# stitchd-event-writer
 
 ClickHouse event ingestion library. Provides the `EventWriter` and schema migration helpers used by `stitchd-analytics-service`.
 

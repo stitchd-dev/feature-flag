@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let context_registry: Arc<dyn stitchd_db::ContextRegistryRepository> =
         Arc::new(stitchd_db::PgContextRegistryRepository::new(pg_pool.clone()));
-    let event_writer = stitchd_events::writer::EventWriter::new(ch_client.clone());
+    let event_writer = stitchd_event_writer::writer::EventWriter::new(ch_client.clone());
 
     let experiment_results_repo: Arc<dyn stitchd_analytics_service::repo::experiment_results::ExperimentResultsRepository> =
         Arc::new(ClickHouseExperimentResultsRepository::new(ch_client.clone()));
