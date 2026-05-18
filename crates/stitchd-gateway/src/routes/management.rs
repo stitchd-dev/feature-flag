@@ -71,7 +71,7 @@ pub struct UserJson {
 #[utoipa::path(
     post,
     path = "/v1/management/orgs/{org_id}/projects",
-    tag = "admin",
+    tag = "management",
     params(("org_id" = String, Path, description = "Organisation ID")),
     request_body = CreateProjectBody,
     responses(
@@ -110,7 +110,7 @@ pub async fn create_project(
 #[utoipa::path(
     post,
     path = "/v1/management/projects/{project_id}/environments",
-    tag = "admin",
+    tag = "management",
     params(("project_id" = String, Path, description = "Project ID")),
     request_body = CreateEnvBody,
     responses(
@@ -149,7 +149,7 @@ pub async fn create_environment(
 #[utoipa::path(
     post,
     path = "/v1/management/environments/{environment_id}/sdk-keys",
-    tag = "admin",
+    tag = "management",
     params(("environment_id" = String, Path, description = "Environment ID")),
     responses(
         (status = 201, description = "SDK key created", body = SdkKeyJson),
@@ -183,7 +183,7 @@ pub async fn create_sdk_key(
 #[utoipa::path(
     post,
     path = "/v1/management/orgs/{org_id}/users",
-    tag = "admin",
+    tag = "management",
     params(("org_id" = String, Path, description = "Organisation ID")),
     request_body = CreateUserBody,
     responses(

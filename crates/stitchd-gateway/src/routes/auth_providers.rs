@@ -5,10 +5,10 @@
 //! Routes:
 //! - `POST   /v1/orgs/{org_id}/auth-providers`
 //! - `GET    /v1/orgs/{org_id}/auth-providers`
-//! - `GET    /v1/orgs/{org_id}/auth-providers/{id}`
-//! - `PUT    /v1/orgs/{org_id}/auth-providers/{id}`
-//! - `DELETE /v1/orgs/{org_id}/auth-providers/{id}`
-//! - `GET    /v1/orgs/{org_id}/auth-providers/{id}/saml/metadata`
+//! - `GET    /v1/orgs/{org_id}/auth-providers/{auth_provider_id}`
+//! - `PUT    /v1/orgs/{org_id}/auth-providers/{auth_provider_id}`
+//! - `DELETE /v1/orgs/{org_id}/auth-providers/{auth_provider_id}`
+//! - `GET    /v1/orgs/{org_id}/auth-providers/{auth_provider_id}/saml/metadata`
 
 use axum::{
     Json,
@@ -263,14 +263,14 @@ pub async fn list_auth_providers(
     Ok(Json(providers))
 }
 
-/// `GET /v1/orgs/{org_id}/auth-providers/{id}`
+/// `GET /v1/orgs/{org_id}/auth-providers/{auth_provider_id}`
 #[utoipa::path(
     get,
-    path = "/v1/orgs/{org_id}/auth-providers/{id}",
+    path = "/v1/orgs/{org_id}/auth-providers/{auth_provider_id}",
     tag = "auth-providers",
     params(
         ("org_id" = String, Path, description = "Organisation ID"),
-        ("id" = String, Path, description = "Provider ID"),
+        ("auth_provider_id" = String, Path, description = "Auth Provider ID"),
     ),
     responses(
         (status = 200, description = "Provider details", body = AuthProviderJson),
@@ -291,14 +291,14 @@ pub async fn get_auth_provider(
     Ok(Json(proto_response_to_json(p)))
 }
 
-/// `PUT /v1/orgs/{org_id}/auth-providers/{id}`
+/// `PUT /v1/orgs/{org_id}/auth-providers/{auth_provider_id}`
 #[utoipa::path(
     put,
-    path = "/v1/orgs/{org_id}/auth-providers/{id}",
+    path = "/v1/orgs/{org_id}/auth-providers/{auth_provider_id}",
     tag = "auth-providers",
     params(
         ("org_id" = String, Path, description = "Organisation ID"),
-        ("id" = String, Path, description = "Provider ID"),
+        ("auth_provider_id" = String, Path, description = "Auth Provider ID"),
     ),
     request_body = UpdateProviderBody,
     responses(
@@ -342,14 +342,14 @@ pub async fn update_auth_provider(
     Ok(Json(proto_response_to_json(p)))
 }
 
-/// `DELETE /v1/orgs/{org_id}/auth-providers/{id}`
+/// `DELETE /v1/orgs/{org_id}/auth-providers/{auth_provider_id}`
 #[utoipa::path(
     delete,
-    path = "/v1/orgs/{org_id}/auth-providers/{id}",
+    path = "/v1/orgs/{org_id}/auth-providers/{auth_provider_id}",
     tag = "auth-providers",
     params(
         ("org_id" = String, Path, description = "Organisation ID"),
-        ("id" = String, Path, description = "Provider ID"),
+        ("auth_provider_id" = String, Path, description = "Auth Provider ID"),
     ),
     responses(
         (status = 204, description = "Deleted"),
@@ -369,14 +369,14 @@ pub async fn delete_auth_provider(
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
-/// `GET /v1/orgs/{org_id}/auth-providers/{id}/saml/metadata`
+/// `GET /v1/orgs/{org_id}/auth-providers/{auth_provider_id}/saml/metadata`
 #[utoipa::path(
     get,
-    path = "/v1/orgs/{org_id}/auth-providers/{id}/saml/metadata",
+    path = "/v1/orgs/{org_id}/auth-providers/{auth_provider_id}/saml/metadata",
     tag = "auth-providers",
     params(
         ("org_id" = String, Path, description = "Organisation ID"),
-        ("id" = String, Path, description = "Provider ID"),
+        ("auth_provider_id" = String, Path, description = "Auth Provider ID"),
     ),
     responses(
         (status = 200, description = "SAML SP metadata XML"),

@@ -19,14 +19,15 @@ use utoipa::{
         version = "0.1.0",
         description = "REST gateway for the stitchd feature-flag and experimentation platform.\n\n\
             ## Auth Models\n\
-            - **SDK routes** (`/v1/environments/*/evaluate`, `/v1/environments/*/events`, \
-              `/v1/environments/*/segments/list-check`) require an `x-sdk-key` header.\n\
-            - **Admin / resource routes** require a `Bearer` JWT in the `Authorization` header."
+            - **SDK routes** (`/v1/sdk/*`) require an `x-sdk-key` header validated by sdk_auth_middleware.\n\
+            - **Superadmin routes** (`/v1/superadmin/*`) require a `Bearer` JWT + system-org membership.\n\
+            - **Management routes** (`/v1/management/*`) require a `Bearer` JWT + non-system-org membership.\n\
+            - **Resource routes** require a `Bearer` JWT in the `Authorization` header."
     ),
     paths(
         // Auth
         crate::routes::auth::login,
-        // Admin (system-org only)
+        // Superadmin (system-org only)
         crate::routes::admin::create_org,
         crate::routes::admin::seed_user,
         // Management (non-system-org)
@@ -34,12 +35,6 @@ use utoipa::{
         crate::routes::management::create_environment,
         crate::routes::management::create_sdk_key,
         crate::routes::management::create_user,
-        // SDK key routes
-        crate::routes::sdk::evaluate,
-        crate::routes::sdk::ingest_event,
-        crate::routes::sdk::ingest_batch_events,
-        crate::routes::sdk::list_check_membership,
-        crate::routes::sdk::batch_list_check_membership,
         // Flags (JWT)
         crate::routes::flags::list_flags,
         crate::routes::flags::create_flag,
@@ -57,7 +52,7 @@ use utoipa::{
         crate::routes::segments::get_segment,
         crate::routes::segments::update_segment,
         crate::routes::segments::delete_segment,
-        // Events (JWT)
+        // Event definitions (JWT)
         crate::routes::events::ingest_event,
         crate::routes::events::ingest_batch,
         crate::routes::events::list_event_definitions,
@@ -83,7 +78,7 @@ use utoipa::{
             // Auth
             crate::routes::auth::LoginBody,
             crate::routes::auth::LoginJson,
-            // Admin
+            // Superadmin
             crate::routes::admin::CreateOrgBody,
             crate::routes::admin::OrgJson,
             crate::routes::admin::SeedUserBody,
@@ -96,13 +91,6 @@ use utoipa::{
             crate::routes::management::SdkKeyJson,
             crate::routes::management::CreateUserBody,
             crate::routes::management::UserJson,
-            // SDK
-            crate::routes::sdk::EvaluateRequest,
-            crate::routes::sdk::EvaluateResponse,
-            crate::routes::sdk::SdkEventBody,
-            crate::routes::sdk::IngestResponseJson,
-            crate::routes::sdk::ListCheckRequest,
-            crate::routes::sdk::ListCheckResponse,
             // Flags
             crate::routes::flags::FlagMutateRequest,
             crate::routes::flags::FlagJson,

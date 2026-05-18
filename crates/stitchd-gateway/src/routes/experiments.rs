@@ -139,13 +139,13 @@ fn status_from_str(s: &str) -> ExperimentStatus {
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
-/// `GET /v1/environments/{env_id}/experiments`
+/// `GET /v1/environments/{environment_id}/experiments`
 #[utoipa::path(
     get,
-    path = "/v1/environments/{env_id}/experiments",
+    path = "/v1/environments/{environment_id}/experiments",
     tag = "experiments",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
+        ("environment_id" = String, Path, description = "Environment ID"),
     ),
     responses(
         (status = 200, description = "Paginated list of experiments"),
@@ -156,11 +156,11 @@ fn status_from_str(s: &str) -> ExperimentStatus {
 )]
 pub async fn list_experiments(
     State(state): State<Arc<GatewayState>>,
-    Path(env_id): Path<String>,
+    Path(environment_id): Path<String>,
     Query(query): Query<ListExperimentsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListExperimentsRequest {
-        environment_id: env_id,
+        environment_id,
         page: query.pagination.effective_page(),
         per_page: query.pagination.effective_per_page(),
     });
@@ -179,12 +179,12 @@ pub async fn list_experiments(
     )))
 }
 
-/// `POST /v1/environments/{env_id}/experiments`
+/// `POST /v1/environments/{environment_id}/experiments`
 #[utoipa::path(
     post,
-    path = "/v1/environments/{env_id}/experiments",
+    path = "/v1/environments/{environment_id}/experiments",
     tag = "experiments",
-    params(("env_id" = String, Path, description = "Environment ID")),
+    params(("environment_id" = String, Path, description = "Environment ID")),
     request_body = CreateExperimentBody,
     responses(
         (status = 201, description = "Experiment created", body = ExperimentJson),
@@ -195,11 +195,11 @@ pub async fn list_experiments(
 )]
 pub async fn create_experiment(
     State(state): State<Arc<GatewayState>>,
-    Path(env_id): Path<String>,
+    Path(environment_id): Path<String>,
     Json(body): Json<CreateExperimentBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let experiment = Experiment {
-        environment_id: env_id,
+        environment_id,
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
         flag_key: body.flag_key.unwrap_or_default(),
@@ -221,13 +221,13 @@ pub async fn create_experiment(
     ))
 }
 
-/// `GET /v1/environments/{env_id}/experiments/{experiment_id}`
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}`
 #[utoipa::path(
     get,
-    path = "/v1/environments/{env_id}/experiments/{experiment_id}",
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}",
     tag = "experiments",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
+        ("environment_id" = String, Path, description = "Environment ID"),
         ("experiment_id" = String, Path, description = "Experiment ID"),
     ),
     responses(
@@ -240,10 +240,10 @@ pub async fn create_experiment(
 )]
 pub async fn get_experiment(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, experiment_id)): Path<(String, String)>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(GetExperimentRequest {
-        environment_id: env_id,
+        environment_id,
         experiment_id,
     });
     let mut client = state.experimentation_client.lock().await;
@@ -254,13 +254,13 @@ pub async fn get_experiment(
     Ok(Json(experiment_to_json(&resp.into_inner())))
 }
 
-/// `PATCH /v1/environments/{env_id}/experiments/{experiment_id}`
+/// `PATCH /v1/environments/{environment_id}/experiments/{experiment_id}`
 #[utoipa::path(
     patch,
-    path = "/v1/environments/{env_id}/experiments/{experiment_id}",
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}",
     tag = "experiments",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
+        ("environment_id" = String, Path, description = "Environment ID"),
         ("experiment_id" = String, Path, description = "Experiment ID"),
     ),
     request_body = UpdateExperimentBody,
@@ -273,12 +273,12 @@ pub async fn get_experiment(
 )]
 pub async fn update_experiment(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, experiment_id)): Path<(String, String)>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
     Json(body): Json<UpdateExperimentBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let experiment = Experiment {
         id: experiment_id.clone(),
-        environment_id: env_id,
+        environment_id,
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
         variant_keys: body.variant_keys.unwrap_or_default(),
@@ -296,13 +296,13 @@ pub async fn update_experiment(
     Ok(Json(experiment_to_json(&resp.into_inner())))
 }
 
-/// `DELETE /v1/environments/{env_id}/experiments/{experiment_id}`
+/// `DELETE /v1/environments/{environment_id}/experiments/{experiment_id}`
 #[utoipa::path(
     delete,
-    path = "/v1/environments/{env_id}/experiments/{experiment_id}",
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}",
     tag = "experiments",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
+        ("environment_id" = String, Path, description = "Environment ID"),
         ("experiment_id" = String, Path, description = "Experiment ID"),
     ),
     responses(
@@ -314,10 +314,10 @@ pub async fn update_experiment(
 )]
 pub async fn delete_experiment(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, experiment_id)): Path<(String, String)>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(DeleteExperimentRequest {
-        environment_id: env_id,
+        environment_id,
         experiment_id,
     });
     let mut client = state.experimentation_client.lock().await;
@@ -328,13 +328,13 @@ pub async fn delete_experiment(
     Ok(Json(experiment_to_json(&resp.into_inner())))
 }
 
-/// `POST /v1/environments/{env_id}/experiments/{experiment_id}/transitions`
+/// `POST /v1/environments/{environment_id}/experiments/{experiment_id}/transitions`
 #[utoipa::path(
     post,
-    path = "/v1/environments/{env_id}/experiments/{experiment_id}/transitions",
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/transitions",
     tag = "experiments",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
+        ("environment_id" = String, Path, description = "Environment ID"),
         ("experiment_id" = String, Path, description = "Experiment ID"),
     ),
     request_body = TransitionBody,
@@ -347,12 +347,12 @@ pub async fn delete_experiment(
 )]
 pub async fn transition_experiment(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, experiment_id)): Path<(String, String)>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
     Json(body): Json<TransitionBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let new_status = status_from_str(&body.new_status);
     let req = tonic::Request::new(TransitionExperimentRequest {
-        environment_id: env_id,
+        environment_id,
         experiment_id,
         new_status: new_status as i32,
         reason: body.reason.unwrap_or_default(),
@@ -365,13 +365,13 @@ pub async fn transition_experiment(
     Ok(Json(experiment_to_json(&resp.into_inner())))
 }
 
-/// `GET /v1/environments/{env_id}/experiments/{experiment_id}/iterations`
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/iterations`
 #[utoipa::path(
     get,
-    path = "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
     tag = "experiments",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
+        ("environment_id" = String, Path, description = "Environment ID"),
         ("experiment_id" = String, Path, description = "Experiment ID"),
     ),
     responses(
@@ -383,10 +383,10 @@ pub async fn transition_experiment(
 )]
 pub async fn list_iterations(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, experiment_id)): Path<(String, String)>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(ListIterationsRequest {
-        environment_id: env_id,
+        environment_id,
         experiment_id,
     });
     let mut client = state.experimentation_client.lock().await;
@@ -403,13 +403,13 @@ pub async fn list_iterations(
     Ok(Json(iterations))
 }
 
-/// `GET /v1/environments/{env_id}/experiments/{experiment_id}/results`
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/results`
 #[utoipa::path(
     get,
-    path = "/v1/environments/{env_id}/experiments/{experiment_id}/results",
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/results",
     tag = "experiments",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
+        ("environment_id" = String, Path, description = "Environment ID"),
         ("experiment_id" = String, Path, description = "Experiment ID"),
     ),
     responses(
@@ -422,10 +422,10 @@ pub async fn list_iterations(
 )]
 pub async fn get_results(
     State(state): State<Arc<GatewayState>>,
-    Path((env_id, experiment_id)): Path<(String, String)>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(GetResultsRequest {
-        environment_id: env_id,
+        environment_id,
         experiment_id,
     });
     let mut client = state.experimentation_client.lock().await;
@@ -452,25 +452,25 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     use axum::routing::{delete, get, patch, post};
     axum::Router::new()
         .route(
-            "/v1/environments/{env_id}/experiments",
+            "/v1/environments/{environment_id}/experiments",
             get(list_experiments).post(create_experiment),
         )
         .route(
-            "/v1/environments/{env_id}/experiments/{experiment_id}",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}",
             get(get_experiment)
                 .patch(update_experiment)
                 .delete(delete_experiment),
         )
         .route(
-            "/v1/environments/{env_id}/experiments/{experiment_id}/results",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/results",
             get(get_results),
         )
         .route(
-            "/v1/environments/{env_id}/experiments/{experiment_id}/transitions",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/transitions",
             post(transition_experiment),
         )
         .route(
-            "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
             get(list_iterations),
         )
         .with_state(state)

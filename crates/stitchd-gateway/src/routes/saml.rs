@@ -56,7 +56,7 @@ pub struct SamlTokenJson {
 #[utoipa::path(
     post,
     path = "/v1/auth/saml/{provider_id}/sso",
-    tag = "saml",
+    tag = "auth",
     params(("provider_id" = String, Path, description = "Provider ID")),
     request_body = SamlSsoBody,
     responses(
@@ -89,7 +89,7 @@ pub async fn saml_sso_by_provider(
 #[utoipa::path(
     post,
     path = "/v1/orgs/{org_id}/auth/saml/sso",
-    tag = "saml",
+    tag = "auth",
     params(("org_id" = String, Path, description = "Organisation ID")),
     request_body = SamlSsoBody,
     responses(
@@ -124,7 +124,7 @@ pub async fn saml_sso_by_org(
 #[utoipa::path(
     post,
     path = "/v1/auth/saml/{provider_id}/callback",
-    tag = "saml",
+    tag = "auth",
     params(("provider_id" = String, Path, description = "Provider ID")),
     request_body(content = SamlAcsForm, content_type = "application/x-www-form-urlencoded"),
     responses(
