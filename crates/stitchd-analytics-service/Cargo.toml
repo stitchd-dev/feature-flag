@@ -1,5 +1,5 @@
 [package]
-name = "stitchd-event-service"
+name = "stitchd-analytics-service"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "stitchd-event-service"
+name = "stitchd-analytics-service"
 path = "src/main.rs"
 
 [dependencies]
@@ -28,12 +28,12 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+chrono = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-chrono = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

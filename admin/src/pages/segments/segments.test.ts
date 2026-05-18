@@ -121,12 +121,11 @@ describe('filterSegments', () => {
 function makeSegment2(partial: Partial<Segment> & { name: string }): Segment {
   return {
     id: 'seg-2',
-    name: partial.name,
-    tags: partial.tags ?? [],
-    user_list: [],          // always empty — deprecated
-    include_count: partial.include_count ?? 0,
-    exclude_count: partial.exclude_count ?? 0,
-    condition_count: partial.condition_count ?? 0,
+    tags: [],
+    user_list: [],
+    include_count: 0,
+    exclude_count: 0,
+    condition_count: 0,
     version: 1,
     created_at: '2026-01-01T00:00:00Z',
     updated_at: '2026-01-01T00:00:00Z',

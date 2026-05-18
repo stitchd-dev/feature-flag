@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package stitchd.analytics.v1;
+
+import "events/v1/event.proto";
+
+// ─── Context Registry ─────────────────────────────────────────────────────────
+
+// Upsert a context type and its parameters observed during an evaluation.
+// Best-effort: callers do not need to wait for a response.
+message RegisterContextRequest {
+  string environment_id  = 1;
+  string context_type    = 2;
+  string context_key     = 3;
+  repeated ContextParam params = 4;
+}
+
+message ContextParam {
+  string param_key     = 1;
+  string inferred_type = 2;  // "string" | "number" | "boolean" | "json"
+  bool   is_private    = 3;
+}
+
+message RegisterContextResponse {}
+
+// List all distinct context types observed in an environment.
+message ListContextTypesRequest {
+  string environment_id = 1;
+}
+
+message ContextTypeRecord {
+  string context_type  = 1;
+  string last_seen_at  = 2;  // RFC 3339 UTC
+}
+
+message ListContextTypesResponse {
+  repeated ContextTypeRecord types = 1;
+}
+
+// List parameters observed for a specific context type.
+message ListContextParamsRequest {
+  string environment_id = 1;
+  string context_type   = 2;
+}
+
+message ContextParamRecord {
+  string param_key     = 1;
+  string inferred_type = 2;
+  bool   is_private    = 3;
+  string last_seen_at  = 4;  // RFC 3339 UTC
+}
+
+message ListContextParamsResponse {
+  repeated ContextParamRecord params = 1;
+}
+
+// ─── Evaluation Statistics ────────────────────────────────────────────────────
+
+message GetEvalStatsRequest {
+  string flag_id      = 1;
+  string project_id   = 2;
+  string from         = 3;  // RFC 3339 UTC
+  string to           = 4;  // RFC 3339 UTC
+  string granularity  = 5;  // "hour" | "day"
+}
+
+message EvalStatsBucket {
+  string ts                            = 1;  // bucket start, RFC 3339 UTC
+  uint64 total                         = 2;
+  map<string, uint64> by_variant       = 3;
+  uint64 disabled_count                = 4;
+  uint64 unique_context_keys           = 5;
+}
+
+message GetEvalStatsResponse {
+  string granularity              = 1;  // effective granularity used
+  repeated EvalStatsBucket buckets = 2;
+}
+
+// ─── Context Intelligence ─────────────────────────────────────────────────────
+
+// Combined query: returns context types + their params in one round-trip.
+// Used by the admin UI's autocomplete widget.
+message GetContextIntelligenceRequest {
+  string environment_id = 1;
+}
+
+message ContextIntelligenceType {
+  string context_type               = 1;
+  string last_seen_at               = 2;
+  repeated ContextParamRecord params = 3;
+}
+
+message GetContextIntelligenceResponse {
+  repeated ContextIntelligenceType types = 1;
+}
+
+// ─── Analytics Service ────────────────────────────────────────────────────────
+
+// AnalyticsService consolidates all analytics and context-registry operations.
+// Replaces both the legacy EventIngestionService (for event writes) and the
+// direct gateway ClickHouse / PostgreSQL calls.
+service AnalyticsService {
+  // Ingest a batch of metric events into ClickHouse.
+  // Forwards the events.v1 IngestRequest so existing callers only need to
+  // change their client — not the request/response types.
+  rpc IngestEvent(stitchd.events.v1.IngestRequest) returns (stitchd.events.v1.IngestResponse);
+
+  // Upsert context type and parameters observed during flag evaluation.
+  rpc RegisterContext(RegisterContextRequest) returns (RegisterContextResponse);
+
+  // List all context types observed in an environment.
+  rpc ListContextTypes(ListContextTypesRequest) returns (ListContextTypesResponse);
+
+  // List parameters observed for a context type.
+  rpc ListContextParams(ListContextParamsRequest) returns (ListContextParamsResponse);
+
+  // Query time-bucketed evaluation statistics for a flag.
+  rpc GetEvalStats(GetEvalStatsRequest) returns (GetEvalStatsResponse);
+
+  // Query context types + params in one request (used by UI autocomplete).
+  rpc GetContextIntelligence(GetContextIntelligenceRequest) returns (GetContextIntelligenceResponse);
+}

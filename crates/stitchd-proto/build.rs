@@ -33,6 +33,7 @@ fn main() {
         proto_root.join("experiments/v1/experimentation_service.proto"),
         proto_root.join("management/v1/management_service.proto"),
         proto_root.join("stats/v1/stats_service.proto"),
+        proto_root.join("analytics/v1/analytics.proto"),
         // SDK contracts (under sdks/spec/proto/, owned by sdk_rewrite_20260516)
         sdk_proto_root.join("sdk/v1/service.proto"),
         sdk_proto_root.join("sdk/v1/backend.proto"),

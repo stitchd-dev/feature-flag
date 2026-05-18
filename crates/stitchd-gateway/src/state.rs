@@ -4,14 +4,12 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
 
-use stitchd_db::{ContextRegistryRepository, PgContextRegistryRepository};
-
+use stitchd_proto::analytics::v1::analytics_service_client::AnalyticsServiceClient;
 use stitchd_proto::auth::v1::{
     auth_provider_service_client::AuthProviderServiceClient,
     auth_service_client::AuthServiceClient, oidc_login_service_client::OidcLoginServiceClient,
     saml_login_service_client::SamlLoginServiceClient,
 };
-use stitchd_proto::events::v1::event_ingestion_service_client::EventIngestionServiceClient;
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::management::v1::management_service_client::ManagementServiceClient;
@@ -31,8 +29,8 @@ pub struct GatewayState {
     pub flag_client: Arc<Mutex<FlagServiceClient<Channel>>>,
     /// Segmentation service gRPC client.
     pub segmentation_client: Arc<Mutex<SegmentationServiceClient<Channel>>>,
-    /// Event ingestion service gRPC client.
-    pub event_client: Arc<Mutex<EventIngestionServiceClient<Channel>>>,
+    /// Analytics service gRPC client — event ingestion, context registry, analytics reads.
+    pub analytics_client: Arc<Mutex<AnalyticsServiceClient<Channel>>>,
     /// Experimentation service gRPC client.
     pub experimentation_client: Arc<Mutex<ExperimentationServiceClient<Channel>>>,
     /// Management service gRPC client (hosted on the auth-service port).
@@ -46,15 +44,9 @@ pub struct GatewayState {
     /// Stats service gRPC client.
     pub stats_client: Arc<Mutex<StatsServiceClient<Channel>>>,
     /// SDK backend client for flag-service (SyncDefinitions + IngestSdkEvalLog).
-    /// Hosted on the same port as `flag_client`.
     pub flag_sdk_backend_client: Arc<Mutex<FlagSdkBackendServiceClient<Channel>>>,
     /// SDK backend client for segmentation-service (BatchCheckListMembership).
-    /// Hosted on the same port as `segmentation_client`.
     pub segmentation_sdk_backend_client: Arc<Mutex<SegmentationSdkBackendServiceClient<Channel>>>,
-    /// ClickHouse HTTP client for evaluation analytics queries.
-    pub ch_client: Arc<clickhouse::Client>,
-    /// Context type / param registry backed by PostgreSQL.
-    pub context_registry: Arc<dyn ContextRegistryRepository>,
 }
 
 impl GatewayState {
@@ -66,11 +58,9 @@ impl GatewayState {
         auth_addr: String,
         flag_addr: String,
         segmentation_addr: String,
-        event_addr: String,
+        analytics_addr: String,
         experimentation_addr: String,
         stats_addr: String,
-        ch_client: clickhouse::Client,
-        pg_pool: sqlx::PgPool,
     ) -> Result<Self, anyhow::Error> {
         let auth_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid Auth Service URI: {e}"))?
@@ -114,11 +104,11 @@ impl GatewayState {
             .await
             .map_err(|e| anyhow::anyhow!("connect to Segmentation Service: {e}"))?;
 
-        let event_channel = Channel::from_shared(event_addr)
-            .map_err(|e| anyhow::anyhow!("invalid Event Service URI: {e}"))?
+        let analytics_channel = Channel::from_shared(analytics_addr)
+            .map_err(|e| anyhow::anyhow!("invalid Analytics Service URI: {e}"))?
             .connect()
             .await
-            .map_err(|e| anyhow::anyhow!("connect to Event Service: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("connect to Analytics Service: {e}"))?;
 
         let exp_channel = Channel::from_shared(experimentation_addr)
             .map_err(|e| anyhow::anyhow!("invalid Experimentation Service URI: {e}"))?
@@ -132,9 +122,6 @@ impl GatewayState {
             .await
             .map_err(|e| anyhow::anyhow!("connect to Stats Service: {e}"))?;
 
-        // Clone channels for the SDK backend clients BEFORE moving the
-        // originals into the primary service clients. tonic Channel is a
-        // cheap Arc-wrapping handle — clones share the underlying connection.
         let flag_channel_for_sdk = flag_channel.clone();
         let seg_channel_for_sdk = seg_channel.clone();
 
@@ -142,7 +129,7 @@ impl GatewayState {
             auth_client: Arc::new(Mutex::new(AuthServiceClient::new(auth_channel))),
             flag_client: Arc::new(Mutex::new(FlagServiceClient::new(flag_channel))),
             segmentation_client: Arc::new(Mutex::new(SegmentationServiceClient::new(seg_channel))),
-            event_client: Arc::new(Mutex::new(EventIngestionServiceClient::new(event_channel))),
+            analytics_client: Arc::new(Mutex::new(AnalyticsServiceClient::new(analytics_channel))),
             experimentation_client: Arc::new(Mutex::new(ExperimentationServiceClient::new(
                 exp_channel,
             ))),
@@ -157,24 +144,16 @@ impl GatewayState {
                 saml_login_channel,
             ))),
             stats_client: Arc::new(Mutex::new(StatsServiceClient::new(stats_channel))),
-            // SDK backend services run on the same ports as their parent
-            // services (just additional tonic Service registrations on the
-            // same server), so the SDK clients share the parent channels.
             flag_sdk_backend_client: Arc::new(Mutex::new(FlagSdkBackendServiceClient::new(
                 flag_channel_for_sdk,
             ))),
             segmentation_sdk_backend_client: Arc::new(Mutex::new(
                 SegmentationSdkBackendServiceClient::new(seg_channel_for_sdk),
             )),
-            ch_client: Arc::new(ch_client),
-            context_registry: Arc::new(PgContextRegistryRepository::new(pg_pool)),
         })
     }
 
-    /// Build a `GatewayState` from channels (used in tests).
-    ///
-    /// SDK backend clients reuse the `flag_channel` and `segmentation_channel`
-    /// — they're additional tonic services on the same backend ports.
+    /// Build a `GatewayState` from pre-constructed clients (used in tests).
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn from_channels(
@@ -183,7 +162,7 @@ impl GatewayState {
         flag_channel: Channel,
         segmentation_client: SegmentationServiceClient<Channel>,
         segmentation_channel: Channel,
-        event_client: EventIngestionServiceClient<Channel>,
+        analytics_client: AnalyticsServiceClient<Channel>,
         experimentation_client: ExperimentationServiceClient<Channel>,
         management_client: ManagementServiceClient<Channel>,
         auth_provider_client: AuthProviderServiceClient<Channel>,
@@ -195,7 +174,7 @@ impl GatewayState {
             auth_client: Arc::new(Mutex::new(auth_client)),
             flag_client: Arc::new(Mutex::new(flag_client)),
             segmentation_client: Arc::new(Mutex::new(segmentation_client)),
-            event_client: Arc::new(Mutex::new(event_client)),
+            analytics_client: Arc::new(Mutex::new(analytics_client)),
             experimentation_client: Arc::new(Mutex::new(experimentation_client)),
             management_client: Arc::new(Mutex::new(management_client)),
             auth_provider_client: Arc::new(Mutex::new(auth_provider_client)),
@@ -208,56 +187,7 @@ impl GatewayState {
             segmentation_sdk_backend_client: Arc::new(Mutex::new(
                 SegmentationSdkBackendServiceClient::new(segmentation_channel),
             )),
-            ch_client: Arc::new(clickhouse::Client::default()),
-            context_registry: Arc::new(NoopContextRegistry),
         }
-    }
-}
-
-/// No-op registry used in unit tests where no database is available.
-struct NoopContextRegistry;
-
-#[async_trait::async_trait]
-impl ContextRegistryRepository for NoopContextRegistry {
-    async fn upsert_context_type(
-        &self,
-        _: stitchd_core::id::EnvironmentId,
-        _: &str,
-    ) -> Result<(), stitchd_db::RepositoryError> {
-        Ok(())
-    }
-
-    async fn upsert_param(
-        &self,
-        _: stitchd_core::id::EnvironmentId,
-        _: &str,
-        _: &str,
-        _: stitchd_core::context::InferredType,
-        _: bool,
-    ) -> Result<(), stitchd_db::RepositoryError> {
-        Ok(())
-    }
-
-    async fn list_types(
-        &self,
-        _: stitchd_core::id::EnvironmentId,
-    ) -> Result<Vec<stitchd_core::context::ContextTypeRecord>, stitchd_db::RepositoryError> {
-        Ok(vec![])
-    }
-
-    async fn list_params(
-        &self,
-        _: stitchd_core::id::EnvironmentId,
-        _: &str,
-    ) -> Result<Vec<stitchd_core::context::ContextParamRecord>, stitchd_db::RepositoryError> {
-        Ok(vec![])
-    }
-
-    async fn purge_stale(
-        &self,
-        _: chrono::DateTime<chrono::Utc>,
-    ) -> Result<(), stitchd_db::RepositoryError> {
-        Ok(())
     }
 }
 

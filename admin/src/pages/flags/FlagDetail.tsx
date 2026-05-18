@@ -419,40 +419,6 @@ function TargetingPanel({
   )
 }
 
-// ─── EvalPanel ────────────────────────────────────────────────────────────────
-
-function EvalPanel() {
-  return (
-    <div className="card">
-      <div className="card-header">
-        <div className="card-title">Evaluations · last 30 days</div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button className="btn sm">24h</button>
-          <button className="btn sm" style={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}>30d</button>
-          <button className="btn sm">90d</button>
-        </div>
-      </div>
-      <div style={{ padding: 18 }}>
-        <svg viewBox="0 0 800 200" style={{ width: '100%', height: 200 }}>
-          <defs>
-            <linearGradient id="evGrad" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.3" />
-              <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          {[40, 80, 120, 160].map((y) => <line key={y} x1="0" x2="800" y1={y} y2={y} stroke="var(--border-faint)" strokeWidth="1" />)}
-          <path d="M0,160 L60,140 L120,150 L180,120 L240,135 L300,100 L360,85 L420,95 L480,70 L540,55 L600,60 L660,40 L720,25 L800,20 L800,200 L0,200 Z" fill="url(#evGrad)" />
-          <path d="M0,160 L60,140 L120,150 L180,120 L240,135 L300,100 L360,85 L420,95 L480,70 L540,55 L600,60 L660,40 L720,25 L800,20" fill="none" stroke="var(--accent)" strokeWidth="2" />
-        </svg>
-        <div style={{ display: 'flex', gap: 18, marginTop: 12, fontSize: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 2, background: 'var(--accent)', display: 'inline-block' }} /> served</div>
-          <div style={{ marginLeft: 'auto', color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>p95 8ms · p99 14ms · errors 0.001%</div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ─── SdkSnippet ───────────────────────────────────────────────────────────────
 
 function SdkSnippet({ flag }: { flag: AdminFlagResponse }) {

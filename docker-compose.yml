@@ -147,33 +147,6 @@ services:
       retries: 5
       start_period: 10s
 
-  event-service:
-    build:
-      context: .
-      dockerfile: docker/event-service/Dockerfile
-    container_name: stitchd-event-service
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
-      CLICKHOUSE_URL: http://${CLICKHOUSE_USER:-stitchd}:${CLICKHOUSE_PASSWORD:-stitchd}@clickhouse:8123/${CLICKHOUSE_DB:-stitchd}
-      EVENT_SERVICE_PORT: "50054"
-      RUST_LOG: ${RUST_LOG:-info}
-    ports:
-      - "${EVENT_SERVICE_PORT:-50054}:50054"
-    networks:
-      - stitchd
-    depends_on:
-      postgres:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "grpc_health_probe -addr=:50054 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   experimentation-service:
     build:
       context: .
@@ -243,7 +216,7 @@ services:
       AUTH_SERVICE_ADDR: http://auth-service:50051
       FLAG_SERVICE_ADDR: http://flag-service:50052
       SEGMENTATION_SERVICE_ADDR: http://segmentation-service:50053
-      EVENT_SERVICE_ADDR: http://event-service:50054
+      ANALYTICS_SERVICE_ADDR: http://analytics-service:50054
       EXPERIMENTATION_SERVICE_ADDR: http://experimentation-service:50055
       STATS_SERVICE_ADDR: http://stats-service:50056
       RUST_LOG: ${RUST_LOG:-info}
@@ -259,7 +232,7 @@ services:
         condition: service_healthy
       segmentation-service:
         condition: service_healthy
-      event-service:
+      analytics-service:
         condition: service_healthy
       experimentation-service:
         condition: service_healthy
