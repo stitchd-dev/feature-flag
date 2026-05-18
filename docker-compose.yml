@@ -104,6 +104,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
       FLAG_SERVICE_PORT: "50052"
+      ANALYTICS_SERVICE_ADDR: http://analytics-service:50054
       RUST_LOG: ${RUST_LOG:-info}
     ports:
       - "${FLAG_SERVICE_PORT:-50052}:50052"
@@ -111,6 +112,8 @@ services:
       - stitchd
     depends_on:
       postgres:
+        condition: service_healthy
+      analytics-service:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "grpc_health_probe -addr=:50052 || exit 1"]

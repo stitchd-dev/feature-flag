@@ -8,6 +8,7 @@ use clickhouse::Client as ChClient;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
+use tonic::transport::Channel;
 
 use stitchd_db::{FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository};
 use stitchd_proto::flags::v1::{
@@ -15,6 +16,10 @@ use stitchd_proto::flags::v1::{
     GetFlagRequest, ListFlagsRequest, ListFlagsResponse, MutateFlagRequest, MutateFlagResponse,
     MutationKind, UpdateFlagHashingRequest, UpdateFlagHashingResponse,
     flag_service_server::FlagService,
+};
+use stitchd_proto::analytics::v1::{
+    ContextParam, RegisterContextRequest,
+    analytics_service_client::AnalyticsServiceClient,
 };
 
 use crate::{error::FlagServiceError, eval_log_writer, mapping};
@@ -28,6 +33,8 @@ pub struct FlagServiceImpl {
     segment_repo: Arc<dyn SegmentRepository>,
     /// Optional ClickHouse client for evaluation telemetry. `None` disables logging.
     ch_client: Option<Arc<ChClient>>,
+    /// Optional analytics gRPC client for fire-and-forget context registration.
+    analytics_client: Option<AnalyticsServiceClient<Channel>>,
 }
 
 impl FlagServiceImpl {
@@ -45,6 +52,7 @@ impl FlagServiceImpl {
             sdk_key_repo,
             segment_repo,
             ch_client: None,
+            analytics_client: None,
         }
     }
 
@@ -52,6 +60,13 @@ impl FlagServiceImpl {
     #[must_use]
     pub fn with_clickhouse(mut self, client: Arc<ChClient>) -> Self {
         self.ch_client = Some(client);
+        self
+    }
+
+    /// Attach an analytics gRPC client for fire-and-forget context registration.
+    #[must_use]
+    pub fn with_analytics_client(mut self, client: AnalyticsServiceClient<Channel>) -> Self {
+        self.analytics_client = Some(client);
         self
     }
 
@@ -756,6 +771,45 @@ impl FlagService for FlagServiceImpl {
                 chrono::Utc::now(),
                 contexts_with_variants,
             );
+        }
+
+        // Fire-and-forget context registration — drives Context Explorer autocomplete.
+        if let Some(analytics) = &self.analytics_client {
+            let env_id_str = env_uuid.to_string();
+            let mut analytics = analytics.clone();
+            let contexts_to_register: Vec<_> = evaluation_contexts
+                .iter()
+                .flat_map(|ec| ec.contexts.iter())
+                .map(|ctx| {
+                    let params = ctx.parameters.iter().map(|(k, v)| {
+                        let inferred_type = match v {
+                            stitchd_core::context::ParameterValue::Bool(_) => "boolean",
+                            stitchd_core::context::ParameterValue::Int(_) => "number",
+                            stitchd_core::context::ParameterValue::Double(_) => "number",
+                            stitchd_core::context::ParameterValue::SemVer(_) => "string",
+                            stitchd_core::context::ParameterValue::Str(_) => "string",
+                        };
+                        ContextParam {
+                            param_key: k.clone(),
+                            inferred_type: inferred_type.to_string(),
+                            is_private: ctx.is_private(k),
+                        }
+                    }).collect();
+                    RegisterContextRequest {
+                        environment_id: env_id_str.clone(),
+                        context_type: ctx.context_type.clone(),
+                        context_key: ctx.key.clone(),
+                        params,
+                    }
+                })
+                .collect();
+            tokio::spawn(async move {
+                for req in contexts_to_register {
+                    if let Err(e) = analytics.register_context(tonic::Request::new(req)).await {
+                        tracing::warn!("register_context failed: {e}");
+                    }
+                }
+            });
         }
 
         let results_json = serde_json::to_string(&results)

@@ -35,25 +35,35 @@ pub fn hash_sdk_key(raw: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Resolve the SDK key from gRPC metadata to an environment_id.
+/// Resolve credentials from gRPC metadata to an environment_id.
+///
+/// Accepts either:
+/// - `x-sdk-key`: validated against DB (SDK clients)
+/// - `x-env-id`: trusted gateway bypass for JWT-authenticated management calls
 pub async fn authenticate(
     state: &EventIngestionState,
     metadata: &tonic::metadata::MetadataMap,
 ) -> Result<stitchd_core::id::EnvironmentId, Status> {
-    let raw_key = metadata
-        .get("x-sdk-key")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| Status::unauthenticated("missing x-sdk-key metadata"))?;
+    // Prefer SDK key when present (validates ownership)
+    if let Some(raw_key) = metadata.get("x-sdk-key").and_then(|v| v.to_str().ok()) {
+        let key_hash = hash_sdk_key(raw_key);
+        let sdk_key = state
+            .sdk_key_repo
+            .find_active_by_hash(&key_hash)
+            .await
+            .map_err(|_| Status::unauthenticated("invalid or revoked SDK key"))?;
+        return Ok(sdk_key.environment_id);
+    }
 
-    let key_hash = hash_sdk_key(raw_key);
+    // Trusted gateway bypass: JWT-authed management calls forward x-env-id
+    if let Some(env_id_str) = metadata.get("x-env-id").and_then(|v| v.to_str().ok()) {
+        let uuid = env_id_str
+            .parse::<::uuid::Uuid>()
+            .map_err(|_| Status::unauthenticated("x-env-id is not a valid UUID"))?;
+        return Ok(stitchd_core::id::EnvironmentId::from_uuid(uuid));
+    }
 
-    let sdk_key = state
-        .sdk_key_repo
-        .find_active_by_hash(&key_hash)
-        .await
-        .map_err(|_| Status::unauthenticated("invalid or revoked SDK key"))?;
-
-    Ok(sdk_key.environment_id)
+    Err(Status::unauthenticated("missing x-sdk-key or x-env-id metadata"))
 }
 
 /// Handle an IngestEvent RPC — validates, accepts, and writes to ClickHouse.

@@ -6,7 +6,7 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -131,12 +131,18 @@ pub async fn evaluate(
 pub async fn ingest_event(
     State(state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
+    headers: HeaderMap,
     Json(body): Json<SdkEventBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let event = sdk_event_to_proto(&body);
-    let req = tonic::Request::new(IngestEventRequest {
+    let mut req = tonic::Request::new(IngestEventRequest {
         events: vec![event],
     });
+    if let Some(sdk_key) = headers.get("x-sdk-key").and_then(|v| v.to_str().ok()) {
+        if let Ok(val) = sdk_key.parse() {
+            req.metadata_mut().insert("x-sdk-key", val);
+        }
+    }
     let mut client = state.analytics_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
@@ -166,10 +172,16 @@ pub async fn ingest_event(
 pub async fn ingest_batch_events(
     State(state): State<Arc<GatewayState>>,
     Path(_env_id): Path<String>,
+    headers: HeaderMap,
     Json(bodies): Json<Vec<SdkEventBody>>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let events: Vec<MetricEvent> = bodies.iter().map(sdk_event_to_proto).collect();
-    let req = tonic::Request::new(IngestEventRequest { events });
+    let mut req = tonic::Request::new(IngestEventRequest { events });
+    if let Some(sdk_key) = headers.get("x-sdk-key").and_then(|v| v.to_str().ok()) {
+        if let Ok(val) = sdk_key.parse() {
+            req.metadata_mut().insert("x-sdk-key", val);
+        }
+    }
     let mut client = state.analytics_client.lock().await;
     let resp = client.ingest_event(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
