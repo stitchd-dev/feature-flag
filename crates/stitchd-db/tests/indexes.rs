@@ -26,9 +26,7 @@ use stitchd_db::{
 // Helpers
 // ---------------------------------------------------------------------------
 
-async fn seed_org_project_env(
-    pool: &sqlx::PgPool,
-) -> (Organisation, Project, Environment) {
+async fn seed_org_project_env(pool: &sqlx::PgPool) -> (Organisation, Project, Environment) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
@@ -90,7 +88,10 @@ async fn sdk_key_hash_index_find_active_returns_matching_key(pool: sqlx::PgPool)
     };
     repo.create(&key).await.unwrap();
 
-    let found = repo.find_active_by_hash("unique-hash-abc123").await.unwrap();
+    let found = repo
+        .find_active_by_hash("unique-hash-abc123")
+        .await
+        .unwrap();
     assert_eq!(found.id, key.id);
     assert!(found.is_active);
 }
@@ -226,7 +227,10 @@ async fn context_registry_last_seen_index_purge_removes_old_types(pool: sqlx::Pg
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(remaining.0, 1, "only the recent 'fresh' entry should survive");
+    assert_eq!(
+        remaining.0, 1,
+        "only the recent 'fresh' entry should survive"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -259,7 +263,10 @@ async fn context_registry_last_seen_index_purge_removes_old_params(pool: sqlx::P
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(remaining.0, 1, "only the recent 'plan' param should survive");
+    assert_eq!(
+        remaining.0, 1,
+        "only the recent 'plan' param should survive"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +355,10 @@ async fn find_rules_batch_returns_rules_for_all_ids(pool: sqlx::PgPool) {
     use stitchd_core::{
         context::ParameterValue,
         id::{RuleId, VariantId},
-        rule_engine::{Condition, types::{ConditionExpr, Rule, RuleOutput}},
+        rule_engine::{
+            Condition,
+            types::{ConditionExpr, Rule, RuleOutput},
+        },
     };
 
     let (_, _, env) = seed_org_project_env(&pool).await;

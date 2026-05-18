@@ -23,9 +23,18 @@ fn experiment_payload(
 ) -> EventPayload {
     EventPayload {
         contexts: vec![
-            EventContext { context_type: "experiment".into(), key: experiment_id.into() },
-            EventContext { context_type: "variant".into(), key: variant_key.into() },
-            EventContext { context_type: "user".into(), key: user_key.into() },
+            EventContext {
+                context_type: "experiment".into(),
+                key: experiment_id.into(),
+            },
+            EventContext {
+                context_type: "variant".into(),
+                key: variant_key.into(),
+            },
+            EventContext {
+                context_type: "user".into(),
+                key: user_key.into(),
+            },
         ],
         metric_key: metric_key.to_string(),
         value,
@@ -324,13 +333,25 @@ async fn events_experiment_daily_mv_populates_on_insert() {
     // Write 3 control + 2 treatment events.
     for _ in 0..3 {
         writer
-            .write(env_id, &experiment_payload("purchase", EventValue::Bool(true), &exp_id, "control", "u1"))
+            .write(
+                env_id,
+                &experiment_payload("purchase", EventValue::Bool(true), &exp_id, "control", "u1"),
+            )
             .await
             .unwrap();
     }
     for _ in 0..2 {
         writer
-            .write(env_id, &experiment_payload("purchase", EventValue::Bool(true), &exp_id, "treatment", "u2"))
+            .write(
+                env_id,
+                &experiment_payload(
+                    "purchase",
+                    EventValue::Bool(true),
+                    &exp_id,
+                    "treatment",
+                    "u2",
+                ),
+            )
             .await
             .unwrap();
     }
@@ -341,10 +362,19 @@ async fn events_experiment_daily_mv_populates_on_insert() {
     let control = rows.iter().find(|r| r.variant_key == "control");
     let treatment = rows.iter().find(|r| r.variant_key == "treatment");
 
-    assert!(control.is_some(), "expected control variant in events_experiment_daily");
-    assert!(treatment.is_some(), "expected treatment variant in events_experiment_daily");
+    assert!(
+        control.is_some(),
+        "expected control variant in events_experiment_daily"
+    );
+    assert!(
+        treatment.is_some(),
+        "expected treatment variant in events_experiment_daily"
+    );
     assert!(control.unwrap().count >= 3, "expected >= 3 control events");
-    assert!(treatment.unwrap().count >= 2, "expected >= 2 treatment events");
+    assert!(
+        treatment.unwrap().count >= 2,
+        "expected >= 2 treatment events"
+    );
 }
 
 #[tokio::test]
@@ -364,7 +394,10 @@ async fn events_without_experiment_context_not_in_mv() {
     wait_for_merge(&client, "events_experiment_daily").await;
 
     let rows = query_experiment_daily(&client, env_id, &exp_id, "plain_metric").await;
-    assert!(rows.is_empty(), "non-experiment events must not appear in events_experiment_daily");
+    assert!(
+        rows.is_empty(),
+        "non-experiment events must not appear in events_experiment_daily"
+    );
 }
 
 // ── events_v2 (weekly partition) tests ───────────────────────────────────────
@@ -377,9 +410,7 @@ struct PartitionRow {
 }
 
 async fn query_events_v2_count(client: &Client, env_id: Uuid) -> u64 {
-    let sql = format!(
-        "SELECT count() AS cnt FROM events_v2 WHERE env_id = '{env_id}'"
-    );
+    let sql = format!("SELECT count() AS cnt FROM events_v2 WHERE env_id = '{env_id}'");
     client.query(&sql).fetch_one::<u64>().await.unwrap_or(0)
 }
 
@@ -415,7 +446,10 @@ async fn events_v2_inserts_are_queryable() {
     wait_for_merge(&client, "events_v2").await;
 
     let count = query_events_v2_count(&client, env_id).await;
-    assert!(count >= 1, "expected at least 1 row in events_v2 after insert, got {count}");
+    assert!(
+        count >= 1,
+        "expected at least 1 row in events_v2 after insert, got {count}"
+    );
     let _ = writer_v2; // keep alive
 }
 

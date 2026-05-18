@@ -14,7 +14,9 @@ fn de_u32_from_str<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Err
         fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             write!(f, "a u32 or string containing a u32")
         }
-        fn visit_u32<E: serde::de::Error>(self, v: u32) -> Result<u32, E> { Ok(v) }
+        fn visit_u32<E: serde::de::Error>(self, v: u32) -> Result<u32, E> {
+            Ok(v)
+        }
         fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<u32, E> {
             u32::try_from(v).map_err(|_| E::custom("u32 overflow"))
         }
@@ -44,7 +46,11 @@ pub struct PaginationParams {
 impl PaginationParams {
     /// Return the effective page number (minimum 1).
     pub fn effective_page(&self) -> u32 {
-        if self.page == 0 { DEFAULT_PAGE } else { self.page }
+        if self.page == 0 {
+            DEFAULT_PAGE
+        } else {
+            self.page
+        }
     }
 
     /// Return the effective per_page value, capped at 200.
@@ -70,7 +76,10 @@ impl PaginationParams {
 
 impl Default for PaginationParams {
     fn default() -> Self {
-        Self { page: DEFAULT_PAGE, per_page: DEFAULT_PER_PAGE }
+        Self {
+            page: DEFAULT_PAGE,
+            per_page: DEFAULT_PER_PAGE,
+        }
     }
 }
 

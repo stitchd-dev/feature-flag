@@ -68,8 +68,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PgSegmentRepository::new(pool, audit_raw.clone()));
 
     // ── ClickHouse (optional — evaluation telemetry) ───────────────────────────
-    let ch_url = std::env::var("CLICKHOUSE_URL")
-        .unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let ch_url =
+        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
     let ch_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
     let ch_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
     let ch_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();

@@ -55,7 +55,9 @@ async fn list_types_applies_90_day_filter(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
-    repo.upsert_context_type(env_id, "fresh_type").await.unwrap();
+    repo.upsert_context_type(env_id, "fresh_type")
+        .await
+        .unwrap();
 
     let types = repo.list_types(env_id).await.unwrap();
     assert_eq!(types.len(), 1);
@@ -129,7 +131,9 @@ async fn purge_stale_removes_old_entries(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
-    repo.upsert_context_type(env_id, "fresh_type").await.unwrap();
+    repo.upsert_context_type(env_id, "fresh_type")
+        .await
+        .unwrap();
 
     let cutoff = Utc::now() - Duration::days(90);
     repo.purge_stale(cutoff).await.unwrap();
@@ -176,7 +180,11 @@ async fn list_params_all_inferred_types_round_trip(pool: sqlx::PgPool) {
 
     for param in &params {
         let (_, expected_ty) = cases.iter().find(|(k, _)| *k == param.param_key).unwrap();
-        assert_eq!(param.inferred_type, *expected_ty, "type mismatch for {}", param.param_key);
+        assert_eq!(
+            param.inferred_type, *expected_ty,
+            "type mismatch for {}",
+            param.param_key
+        );
     }
 }
 

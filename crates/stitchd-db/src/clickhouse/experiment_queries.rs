@@ -396,8 +396,14 @@ mod tests {
     #[test]
     fn count_metric_sql_uses_merge_aggregates() {
         let sql = build_count_metric_sql();
-        assert!(sql.contains("countMerge"), "must use countMerge to finalise count_state");
-        assert!(sql.contains("uniqMerge"), "must use uniqMerge to finalise uniq_ctx_state");
+        assert!(
+            sql.contains("countMerge"),
+            "must use countMerge to finalise count_state"
+        );
+        assert!(
+            sql.contains("uniqMerge"),
+            "must use uniqMerge to finalise uniq_ctx_state"
+        );
     }
 
     #[test]
@@ -409,7 +415,10 @@ mod tests {
     #[test]
     fn count_metric_sql_filters_experiment_id_column() {
         let sql = build_count_metric_sql();
-        assert!(sql.contains("experiment_id"), "must filter by experiment_id column in MV");
+        assert!(
+            sql.contains("experiment_id"),
+            "must filter by experiment_id column in MV"
+        );
     }
 
     #[test]
@@ -429,7 +438,10 @@ mod tests {
     fn count_metric_sql_has_five_bind_placeholders() {
         let sql = build_count_metric_sql();
         let count = sql.chars().filter(|&c| c == '?').count();
-        assert_eq!(count, 5, "expected 5 bind params: env_id, experiment_id, metric_key, date_from, date_to");
+        assert_eq!(
+            count, 5,
+            "expected 5 bind params: env_id, experiment_id, metric_key, date_from, date_to"
+        );
     }
 
     #[test]

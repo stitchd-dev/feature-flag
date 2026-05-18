@@ -21,7 +21,9 @@ use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use stitchd_db::scylla::{ScyllaConfig, migrate as scylla_migrate, segment::ScyllaSegmentStore};
-use stitchd_db::{CompositeSegmentRepository, PgAuditLogger, PgSegmentRepository, SegmentRepository};
+use stitchd_db::{
+    CompositeSegmentRepository, PgAuditLogger, PgSegmentRepository, SegmentRepository,
+};
 use stitchd_proto::sdk::v1::segmentation_sdk_backend_service_server::SegmentationSdkBackendServiceServer;
 use stitchd_proto::segments::v1::segmentation_service_server::SegmentationServiceServer;
 use stitchd_segmentation_service::grpc::sdk_backend::SegmentationSdkBackendServiceImpl;
@@ -96,9 +98,10 @@ async fn main() -> anyhow::Result<()> {
     let scylla_store = Arc::new(ScyllaSegmentStore::new(scylla_client));
 
     // Composite repository: PG for metadata, Scylla for list-entry operations.
-    let segment_repo: Arc<dyn SegmentRepository> = Arc::new(
-        CompositeSegmentRepository::new(pg_segment_repo.clone(), scylla_store),
-    );
+    let segment_repo: Arc<dyn SegmentRepository> = Arc::new(CompositeSegmentRepository::new(
+        pg_segment_repo.clone(),
+        scylla_store,
+    ));
 
     // ── gRPC server ───────────────────────────────────────────────────────────
     let addr: std::net::SocketAddr = format!("0.0.0.0:{port}")
@@ -111,8 +114,9 @@ async fn main() -> anyhow::Result<()> {
     let service = SegmentationServiceImpl::new(state);
     let svc = SegmentationServiceServer::new(service);
 
-    let sdk_backend_svc =
-        SegmentationSdkBackendServiceServer::new(SegmentationSdkBackendServiceImpl::new(segment_repo));
+    let sdk_backend_svc = SegmentationSdkBackendServiceServer::new(
+        SegmentationSdkBackendServiceImpl::new(segment_repo),
+    );
 
     tracing::info!(%addr, "starting segmentation service gRPC server");
 

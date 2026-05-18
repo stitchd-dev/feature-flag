@@ -11,7 +11,8 @@ mod tests {
 
     use stitchd_core::id::EnvironmentId;
     use stitchd_proto::segments::v1::{
-        GetSegmentRequest, ListSegment, ListSegmentsRequest, MutateSegmentRequest, RuleSegment,
+        AddEntriesRequest, GetSegmentRequest, ListSegment, ListSegmentsRequest,
+        LookupSegmentEntryRequest, MutateSegmentRequest, RemoveEntriesRequest, RuleSegment,
         SegmentMutationKind, mutate_segment_request,
         segmentation_service_server::SegmentationService,
     };
@@ -277,5 +278,195 @@ mod tests {
         let body = resp.into_inner();
         assert!(body.rule_segments.is_empty());
         assert!(body.list_segments.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 4: AddEntries RPC
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn add_entries_invalid_segment_id_returns_invalid_argument() {
+        let repo = MockSegmentRepoForTest::new();
+        let svc = make_service(repo);
+
+        let result = svc
+            .add_entries(Request::new(AddEntriesRequest {
+                segment_id: "not-a-uuid".to_string(),
+                context_type: "user".to_string(),
+                list_type: "include".to_string(),
+                keys: vec!["u1".to_string()],
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn add_entries_invalid_list_type_returns_invalid_argument() {
+        let repo = MockSegmentRepoForTest::new();
+        let svc = make_service(repo);
+        let seg_id = uuid::Uuid::new_v4().to_string();
+
+        let result = svc
+            .add_entries(Request::new(AddEntriesRequest {
+                segment_id: seg_id,
+                context_type: "user".to_string(),
+                list_type: "bad".to_string(),
+                keys: vec!["u1".to_string()],
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn add_entries_valid_request_returns_added_count() {
+        let repo = MockSegmentRepoForTest::new();
+        let svc = make_service(repo);
+        let seg_id = uuid::Uuid::new_v4().to_string();
+
+        let resp = svc
+            .add_entries(Request::new(AddEntriesRequest {
+                segment_id: seg_id,
+                context_type: "user".to_string(),
+                list_type: "include".to_string(),
+                keys: vec!["u1".to_string(), "u2".to_string()],
+            }))
+            .await
+            .expect("add_entries should succeed");
+
+        assert_eq!(resp.into_inner().added_count, 2);
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 4: RemoveEntries RPC
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn remove_entries_invalid_segment_id_returns_invalid_argument() {
+        let repo = MockSegmentRepoForTest::new();
+        let svc = make_service(repo);
+
+        let result = svc
+            .remove_entries(Request::new(RemoveEntriesRequest {
+                segment_id: "not-a-uuid".to_string(),
+                context_type: "user".to_string(),
+                list_type: "include".to_string(),
+                keys: vec!["u1".to_string()],
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn remove_entries_invalid_list_type_returns_invalid_argument() {
+        let repo = MockSegmentRepoForTest::new();
+        let svc = make_service(repo);
+        let seg_id = uuid::Uuid::new_v4().to_string();
+
+        let result = svc
+            .remove_entries(Request::new(RemoveEntriesRequest {
+                segment_id: seg_id,
+                context_type: "user".to_string(),
+                list_type: "neither".to_string(),
+                keys: vec!["u1".to_string()],
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn remove_entries_valid_request_returns_removed_count() {
+        let repo = MockSegmentRepoForTest::new();
+        let svc = make_service(repo);
+        let seg_id = uuid::Uuid::new_v4().to_string();
+
+        let resp = svc
+            .remove_entries(Request::new(RemoveEntriesRequest {
+                segment_id: seg_id,
+                context_type: "user".to_string(),
+                list_type: "exclude".to_string(),
+                keys: vec!["u3".to_string()],
+            }))
+            .await
+            .expect("remove_entries should succeed");
+
+        assert_eq!(resp.into_inner().removed_count, 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 4: LookupSegmentEntry RPC
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn lookup_segment_entry_invalid_segment_id_returns_invalid_argument() {
+        let repo = MockSegmentRepoForTest::new();
+        let svc = make_service(repo);
+
+        let result = svc
+            .lookup_segment_entry(Request::new(LookupSegmentEntryRequest {
+                segment_id: "bad-id".to_string(),
+                key: "u1".to_string(),
+                org_id: String::new(),
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn lookup_segment_entry_nonexistent_segment_returns_not_found() {
+        let repo = MockSegmentRepoForTest::new();
+        let svc = make_service(repo);
+
+        let result = svc
+            .lookup_segment_entry(Request::new(LookupSegmentEntryRequest {
+                segment_id: uuid::Uuid::new_v4().to_string(),
+                key: "u1".to_string(),
+                org_id: String::new(),
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn lookup_segment_entry_included_key_returns_in_include() {
+        use std::collections::HashMap;
+        use stitchd_core::segment::ContextList;
+
+        let repo = MockSegmentRepoForTest::new();
+        let (env_id, _) = make_env_id();
+
+        let mut lists = HashMap::new();
+        lists.insert(
+            "user".to_string(),
+            ContextList {
+                include: ["u1".to_string()].iter().cloned().collect(),
+                exclude: std::collections::HashSet::new(),
+            },
+        );
+        let seg = repo.insert_list_segment(env_id, "my-list", lists);
+
+        let svc = make_service(repo);
+        let resp = svc
+            .lookup_segment_entry(Request::new(LookupSegmentEntryRequest {
+                segment_id: seg.id.to_string(),
+                key: "u1".to_string(),
+                org_id: String::new(),
+            }))
+            .await
+            .expect("lookup should succeed");
+
+        let inner = resp.into_inner();
+        assert!(inner.in_include, "u1 should be in the include list");
     }
 }

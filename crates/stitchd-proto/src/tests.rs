@@ -103,7 +103,9 @@ mod compilation_tests {
         type _FlagBackendServer<T> =
             sdk::v1::flag_sdk_backend_service_server::FlagSdkBackendServiceServer<T>;
         type _SegBackendClient<T> =
-            sdk::v1::segmentation_sdk_backend_service_client::SegmentationSdkBackendServiceClient<T>;
+            sdk::v1::segmentation_sdk_backend_service_client::SegmentationSdkBackendServiceClient<
+                T,
+            >;
         type _SegBackendServer<T> =
             sdk::v1::segmentation_sdk_backend_service_server::SegmentationSdkBackendServiceServer<
                 T,

@@ -99,9 +99,13 @@ impl ScyllaSegmentStore {
         // Taking the absolute value ensures the i64 is positive.
         let new_gen = (i64::from(uuid::Uuid::new_v4().as_fields().0) << 32
             | i64::from(uuid::Uuid::new_v4().as_fields().0))
-            .abs();
+        .abs();
         // Fallback: if somehow new_gen == 0, use a simple increment.
-        let new_gen = if new_gen == 0 { current_gen + 1 } else { new_gen };
+        let new_gen = if new_gen == 0 {
+            current_gen + 1
+        } else {
+            new_gen
+        };
 
         // Step 2: write all include entries under new_gen.
         let insert_cql = format!(
@@ -114,7 +118,10 @@ impl ScyllaSegmentStore {
         for key in include {
             self.client
                 .session()
-                .execute_unpaged(&insert_stmt, (seg_uuid, context_type, new_gen, "include", key.as_str()))
+                .execute_unpaged(
+                    &insert_stmt,
+                    (seg_uuid, context_type, new_gen, "include", key.as_str()),
+                )
                 .await
                 .map_err(|e| ScyllaError::Query(format!("insert include entry: {e}")))?;
         }
@@ -123,7 +130,10 @@ impl ScyllaSegmentStore {
         for key in exclude {
             self.client
                 .session()
-                .execute_unpaged(&insert_stmt, (seg_uuid, context_type, new_gen, "exclude", key.as_str()))
+                .execute_unpaged(
+                    &insert_stmt,
+                    (seg_uuid, context_type, new_gen, "exclude", key.as_str()),
+                )
                 .await
                 .map_err(|e| ScyllaError::Query(format!("insert exclude entry: {e}")))?;
         }
@@ -204,7 +214,10 @@ impl ScyllaSegmentStore {
         for key in keys {
             self.client
                 .session()
-                .execute_unpaged(&stmt, (seg_uuid, context_type, active_gen, list_type, key.as_str()))
+                .execute_unpaged(
+                    &stmt,
+                    (seg_uuid, context_type, active_gen, list_type, key.as_str()),
+                )
                 .await
                 .map_err(|e| ScyllaError::Query(format!("add_entries insert: {e}")))?;
         }
@@ -245,7 +258,10 @@ impl ScyllaSegmentStore {
         for key in keys {
             self.client
                 .session()
-                .execute_unpaged(&stmt, (seg_uuid, context_type, active_gen, list_type, key.as_str()))
+                .execute_unpaged(
+                    &stmt,
+                    (seg_uuid, context_type, active_gen, list_type, key.as_str()),
+                )
                 .await
                 .map_err(|e| ScyllaError::Query(format!("remove_entries delete: {e}")))?;
         }
@@ -387,7 +403,10 @@ impl ScyllaSegmentStore {
         let rows = self
             .client
             .session()
-            .execute_unpaged(&stmt, (segment_id, context_type, generation, list_type, key))
+            .execute_unpaged(
+                &stmt,
+                (segment_id, context_type, generation, list_type, key),
+            )
             .await
             .map_err(|e| ScyllaError::Query(format!("entry_exists query: {e}")))?;
 

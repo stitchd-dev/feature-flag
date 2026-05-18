@@ -81,9 +81,12 @@ fn env_id_from_metadata(req: &Request<impl Sized>) -> Result<EnvironmentId, Stat
         .get(ENV_ID_METADATA_KEY)
         .ok_or_else(|| Status::unauthenticated(format!("missing {ENV_ID_METADATA_KEY} metadata")))?
         .to_str()
-        .map_err(|_| Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not valid UTF-8")))?;
-    let uuid = uuid::Uuid::parse_str(raw)
-        .map_err(|_| Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not a valid UUID")))?;
+        .map_err(|_| {
+            Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not valid UTF-8"))
+        })?;
+    let uuid = uuid::Uuid::parse_str(raw).map_err(|_| {
+        Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not a valid UUID"))
+    })?;
     Ok(EnvironmentId::from_uuid(uuid))
 }
 
@@ -109,9 +112,7 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
                 .variant_repo
                 .find_by_flag(record.id)
                 .await
-                .map_err(|e| {
-                    Status::internal(format!("variant_repo.find_by_flag failed: {e}"))
-                })?;
+                .map_err(|e| Status::internal(format!("variant_repo.find_by_flag failed: {e}")))?;
             let rules = self
                 .flag_repo
                 .find_rules(record.id)
@@ -141,9 +142,7 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
             .segment_repo
             .find_rules_batch(&rule_ids)
             .await
-            .map_err(|e| {
-                Status::internal(format!("segment_repo.find_rules_batch failed: {e}"))
-            })?;
+            .map_err(|e| Status::internal(format!("segment_repo.find_rules_batch failed: {e}")))?;
         // List segment defs not returned until Phase 4 Scylla membership reads.
         let _ = list_ids;
 
@@ -252,9 +251,7 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
                 row_count = rows.len(),
                 "ingest_sdk_eval_log: clickhouse insert failed"
             );
-            return Err(Status::internal(format!(
-                "eval log insert failed: {e}"
-            )));
+            return Err(Status::internal(format!("eval log insert failed: {e}")));
         }
 
         Ok(Response::new(IngestSdkEvalLogResponse {}))
@@ -268,9 +265,8 @@ fn param_value_to_json(pv: stitchd_proto::common::v1::ParameterValue) -> serde_j
     use stitchd_proto::common::v1::parameter_value::Value;
     match pv.value {
         Some(Value::IntValue(i)) => serde_json::Value::from(i),
-        Some(Value::DoubleValue(d)) => {
-            serde_json::Number::from_f64(d).map_or(serde_json::Value::Null, serde_json::Value::Number)
-        }
+        Some(Value::DoubleValue(d)) => serde_json::Number::from_f64(d)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
         Some(Value::StringValue(s)) => serde_json::Value::String(s),
         Some(Value::BoolValue(b)) => serde_json::Value::Bool(b),
         Some(Value::SemverValue(s)) => serde_json::Value::String(s),
@@ -287,7 +283,12 @@ fn event_to_row(ev: FlagEvaluationEvent, env_id: EnvironmentId) -> Result<EvalLo
         .evaluated_at
         .parse::<DateTime<chrono::FixedOffset>>()
         .map(|dt| dt.with_timezone(&Utc))
-        .map_err(|_| format!("evaluated_at is not a valid RFC3339 timestamp: {:?}", ev.evaluated_at))?;
+        .map_err(|_| {
+            format!(
+                "evaluated_at is not a valid RFC3339 timestamp: {:?}",
+                ev.evaluated_at
+            )
+        })?;
     // params_json: serialise non-private parameters; private ones are already
     // stripped by the SDK before sending (per sdks/spec/docs/05-events.md).
     // The proto's ParameterValue doesn't impl Serialize directly (generated
@@ -299,8 +300,7 @@ fn event_to_row(ev: FlagEvaluationEvent, env_id: EnvironmentId) -> Result<EvalLo
         for (k, v) in ev.context_parameters {
             obj.insert(k, param_value_to_json(v));
         }
-        serde_json::to_string(&serde_json::Value::Object(obj))
-            .unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_else(|_| "{}".to_string())
     };
     Ok(EvalLogRow {
         env_id: env_id.as_uuid(),
@@ -329,9 +329,7 @@ mod tests {
     use stitchd_core::context::Context;
     use stitchd_core::flag::{FlagRecord, FlagRule, FlagValueType, Variant};
     use stitchd_core::id::{FlagId, FlagKey, ProjectId, SegmentId, VariantId};
-    use stitchd_core::segment::{
-        RuleBasedSegment, Segment, SegmentType,
-    };
+    use stitchd_core::segment::{RuleBasedSegment, Segment, SegmentType};
     use stitchd_db::{ContextMembership, RepositoryError};
 
     // ── Stub repositories ───────────────────────────────────────────────────
@@ -427,10 +425,7 @@ mod tests {
         ) -> Result<(), RepositoryError> {
             unimplemented!()
         }
-        async fn find_rules(
-            &self,
-            flag_id: FlagId,
-        ) -> Result<Vec<FlagRule>, RepositoryError> {
+        async fn find_rules(&self, flag_id: FlagId) -> Result<Vec<FlagRule>, RepositoryError> {
             Ok(self
                 .rules_by_flag
                 .lock()
@@ -451,10 +446,7 @@ mod tests {
     struct StubVariantRepo;
     #[async_trait]
     impl VariantRepository for StubVariantRepo {
-        async fn find_by_flag(
-            &self,
-            _flag_id: FlagId,
-        ) -> Result<Vec<Variant>, RepositoryError> {
+        async fn find_by_flag(&self, _flag_id: FlagId) -> Result<Vec<Variant>, RepositoryError> {
             Ok(vec![])
         }
         async fn create(
@@ -500,10 +492,7 @@ mod tests {
 
     #[async_trait]
     impl SegmentRepository for StubSegmentRepo {
-        async fn find_by_id(
-            &self,
-            _id: SegmentId,
-        ) -> Result<Segment, RepositoryError> {
+        async fn find_by_id(&self, _id: SegmentId) -> Result<Segment, RepositoryError> {
             unimplemented!()
         }
         async fn find_by_key(
@@ -605,11 +594,35 @@ mod tests {
             ids: &[SegmentId],
         ) -> Result<HashMap<SegmentId, RuleBasedSegment>, RepositoryError> {
             let rules = self.rules.lock().unwrap();
-            Ok(ids.iter().filter_map(|id| rules.get(id).map(|r| (*id, r.clone()))).collect())
+            Ok(ids
+                .iter()
+                .filter_map(|id| rules.get(id).map(|r| (*id, r.clone())))
+                .collect())
         }
-        async fn add_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
-        async fn remove_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
-        async fn get_list_segment_summary(&self, _id: SegmentId) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> { Ok(stitchd_db::ListSegmentSummary::default()) }
+        async fn add_entries(
+            &self,
+            _id: SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn remove_entries(
+            &self,
+            _id: SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn get_list_segment_summary(
+            &self,
+            _id: SegmentId,
+        ) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> {
+            Ok(stitchd_db::ListSegmentSummary::default())
+        }
         async fn find_memberships_batch(
             &self,
             _env_id: EnvironmentId,
@@ -704,7 +717,10 @@ mod tests {
     async fn sync_definitions_returns_empty_snapshot_for_unknown_env() {
         let env_id = EnvironmentId::new();
         let svc = make_service(StubFlagRepo::arc(), StubSegmentRepo::arc());
-        let resp = svc.sync_definitions(make_request_with_env(env_id)).await.unwrap();
+        let resp = svc
+            .sync_definitions(make_request_with_env(env_id))
+            .await
+            .unwrap();
         let resp = resp.into_inner();
         assert_eq!(resp.flags.len(), 0);
         assert_eq!(resp.rule_segments.len(), 0);
@@ -826,7 +842,9 @@ mod tests {
             context_parameters: std::collections::HashMap::new(),
             environment_id: String::new(),
         };
-        let mut req = Request::new(IngestSdkEvalLogRequest { events: vec![event] });
+        let mut req = Request::new(IngestSdkEvalLogRequest {
+            events: vec![event],
+        });
         req.metadata_mut()
             .insert("x-env-id", env_id.to_string().parse().unwrap());
         let _ = svc.ingest_sdk_eval_log(req).await.unwrap();

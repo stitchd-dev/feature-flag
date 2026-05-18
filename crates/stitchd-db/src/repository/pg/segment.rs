@@ -27,7 +27,7 @@ fn row_to_segment(row: &sqlx::postgres::PgRow) -> Result<Segment, RepositoryErro
         other => {
             return Err(RepositoryError::Database(sqlx::Error::Decode(
                 format!("unknown segment_type: {other}").into(),
-            )))
+            )));
         }
     };
     let tags: Vec<String> = row.get("tags");
@@ -652,10 +652,7 @@ impl SegmentRepository for PgSegmentRepository {
         Ok(results)
     }
 
-    async fn find_batch_by_ids(
-        &self,
-        ids: &[SegmentId],
-    ) -> Result<Vec<Segment>, RepositoryError> {
+    async fn find_batch_by_ids(&self, ids: &[SegmentId]) -> Result<Vec<Segment>, RepositoryError> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -748,7 +745,15 @@ impl SegmentRepository for PgSegmentRepository {
 
         Ok(ids
             .iter()
-            .map(|&id| (id, RuleBasedSegment { id, rules: rules_by_id.remove(&id).unwrap_or_default() }))
+            .map(|&id| {
+                (
+                    id,
+                    RuleBasedSegment {
+                        id,
+                        rules: rules_by_id.remove(&id).unwrap_or_default(),
+                    },
+                )
+            })
             .collect())
     }
 

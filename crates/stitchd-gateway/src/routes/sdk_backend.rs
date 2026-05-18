@@ -224,10 +224,7 @@ async fn read_json_body<T: for<'de> Deserialize<'de>>(req: Request) -> Result<T,
         .map_err(|e| GatewayError::BadRequest(format!("invalid JSON body: {e}")))
 }
 
-fn inject_env_id_metadata<T>(
-    req: &mut TonicRequest<T>,
-    env_id: &str,
-) -> Result<(), GatewayError> {
+fn inject_env_id_metadata<T>(req: &mut TonicRequest<T>, env_id: &str) -> Result<(), GatewayError> {
     let value = env_id
         .parse()
         .map_err(|_| GatewayError::Upstream(format!("env_id is not valid metadata: {env_id:?}")))?;
@@ -242,7 +239,10 @@ fn json_value_to_proto(v: serde_json::Value) -> Option<stitchd_proto::common::v1
     use stitchd_proto::common::v1::parameter_value::Value;
     let inner = match v {
         serde_json::Value::Bool(b) => Some(Value::BoolValue(b)),
-        serde_json::Value::Number(n) => n.as_i64().map(Value::IntValue).or_else(|| n.as_f64().map(Value::DoubleValue)),
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .map(Value::IntValue)
+            .or_else(|| n.as_f64().map(Value::DoubleValue)),
         serde_json::Value::String(s) => Some(Value::StringValue(s)),
         serde_json::Value::Null | serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
             None

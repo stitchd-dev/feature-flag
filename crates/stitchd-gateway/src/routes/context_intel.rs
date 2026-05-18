@@ -193,7 +193,10 @@ mod tests {
             },
         ];
         let cutoff = now - Duration::days(90);
-        let fresh: Vec<_> = records.into_iter().filter(|r| r.last_seen_at >= cutoff).collect();
+        let fresh: Vec<_> = records
+            .into_iter()
+            .filter(|r| r.last_seen_at >= cutoff)
+            .collect();
         assert_eq!(fresh.len(), 1);
         assert_eq!(fresh[0].param_key, "email");
     }

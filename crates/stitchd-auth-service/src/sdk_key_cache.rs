@@ -21,18 +21,21 @@ const MAX_CAPACITY: u64 = 4_096;
 fn reconstruct_repo_error(arc: &RepositoryError) -> RepositoryError {
     match arc {
         RepositoryError::NotFound { id } => RepositoryError::NotFound { id: id.clone() },
-        RepositoryError::VersionConflict { expected, actual } => {
-            RepositoryError::VersionConflict { expected: *expected, actual: *actual }
-        }
-        RepositoryError::UniqueViolation { field } => {
-            RepositoryError::UniqueViolation { field: field.clone() }
-        }
+        RepositoryError::VersionConflict { expected, actual } => RepositoryError::VersionConflict {
+            expected: *expected,
+            actual: *actual,
+        },
+        RepositoryError::UniqueViolation { field } => RepositoryError::UniqueViolation {
+            field: field.clone(),
+        },
         RepositoryError::ForeignKeyViolation { constraint } => {
-            RepositoryError::ForeignKeyViolation { constraint: constraint.clone() }
+            RepositoryError::ForeignKeyViolation {
+                constraint: constraint.clone(),
+            }
         }
-        RepositoryError::InvalidState { reason } => {
-            RepositoryError::InvalidState { reason: reason.clone() }
-        }
+        RepositoryError::InvalidState { reason } => RepositoryError::InvalidState {
+            reason: reason.clone(),
+        },
         other => RepositoryError::Unexpected(anyhow::anyhow!("{other}")),
     }
 }
@@ -159,7 +162,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 0, "loader must be skipped on hit");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "loader must be skipped on hit"
+        );
     }
 
     #[tokio::test]
@@ -189,7 +196,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "loader must be called again after invalidation");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "loader must be called again after invalidation"
+        );
     }
 
     #[tokio::test]
@@ -198,7 +209,9 @@ mod tests {
 
         let result = cache
             .get_or_load("hash-d", || async {
-                Err(RepositoryError::NotFound { id: "hash-d".into() })
+                Err(RepositoryError::NotFound {
+                    id: "hash-d".into(),
+                })
             })
             .await;
 
@@ -234,7 +247,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "loader must fire again after TTL expiry");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "loader must fire again after TTL expiry"
+        );
     }
 
     #[tokio::test]
@@ -264,6 +281,9 @@ mod tests {
         // moka coalesces concurrent loads for the same key — allow 1 or a small
         // number of calls depending on timing, but never 10 separate DB hits.
         let total = calls.load(Ordering::SeqCst);
-        assert!(total < 10, "concurrent misses must be coalesced; got {total} loader calls");
+        assert!(
+            total < 10,
+            "concurrent misses must be coalesced; got {total} loader calls"
+        );
     }
 }

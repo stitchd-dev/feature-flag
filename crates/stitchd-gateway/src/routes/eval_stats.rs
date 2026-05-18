@@ -81,7 +81,6 @@ struct EvalStatRow {
     unique_ctx: u64,
 }
 
-
 /// Resolve the effective granularity.
 ///
 /// Forces `"day"` when the requested range exceeds 24 hours.
@@ -177,16 +176,18 @@ pub async fn get_eval_stats(
         std::collections::BTreeMap::new();
 
     for row in rows {
-        let bucket = bucket_map.entry(row.ts as i64).or_insert_with(|| EvalStatsBucket {
-            ts: DateTime::from_timestamp(row.ts as i64, 0)
-                .unwrap_or_default()
-                .format("%Y-%m-%dT%H:%M:%SZ")
-                .to_string(),
-            total: 0,
-            by_variant: HashMap::new(),
-            disabled_count: 0,
-            unique_context_keys: 0,
-        });
+        let bucket = bucket_map
+            .entry(row.ts as i64)
+            .or_insert_with(|| EvalStatsBucket {
+                ts: DateTime::from_timestamp(row.ts as i64, 0)
+                    .unwrap_or_default()
+                    .format("%Y-%m-%dT%H:%M:%SZ")
+                    .to_string(),
+                total: 0,
+                by_variant: HashMap::new(),
+                disabled_count: 0,
+                unique_context_keys: 0,
+            });
 
         bucket.total += row.count;
         *bucket.by_variant.entry(row.variant_key).or_insert(0) += row.count;
@@ -272,7 +273,10 @@ mod tests {
     fn valid_flag_id_parses_as_uuid() {
         let valid = "550e8400-e29b-41d4-a716-446655440000";
         let result = valid.parse::<Uuid>();
-        assert!(result.is_ok(), "expected valid UUID to parse, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "expected valid UUID to parse, got: {result:?}"
+        );
     }
 
     // ── SQL parameterization ─────────────────────────────────────────────────
@@ -300,13 +304,19 @@ mod tests {
     #[test]
     fn build_eval_stats_sql_hour_uses_tostartofahour() {
         let sql = build_eval_stats_sql("toStartOfHour");
-        assert!(sql.contains("toStartOfHour"), "hour granularity must use toStartOfHour");
+        assert!(
+            sql.contains("toStartOfHour"),
+            "hour granularity must use toStartOfHour"
+        );
     }
 
     #[test]
     fn build_eval_stats_sql_day_uses_tostartofday() {
         let sql = build_eval_stats_sql("toStartOfDay");
-        assert!(sql.contains("toStartOfDay"), "day granularity must use toStartOfDay");
+        assert!(
+            sql.contains("toStartOfDay"),
+            "day granularity must use toStartOfDay"
+        );
     }
 
     #[test]
@@ -314,6 +324,9 @@ mod tests {
         let sql = build_eval_stats_sql("toStartOfHour");
         // Count standalone '?' characters (bind slots for flag_id, from_ms, to_ms).
         let count = sql.chars().filter(|&c| c == '?').count();
-        assert_eq!(count, 3, "SQL must have exactly 3 bind slots: flag_id, from_ms, to_ms");
+        assert_eq!(
+            count, 3,
+            "SQL must have exactly 3 bind slots: flag_id, from_ms, to_ms"
+        );
     }
 }

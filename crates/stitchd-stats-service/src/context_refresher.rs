@@ -45,7 +45,10 @@ pub struct ContextRegistryRefresher {
 
 impl ContextRegistryRefresher {
     /// Construct a refresher backed by the given source and registry.
-    pub fn new(source: Arc<dyn EvalLogSource>, registry: Arc<dyn ContextRegistryRepository>) -> Self {
+    pub fn new(
+        source: Arc<dyn EvalLogSource>,
+        registry: Arc<dyn ContextRegistryRepository>,
+    ) -> Self {
         Self { source, registry }
     }
 
@@ -187,7 +190,10 @@ mod tests {
 
     #[async_trait]
     impl EvalLogSource for FakeEvalLogSource {
-        async fn fetch_context_summaries(&self, _since: DateTime<Utc>) -> Result<Vec<ContextSummary>> {
+        async fn fetch_context_summaries(
+            &self,
+            _since: DateTime<Utc>,
+        ) -> Result<Vec<ContextSummary>> {
             Ok(self.summaries.clone())
         }
     }
@@ -206,7 +212,10 @@ mod tests {
             env_id: EnvironmentId,
             context_type: &str,
         ) -> std::result::Result<(), stitchd_db::RepositoryError> {
-            self.upserted_types.lock().unwrap().push((env_id, context_type.to_string()));
+            self.upserted_types
+                .lock()
+                .unwrap()
+                .push((env_id, context_type.to_string()));
             Ok(())
         }
 
@@ -231,8 +240,10 @@ mod tests {
         async fn list_types(
             &self,
             _env_id: EnvironmentId,
-        ) -> std::result::Result<Vec<stitchd_core::context::ContextTypeRecord>, stitchd_db::RepositoryError>
-        {
+        ) -> std::result::Result<
+            Vec<stitchd_core::context::ContextTypeRecord>,
+            stitchd_db::RepositoryError,
+        > {
             Ok(vec![])
         }
 
@@ -240,8 +251,10 @@ mod tests {
             &self,
             _env_id: EnvironmentId,
             _context_type: &str,
-        ) -> std::result::Result<Vec<stitchd_core::context::ContextParamRecord>, stitchd_db::RepositoryError>
-        {
+        ) -> std::result::Result<
+            Vec<stitchd_core::context::ContextParamRecord>,
+            stitchd_db::RepositoryError,
+        > {
             Ok(vec![])
         }
 
@@ -347,6 +360,10 @@ mod tests {
         let types = registry.upserted_types.lock().unwrap();
         assert!(types.is_empty());
         let cutoffs = registry.purge_cutoffs.lock().unwrap();
-        assert_eq!(cutoffs.len(), 1, "purge must run even when no new data arrives");
+        assert_eq!(
+            cutoffs.len(),
+            1,
+            "purge must run even when no new data arrives"
+        );
     }
 }

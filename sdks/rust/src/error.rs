@@ -49,10 +49,26 @@ mod tests {
 
     #[test]
     fn display_includes_class_prefix() {
-        assert!(SdkError::Config("a".into()).to_string().starts_with("sdk config error:"));
-        assert!(SdkError::Auth("a".into()).to_string().starts_with("sdk auth error:"));
-        assert!(SdkError::Network("a".into()).to_string().starts_with("sdk network error:"));
-        assert!(SdkError::State("a".into()).to_string().starts_with("sdk state error:"));
+        assert!(
+            SdkError::Config("a".into())
+                .to_string()
+                .starts_with("sdk config error:")
+        );
+        assert!(
+            SdkError::Auth("a".into())
+                .to_string()
+                .starts_with("sdk auth error:")
+        );
+        assert!(
+            SdkError::Network("a".into())
+                .to_string()
+                .starts_with("sdk network error:")
+        );
+        assert!(
+            SdkError::State("a".into())
+                .to_string()
+                .starts_with("sdk state error:")
+        );
     }
 
     #[test]

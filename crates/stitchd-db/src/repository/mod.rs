@@ -519,8 +519,10 @@ pub trait SegmentRepository: Send + Sync {
     async fn find_rules_batch(
         &self,
         ids: &[SegmentId],
-    ) -> Result<std::collections::HashMap<SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError>;
-
+    ) -> Result<
+        std::collections::HashMap<SegmentId, stitchd_core::segment::RuleBasedSegment>,
+        RepositoryError,
+    >;
 }
 
 // ---------------------------------------------------------------------------

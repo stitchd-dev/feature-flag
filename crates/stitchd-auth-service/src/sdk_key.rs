@@ -209,14 +209,15 @@ mod tests {
         let repo = StubSdkKeyRepo::empty();
         let cache = crate::sdk_key_cache::SdkKeyCache::new();
 
-        let result = validate_sdk_key("unknown-key", &(repo as Arc<dyn SdkKeyRepository>), &cache).await;
+        let result =
+            validate_sdk_key("unknown-key", &(repo as Arc<dyn SdkKeyRepository>), &cache).await;
         assert!(matches!(result, Err(SdkKeyValidationError::NotFound)));
     }
 
     #[tokio::test]
     async fn validate_sdk_key_uses_cache_on_second_call() {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use crate::sdk_key_cache::SdkKeyCache;
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         struct CountingRepo {
             key: SdkKey,
@@ -227,11 +228,32 @@ mod tests {
             async fn find_by_id(&self, id: SdkKeyId) -> Result<SdkKey, RepositoryError> {
                 Err(RepositoryError::NotFound { id: id.to_string() })
             }
-            async fn list_by_environment(&self, _: EnvironmentId) -> Result<Vec<SdkKey>, RepositoryError> { Ok(vec![]) }
-            async fn list_by_environment_paginated(&self, _: EnvironmentId, _: u64, _: u64) -> Result<(Vec<SdkKey>, u64), RepositoryError> { Ok((vec![], 0)) }
-            async fn create(&self, _: &SdkKey) -> Result<(), RepositoryError> { Ok(()) }
-            async fn revoke(&self, _: SdkKeyId) -> Result<(), RepositoryError> { Ok(()) }
-            async fn find_active_by_environment(&self, _: EnvironmentId) -> Result<Vec<SdkKey>, RepositoryError> { Ok(vec![]) }
+            async fn list_by_environment(
+                &self,
+                _: EnvironmentId,
+            ) -> Result<Vec<SdkKey>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn list_by_environment_paginated(
+                &self,
+                _: EnvironmentId,
+                _: u64,
+                _: u64,
+            ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
+                Ok((vec![], 0))
+            }
+            async fn create(&self, _: &SdkKey) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn revoke(&self, _: SdkKeyId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn find_active_by_environment(
+                &self,
+                _: EnvironmentId,
+            ) -> Result<Vec<SdkKey>, RepositoryError> {
+                Ok(vec![])
+            }
             async fn find_active_by_hash(&self, _: &str) -> Result<SdkKey, RepositoryError> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 Ok(self.key.clone())
@@ -249,13 +271,20 @@ mod tests {
             revoked_at: None,
         };
         let calls = Arc::new(AtomicUsize::new(0));
-        let repo: Arc<dyn SdkKeyRepository> = Arc::new(CountingRepo { key, calls: calls.clone() });
+        let repo: Arc<dyn SdkKeyRepository> = Arc::new(CountingRepo {
+            key,
+            calls: calls.clone(),
+        });
         let cache = SdkKeyCache::new();
 
         validate_sdk_key(raw, &repo, &cache).await.unwrap();
         validate_sdk_key(raw, &repo, &cache).await.unwrap();
 
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "DB must be hit only once; second call served from cache");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "DB must be hit only once; second call served from cache"
+        );
     }
 
     #[tokio::test]
@@ -279,7 +308,10 @@ mod tests {
         // In a real revocation scenario the repo would return NotFound; here we just verify
         // the cache entry was removed (loader is invoked again).
         let result = validate_sdk_key(raw, &repo_arc, &cache).await;
-        assert!(result.is_ok(), "key still active in repo; re-fetched correctly after invalidation");
+        assert!(
+            result.is_ok(),
+            "key still active in repo; re-fetched correctly after invalidation"
+        );
     }
 
     #[tokio::test]

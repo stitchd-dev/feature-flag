@@ -28,8 +28,8 @@ pub async fn refresh_token(
     let raw = req.into_inner().refresh_token;
 
     // Compute the SHA-256 hash of the raw hex token (same derivation as generate_opaque_token).
-    let raw_bytes = hex::decode(&raw)
-        .map_err(|_| Status::unauthenticated("invalid refresh token"))?;
+    let raw_bytes =
+        hex::decode(&raw).map_err(|_| Status::unauthenticated("invalid refresh token"))?;
     let hash = hex::encode(Sha256::digest(&raw_bytes));
 
     // Look up the active token by hash.

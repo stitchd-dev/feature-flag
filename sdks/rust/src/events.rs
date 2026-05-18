@@ -140,7 +140,11 @@ impl EventQueue {
     /// Returns `true` if an old event was dropped to make room, `false`
     /// otherwise. (Used by tests + diagnostics; the caller never blocks.)
     pub fn send(&self, event: FlagEvaluationEvent) -> bool {
-        let mut buf = self.inner.buffer.lock().expect("event queue mutex poisoned");
+        let mut buf = self
+            .inner
+            .buffer
+            .lock()
+            .expect("event queue mutex poisoned");
         let dropped = if buf.len() >= self.inner.capacity {
             buf.pop_front();
             true
@@ -159,7 +163,11 @@ impl EventQueue {
     /// Drain up to `n` events in FIFO order.
     #[must_use]
     pub fn drain_up_to(&self, n: usize) -> Vec<FlagEvaluationEvent> {
-        let mut buf = self.inner.buffer.lock().expect("event queue mutex poisoned");
+        let mut buf = self
+            .inner
+            .buffer
+            .lock()
+            .expect("event queue mutex poisoned");
         let take = n.min(buf.len());
         buf.drain(..take).collect()
     }
@@ -167,7 +175,11 @@ impl EventQueue {
     /// Drain ALL events. Used by the flush task on shutdown.
     #[must_use]
     pub fn drain_all(&self) -> Vec<FlagEvaluationEvent> {
-        let mut buf = self.inner.buffer.lock().expect("event queue mutex poisoned");
+        let mut buf = self
+            .inner
+            .buffer
+            .lock()
+            .expect("event queue mutex poisoned");
         buf.drain(..).collect()
     }
 
@@ -176,7 +188,11 @@ impl EventQueue {
     /// capacity, the OLDEST already-buffered events are dropped — failed
     /// flushes take priority over fresh events, but the cap is absolute.
     pub fn requeue_at_head(&self, batch: Vec<FlagEvaluationEvent>) {
-        let mut buf = self.inner.buffer.lock().expect("event queue mutex poisoned");
+        let mut buf = self
+            .inner
+            .buffer
+            .lock()
+            .expect("event queue mutex poisoned");
         // Make room: drop oldest tail entries until (existing - dropped) + batch.len() <= capacity.
         let needed = batch.len();
         let max_existing = self.inner.capacity.saturating_sub(needed);
@@ -192,7 +208,11 @@ impl EventQueue {
     /// Current queue length.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.inner.buffer.lock().expect("event queue mutex poisoned").len()
+        self.inner
+            .buffer
+            .lock()
+            .expect("event queue mutex poisoned")
+            .len()
     }
 
     /// Whether the queue is empty.
@@ -200,7 +220,6 @@ impl EventQueue {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
 }
 
 impl std::fmt::Debug for EventQueue {
@@ -235,11 +254,7 @@ impl FlushTask {
     ///
     /// On shutdown signal, the task does ONE final drain of EVERYTHING in
     /// the queue (not just `batch_size`) before exiting.
-    pub fn spawn(
-        queue: EventQueue,
-        sink: Arc<dyn EventSink>,
-        flush_interval: Duration,
-    ) -> Self {
+    pub fn spawn(queue: EventQueue, sink: Arc<dyn EventSink>, flush_interval: Duration) -> Self {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
         let batch_size = queue.inner.batch_size;
         let batch_ready = Arc::clone(&queue.inner);
@@ -515,7 +530,10 @@ mod tests {
         tokio::task::yield_now().await;
 
         task.shutdown().await;
-        assert!(!sink.batches().is_empty(), "sink should have received at least one batch");
+        assert!(
+            !sink.batches().is_empty(),
+            "sink should have received at least one batch"
+        );
         let keys = sink.flat_keys();
         assert_eq!(keys, vec!["1", "2", "3"]);
     }

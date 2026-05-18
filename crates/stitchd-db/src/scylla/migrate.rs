@@ -111,9 +111,10 @@ async fn applied_versions(
 
     let mut versions = std::collections::HashSet::new();
     if let Ok(result) = rows.into_rows_result() {
-        for row in result.rows::<(String,)>().map_err(|e| {
-            ScyllaError::Query(format!("deserialize versions failed: {e}"))
-        })? {
+        for row in result
+            .rows::<(String,)>()
+            .map_err(|e| ScyllaError::Query(format!("deserialize versions failed: {e}")))?
+        {
             let (v,) = row.map_err(|e| ScyllaError::Query(format!("row error: {e}")))?;
             versions.insert(v);
         }
@@ -159,7 +160,9 @@ async fn apply_file(
             .query_unpaged(stmt, &[])
             .await
             .map_err(|e| {
-                ScyllaError::Query(format!("migration {filename} failed at statement: {e}\n  CQL: {stmt}"))
+                ScyllaError::Query(format!(
+                    "migration {filename} failed at statement: {e}\n  CQL: {stmt}"
+                ))
             })?;
     }
 

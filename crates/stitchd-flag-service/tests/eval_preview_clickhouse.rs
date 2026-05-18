@@ -3,8 +3,8 @@
 //! Requires a running flag-service on FLAG_SERVICE_ADDR (default localhost:50052)
 //! and ClickHouse on CLICKHOUSE_URL. Skipped when either is absent.
 
-use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::flags::v1::EvaluatePreviewRequest;
+use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 
 fn ch_client() -> Option<clickhouse::Client> {
     let url = std::env::var("CLICKHOUSE_URL").ok()?;
@@ -37,8 +37,7 @@ async fn evaluate_preview_writes_rows_to_clickhouse() {
 
     let project_id = std::env::var("TEST_PROJECT_ID")
         .unwrap_or_else(|_| "b787ef8e-a429-4df8-86fe-973fec41bc77".to_string());
-    let flag_key = std::env::var("TEST_FLAG_KEY")
-        .unwrap_or_else(|_| "test-flag".to_string());
+    let flag_key = std::env::var("TEST_FLAG_KEY").unwrap_or_else(|_| "test-flag".to_string());
 
     // Count rows before the call.
     let before: u64 = ch
@@ -84,10 +83,13 @@ async fn evaluate_preview_writes_rows_to_clickhouse() {
         .expect("evaluate_preview RPC")
         .into_inner();
 
-    println!("flag_enabled={}, results_len={}", resp.flag_enabled,
+    println!(
+        "flag_enabled={}, results_len={}",
+        resp.flag_enabled,
         serde_json::from_str::<serde_json::Value>(&resp.results_json)
             .map(|v| v.as_array().map(|a| a.len()).unwrap_or(0))
-            .unwrap_or(0));
+            .unwrap_or(0)
+    );
 
     // Give ClickHouse a moment to make the inserted rows visible.
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
@@ -114,7 +116,10 @@ async fn evaluate_preview_writes_rows_to_clickhouse() {
         .await
         .expect("fetch alice/bob rows");
 
-    let alice = rows.iter().find(|r| r.context_key == "alice").expect("alice row");
+    let alice = rows
+        .iter()
+        .find(|r| r.context_key == "alice")
+        .expect("alice row");
     let params: serde_json::Value = serde_json::from_str(&alice.params_json).unwrap();
     assert_eq!(params["email"], "********", "email must be masked");
     assert_eq!(params["plan"], "pro", "plan must be plain");

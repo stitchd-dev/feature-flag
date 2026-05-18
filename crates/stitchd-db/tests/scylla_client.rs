@@ -8,8 +8,7 @@ use stitchd_db::scylla::{ScyllaClient, ScyllaConfig, ScyllaError};
 
 fn test_config() -> ScyllaConfig {
     ScyllaConfig {
-        uri: std::env::var("SCYLLA_TEST_URI")
-            .unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
+        uri: std::env::var("SCYLLA_TEST_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
         keyspace: std::env::var("SCYLLA_TEST_KEYSPACE")
             .unwrap_or_else(|_| "stitchd_test".to_string()),
     }
@@ -29,13 +28,18 @@ async fn connect_returns_usable_session() {
         eprintln!("SKIP: ScyllaDB not available at {}", config.uri);
         return;
     }
-    let client = ScyllaClient::connect(&config).await.expect("connect should succeed");
+    let client = ScyllaClient::connect(&config)
+        .await
+        .expect("connect should succeed");
     // Verify the session is usable by running a trivial system query.
     let result = client
         .session()
         .query_unpaged("SELECT cluster_name FROM system.local", &[])
         .await;
-    assert!(result.is_ok(), "system.local query should succeed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "system.local query should succeed: {result:?}"
+    );
 }
 
 /// Calling prepare() twice for the same CQL should not increase the cache size.
@@ -46,16 +50,28 @@ async fn prepared_statement_cache_deduplicates() {
         eprintln!("SKIP: ScyllaDB not available at {}", config.uri);
         return;
     }
-    let client = ScyllaClient::connect(&config).await.expect("connect should succeed");
+    let client = ScyllaClient::connect(&config)
+        .await
+        .expect("connect should succeed");
 
     let cql = "SELECT cluster_name FROM system.local";
 
     // First prepare — cache miss, goes to cluster.
-    let _stmt1 = client.prepare(cql).await.expect("first prepare should succeed");
-    assert_eq!(client.cached_statement_count().await, 1, "one entry after first prepare");
+    let _stmt1 = client
+        .prepare(cql)
+        .await
+        .expect("first prepare should succeed");
+    assert_eq!(
+        client.cached_statement_count().await,
+        1,
+        "one entry after first prepare"
+    );
 
     // Second prepare — cache hit, should NOT add another entry.
-    let _stmt2 = client.prepare(cql).await.expect("second prepare should succeed");
+    let _stmt2 = client
+        .prepare(cql)
+        .await
+        .expect("second prepare should succeed");
     assert_eq!(
         client.cached_statement_count().await,
         1,

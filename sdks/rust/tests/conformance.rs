@@ -23,9 +23,7 @@ use stitchd_core::rule_engine::condition::Condition;
 use stitchd_core::rule_engine::types::{ConditionExpr, Rule, RuleOutput};
 use stitchd_proto::flags::v1::{
     AllocationBucket, ContextHashSpec, FeatureFlag, FlagRule, PercentageAllocation, Variant,
-    VariantValue,
-    flag_rule::Output as ProtoOutput,
-    variant_value::Value as VVal,
+    VariantValue, flag_rule::Output as ProtoOutput, variant_value::Value as VVal,
 };
 use stitchd_proto::sdk::v1::SyncDefinitionsResponse;
 use stitchd_proto::segments::v1::{ListSegmentMeta, RuleSegment};
@@ -78,8 +76,12 @@ struct FixtureTargetingRule {
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum FixtureVariantAssignment {
-    Specific { specific_variant: String },
-    Rollout { percentage_rollout: FixturePercentageRollout },
+    Specific {
+        specific_variant: String,
+    },
+    Rollout {
+        percentage_rollout: FixturePercentageRollout,
+    },
 }
 
 #[derive(Deserialize)]
@@ -287,7 +289,11 @@ fn fixture_condition_to_expr(cond: &FixtureCondition) -> ConditionExpr {
             substr: cond
                 .substr
                 .clone()
-                .or_else(|| cond.value.as_ref().and_then(|v| v.as_str().map(str::to_string)))
+                .or_else(|| {
+                    cond.value
+                        .as_ref()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                })
                 .expect("Contains needs substr or value"),
         }),
         "StartsWith" => ConditionExpr::Leaf(Condition::StartsWith {
@@ -296,7 +302,11 @@ fn fixture_condition_to_expr(cond: &FixtureCondition) -> ConditionExpr {
             prefix: cond
                 .prefix
                 .clone()
-                .or_else(|| cond.value.as_ref().and_then(|v| v.as_str().map(str::to_string)))
+                .or_else(|| {
+                    cond.value
+                        .as_ref()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                })
                 .expect("StartsWith needs prefix or value"),
         }),
         "EndsWith" => ConditionExpr::Leaf(Condition::EndsWith {
@@ -305,16 +315,26 @@ fn fixture_condition_to_expr(cond: &FixtureCondition) -> ConditionExpr {
             suffix: cond
                 .suffix
                 .clone()
-                .or_else(|| cond.value.as_ref().and_then(|v| v.as_str().map(str::to_string)))
+                .or_else(|| {
+                    cond.value
+                        .as_ref()
+                        .and_then(|v| v.as_str().map(str::to_string))
+                })
                 .expect("EndsWith needs suffix or value"),
         }),
         "InSegment" => {
-            let raw = cond.segment_id.as_ref().expect("InSegment needs segment_id");
+            let raw = cond
+                .segment_id
+                .as_ref()
+                .expect("InSegment needs segment_id");
             let uuid = Uuid::parse_str(raw).expect("InSegment segment_id must be a UUID");
             ConditionExpr::Leaf(Condition::InSegment(SegmentId::from_uuid(uuid)))
         }
         "NotInSegment" => {
-            let raw = cond.segment_id.as_ref().expect("NotInSegment needs segment_id");
+            let raw = cond
+                .segment_id
+                .as_ref()
+                .expect("NotInSegment needs segment_id");
             let uuid = Uuid::parse_str(raw).expect("NotInSegment segment_id must be a UUID");
             ConditionExpr::Leaf(Condition::NotInSegment(SegmentId::from_uuid(uuid)))
         }
@@ -341,7 +361,10 @@ fn build_percentage_allocation(rollout: &FixturePercentageRollout) -> Percentage
             weight_milli: w.weight,
         })
         .collect();
-    PercentageAllocation { context_hash_specs, buckets }
+    PercentageAllocation {
+        context_hash_specs,
+        buckets,
+    }
 }
 
 fn variant_assignment_to_output(va: &FixtureVariantAssignment) -> ProtoOutput {
@@ -375,8 +398,7 @@ fn convert_flag(f: &FixtureFlag) -> (FeatureFlag, Option<usize>) {
         .map(|r| {
             let cond = fixture_condition_to_expr(&r.condition);
             FlagRule {
-                rule_payload: serde_json::to_vec(&cond)
-                    .expect("ConditionExpr must serialize"),
+                rule_payload: serde_json::to_vec(&cond).expect("ConditionExpr must serialize"),
                 output: Some(variant_assignment_to_output(&r.variant_assignment)),
                 name: r.rule_name.clone(),
             }
@@ -384,26 +406,22 @@ fn convert_flag(f: &FixtureFlag) -> (FeatureFlag, Option<usize>) {
         .collect();
 
     // Handle the default_rule.
-    let (default_variant_key, catch_all_index) =
-        match &f.default_rule.variant_assignment {
-            FixtureVariantAssignment::Specific { specific_variant } => {
-                (specific_variant.clone(), None)
-            }
-            FixtureVariantAssignment::Rollout { percentage_rollout } => {
-                // Represent as a catch-all rule: ConditionExpr::And([]) is vacuously true.
-                let catch_all = ConditionExpr::And(vec![]);
-                let idx = rules.len();
-                rules.push(FlagRule {
-                    rule_payload: serde_json::to_vec(&catch_all)
-                        .expect("And([]) must serialize"),
-                    output: Some(ProtoOutput::Allocation(build_percentage_allocation(
-                        percentage_rollout,
-                    ))),
-                    name: "__default_rule__".to_string(),
-                });
-                (String::new(), Some(idx))
-            }
-        };
+    let (default_variant_key, catch_all_index) = match &f.default_rule.variant_assignment {
+        FixtureVariantAssignment::Specific { specific_variant } => (specific_variant.clone(), None),
+        FixtureVariantAssignment::Rollout { percentage_rollout } => {
+            // Represent as a catch-all rule: ConditionExpr::And([]) is vacuously true.
+            let catch_all = ConditionExpr::And(vec![]);
+            let idx = rules.len();
+            rules.push(FlagRule {
+                rule_payload: serde_json::to_vec(&catch_all).expect("And([]) must serialize"),
+                output: Some(ProtoOutput::Allocation(build_percentage_allocation(
+                    percentage_rollout,
+                ))),
+                name: "__default_rule__".to_string(),
+            });
+            (String::new(), Some(idx))
+        }
+    };
 
     let flag = FeatureFlag {
         key: f.key.clone(),
@@ -467,13 +485,11 @@ fn load_scenario(dir: &Path) -> Scenario {
         serde_json::from_str(&memberships_json).expect("parse memberships")
     };
 
-    let requests_json =
-        std::fs::read_to_string(dir.join("requests.json")).expect("requests.json");
+    let requests_json = std::fs::read_to_string(dir.join("requests.json")).expect("requests.json");
     let fixture_reqs: Vec<FixtureRequest> =
         serde_json::from_str(&requests_json).expect("parse requests");
 
-    let expected_json =
-        std::fs::read_to_string(dir.join("expected.json")).expect("expected.json");
+    let expected_json = std::fs::read_to_string(dir.join("expected.json")).expect("expected.json");
     let expected: Vec<FixtureExpected> =
         serde_json::from_str(&expected_json).expect("parse expected");
 
@@ -489,8 +505,11 @@ fn load_scenario(dir: &Path) -> Scenario {
     }
 
     // Convert rule segments.
-    let proto_rule_segs: Vec<RuleSegment> =
-        seg_defs.rule_segments.iter().map(convert_rule_segment).collect();
+    let proto_rule_segs: Vec<RuleSegment> = seg_defs
+        .rule_segments
+        .iter()
+        .map(convert_rule_segment)
+        .collect();
 
     // Convert list segments.
     let proto_list_segs: Vec<ListSegmentMeta> = seg_defs
@@ -524,7 +543,13 @@ fn load_scenario(dir: &Path) -> Scenario {
     let preseed_lru: Vec<(String, String, MembershipMap)> = memberships
         .preseed_lru
         .iter()
-        .map(|e| (e.context_type.clone(), e.context_key.clone(), e.memberships.clone()))
+        .map(|e| {
+            (
+                e.context_type.clone(),
+                e.context_key.clone(),
+                e.memberships.clone(),
+            )
+        })
         .collect();
 
     Scenario {
@@ -557,7 +582,9 @@ impl MembershipBatchFetcher for FixtureMembershipFetcher {
             let memberships = self
                 .on_miss_responses
                 .iter()
-                .find(|r| &r.match_query.context_type == ctx_type && &r.match_query.context_key == ctx_key)
+                .find(|r| {
+                    &r.match_query.context_type == ctx_type && &r.match_query.context_key == ctx_key
+                })
                 .map(|r| r.return_memberships.clone())
                 .unwrap_or_default();
             results.push(memberships);
@@ -596,15 +623,11 @@ fn outcome_matches(
 async fn run_scenario(scenario_dir: &Path, scenario_name: &str) {
     let scenario = load_scenario(scenario_dir);
 
-    let fetcher: Arc<dyn MembershipBatchFetcher> =
-        Arc::new(FixtureMembershipFetcher {
-            on_miss_responses: scenario.on_miss_responses,
-        });
-    let client = testing::sdk_client_with_snapshot_and_lru(
-        scenario.snapshot,
-        fetcher,
-        scenario.preseed_lru,
-    );
+    let fetcher: Arc<dyn MembershipBatchFetcher> = Arc::new(FixtureMembershipFetcher {
+        on_miss_responses: scenario.on_miss_responses,
+    });
+    let client =
+        testing::sdk_client_with_snapshot_and_lru(scenario.snapshot, fetcher, scenario.preseed_lru);
 
     let results = client.evaluate(&scenario.requests).await;
 

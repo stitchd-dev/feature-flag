@@ -79,7 +79,9 @@ async fn main() -> anyhow::Result<()> {
     let gateway_port: u16 = env_or("GATEWAY_PORT", "8080").parse().unwrap_or(8080);
     let addr: SocketAddr = format!("0.0.0.0:{gateway_port}").parse()?;
 
-    let grpc_port: u16 = env_or("GATEWAY_GRPC_PORT", "50050").parse().unwrap_or(50050);
+    let grpc_port: u16 = env_or("GATEWAY_GRPC_PORT", "50050")
+        .parse()
+        .unwrap_or(50050);
     let grpc_addr: SocketAddr = format!("0.0.0.0:{grpc_port}").parse()?;
 
     // Capture the two SDK backend clients BEFORE we move `state` into the

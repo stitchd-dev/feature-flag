@@ -108,7 +108,8 @@ impl RefreshTask {
                             consecutive_failures = consecutive_failures.saturating_add(1);
                             continue;
                         }
-                        for ((ctx_type, ctx_key), memberships) in contexts.into_iter().zip(results) {
+                        for ((ctx_type, ctx_key), memberships) in contexts.into_iter().zip(results)
+                        {
                             cache.insert(&ctx_type, &ctx_key, memberships);
                         }
                         consecutive_failures = 0;
@@ -130,7 +131,10 @@ impl RefreshTask {
             }
         });
 
-        Self { handle, shutdown_tx: Some(shutdown_tx) }
+        Self {
+            handle,
+            shutdown_tx: Some(shutdown_tx),
+        }
     }
 
     /// Signal the task to stop and await its exit. Idempotent.
@@ -316,7 +320,10 @@ mod tests {
         // At least one of them should be `true` (the response had one true).
         let alice_v = alice_mem.get("seg-1").copied().unwrap_or(false);
         let bob_v = bob_mem.get("seg-1").copied().unwrap_or(false);
-        assert!(alice_v || bob_v, "at least one context should show true after refresh");
+        assert!(
+            alice_v || bob_v,
+            "at least one context should show true after refresh"
+        );
     }
 
     #[tokio::test(flavor = "current_thread", start_paused = true)]
@@ -332,12 +339,7 @@ mod tests {
         let bad_response = vec![membership(&[("seg-1", true)])];
         let fetcher = StubFetcher::new(vec![Ok(bad_response)]);
 
-        let task = RefreshTask::spawn(
-            fetcher,
-            cache.clone(),
-            store,
-            Duration::from_millis(50),
-        );
+        let task = RefreshTask::spawn(fetcher, cache.clone(), store, Duration::from_millis(50));
         tokio::time::sleep(Duration::from_millis(150)).await;
         task.shutdown().await;
 
@@ -361,12 +363,7 @@ mod tests {
         let store = DefinitionStore::from_snapshot(snapshot_with_list_segments(&["seg-1"]));
         let fetcher = StubFetcher::new(vec![Err(SdkError::Network("boom".into()))]);
 
-        let task = RefreshTask::spawn(
-            fetcher,
-            cache.clone(),
-            store,
-            Duration::from_millis(50),
-        );
+        let task = RefreshTask::spawn(fetcher, cache.clone(), store, Duration::from_millis(50));
         tokio::time::sleep(Duration::from_millis(150)).await;
         task.shutdown().await;
 

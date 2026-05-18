@@ -112,7 +112,11 @@ pub fn proto_flag_rule_to_domain(
         None => return None,
     };
 
-    let name = if proto.name.is_empty() { None } else { Some(proto.name.clone()) };
+    let name = if proto.name.is_empty() {
+        None
+    } else {
+        Some(proto.name.clone())
+    };
     Some(stitchd_core::flag::FlagRule {
         flag_id,
         rule_index,

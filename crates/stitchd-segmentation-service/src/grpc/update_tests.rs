@@ -174,7 +174,11 @@ mod tests {
             .expect("get_segment should succeed");
 
         let bundle = resp.into_inner();
-        assert_eq!(bundle.list_segments.len(), 1, "should have one list segment meta");
+        assert_eq!(
+            bundle.list_segments.len(),
+            1,
+            "should have one list segment meta"
+        );
         assert_eq!(bundle.rule_segments.len(), 0);
         let meta = &bundle.list_segments[0];
         assert_eq!(meta.key, "my-list-seg");

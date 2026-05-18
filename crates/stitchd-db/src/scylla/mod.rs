@@ -7,9 +7,7 @@ pub mod segment;
 use std::{collections::HashMap, sync::Arc};
 
 use scylla::{
-    client::session::Session,
-    errors::NewSessionError,
-    statement::prepared::PreparedStatement,
+    client::session::Session, errors::NewSessionError, statement::prepared::PreparedStatement,
 };
 use thiserror::Error;
 use tokio::sync::RwLock;
@@ -119,7 +117,10 @@ impl ScyllaClient {
             .await
             .map_err(|e| ScyllaError::Prepare(e.to_string()))?;
 
-        self.prepared.write().await.insert(cql.to_string(), stmt.clone());
+        self.prepared
+            .write()
+            .await
+            .insert(cql.to_string(), stmt.clone());
         Ok(stmt)
     }
 

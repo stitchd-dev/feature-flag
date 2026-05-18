@@ -95,7 +95,10 @@ pub fn evaluate_preview(
 }
 
 /// Resolve which segments the context belongs to by evaluating each segment definition.
-fn resolve_segments(ec: &EvaluationContext, definitions: &[SegmentDefinition]) -> HashSet<SegmentId> {
+fn resolve_segments(
+    ec: &EvaluationContext,
+    definitions: &[SegmentDefinition],
+) -> HashSet<SegmentId> {
     if definitions.is_empty() {
         return HashSet::new();
     }
@@ -194,8 +197,7 @@ fn evaluate_single(
 
                     let flag_key = flag.record.key.as_str();
                     let env_str = env_id.to_string();
-                    let percentage =
-                        calculate_allocation(flag_key, &env_str, &target_values);
+                    let percentage = calculate_allocation(flag_key, &env_str, &target_values);
                     let bucket = ((percentage * 10.0).floor() as u32).min(999);
 
                     // Build hash_input string the same way calculate_allocation does.
@@ -306,45 +308,96 @@ fn collect_leaf_traces(
 
 fn condition_to_predicate(cond: &Condition) -> String {
     match cond {
-        Condition::Eq { context_type, param, value } => {
+        Condition::Eq {
+            context_type,
+            param,
+            value,
+        } => {
             format!("{context_type}.{param} == {value}")
         }
-        Condition::Ne { context_type, param, value } => {
+        Condition::Ne {
+            context_type,
+            param,
+            value,
+        } => {
             format!("{context_type}.{param} != {value}")
         }
-        Condition::Lt { context_type, param, value } => {
+        Condition::Lt {
+            context_type,
+            param,
+            value,
+        } => {
             format!("{context_type}.{param} < {value}")
         }
-        Condition::Lte { context_type, param, value } => {
+        Condition::Lte {
+            context_type,
+            param,
+            value,
+        } => {
             format!("{context_type}.{param} <= {value}")
         }
-        Condition::Gt { context_type, param, value } => {
+        Condition::Gt {
+            context_type,
+            param,
+            value,
+        } => {
             format!("{context_type}.{param} > {value}")
         }
-        Condition::Gte { context_type, param, value } => {
+        Condition::Gte {
+            context_type,
+            param,
+            value,
+        } => {
             format!("{context_type}.{param} >= {value}")
         }
-        Condition::Contains { context_type, param, substr } => {
+        Condition::Contains {
+            context_type,
+            param,
+            substr,
+        } => {
             format!("{context_type}.{param} contains \"{substr}\"")
         }
-        Condition::StartsWith { context_type, param, prefix } => {
+        Condition::StartsWith {
+            context_type,
+            param,
+            prefix,
+        } => {
             format!("{context_type}.{param} starts_with \"{prefix}\"")
         }
-        Condition::EndsWith { context_type, param, suffix } => {
+        Condition::EndsWith {
+            context_type,
+            param,
+            suffix,
+        } => {
             format!("{context_type}.{param} ends_with \"{suffix}\"")
         }
-        Condition::SemverGte { context_type, param, version } => {
+        Condition::SemverGte {
+            context_type,
+            param,
+            version,
+        } => {
             format!("{context_type}.{param} semver >= {version}")
         }
-        Condition::SemverTilde { context_type, param, version } => {
+        Condition::SemverTilde {
+            context_type,
+            param,
+            version,
+        } => {
             format!("{context_type}.{param} semver ~{version}")
         }
-        Condition::SemverCaret { context_type, param, version } => {
+        Condition::SemverCaret {
+            context_type,
+            param,
+            version,
+        } => {
             format!("{context_type}.{param} semver ^{version}")
         }
         Condition::InSegment(id) => format!("in segment {id}"),
         Condition::NotInSegment(id) => format!("not in segment {id}"),
-        Condition::FlagEvaluatedAs { flag_id, variant_id } => {
+        Condition::FlagEvaluatedAs {
+            flag_id,
+            variant_id,
+        } => {
             format!("flag {flag_id} evaluated as {variant_id}")
         }
     }
@@ -368,8 +421,8 @@ mod tests {
     use crate::context::{Context, ParameterValue};
     use crate::flag::{Flag, FlagRecord, FlagRule, FlagValueType};
     use crate::id::{FlagId, FlagKey, ProjectId, RuleId, SegmentId, VariantId};
-    use crate::rule_engine::types::TargetField;
     use crate::rule_engine::condition::Condition;
+    use crate::rule_engine::types::TargetField;
     use crate::rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput};
     use crate::variants::{Variant, VariantValue};
     use chrono::Utc;
@@ -397,11 +450,24 @@ mod tests {
         };
 
         let variants = vec![
-            Variant { id: on_id, key: "on".to_string(), value: VariantValue::BoolValue(true) },
-            Variant { id: off_id, key: "off".to_string(), value: VariantValue::BoolValue(false) },
+            Variant {
+                id: on_id,
+                key: "on".to_string(),
+                value: VariantValue::BoolValue(true),
+            },
+            Variant {
+                id: off_id,
+                key: "off".to_string(),
+                value: VariantValue::BoolValue(false),
+            },
         ];
 
-        let flag = Flag { record, hashing_config: vec![], rules: vec![], variants };
+        let flag = Flag {
+            record,
+            hashing_config: vec![],
+            rules: vec![],
+            variants,
+        };
         (flag, on_id, off_id)
     }
 
@@ -431,8 +497,9 @@ mod tests {
     #[test]
     fn disabled_flag_returns_default_with_no_traces() {
         let (flag, _, _) = make_bool_flag(false);
-        let ec = EvaluationContext::new()
-            .with_context(Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)));
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
         let results = evaluate_preview(&flag, &[ec], &[], env_id());
 
         assert_eq!(results.len(), 1);
@@ -451,8 +518,9 @@ mod tests {
         let rule = beta_rule(on_id, flag.record.id);
         flag.rules.push(rule);
 
-        let ec = EvaluationContext::new()
-            .with_context(Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)));
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
         let results = evaluate_preview(&flag, &[ec], &[], env_id());
 
         let r = &results[0];
@@ -462,7 +530,10 @@ mod tests {
         assert!(matches!(r.rule_traces[0].outcome, RuleOutcome::Match));
         assert_eq!(r.rule_traces[0].conditions.len(), 1);
         assert!(r.rule_traces[0].conditions[0].result);
-        assert_eq!(r.rule_traces[0].conditions[0].predicate, "user.beta == true");
+        assert_eq!(
+            r.rule_traces[0].conditions[0].predicate,
+            "user.beta == true"
+        );
     }
 
     // ── No match → default variant ────────────────────────────────────────────
@@ -473,8 +544,9 @@ mod tests {
         let rule = beta_rule(on_id, flag.record.id);
         flag.rules.push(rule);
 
-        let ec = EvaluationContext::new()
-            .with_context(Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false)));
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false)),
+        );
         let results = evaluate_preview(&flag, &[ec], &[], env_id());
 
         let r = &results[0];
@@ -579,8 +651,7 @@ mod tests {
             },
         });
 
-        let ec = EvaluationContext::new()
-            .with_context(Context::new("user", "u1"));
+        let ec = EvaluationContext::new().with_context(Context::new("user", "u1"));
         let results = evaluate_preview(&flag, &[ec], &[], env_id());
 
         let r = &results[0];
@@ -602,10 +673,12 @@ mod tests {
         let (mut flag, on_id, _) = make_bool_flag(true);
         flag.rules.push(beta_rule(on_id, flag.record.id));
 
-        let ec1 = EvaluationContext::new()
-            .with_context(Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)));
-        let ec2 = EvaluationContext::new()
-            .with_context(Context::new("user", "u2").with_parameter("beta", ParameterValue::Bool(false)));
+        let ec1 = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let ec2 = EvaluationContext::new().with_context(
+            Context::new("user", "u2").with_parameter("beta", ParameterValue::Bool(false)),
+        );
 
         let results = evaluate_preview(&flag, &[ec1, ec2], &[], env_id());
 
@@ -645,24 +718,107 @@ mod tests {
         let variant_id = VariantId::new();
 
         let cases: &[(Condition, &str)] = &[
-            (Condition::Ne { context_type: "u".into(), param: "x".into(), value: ParameterValue::Bool(false) }, "u.x != false"),
-            (Condition::Lt { context_type: "u".into(), param: "age".into(), value: ParameterValue::Int(18) }, "u.age < 18"),
-            (Condition::Lte { context_type: "u".into(), param: "age".into(), value: ParameterValue::Int(18) }, "u.age <= 18"),
-            (Condition::Gt { context_type: "u".into(), param: "score".into(), value: ParameterValue::Int(100) }, "u.score > 100"),
-            (Condition::Gte { context_type: "u".into(), param: "score".into(), value: ParameterValue::Int(100) }, "u.score >= 100"),
-            (Condition::StartsWith { context_type: "u".into(), param: "name".into(), prefix: "Al".into() }, "u.name starts_with \"Al\""),
-            (Condition::EndsWith { context_type: "u".into(), param: "name".into(), suffix: "son".into() }, "u.name ends_with \"son\""),
-            (Condition::SemverGte { context_type: "app".into(), param: "version".into(), version: "2.0.0".into() }, "app.version semver >= 2.0.0"),
-            (Condition::SemverTilde { context_type: "app".into(), param: "version".into(), version: "1.2.0".into() }, "app.version semver ~1.2.0"),
-            (Condition::SemverCaret { context_type: "app".into(), param: "version".into(), version: "1.0.0".into() }, "app.version semver ^1.0.0"),
-            (Condition::NotInSegment(seg_id), &format!("not in segment {seg_id}")),
+            (
+                Condition::Ne {
+                    context_type: "u".into(),
+                    param: "x".into(),
+                    value: ParameterValue::Bool(false),
+                },
+                "u.x != false",
+            ),
+            (
+                Condition::Lt {
+                    context_type: "u".into(),
+                    param: "age".into(),
+                    value: ParameterValue::Int(18),
+                },
+                "u.age < 18",
+            ),
+            (
+                Condition::Lte {
+                    context_type: "u".into(),
+                    param: "age".into(),
+                    value: ParameterValue::Int(18),
+                },
+                "u.age <= 18",
+            ),
+            (
+                Condition::Gt {
+                    context_type: "u".into(),
+                    param: "score".into(),
+                    value: ParameterValue::Int(100),
+                },
+                "u.score > 100",
+            ),
+            (
+                Condition::Gte {
+                    context_type: "u".into(),
+                    param: "score".into(),
+                    value: ParameterValue::Int(100),
+                },
+                "u.score >= 100",
+            ),
+            (
+                Condition::StartsWith {
+                    context_type: "u".into(),
+                    param: "name".into(),
+                    prefix: "Al".into(),
+                },
+                "u.name starts_with \"Al\"",
+            ),
+            (
+                Condition::EndsWith {
+                    context_type: "u".into(),
+                    param: "name".into(),
+                    suffix: "son".into(),
+                },
+                "u.name ends_with \"son\"",
+            ),
+            (
+                Condition::SemverGte {
+                    context_type: "app".into(),
+                    param: "version".into(),
+                    version: "2.0.0".into(),
+                },
+                "app.version semver >= 2.0.0",
+            ),
+            (
+                Condition::SemverTilde {
+                    context_type: "app".into(),
+                    param: "version".into(),
+                    version: "1.2.0".into(),
+                },
+                "app.version semver ~1.2.0",
+            ),
+            (
+                Condition::SemverCaret {
+                    context_type: "app".into(),
+                    param: "version".into(),
+                    version: "1.0.0".into(),
+                },
+                "app.version semver ^1.0.0",
+            ),
+            (
+                Condition::NotInSegment(seg_id),
+                &format!("not in segment {seg_id}"),
+            ),
         ];
         for (cond, expected) in cases {
-            assert_eq!(&condition_to_predicate(cond), expected, "failed for {expected}");
+            assert_eq!(
+                &condition_to_predicate(cond),
+                expected,
+                "failed for {expected}"
+            );
         }
         // InSegment and FlagEvaluatedAs
         assert!(condition_to_predicate(&Condition::InSegment(seg_id)).starts_with("in segment "));
-        assert!(condition_to_predicate(&Condition::FlagEvaluatedAs { flag_id, variant_id }).starts_with("flag "));
+        assert!(
+            condition_to_predicate(&Condition::FlagEvaluatedAs {
+                flag_id,
+                variant_id
+            })
+            .starts_with("flag ")
+        );
     }
 
     // ── segment resolution ────────────────────────────────────────────────────

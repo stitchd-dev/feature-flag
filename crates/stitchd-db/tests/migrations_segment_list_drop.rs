@@ -18,7 +18,10 @@ async fn segment_list_entries_table_is_dropped(pool: PgPool) {
     .await
     .expect("schema query failed");
 
-    assert!(!row.0, "segment_list_entries table should not exist after the drop migration");
+    assert!(
+        !row.0,
+        "segment_list_entries table should not exist after the drop migration"
+    );
 }
 
 #[sqlx::test]
@@ -34,5 +37,8 @@ async fn segment_list_entries_covering_index_is_dropped(pool: PgPool) {
     .await
     .expect("schema query failed");
 
-    assert!(!row.0, "idx_segment_list_entries_covering index should not exist after the drop migration");
+    assert!(
+        !row.0,
+        "idx_segment_list_entries_covering index should not exist after the drop migration"
+    );
 }

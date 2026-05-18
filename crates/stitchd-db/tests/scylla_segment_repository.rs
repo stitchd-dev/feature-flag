@@ -13,8 +13,7 @@ use stitchd_db::scylla::{ScyllaClient, ScyllaConfig, migrate, segment::ScyllaSeg
 
 async fn scylla_available() -> bool {
     let cfg = ScyllaConfig {
-        uri: std::env::var("SCYLLA_TEST_URI")
-            .unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
+        uri: std::env::var("SCYLLA_TEST_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
         keyspace: "system".to_string(),
     };
     ScyllaClient::connect(&cfg).await.is_ok()
@@ -22,11 +21,12 @@ async fn scylla_available() -> bool {
 
 async fn setup_client(ks: &str) -> ScyllaClient {
     let config = ScyllaConfig {
-        uri: std::env::var("SCYLLA_TEST_URI")
-            .unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
+        uri: std::env::var("SCYLLA_TEST_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
         keyspace: ks.to_string(),
     };
-    let client = ScyllaClient::connect(&config).await.expect("connect to ScyllaDB");
+    let client = ScyllaClient::connect(&config)
+        .await
+        .expect("connect to ScyllaDB");
     let migrations_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/scylla-migrations");
     migrate::run(&client, migrations_dir)
         .await
@@ -128,8 +128,24 @@ async fn set_list_entries_happy_path() {
         .await
         .expect("generation pointer should exist");
 
-    let inc_count = count_entries(&client, &ks, seg_id.as_uuid(), "user", active_gen, "include").await;
-    let exc_count = count_entries(&client, &ks, seg_id.as_uuid(), "user", active_gen, "exclude").await;
+    let inc_count = count_entries(
+        &client,
+        &ks,
+        seg_id.as_uuid(),
+        "user",
+        active_gen,
+        "include",
+    )
+    .await;
+    let exc_count = count_entries(
+        &client,
+        &ks,
+        seg_id.as_uuid(),
+        "user",
+        active_gen,
+        "exclude",
+    )
+    .await;
 
     assert_eq!(inc_count, 3, "should have 3 include entries");
     assert_eq!(exc_count, 2, "should have 2 exclude entries");
@@ -180,8 +196,12 @@ async fn set_list_entries_replaces_atomically() {
     assert_ne!(gen2, gen1, "generation must change on replace");
 
     // New generation has only carol.
-    let inc_count_new = count_entries(&client, &ks, seg_id.as_uuid(), "user", gen2, "include").await;
-    assert_eq!(inc_count_new, 1, "new generation should have only 1 include entry");
+    let inc_count_new =
+        count_entries(&client, &ks, seg_id.as_uuid(), "user", gen2, "include").await;
+    assert_eq!(
+        inc_count_new, 1,
+        "new generation should have only 1 include entry"
+    );
 
     cleanup(&client, &ks).await;
 }
@@ -229,8 +249,19 @@ async fn concurrent_set_list_entries_only_one_wins() {
     assert!(active_gen >= 2, "generation must have advanced from 1");
 
     // The active generation must contain exactly 1 include entry (one winner).
-    let inc_count = count_entries(&client, &ks, seg_id.as_uuid(), "user", active_gen, "include").await;
-    assert_eq!(inc_count, 1, "active generation should have exactly 1 include entry (one CAS winner)");
+    let inc_count = count_entries(
+        &client,
+        &ks,
+        seg_id.as_uuid(),
+        "user",
+        active_gen,
+        "include",
+    )
+    .await;
+    assert_eq!(
+        inc_count, 1,
+        "active generation should have exactly 1 include entry (one CAS winner)"
+    );
 
     cleanup(&client, &ks).await;
 }
@@ -269,7 +300,15 @@ async fn add_entries_inserts_into_current_generation() {
         .await
         .expect("add_entries");
 
-    let inc_count = count_entries(&client, &ks, seg_id.as_uuid(), "user", active_gen, "include").await;
+    let inc_count = count_entries(
+        &client,
+        &ks,
+        seg_id.as_uuid(),
+        "user",
+        active_gen,
+        "include",
+    )
+    .await;
     assert_eq!(inc_count, 2, "should have 2 include entries after add");
 
     cleanup(&client, &ks).await;
@@ -308,7 +347,15 @@ async fn add_entries_is_idempotent() {
         .await
         .expect("second add (idempotent)");
 
-    let inc_count = count_entries(&client, &ks, seg_id.as_uuid(), "user", active_gen, "include").await;
+    let inc_count = count_entries(
+        &client,
+        &ks,
+        seg_id.as_uuid(),
+        "user",
+        active_gen,
+        "include",
+    )
+    .await;
     assert_eq!(inc_count, 1, "duplicate add should not create extra rows");
 
     cleanup(&client, &ks).await;
@@ -347,8 +394,19 @@ async fn remove_entries_deletes_from_current_generation() {
         .await
         .expect("remove_entries");
 
-    let inc_count = count_entries(&client, &ks, seg_id.as_uuid(), "user", active_gen, "include").await;
-    assert_eq!(inc_count, 1, "should have 1 include entry after removing alice");
+    let inc_count = count_entries(
+        &client,
+        &ks,
+        seg_id.as_uuid(),
+        "user",
+        active_gen,
+        "include",
+    )
+    .await;
+    assert_eq!(
+        inc_count, 1,
+        "should have 1 include entry after removing alice"
+    );
 
     cleanup(&client, &ks).await;
 }
@@ -376,7 +434,10 @@ async fn remove_entries_noop_on_missing() {
     let result = store
         .remove_entries(seg_id, "user", "include", &["nonexistent".to_string()])
         .await;
-    assert!(result.is_ok(), "remove of missing key must not error: {result:?}");
+    assert!(
+        result.is_ok(),
+        "remove of missing key must not error: {result:?}"
+    );
 
     cleanup(&client, &ks).await;
 }
@@ -411,7 +472,10 @@ async fn summary_reflects_set_list_entries() {
         .await
         .expect("get_list_segment_summary");
 
-    let counts = summary.counts.get("user").expect("'user' context should be present");
+    let counts = summary
+        .counts
+        .get("user")
+        .expect("'user' context should be present");
     assert_eq!(counts.include_count, 3, "include_count should be 3");
     assert_eq!(counts.exclude_count, 2, "exclude_count should be 2");
 

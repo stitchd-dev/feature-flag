@@ -159,7 +159,9 @@ async fn list_by_project_paginated_page_1_returns_first_slice(pool: sqlx::PgPool
 
     // Seed 5 flags in a project.
     for i in 0..5 {
-        repo.create(&make_flag(project.id, &format!("flag-{i:02}"))).await.unwrap();
+        repo.create(&make_flag(project.id, &format!("flag-{i:02}")))
+            .await
+            .unwrap();
     }
 
     let (page1, total) = repo
@@ -181,7 +183,9 @@ async fn list_by_project_paginated_page_2_returns_remainder(pool: sqlx::PgPool) 
     let project = setup_org_and_project(&org_repo, &proj_repo).await;
 
     for i in 0..5 {
-        repo.create(&make_flag(project.id, &format!("flag-{i:02}"))).await.unwrap();
+        repo.create(&make_flag(project.id, &format!("flag-{i:02}")))
+            .await
+            .unwrap();
     }
 
     let (page2, total) = repo
@@ -203,7 +207,9 @@ async fn list_by_project_paginated_total_count_accurate(pool: sqlx::PgPool) {
     let project = setup_org_and_project(&org_repo, &proj_repo).await;
 
     for i in 0..10 {
-        repo.create(&make_flag(project.id, &format!("flag-{i:02}"))).await.unwrap();
+        repo.create(&make_flag(project.id, &format!("flag-{i:02}")))
+            .await
+            .unwrap();
     }
 
     // Even with per_page=1 the total must reflect all 10 flags.
@@ -212,7 +218,10 @@ async fn list_by_project_paginated_total_count_accurate(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    assert_eq!(total, 10, "total must include all rows regardless of page size");
+    assert_eq!(
+        total, 10,
+        "total must include all rows regardless of page size"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]

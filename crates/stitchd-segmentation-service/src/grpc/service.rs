@@ -19,9 +19,7 @@ use stitchd_proto::segments::v1::{
 
 use crate::{
     error::ServiceError,
-    segment::{
-        parse_env_id, segment_to_list_meta_proto, segment_to_rule_proto,
-    },
+    segment::{parse_env_id, segment_to_list_meta_proto, segment_to_rule_proto},
 };
 
 /// Shared application state for the segmentation service.
@@ -198,7 +196,11 @@ impl SegmentationService for SegmentationServiceImpl {
         let env_id = parse_env_id(&r.environment_id).map_err(Status::from)?;
 
         let page = if r.page == 0 { 1u64 } else { r.page as u64 };
-        let per_page = if r.per_page == 0 { 50u64 } else { (r.per_page as u64).min(200) };
+        let per_page = if r.per_page == 0 {
+            50u64
+        } else {
+            (r.per_page as u64).min(200)
+        };
         let offset = (page - 1) * per_page;
 
         let (segments, total) = self
@@ -216,14 +218,24 @@ impl SegmentationService for SegmentationServiceImpl {
                 None
             };
             let condition_expr = if s.segment_type == SegmentType::Rule {
-                self.state.segment_repo.get_condition_expr(s.id).await
+                self.state
+                    .segment_repo
+                    .get_condition_expr(s.id)
+                    .await
                     .map_err(|e| Status::from(ServiceError::from(e)))?
             } else {
                 None
             };
-            admin_segments.push(segment_to_admin_proto_with_counts(s, list_counts, condition_expr));
+            admin_segments.push(segment_to_admin_proto_with_counts(
+                s,
+                list_counts,
+                condition_expr,
+            ));
         }
-        Ok(Response::new(ListAdminSegmentsResponse { segments: admin_segments, total }))
+        Ok(Response::new(ListAdminSegmentsResponse {
+            segments: admin_segments,
+            total,
+        }))
     }
 
     async fn get_admin_segment(
@@ -235,7 +247,9 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_id
             .parse::<uuid::Uuid>()
             .map(stitchd_core::id::SegmentId::from_uuid)
-            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+            .map_err(|_| {
+                Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
+            })?;
 
         let seg = self
             .state
@@ -252,13 +266,20 @@ impl SegmentationService for SegmentationServiceImpl {
         };
 
         let condition_expr = if seg.segment_type == SegmentType::Rule {
-            self.state.segment_repo.get_condition_expr(segment_id).await
+            self.state
+                .segment_repo
+                .get_condition_expr(segment_id)
+                .await
                 .map_err(|e| Status::from(ServiceError::from(e)))?
         } else {
             None
         };
 
-        Ok(Response::new(segment_to_admin_proto_with_counts(&seg, list_counts, condition_expr)))
+        Ok(Response::new(segment_to_admin_proto_with_counts(
+            &seg,
+            list_counts,
+            condition_expr,
+        )))
     }
 
     async fn create_admin_segment(
@@ -276,10 +297,18 @@ impl SegmentationService for SegmentationServiceImpl {
             "rule" => SegmentType::Rule,
             "list" => SegmentType::List,
             _ => {
-                if r.user_list.is_empty() { SegmentType::Rule } else { SegmentType::List }
+                if r.user_list.is_empty() {
+                    SegmentType::Rule
+                } else {
+                    SegmentType::List
+                }
             }
         };
-        let context_type = if r.context_type.is_empty() { "user".to_string() } else { r.context_type.clone() };
+        let context_type = if r.context_type.is_empty() {
+            "user".to_string()
+        } else {
+            r.context_type.clone()
+        };
 
         let key = r.name.to_lowercase().replace(' ', "-");
         let now = Utc::now();
@@ -315,7 +344,10 @@ impl SegmentationService for SegmentationServiceImpl {
         let condition_expr = if seg_type == SegmentType::Rule && !r.condition_expr.is_empty() {
             let v: serde_json::Value = serde_json::from_slice(&r.condition_expr)
                 .map_err(|e| Status::invalid_argument(format!("invalid condition_expr: {e}")))?;
-            self.state.segment_repo.set_condition_expr(seg.id, Some(&v)).await
+            self.state
+                .segment_repo
+                .set_condition_expr(seg.id, Some(&v))
+                .await
                 .map_err(|e| Status::from(ServiceError::from(e)))?;
             Some(v)
         } else {
@@ -331,7 +363,11 @@ impl SegmentationService for SegmentationServiceImpl {
         } else {
             None
         };
-        Ok(Response::new(segment_to_admin_proto_with_counts(&seg, list_counts, condition_expr)))
+        Ok(Response::new(segment_to_admin_proto_with_counts(
+            &seg,
+            list_counts,
+            condition_expr,
+        )))
     }
 
     async fn update_admin_segment(
@@ -343,7 +379,9 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_id
             .parse::<uuid::Uuid>()
             .map(stitchd_core::id::SegmentId::from_uuid)
-            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+            .map_err(|_| {
+                Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
+            })?;
 
         let mut seg = self
             .state
@@ -365,7 +403,11 @@ impl SegmentationService for SegmentationServiceImpl {
 
         // Update list entries if this is a list-based segment.
         let list_counts = if updated.segment_type == SegmentType::List {
-            let context_type = if r.context_type.is_empty() { "user".to_string() } else { r.context_type.clone() };
+            let context_type = if r.context_type.is_empty() {
+                "user".to_string()
+            } else {
+                r.context_type.clone()
+            };
             self.state
                 .segment_repo
                 .set_list_entries(updated.id, &context_type, &r.user_list, &r.excluded_keys)
@@ -381,19 +423,31 @@ impl SegmentationService for SegmentationServiceImpl {
         };
 
         // Persist condition_expr for rule-based segments.
-        let condition_expr = if updated.segment_type == SegmentType::Rule && !r.condition_expr.is_empty() {
+        let condition_expr = if updated.segment_type == SegmentType::Rule
+            && !r.condition_expr.is_empty()
+        {
             let v: serde_json::Value = serde_json::from_slice(&r.condition_expr)
                 .map_err(|e| Status::invalid_argument(format!("invalid condition_expr: {e}")))?;
-            self.state.segment_repo.set_condition_expr(updated.id, Some(&v)).await
+            self.state
+                .segment_repo
+                .set_condition_expr(updated.id, Some(&v))
+                .await
                 .map_err(|e| Status::from(ServiceError::from(e)))?;
             Some(v)
         } else {
             // Read back existing condition_expr to include in response.
-            self.state.segment_repo.get_condition_expr(updated.id).await
+            self.state
+                .segment_repo
+                .get_condition_expr(updated.id)
+                .await
                 .map_err(|e| Status::from(ServiceError::from(e)))?
         };
 
-        Ok(Response::new(segment_to_admin_proto_with_counts(&updated, list_counts, condition_expr)))
+        Ok(Response::new(segment_to_admin_proto_with_counts(
+            &updated,
+            list_counts,
+            condition_expr,
+        )))
     }
 
     async fn delete_admin_segment(
@@ -405,7 +459,9 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_id
             .parse::<uuid::Uuid>()
             .map(stitchd_core::id::SegmentId::from_uuid)
-            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+            .map_err(|_| {
+                Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
+            })?;
 
         self.state
             .segment_repo
@@ -425,12 +481,18 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_id
             .parse::<uuid::Uuid>()
             .map(stitchd_core::id::SegmentId::from_uuid)
-            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+            .map_err(|_| {
+                Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
+            })?;
 
         // Validate list_type
         match r.list_type.as_str() {
             "include" | "exclude" => {}
-            other => return Err(Status::invalid_argument(format!("invalid list_type: {other}; expected 'include' or 'exclude'"))),
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "invalid list_type: {other}; expected 'include' or 'exclude'"
+                )));
+            }
         };
 
         // Use "user" as the default context_type (find_with_list removed in Scylla migration).
@@ -454,7 +516,11 @@ impl SegmentationService for SegmentationServiceImpl {
             "replace" => {
                 let deduped: Vec<String> = {
                     let mut seen = std::collections::HashSet::new();
-                    r.keys.iter().filter(|k| seen.insert(k.to_string())).cloned().collect()
+                    r.keys
+                        .iter()
+                        .filter(|k| seen.insert(k.to_string()))
+                        .cloned()
+                        .collect()
                 };
                 let (include, exclude) = if r.list_type == "include" {
                     (deduped.as_slice(), [].as_slice())
@@ -467,15 +533,25 @@ impl SegmentationService for SegmentationServiceImpl {
                     .await
                     .map_err(|e| Status::from(ServiceError::from(e)))?;
             }
-            other => return Err(Status::invalid_argument(format!("invalid action: {other}; expected 'add', 'remove', or 'replace'"))),
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "invalid action: {other}; expected 'add', 'remove', or 'replace'"
+                )));
+            }
         }
 
         // Get updated counts from summary.
-        let summary = self.state.segment_repo
+        let summary = self
+            .state
+            .segment_repo
             .get_list_segment_summary(segment_id)
             .await
             .map_err(|e| Status::from(ServiceError::from(e)))?;
-        let counts = summary.counts.get(context_type).cloned().unwrap_or_default();
+        let counts = summary
+            .counts
+            .get(context_type)
+            .cloned()
+            .unwrap_or_default();
 
         Ok(Response::new(PatchSegmentEntriesResponse {
             include_count: u32::try_from(counts.include_count).unwrap_or(u32::MAX),
@@ -492,7 +568,9 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_id
             .parse::<uuid::Uuid>()
             .map(stitchd_core::id::SegmentId::from_uuid)
-            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+            .map_err(|_| {
+                Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
+            })?;
 
         // Fetch the segment to get its key and environment_id for the membership check.
         let seg = self
@@ -554,7 +632,9 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_id
             .parse::<uuid::Uuid>()
             .map(stitchd_core::id::SegmentId::from_uuid)
-            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+            .map_err(|_| {
+                Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
+            })?;
 
         // Validate list_type
         match r.list_type.as_str() {
@@ -586,7 +666,9 @@ impl SegmentationService for SegmentationServiceImpl {
             .segment_id
             .parse::<uuid::Uuid>()
             .map(stitchd_core::id::SegmentId::from_uuid)
-            .map_err(|_| Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id)))?;
+            .map_err(|_| {
+                Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
+            })?;
 
         // Validate list_type
         match r.list_type.as_str() {
@@ -634,7 +716,11 @@ fn segment_to_admin_proto_with_counts(
     AdminSegment {
         id: seg.id.to_string(),
         environment_id: seg.environment_id.to_string(),
-        name: if seg.name.is_empty() { seg.key.clone() } else { seg.name.clone() },
+        name: if seg.name.is_empty() {
+            seg.key.clone()
+        } else {
+            seg.name.clone()
+        },
         description: seg.description.clone(),
         tags: seg.tags.clone(),
         condition_expr: condition_expr_bytes,

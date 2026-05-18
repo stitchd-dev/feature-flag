@@ -60,9 +60,7 @@ impl MembershipCache {
     #[must_use]
     pub fn new(max_entries: usize) -> Self {
         Self {
-            inner: Cache::builder()
-                .max_capacity(max_entries as u64)
-                .build(),
+            inner: Cache::builder().max_capacity(max_entries as u64).build(),
         }
     }
 
@@ -97,10 +95,7 @@ impl MembershipCache {
     #[must_use]
     pub fn keys(&self) -> Vec<ContextKey> {
         // moka's iter() returns (Arc<K>, V) pairs. We just need K-clones.
-        self.inner
-            .iter()
-            .map(|(k, _v)| (*k).clone())
-            .collect()
+        self.inner.iter().map(|(k, _v)| (*k).clone()).collect()
     }
 
     /// Number of currently resident entries (approximate — moka may report
@@ -310,6 +305,9 @@ mod tests {
         let s = format!("{c:?}");
         assert!(s.contains("entry_count"));
         // Debug must not dump every key/value (could be thousands of entries).
-        assert!(!s.contains("alice"), "Debug must not include cache contents: {s}");
+        assert!(
+            !s.contains("alice"),
+            "Debug must not include cache contents: {s}"
+        );
     }
 }

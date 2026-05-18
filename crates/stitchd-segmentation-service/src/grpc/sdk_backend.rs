@@ -38,9 +38,12 @@ fn env_id_from_metadata(req: &Request<impl Sized>) -> Result<EnvironmentId, Stat
         .get(ENV_ID_METADATA_KEY)
         .ok_or_else(|| Status::unauthenticated(format!("missing {ENV_ID_METADATA_KEY} metadata")))?
         .to_str()
-        .map_err(|_| Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not valid UTF-8")))?;
-    let uuid = uuid::Uuid::parse_str(raw)
-        .map_err(|_| Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not a valid UUID")))?;
+        .map_err(|_| {
+            Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not valid UTF-8"))
+        })?;
+    let uuid = uuid::Uuid::parse_str(raw).map_err(|_| {
+        Status::unauthenticated(format!("{ENV_ID_METADATA_KEY} is not a valid UUID"))
+    })?;
     Ok(EnvironmentId::from_uuid(uuid))
 }
 
@@ -54,7 +57,9 @@ impl SegmentationSdkBackendService for SegmentationSdkBackendServiceImpl {
         let queries = request.into_inner().queries;
 
         if queries.is_empty() {
-            return Ok(Response::new(BatchCheckListMembershipResponse { results: vec![] }));
+            return Ok(Response::new(BatchCheckListMembershipResponse {
+                results: vec![],
+            }));
         }
 
         // Per the proto, each query carries its own segment_ids list. The
@@ -94,10 +99,15 @@ impl SegmentationSdkBackendService for SegmentationSdkBackendServiceImpl {
             .map_err(|e| Status::internal(format!("find_memberships_batch failed: {e}")))?;
 
         // Build a lookup: (context_type, context_key) → id-keyed membership map.
-        let mut by_ctx: std::collections::HashMap<(String, String), &std::collections::HashMap<SegmentId, bool>> =
-            std::collections::HashMap::with_capacity(id_results.len());
+        let mut by_ctx: std::collections::HashMap<
+            (String, String),
+            &std::collections::HashMap<SegmentId, bool>,
+        > = std::collections::HashMap::with_capacity(id_results.len());
         for r in &id_results {
-            by_ctx.insert((r.context_type.clone(), r.context_key.clone()), &r.memberships);
+            by_ctx.insert(
+                (r.context_type.clone(), r.context_key.clone()),
+                &r.memberships,
+            );
         }
 
         // Build the response in the SAME ORDER as the request's queries, and
@@ -274,16 +284,38 @@ mod tests {
         ) -> Result<HashMap<SegmentId, RuleBasedSegment>, RepositoryError> {
             unimplemented!()
         }
-        async fn add_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
-        async fn remove_entries(&self, _id: SegmentId, _ctx: &str, _lt: &str, _keys: &[String]) -> Result<(), RepositoryError> { Ok(()) }
-        async fn get_list_segment_summary(&self, _id: SegmentId) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> { Ok(stitchd_db::ListSegmentSummary::default()) }
+        async fn add_entries(
+            &self,
+            _id: SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn remove_entries(
+            &self,
+            _id: SegmentId,
+            _ctx: &str,
+            _lt: &str,
+            _keys: &[String],
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn get_list_segment_summary(
+            &self,
+            _id: SegmentId,
+        ) -> Result<stitchd_db::ListSegmentSummary, RepositoryError> {
+            Ok(stitchd_db::ListSegmentSummary::default())
+        }
         async fn find_memberships_batch(
             &self,
             env_id: EnvironmentId,
             contexts: &[(String, String)],
             segment_ids: &[SegmentId],
         ) -> Result<Vec<SegmentIdMembership>, RepositoryError> {
-            *self.last_call.lock().unwrap() = Some((env_id, contexts.to_vec(), segment_ids.to_vec()));
+            *self.last_call.lock().unwrap() =
+                Some((env_id, contexts.to_vec(), segment_ids.to_vec()));
             let matrix = self.membership_matrix.lock().unwrap();
             Ok(contexts
                 .iter()

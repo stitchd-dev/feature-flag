@@ -230,7 +230,11 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
     let mut seen = std::collections::HashSet::new();
     segment_ids.retain(|id| seen.insert(id.clone()));
 
-    let name = if r.name.is_empty() { None } else { Some(r.name.clone()) };
+    let name = if r.name.is_empty() {
+        None
+    } else {
+        Some(r.name.clone())
+    };
     RuleJson {
         name,
         condition,
@@ -405,7 +409,11 @@ pub async fn list_flags(
         per_page: pagination.effective_per_page(),
     });
     let mut client = state.flag_client.lock().await;
-    let inner = client.list_flags(req).await.map_err(GatewayError::from)?.into_inner();
+    let inner = client
+        .list_flags(req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
     let items: Vec<AdminFlagJson> = inner.flags.iter().map(flag_to_admin_json).collect();
     let total = inner.total;
     Ok(Json(PaginatedResponse::new(items, total, pagination)))
@@ -1095,9 +1103,8 @@ pub async fn evaluate_preview(
 
     let flag_enabled = resp.flag_enabled;
 
-    let raw_results: Vec<serde_json::Value> =
-        serde_json::from_str(&resp.results_json)
-            .map_err(|e| GatewayError::Upstream(e.to_string()))?;
+    let raw_results: Vec<serde_json::Value> = serde_json::from_str(&resp.results_json)
+        .map_err(|e| GatewayError::Upstream(e.to_string()))?;
 
     let results: Vec<PreviewResultJson> = raw_results
         .into_iter()

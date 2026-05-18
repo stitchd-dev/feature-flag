@@ -194,7 +194,11 @@ fn proto_to_admin_json(seg: &stitchd_proto::segments::v1::AdminSegment) -> Admin
         } else {
             seg.segment_type.clone()
         },
-        context_type: if seg.context_type.is_empty() { None } else { Some(seg.context_type.clone()) },
+        context_type: if seg.context_type.is_empty() {
+            None
+        } else {
+            Some(seg.context_type.clone())
+        },
     }
 }
 
@@ -673,7 +677,10 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
             post(create_segment_in_env),
         )
         .route("/v1/segments/{id}/entries", post(patch_segment_entries))
-        .route("/v1/segments/{id}/entries/lookup", get(lookup_segment_entry))
+        .route(
+            "/v1/segments/{id}/entries/lookup",
+            get(lookup_segment_entry),
+        )
         .with_state(state)
 }
 
@@ -917,7 +924,8 @@ mod tests {
 
     #[test]
     fn validate_rejects_flag_evaluated_as_leaf() {
-        let expr = serde_json::json!({"Leaf": {"FlagEvaluatedAs": {"flag_id": "f1", "variant_id": "on"}}});
+        let expr =
+            serde_json::json!({"Leaf": {"FlagEvaluatedAs": {"flag_id": "f1", "variant_id": "on"}}});
         let err = validate_segment_condition_expr(&expr).unwrap_err();
         assert!(err.to_string().contains("FlagEvaluatedAs"));
     }

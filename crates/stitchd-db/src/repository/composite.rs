@@ -1,9 +1,9 @@
 //! Composite segment repository that delegates metadata operations to PostgreSQL
-//! and list-entry operations (storage, membership, summary) to ScyllaDB.
+//! and list-entry operations (storage, membership, summary) to [`ScyllaDB`].
 //!
 //! This is the production implementation wired into the segmentation service.
 //! Unit tests use [`crate::repository::pg::PgSegmentRepository`] (via a mock) directly
-//! so they don't require a running Scylla cluster.
+//! so they don't require a running [`ScyllaDB`] cluster.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ impl From<ScyllaError> for RepositoryError {
 // ---------------------------------------------------------------------------
 
 /// Production [`SegmentRepository`] that stores segment metadata in PostgreSQL
-/// and list entries in ScyllaDB.
+/// and list entries in `ScyllaDB`.
 ///
 /// Cloning is cheap — both inner stores wrap an `Arc`.
 #[derive(Clone)]
@@ -47,8 +47,12 @@ pub struct CompositeSegmentRepository {
 
 impl CompositeSegmentRepository {
     /// Create a composite backed by the given PG and Scylla stores.
+    ///
+    /// # Arguments
+    /// * `pg` — PostgreSQL-backed segment repository (metadata operations)
+    /// * `scylla` — ScyllaDB-backed list store (entry operations)
     #[must_use]
-    pub fn new(pg: Arc<PgSegmentRepository>, scylla: Arc<ScyllaSegmentStore>) -> Self {
+    pub const fn new(pg: Arc<PgSegmentRepository>, scylla: Arc<ScyllaSegmentStore>) -> Self {
         Self { pg, scylla }
     }
 }
@@ -65,7 +69,10 @@ impl SegmentRepository for CompositeSegmentRepository {
         self.pg.find_by_key(key, env).await
     }
 
-    async fn list_by_environment(&self, env: EnvironmentId) -> Result<Vec<Segment>, RepositoryError> {
+    async fn list_by_environment(
+        &self,
+        env: EnvironmentId,
+    ) -> Result<Vec<Segment>, RepositoryError> {
         self.pg.list_by_environment(env).await
     }
 
@@ -75,7 +82,9 @@ impl SegmentRepository for CompositeSegmentRepository {
         offset: u64,
         limit: u64,
     ) -> Result<(Vec<Segment>, u64), RepositoryError> {
-        self.pg.list_by_environment_paginated(env, offset, limit).await
+        self.pg
+            .list_by_environment_paginated(env, offset, limit)
+            .await
     }
 
     async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {

@@ -13,8 +13,7 @@ use stitchd_db::scylla::{ScyllaClient, ScyllaConfig, migrate, segment::ScyllaSeg
 
 async fn scylla_available() -> bool {
     let cfg = ScyllaConfig {
-        uri: std::env::var("SCYLLA_TEST_URI")
-            .unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
+        uri: std::env::var("SCYLLA_TEST_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
         keyspace: "system".to_string(),
     };
     ScyllaClient::connect(&cfg).await.is_ok()
@@ -22,11 +21,12 @@ async fn scylla_available() -> bool {
 
 async fn setup_client(ks: &str) -> ScyllaClient {
     let config = ScyllaConfig {
-        uri: std::env::var("SCYLLA_TEST_URI")
-            .unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
+        uri: std::env::var("SCYLLA_TEST_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
         keyspace: ks.to_string(),
     };
-    let client = ScyllaClient::connect(&config).await.expect("connect to ScyllaDB");
+    let client = ScyllaClient::connect(&config)
+        .await
+        .expect("connect to ScyllaDB");
     let migrations_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/scylla-migrations");
     migrate::run(&client, migrations_dir)
         .await
@@ -100,7 +100,12 @@ async fn check_membership_exclude_takes_precedence() {
     let seg_id = SegmentId::new();
     // alice is in BOTH include and exclude — exclude should win.
     store
-        .set_list_entries(seg_id, "user", &["alice".to_string()], &["alice".to_string()])
+        .set_list_entries(
+            seg_id,
+            "user",
+            &["alice".to_string()],
+            &["alice".to_string()],
+        )
         .await
         .expect("set_list_entries");
 
@@ -109,7 +114,10 @@ async fn check_membership_exclude_takes_precedence() {
         .await
         .expect("check_membership");
 
-    assert!(!is_member, "exclude takes precedence: alice should NOT be a member");
+    assert!(
+        !is_member,
+        "exclude takes precedence: alice should NOT be a member"
+    );
 
     cleanup(&client, &ks).await;
 }
@@ -156,7 +164,12 @@ async fn batch_check_membership_multiple_keys() {
 
     let seg_id = SegmentId::new();
     store
-        .set_list_entries(seg_id, "user", &["alice".to_string(), "carol".to_string()], &[])
+        .set_list_entries(
+            seg_id,
+            "user",
+            &["alice".to_string(), "carol".to_string()],
+            &[],
+        )
         .await
         .expect("set_list_entries");
 
@@ -166,9 +179,21 @@ async fn batch_check_membership_multiple_keys() {
         .await
         .expect("batch_check_membership");
 
-    assert_eq!(*memberships.get("alice").expect("alice"), true, "alice is a member");
-    assert_eq!(*memberships.get("bob").expect("bob"), false, "bob is not a member");
-    assert_eq!(*memberships.get("carol").expect("carol"), true, "carol is a member");
+    assert_eq!(
+        *memberships.get("alice").expect("alice"),
+        true,
+        "alice is a member"
+    );
+    assert_eq!(
+        *memberships.get("bob").expect("bob"),
+        false,
+        "bob is not a member"
+    );
+    assert_eq!(
+        *memberships.get("carol").expect("carol"),
+        true,
+        "carol is a member"
+    );
 
     cleanup(&client, &ks).await;
 }

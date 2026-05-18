@@ -283,7 +283,9 @@ mod tests {
     #[test]
     fn missing_context_in_or_is_false_branch_and_continues() {
         // Or([missing_context_condition, matching_condition]) → true via second branch
-        let ctx = [Context::new("user", "u1").with_parameter("role", ParameterValue::Str("admin".into()))];
+        let ctx =
+            [Context::new("user", "u1")
+                .with_parameter("role", ParameterValue::Str("admin".into()))];
         let expr = ConditionExpr::Or(vec![
             ConditionExpr::Leaf(Condition::Eq {
                 context_type: "org".into(), // missing context
@@ -302,7 +304,8 @@ mod tests {
     #[test]
     fn missing_param_in_or_continues_to_next_branch() {
         // Or([user.plan==pro (plan absent), user.role==power_user (role present)]) → true
-        let ctx = [Context::new("user", "alice").with_parameter("role", ParameterValue::Str("power_user".into()))];
+        let ctx = [Context::new("user", "alice")
+            .with_parameter("role", ParameterValue::Str("power_user".into()))];
         let expr = ConditionExpr::Or(vec![
             ConditionExpr::Leaf(Condition::Eq {
                 context_type: "user".into(),

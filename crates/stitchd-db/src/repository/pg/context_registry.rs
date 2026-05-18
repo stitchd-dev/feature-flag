@@ -8,7 +8,7 @@ use stitchd_core::{
     id::EnvironmentId,
 };
 
-use crate::{repository::ContextRegistryRepository, RepositoryError};
+use crate::{RepositoryError, repository::ContextRegistryRepository};
 
 /// Postgres-backed implementation of [`ContextRegistryRepository`].
 pub struct PgContextRegistryRepository {
@@ -161,10 +161,7 @@ impl ContextRegistryRepository for PgContextRegistryRepository {
             .collect())
     }
 
-    async fn purge_stale(
-        &self,
-        older_than: DateTime<Utc>,
-    ) -> Result<(), RepositoryError> {
+    async fn purge_stale(&self, older_than: DateTime<Utc>) -> Result<(), RepositoryError> {
         sqlx::query(r#"DELETE FROM context_param_registry WHERE last_seen_at < $1"#)
             .bind(older_than)
             .execute(&self.pool)
@@ -197,11 +194,12 @@ mod tests {
 
         repo.upsert_context_type(env_id, "user").await.unwrap();
 
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM context_type_registry WHERE context_type = 'user'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM context_type_registry WHERE context_type = 'user'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count.0, 1);
     }
 
@@ -213,11 +211,12 @@ mod tests {
         repo.upsert_context_type(env_id, "user").await.unwrap();
         repo.upsert_context_type(env_id, "user").await.unwrap();
 
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM context_type_registry WHERE context_type = 'user'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM context_type_registry WHERE context_type = 'user'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(count.0, 1, "upsert must not create duplicate rows");
     }
 
@@ -330,11 +329,10 @@ mod tests {
 
         repo.purge_stale(cutoff).await.unwrap();
 
-        let count: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM context_type_registry")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM context_type_registry")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(count.0, 1, "only the recent entry should remain");
     }
 

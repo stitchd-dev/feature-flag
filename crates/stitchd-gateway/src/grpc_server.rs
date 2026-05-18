@@ -28,8 +28,7 @@ use stitchd_proto::auth::v1::{
 };
 use stitchd_proto::sdk::v1::{
     IngestSdkEvalLogRequest, IngestSdkEvalLogResponse, SyncDefinitionsRequest,
-    SyncDefinitionsResponse,
-    flag_sdk_backend_service_client::FlagSdkBackendServiceClient,
+    SyncDefinitionsResponse, flag_sdk_backend_service_client::FlagSdkBackendServiceClient,
     sdk_service_server::SdkService,
 };
 
@@ -49,12 +48,18 @@ impl GatewaySdkServiceImpl {
         auth_client: Arc<Mutex<AuthServiceClient<Channel>>>,
         flag_sdk_backend_client: Arc<Mutex<FlagSdkBackendServiceClient<Channel>>>,
     ) -> Self {
-        Self { auth_client, flag_sdk_backend_client }
+        Self {
+            auth_client,
+            flag_sdk_backend_client,
+        }
     }
 
     /// Validate `x-sdk-key` from inbound metadata and resolve the environment.
     /// Returns the resolved `RbacContext`, from which `environment_id` is read.
-    async fn authenticate(&self, metadata: &tonic::metadata::MetadataMap) -> Result<RbacContext, Status> {
+    async fn authenticate(
+        &self,
+        metadata: &tonic::metadata::MetadataMap,
+    ) -> Result<RbacContext, Status> {
         let sdk_key = metadata
             .get(SDK_KEY_METADATA_KEY)
             .ok_or_else(|| Status::unauthenticated("missing x-sdk-key metadata"))?
@@ -68,7 +73,9 @@ impl GatewaySdkServiceImpl {
 
         let resp = {
             let mut client = self.auth_client.lock().await;
-            client.validate_credential(Request::new(credential_req)).await?
+            client
+                .validate_credential(Request::new(credential_req))
+                .await?
         };
 
         Ok(resp.into_inner())
@@ -187,10 +194,16 @@ mod tests {
 
     #[test]
     fn forward_request_attaches_env_id_metadata() {
-        let req = forward_request(SyncDefinitionsRequest {}, "00000000-0000-0000-0000-000000000001")
-            .unwrap();
+        let req = forward_request(
+            SyncDefinitionsRequest {},
+            "00000000-0000-0000-0000-000000000001",
+        )
+        .unwrap();
         let val = req.metadata().get(ENV_ID_METADATA_KEY).unwrap();
-        assert_eq!(val.to_str().unwrap(), "00000000-0000-0000-0000-000000000001");
+        assert_eq!(
+            val.to_str().unwrap(),
+            "00000000-0000-0000-0000-000000000001"
+        );
     }
 
     #[test]

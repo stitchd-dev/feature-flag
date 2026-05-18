@@ -22,7 +22,10 @@ fn scylla_migrate() -> Result<()> {
     use stitchd_db::scylla::{ScyllaClient, ScyllaConfig, migrate};
 
     let config = ScyllaConfig::from_env();
-    println!("Connecting to ScyllaDB at {} (keyspace: {})", config.uri, config.keyspace);
+    println!(
+        "Connecting to ScyllaDB at {} (keyspace: {})",
+        config.uri, config.keyspace
+    );
 
     let migrations_dir = {
         let root = project_root();
@@ -608,8 +611,7 @@ fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
 /// and write it to `docs/src/sdk/quickstart.md`.
 fn extract_quickstart(root: &Path) -> Result<()> {
     let lib_rs = root.join("sdks/rust/src/lib.rs");
-    let source =
-        std::fs::read_to_string(&lib_rs).context("failed to read sdks/rust/src/lib.rs")?;
+    let source = std::fs::read_to_string(&lib_rs).context("failed to read sdks/rust/src/lib.rs")?;
 
     // Collect `//!` lines and strip the prefix
     let doc_lines: Vec<&str> = source
