@@ -10,7 +10,7 @@ pub mod clickhouse;
 pub mod error;
 pub mod experiment_results;
 pub mod repository;
-/// ScyllaDB client, migration applier, and list-segment repository.
+/// `ScyllaDB` client, migration applier, and list-segment repository.
 pub mod scylla;
 
 pub use scylla::segment::OrphanedGeneration;

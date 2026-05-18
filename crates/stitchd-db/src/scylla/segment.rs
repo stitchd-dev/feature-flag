@@ -51,7 +51,7 @@ pub struct ScyllaSegmentStore {
 impl ScyllaSegmentStore {
     /// Create a new store backed by the given client.
     #[must_use]
-    pub fn new(client: ScyllaClient) -> Self {
+    pub const fn new(client: ScyllaClient) -> Self {
         Self { client }
     }
 
@@ -96,6 +96,10 @@ impl ScyllaSegmentStore {
     /// Replace all list entries for `(segment_id, context_type)` atomically.
     ///
     /// Algorithm: generation-swap with LWT CAS pointer flip.
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError::Query`] if the CQL operation fails.
+    #[allow(clippy::too_many_lines)]
     pub async fn set_list_entries(
         &self,
         id: SegmentId,
@@ -200,7 +204,7 @@ impl ScyllaSegmentStore {
                 };
                 iter.next()
                     .and_then(Result::ok)
-                    .map_or(false, |(applied,)| applied)
+                    .is_some_and(|(applied,)| applied)
             };
 
             if cas_applied {
@@ -222,6 +226,9 @@ impl ScyllaSegmentStore {
     ///
     /// `list_type` must be `"include"` or `"exclude"`. Duplicate adds are idempotent
     /// (Scylla INSERT with same PK is a no-op for non-counter tables).
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError::Query`] if the CQL operation fails.
     pub async fn add_entries(
         &self,
         id: SegmentId,
@@ -266,6 +273,9 @@ impl ScyllaSegmentStore {
     /// Remove individual keys from the current generation of `(segment_id, context_type)`.
     ///
     /// `list_type` must be `"include"` or `"exclude"`. Removing a missing key is a no-op.
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError::Query`] if the CQL operation fails.
     pub async fn remove_entries(
         &self,
         id: SegmentId,
@@ -311,6 +321,9 @@ impl ScyllaSegmentStore {
     ///
     /// Member iff: in the include list AND NOT in the exclude list.
     /// Returns `false` if there is no active generation (segment not populated).
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError::Query`] if the CQL operation fails.
     pub async fn check_membership(
         &self,
         id: SegmentId,
@@ -346,6 +359,9 @@ impl ScyllaSegmentStore {
     ///
     /// Returns a map from `key → is_member`. Keys absent from the active generation
     /// map to `false`.
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError::Query`] if the CQL operation fails.
     pub async fn batch_check_membership(
         &self,
         id: SegmentId,
@@ -366,6 +382,9 @@ impl ScyllaSegmentStore {
     ///
     /// Uses `COUNT(*)` over the active generation partition for correctness.
     /// Returns an empty `counts` map if the segment has no active generation.
+    ///
+    /// # Errors
+    /// Returns [`ScyllaError::Query`] if the CQL operation fails.
     pub async fn get_list_segment_summary(
         &self,
         id: SegmentId,

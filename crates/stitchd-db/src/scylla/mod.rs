@@ -21,7 +21,7 @@ use scylla::{
 use thiserror::Error;
 use tokio::sync::RwLock;
 
-/// Errors produced by ScyllaDB operations.
+/// Errors produced by `ScyllaDB` operations.
 #[derive(Debug, Error)]
 pub enum ScyllaError {
     /// Failed to establish a session.
@@ -40,11 +40,11 @@ pub enum ScyllaError {
 
 impl From<NewSessionError> for ScyllaError {
     fn from(e: NewSessionError) -> Self {
-        ScyllaError::Connection(e.to_string())
+        Self::Connection(e.to_string())
     }
 }
 
-/// Configuration for connecting to a ScyllaDB cluster.
+/// Configuration for connecting to a `ScyllaDB` cluster.
 #[derive(Debug, Clone)]
 pub struct ScyllaConfig {
     /// CQL contact point (e.g. `"127.0.0.1:9042"`).
@@ -78,10 +78,11 @@ pub struct ScyllaClient {
 }
 
 impl ScyllaClient {
-    /// Connect to ScyllaDB and return a client.
+    /// Connect to `ScyllaDB` and return a client.
     ///
     /// # Errors
     /// Returns [`ScyllaError::Connection`] if the cluster is unreachable.
+    #[allow(clippy::large_futures)]
     pub async fn connect(config: &ScyllaConfig) -> Result<Self, ScyllaError> {
         let session = scylla::client::session_builder::SessionBuilder::new()
             .known_node(config.uri.as_str())

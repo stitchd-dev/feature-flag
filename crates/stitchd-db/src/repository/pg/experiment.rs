@@ -131,19 +131,26 @@ impl ExperimentRepository for PgExperimentRepository {
             ",
         )
         .bind(env_id.as_uuid())
-        .bind(limit as i64)
-        .bind(offset as i64)
+        .bind({
+            #[allow(clippy::cast_possible_wrap)]
+            let v = limit as i64;
+            v
+        })
+        .bind({
+            #[allow(clippy::cast_possible_wrap)]
+            let v = offset as i64;
+            v
+        })
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let total = rows
-            .first()
-            .map(|r| {
-                let n: i64 = r.get("total_count");
-                n.max(0) as u64
-            })
-            .unwrap_or(0);
+        let total = rows.first().map_or(0, |r| {
+            let n: i64 = r.get("total_count");
+            #[allow(clippy::cast_sign_loss)]
+            let result = n.max(0) as u64;
+            result
+        });
 
         let experiments = rows
             .iter()

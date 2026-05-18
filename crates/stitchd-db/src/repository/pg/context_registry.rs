@@ -17,7 +17,8 @@ pub struct PgContextRegistryRepository {
 
 impl PgContextRegistryRepository {
     /// Construct a new repository bound to `pool`.
-    pub fn new(pool: PgPool) -> Self {
+    #[must_use]
+    pub const fn new(pool: PgPool) -> Self {
         Self { pool }
     }
 }
@@ -49,12 +50,12 @@ impl ContextRegistryRepository for PgContextRegistryRepository {
         context_type: &str,
     ) -> Result<(), RepositoryError> {
         sqlx::query(
-            r#"
+            r"
             INSERT INTO context_type_registry (env_id, context_type, first_seen_at, last_seen_at)
             VALUES ($1, $2, NOW(), NOW())
             ON CONFLICT (env_id, context_type)
             DO UPDATE SET last_seen_at = NOW()
-            "#,
+            ",
         )
         .bind(env_id.as_uuid())
         .bind(context_type)
@@ -73,7 +74,7 @@ impl ContextRegistryRepository for PgContextRegistryRepository {
         is_private: bool,
     ) -> Result<(), RepositoryError> {
         sqlx::query(
-            r#"
+            r"
             INSERT INTO context_param_registry
                 (env_id, context_type, param_key, inferred_type, is_private,
                  first_seen_at, last_seen_at)
@@ -82,7 +83,7 @@ impl ContextRegistryRepository for PgContextRegistryRepository {
             DO UPDATE SET inferred_type = EXCLUDED.inferred_type,
                           is_private    = EXCLUDED.is_private,
                           last_seen_at  = NOW()
-            "#,
+            ",
         )
         .bind(env_id.as_uuid())
         .bind(context_type)
@@ -100,13 +101,13 @@ impl ContextRegistryRepository for PgContextRegistryRepository {
         env_id: EnvironmentId,
     ) -> Result<Vec<ContextTypeRecord>, RepositoryError> {
         let rows: Vec<ContextTypeRow> = sqlx::query_as(
-            r#"
+            r"
             SELECT env_id, context_type, first_seen_at, last_seen_at
             FROM context_type_registry
             WHERE env_id = $1
               AND last_seen_at >= NOW() - INTERVAL '90 days'
             ORDER BY last_seen_at DESC
-            "#,
+            ",
         )
         .bind(env_id.as_uuid())
         .fetch_all(&self.pool)
@@ -130,7 +131,7 @@ impl ContextRegistryRepository for PgContextRegistryRepository {
         context_type: &str,
     ) -> Result<Vec<ContextParamRecord>, RepositoryError> {
         let rows: Vec<ContextParamRow> = sqlx::query_as(
-            r#"
+            r"
             SELECT env_id, context_type, param_key, inferred_type, is_private,
                    first_seen_at, last_seen_at
             FROM context_param_registry
@@ -138,7 +139,7 @@ impl ContextRegistryRepository for PgContextRegistryRepository {
               AND context_type = $2
               AND last_seen_at >= NOW() - INTERVAL '90 days'
             ORDER BY param_key ASC
-            "#,
+            ",
         )
         .bind(env_id.as_uuid())
         .bind(context_type)
@@ -162,13 +163,13 @@ impl ContextRegistryRepository for PgContextRegistryRepository {
     }
 
     async fn purge_stale(&self, older_than: DateTime<Utc>) -> Result<(), RepositoryError> {
-        sqlx::query(r#"DELETE FROM context_param_registry WHERE last_seen_at < $1"#)
+        sqlx::query(r"DELETE FROM context_param_registry WHERE last_seen_at < $1")
             .bind(older_than)
             .execute(&self.pool)
             .await
             .map_err(RepositoryError::Database)?;
 
-        sqlx::query(r#"DELETE FROM context_type_registry WHERE last_seen_at < $1"#)
+        sqlx::query(r"DELETE FROM context_type_registry WHERE last_seen_at < $1")
             .bind(older_than)
             .execute(&self.pool)
             .await

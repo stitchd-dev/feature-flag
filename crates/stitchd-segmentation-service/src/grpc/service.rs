@@ -195,11 +195,11 @@ impl SegmentationService for SegmentationServiceImpl {
         let r = req.into_inner();
         let env_id = parse_env_id(&r.environment_id).map_err(Status::from)?;
 
-        let page = if r.page == 0 { 1u64 } else { r.page as u64 };
+        let page = if r.page == 0 { 1u64 } else { u64::from(r.page) };
         let per_page = if r.per_page == 0 {
             50u64
         } else {
-            (r.per_page as u64).min(200)
+            u64::from(r.per_page).min(200)
         };
         let offset = (page - 1) * per_page;
 
@@ -229,7 +229,7 @@ impl SegmentationService for SegmentationServiceImpl {
             admin_segments.push(segment_to_admin_proto_with_counts(
                 s,
                 list_counts,
-                condition_expr,
+                condition_expr.as_ref(),
             ));
         }
         Ok(Response::new(ListAdminSegmentsResponse {
@@ -278,7 +278,7 @@ impl SegmentationService for SegmentationServiceImpl {
         Ok(Response::new(segment_to_admin_proto_with_counts(
             &seg,
             list_counts,
-            condition_expr,
+            condition_expr.as_ref(),
         )))
     }
 
@@ -366,7 +366,7 @@ impl SegmentationService for SegmentationServiceImpl {
         Ok(Response::new(segment_to_admin_proto_with_counts(
             &seg,
             list_counts,
-            condition_expr,
+            condition_expr.as_ref(),
         )))
     }
 
@@ -446,7 +446,7 @@ impl SegmentationService for SegmentationServiceImpl {
         Ok(Response::new(segment_to_admin_proto_with_counts(
             &updated,
             list_counts,
-            condition_expr,
+            condition_expr.as_ref(),
         )))
     }
 
@@ -493,7 +493,7 @@ impl SegmentationService for SegmentationServiceImpl {
                     "invalid list_type: {other}; expected 'include' or 'exclude'"
                 )));
             }
-        };
+        }
 
         // Use "user" as the default context_type (find_with_list removed in Scylla migration).
         let context_type = "user";
@@ -518,7 +518,7 @@ impl SegmentationService for SegmentationServiceImpl {
                     let mut seen = std::collections::HashSet::new();
                     r.keys
                         .iter()
-                        .filter(|k| seen.insert(k.to_string()))
+                        .filter(|k| seen.insert((*k).clone()))
                         .cloned()
                         .collect()
                 };
@@ -589,7 +589,7 @@ impl SegmentationService for SegmentationServiceImpl {
                 seg.environment_id,
                 "user", // default context_type for legacy lookup
                 &r.key,
-                &[seg.key.clone()],
+                std::slice::from_ref(&seg.key),
             )
             .await
             .map_err(|e| Status::from(ServiceError::from(e)))?;
@@ -614,8 +614,7 @@ impl SegmentationService for SegmentationServiceImpl {
                     &[format!("__excl__{}", seg.key)], // non-existent key → always false
                 )
                 .await
-                .map(|_| false)
-                .unwrap_or(false);
+                .is_ok_and(|_| false);
 
         Ok(Response::new(LookupSegmentEntryResponse {
             in_include,
@@ -702,7 +701,7 @@ impl SegmentationService for SegmentationServiceImpl {
 fn segment_to_admin_proto_with_counts(
     seg: &Segment,
     list_counts: Option<(String, u32, u32)>,
-    condition_expr: Option<serde_json::Value>,
+    condition_expr: Option<&serde_json::Value>,
 ) -> AdminSegment {
     let seg_type_str = match seg.segment_type {
         SegmentType::List => "list",
@@ -710,7 +709,6 @@ fn segment_to_admin_proto_with_counts(
     };
     let (context_type, include_count, exclude_count) = list_counts.unwrap_or_default();
     let condition_expr_bytes = condition_expr
-        .as_ref()
         .and_then(|v| serde_json::to_vec(v).ok())
         .unwrap_or_default();
     AdminSegment {
@@ -741,7 +739,7 @@ fn segment_to_admin_proto_with_counts(
 // Count helper
 // ---------------------------------------------------------------------------
 
-/// Fetch (context_type, include_count, exclude_count) for a list-based segment.
+/// Fetch (`context_type`, `include_count`, `exclude_count`) for a list-based segment.
 /// Returns `None` if the segment has no list entries.
 async fn count_list_entries(
     repo: &dyn SegmentRepository,

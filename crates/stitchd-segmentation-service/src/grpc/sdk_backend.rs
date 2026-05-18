@@ -32,6 +32,7 @@ impl SegmentationSdkBackendServiceImpl {
 
 /// Extract the resolved environment id from `x-env-id` gRPC metadata. Mirrors
 /// the helper in `stitchd-flag-service::sdk_backend` (same contract).
+#[allow(clippy::result_large_err)]
 fn env_id_from_metadata(req: &Request<impl Sized>) -> Result<EnvironmentId, Status> {
     let raw = req
         .metadata()

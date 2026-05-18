@@ -3,7 +3,7 @@
 //! Three query families are provided:
 //!
 //! - [`query_count_metric`] — count / conversion metrics queried from the
-//!   `events_experiment_daily` pre-aggregated AggregatingMergeTree table via
+//!   `events_experiment_daily` pre-aggregated `AggregatingMergeTree` table via
 //!   `countMerge`/`uniqMerge`. Avoids full `arrayFirst`/`arrayExists` raw
 //!   event scans for the most common query type.
 //! - [`query_numeric_metric`] — numeric sum / avg / percentile metrics queried
@@ -89,11 +89,11 @@ pub struct FunnelStepRow {
 
 /// Build the SQL string for a count/conversion metric query.
 ///
-/// Reads from `events_experiment_daily` (pre-aggregated AggregatingMergeTree)
+/// Reads from `events_experiment_daily` (pre-aggregated `AggregatingMergeTree`)
 /// rather than scanning raw events. `countMerge` and `uniqMerge` finalise the
 /// stored aggregate states across all matched day partitions.
 ///
-/// `sample_size` is an HyperLogLog approximation via `uniqMerge` (vs the
+/// `sample_size` is an `HyperLogLog` approximation via `uniqMerge` (vs the
 /// previous `uniqExact` on raw events). For experiment analysis at scale the
 /// approximation error is negligible.
 ///

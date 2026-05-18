@@ -66,13 +66,16 @@ impl<R: SweeperRepository> GenerationSweeper<R> {
     /// # Arguments
     /// * `store`     — Storage abstraction (Scylla or mock).
     /// * `retention` — How long an orphaned generation must be old before it
-    ///                  is eligible for deletion.
-    pub fn new(store: R, retention: Duration) -> Self {
+    ///   is eligible for deletion.
+    pub const fn new(store: R, retention: Duration) -> Self {
         Self { store, retention }
     }
 
     /// Execute one sweep pass: delete all orphaned generations older than the
     /// retention window.
+    ///
+    /// # Errors
+    /// Returns [`SweeperError`] if a database operation fails.
     pub async fn sweep(&self) -> Result<(), SweeperError> {
         let cutoff = Utc::now()
             - chrono::Duration::from_std(self.retention).unwrap_or(chrono::Duration::hours(24));

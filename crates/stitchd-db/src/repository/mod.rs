@@ -42,7 +42,7 @@ pub struct ListContextCounts {
 /// Keyed by `context_type`.
 #[derive(Debug, Clone, Default)]
 pub struct ListSegmentSummary {
-    /// Counts per context_type.
+    /// Counts per `context_type`.
     pub counts: std::collections::HashMap<String, ListContextCounts>,
 }
 
@@ -439,20 +439,20 @@ pub trait SegmentRepository: Send + Sync {
         keys: &[String],
     ) -> Result<(), RepositoryError>;
 
-    /// Fetch include/exclude counts per context_type for a list segment.
+    /// Fetch include/exclude counts per `context_type` for a list segment.
     async fn get_list_segment_summary(
         &self,
         id: SegmentId,
     ) -> Result<crate::repository::ListSegmentSummary, RepositoryError>;
 
-    /// Fetch the raw ConditionExpr JSON for a rule-based segment (admin UI).
+    /// Fetch the raw `ConditionExpr` JSON for a rule-based segment (admin UI).
     /// Returns `None` if the segment has no condition set yet.
     async fn get_condition_expr(
         &self,
         id: SegmentId,
     ) -> Result<Option<serde_json::Value>, RepositoryError>;
 
-    /// Persist (overwrite) the raw ConditionExpr JSON for a rule-based segment.
+    /// Persist (overwrite) the raw `ConditionExpr` JSON for a rule-based segment.
     /// Pass `None` to clear it.
     async fn set_condition_expr(
         &self,

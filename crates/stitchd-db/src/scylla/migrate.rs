@@ -1,4 +1,4 @@
-/// ScyllaDB migration applier.
+/// `ScyllaDB` migration applier.
 ///
 /// Reads versioned `.cql` files from a directory (sorted lexicographically, so
 /// files named `0001_*.cql`, `0002_*.cql`, … apply in the correct order).
@@ -33,10 +33,10 @@ pub async fn run(client: &ScyllaClient, migrations_dir: &str) -> Result<(), Scyl
     let dir = Path::new(migrations_dir);
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .map_err(|e| ScyllaError::Schema(format!("cannot read migrations dir: {e}")))?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .filter(|e| e.path().extension().is_some_and(|x| x == "cql"))
         .collect();
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in entries {
         let path = entry.path();
@@ -139,13 +139,7 @@ async fn apply_file(
     // semicolons inside comment text don't produce spurious statement fragments.
     let stripped: String = cql
         .lines()
-        .map(|line| {
-            if let Some(pos) = line.find("--") {
-                &line[..pos]
-            } else {
-                line
-            }
-        })
+        .map(|line| line.find("--").map_or(line, |pos| &line[..pos]))
         .collect::<Vec<_>>()
         .join("\n");
 
