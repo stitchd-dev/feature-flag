@@ -18,7 +18,6 @@ All repositories implement async traits defined in this crate. Every query is sc
 | `PgVariantRepository` | PostgreSQL | Variant configurations |
 | `PgSegmentRepository` | PostgreSQL | Segment definitions and list members |
 | `PgExperimentRepository` | PostgreSQL | Experiment and metric definitions |
-| `PgExperimentResultsRepository` | PostgreSQL | Aggregated experiment results |
 | `PgAuditLogger` | PostgreSQL | Audit log writes |
 
 ## ClickHouse
