@@ -55,6 +55,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       STITCHD_DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
+      # sqlx-cli requires DATABASE_URL; set it as an alias for STITCHD_DATABASE_URL
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
       SQLX_OFFLINE: false
     steps:
       - uses: actions/checkout@v4
