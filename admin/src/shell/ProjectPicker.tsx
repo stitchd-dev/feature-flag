@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { createProject, deleteProject, renameProject } from '../lib/api'
 import { I } from '../components/icons'
+import { Dropdown } from '../components/Dropdown'
 import { useOrgContext } from '../context/OrgContext'
 import { usePermissions } from '../hooks/usePermissions'
 import { PERMISSIONS } from '../lib/permissions'
@@ -26,7 +27,6 @@ export function ProjectPicker() {
   const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const dropRef = useRef<HTMLDivElement>(null)
   const renameRef = useRef<HTMLInputElement>(null)
   const newRef = useRef<HTMLInputElement>(null)
 
@@ -37,19 +37,6 @@ export function ProjectPicker() {
   const currentProject = projects.find((p) => p.project_id === projectId)
   const displayName = currentProject?.project_name ?? (projectsLoading ? 'Loading…' : 'Select project')
   const abbr = currentProject ? initials(currentProject.project_name) : '—'
-
-  useEffect(() => {
-    function onOutside(e: MouseEvent) {
-      if (dropRef.current && !dropRef.current.contains(e.target as Node)) {
-        setOpen(false)
-        setRenamingId(null)
-        setDeletingId(null)
-        setCreating(false)
-      }
-    }
-    if (open) document.addEventListener('mousedown', onOutside)
-    return () => document.removeEventListener('mousedown', onOutside)
-  }, [open])
 
   // Auto-select first project when list loads and nothing is selected
   useEffect(() => {
@@ -106,178 +93,169 @@ export function ProjectPicker() {
     }
   }
 
+  const trigger = (
+    <button
+      className="org-switcher button-reset"
+      onClick={() => setOpen((v) => !v)}
+      style={{ width: '100%', cursor: 'pointer', textAlign: 'left' }}
+      title={`Current project: ${displayName}`}
+    >
+      <div className="org-avatar" style={{ background: 'linear-gradient(135deg, #1a3a5c, #0d1f33)' }}>
+        {abbr}
+      </div>
+      <div className="org-meta">
+        <div style={{ fontSize: 10, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, marginBottom: 1 }}>
+          Project
+        </div>
+        <div className="org-name">{displayName}</div>
+      </div>
+      <I.chevronDown
+        size={14}
+        className="org-chevron"
+        style={{ transform: open ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }}
+      />
+    </button>
+  )
+
   return (
-    <div ref={dropRef} style={{ position: 'relative' }}>
-      {/* Trigger — identical to OrgSwitcher trigger */}
-      <button
-        className="org-switcher"
-        onClick={() => setOpen((v) => !v)}
-        style={{ width: '100%', cursor: 'pointer', background: 'none', border: 'none', padding: 0, textAlign: 'left' }}
-        title={`Current project: ${displayName}`}
-      >
-        <div className="org-avatar" style={{ background: 'linear-gradient(135deg, #1a3a5c, #0d1f33)' }}>
-          {abbr}
-        </div>
-        <div className="org-meta">
-          <div style={{ fontSize: 10, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600, marginBottom: 1 }}>
-            Project
-          </div>
-          <div className="org-name">{displayName}</div>
-        </div>
-        <I.chevronDown
-          size={14}
-          className="org-chevron"
-          style={{ transform: open ? 'rotate(180deg)' : undefined, transition: 'transform 0.15s' }}
-        />
-      </button>
-
-      {/* Dropdown */}
-      {open && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 100,
-          background: 'var(--surface)', border: '1px solid var(--border)',
-          borderRadius: 8, boxShadow: 'var(--shadow-md)', overflow: 'hidden',
-          marginTop: 4,
-        }}>
-          {error && (
-            <div style={{ padding: '6px 14px', fontSize: 11, color: 'var(--danger)', borderBottom: '1px solid var(--border)' }}>
-              {error}
-            </div>
-          )}
-
-          {/* Project list */}
-          {projects.length === 0 && !creating && (
-            <div style={{ padding: '12px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
-              No projects yet
-            </div>
-          )}
-
-          {projects.length > 0 && (
-            <>
-              <div style={{ padding: '6px 14px 4px', fontSize: 10, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Switch to
-              </div>
-              {projects.map((p) => {
-                const isSelected = p.project_id === projectId
-
-                if (renamingId === p.project_id) {
-                  return (
-                    <div key={p.project_id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderTop: '1px solid var(--border)' }}>
-                      <input
-                        ref={renameRef}
-                        className="input"
-                        style={{ flex: 1, fontSize: 13, padding: '4px 8px' }}
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void submitRename(p.project_id)
-                          if (e.key === 'Escape') setRenamingId(null)
-                        }}
-                        disabled={busy}
-                        autoFocus
-                      />
-                      <button className="icon-btn" disabled={busy} onClick={() => void submitRename(p.project_id)}><I.check size={12} /></button>
-                      <button className="icon-btn" disabled={busy} onClick={() => setRenamingId(null)}><I.x size={12} /></button>
-                    </div>
-                  )
-                }
-
-                if (deletingId === p.project_id) {
-                  return (
-                    <div key={p.project_id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderTop: '1px solid var(--border)' }}>
-                      <span style={{ flex: 1, fontSize: 12, color: 'var(--fg-muted)' }}>Delete "{p.project_name}"?</span>
-                      <button className="btn btn--danger btn--xs" disabled={busy} onClick={() => void submitDelete(p.project_id)}>Delete</button>
-                      <button className="btn btn--xs" disabled={busy} onClick={() => setDeletingId(null)}>Cancel</button>
-                    </div>
-                  )
-                }
-
-                return (
-                  <div
-                    key={p.project_id}
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', cursor: 'pointer' }}
-                    className="sidebar-link"
-                    onClick={() => { setProjectId(p.project_id); setOpen(false) }}
-                  >
-                    <div className="org-avatar" style={{ width: 24, height: 24, fontSize: 10, borderRadius: 5, flexShrink: 0, background: 'linear-gradient(135deg, #1a3a5c, #0d1f33)' }}>
-                      {initials(p.project_name)}
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: isSelected ? 600 : 400, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {p.project_name}
-                      </div>
-                    </div>
-                    {isSelected && <I.check size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />}
-                    <div style={{ display: 'flex', gap: 2, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
-                      <button
-                        className="icon-btn"
-                        title={canRename ? 'Rename' : 'No permission to rename'}
-                        disabled={!canRename || busy}
-                        style={{ opacity: canRename ? 1 : 0.35 }}
-                        onClick={() => {
-                          setRenamingId(p.project_id)
-                          setRenameValue(p.project_name)
-                          setTimeout(() => renameRef.current?.focus(), 0)
-                        }}
-                      >
-                        <I.pencil size={11} />
-                      </button>
-                      <button
-                        className="icon-btn icon-btn--danger"
-                        title={canDelete ? 'Delete' : 'No permission to delete'}
-                        disabled={!canDelete || busy}
-                        style={{ opacity: canDelete ? 1 : 0.35 }}
-                        onClick={() => setDeletingId(p.project_id)}
-                      >
-                        <I.trash size={11} />
-                      </button>
-                    </div>
-                  </div>
-                )
-              })}
-            </>
-          )}
-
-          {/* New project input row */}
-          {creating && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderTop: projects.length > 0 ? '1px solid var(--border)' : undefined }}>
-              <input
-                ref={newRef}
-                className="input"
-                style={{ flex: 1, fontSize: 13, padding: '4px 8px' }}
-                placeholder="Project name"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void submitCreate()
-                  if (e.key === 'Escape') { setCreating(false); setNewName('') }
-                }}
-                disabled={busy}
-                autoFocus
-              />
-              <button className="icon-btn" disabled={busy} onClick={() => void submitCreate()}><I.check size={12} /></button>
-              <button className="icon-btn" disabled={busy} onClick={() => { setCreating(false); setNewName('') }}><I.x size={12} /></button>
-            </div>
-          )}
-
-          {/* New project button */}
-          {canCreate && !creating && (
-            <button
-              className="sidebar-link"
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                width: '100%', padding: '9px 14px',
-                borderTop: '1px solid var(--border)',
-                color: 'var(--fg-muted)', fontSize: 13,
-              }}
-              onClick={() => { setCreating(true); setNewName(''); setTimeout(() => newRef.current?.focus(), 0) }}
-            >
-              <I.plus size={13} />
-              New project
-            </button>
-          )}
+    <Dropdown trigger={trigger} isOpen={open} onOpenChange={(v) => {
+      setOpen(v)
+      if (!v) { setRenamingId(null); setDeletingId(null); setCreating(false) }
+    }}>
+      {error && (
+        <div style={{ padding: '6px 14px', fontSize: 11, color: 'var(--danger)', borderBottom: '1px solid var(--border)' }}>
+          {error}
         </div>
       )}
-    </div>
+
+      {projects.length === 0 && !creating && (
+        <div style={{ padding: '12px 14px', fontSize: 12, color: 'var(--fg-muted)' }}>
+          No projects yet
+        </div>
+      )}
+
+      {projects.length > 0 && (
+        <>
+          <div style={{ padding: '6px 14px 4px', fontSize: 10, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Switch to
+          </div>
+          {projects.map((p) => {
+            const isSelected = p.project_id === projectId
+
+            if (renamingId === p.project_id) {
+              return (
+                <div key={p.project_id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderTop: '1px solid var(--border)' }}>
+                  <input
+                    ref={renameRef}
+                    className="input"
+                    style={{ flex: 1, fontSize: 13, padding: '4px 8px' }}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void submitRename(p.project_id)
+                      if (e.key === 'Escape') setRenamingId(null)
+                    }}
+                    disabled={busy}
+                    autoFocus
+                  />
+                  <button className="icon-btn" disabled={busy} onClick={() => void submitRename(p.project_id)}><I.check size={12} /></button>
+                  <button className="icon-btn" disabled={busy} onClick={() => setRenamingId(null)}><I.x size={12} /></button>
+                </div>
+              )
+            }
+
+            if (deletingId === p.project_id) {
+              return (
+                <div key={p.project_id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', borderTop: '1px solid var(--border)' }}>
+                  <span style={{ flex: 1, fontSize: 12, color: 'var(--fg-muted)' }}>Delete "{p.project_name}"?</span>
+                  <button className="btn btn--danger btn--xs" disabled={busy} onClick={() => void submitDelete(p.project_id)}>Delete</button>
+                  <button className="btn btn--xs" disabled={busy} onClick={() => setDeletingId(null)}>Cancel</button>
+                </div>
+              )
+            }
+
+            return (
+              <div
+                key={p.project_id}
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', cursor: 'pointer' }}
+                className="sidebar-link dropdown-item"
+                onClick={() => { setProjectId(p.project_id); setOpen(false) }}
+              >
+                <div className="org-avatar" style={{ width: 24, height: 24, fontSize: 10, borderRadius: 5, flexShrink: 0, background: 'linear-gradient(135deg, #1a3a5c, #0d1f33)' }}>
+                  {initials(p.project_name)}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: isSelected ? 600 : 400, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.project_name}
+                  </div>
+                </div>
+                {isSelected && <I.check size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />}
+                <div style={{ display: 'flex', gap: 2, flexShrink: 0 }} onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="icon-btn"
+                    title={canRename ? 'Rename' : 'No permission to rename'}
+                    disabled={!canRename || busy}
+                    style={{ opacity: canRename ? 1 : 0.35 }}
+                    onClick={() => {
+                      setRenamingId(p.project_id)
+                      setRenameValue(p.project_name)
+                      setTimeout(() => renameRef.current?.focus(), 0)
+                    }}
+                  >
+                    <I.pencil size={11} />
+                  </button>
+                  <button
+                    className="icon-btn icon-btn--danger"
+                    title={canDelete ? 'Delete' : 'No permission to delete'}
+                    disabled={!canDelete || busy}
+                    style={{ opacity: canDelete ? 1 : 0.35 }}
+                    onClick={() => setDeletingId(p.project_id)}
+                  >
+                    <I.trash size={11} />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </>
+      )}
+
+      {creating && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderTop: projects.length > 0 ? '1px solid var(--border)' : undefined }}>
+          <input
+            ref={newRef}
+            className="input"
+            style={{ flex: 1, fontSize: 13, padding: '4px 8px' }}
+            placeholder="Project name"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void submitCreate()
+              if (e.key === 'Escape') { setCreating(false); setNewName('') }
+            }}
+            disabled={busy}
+            autoFocus
+          />
+          <button className="icon-btn" disabled={busy} onClick={() => void submitCreate()}><I.check size={12} /></button>
+          <button className="icon-btn" disabled={busy} onClick={() => { setCreating(false); setNewName('') }}><I.x size={12} /></button>
+        </div>
+      )}
+
+      {canCreate && !creating && (
+        <button
+          className="sidebar-link dropdown-item"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            width: '100%', padding: '9px 14px',
+            borderTop: '1px solid var(--border)',
+            color: 'var(--fg-muted)', fontSize: 13,
+          }}
+          onClick={() => { setCreating(true); setNewName(''); setTimeout(() => newRef.current?.focus(), 0) }}
+        >
+          <I.plus size={13} />
+          New project
+        </button>
+      )}
+    </Dropdown>
   )
 }
