@@ -114,18 +114,18 @@
 ## Phase 7: Route Handler Moderate Trim
 <!-- depends: -->
 
-- [ ] Task 1: Extract shared helpers in `routes/mod.rs`
+- [x] Task 1: Extract shared helpers in `routes/mod.rs`
   - Pagination helpers, error-mapping utilities currently duplicated across handlers
   - No logic changes — pure extraction
 
-- [ ] Task 2: Trim `flags.rs`
+- [x] Task 2: Trim `flags.rs`
   - Remove dead code, unused imports, stale comments
   - Enforce: no inline DB calls, no analytics calls
 
-- [ ] Task 3: Trim `segments.rs`
+- [x] Task 3: Trim `segments.rs`
   - Same as Task 2 for segments
 
-- [ ] Task 4: Clippy + fmt pass
+- [x] Task 4: Clippy + fmt pass
   - `cargo clippy -p stitchd-gateway -- -D warnings`
   - `cargo fmt -p stitchd-gateway --check`
 
@@ -134,11 +134,11 @@
 ## Phase 8: Final Verification
 <!-- depends: phase6, phase7 -->
 
-- [ ] Task 1: Full workspace build + test
+- [x] Task 1: Full workspace build + test
   - `cargo test --workspace`
   - `cargo clippy --workspace --all-targets -- -D warnings`
 
-- [ ] Task 2: Acceptance criteria audit
+- [x] Task 2: Acceptance criteria audit
   - `cargo tree -p stitchd-gateway | grep -E "clickhouse|sqlx"` → empty ✓
   - `stitchd-event-service` crate absent from workspace ✓
   - All gateway route tests pass ✓
