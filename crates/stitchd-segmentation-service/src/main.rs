@@ -20,8 +20,8 @@ use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use stitchd_db::scylla::{ScyllaConfig, migrate as scylla_migrate};
-use stitchd_db::{PgAuditLogger, PgSegmentRepository, SegmentRepository};
+use stitchd_db::scylla::{ScyllaConfig, migrate as scylla_migrate, segment::ScyllaSegmentStore};
+use stitchd_db::{CompositeSegmentRepository, PgAuditLogger, PgSegmentRepository, SegmentRepository};
 use stitchd_proto::sdk::v1::segmentation_sdk_backend_service_server::SegmentationSdkBackendServiceServer;
 use stitchd_proto::segments::v1::segmentation_service_server::SegmentationServiceServer;
 use stitchd_segmentation_service::grpc::sdk_backend::SegmentationSdkBackendServiceImpl;
@@ -74,8 +74,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to connect to PostgreSQL")?;
 
     let audit_logger = Arc::new(PgAuditLogger::new(pool.clone()));
-    let segment_repo: Arc<dyn SegmentRepository> =
-        Arc::new(PgSegmentRepository::new(pool.clone(), audit_logger));
+    let pg_segment_repo = Arc::new(PgSegmentRepository::new(pool.clone(), audit_logger));
 
     // ── ScyllaDB ──────────────────────────────────────────────────────────────
     let scylla_config = ScyllaConfig::from_env();
@@ -93,6 +92,13 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("ScyllaDB migrations failed")?;
     tracing::info!("ScyllaDB migrations applied");
+
+    let scylla_store = Arc::new(ScyllaSegmentStore::new(scylla_client));
+
+    // Composite repository: PG for metadata, Scylla for list-entry operations.
+    let segment_repo: Arc<dyn SegmentRepository> = Arc::new(
+        CompositeSegmentRepository::new(pg_segment_repo.clone(), scylla_store),
+    );
 
     // ── gRPC server ───────────────────────────────────────────────────────────
     let addr: std::net::SocketAddr = format!("0.0.0.0:{port}")

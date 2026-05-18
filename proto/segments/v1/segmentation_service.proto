@@ -93,6 +93,32 @@ message AdminSegment {
   uint32          exclude_count  = 15;
 }
 
+// ─── AddEntries / RemoveEntries messages ─────────────────────────────────────
+
+message AddEntriesRequest {
+  string          segment_id   = 1;
+  string          context_type = 2;
+  // "include" or "exclude"
+  string          list_type    = 3;
+  repeated string keys         = 4;
+}
+
+message AddEntriesResponse {
+  int64 added_count = 1;
+}
+
+message RemoveEntriesRequest {
+  string          segment_id   = 1;
+  string          context_type = 2;
+  // "include" or "exclude"
+  string          list_type    = 3;
+  repeated string keys         = 4;
+}
+
+message RemoveEntriesResponse {
+  int64 removed_count = 1;
+}
+
 // ─── Entry patch / lookup messages ───────────────────────────────────────────
 
 // Patch (add/remove/replace) entries in a list segment.
@@ -219,4 +245,10 @@ service SegmentationService {
 
   // Look up whether a single key is in the include/exclude list of a segment.
   rpc LookupSegmentEntry(LookupSegmentEntryRequest) returns (LookupSegmentEntryResponse);
+
+  // Add individual entries to a list segment (Scylla-backed).
+  rpc AddEntries(AddEntriesRequest) returns (AddEntriesResponse);
+
+  // Remove individual entries from a list segment (Scylla-backed).
+  rpc RemoveEntries(RemoveEntriesRequest) returns (RemoveEntriesResponse);
 }

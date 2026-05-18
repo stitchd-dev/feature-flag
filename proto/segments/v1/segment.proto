@@ -44,7 +44,9 @@ message ListSegmentMeta {
 // --- Sync payload ---
 
 // Segment data returned as part of the flag sync response (embedded via FlagSyncService).
+// list_segments carries lightweight metadata only — no entry keys.
+// Entry keys are never sent over the wire; membership is evaluated server-side.
 message SegmentBundle {
-  repeated ListSegment list_segments = 1;
-  repeated RuleSegment rule_segments = 2;
+  repeated ListSegmentMeta list_segments = 1;
+  repeated RuleSegment     rule_segments = 2;
 }

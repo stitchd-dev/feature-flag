@@ -21,7 +21,30 @@ use stitchd_core::{
 
 use crate::RepositoryError;
 
+pub mod composite;
 pub mod pg;
+
+// ---------------------------------------------------------------------------
+// Scylla-backed list segment types
+// ---------------------------------------------------------------------------
+
+/// Include/exclude entry counts for one context type within a list segment.
+#[derive(Debug, Clone, Default)]
+pub struct ListContextCounts {
+    /// Number of keys in the include list.
+    pub include_count: i64,
+    /// Number of keys in the exclude list.
+    pub exclude_count: i64,
+}
+
+/// Aggregated counts returned by [`SegmentRepository::get_list_segment_summary`].
+///
+/// Keyed by `context_type`.
+#[derive(Debug, Clone, Default)]
+pub struct ListSegmentSummary {
+    /// Counts per context_type.
+    pub counts: std::collections::HashMap<String, ListContextCounts>,
+}
 
 // ---------------------------------------------------------------------------
 // Organisation
@@ -376,12 +399,6 @@ pub trait SegmentRepository: Send + Sync {
         id: SegmentId,
     ) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError>;
 
-    /// Fetch a list-based segment definition.
-    async fn find_with_list(
-        &self,
-        id: SegmentId,
-    ) -> Result<stitchd_core::segment::ListBasedSegment, RepositoryError>;
-
     /// Upsert rule definitions for a segment (replaces all existing rules).
     async fn upsert_rules(
         &self,
@@ -389,7 +406,9 @@ pub trait SegmentRepository: Send + Sync {
         rules: &[stitchd_core::rule_engine::types::Rule],
     ) -> Result<(), RepositoryError>;
 
-    /// Replace list entries for a specific context type within a segment.
+    /// Replace list entries for a specific context type within a segment (generation-swap).
+    ///
+    /// Atomically flips the active generation pointer after writing all new entries.
     async fn set_list_entries(
         &self,
         id: SegmentId,
@@ -397,6 +416,34 @@ pub trait SegmentRepository: Send + Sync {
         include: &[String],
         exclude: &[String],
     ) -> Result<(), RepositoryError>;
+
+    /// Add individual keys to an existing list segment.
+    ///
+    /// `list_type` is `"include"` or `"exclude"`. Duplicate adds are idempotent.
+    async fn add_entries(
+        &self,
+        id: SegmentId,
+        context_type: &str,
+        list_type: &str,
+        keys: &[String],
+    ) -> Result<(), RepositoryError>;
+
+    /// Remove individual keys from an existing list segment.
+    ///
+    /// `list_type` is `"include"` or `"exclude"`. Missing keys are no-ops.
+    async fn remove_entries(
+        &self,
+        id: SegmentId,
+        context_type: &str,
+        list_type: &str,
+        keys: &[String],
+    ) -> Result<(), RepositoryError>;
+
+    /// Fetch include/exclude counts per context_type for a list segment.
+    async fn get_list_segment_summary(
+        &self,
+        id: SegmentId,
+    ) -> Result<crate::repository::ListSegmentSummary, RepositoryError>;
 
     /// Fetch the raw ConditionExpr JSON for a rule-based segment (admin UI).
     /// Returns `None` if the segment has no condition set yet.
@@ -474,13 +521,6 @@ pub trait SegmentRepository: Send + Sync {
         ids: &[SegmentId],
     ) -> Result<std::collections::HashMap<SegmentId, stitchd_core::segment::RuleBasedSegment>, RepositoryError>;
 
-    /// Fetch list entries for multiple list-based segments in one query.
-    ///
-    /// Returns a map from segment ID to its assembled [`ListBasedSegment`].
-    async fn find_lists_batch(
-        &self,
-        ids: &[SegmentId],
-    ) -> Result<std::collections::HashMap<SegmentId, stitchd_core::segment::ListBasedSegment>, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

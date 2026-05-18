@@ -29,8 +29,10 @@ pub use experiment_results::{
 };
 pub use repository::{
     AuditLogger, ContextRegistryRepository, EnvironmentRepository, EventDefinitionRepository,
-    ExperimentRepository, FlagRepository, OrganisationRepository, ProjectRepository,
+    ExperimentRepository, FlagRepository, ListContextCounts, ListSegmentSummary,
+    OrganisationRepository, ProjectRepository,
     RoleRepository, SdkKeyRepository, SegmentRepository, UserRepository, VariantRepository,
+    composite::CompositeSegmentRepository,
     pg::{
         PgAuditLogger, PgContextRegistryRepository, PgEnvironmentRepository,
         PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository,
