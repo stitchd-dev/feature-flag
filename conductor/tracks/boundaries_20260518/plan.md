@@ -24,21 +24,23 @@
   - [x] Implement `ExperimentResultsRepository` trait + `ClickHouseExperimentResultsRepository`
   - [x] Wire into FR1.2 handlers via main.rs AppState
 
-- [ ] Task 4: Refactor `stats-service` to consume both services via gRPC
-  <!-- files: crates/stitchd-stats-service/src/scheduler.rs, crates/stitchd-stats-service/src/results_writer.rs, crates/stitchd-stats-service/src/main.rs, crates/stitchd-stats-service/Cargo.toml -->
+- [x] Task 4: Refactor `stats-service` to consume both services via gRPC [a024312]
+  <!-- files: crates/stitchd-stats-service/src/scheduler.rs, crates/stitchd-stats-service/src/results_writer.rs, crates/stitchd-stats-service/src/main.rs, crates/stitchd-stats-service/src/config.rs, crates/stitchd-stats-service/Cargo.toml -->
   <!-- depends: task1, task2, task3 -->
-  - [ ] Write failing mock-client tests
-  - [ ] Refactor `scheduler.rs` to call `experimentation-service.ListRunningExperiments`
-  - [ ] Refactor `results_writer.rs` to call `analytics-service.WriteExperimentResults`
-  - [ ] Remove unused PG pool deps
-  - [ ] Run tests + clippy
+  - [x] Write failing mock-client tests (12 new tests; in-process tonic mock via TcpListenerStream)
+  - [x] Refactor `scheduler.rs` to call `experimentation-service.ListRunningExperiments`
+  - [x] Refactor `results_writer.rs` to call `analytics-service.WriteExperimentResults`
+  - [x] Remove direct SQL on experiments/experiment_iterations/experiment_results (acceptance grep clean)
+  - [x] Added `EXPERIMENTATION_SERVICE_GRPC_URL` + `ANALYTICS_SERVICE_GRPC_URL` config vars
+  - [x] Run tests + clippy
 
-- [ ] Task 5: Refactor `experimentation-service.GetExperimentResults` handler to read from analytics-service
-  <!-- files: crates/stitchd-experimentation-service/src/grpc/results.rs, crates/stitchd-experimentation-service/Cargo.toml -->
+- [x] Task 5: Refactor `experimentation-service.GetExperimentResults` handler to read from analytics-service [f2b6a6a]
+  <!-- files: crates/stitchd-experimentation-service/src/analytics_client.rs, crates/stitchd-experimentation-service/src/main.rs, crates/stitchd-experimentation-service/src/service.rs, crates/stitchd-experimentation-service/src/lib.rs -->
   <!-- depends: task1, task3 -->
-  - [ ] Write failing test asserting analytics-service gRPC call
-  - [ ] Implement; remove `experiment_results` PG repo usage
-  - [ ] Run tests
+  - [x] Write failing test asserting analytics-service gRPC call (2 new tests; 48 total green)
+  - [x] Implement via new `AnalyticsResultsPort` trait + `AnalyticsClient` (DI pattern, mockable)
+  - [x] Remove `PgExperimentResultsRepository` from experimentation-service entirely
+  - [x] Run tests
 
 - [ ] Task 6: Drop `experiment_results` PostgreSQL table + repo
   <!-- files: crates/stitchd-db/migrations/, crates/stitchd-db/src/experiment_results.rs, crates/stitchd-db/src/lib.rs -->
@@ -240,9 +242,10 @@
 - [x] Task 4: Refresh `sdks/rust/README.md` + crate-level doc comment [8ada1cf]
   <!-- files: sdks/rust/README.md, sdks/rust/src/lib.rs -->
 
-- [ ] Task 5: Run SDK conformance suite
+- [x] Task 5: Run SDK conformance suite [no code change — verified green]
   <!-- files: sdks/rust/tests/conformance.rs (read-only) -->
   <!-- depends: task4 -->
+  - 8/8 conformance tests green; clippy clean. Command: `cargo test -p stitchd-sdk --test conformance --features test-util`. `--features test-util` required for clippy `--all-targets`.
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 6 — SDK Alignment' (Protocol in workflow.md)
   <!-- depends: task1, task2, task3, task5 -->

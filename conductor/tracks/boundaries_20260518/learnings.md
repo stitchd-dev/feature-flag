@@ -76,3 +76,32 @@ Workspace `cargo check --workspace` clean after all 8 merges.
 - **ScyllaDB containment correction**: the plan stated "only `stitchd-segmentation-service` and `xtask` have direct `scylla` deps". Actually `xtask` is compliant via **transitive** dep through `stitchd-db`; direct deps are only `stitchd-db` (library home) + `stitchd-segmentation-service` (binary consumer). This is captured in the new `SCYLLA_OWNERSHIP.md`.
 
 ---
+
+## [2026-05-19 00:50] Wave 2 — Phase 1 tasks 1.4, 1.5 + Phase 6 task 6.5 (3 parallel workers)
+
+**Tasks completed:** 1.4, 1.5, 6.5 (3 of 3).
+
+**Worker commits:**
+- 1.4 stats-service gRPC refactor: `a024312`
+- 1.5 experimentation GetExperimentResults via analytics: `f2b6a6a`
+- 6.5 SDK conformance verified: no commit (working tree clean — 8/8 fixtures green)
+
+Workspace `cargo check --workspace` clean after both merges.
+
+**Patterns / gotchas:**
+
+- **`bd close --no-auto` is the correct default for parallel waves.** Wave 1 used `--continue` and the cascade auto-claimed Phase 2 + Phase 3 tasks across milestone boundaries — required manual reset. Wave 2 used `--no-auto`; no cascade, no resets needed. Use `--no-auto` whenever the orchestrator (not beads) controls wave advancement.
+
+- **In-process tonic mocks via `TcpListenerStream`.** Worker 9 needed to test stats-service against mocked experimentation-service + analytics-service gRPC. Pattern: `tokio::net::TcpListener::bind("127.0.0.1:0")` to claim a random port; wrap with `tokio_stream::wrappers::TcpListenerStream`; pass to `tonic::transport::Server::builder().serve_with_incoming(...)` running in a `tokio::spawn`. Client connects to `format!("http://{}", listener.local_addr()?)`. No external mocking lib; no port conflicts. Reusable pattern for cross-service-gRPC integration tests.
+
+- **`*ServiceClient` lives in `*_service_client` sub-module of generated proto code.** When importing tonic-generated clients, the path is `stitchd_proto::analytics::v1::analytics_service_client::AnalyticsServiceClient` (not re-exported at v1::). Similarly for service traits used by hand-rolled servers: they live under `*_service_server::*ServiceTrait`.
+
+- **`Arc<Mutex<Client>>` for tonic gRPC clients shared across tasks.** Worker 9 found that the `tonic::Client` type doesn't impl `Clone`-with-shared-state cleanly; wrapping in `Arc<Mutex<...>>` lets multiple async tasks send requests through the same channel. (Alternative: the underlying `Channel` is `Clone` and cheap to clone — clone the Channel and create per-task clients. Either pattern works.)
+
+- **Proto JSON-string fields require explicit `serde_json::from_str` at consumer boundaries.** Worker 10 found that `ExperimentResult.variant_stats` / `frequentist_result` / `bayesian_result` are wire-level `String`, not `serde_json::Value`. Aggregation logic that previously worked off a `serde_json::Value` from PG must call `serde_json::from_str` first when reading via the new gRPC path.
+
+- **Port assignment plan vs reality**: Worker 9 used default ports `EXPERIMENTATION_SERVICE_GRPC_URL=http://localhost:50054` and `ANALYTICS_SERVICE_GRPC_URL=http://localhost:50055`. Worker 10 used `ANALYTICS_SERVICE_GRPC_URL` with default `http://localhost:50054` (conflict — analytics-service vs experimentation-service ports). Phase 3 (task 3.6 port-suffix standardization + 3.4 STITCHD_ prefix) needs to reconcile actual port assignments per-service and document in docker-compose. Note as a follow-up.
+
+- **`--features test-util` required for SDK clippy `--all-targets`**. The conformance test uses test-only helpers behind a feature flag. Without `--features test-util`, `cargo clippy -p stitchd-sdk --all-targets` fails with unresolved imports. Document this in the SDK README's testing section eventually.
+
+---
