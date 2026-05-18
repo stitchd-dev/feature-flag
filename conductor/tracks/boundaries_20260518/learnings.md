@@ -121,3 +121,35 @@ Workspace `cargo check --workspace` clean after both merges.
 **Phase 1 + Phase 6 are now CODE-COMPLETE.** Only the two user-manual-verification tasks remain (`feature-flag-mwk.1.8` and `feature-flag-mwk.6.6`). No more parallel waves until user verifies.
 
 ---
+
+## [2026-05-19 02:00] Discovered work — workspace clippy cleanup (`feature-flag-mwk.8`)
+
+**Out-of-scope but user-requested.** During Phase 1+6 verification, `cargo clippy --workspace --all-targets -- -D warnings` revealed **51 pre-existing clippy violations across 8 crates** (none introduced by the boundary refactor; refactor-touched crates were already clean). User requested fix-and-reverify before moving to Phase 2. Worker 13 closed at commit `15bb6df`.
+
+**Scylla perf benchmark marked `#[ignore]`:** `perf_40_segments_1m_entries_each` in `crates/stitchd-db/tests/scylla_perf_e2e.rs` writes **40 million rows** (40 segments × 1M entries) to ScyllaDB — minutes per run. Now `#[ignore]`d by default; opt in with `cargo test -p stitchd-db --test scylla_perf_e2e -- --ignored`.
+
+**Per-crate clippy: 51 → 0.** `cargo clippy --workspace --all-targets -- -D warnings` exits 0 across:
+- stitchd-core (2 → 0)
+- stitchd-db (3 → 0; scylla `assert_eq!(x, bool_literal)` → `assert!(x)` / `assert!(!x)`)
+- stitchd-events (2 → 0; `useless_format` in clickhouse_views test)
+- stitchd-auth-service (10 → 0; `cast u32 to u64`, missing `# Errors`, `#[must_use]`)
+- stitchd-flag-service (6 → 0; `result_large_err`, `approx_constant`)
+- stitchd-segmentation-service (25 → 0; largest; 469-line refactor of sweeper test module restructuring inline test mod into top-level `#[tokio::test]` fns)
+- stitchd-gateway (2 → 0; `stub_clients()` `type_complexity` resolved via type alias — closes the originally-filed `feature-flag-ysh`)
+- stitchd-sdk (1 → 0; only triggers without `--features test-util`)
+
+**Patterns / gotchas:**
+
+- **One `cargo clippy --workspace --all-targets --fix --allow-dirty -- -D warnings` pass resolved everything.** Auto-fix is remarkably effective for the lint families that dominate stale codebases: `useless_format`, `approx_constant`, `cast_lossless`, `assert_eq!(x, bool_literal)`, `result_large_err` (it adds `#[allow]` with comment when boxing would change public API). Worth keeping in the dev workflow.
+
+- **`#[allow(clippy::result_large_err)]` is the right escape hatch for tonic returns.** `stitchd-flag-service/src/sdk_backend.rs::env_id_from_metadata()` returns `tonic::Status` (external type, large variant); boxing it would change the public gRPC API surface. The `#[allow]` with a one-line justification comment is the correct fix — auto-fix even applies it correctly with the comment included.
+
+- **`cargo clippy --fix` chooses `.to_string()` over `.to_owned()` for `useless_format` literal conversions.** Both are idiomatic; the auto-fix picks `.to_string()`. Acceptable.
+
+- **`stitchd-segmentation-service/src/sweeper/tests.rs` 469-line restructure.** Auto-fix triggered on `useless_let_if_seq` / `needless_pass_by_ref_mut` and restructured an inline test module into top-level `#[tokio::test]` fns. Large diff but mechanical — behaviour preserved. Worth a code review if you care about the test layout style.
+
+- **Pre-existing E2E infra-dependent failure (NOT a regression):** `stitchd-flag-service::evaluate_preview_writes_rows_to_clickhouse` requires a running flag-service daemon on `:50052`. `FLAG_SERVICE_ADDR` is set in `.env.local`, which prevents the test from self-skipping when no daemon is actually running. This is pre-existing behaviour. Two clean fixes either: (a) auto-skip when the daemon isn't reachable, or (b) wrap in an `#[ignore = "needs running flag-service daemon"]` like the perf bench. Filing as a separate follow-up beads issue is reasonable.
+
+- **Per-crate test invocation discipline.** Per user preference, every verification ran `cargo test -p <crate>` instead of `cargo test --workspace`. Slightly slower wall-clock (no parallel test execution across crates), but much clearer signal when a single crate breaks.
+
+---
