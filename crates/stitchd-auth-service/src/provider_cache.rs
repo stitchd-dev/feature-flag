@@ -50,10 +50,10 @@ impl<T: Clone + Send + Sync + 'static> ProviderCache<T> {
         }
     }
 
-    /// Construct a cache using `PROVIDER_CACHE_TTL_SECS` env var (default: 3600).
+    /// Construct a cache using `STITCHD_PROVIDER_CACHE_TTL_SECS` env var (default: 3600).
     #[must_use]
     pub fn from_env() -> Self {
-        let secs: u64 = std::env::var("PROVIDER_CACHE_TTL_SECS")
+        let secs: u64 = std::env::var("STITCHD_PROVIDER_CACHE_TTL_SECS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(3600);
@@ -256,7 +256,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn from_env_defaults_to_3600_secs() {
-        // PROVIDER_CACHE_TTL_SECS not set → default 3600 s TTL
+        // STITCHD_PROVIDER_CACHE_TTL_SECS not set → default 3600 s TTL
         let cache: ProviderCache<String> = ProviderCache::from_env();
         assert_eq!(cache.ttl, Duration::from_secs(3600));
     }
@@ -265,9 +265,9 @@ mod tests {
     #[serial]
     async fn from_env_reads_env_var() {
         // SAFETY: test-only, single-threaded context for env mutation
-        unsafe { std::env::set_var("PROVIDER_CACHE_TTL_SECS", "120") };
+        unsafe { std::env::set_var("STITCHD_PROVIDER_CACHE_TTL_SECS", "120") };
         let cache: ProviderCache<String> = ProviderCache::from_env();
-        unsafe { std::env::remove_var("PROVIDER_CACHE_TTL_SECS") };
+        unsafe { std::env::remove_var("STITCHD_PROVIDER_CACHE_TTL_SECS") };
         assert_eq!(cache.ttl, Duration::from_secs(120));
     }
 }

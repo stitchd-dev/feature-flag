@@ -22,8 +22,8 @@ Stitchd uses [sqlx](https://github.com/launchbahq/sqlx) for migrations. Run them
 against the database before starting the server:
 
 ```bash
-export DATABASE_URL="postgres://stitchd:yourpassword@localhost/stitchd"
-sqlx migrate run --database-url "$DATABASE_URL"
+export STITCHD_DATABASE_URL="postgres://stitchd:yourpassword@localhost/stitchd"
+sqlx migrate run --database-url "$STITCHD_DATABASE_URL"
 ```
 
 Migrations live in `crates/stitchd-db/migrations/`. They are additive and safe to
@@ -41,7 +41,7 @@ Example:
 postgres://stitchd:secret@db.internal:5432/stitchd
 ```
 
-Pass this as the `DATABASE_URL` environment variable to `stitchd-server`.
+Pass this as the `STITCHD_DATABASE_URL` environment variable to `stitchd-server`.
 
 ## Connection Pool
 

@@ -22,8 +22,8 @@ use thiserror::Error;
 /// Errors that can arise from cryptographic operations.
 #[derive(Debug, Error)]
 pub enum CryptoError {
-    /// The `AUTH_ENCRYPTION_KEY` environment variable is missing.
-    #[error("missing AUTH_ENCRYPTION_KEY environment variable")]
+    /// The `STITCHD_AUTH_ENCRYPTION_KEY` environment variable is missing.
+    #[error("missing STITCHD_AUTH_ENCRYPTION_KEY environment variable")]
     MissingEnvVar,
 
     /// The key bytes could not be decoded (wrong length or bad base64).
@@ -49,7 +49,7 @@ pub enum CryptoError {
 
 /// A 256-bit symmetric key for AES-GCM encryption.
 ///
-/// Loaded from the `AUTH_ENCRYPTION_KEY` environment variable (base64-encoded).
+/// Loaded from the `STITCHD_AUTH_ENCRYPTION_KEY` environment variable (base64-encoded).
 pub struct CryptoKey([u8; 32]);
 
 impl CryptoKey {
@@ -63,14 +63,14 @@ impl CryptoKey {
         Self(key)
     }
 
-    /// Read and base64-decode `AUTH_ENCRYPTION_KEY` from the environment.
+    /// Read and base64-decode `STITCHD_AUTH_ENCRYPTION_KEY` from the environment.
     ///
     /// # Errors
     /// Returns [`CryptoError::MissingEnvVar`] if the variable is absent, or
     /// [`CryptoError::InvalidKey`] if the decoded bytes are not exactly 32 bytes.
     pub fn from_env() -> Result<Self, CryptoError> {
         let encoded =
-            std::env::var("AUTH_ENCRYPTION_KEY").map_err(|_| CryptoError::MissingEnvVar)?;
+            std::env::var("STITCHD_AUTH_ENCRYPTION_KEY").map_err(|_| CryptoError::MissingEnvVar)?;
         let bytes = BASE64
             .decode(encoded.trim())
             .map_err(|e| CryptoError::InvalidKey(e.to_string()))?;

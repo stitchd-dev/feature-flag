@@ -3874,7 +3874,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stitchd-sdk"
+name = "stitchd-sdk-rust"
 version = "0.1.0"
 dependencies = [
  "arc-swap",

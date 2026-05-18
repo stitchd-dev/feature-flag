@@ -50,8 +50,8 @@ Default consistency levels used by the driver:
 
 | Variable | Default | Description |
 |---|---|---|
-| `SCYLLA_URI` | `127.0.0.1:9042` | Contact point (host:port) |
-| `SCYLLA_KEYSPACE` | `stitchd` | Keyspace used for all tables |
+| `STITCHD_SCYLLA_URI` | `127.0.0.1:9042` | Contact point (host:port) |
+| `STITCHD_SCYLLA_KEYSPACE` | `stitchd` | Keyspace used for all tables |
 | `SWEEPER_RETENTION_SECS` | `86400` (24 h) | How old an orphaned generation must be before it's deleted |
 | `SWEEPER_INTERVAL_SECS` | `3600` (1 h) | How often the generation sweeper runs |
 

@@ -17,10 +17,10 @@ server for SDK sync.
 ```bash
 # 1. Start PostgreSQL
 # 2. Set required environment variable
-export DATABASE_URL="postgres://user:pass@localhost/stitchd"
+export STITCHD_DATABASE_URL="postgres://user:pass@localhost/stitchd"
 
 # 3. Run migrations
-sqlx migrate run --database-url "$DATABASE_URL"
+sqlx migrate run --database-url "$STITCHD_DATABASE_URL"
 
 # 4. Start the server
 cargo run -p stitchd-server

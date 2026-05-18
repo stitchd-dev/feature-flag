@@ -1,18 +1,18 @@
 //! Entry point for the `stitchd-flag-service` gRPC microservice.
 //!
-//! The server listens on `FLAG_SERVICE_PORT` (default `50052`) and exposes
+//! The server listens on `STITCHD_FLAG_SERVICE_GRPC_PORT` (default `50052`) and exposes
 //! the [`FlagService`] gRPC API backed by a PostgreSQL database.
 //!
 //! # Environment variables
 //!
 //! | Variable             | Default                                    | Description                     |
 //! |----------------------|--------------------------------------------|---------------------------------|
-//! | `FLAG_SERVICE_PORT`  | `50052`                                    | gRPC server listen port         |
-//! | `DATABASE_URL`       | *required*                                 | PostgreSQL connection string    |
-//! | `CLICKHOUSE_URL`     | `http://localhost:8123`                    | ClickHouse HTTP endpoint        |
-//! | `CLICKHOUSE_DB`      | `stitchd`                                  | ClickHouse database name        |
-//! | `CLICKHOUSE_USER`    | `default`                                  | ClickHouse username             |
-//! | `CLICKHOUSE_PASSWORD`| *(empty)*                                  | ClickHouse password             |
+//! | `STITCHD_FLAG_SERVICE_GRPC_PORT`  | `50052`                                    | gRPC server listen port         |
+//! | `STITCHD_DATABASE_URL`       | *required*                                 | PostgreSQL connection string    |
+//! | `STITCHD_CLICKHOUSE_URL`     | `http://localhost:8123`                    | ClickHouse HTTP endpoint        |
+//! | `STITCHD_CLICKHOUSE_DB`      | `stitchd`                                  | ClickHouse database name        |
+//! | `STITCHD_CLICKHOUSE_USER`    | `default`                                  | ClickHouse username             |
+//! | `STITCHD_CLICKHOUSE_PASSWORD`| *(empty)*                                  | ClickHouse password             |
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // ── Metrics ────────────────────────────────────────────────────────────────
-    let metrics_port: u16 = std::env::var("FLAG_METRICS_PORT")
+    let metrics_port: u16 = std::env::var("STITCHD_FLAG_SERVICE_METRICS_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(9052);
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to install Prometheus recorder")?;
 
     // ── Database ───────────────────────────────────────────────────────────────
-    let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
+    let database_url = std::env::var("STITCHD_DATABASE_URL").context("STITCHD_DATABASE_URL is required")?;
     let pool = sqlx::PgPool::connect(&database_url)
         .await
         .context("failed to connect to database")?;
@@ -69,10 +69,10 @@ async fn main() -> anyhow::Result<()> {
 
     // ── ClickHouse (optional — evaluation telemetry) ───────────────────────────
     let ch_url =
-        std::env::var("CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
-    let ch_db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
-    let ch_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
-    let ch_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+        std::env::var("STITCHD_CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let ch_db = std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
+    let ch_user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let ch_password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_default();
     let ch_client = Arc::new(
         ChClient::default()
             .with_url(ch_url)
@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ── gRPC Server ────────────────────────────────────────────────────────────
-    let port: u16 = std::env::var("FLAG_SERVICE_PORT")
+    let port: u16 = std::env::var("STITCHD_FLAG_SERVICE_GRPC_PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(50052);

@@ -22,7 +22,7 @@ ClickHouse handles this workload efficiently without impacting the main config s
 clickhouse-client --query "CREATE DATABASE stitchd_events"
 ```
 
-A future `CLICKHOUSE_URL` environment variable will point the server at the HTTP
+A future `STITCHD_CLICKHOUSE_URL` environment variable will point the server at the HTTP
 interface (default port 8123):
 
 ```

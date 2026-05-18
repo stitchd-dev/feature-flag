@@ -55,12 +55,12 @@ pub struct ScyllaConfig {
 
 impl ScyllaConfig {
     /// Create a config from the standard env vars:
-    /// `SCYLLA_URI` (default `127.0.0.1:9042`) and `SCYLLA_KEYSPACE` (default `stitchd`).
+    /// `STITCHD_SCYLLA_URI` (default `127.0.0.1:9042`) and `STITCHD_SCYLLA_KEYSPACE` (default `stitchd`).
     #[must_use]
     pub fn from_env() -> Self {
         Self {
-            uri: std::env::var("SCYLLA_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
-            keyspace: std::env::var("SCYLLA_KEYSPACE").unwrap_or_else(|_| "stitchd".to_string()),
+            uri: std::env::var("STITCHD_SCYLLA_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string()),
+            keyspace: std::env::var("STITCHD_SCYLLA_KEYSPACE").unwrap_or_else(|_| "stitchd".to_string()),
         }
     }
 }

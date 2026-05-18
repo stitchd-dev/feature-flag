@@ -4,11 +4,11 @@
 //! with a Prometheus metrics endpoint.
 //!
 //! ## Environment Variables
-//! - `SEGMENTATION_SERVICE_PORT` — gRPC listen port (default: `50053`)
-//! - `SEGMENTATION_METRICS_PORT` — Prometheus metrics port (default: `9053`)
-//! - `DATABASE_URL` — PostgreSQL connection string (required)
-//! - `SCYLLA_URI` — ScyllaDB contact point (default: `127.0.0.1:9042`)
-//! - `SCYLLA_KEYSPACE` — ScyllaDB keyspace (default: `stitchd`)
+//! - `STITCHD_SEGMENTATION_SERVICE_GRPC_PORT` — gRPC listen port (default: `50053`)
+//! - `STITCHD_SEGMENTATION_SERVICE_METRICS_PORT` — Prometheus metrics port (default: `9053`)
+//! - `STITCHD_DATABASE_URL` — PostgreSQL connection string (required)
+//! - `STITCHD_SCYLLA_URI` — ScyllaDB contact point (default: `127.0.0.1:9042`)
+//! - `STITCHD_SCYLLA_KEYSPACE` — ScyllaDB keyspace (default: `stitchd`)
 //! - `RUST_LOG` — log filter directive (default: `info`)
 
 use std::sync::Arc;
@@ -44,18 +44,18 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     // ── Configuration ─────────────────────────────────────────────────────────
-    let port: u16 = std::env::var("SEGMENTATION_SERVICE_PORT")
+    let port: u16 = std::env::var("STITCHD_SEGMENTATION_SERVICE_GRPC_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_PORT);
 
-    let metrics_port: u16 = std::env::var("SEGMENTATION_METRICS_PORT")
+    let metrics_port: u16 = std::env::var("STITCHD_SEGMENTATION_SERVICE_METRICS_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_METRICS_PORT);
 
     let database_url =
-        std::env::var("DATABASE_URL").context("DATABASE_URL environment variable is required")?;
+        std::env::var("STITCHD_DATABASE_URL").context("STITCHD_DATABASE_URL environment variable is required")?;
 
     // ── Prometheus metrics ────────────────────────────────────────────────────
     let metrics_addr: std::net::SocketAddr = format!("0.0.0.0:{metrics_port}")
@@ -115,11 +115,11 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Generation sweeper ────────────────────────────────────────────────────
     // Reads retention/interval from environment with sensible defaults.
-    let sweeper_retention_secs: u64 = std::env::var("SWEEPER_RETENTION_SECS")
+    let sweeper_retention_secs: u64 = std::env::var("STITCHD_SEGMENTATION_SWEEPER_RETENTION_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(24 * 3600); // default: 24 hours
-    let sweeper_interval_secs: u64 = std::env::var("SWEEPER_INTERVAL_SECS")
+    let sweeper_interval_secs: u64 = std::env::var("STITCHD_SEGMENTATION_SWEEPER_INTERVAL_SECS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(3600); // default: run every hour
