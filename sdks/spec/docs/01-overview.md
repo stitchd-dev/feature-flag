@@ -100,6 +100,75 @@ until the snapshot contains real data. This guarantees that any subsequent
 `evaluate()` call has flag definitions to work with — there is no "warming up"
 window during which evaluations silently return defaults.
 
+## Flag Lifecycle
+
+Every feature flag progresses through three mutually exclusive states. SDKs
+interact with each state differently. The transitions are managed server-side;
+the SDK observes state solely through the definition snapshot it receives from
+the gateway.
+
+### Enabled
+
+A flag in the **Enabled** state has `enabled = true` in the `FeatureFlag`
+message and `archived = false`. This is the normal operational state.
+
+- The SDK MUST evaluate the flag using the canonical rule engine defined in
+  `02-evaluation-semantics.md`, matching context against rules in order and
+  returning the winning variant.
+- An `enabled = false` flag is a sub-case of the Enabled state (the flag
+  definition exists and is eligible for evaluation, but falls through to the
+  `Disabled` outcome immediately — see `02-evaluation-semantics.md` §Disabled).
+
+### Archived
+
+A flag in the **Archived** state has `archived = true` in the `FeatureFlag`
+message. Archived flags are included in the sync response — the SDK receives
+their definition — but they have been administratively retired and MUST NOT be
+evaluated as live flags.
+
+- The SDK MUST treat an archived flag as if it does not exist: any call to
+  `evaluate` or `evaluate_with_reasoning` for an archived flag key MUST return
+  an outcome of `FlagNotFound` (see `06-errors.md`).
+- The SDK MUST NOT execute rule matching or variant selection for an archived
+  flag; the `FlagNotFound` short-circuit MUST occur before any evaluation logic
+  runs.
+- The SDK MUST emit a `FlagEvaluationEvent` with `outcome = "flag_not_found"`
+  for each archived-flag evaluation, consistent with the treatment of a truly
+  absent flag.
+- The default variant value (if present in the definition) MAY be returned as
+  the result value alongside the `FlagNotFound` outcome so that callers using
+  the result value directly receive a sensible default; however, the outcome
+  field MUST still be `FlagNotFound`.
+- Implementations MUST NOT silently upgrade an archived flag to an active
+  evaluation. If an archived flag is later re-enabled server-side, the gateway
+  will reflect `archived = false` in the next sync response, and the SDK will
+  resume normal evaluation automatically.
+
+### Deleted
+
+A flag in the **Deleted** state has been permanently removed or soft-deleted
+(`deleted_at` is set in the backing store). The gateway filters deleted flags
+from every `SyncResponse`; the SDK will never receive a deleted flag in its
+definition snapshot.
+
+- Because deleted flags never appear in sync responses, the SDK will observe
+  them only as absent keys. Any evaluation request for a deleted flag key MUST
+  return a `FlagNotFound` outcome — the same path taken for any unknown key.
+- SDKs MUST NOT cache or persist stale definitions across restarts in a way
+  that would surface a deleted flag after the server has removed it. A fresh
+  `init` call MUST reflect the authoritative server state.
+- SDKs SHOULD NOT attempt to distinguish between a flag that was never created
+  and one that was deleted; from the SDK's perspective both are simply absent.
+
+### Summary
+
+| Server state | In sync response | SDK outcome |
+|---|---|---|
+| Enabled (`enabled=true, archived=false`) | Yes | Rule evaluation → matched variant |
+| Disabled (`enabled=false, archived=false`) | Yes | `Disabled` (default variant returned) |
+| Archived (`archived=true`) | Yes | `FlagNotFound` (no rule evaluation) |
+| Deleted (`deleted_at` set) | No (filtered) | `FlagNotFound` (key absent from snapshot) |
+
 ## Non-Goals
 
 - The SDK is **server-side only**. Client-side (browser / mobile) SDKs use a
