@@ -5,6 +5,9 @@ import { usePermissions } from '../../hooks/usePermissions'
 import { PageHeader, VariantBar, Sparkline } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { Pagination } from '../../components/Pagination'
+import { LoadingSpinner } from '../../components/LoadingSpinner'
+import { ErrorBanner } from '../../components/ErrorBanner'
+import { EmptyState } from '../../components/EmptyState'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
@@ -167,14 +170,12 @@ export function FlagsList() {
         />
         <div className="page-body">
           <div className="card">
-            <div className="empty">
-              <div className="empty-icon"><I.flag size={20} /></div>
-              <div className="empty-title">No project selected</div>
-              <div className="empty-desc">No project selected — set a project ID in environments settings</div>
-              <button className="btn primary" style={{ marginTop: 8 }} onClick={() => navigate(`/org/${orgId}/environments`)}>
-                Go to Environments
-              </button>
-            </div>
+            <EmptyState
+              icon={<I.flag size={20} />}
+              title="No project selected"
+              desc="No project selected — set a project ID in environments settings"
+              action={<button className="btn primary" onClick={() => navigate(`/org/${orgId}/environments`)}>Go to Environments</button>}
+            />
           </div>
         </div>
       </>
@@ -210,15 +211,16 @@ export function FlagsList() {
       <div className="page-body">
         {loading && (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
-            <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading flags…</span>
+            <LoadingSpinner label="Loading flags…" />
           </div>
         )}
 
         {error && !loading && (
-          <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 8, color: 'var(--danger)', fontSize: 13, marginBottom: 16 }}>
-            <I.alert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            {error}
-          </div>
+          <ErrorBanner
+            message={error}
+            icon={<I.alert size={14} />}
+            onDismiss={() => setError(null)}
+          />
         )}
 
         {!loading && !error && (
@@ -270,12 +272,12 @@ export function FlagsList() {
 
             {flags.length === 0 && (
               <div className="card">
-                <div className="empty">
-                  <div className="empty-icon"><I.flag size={20} /></div>
-                  <div className="empty-title">No flags yet</div>
-                  <div className="empty-desc">Create your first feature flag to start controlling feature rollouts.</div>
-                  <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowCreate(true)}><I.plus size={13} /> New flag</button>
-                </div>
+                <EmptyState
+                  icon={<I.flag size={20} />}
+                  title="No flags yet"
+                  desc="Create your first feature flag to start controlling feature rollouts."
+                  action={<button className="btn primary" onClick={() => setShowCreate(true)}><I.plus size={13} /> New flag</button>}
+                />
               </div>
             )}
 

@@ -4,6 +4,8 @@ import { createOrg, listOrgs } from '../../lib/api'
 import type { OrgSummary } from '../../lib/api'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
+import { ErrorBanner } from '../../components/ErrorBanner'
+import { EmptyState } from '../../components/EmptyState'
 
 export function OrgsList() {
   const navigate = useNavigate()
@@ -90,8 +92,8 @@ export function OrgsList() {
                 </button>
               </form>
               {error && (
-                <div style={{ marginTop: 10, fontSize: 12, color: 'var(--danger)', padding: '6px 10px', background: 'var(--danger-bg)', borderRadius: 6 }}>
-                  {error}
+                <div style={{ marginTop: 10 }}>
+                  <ErrorBanner message={error} onDismiss={() => setError(null)} />
                 </div>
               )}
             </div>
@@ -112,14 +114,12 @@ export function OrgsList() {
             ))}
           </div>
         ) : orgs.length === 0 ? (
-          <div className="empty">
-            <div className="empty-icon"><I.home size={20} /></div>
-            <div className="empty-title">No organisations yet</div>
-            <div className="empty-desc">Create your first organisation to onboard a customer team.</div>
-            <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowForm(true)}>
-              <I.plus size={14} /> New Organisation
-            </button>
-          </div>
+          <EmptyState
+            icon={<I.home size={20} />}
+            title="No organisations yet"
+            desc="Create your first organisation to onboard a customer team."
+            action={<button className="btn primary" onClick={() => setShowForm(true)}><I.plus size={14} /> New Organisation</button>}
+          />
         ) : (
           <div className="card">
             <div className="card-header">
