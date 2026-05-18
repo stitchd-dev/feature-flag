@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
+import { Modal } from '../../components/Modal'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import type { Segment } from './types'
@@ -134,111 +135,112 @@ function CsvImportModal({ contextType, onClose, onApply, saving }: CsvImportModa
     remove: 'Remove CSV keys from the list',
   }
 
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} onClick={onClose} />
-      <div className="card" style={{ position: 'relative', width: 520, maxHeight: '85vh', overflow: 'auto', zIndex: 1, padding: 0 }}>
-        <div className="card-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
-          <div className="card-title"><I.upload size={14} /> Import CSV</div>
-          <button className="icon-btn" onClick={onClose}><I.x size={16} /></button>
-        </div>
-        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-
-          {/* File picker */}
-          <div>
-            <label className="label">CSV File</label>
-            <div
-              style={{ border: '2px dashed var(--border)', borderRadius: 8, padding: '24px 16px', textAlign: 'center', cursor: 'pointer', background: 'var(--bg-sunken)' }}
-              onClick={() => fileRef.current?.click()}
-            >
-              {fileName ? (
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{fileName} — {parsedKeys.length} keys found</div>
-              ) : (
-                <>
-                  <I.upload size={18} style={{ color: 'var(--fg-muted)', marginBottom: 6 }} />
-                  <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>Click to upload a CSV file</div>
-                  <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4 }}>
-                    One <code>{contextType}</code> key per row or column
-                  </div>
-                </>
-              )}
-            </div>
-            <input ref={fileRef} type="file" accept=".csv,.txt" style={{ display: 'none' }} onChange={handleFile} />
-          </div>
-
-          {parsedKeys.length > 0 && (
-            <>
-              {/* Preview */}
-              <div>
-                <label className="label">Preview ({parsedKeys.length} keys)</label>
-                <div style={{
-                  background: 'var(--bg-sunken)', border: '1px solid var(--border)', borderRadius: 6,
-                  padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 12,
-                  maxHeight: 120, overflow: 'auto', lineHeight: 1.8,
-                }}>
-                  {parsedKeys.slice(0, 20).join('\n')}{parsedKeys.length > 20 ? `\n… and ${parsedKeys.length - 20} more` : ''}
-                </div>
-              </div>
-
-              {/* Target list */}
-              <div>
-                <label className="label">Apply to</label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  {(['include', 'exclude'] as ListTarget[]).map((t) => (
-                    <button key={t} type="button" onClick={() => setTarget(t)} style={{
-                      padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                      border: `1.5px solid ${target === t ? 'var(--primary)' : 'var(--border)'}`,
-                      background: target === t ? 'var(--primary-bg, rgba(229,79,53,0.06))' : 'var(--surface)',
-                      color: target === t ? 'var(--primary)' : 'var(--fg)',
-                    }}>{t === 'include' ? 'Include list' : 'Exclude list'}</button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Action */}
-              <div>
-                <label className="label">Action</label>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {([
-                    { value: 'merge' as CsvAction, label: 'Merge', icon: 'plus' },
-                    { value: 'replace' as CsvAction, label: 'Replace all', icon: 'refresh' },
-                    { value: 'remove' as CsvAction, label: 'Remove from list', icon: 'trash' },
-                  ] as { value: CsvAction; label: string; icon: keyof typeof I }[]).map(({ value, label, icon }) => {
-                    const Ic = I[icon] as React.FC<{ size?: number }>
-                    return (
-                      <label key={value} style={{
-                        display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
-                        border: `1.5px solid ${action === value ? 'var(--primary)' : 'var(--border)'}`,
-                        background: action === value ? 'var(--primary-bg, rgba(229,79,53,0.06))' : 'var(--surface)',
-                      }}>
-                        <input type="radio" name="csv-action" value={value} checked={action === value} onChange={() => setAction(value)} style={{ marginTop: 2 }} />
-                        <div>
-                          <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-                            <Ic size={12} /> {label}
-                          </div>
-                          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>{actionDescriptions[value]}</div>
-                        </div>
-                      </label>
-                    )
-                  })}
-                </div>
-              </div>
-            </>
-          )}
-
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
-            <button type="button" className="btn" onClick={onClose} disabled={saving}>Cancel</button>
-            <button
-              type="button" className="btn primary"
-              disabled={parsedKeys.length === 0 || saving}
-              onClick={() => onApply(parsedKeys, action, target)}
-            >
-              {saving ? 'Applying…' : <><I.check size={13} /> Apply {parsedKeys.length > 0 ? `(${parsedKeys.length} keys)` : ''}</>}
-            </button>
-          </div>
-        </div>
-      </div>
+  const header = (
+    <div className="card-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div className="card-title"><I.upload size={14} /> Import CSV</div>
+      <button className="icon-btn" onClick={onClose}><I.x size={16} /></button>
     </div>
+  )
+
+  const footer = (
+    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
+      <button type="button" className="btn" onClick={onClose} disabled={saving}>Cancel</button>
+      <button
+        type="button" className="btn primary"
+        disabled={parsedKeys.length === 0 || saving}
+        onClick={() => onApply(parsedKeys, action, target)}
+      >
+        {saving ? 'Applying…' : <><I.check size={13} /> Apply {parsedKeys.length > 0 ? `(${parsedKeys.length} keys)` : ''}</>}
+      </button>
+    </div>
+  )
+
+  return (
+    <Modal isOpen onClose={onClose} size="md" title={header} footer={footer}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* File picker */}
+        <div>
+          <label className="label">CSV File</label>
+          <div
+            style={{ border: '2px dashed var(--border)', borderRadius: 8, padding: '24px 16px', textAlign: 'center', cursor: 'pointer', background: 'var(--bg-sunken)' }}
+            onClick={() => fileRef.current?.click()}
+          >
+            {fileName ? (
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{fileName} — {parsedKeys.length} keys found</div>
+            ) : (
+              <>
+                <I.upload size={18} style={{ color: 'var(--fg-muted)', marginBottom: 6 }} />
+                <div style={{ fontSize: 13, color: 'var(--fg-muted)' }}>Click to upload a CSV file</div>
+                <div style={{ fontSize: 11, color: 'var(--fg-faint)', marginTop: 4 }}>
+                  One <code>{contextType}</code> key per row or column
+                </div>
+              </>
+            )}
+          </div>
+          <input ref={fileRef} type="file" accept=".csv,.txt" style={{ display: 'none' }} onChange={handleFile} />
+        </div>
+
+        {parsedKeys.length > 0 && (
+          <>
+            {/* Preview */}
+            <div>
+              <label className="label">Preview ({parsedKeys.length} keys)</label>
+              <div style={{
+                background: 'var(--bg-sunken)', border: '1px solid var(--border)', borderRadius: 6,
+                padding: '8px 12px', fontFamily: 'var(--font-mono)', fontSize: 12,
+                maxHeight: 120, overflow: 'auto', lineHeight: 1.8,
+              }}>
+                {parsedKeys.slice(0, 20).join('\n')}{parsedKeys.length > 20 ? `\n… and ${parsedKeys.length - 20} more` : ''}
+              </div>
+            </div>
+
+            {/* Target list */}
+            <div>
+              <label className="label">Apply to</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {(['include', 'exclude'] as ListTarget[]).map((t) => (
+                  <button key={t} type="button" onClick={() => setTarget(t)} style={{
+                    padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                    border: `1.5px solid ${target === t ? 'var(--primary)' : 'var(--border)'}`,
+                    background: target === t ? 'var(--primary-bg, rgba(229,79,53,0.06))' : 'var(--surface)',
+                    color: target === t ? 'var(--primary)' : 'var(--fg)',
+                  }}>{t === 'include' ? 'Include list' : 'Exclude list'}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Action */}
+            <div>
+              <label className="label">Action</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {([
+                  { value: 'merge' as CsvAction, label: 'Merge', icon: 'plus' },
+                  { value: 'replace' as CsvAction, label: 'Replace all', icon: 'refresh' },
+                  { value: 'remove' as CsvAction, label: 'Remove from list', icon: 'trash' },
+                ] as { value: CsvAction; label: string; icon: keyof typeof I }[]).map(({ value, label, icon }) => {
+                  const Ic = I[icon] as React.FC<{ size?: number }>
+                  return (
+                    <label key={value} style={{
+                      display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+                      border: `1.5px solid ${action === value ? 'var(--primary)' : 'var(--border)'}`,
+                      background: action === value ? 'var(--primary-bg, rgba(229,79,53,0.06))' : 'var(--surface)',
+                    }}>
+                      <input type="radio" name="csv-action" value={value} checked={action === value} onChange={() => setAction(value)} style={{ marginTop: 2 }} />
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <Ic size={12} /> {label}
+                        </div>
+                        <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 2 }}>{actionDescriptions[value]}</div>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
   )
 }
 

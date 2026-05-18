@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { I } from '../../components/icons'
+import { Modal } from '../../components/Modal'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { slugify } from '../../lib/utils'
@@ -82,7 +83,6 @@ export function CreateFlagModal({ onClose }: Props) {
   function setVariantValue(i: number, val: string) {
     const next = variants.map((v, j) => j === i ? { ...v, value: val } : v)
     setVariants(next)
-    // Validate on change so the user sees errors while typing
     setVariantErrors(next.map((v) => validateVariantValue(v.value, flagType)))
   }
 
@@ -105,14 +105,12 @@ export function CreateFlagModal({ onClose }: Props) {
 
     const validVariants = variants.filter((v) => v.key.trim())
 
-    // Duplicate key check
     const keys = validVariants.map((v) => v.key.trim())
     if (new Set(keys).size !== keys.length) {
       setError('Variant keys must be unique')
       return
     }
 
-    // Type-specific value validation
     for (const v of validVariants) {
       const err = validateVariantValue(v.value, flagType)
       if (err) { setError(`Variant "${v.key}": ${err}`); return }
@@ -140,115 +138,116 @@ export function CreateFlagModal({ onClose }: Props) {
     }
   }
 
+  const header = (
+    <div className="card-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div className="card-title"><I.flag size={15} /> New feature flag</div>
+      <button className="icon-btn" onClick={onClose}><I.x size={16} /></button>
+    </div>
+  )
+
+  const footer = (
+    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
+      <button type="button" className="btn" onClick={onClose}>Cancel</button>
+      <button type="submit" className="btn primary" form="create-flag-form" disabled={saving}>
+        {saving ? 'Creating…' : <><I.plus size={13} /> Create flag</>}
+      </button>
+    </div>
+  )
+
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)' }} onClick={onClose} />
-      <div className="card" style={{ position: 'relative', width: 520, maxHeight: '90vh', overflow: 'auto', zIndex: 1, padding: 0 }}>
-        <div className="card-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)' }}>
-          <div className="card-title"><I.flag size={15} /> New feature flag</div>
-          <button className="icon-btn" onClick={onClose}><I.x size={16} /></button>
+    <Modal isOpen onClose={onClose} size="md" title={header} footer={footer}>
+      <form id="create-flag-form" onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {error && (
+          <div style={{ padding: '10px 14px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 13 }}>
+            <I.alert size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />{error}
+          </div>
+        )}
+
+        <div>
+          <label className="label">Name <span style={{ color: 'var(--danger)' }}>*</span></label>
+          <input className="input" style={{ width: '100%' }} placeholder="e.g. Dark Mode Beta"
+            value={name} onChange={(e) => setName(e.target.value)} autoFocus />
         </div>
 
-        <form onSubmit={submit} style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {error && (
-            <div style={{ padding: '10px 14px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 13 }}>
-              <I.alert size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />{error}
-            </div>
-          )}
-
-          <div>
-            <label className="label">Name <span style={{ color: 'var(--danger)' }}>*</span></label>
-            <input className="input" style={{ width: '100%' }} placeholder="e.g. Dark Mode Beta"
-              value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        <div>
+          <label className="label">Key <span style={{ color: 'var(--danger)' }}>*</span></label>
+          <input
+            className="input" style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
+            placeholder="e.g. dark-mode-beta"
+            value={key}
+            onChange={(e) => { setKey(e.target.value); setKeyEdited(true) }}
+          />
+          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+            Immutable after creation. Used in SDK calls.
           </div>
+        </div>
 
-          <div>
-            <label className="label">Key <span style={{ color: 'var(--danger)' }}>*</span></label>
-            <input
-              className="input" style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
-              placeholder="e.g. dark-mode-beta"
-              value={key}
-              onChange={(e) => { setKey(e.target.value); setKeyEdited(true) }}
-            />
-            <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-              Immutable after creation. Used in SDK calls.
-            </div>
+        <div>
+          <label className="label">Description</label>
+          <textarea className="input" style={{ width: '100%', minHeight: 64, resize: 'vertical' }}
+            placeholder="Optional description of what this flag controls"
+            value={description} onChange={(e) => setDescription(e.target.value)} />
+        </div>
+
+        <div>
+          <label className="label">Flag type</label>
+          <select className="input" style={{ width: '100%' }} value={flagType}
+            onChange={(e) => setFlagType(e.target.value as FlagType)}>
+            <option value="bool">Boolean — on/off toggle</option>
+            <option value="string">String — text values</option>
+            <option value="int">Integer — whole numbers</option>
+            <option value="double">Double — decimal numbers</option>
+            <option value="json">JSON — arbitrary objects</option>
+          </select>
+        </div>
+
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <label className="label" style={{ margin: 0 }}>Initial variants</label>
+            <button type="button" className="btn sm" onClick={addVariant}><I.plus size={11} /> Add</button>
           </div>
-
-          <div>
-            <label className="label">Description</label>
-            <textarea className="input" style={{ width: '100%', minHeight: 64, resize: 'vertical' }}
-              placeholder="Optional description of what this flag controls"
-              value={description} onChange={(e) => setDescription(e.target.value)} />
-          </div>
-
-          <div>
-            <label className="label">Flag type</label>
-            <select className="input" style={{ width: '100%' }} value={flagType}
-              onChange={(e) => setFlagType(e.target.value as FlagType)}>
-              <option value="bool">Boolean — on/off toggle</option>
-              <option value="string">String — text values</option>
-              <option value="int">Integer — whole numbers</option>
-              <option value="double">Double — decimal numbers</option>
-              <option value="json">JSON — arbitrary objects</option>
-            </select>
-          </div>
-
-          <div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <label className="label" style={{ margin: 0 }}>Initial variants</label>
-              <button type="button" className="btn sm" onClick={addVariant}><I.plus size={11} /> Add</button>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {variants.map((v, i) => (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <input className="input" style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                      placeholder="name" value={v.key}
-                      onChange={(e) => setVariantKey(i, e.target.value)} />
-                    {flagType === 'bool' ? (
-                      <select className="input" style={{ flex: 1, fontSize: 12 }}
-                        value={v.value} onChange={(e) => setVariantValue(i, e.target.value)}>
-                        <option value="true">true</option>
-                        <option value="false">false</option>
-                      </select>
-                    ) : (
-                      <input
-                        className="input"
-                        style={{
-                          flex: 1,
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: 12,
-                          borderColor: variantErrors[i] ? 'var(--danger)' : undefined,
-                        }}
-                        placeholder={flagType === 'json' ? '{}' : flagType === 'int' ? '42' : flagType === 'double' ? '3.14' : 'value'}
-                        value={v.value}
-                        onChange={(e) => setVariantValue(i, e.target.value)}
-                      />
-                    )}
-                    <button type="button" className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
-                      disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
-                      <I.x size={12} />
-                    </button>
-                  </div>
-                  {variantErrors[i] && (
-                    <div style={{ fontSize: 11, color: 'var(--danger)', paddingLeft: 128 }}>
-                      {variantErrors[i]}
-                    </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {variants.map((v, i) => (
+              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input className="input" style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                    placeholder="name" value={v.key}
+                    onChange={(e) => setVariantKey(i, e.target.value)} />
+                  {flagType === 'bool' ? (
+                    <select className="input" style={{ flex: 1, fontSize: 12 }}
+                      value={v.value} onChange={(e) => setVariantValue(i, e.target.value)}>
+                      <option value="true">true</option>
+                      <option value="false">false</option>
+                    </select>
+                  ) : (
+                    <input
+                      className="input"
+                      style={{
+                        flex: 1,
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 12,
+                        borderColor: variantErrors[i] ? 'var(--danger)' : undefined,
+                      }}
+                      placeholder={flagType === 'json' ? '{}' : flagType === 'int' ? '42' : flagType === 'double' ? '3.14' : 'value'}
+                      value={v.value}
+                      onChange={(e) => setVariantValue(i, e.target.value)}
+                    />
                   )}
+                  <button type="button" className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
+                    disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
+                    <I.x size={12} />
+                  </button>
                 </div>
-              ))}
-            </div>
+                {variantErrors[i] && (
+                  <div style={{ fontSize: 11, color: 'var(--danger)', paddingLeft: 128 }}>
+                    {variantErrors[i]}
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
-
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
-            <button type="button" className="btn" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn primary" disabled={saving}>
-              {saving ? 'Creating…' : <><I.plus size={13} /> Create flag</>}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        </div>
+      </form>
+    </Modal>
   )
 }

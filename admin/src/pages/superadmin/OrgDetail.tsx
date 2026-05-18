@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
+import { Modal } from '../../components/Modal'
 import { auth } from '../../lib/auth'
 import { getOrg, listOrgUsers, removeOrgUser } from '../../lib/api'
 import type { OrgSummary, OrgUserSummary } from '../../lib/api'
@@ -224,38 +225,28 @@ function OverviewTab({ org, orgId }: { org: OrgSummary; orgId: string }) {
       </div>
 
       {/* Switch modal */}
-      {showSwitchModal && (
-        <div
-          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onClick={() => setShowSwitchModal(false)}
-        >
-          <div
-            style={{ background: 'var(--surface)', borderRadius: 12, padding: 28, width: 420, boxShadow: 'var(--shadow-xl)', border: '1px solid var(--border)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-              <div style={{ width: 36, height: 36, borderRadius: 10, background: 'color-mix(in srgb, var(--accent) 12%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <I.lock size={18} style={{ color: 'var(--accent)' }} />
-              </div>
-              <div>
-                <div style={{ fontWeight: 600, fontSize: 16 }}>Switch to Org Mode</div>
-                <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>You will be signed out of superadmin</div>
-              </div>
-            </div>
-            <p style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 20 }}>
-              You are about to leave the superadmin session. To access{' '}
-              <strong>{org.org_name}</strong>, you'll need to re-authenticate
-              using an org user account.
-            </p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <button className="btn primary" style={{ flex: 1 }} onClick={confirmSwitch}>
-                Sign out &amp; go to login
-              </button>
-              <button className="btn" onClick={() => setShowSwitchModal(false)}>Cancel</button>
-            </div>
+      <Modal isOpen={showSwitchModal} onClose={() => setShowSwitchModal(false)} size="sm">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: 'color-mix(in srgb, var(--accent) 12%, transparent)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <I.lock size={18} style={{ color: 'var(--accent)' }} />
+          </div>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 16 }}>Switch to Org Mode</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>You will be signed out of superadmin</div>
           </div>
         </div>
-      )}
+        <p style={{ fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6, marginBottom: 20 }}>
+          You are about to leave the superadmin session. To access{' '}
+          <strong>{org.org_name}</strong>, you'll need to re-authenticate
+          using an org user account.
+        </p>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn primary" style={{ flex: 1 }} onClick={confirmSwitch}>
+            Sign out &amp; go to login
+          </button>
+          <button className="btn" onClick={() => setShowSwitchModal(false)}>Cancel</button>
+        </div>
+      </Modal>
     </div>
   )
 }
