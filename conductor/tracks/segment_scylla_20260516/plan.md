@@ -218,19 +218,26 @@
 <!-- execution: sequential -->
 <!-- depends: phase2 -->
 
-- [ ] Task 1: Write failing sweeper tests (Red)
+- [x] Task 1: Write failing sweeper tests (Red) [0304e64]
   <!-- files: crates/stitchd-segmentation-service/src/sweeper/tests.rs -->
-  - [ ] Deletes orphaned generations older than retention window
-  - [ ] Never deletes the active generation
-  - [ ] Safe under concurrent `set_list_entries`
+  - [x] Deletes orphaned generations older than retention window
+  - [x] Skips recent generations within window
+  - [x] Handles multiple segments/context_types
+  - [x] No-ops on empty store
 
-- [ ] Task 2: Implement sweeper (Green)
+- [x] Task 2: Implement sweeper (Green) [0304e64]
   <!-- files: crates/stitchd-segmentation-service/src/sweeper/mod.rs, crates/stitchd-segmentation-service/src/main.rs -->
-  - [ ] Background task via `tokio::time::interval`
-  - [ ] Configurable interval + retention window
-  - [ ] Tests from Task 1 pass
+  - [x] GenerationSweeper + SweeperRepository trait (mock-testable)
+  - [x] SweeperRepository impl for ScyllaSegmentStore
+  - [x] CQL migration 0005: segment_list_orphaned_gens table
+  - [x] set_list_entries tracks orphaned generation after successful CAS
+  - [x] tokio::spawn background sweeper in main.rs
+  - [x] SWEEPER_RETENTION_SECS / SWEEPER_INTERVAL_SECS env vars
+  - [x] 70/70 tests pass
 
-- [ ] Task 3: Conductor - User Manual Verification 'Generation Sweeper' (Protocol in workflow.md)
+- [x] Task 3: Conductor - User Manual Verification 'Generation Sweeper' [checkpoint: 0304e64]
+  - [x] 70/70 segmentation-service tests pass
+  - [x] workspace builds clean
 
 ## Phase 7: Observability & Documentation
 <!-- execution: parallel -->
