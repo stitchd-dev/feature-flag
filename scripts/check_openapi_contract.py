@@ -15,8 +15,16 @@ from pathlib import Path
 SNAPSHOT = Path(__file__).parent.parent / "docs/openapi-pre-decomposition.json"
 ROUTER   = Path(__file__).parent.parent / "crates/stitchd-gateway/src/router.rs"
 
-# All pre-decomposition routes are now proxied through the gateway.
-KNOWN_GAPS: set[tuple[str, str]] = set()
+# Intentional gaps: routes whose surface changed during the canonical URL
+# refactor (boundaries_20260518) and are therefore not present verbatim.
+KNOWN_GAPS: set[tuple[str, str]] = {
+    # List segments was env-path-scoped in the pre-decomp snapshot:
+    #   GET /v1/environments/{environment_id}/segments
+    # The gateway now serves this as a query-param scoped route:
+    #   GET /v1/segments?env_id=<uuid>
+    # The route still exists; only the parameter binding style changed.
+    ("GET", "/v1/environments/{environment_id}/segments"),
+}
 
 
 def load_spec_routes(path: Path) -> set[tuple[str, str]]:
