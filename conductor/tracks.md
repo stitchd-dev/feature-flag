@@ -41,6 +41,6 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: List-Based Segment Storage on ScyllaDB
+## [x] Track: List-Based Segment Storage on ScyllaDB
 *Link: [./conductor/tracks/segment_scylla_20260516/](./conductor/tracks/segment_scylla_20260516/)*
 
