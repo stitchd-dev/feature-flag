@@ -225,10 +225,10 @@ export interface SdkKeySummary {
 }
 
 export async function listSdkKeys(environmentId: string): Promise<SdkKeySummary[]> {
-  const { data } = await api.get<{ sdk_keys: SdkKeySummary[] }>(
+  const { data } = await api.get<{ items: SdkKeySummary[] }>(
     `/v1/management/environments/${environmentId}/sdk-keys`,
   )
-  return data.sdk_keys
+  return data.items ?? []
 }
 
 export interface CreateSdkKeyResponse {

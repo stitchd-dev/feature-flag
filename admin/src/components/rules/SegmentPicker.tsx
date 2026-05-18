@@ -62,8 +62,8 @@ export function SegmentPicker({ value, onChange, envId, orgId, readOnly, segment
     if (didFetch.current || !envId || !value) return
     didFetch.current = true
     setLoading(true)
-    api.get<Segment[]>(`/v1/segments?env_id=${envId}`)
-      .then(({ data }) => setSegments(data))
+    api.get<{ items: Segment[] }>(`/v1/segments?env_id=${envId}`)
+      .then(({ data }) => setSegments(data.items ?? (Array.isArray(data) ? data : [])))
       .catch(() => { /* silently ignore — user can still open dropdown */ })
       .finally(() => setLoading(false))
   }, [envId, value])
@@ -76,8 +76,8 @@ export function SegmentPicker({ value, onChange, envId, orgId, readOnly, segment
       didFetch.current = true
       setLoading(true)
       setError(null)
-      api.get<Segment[]>(`/v1/segments?env_id=${envId}`)
-        .then(({ data }) => setSegments(data))
+      api.get<{ items: Segment[] }>(`/v1/segments?env_id=${envId}`)
+        .then(({ data }) => setSegments(data.items ?? (Array.isArray(data) ? data : [])))
         .catch(() => setError('Failed to load segments'))
         .finally(() => setLoading(false))
     }

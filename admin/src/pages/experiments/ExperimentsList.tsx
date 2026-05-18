@@ -50,8 +50,8 @@ export function ExperimentsList() {
     if (!envId) return
     setLoading(true)
     setError(null)
-    api.get<ExperimentResponse[]>(`/v1/environments/${envId}/experiments`)
-      .then(({ data }) => setExperiments(data))
+    api.get<{ items: ExperimentResponse[]; total: number }>(`/v1/environments/${envId}/experiments`)
+      .then(({ data }) => setExperiments(data.items ?? (Array.isArray(data) ? data : [])))
       .catch((err) => setError(err?.response?.data?.message ?? err.message ?? 'Failed to load experiments'))
       .finally(() => setLoading(false))
   }, [envId])
