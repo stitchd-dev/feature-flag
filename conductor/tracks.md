@@ -52,5 +52,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Boundary Hardening Refactor — DDD service boundaries, URL canonical rewrite, naming conventions, admin UI patterns, Formik migration, SDK spec alignment
+## [x] Track: Boundary Hardening Refactor — DDD service boundaries, URL canonical rewrite, naming conventions, admin UI patterns, Formik migration, SDK spec alignment
 *Link: [./conductor/tracks/boundaries_20260518/](./conductor/tracks/boundaries_20260518/)*
