@@ -9,6 +9,7 @@ import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import type { ExperimentResponse } from '../../lib/types'
+import { CreateExperimentModal } from './CreateExperimentModal'
 
 type StateFilter = 'All' | 'Running' | 'Draft' | 'Stopped' | 'Completed'
 const STATE_FILTERS: StateFilter[] = ['All', 'Running', 'Draft', 'Stopped', 'Completed']
@@ -30,6 +31,7 @@ export function ExperimentsList() {
   const { envId, orgId } = useOrgContext()
   const [search, setSearch] = useState('')
   const [stateFilter, setStateFilter] = useState<StateFilter>('All')
+  const [showCreate, setShowCreate] = useState(false)
 
   const { data: experiments, loading, error } = usePaginatedList<ExperimentResponse>(
     async ({ signal }) => {
@@ -80,7 +82,7 @@ export function ExperimentsList() {
         actions={
           <>
             <button className="btn"><I.filter size={13} /> All states</button>
-            <button className="btn primary"><I.plus size={14} /> New experiment</button>
+            <button className="btn primary" onClick={() => setShowCreate(true)}><I.plus size={14} /> New experiment</button>
           </>
         }
       />
@@ -178,6 +180,8 @@ export function ExperimentsList() {
           </>
         )}
       </div>
+
+      {showCreate && <CreateExperimentModal onClose={() => setShowCreate(false)} />}
     </>
   )
 }
