@@ -41,6 +41,33 @@ for this track:
 
 <!-- Learnings from implementation will be appended below -->
 
+## [2026-05-19 11:00] - Phase 3 Complete (Metric CRUD API & Service) + Phase 2 Tasks 1+2
+
+**Wave 1 (3 parallel workers, all merged):**
+| Worker | Branch | Commit | Tests | Patterns elevated |
+|---|---|---|---|---|
+| 1 (TrackEvents gRPC + CH batch INSERT) | w1_track_events | `8dc3888` | analytics-service 114/114 | `moka::future::Cache<(env_id, key), Arc<EventDefinition>>` 60s TTL for hot-path validation |
+| 2 (MetricService gRPC impl, replaces 6 stubs) | w2_metric_grpc | `9358c6f` | analytics-service +24 new | `handle_*` extraction pattern keeps service.rs as the trait-impl spine |
+| 3 (metric:read|write RBAC) | w3_rbac_perms | `b9303ed` | auth-service 96/96 + 3 new | `tests/rbac_test.rs` doesn't exist — RBAC tests live inline in `rbac.rs`; update FILES_OWNED for future RBAC tasks |
+
+Merge conflicts (worker 1 vs worker 2): both extended `service.rs` imports + `ServiceState`. Resolved by keeping both additions — `metric_repo: Arc<PgMetricRepository>` + `event_def_cache: EventDefinitionCache` co-exist as separate `ServiceState` fields.
+
+**Wave 2 (2 parallel workers, all merged):**
+| Worker | Branch | Commit | Tests | Patterns elevated |
+|---|---|---|---|---|
+| 4 (POST /v1/events/track route) | w4_gw_events | `8d33fde` | gateway 169/169 (22 in events module) | `axum::body::Bytes::from_request(req, &()).await` honors `DefaultBodyLimit` and auto-maps oversize → `413` — avoids hand-rolling `LengthLimitError` chain |
+| 5 (/v1/metrics CRUD + preview) | w5_gw_metrics | `ec56079` | gateway 182/182 (13 new) | (a) Local `tonic::Status → GatewayError` mapping for module-specific codes (e.g. `Aborted` → `Conflict`); (b) Domain type as response shape for admin-only routes via `stitchd-core` openapi feature; (c) Parameterised `Behaviour` enums + `Captured<...>` for in-process tonic mock |
+
+Merge conflicts (worker 4 vs worker 5): both extended `router.rs` and `openapi.rs`. Resolved by combining both. **Worker 5 also moved Prometheus exposition from `/v1/metrics` to `/metrics`** (path collision with the new admin metric CRUD routes) — touched `URL_SPACE.md`, `tech-stack.md`, `dev.sh` as part of the fix-gaps-as-discovered.
+
+**Beads state drift** (observed AGAIN this session, matches `boundaries_20260518` learnings): Phase milestones + verification subtasks revert from CLOSED → OPEN after the dolt export step. Required `bd close --force --no-auto` to re-close every time. Track the work via git commit + git note for truth; beads is best-effort coordination.
+
+**Total commits on `track/events_metrics_20260519`**: 14 (8 from Phase 1 + 6 from Phase 2/3 parallel waves)
+
+**Phase 2 remaining**: Task 2.3 (per-env quota middleware) in flight as worker_6. Then 2.4 verification + close milestone.
+
+---
+
 ## [2026-05-19 10:15] - Phase 1 Complete (DB & Schema Foundations)
 
 **6 tasks done, 7 commits on `track/events_metrics_20260519`.** Per-task summary:

@@ -40,18 +40,18 @@ domain types in `stitchd-core`, repo trait + Pg/composite impls in
 REST `POST /v1/events/track` on gateway + new `TrackEvents` gRPC on
 analytics-service + ClickHouse batch write + per-env quota.
 
-- [ ] Task 2.1: `AnalyticsService.TrackEvents` gRPC implementation
+- [x] Task 2.1: `AnalyticsService.TrackEvents` gRPC implementation [8dc3888]
   <!-- files: crates/stitchd-analytics-service/src/grpc/ingestion.rs, crates/stitchd-analytics-service/src/grpc/mod.rs, crates/stitchd-analytics-service/src/lib.rs -->
   - TDD: rejects unknown event_keys, archived events return 410, valid batch writes N rows to ClickHouse
   - Schema validation against `event_definitions` (PG); cache for hot-path lookups (moka, 60s TTL)
   - ClickHouse batch INSERT using `ch_pool::insert`
-- [ ] Task 2.2: Gateway `POST /v1/events/track` route + DTOs
+- [x] Task 2.2: Gateway `POST /v1/events/track` route + DTOs [8d33fde]
   <!-- files: crates/stitchd-gateway/src/routes/events.rs, crates/stitchd-gateway/src/routes/mod.rs, crates/stitchd-gateway/src/openapi.rs -->
   <!-- depends: task1 -->
   - SDK auth middleware extracts env_id, propagates as `x-env-id` to analytics-service
   - Returns 202 with per-event accepted/rejected detail; 413 on >5MB body
   - utoipa annotation for OpenAPI surface
-- [ ] Task 2.3: Per-env quota middleware (governor) for ingestion route
+- [~] Task 2.3: Per-env quota middleware (governor) for ingestion route
   <!-- files: crates/stitchd-gateway/src/middleware/event_quota.rs, crates/stitchd-gateway/src/lib.rs -->
   <!-- depends: task2 -->
   - Default 1000 events/sec/env_id; configurable via `STITCHD_EVENT_QUOTA_PER_SEC`
@@ -66,21 +66,21 @@ analytics-service + ClickHouse batch write + per-env quota.
 Analytics-service gRPC + gateway REST routes for metric_definitions
 CRUD + preview endpoint.
 
-- [ ] Task 3.1: Analytics-service `MetricService` gRPC impl
+- [x] Task 3.1: Analytics-service `MetricService` gRPC impl [9358c6f]
   <!-- files: crates/stitchd-analytics-service/src/grpc/metric.rs, crates/stitchd-analytics-service/src/grpc/mod.rs, crates/stitchd-analytics-service/src/lib.rs -->
   - TDD: CRUD + list_by_env + validation (kind-specific config validators)
   - Calls `PgMetricRepository` from Phase 1
   - `PreviewMetric` RPC runs the metric against last 7d, returns time-series
-- [ ] Task 3.2: Gateway `/v1/metrics` routes + DTOs + RBAC
+- [x] Task 3.2: Gateway `/v1/metrics` routes + DTOs + RBAC [ec56079]
   <!-- files: crates/stitchd-gateway/src/routes/metrics.rs, crates/stitchd-gateway/src/routes/mod.rs, crates/stitchd-gateway/src/openapi.rs -->
   <!-- depends: task1 -->
   - POST, GET, PATCH, DELETE `/v1/metrics`; GET `/v1/metrics/{id}`; POST `/v1/metrics/{id}/preview`
   - RBAC: `metric:read` for GET routes, `metric:write` for mutations
   - utoipa annotations
-- [ ] Task 3.3: Add `metric:read|write` permissions to RBAC role definitions
+- [x] Task 3.3: Add `metric:read|write` permissions to RBAC role definitions [b9303ed]
   <!-- files: crates/stitchd-auth-service/src/rbac.rs, crates/stitchd-auth-service/tests/rbac_test.rs -->
   - `org_admin` → both; `org_member` → `metric:read` only
-- [ ] Task 3.4: Conductor - User Manual Verification 'Metric CRUD API & Service' (Protocol in workflow.md)
+- [x] Task 3.4: Conductor - User Manual Verification 'Metric CRUD API & Service' [auto-verify]
 
 ## Phase 4: Stats-Service Metric Dispatch
 <!-- depends: phase1, phase3 -->

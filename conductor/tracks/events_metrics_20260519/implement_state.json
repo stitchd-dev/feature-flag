@@ -1,17 +1,17 @@
 {
-  "current_phase": "Phase 2: Backend Ingestion Path",
+  "current_phase": "Phase 2 + 4/5/6",
   "current_phase_index": 1,
-  "current_task_index": 0,
-  "completed_phases": ["Phase 1: DB & Schema Foundations"],
+  "current_task_index": 2,
+  "completed_phases": ["Phase 1: DB & Schema Foundations", "Phase 3: Metric CRUD API & Service"],
   "completed_tasks": [
-    "phase1_task1",
-    "phase1_task2",
-    "phase1_task3",
-    "phase1_task4",
-    "phase1_task5",
-    "phase1_task6"
+    "phase1_task1", "phase1_task2", "phase1_task3", "phase1_task4", "phase1_task5", "phase1_task6",
+    "phase2_task1", "phase2_task2",
+    "phase3_task1", "phase3_task2", "phase3_task3", "phase3_task4"
   ],
-  "last_updated": "2026-05-19T10:15:00Z",
+  "in_progress_workers": [
+    {"worker_id": "worker_6_quota", "beads_task": "feature-flag-7an.2.3", "branch": "track_events_metrics_20260519_w6_quota"}
+  ],
+  "last_updated": "2026-05-19T11:00:00Z",
   "status": "in_progress",
-  "note": "Phase 1 (DB + Schema + Proto + CH) complete — 7 commits on track/events_metrics_20260519. Phase 2 + 3 can now run in parallel (6 sub-agent workers)."
+  "note": "Phase 3 fully done. Phase 2 — task 3 (quota middleware) running as worker_6, then 2.4 verification. After that: Phase 4/5/6 parallel wave."
 }
