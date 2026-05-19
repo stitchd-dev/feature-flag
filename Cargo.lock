@@ -4008,6 +4008,7 @@ dependencies = [
  "stitchd-core",
  "stitchd-db",
  "stitchd-proto",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tonic",

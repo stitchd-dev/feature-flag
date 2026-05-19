@@ -5,6 +5,7 @@ pub mod config;
 pub mod context_refresher;
 pub mod grpc;
 pub mod job_service;
+pub mod queries;
 pub mod results_writer;
 pub mod schedule_updater;
 pub mod scheduler;
