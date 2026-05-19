@@ -104,7 +104,7 @@ export function CreateSegmentModal({ envId, orgId, projectId, onClose, onCreated
         validationSchema={schema}
         onSubmit={handleSubmit}
       >
-        {({ isSubmitting }) => (
+        {({ isSubmitting, setFieldValue }) => (
           <Form style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
             <FormErrorBanner />
 
@@ -121,7 +121,14 @@ export function CreateSegmentModal({ envId, orgId, projectId, onClose, onCreated
                     <button
                       key={opt.value}
                       type="button"
-                      onClick={() => setSegmentType(opt.value)}
+                      onClick={() => {
+                        setSegmentType(opt.value)
+                        // Sync React-state choice into Formik values so the Yup
+                        // segment_type.oneOf(['list','rule']) validator passes.
+                        // Without this the submit fails silently because
+                        // values.segment_type stays '' (initial).
+                        void setFieldValue('segment_type', opt.value)
+                      }}
                       style={{
                         display: 'flex',
                         flexDirection: 'column',
