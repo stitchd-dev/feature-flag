@@ -9,6 +9,8 @@
 //! - `STITCHD_ANALYTICS_SERVICE_ADDR` (default: `http://localhost:50054`)
 //! - `STITCHD_EXPERIMENTATION_SERVICE_ADDR` (default: `http://localhost:50055`)
 //! - `STITCHD_STATS_SERVICE_ADDR` (default: `http://localhost:50056`)
+//! - `STITCHD_EVENT_QUOTA_PER_SEC` (default: `1000`) — per-env quota for
+//!   `POST /v1/events/track`; requests above the cap return 429.
 //!
 //! Prometheus metrics are served at `GET /metrics` on the same port as the
 //! REST API (Prometheus text exposition format, `text/plain; version=0.0.4`).
