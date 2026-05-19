@@ -75,7 +75,9 @@ pub struct MetricDefinition {
     pub goal_direction: GoalDirection,
     /// Optimistic-locking version — incremented by the repo on every
     /// successful update; updates with stale `version` are rejected.
-    pub version: i32,
+    /// Stored as `BIGINT` in PG; matches the convention used by
+    /// `EventDefinition`, `Segment`, and other versioned entities.
+    pub version: i64,
     /// Creation timestamp (UTC).
     pub created_at: DateTime<Utc>,
     /// Last-modification timestamp (UTC).
