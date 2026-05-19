@@ -3653,6 +3653,7 @@ dependencies = [
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
+ "moka",
  "prost",
  "serde",
  "serde_json",

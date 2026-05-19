@@ -10,9 +10,9 @@ use stitchd_proto::analytics::v1::{
     IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
     ListContextTypesRequest, ListContextTypesResponse, ListExperimentResultsRequest,
     ListMetricsRequest, ListMetricsResponse, MetricDefinition, PreviewMetricRequest,
-    PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse, UpdateMetricRequest,
-    WriteExperimentResultsRequest, WriteExperimentResultsResponse,
-    analytics_service_server::AnalyticsService,
+    PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse, TrackEventsRequest,
+    TrackEventsResponse, UpdateMetricRequest, WriteExperimentResultsRequest,
+    WriteExperimentResultsResponse, analytics_service_server::AnalyticsService,
 };
 
 use super::context_intel::handle_get_context_intelligence;
@@ -25,6 +25,7 @@ use super::experiment_results::{
     ResultStream, handle_get_experiment_result, handle_list_experiment_results,
     handle_write_experiment_results,
 };
+use super::ingestion::{EventDefinitionCache, TrackEventsState, handle_track_events};
 use crate::repo::experiment_results::ExperimentResultsRepository;
 
 pub struct ServiceState {
@@ -36,6 +37,9 @@ pub struct ServiceState {
     pub context_registry: Arc<dyn ContextRegistryRepository>,
     /// ClickHouse-backed repository for computed experiment results.
     pub experiment_results_repo: Arc<dyn ExperimentResultsRepository>,
+    /// 60-second in-process cache for event-definition validation lookups
+    /// — backs the `TrackEvents` RPC hot path.
+    pub event_def_cache: EventDefinitionCache,
 }
 
 pub struct AnalyticsServiceImpl {
@@ -62,6 +66,18 @@ impl AnalyticsService for AnalyticsServiceImpl {
             event_writer: self.state.event_writer.clone(),
         };
         handle_ingest_event(&ingestion_state, request).await
+    }
+
+    async fn track_events(
+        &self,
+        request: Request<TrackEventsRequest>,
+    ) -> Result<Response<TrackEventsResponse>, Status> {
+        let track_state = TrackEventsState {
+            event_def_repo: Arc::clone(&self.state.event_def_repo),
+            event_def_cache: self.state.event_def_cache.clone(),
+            ch_client: Arc::clone(&self.state.ch_client),
+        };
+        handle_track_events(&track_state, request).await
     }
 
     async fn register_context(

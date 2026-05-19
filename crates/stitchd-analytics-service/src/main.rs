@@ -16,7 +16,10 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use stitchd_analytics_service::{
     config::Config,
-    grpc::service::{AnalyticsServiceImpl, ServiceState},
+    grpc::{
+        ingestion::EventDefinitionCache,
+        service::{AnalyticsServiceImpl, ServiceState},
+    },
     repo::experiment_results::ClickHouseExperimentResultsRepository,
 };
 use stitchd_proto::analytics::v1::analytics_service_server::AnalyticsServiceServer;
@@ -76,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
         event_writer,
         context_registry,
         experiment_results_repo,
+        event_def_cache: EventDefinitionCache::new(),
     };
     let svc = AnalyticsServiceImpl::new(state);
 

@@ -35,6 +35,7 @@ async-trait = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 tokio-stream = "0.1"
+moka = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
