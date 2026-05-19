@@ -41,6 +41,31 @@ for this track:
 
 <!-- Learnings from implementation will be appended below -->
 
+## [2026-05-19 10:15] - Phase 1 Complete (DB & Schema Foundations)
+
+**6 tasks done, 7 commits on `track/events_metrics_20260519`.** Per-task summary:
+
+| Task | Commit | Lines | Key artefact |
+|---|---|---|---|
+| 1.1 Domain types | `8d1d6b9` | +698 | `stitchd-core::metric::{MetricDefinition, MetricKind}` + 24 tests |
+| 1.2 PG migration | `49bac46` | +55 | `metric_definitions` table + 3 indexes + 2 CHECK constraints |
+| 1.3 Repo trait + Pg impl | `(commit)` | +865 | `MetricRepository` + `PgMetricRepository` + 17 integration tests |
+| 1.4 Proto messages | `8d2eda5` | +225 | `AnalyticsService` extended with 6 metric RPCs + oneof config |
+| 1.5 ClickHouse schema | `45ebc69` | +37 | `events_v2 + properties + occurred_at` columns |
+| (Cleanup) | `0bf1084` | +38 | MockAnalyticsService stubs |
+
+**Phase verification:**
+- `cargo test -p stitchd-core -p stitchd-db -p stitchd-proto`: **all green** (414 + 17 new metric repo + 24 new metric domain tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean
+
+**Phase-level patterns to carry forward into Phase 2/3:**
+- Adding RPCs to a tonic service trait BREAKS every existing impl — always grep for `impl <Service> for` across the workspace and add Unimplemented stubs to MockServices in tests too.
+- `MetricKind` serde discriminator (`kind`) and proto oneof variant names line up exactly — no mapping layer needed between proto and domain.
+- Raw `sqlx::query` strings (not the `query!`/`query_as!` macros) keep the `.sqlx/` cache stable for parallel workers — adopt for all new repos in this track.
+- Versioned-entity columns are `BIGINT` in PG → `i64` in Rust. `RepositoryError::VersionConflict.{expected,actual}` are `i64`. Don't use `i32` for versions in new domain types.
+
+---
+
 ## [2026-05-19 09:50] - Phase 1 Task 1.1: Domain types in stitchd-core for MetricDefinition + MetricKind
 
 - **Implemented:** MetricDefinition struct + MetricKind discriminated union (Aggregation/Ratio/Funnel) with per-kind config structs + GoalDirection + MetricValidationError. 24 unit tests covering serde round-trips and shape invariants.

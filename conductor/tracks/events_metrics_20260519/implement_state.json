@@ -1,9 +1,17 @@
 {
-  "current_phase": "Phase 1: DB & Schema Foundations",
-  "current_phase_index": 0,
-  "current_task_index": 1,
-  "completed_phases": [],
-  "completed_tasks": ["phase1_task1"],
-  "last_updated": "2026-05-19T09:50:00Z",
-  "status": "in_progress"
+  "current_phase": "Phase 2: Backend Ingestion Path",
+  "current_phase_index": 1,
+  "current_task_index": 0,
+  "completed_phases": ["Phase 1: DB & Schema Foundations"],
+  "completed_tasks": [
+    "phase1_task1",
+    "phase1_task2",
+    "phase1_task3",
+    "phase1_task4",
+    "phase1_task5",
+    "phase1_task6"
+  ],
+  "last_updated": "2026-05-19T10:15:00Z",
+  "status": "in_progress",
+  "note": "Phase 1 (DB + Schema + Proto + CH) complete — 7 commits on track/events_metrics_20260519. Phase 2 + 3 can now run in parallel (6 sub-agent workers)."
 }

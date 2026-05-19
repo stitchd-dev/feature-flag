@@ -14,24 +14,24 @@ domain types in `stitchd-core`, repo trait + Pg/composite impls in
 - [x] Task 1.1: Domain types in `stitchd-core` for MetricDefinition + MetricKind [8d1d6b9]
   <!-- files: crates/stitchd-core/src/metric/mod.rs, crates/stitchd-core/src/metric/kinds.rs, crates/stitchd-core/src/id.rs, crates/stitchd-core/src/lib.rs -->
   - TDD: type definitions, serde round-trip tests, MetricKind config validators (e.g. funnel must have ≥2 steps, ratio must have distinct num/denom)
-- [ ] Task 1.2: PG migration `metric_definitions` table
+- [x] Task 1.2: PG migration `metric_definitions` table [49bac46]
   <!-- files: crates/stitchd-db/migrations/20260520000001_metric_definitions.sql -->
   - Schema: id, env_id, key, name, description, kind, config JSONB, goal_direction, version, created_at, updated_at, deleted_at
   - Indexes: `(env_id, key) WHERE deleted_at IS NULL`, `(env_id) WHERE deleted_at IS NULL`
-- [ ] Task 1.3: `MetricRepository` trait + `PgMetricRepository` impl in `stitchd-db`
+- [x] Task 1.3: `MetricRepository` trait + `PgMetricRepository` impl in `stitchd-db` [(commit)]
   <!-- files: crates/stitchd-db/src/repository/metric.rs, crates/stitchd-db/src/repository/mod.rs, crates/stitchd-db/src/repository/pg/metric.rs, crates/stitchd-db/src/repository/pg/mod.rs -->
   - TDD: CRUD, list_by_env, soft-delete, optimistic-locking, find_by_key
   - Use `#[sqlx::test(migrations = "./migrations")]`
-- [ ] Task 1.4: Proto messages for MetricDefinition + MetricKind oneof
+- [x] Task 1.4: Proto messages for MetricDefinition + MetricKind oneof [8d2eda5]
   <!-- files: crates/stitchd-proto/proto/metric.proto, crates/stitchd-proto/proto/analytics.proto, crates/stitchd-proto/src/mapping/metric.rs -->
   - Add `MetricDefinition`, `AggregationConfig`, `RatioConfig`, `FunnelConfig`, `FunnelStep` messages
   - Add to `AnalyticsService` proto: `CreateMetric`, `GetMetric`, `ListMetrics`, `UpdateMetric`, `DeleteMetric`, `PreviewMetric`
   - Mapping tests
-- [ ] Task 1.5: ClickHouse schema for `events_v2` properties + index
+- [x] Task 1.5: ClickHouse schema for `events_v2` properties + index [45ebc69]
   <!-- files: crates/stitchd-db/clickhouse-migrations/0010_events_v2_properties.sql -->
   - Add `properties Map(String, String)` and `occurred_at DateTime64(3, 'UTC')` to `events_v2` if missing
   - Verify `events_experiment_daily` MV is still well-formed (or recreate)
-- [ ] Task 1.6: Conductor - User Manual Verification 'DB & Schema Foundations' (Protocol in workflow.md)
+- [x] Task 1.6: Conductor - User Manual Verification 'DB & Schema Foundations' [phase-checkpoint]
 
 ## Phase 2: Backend Ingestion Path
 <!-- execution: parallel -->
