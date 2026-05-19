@@ -1,7 +1,10 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
-use stitchd_db::{ContextRegistryRepository, EventDefinitionRepository, SdkKeyRepository};
+use stitchd_db::{
+    ContextRegistryRepository, EventDefinitionRepository, SdkKeyRepository,
+    repository::pg::PgMetricRepository,
+};
 use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
     CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse, ExperimentResult,
@@ -25,6 +28,10 @@ use super::experiment_results::{
     ResultStream, handle_get_experiment_result, handle_list_experiment_results,
     handle_write_experiment_results,
 };
+use super::metric::{
+    handle_create_metric, handle_delete_metric, handle_get_metric, handle_list_metrics,
+    handle_preview_metric, handle_update_metric,
+};
 use crate::repo::experiment_results::ExperimentResultsRepository;
 
 pub struct ServiceState {
@@ -36,6 +43,8 @@ pub struct ServiceState {
     pub context_registry: Arc<dyn ContextRegistryRepository>,
     /// ClickHouse-backed repository for computed experiment results.
     pub experiment_results_repo: Arc<dyn ExperimentResultsRepository>,
+    /// Postgres-backed metric definitions repository (Phase 3+).
+    pub metric_repo: Arc<PgMetricRepository>,
 }
 
 pub struct AnalyticsServiceImpl {
@@ -128,62 +137,49 @@ impl AnalyticsService for AnalyticsServiceImpl {
 
     // ── Metric definitions CRUD ─────────────────────────────────────────────
     //
-    // These RPCs are wired in Phase 3 (`MetricService` implementation in
-    // `crates/stitchd-analytics-service/src/grpc/metric.rs`). For now they
-    // return `Unimplemented` so the proto-generated trait is satisfied and
-    // the service binary compiles.
+    // Wired in Phase 3 (`events_metrics_20260519`). Handlers live in
+    // `crates/stitchd-analytics-service/src/grpc/metric.rs` and operate
+    // on the Postgres-backed `PgMetricRepository`.
 
     async fn create_metric(
         &self,
-        _request: Request<CreateMetricRequest>,
+        request: Request<CreateMetricRequest>,
     ) -> Result<Response<MetricDefinition>, Status> {
-        Err(Status::unimplemented(
-            "create_metric — wired in events_metrics_20260519 Phase 3",
-        ))
+        handle_create_metric(&self.state.metric_repo, request).await
     }
 
     async fn get_metric(
         &self,
-        _request: Request<GetMetricRequest>,
+        request: Request<GetMetricRequest>,
     ) -> Result<Response<MetricDefinition>, Status> {
-        Err(Status::unimplemented(
-            "get_metric — wired in events_metrics_20260519 Phase 3",
-        ))
+        handle_get_metric(&self.state.metric_repo, request).await
     }
 
     async fn list_metrics(
         &self,
-        _request: Request<ListMetricsRequest>,
+        request: Request<ListMetricsRequest>,
     ) -> Result<Response<ListMetricsResponse>, Status> {
-        Err(Status::unimplemented(
-            "list_metrics — wired in events_metrics_20260519 Phase 3",
-        ))
+        handle_list_metrics(&self.state.metric_repo, request).await
     }
 
     async fn update_metric(
         &self,
-        _request: Request<UpdateMetricRequest>,
+        request: Request<UpdateMetricRequest>,
     ) -> Result<Response<MetricDefinition>, Status> {
-        Err(Status::unimplemented(
-            "update_metric — wired in events_metrics_20260519 Phase 3",
-        ))
+        handle_update_metric(&self.state.metric_repo, request).await
     }
 
     async fn delete_metric(
         &self,
-        _request: Request<DeleteMetricRequest>,
+        request: Request<DeleteMetricRequest>,
     ) -> Result<Response<DeleteMetricResponse>, Status> {
-        Err(Status::unimplemented(
-            "delete_metric — wired in events_metrics_20260519 Phase 3",
-        ))
+        handle_delete_metric(&self.state.metric_repo, request).await
     }
 
     async fn preview_metric(
         &self,
-        _request: Request<PreviewMetricRequest>,
+        request: Request<PreviewMetricRequest>,
     ) -> Result<Response<PreviewMetricResponse>, Status> {
-        Err(Status::unimplemented(
-            "preview_metric — wired in events_metrics_20260519 Phase 3",
-        ))
+        handle_preview_metric(&self.state.metric_repo, request).await
     }
 }
