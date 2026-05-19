@@ -40,3 +40,18 @@ for this track:
 ---
 
 <!-- Learnings from implementation will be appended below -->
+
+## [2026-05-19 09:50] - Phase 1 Task 1.1: Domain types in stitchd-core for MetricDefinition + MetricKind
+
+- **Implemented:** MetricDefinition struct + MetricKind discriminated union (Aggregation/Ratio/Funnel) with per-kind config structs + GoalDirection + MetricValidationError. 24 unit tests covering serde round-trips and shape invariants.
+- **Files changed:** crates/stitchd-core/src/metric/mod.rs (new), crates/stitchd-core/src/metric/kinds.rs (new), crates/stitchd-core/src/lib.rs (add pub mod)
+- **Commit:** 8d1d6b9
+- **Learnings:**
+  - **Pattern — serde `tag` + `#[serde(flatten)]` for discriminated enums in parent structs:** `MetricKind` uses `#[serde(tag = "kind", rename_all = "snake_case")]`. When embedded in `MetricDefinition` with `#[serde(flatten)]`, the top-level JSON gets the `kind` discriminator inline. This matches the protobuf oneof wire format exactly — no separate mapping needed.
+  - **Pattern — `requires_field()` helper on enum variants:** `AggregationOperator::Count` doesn't need an `on_field`, the rest do. A `const fn requires_field()` helper centralizes the rule so validation + UI form rendering use one source of truth.
+  - **Gotcha — pre-existing `experimentation::stats::MetricType` is NOT the same concept:** `MetricType::{Count, Numeric, Percentile, Funnel}` classifies the STATS methodology used to analyse experiment results. The new `metric::MetricKind` classifies the METRIC PRIMITIVE that produces values. They will compose (a Ratio metric uses Numeric methodology). Don't conflate.
+  - **Pattern — `MetricId` newtype already in `id.rs`:** Line 72. No id.rs change needed for this task; the newtype macro `define_id!` already covered it.
+  - **Pattern — validation returns typed errors (`MetricValidationError`) not stringly-typed:** Each shape invariant has its own enum variant — gives gateway + UI precise error mapping without parsing error messages.
+- **Context:** Foundational task of Phase 1. Tasks 1.2–1.5 build on this (PG schema persists `MetricDefinition`, proto messages mirror it, ClickHouse properties feed the aggregation `on_field` path).
+
+---

@@ -11,7 +11,7 @@ PG schemas for `metric_definitions`, ClickHouse view adjustments,
 domain types in `stitchd-core`, repo trait + Pg/composite impls in
 `stitchd-db`. Sets up everything downstream phases depend on.
 
-- [ ] Task 1.1: Domain types in `stitchd-core` for MetricDefinition + MetricKind
+- [x] Task 1.1: Domain types in `stitchd-core` for MetricDefinition + MetricKind [8d1d6b9]
   <!-- files: crates/stitchd-core/src/metric/mod.rs, crates/stitchd-core/src/metric/kinds.rs, crates/stitchd-core/src/id.rs, crates/stitchd-core/src/lib.rs -->
   - TDD: type definitions, serde round-trip tests, MetricKind config validators (e.g. funnel must have ≥2 steps, ratio must have distinct num/denom)
 - [ ] Task 1.2: PG migration `metric_definitions` table
