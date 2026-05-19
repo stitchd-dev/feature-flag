@@ -25,10 +25,43 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
+use serde::{Deserialize, Serialize};
 
 use stitchd_proto::flags::v1::FeatureFlag;
 use stitchd_proto::sdk::v1::SyncDefinitionsResponse;
 use stitchd_proto::segments::v1::{ListSegmentMeta, RuleSegment};
+
+use crate::event_buffer::TypedValue;
+
+/// The metric value-type an event definition accepts. Mirrors
+/// `stitchd_core::event::EventValueType` but is duplicated here so the
+/// SDK crate has no dependency on the server-side `stitchd-core::event`
+/// module. The `snake_case` serde rename matches the wire shape used by
+/// `event_definitions` rows in the gateway / analytics-service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventValueType {
+    /// Boolean metric (e.g. conversion flag).
+    Bool,
+    /// 64-bit integer metric (e.g. click count).
+    Int,
+    /// 64-bit floating-point metric (e.g. revenue).
+    Double,
+}
+
+impl EventValueType {
+    /// Return the `EventValueType` that corresponds to a [`TypedValue`]
+    /// variant. Used by `Client::track()` to check whether a caller-supplied
+    /// value matches the registered metric type.
+    #[must_use]
+    pub fn of(value: &TypedValue) -> Self {
+        match value {
+            TypedValue::Bool(_) => Self::Bool,
+            TypedValue::Int(_) => Self::Int,
+            TypedValue::Double(_) => Self::Double,
+        }
+    }
+}
 
 /// Immutable in-memory snapshot of the SDK's environment.
 ///
@@ -45,6 +78,19 @@ pub struct DefinitionSnapshot {
     /// List-segment metadata keyed by segment id (UUID string).
     /// Entries (members) are NOT included — those live in the LRU cache.
     list_segments: HashMap<String, ListSegmentMeta>,
+    /// Pre-registered event definitions keyed by `event_key`.
+    /// Used by `Client::track()` for client-side validation (unknown
+    /// event_keys + value-type mismatches are warned + skipped).
+    ///
+    /// TODO(feature-flag-7an.5.x — polling extension): the `SdkService`
+    /// gRPC `SyncDefinitions` does NOT currently carry event_definitions.
+    /// Until the polling layer is extended, this map is populated only by
+    /// tests and the conformance runner via [`Self::with_event_definitions`].
+    /// In production today the cache is empty, which means every
+    /// `Client::track()` call will warn-skip (per spec F2.4) — matching
+    /// the safest possible behaviour. See
+    /// `bd show feature-flag-7an.5.2` for the planned polling extension.
+    event_definitions: HashMap<String, EventValueType>,
     /// Server clock at snapshot construction (`SyncDefinitionsResponse.server_timestamp_ms`).
     /// Diagnostic only — useful for "how stale is my snapshot" logging.
     server_timestamp_ms: i64,
@@ -86,9 +132,36 @@ impl DefinitionSnapshot {
             flags,
             rule_segments,
             list_segments,
+            event_definitions: HashMap::new(),
             server_timestamp_ms: resp.server_timestamp_ms,
             environment_id: resp.environment_id,
         }
+    }
+
+    /// Replace the `event_definitions` cache with the supplied map.
+    ///
+    /// Currently this is the ONLY way to populate the cache — the SDK's
+    /// `SyncDefinitions` proto does not yet carry event definitions
+    /// alongside flags. Tests and the conformance runner use this method
+    /// directly. Once the polling layer is extended (tracked separately),
+    /// `from_proto` will start populating this automatically.
+    #[must_use]
+    pub fn with_event_definitions(mut self, defs: HashMap<String, EventValueType>) -> Self {
+        self.event_definitions = defs;
+        self
+    }
+
+    /// Look up an event definition by `event_key`. Returns the registered
+    /// [`EventValueType`] if present.
+    #[must_use]
+    pub fn event_definition(&self, event_key: &str) -> Option<EventValueType> {
+        self.event_definitions.get(event_key).copied()
+    }
+
+    /// Total event-definition count — diagnostic.
+    #[must_use]
+    pub fn event_definition_count(&self) -> usize {
+        self.event_definitions.len()
     }
 
     /// Look up a flag by key. Returns `None` if no flag with this key exists
@@ -422,6 +495,55 @@ mod tests {
         let b = a.clone();
         a.store(snapshot_with(vec![flag("via-a")], vec![], vec![]));
         assert!(b.load().flag("via-a").is_some());
+    }
+
+    // ── EventValueType + event_definitions cache ────────────────────────────
+
+    #[test]
+    fn event_value_type_serde_round_trips_snake_case() {
+        // Must match `stitchd_core::event::EventValueType` so a future
+        // polling-layer extension that ships event_definitions via
+        // SyncDefinitions can wire straight in without renames.
+        let cases = [
+            (EventValueType::Bool, r#""bool""#),
+            (EventValueType::Int, r#""int""#),
+            (EventValueType::Double, r#""double""#),
+        ];
+        for (val, expected) in cases {
+            let s = serde_json::to_string(&val).unwrap();
+            assert_eq!(s, expected, "serialise");
+            let parsed: EventValueType = serde_json::from_str(&s).unwrap();
+            assert_eq!(parsed, val, "round-trip");
+        }
+    }
+
+    #[test]
+    fn event_value_type_of_typed_value() {
+        use crate::event_buffer::TypedValue;
+        assert_eq!(EventValueType::of(&TypedValue::Bool(true)), EventValueType::Bool);
+        assert_eq!(EventValueType::of(&TypedValue::Int(7)), EventValueType::Int);
+        assert_eq!(EventValueType::of(&TypedValue::Double(1.5)), EventValueType::Double);
+    }
+
+    #[test]
+    fn event_definitions_default_is_empty() {
+        let s = snapshot_with(vec![], vec![], vec![]);
+        assert_eq!(s.event_definition_count(), 0);
+        assert!(s.event_definition("anything").is_none());
+    }
+
+    #[test]
+    fn with_event_definitions_populates_cache() {
+        let mut defs = HashMap::new();
+        defs.insert("checkout_completed".to_string(), EventValueType::Bool);
+        defs.insert("revenue".to_string(), EventValueType::Double);
+        defs.insert("clicks".to_string(), EventValueType::Int);
+        let s = snapshot_with(vec![], vec![], vec![]).with_event_definitions(defs);
+        assert_eq!(s.event_definition_count(), 3);
+        assert_eq!(s.event_definition("checkout_completed"), Some(EventValueType::Bool));
+        assert_eq!(s.event_definition("revenue"), Some(EventValueType::Double));
+        assert_eq!(s.event_definition("clicks"), Some(EventValueType::Int));
+        assert!(s.event_definition("not_registered").is_none());
     }
 
     #[test]

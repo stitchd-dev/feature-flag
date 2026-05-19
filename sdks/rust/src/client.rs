@@ -45,12 +45,13 @@ use stitchd_proto::sdk::v1::SyncDefinitionsRequest;
 use stitchd_proto::sdk::v1::sdk_service_client::SdkServiceClient;
 
 use crate::config::SdkConfig;
-use crate::error::SdkError;
+use crate::error::{SdkError, TrackError};
+use crate::event_buffer::{BufferedEvent, EventBuffer, EventBufferConfig, TypedValue};
 use crate::events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, ParameterValue};
 use crate::lru::{ContextKey, MembershipCache, MembershipMap};
 use crate::polling::{DefinitionFetcher, PollTask};
 use crate::refresh::{MembershipBatchFetcher, RefreshTask};
-use crate::snapshot::{DefinitionSnapshot, DefinitionStore};
+use crate::snapshot::{DefinitionSnapshot, DefinitionStore, EventValueType};
 
 // ============================================================================
 // Public output types (Tasks 8)
@@ -374,6 +375,12 @@ pub struct SdkClient {
     /// On-demand membership fetcher used by `evaluate()` on LRU miss.
     /// Shared with `RefreshTask` (same channel/auth).
     membership_fetcher: Arc<dyn MembershipBatchFetcher>,
+    /// Client-side track-event buffer (Phase 5). `None` when the
+    /// `SdkConfig` is built without a gateway URL we can POST to (e.g.
+    /// pure in-memory test fixtures via the `test-util` feature). In
+    /// production builds — i.e. anything coming through `SdkClient::init`
+    /// — this is `Some(_)` and powers `Client::track()`.
+    event_buffer: Option<Arc<EventBuffer>>,
     poll_task: Mutex<Option<PollTask>>,
     refresh_task: Mutex<Option<RefreshTask>>,
     flush_task: Mutex<Option<FlushTask>>,
@@ -450,6 +457,21 @@ impl SdkClient {
         ));
         let flush_task = FlushTask::spawn(event_queue.clone(), sink, config.event_flush_interval);
 
+        // ── Track-event buffer (Phase 5) ──────────────────────────────────
+        //
+        // Distinct from the flag-evaluation event_queue above — that one
+        // ships `FlagEvaluationEvent` to `/v1/sdk/events:batch`; this one
+        // ships caller-supplied `BufferedEvent` to `/v1/events/track`.
+        let event_buffer_config = EventBufferConfig {
+            flush_at_size: config.event_batch_size,
+            flush_interval: config.event_flush_interval,
+            max_retries: 3,
+            backoff_base: std::time::Duration::from_millis(200),
+            gateway_base_url: config.gateway_url.clone(),
+            sdk_key: config.sdk_key.clone(),
+        };
+        let event_buffer = EventBuffer::with_client(event_buffer_config, http_client.clone());
+
         // ── Background poll task ──────────────────────────────────────────
         let poll_task = PollTask::spawn(
             fetcher as Arc<dyn DefinitionFetcher>,
@@ -470,6 +492,7 @@ impl SdkClient {
             membership_cache,
             event_queue,
             membership_fetcher,
+            event_buffer: Some(event_buffer),
             poll_task: Mutex::new(Some(poll_task)),
             refresh_task: Mutex::new(Some(refresh_task)),
             flush_task: Mutex::new(Some(flush_task)),
@@ -546,6 +569,99 @@ impl SdkClient {
             });
         }
         results
+    }
+
+    // ── track (Phase 5 Task 5.2) ─────────────────────────────────────────────
+
+    /// Enqueue one track-event for delivery to the gateway's
+    /// `/v1/events/track` endpoint.
+    ///
+    /// **Validation (per spec F2.4):** before the event is enqueued, the
+    /// SDK checks the locally cached `event_definitions`:
+    ///
+    /// - If `event_key` is not registered → emit `tracing::warn!`, do
+    ///   nothing, return `Ok(())`. Rejections at this layer are
+    ///   fire-and-forget; they NEVER propagate as `Err`.
+    /// - If `value` is `Some(_)` and its variant doesn't match the
+    ///   registered `EventValueType` → same warn + skip.
+    /// - Otherwise → assemble a [`BufferedEvent`] and call
+    ///   `event_buffer.enqueue()`.
+    ///
+    /// **Buffer absent.** A client constructed via the `test-util`
+    /// helpers (or any future builder path that doesn't supply an event
+    /// buffer) silently no-ops. Production clients built via
+    /// `SdkClient::init` always have a buffer.
+    ///
+    /// # Errors
+    ///
+    /// - [`TrackError::State`] — placeholder for post-shutdown calls.
+    ///   The current implementation never returns this; it's reserved
+    ///   so the signature is stable across Phase 5 Task 5.3
+    ///   (`Client::shutdown()` integration).
+    pub async fn track(
+        &self,
+        event_key: &str,
+        context: &Context,
+        value: Option<TypedValue>,
+        properties: Option<HashMap<String, String>>,
+    ) -> Result<(), TrackError> {
+        // Look up the cached event-definition. If absent or mismatched,
+        // warn + skip (per spec F2.4).
+        let snapshot = self.definition_store.load();
+        match snapshot.event_definition(event_key) {
+            None => {
+                warn!(
+                    event_key,
+                    "track: unknown event_key; skipping (no matching event definition in local snapshot)"
+                );
+                return Ok(());
+            }
+            Some(registered) => {
+                if let Some(ref v) = value {
+                    let actual = EventValueType::of(v);
+                    if actual != registered {
+                        warn!(
+                            event_key,
+                            ?registered,
+                            ?actual,
+                            "track: value type does not match registered event definition; skipping"
+                        );
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // No buffer (test-util fixtures) — accept and drop silently.
+        let Some(buffer) = self.event_buffer.as_ref() else {
+            return Ok(());
+        };
+
+        let buffered = BufferedEvent {
+            event_key: event_key.to_string(),
+            context_type: context.context_type.clone(),
+            context_key: context.key.clone(),
+            value,
+            properties,
+            // SDK-local clock; gateway re-stamps if absent.
+            occurred_at: Some(Utc::now()),
+        };
+        buffer.enqueue(buffered);
+        Ok(())
+    }
+
+    /// Synchronous predicate — does the locally cached snapshot contain
+    /// an event definition for `event_key`?
+    ///
+    /// Implements spec F2.5. Useful for pre-flight checks before
+    /// constructing a value, e.g. in branchy code paths where the value
+    /// is expensive to compute.
+    #[must_use]
+    pub fn is_event_registered(&self, event_key: &str) -> bool {
+        self.definition_store
+            .load()
+            .event_definition(event_key)
+            .is_some()
     }
 
     // ── shutdown (Task 9) ────────────────────────────────────────────────────
@@ -1055,6 +1171,7 @@ mod tests {
             membership_cache,
             event_queue,
             membership_fetcher,
+            event_buffer: None,
             poll_task: Mutex::new(Some(poll_task)),
             refresh_task: Mutex::new(Some(refresh_task)),
             flush_task: Mutex::new(Some(flush_task)),
@@ -1090,6 +1207,7 @@ mod tests {
             membership_cache,
             event_queue,
             membership_fetcher: fetcher,
+            event_buffer: None,
             poll_task: Mutex::new(Some(poll_task)),
             refresh_task: Mutex::new(Some(refresh_task)),
             flush_task: Mutex::new(Some(flush_task)),
@@ -1765,6 +1883,295 @@ mod tests {
             .await;
         assert_eq!(client.event_queue.len(), 2, "one event per EvalRequest");
     }
+
+    // ── Phase 5 Task 5.2: track() + is_event_registered ─────────────────────
+
+    /// Build a snapshot with the supplied event definitions registered.
+    fn snapshot_with_event_defs(defs: Vec<(&str, EventValueType)>) -> DefinitionSnapshot {
+        let map: HashMap<String, EventValueType> =
+            defs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        DefinitionSnapshot::from_proto(SyncDefinitionsResponse {
+            flags: vec![],
+            rule_segments: vec![],
+            list_segments: vec![],
+            server_timestamp_ms: 0,
+            environment_id: "env-1".into(),
+        })
+        .with_event_definitions(map)
+    }
+
+    /// Build a SdkClient bound to the supplied snapshot WITH a real
+    /// `EventBuffer` that POSTs to `gateway_url`. The buffer's interval
+    /// is set to 60s so tests opt-in to flushing via `enqueue` size
+    /// triggers or by inspecting `EventBuffer::flush()` directly.
+    fn sdk_client_with_track_buffer(
+        snapshot: DefinitionSnapshot,
+        gateway_url: &str,
+    ) -> Arc<SdkClient> {
+        let definition_store = DefinitionStore::from_snapshot(snapshot);
+        let membership_cache = MembershipCache::new(100);
+        let event_queue = EventQueue::new(1000, 100);
+
+        let sink: Arc<dyn EventSink> = Arc::new(NoopSink);
+        let flush_task = FlushTask::spawn(event_queue.clone(), sink, Duration::from_secs(60));
+
+        let membership_fetcher: Arc<dyn MembershipBatchFetcher> = Arc::new(NoopMembershipFetcher);
+        let poll_fetcher: Arc<dyn DefinitionFetcher> = Arc::new(NoopFetcher);
+        let poll_task = PollTask::spawn(
+            poll_fetcher,
+            definition_store.clone(),
+            Duration::from_secs(60),
+        );
+        let refresh_task = RefreshTask::spawn(
+            Arc::clone(&membership_fetcher),
+            membership_cache.clone(),
+            definition_store.clone(),
+            Duration::from_secs(60),
+        );
+
+        let buffer = EventBuffer::new(EventBufferConfig {
+            flush_at_size: 100,
+            flush_interval: Duration::from_secs(60),
+            max_retries: 0,
+            backoff_base: Duration::from_millis(1),
+            gateway_base_url: gateway_url.to_string(),
+            sdk_key: "test-sdk-key".to_string(),
+        });
+
+        Arc::new(SdkClient {
+            definition_store,
+            membership_cache,
+            event_queue,
+            membership_fetcher,
+            event_buffer: Some(buffer),
+            poll_task: Mutex::new(Some(poll_task)),
+            refresh_task: Mutex::new(Some(refresh_task)),
+            flush_task: Mutex::new(Some(flush_task)),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_is_event_registered_reflects_cache() {
+        let snap = snapshot_with_event_defs(vec![
+            ("checkout_completed", EventValueType::Bool),
+            ("revenue", EventValueType::Double),
+        ]);
+        let client = sdk_client_with_snapshot(snap);
+        assert!(client.is_event_registered("checkout_completed"));
+        assert!(client.is_event_registered("revenue"));
+        assert!(!client.is_event_registered("not_a_real_event"));
+    }
+
+    #[tokio::test]
+    async fn test_track_with_registered_event_enqueues() {
+        // wiremock server that captures the body so we can assert the
+        // event was indeed enqueued + flushed.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "accepted_count": 1,
+                "rejected": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let snap = snapshot_with_event_defs(vec![("checkout_completed", EventValueType::Bool)]);
+        let client = sdk_client_with_track_buffer(snap, &server.uri());
+
+        let ctx = Context::new("user", "alice");
+        client
+            .track(
+                "checkout_completed",
+                &ctx,
+                Some(TypedValue::Bool(true)),
+                None,
+            )
+            .await
+            .expect("track must succeed for registered event");
+
+        // Force a flush so the wiremock assertion holds at the end of test.
+        let buffer = client.event_buffer.as_ref().unwrap();
+        let report = buffer.flush().await.expect("flush must succeed");
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.rejected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_track_with_unknown_event_warns_and_skips() {
+        // No mock — if track tries to POST anything, wiremock complains.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        // Empty event-definitions cache.
+        let snap = snapshot_with_event_defs(vec![]);
+        let client = sdk_client_with_track_buffer(snap, &server.uri());
+
+        let ctx = Context::new("user", "alice");
+        // Per spec F2.4: unknown event → Ok(()) (warn + skip, NOT Err).
+        client
+            .track("ghost_event", &ctx, Some(TypedValue::Int(1)), None)
+            .await
+            .expect("track must NOT propagate errors for unknown event_key");
+
+        // Buffer must still be empty — flush should be a no-op.
+        let buffer = client.event_buffer.as_ref().unwrap();
+        let report = buffer.flush().await.expect("empty flush is ok");
+        assert_eq!(report.accepted, 0);
+        assert_eq!(report.rejected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_track_with_mismatched_value_type_warns_and_skips() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202))
+            .expect(0)
+            .mount(&server)
+            .await;
+
+        // Registered as Bool, caller supplies Int → mismatch.
+        let snap = snapshot_with_event_defs(vec![("conversion", EventValueType::Bool)]);
+        let client = sdk_client_with_track_buffer(snap, &server.uri());
+
+        let ctx = Context::new("user", "alice");
+        client
+            .track("conversion", &ctx, Some(TypedValue::Int(42)), None)
+            .await
+            .expect("track must NOT propagate errors for type mismatch");
+
+        let buffer = client.event_buffer.as_ref().unwrap();
+        let report = buffer.flush().await.expect("empty flush is ok");
+        assert_eq!(report.accepted, 0);
+        assert_eq!(report.rejected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_track_with_no_value_skips_type_check() {
+        // value=None is legal (pure occurrence marker) — no type check.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "accepted_count": 1,
+                "rejected": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let snap = snapshot_with_event_defs(vec![("page_view", EventValueType::Int)]);
+        let client = sdk_client_with_track_buffer(snap, &server.uri());
+
+        let ctx = Context::new("user", "alice");
+        client
+            .track("page_view", &ctx, None, None)
+            .await
+            .expect("track must accept value=None regardless of registered type");
+
+        let buffer = client.event_buffer.as_ref().unwrap();
+        let report = buffer.flush().await.expect("flush must succeed");
+        assert_eq!(report.accepted, 1);
+    }
+
+    #[tokio::test]
+    async fn test_track_without_event_buffer_returns_ok() {
+        // SdkClient without an event_buffer (test-util construction path).
+        // track() must be a silent no-op — Ok(()) and no panic.
+        let snap = snapshot_with_event_defs(vec![("event", EventValueType::Bool)]);
+        let client = sdk_client_with_snapshot(snap);
+        assert!(client.event_buffer.is_none());
+
+        let ctx = Context::new("user", "alice");
+        client
+            .track("event", &ctx, Some(TypedValue::Bool(true)), None)
+            .await
+            .expect("track must be a no-op when buffer is absent");
+    }
+
+    #[tokio::test]
+    async fn test_track_round_trips_context_and_properties() {
+        // Verify the buffered event carries context_type/key + properties
+        // intact through to the POST body.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let captured: Arc<std::sync::Mutex<Option<serde_json::Value>>> =
+            Arc::new(std::sync::Mutex::new(None));
+
+        struct Capture {
+            slot: Arc<std::sync::Mutex<Option<serde_json::Value>>>,
+        }
+        impl Respond for Capture {
+            fn respond(&self, req: &Request) -> ResponseTemplate {
+                *self.slot.lock().unwrap() =
+                    Some(serde_json::from_slice(&req.body).unwrap());
+                ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                    "accepted_count": 1,
+                    "rejected": []
+                }))
+            }
+        }
+
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(Capture {
+                slot: Arc::clone(&captured),
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let snap = snapshot_with_event_defs(vec![("purchase", EventValueType::Double)]);
+        let client = sdk_client_with_track_buffer(snap, &server.uri());
+
+        let ctx = Context::new("user", "u42");
+        let mut props = HashMap::new();
+        props.insert("currency".to_string(), "USD".to_string());
+
+        client
+            .track(
+                "purchase",
+                &ctx,
+                Some(TypedValue::Double(19.99)),
+                Some(props),
+            )
+            .await
+            .expect("track must succeed");
+
+        let buffer = client.event_buffer.as_ref().unwrap();
+        buffer.flush().await.expect("flush must succeed");
+
+        let body = captured.lock().unwrap().clone().expect("body captured");
+        let ev0 = &body["events"][0];
+        assert_eq!(ev0["event_key"], "purchase");
+        assert_eq!(ev0["context_type"], "user");
+        assert_eq!(ev0["context_key"], "u42");
+        assert_eq!(ev0["value"], serde_json::json!({"double": 19.99}));
+        assert_eq!(ev0["properties"]["currency"], "USD");
+        // occurred_at is SDK-stamped from `Utc::now()` — just confirm presence.
+        assert!(ev0.get("occurred_at").is_some_and(|v| v.is_string()));
+    }
 }
 
 // ============================================================================
@@ -1847,6 +2254,7 @@ pub mod testing {
             membership_cache,
             event_queue,
             membership_fetcher,
+            event_buffer: None,
             poll_task: Mutex::new(Some(poll_task)),
             refresh_task: Mutex::new(Some(refresh_task)),
             flush_task: Mutex::new(Some(flush_task)),
@@ -1856,5 +2264,59 @@ pub mod testing {
     /// Simpler variant with a no-op membership fetcher and empty LRU.
     pub fn sdk_client_simple(snapshot: DefinitionSnapshot) -> Arc<SdkClient> {
         sdk_client_with_snapshot_and_lru(snapshot, Arc::new(NoopMembershipFetcher), vec![])
+    }
+
+    /// Construct an `Arc<SdkClient>` with a real `EventBuffer` pointing at
+    /// `gateway_base_url` (typically a wiremock server). Used by tests
+    /// that exercise the full `track()` → buffer → POST pipeline.
+    pub fn sdk_client_with_track_buffer(
+        snapshot: DefinitionSnapshot,
+        gateway_base_url: impl Into<String>,
+        sdk_key: impl Into<String>,
+    ) -> Arc<SdkClient> {
+        let definition_store = DefinitionStore::from_snapshot(snapshot);
+        let membership_cache = MembershipCache::new(1000);
+        let event_queue = EventQueue::new(1000, 100);
+
+        let sink: Arc<dyn EventSink> = Arc::new(NoopSink);
+        let flush_task = FlushTask::spawn(event_queue.clone(), sink, Duration::from_secs(60));
+
+        let poll_fetcher: Arc<dyn DefinitionFetcher> = Arc::new(NoopDefinitionFetcher);
+        let poll_task = PollTask::spawn(
+            poll_fetcher,
+            definition_store.clone(),
+            Duration::from_secs(60),
+        );
+
+        let membership_fetcher: Arc<dyn MembershipBatchFetcher> = Arc::new(NoopMembershipFetcher);
+        let refresh_task = RefreshTask::spawn(
+            Arc::clone(&membership_fetcher),
+            membership_cache.clone(),
+            definition_store.clone(),
+            Duration::from_secs(60),
+        );
+
+        // Long flush interval — tests opt-in to explicit flushes or size
+        // triggers; otherwise the interval never fires within a test.
+        let buffer_cfg = EventBufferConfig {
+            flush_at_size: 100,
+            flush_interval: Duration::from_secs(60),
+            max_retries: 0,
+            backoff_base: Duration::from_millis(1),
+            gateway_base_url: gateway_base_url.into(),
+            sdk_key: sdk_key.into(),
+        };
+        let event_buffer = EventBuffer::new(buffer_cfg);
+
+        Arc::new(SdkClient {
+            definition_store,
+            membership_cache,
+            event_queue,
+            membership_fetcher,
+            event_buffer: Some(event_buffer),
+            poll_task: Mutex::new(Some(poll_task)),
+            refresh_task: Mutex::new(Some(refresh_task)),
+            flush_task: Mutex::new(Some(flush_task)),
+        })
     }
 }

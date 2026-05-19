@@ -43,6 +43,33 @@ impl fmt::Display for SdkError {
 
 impl std::error::Error for SdkError {}
 
+// ============================================================================
+// TrackError — surface for `Client::track()` failures
+// ============================================================================
+
+/// Errors returned by [`crate::SdkClient::track`].
+///
+/// Note: `track()` is fire-and-forget per spec F2 — validation failures
+/// (unknown event_key, value-type mismatch) DO NOT propagate as `Err`.
+/// They warn + skip + return `Ok(())`. Only programming errors surface
+/// here.
+#[derive(Debug)]
+pub enum TrackError {
+    /// Caller invoked `track()` after `shutdown()`. This is a programming
+    /// error — the client must not be used after it's been shut down.
+    State(String),
+}
+
+impl fmt::Display for TrackError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::State(m) => write!(f, "track state error: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for TrackError {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +104,20 @@ mod tests {
         // boxed-error workflows.
         fn assert_error<E: std::error::Error>() {}
         assert_error::<SdkError>();
+    }
+
+    #[test]
+    fn track_error_display_includes_class_prefix() {
+        assert!(
+            TrackError::State("shut down".into())
+                .to_string()
+                .starts_with("track state error:")
+        );
+    }
+
+    #[test]
+    fn track_error_implements_std_error() {
+        fn assert_error<E: std::error::Error>() {}
+        assert_error::<TrackError>();
     }
 }
