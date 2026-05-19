@@ -160,6 +160,44 @@ mod tests {
             self.received.lock().await.push(req.into_inner());
             Ok(Response::new(WriteExperimentResultsResponse {}))
         }
+
+        // ── Metric definitions CRUD — not exercised by stats-service tests ──
+        async fn create_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::CreateMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_metrics(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::ListMetricsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::ListMetricsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn update_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::UpdateMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn delete_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::DeleteMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::DeleteMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn preview_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::PreviewMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::PreviewMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
     }
 
     /// Spin up an in-process gRPC server and return (client, captured_requests).
