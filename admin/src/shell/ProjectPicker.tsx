@@ -97,7 +97,6 @@ export function ProjectPicker() {
     <button
       className="org-switcher button-reset"
       onClick={() => setOpen((v) => !v)}
-      style={{ width: '100%' }}
       title={`Current project: ${displayName}`}
     >
       <div className="org-avatar" style={{ background: 'linear-gradient(135deg, #1a3a5c, #0d1f33)' }}>

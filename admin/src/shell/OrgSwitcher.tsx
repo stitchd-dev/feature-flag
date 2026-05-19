@@ -69,7 +69,6 @@ export function OrgSwitcher({ currentOrgId, currentOrgName }: OrgSwitcherProps) 
   const trigger = (
     <button
       className="org-switcher button-reset"
-      style={{ width: '100%' }}
       title={`Current org: ${displayName}`}
       onClick={() => setOpen((v) => !v)}
     >

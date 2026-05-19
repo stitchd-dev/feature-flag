@@ -37,8 +37,10 @@ export function EnvSwitcher() {
     </div>
   )
 
+  // Margins live entirely on `.env-pill` (12px sides + top, 0 bottom);
+  // wrapper has only `position: relative` for the dropdown anchor.
   if (environments.length <= 1) {
-    return <div style={{ margin: '0 12px 8px', position: 'relative' }}>{trigger}</div>
+    return <div style={{ position: 'relative' }}>{trigger}</div>
   }
 
   return (
@@ -46,7 +48,6 @@ export function EnvSwitcher() {
       trigger={trigger}
       isOpen={open}
       onOpenChange={setOpen}
-      style={{ margin: '0 12px 8px' }}
     >
       <div style={{ padding: '6px 14px 4px', fontSize: 10, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         Switch to
