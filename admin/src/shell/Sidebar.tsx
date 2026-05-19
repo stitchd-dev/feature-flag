@@ -70,7 +70,9 @@ export function Sidebar({ onCmdK }: SidebarProps) {
         </>
       )}
 
-      <div style={{ padding: '0 12px 8px' }}>
+      {/* Uniform 12px top spacing — keeps consistent rhythm with the switcher blocks above,
+          and ensures the search bar isn't flush against the brand divider in superadmin mode. */}
+      <div style={{ padding: '12px 12px 4px' }}>
         <div className="search-input" style={{ maxWidth: '100%' }}>
           <I.search size={14} />
           <input className="input" placeholder="Search… flags, segments" onFocus={onCmdK} readOnly />

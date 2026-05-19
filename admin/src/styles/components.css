@@ -57,7 +57,10 @@
   color: var(--fg);
 }
 .org-switcher {
-  margin: 12px;
+  /* Top-only margin gives a uniform 12px gap above every sidebar block
+     (OrgSwitcher, ProjectPicker, EnvSwitcher, search-input). Without
+     bottom margin we avoid 12+12=24px flex-column doubling. */
+  margin: 12px 12px 0;
   padding: 10px 12px;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -84,7 +87,8 @@
 .org-chevron { color: var(--fg-subtle); flex-shrink: 0; }
 
 .env-pill {
-  margin: 0 12px 8px;
+  /* Uniform 12px top spacing matches .org-switcher rhythm. */
+  margin: 12px 12px 0;
   padding: 8px 10px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius);
