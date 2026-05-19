@@ -29,6 +29,61 @@ message IngestEventResponse {
   repeated string rejected_keys  = 2;
 }
 
+// ─── Track Events (SDK batch ingestion) ──────────────────────────────────────
+//
+// `TrackEvents` is the foundational event-ingestion RPC the gateway proxies
+// SDK `POST /v1/events/track` requests to. Unlike `IngestEvent`, the analytics
+// service trusts the gateway's `x-env-id` metadata (the gateway is the sole
+// SDK-trust boundary) and additionally carries `properties` + `occurred_at`
+// fields to support metric filters and offline replay.
+
+message TrackEvent {
+  // Pre-registered event_definitions.key. Unknown / archived keys are
+  // rejected (added to TrackEventsResponse.rejected) rather than failing
+  // the whole batch.
+  string                 event_key    = 1;
+  // Dimension type (e.g. "user", "session").
+  string                 context_type = 2;
+  // Dimension value (e.g. "u-42").
+  string                 context_key  = 3;
+  // Typed metric value; must match the registered event's value_type.
+  // Optional because some event_definitions are pure occurrence markers
+  // (count-only) where value carries no information.
+  MetricValue            value        = 4;
+  // Arbitrary per-event metadata. Used by metric filters / on-field
+  // aggregations downstream. Empty map is fine.
+  map<string, string>    properties   = 5;
+  // RFC 3339 client-side wall-clock timestamp. Optional — when absent,
+  // analytics-service uses ingestion (server) time. Lets SDKs replay
+  // buffered offline events with their original firing time.
+  optional string        occurred_at  = 6;
+}
+
+message TrackEventsRequest {
+  // Trusted gateway-supplied env_id (UUID). Mirrors the `x-env-id` metadata
+  // header for callers that want it in the body (e.g. test harnesses).
+  // Effective env_id resolution: metadata header takes precedence when both
+  // are present.
+  string              env_id = 1;
+  repeated TrackEvent events = 2;
+}
+
+// One rejected event with a machine-readable reason discriminant.
+message RejectedEvent {
+  string event_key = 1;
+  // One of: "unknown_event_key", "archived_event_key", "value_type_mismatch",
+  // "missing_value", "invalid_occurred_at".
+  string reason    = 2;
+}
+
+message TrackEventsResponse {
+  // Number of events accepted and written to ClickHouse.
+  uint32                 accepted_count = 1;
+  // Per-event rejection detail. Index does NOT correspond to request index —
+  // duplicates may appear if the same key was rejected multiple times.
+  repeated RejectedEvent rejected       = 2;
+}
+
 // ─── Context Registry ─────────────────────────────────────────────────────────
 
 // Upsert a context type and its parameters observed during an evaluation.
@@ -328,6 +383,12 @@ message PreviewMetricResponse {
 service AnalyticsService {
   // Ingest a batch of metric events into ClickHouse.
   rpc IngestEvent(IngestEventRequest) returns (IngestEventResponse);
+
+  // SDK-facing batch event ingestion. Validates against PG event_definitions
+  // (60s in-process cache), writes accepted rows to ClickHouse `events_v2`.
+  // Reads the trusted env_id from the `x-env-id` metadata header (gateway
+  // is the sole SDK trust boundary), falling back to `TrackEventsRequest.env_id`.
+  rpc TrackEvents(TrackEventsRequest) returns (TrackEventsResponse);
 
   // Upsert context type and parameters observed during flag evaluation.
   rpc RegisterContext(RegisterContextRequest) returns (RegisterContextResponse);

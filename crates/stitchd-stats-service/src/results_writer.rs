@@ -110,6 +110,12 @@ mod tests {
         ) -> Result<Response<IngestEventResponse>, Status> {
             Err(Status::unimplemented("not used in tests"))
         }
+        async fn track_events(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::TrackEventsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::TrackEventsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
         async fn register_context(
             &self,
             _req: Request<stitchd_proto::analytics::v1::RegisterContextRequest>,

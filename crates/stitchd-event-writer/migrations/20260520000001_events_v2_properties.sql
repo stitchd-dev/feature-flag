@@ -7,13 +7,13 @@
 --     that the metrics layer can filter on (via JsonLogic where_clause)
 --     and aggregate over (via AggregationConfig.on_field).
 --   * `occurred_at DateTime64(3, 'UTC')` — wall-clock time the event
---     happened on the client; distinct from `timestamp` (broker
+--     happened on the client. Distinct from `timestamp` (broker
 --     ingestion time) and `ingested_at` (CH server time). Lets the SDK
 --     submit events with a real client-side timestamp when buffering or
 --     replaying offline data.
 --
 -- Both columns are nullable in spirit (`properties` defaults to empty
--- map; `occurred_at` defaults to `timestamp` when absent at write time —
+-- map, `occurred_at` defaults to `timestamp` when absent at write time —
 -- the SDK / analytics-service handles that in code, not in SQL, because
 -- ClickHouse DEFAULTs on ADD COLUMN re-write the whole table). Adding
 -- columns without DEFAULT clauses is metadata-only and instant in
@@ -26,7 +26,7 @@ ALTER TABLE events_v2
 -- An index on the `properties` map would require ClickHouse skipping
 -- indexes or projections — both add write overhead and slow ingestion.
 -- The properties column is filtered at scan time inside the experiment
--- aggregation MV (`events_experiment_daily_mv`); we rely on the
+-- aggregation MV (`events_experiment_daily_mv`), and we rely on the
 -- partition pruning + ORDER BY for query performance.
 --
 -- If a specific high-cardinality property becomes a hot filter we will
