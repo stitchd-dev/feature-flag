@@ -220,7 +220,7 @@ These routes are removed entirely. The SDK must use `/v1/sdk/*` instead.
 | Method | New path | Old path |
 |--------|----------|----------|
 | GET    | `/v1/health` | `/health` |
-| GET    | `/v1/metrics` | `/metrics` (not previously registered; added now) |
+| GET    | `/metrics`   | `/v1/metrics` (Prometheus exposition moved off the versioned API prefix in `events_metrics_20260519` to free `/v1/metrics` for the admin metric-definitions CRUD surface) |
 
 ---
 

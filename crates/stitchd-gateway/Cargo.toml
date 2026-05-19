@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 stitchd-proto = { path = "../stitchd-proto" }
+stitchd-core = { path = "../stitchd-core", features = ["openapi"] }
 tokio = { workspace = true }
 tonic = { workspace = true }
 axum = { workspace = true }

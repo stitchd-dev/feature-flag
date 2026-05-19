@@ -24,11 +24,15 @@ use crate::middleware::auth::{auth_middleware, require_non_system_org, require_s
 use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
     admin, auth, auth_providers, context_intel, eval_stats, events, experiments, flags, management,
-    oidc, saml, sdk_backend, segments, stats,
+    metrics, oidc, saml, sdk_backend, segments, stats,
 };
 use crate::state::GatewayState;
 
-/// Handler for `GET /v1/metrics` — renders Prometheus exposition format.
+/// Handler for `GET /metrics` — renders Prometheus exposition format.
+///
+/// Lives at the conventional Prometheus path (no `/v1/` version prefix) to
+/// keep the versioned admin REST surface — including `GET /v1/metrics` for
+/// metric-definitions CRUD — free of operational endpoints.
 async fn metrics_handler(State(handle): State<PrometheusHandle>) -> impl IntoResponse {
     (
         [(
@@ -215,6 +219,22 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
                 .put(events::update_event_definition)
                 .delete(events::delete_event_definition),
         )
+        // Metrics (admin CRUD + preview) — env_id is a query param on list;
+        // path params identify a specific metric.
+        .route(
+            "/v1/metrics",
+            get(metrics::list_metrics).post(metrics::create_metric),
+        )
+        .route(
+            "/v1/metrics/{id}",
+            get(metrics::get_metric)
+                .patch(metrics::update_metric)
+                .delete(metrics::delete_metric),
+        )
+        .route(
+            "/v1/metrics/{id}/preview",
+            post(metrics::preview_metric),
+        )
         // Experiments
         .route(
             "/v1/environments/{environment_id}/experiments",
@@ -293,8 +313,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         ));
 
     // ── Prometheus metrics — own state (PrometheusHandle), no auth ──────────
+    // Lives at the conventional Prometheus path (`/metrics`) to free
+    // `/v1/metrics` for the admin metric-definitions CRUD surface.
     let metrics_routes = Router::new()
-        .route("/v1/metrics", get(metrics_handler))
+        .route("/metrics", get(metrics_handler))
         .with_state(metrics_handle);
 
     Router::new()
@@ -453,7 +475,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/v1/metrics")
+                    .uri("/metrics")
                     .body(Body::empty())
                     .unwrap(),
             )

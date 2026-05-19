@@ -7,7 +7,7 @@ The system is decomposed into seven Cargo workspace crates, each a standalone gR
 
 | Crate | Role | Type |
 |---|---|---|
-| `stitchd-gateway` | REST API facade — translates JSON ↔ gRPC, calls all domain services; hosts OpenAPI spec; serves real Prometheus metrics at `GET /v1/metrics` | Binary |
+| `stitchd-gateway` | REST API facade — translates JSON ↔ gRPC, calls all domain services; hosts OpenAPI spec; serves real Prometheus metrics at `GET /metrics` (the conventional path; `/v1/metrics` is the admin metric-definitions CRUD surface) | Binary |
 | `stitchd-auth-service` | JWT / SDK-key credential validation; RBAC context assembly | Binary |
 | `stitchd-flag-service` | Flag + variant CRUD; server-streaming definition sync for SDK | Binary |
 | `stitchd-segmentation-service` | Segment CRUD; rule-based + list-based membership evaluation; ScyllaDB-backed list entry storage | Binary |

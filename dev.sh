@@ -149,7 +149,7 @@ esac
 echo ""
 echo "Services started. Endpoints:"
 echo "  Gateway REST  → http://localhost:${STITCHD_GATEWAY_HTTP_PORT}"
-echo "  Gateway Prom  → http://localhost:${STITCHD_GATEWAY_METRICS_PORT}/v1/metrics"
+echo "  Gateway Prom  → http://localhost:${STITCHD_GATEWAY_METRICS_PORT}/metrics"
 echo "  Auth gRPC     → localhost:${STITCHD_AUTH_SERVICE_GRPC_PORT}"
 echo "  Flag gRPC     → localhost:${STITCHD_FLAG_SERVICE_GRPC_PORT}"
 echo "  Segment gRPC  → localhost:${STITCHD_SEGMENTATION_SERVICE_GRPC_PORT}"
