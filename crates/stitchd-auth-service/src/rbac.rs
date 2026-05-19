@@ -24,9 +24,16 @@ const ORG_ADMIN_PERMISSIONS: &[&str] = &[
     "flag:write",
     "segment:read",
     "segment:write",
+    "metric:read",
+    "metric:write",
 ];
 
-const ORG_MEMBER_PERMISSIONS: &[&str] = &["environment:read", "flag:read", "segment:read"];
+const ORG_MEMBER_PERMISSIONS: &[&str] = &[
+    "environment:read",
+    "flag:read",
+    "segment:read",
+    "metric:read",
+];
 
 /// Assemble an [`RbacContext`] from a validated JWT.
 #[must_use]
@@ -129,5 +136,42 @@ mod tests {
         let validated = make_validated_jwt();
         let ctx = rbac_context_from_jwt(&validated);
         assert!(!ctx.roles.is_empty());
+    }
+
+    #[test]
+    fn test_org_admin_has_metric_read_and_write() {
+        let mut validated = make_validated_jwt();
+        validated.org_role = OrgRole::OrgAdmin;
+        let ctx = rbac_context_from_jwt(&validated);
+        assert!(
+            ctx.permissions.contains(&"metric:read".to_string()),
+            "org_admin must have metric:read"
+        );
+        assert!(
+            ctx.permissions.contains(&"metric:write".to_string()),
+            "org_admin must have metric:write"
+        );
+    }
+
+    #[test]
+    fn test_org_member_has_metric_read_only() {
+        let mut validated = make_validated_jwt();
+        validated.org_role = OrgRole::OrgMember;
+        let ctx = rbac_context_from_jwt(&validated);
+        assert!(
+            ctx.permissions.contains(&"metric:read".to_string()),
+            "org_member must have metric:read"
+        );
+    }
+
+    #[test]
+    fn test_org_member_does_not_have_metric_write() {
+        let mut validated = make_validated_jwt();
+        validated.org_role = OrgRole::OrgMember;
+        let ctx = rbac_context_from_jwt(&validated);
+        assert!(
+            !ctx.permissions.contains(&"metric:write".to_string()),
+            "org_member must NOT have metric:write"
+        );
     }
 }
