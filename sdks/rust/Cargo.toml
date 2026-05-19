@@ -1,5 +1,5 @@
 [package]
-name = "stitchd-sdk"
+name = "stitchd-sdk-rust"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -47,6 +47,10 @@ chrono = { workspace = true }
 [features]
 # Expose test helpers (SdkClient constructor from snapshot) for integration / conformance tests.
 test-util = []
+
+[[test]]
+name = "conformance"
+required-features = ["test-util"]
 
 [dev-dependencies]
 # Integration tests stub out the gateway with wiremock + tonic mock services.

@@ -188,7 +188,7 @@ mod tests {
         let ctx = Context::new("user", "u")
             .with_parameter("b", ParameterValue::Bool(true))
             .with_parameter("i", ParameterValue::Int(42))
-            .with_parameter("d", ParameterValue::Double(3.14))
+            .with_parameter("d", ParameterValue::Double(std::f64::consts::PI))
             .with_parameter("s", ParameterValue::Str("hello".into()))
             .with_parameter(
                 "v",
@@ -205,7 +205,7 @@ mod tests {
         let params: serde_json::Value = serde_json::from_str(&rows[0].params_json).unwrap();
         assert_eq!(params["b"], true);
         assert_eq!(params["i"], 42);
-        assert!(params["d"].as_f64().unwrap() - 3.14 < 0.001);
+        assert!((params["d"].as_f64().unwrap() - std::f64::consts::PI).abs() < 0.001);
         assert_eq!(params["s"], "hello");
         assert_eq!(params["v"], "1.2.3");
     }

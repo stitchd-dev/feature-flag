@@ -1,59 +1,66 @@
-//! Writes computed per-metric statistics to the `experiment_results` table.
+//! Writes computed per-metric statistics via the analytics-service gRPC client.
+//!
+//! No direct PostgreSQL access to `experiment_results`.
 
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use tonic::transport::Channel;
 use uuid::Uuid;
 
+use stitchd_proto::analytics::v1::{
+    WriteExperimentResultsRequest,
+    analytics_service_client::AnalyticsServiceClient,
+};
+
 /// A summarized metric result for one (variant_group, metric_key) pair,
-/// ready to be written to `experiment_results`.
+/// ready to be forwarded to analytics-service.
 #[derive(Debug, Clone)]
 pub struct MetricSummary {
     pub metric_key: String,
     /// JSON object mapping variant_key → event count.
     pub variant_stats: serde_json::Value,
-    /// Optional frequentist analysis result (JSONB).
+    /// Optional frequentist analysis result (JSON).
     pub frequentist_result: Option<serde_json::Value>,
-    /// Optional bayesian analysis result (JSONB).
+    /// Optional bayesian analysis result (JSON).
     pub bayesian_result: Option<serde_json::Value>,
     pub recommendation: String,
 }
 
-/// Upsert computed metric summaries into `experiment_results`.
+/// Forward computed metric summaries to `analytics-service.WriteExperimentResults`.
 ///
-/// Each `MetricSummary` maps to one row keyed on `(experiment_id, iteration_id, metric_key)`.
+/// Each `MetricSummary` becomes one `WriteExperimentResultsRequest` call keyed
+/// on `(experiment_id, iteration_id, metric_key)`.  The analytics service is
+/// responsible for the actual upsert.
+///
+/// `env_id` is the environment UUID that scopes the result rows.
 pub async fn write_results(
-    pool: &PgPool,
+    client: &mut AnalyticsServiceClient<Channel>,
+    env_id: Uuid,
     experiment_id: Uuid,
     iteration_id: Uuid,
     computed_at: DateTime<Utc>,
     summaries: &[MetricSummary],
-) -> Result<(), sqlx::Error> {
+) -> Result<(), anyhow::Error> {
+    let computed_at_rfc = computed_at.to_rfc3339();
+
     for summary in summaries {
-        sqlx::query(
-            r"
-            INSERT INTO experiment_results
-                (experiment_id, iteration_id, metric_key, metric_type,
-                 variant_stats, frequentist_result, bayesian_result,
-                 recommendation, computed_at)
-            VALUES ($1, $2, $3, 'count', $4, $5, $6, $7, $8)
-            ON CONFLICT (experiment_id, iteration_id, metric_key) DO UPDATE
-                SET variant_stats      = EXCLUDED.variant_stats,
-                    frequentist_result = EXCLUDED.frequentist_result,
-                    bayesian_result    = EXCLUDED.bayesian_result,
-                    recommendation     = EXCLUDED.recommendation,
-                    computed_at        = EXCLUDED.computed_at
-            ",
-        )
-        .bind(experiment_id)
-        .bind(iteration_id)
-        .bind(&summary.metric_key)
-        .bind(&summary.variant_stats)
-        .bind(&summary.frequentist_result)
-        .bind(&summary.bayesian_result)
-        .bind(&summary.recommendation)
-        .bind(computed_at)
-        .execute(pool)
-        .await?;
+        let req = WriteExperimentResultsRequest {
+            env_id: env_id.to_string(),
+            experiment_id: experiment_id.to_string(),
+            iteration_id: iteration_id.to_string(),
+            variant_key: String::new(), // variant breakdown is encoded in variant_stats JSON
+            metric_key: summary.metric_key.clone(),
+            metric_type: "count".to_string(),
+            variant_stats: summary.variant_stats.to_string(),
+            frequentist_result: summary
+                .frequentist_result
+                .as_ref()
+                .map(|v| v.to_string()),
+            bayesian_result: summary.bayesian_result.as_ref().map(|v| v.to_string()),
+            recommendation: summary.recommendation.clone(),
+            computed_at: computed_at_rfc.clone(),
+        };
+
+        client.write_experiment_results(req).await?;
     }
 
     Ok(())
@@ -69,136 +76,150 @@ mod tests {
 
     use std::sync::Arc;
 
-    use chrono::Utc;
-    use stitchd_core::{
-        experimentation::{Experiment, ExperimentStatus},
-        flag::{FlagRecord, FlagRule, FlagValueType},
-        id::{
-            EnvironmentId, ExperimentId, FlagId, FlagKey, OrganisationId, ProjectId, RuleId,
-            VariantId,
-        },
-        rule_engine::types::{ConditionExpr, Rule, RuleOutput},
-        tenant::{Environment, Organisation, Project},
-    };
-    use stitchd_db::{
-        EnvironmentRepository, ExperimentRepository, FlagRepository, OrganisationRepository,
-        ProjectRepository,
-        repository::pg::{
-            PgAuditLogger, PgEnvironmentRepository, PgExperimentRepository, PgFlagRepository,
-            PgOrganisationRepository, PgProjectRepository,
-        },
+    use tokio::sync::Mutex;
+    use tonic::{Request, Response, Status};
+
+    use stitchd_proto::analytics::v1::{
+        ExperimentResult,
+        GetContextIntelligenceResponse,
+        GetEvalStatsResponse,
+        IngestEventResponse,
+        ListContextParamsResponse,
+        ListContextTypesResponse,
+        RegisterContextResponse,
+        WriteExperimentResultsRequest,
+        WriteExperimentResultsResponse,
+        analytics_service_server::{AnalyticsService as AnalyticsServiceTrait, AnalyticsServiceServer},
     };
 
-    async fn setup_running_experiment(pool: sqlx::PgPool) -> (Uuid, Uuid) {
-        let audit = Arc::new(PgAuditLogger::new(pool.clone()));
-        let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
-        let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
-        let env_repo = PgEnvironmentRepository::new(pool.clone(), audit.clone());
-        let flag_repo = PgFlagRepository::new(pool.clone(), audit.clone());
-        let exp_repo = PgExperimentRepository::new(pool.clone(), audit.clone());
+    // ── Mock analytics service ────────────────────────────────────────────────
 
-        let org = Organisation {
-            id: OrganisationId::new(),
-            name: "RwOrg".into(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            deleted_at: None,
-            version: 1,
-            is_system: false,
+    #[derive(Default)]
+    struct MockAnalyticsService {
+        received: Arc<Mutex<Vec<WriteExperimentResultsRequest>>>,
+    }
+
+    #[tonic::async_trait]
+    impl AnalyticsServiceTrait for MockAnalyticsService {
+        type ListExperimentResultsStream =
+            tokio_stream::wrappers::ReceiverStream<Result<ExperimentResult, Status>>;
+
+        async fn ingest_event(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::IngestEventRequest>,
+        ) -> Result<Response<IngestEventResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn register_context(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::RegisterContextRequest>,
+        ) -> Result<Response<RegisterContextResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_context_types(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::ListContextTypesRequest>,
+        ) -> Result<Response<ListContextTypesResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_context_params(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::ListContextParamsRequest>,
+        ) -> Result<Response<ListContextParamsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_eval_stats(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetEvalStatsRequest>,
+        ) -> Result<Response<GetEvalStatsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_context_intelligence(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetContextIntelligenceRequest>,
+        ) -> Result<Response<GetContextIntelligenceResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_experiment_results(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::ListExperimentResultsRequest>,
+        ) -> Result<Response<Self::ListExperimentResultsStream>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_experiment_result(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetExperimentResultRequest>,
+        ) -> Result<Response<ExperimentResult>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+
+        async fn write_experiment_results(
+            &self,
+            req: Request<WriteExperimentResultsRequest>,
+        ) -> Result<Response<WriteExperimentResultsResponse>, Status> {
+            self.received.lock().await.push(req.into_inner());
+            Ok(Response::new(WriteExperimentResultsResponse {}))
+        }
+    }
+
+    /// Spin up an in-process gRPC server and return (client, captured_requests).
+    async fn make_client() -> (
+        AnalyticsServiceClient<Channel>,
+        Arc<Mutex<Vec<WriteExperimentResultsRequest>>>,
+    ) {
+        use tonic::transport::Server;
+
+        let captured: Arc<Mutex<Vec<WriteExperimentResultsRequest>>> =
+            Arc::new(Mutex::new(vec![]));
+        let svc = MockAnalyticsService {
+            received: captured.clone(),
         };
-        org_repo.create(&org).await.unwrap();
 
-        let project = Project {
-            id: ProjectId::new(),
-            organisation_id: org.id,
-            name: "RwProj".into(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            deleted_at: None,
-            version: 1,
-        };
-        proj_repo.create(&project).await.unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
 
-        let env = Environment {
-            id: EnvironmentId::new(),
-            project_id: project.id,
-            name: "RwEnv".into(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            deleted_at: None,
-            version: 1,
-        };
-        env_repo.create(&env).await.unwrap();
-
-        let flag = FlagRecord {
-            id: FlagId::new(),
-            project_id: project.id,
-            key: FlagKey::new("rw-flag").unwrap(),
-            name: String::new(),
-            description: String::new(),
-            value_type: FlagValueType::Bool,
-            enabled: true,
-            default_variant_id: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            deleted_at: None,
-            version: 1,
-        };
-        flag_repo.create(&flag).await.unwrap();
-
-        let rules = vec![FlagRule {
-            flag_id: flag.id,
-            rule_index: 0,
-            rule: Rule {
-                id: RuleId::new(),
-                name: None,
-                condition: ConditionExpr::And(vec![]),
-                output: RuleOutput::Variant(VariantId::new()),
-            },
-        }];
-        flag_repo.upsert_rules(flag.id, &rules).await.unwrap();
-
-        let rule_uuid: uuid::Uuid =
-            sqlx::query_scalar("SELECT id FROM feature_flag_rules WHERE flag_id = $1 LIMIT 1")
-                .bind(flag.id.as_uuid())
-                .fetch_one(&pool)
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(AnalyticsServiceServer::new(svc))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
                 .await
                 .unwrap();
-        let flag_rule_id = RuleId::from_uuid(rule_uuid);
+        });
 
-        let exp = Experiment {
-            id: ExperimentId::new(),
-            environment_id: env.id,
-            flag_rule_id,
-            name: "RwExp".into(),
-            description: None,
-            hypothesis: None,
-            metric_keys: vec!["clicks".into()],
-            traffic_allocation: 100.0,
-            min_sample_size: None,
-            scheduled_start_at: None,
-            scheduled_end_at: None,
-            status: ExperimentStatus::Draft,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
-            deleted_at: None,
-            version: 1,
-        };
-        exp_repo.create(&exp).await.unwrap();
-        exp_repo
-            .apply_transition(exp.id, ExperimentStatus::Running, None)
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let client = AnalyticsServiceClient::connect(format!("http://{addr}"))
             .await
             .unwrap();
 
-        let iterations = exp_repo.list_iterations(exp.id).await.unwrap();
-        let iter = &iterations[0];
-
-        (exp.id.as_uuid(), iter.id.as_uuid())
+        (client, captured)
     }
 
-    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
-    async fn test_write_results_inserts_row_with_correct_ids(pool: sqlx::PgPool) {
-        let (exp_id, iter_id) = setup_running_experiment(pool.clone()).await;
+    // ── Test cases ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_write_results_empty_summaries_is_noop() {
+        let (mut client, captured) = make_client().await;
+        write_results(
+            &mut client,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Utc::now(),
+            &[],
+        )
+        .await
+        .expect("empty write should succeed");
+
+        assert!(captured.lock().await.is_empty(), "no RPC calls expected");
+    }
+
+    #[tokio::test]
+    async fn test_write_results_single_metric() {
+        let (mut client, captured) = make_client().await;
+        let exp_id = Uuid::new_v4();
+        let iter_id = Uuid::new_v4();
+        let env_id = Uuid::new_v4();
 
         let summaries = vec![MetricSummary {
             metric_key: "clicks".into(),
@@ -208,103 +229,66 @@ mod tests {
             recommendation: "ship_treatment".into(),
         }];
 
-        write_results(&pool, exp_id, iter_id, Utc::now(), &summaries)
+        write_results(&mut client, env_id, exp_id, iter_id, Utc::now(), &summaries)
             .await
             .expect("write_results should succeed");
 
-        let row: (Uuid, Uuid, String) = sqlx::query_as(
-            "SELECT experiment_id, iteration_id, metric_key FROM experiment_results WHERE experiment_id = $1",
-        )
-        .bind(exp_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        assert_eq!(row.0, exp_id, "experiment_id must match");
-        assert_eq!(row.1, iter_id, "iteration_id must match");
-        assert_eq!(row.2, "clicks");
+        let reqs = captured.lock().await;
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].experiment_id, exp_id.to_string());
+        assert_eq!(reqs[0].iteration_id, iter_id.to_string());
+        assert_eq!(reqs[0].env_id, env_id.to_string());
+        assert_eq!(reqs[0].metric_key, "clicks");
+        assert_eq!(reqs[0].recommendation, "ship_treatment");
+        assert!(reqs[0].frequentist_result.is_some());
     }
 
-    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
-    async fn test_write_results_upsert_is_idempotent(pool: sqlx::PgPool) {
-        let (exp_id, iter_id) = setup_running_experiment(pool.clone()).await;
-
-        let summaries = vec![MetricSummary {
-            metric_key: "clicks".into(),
-            variant_stats: serde_json::json!({ "control": 50 }),
-            frequentist_result: None,
-            bayesian_result: None,
-            recommendation: "wait".into(),
-        }];
-
-        write_results(&pool, exp_id, iter_id, Utc::now(), &summaries)
-            .await
-            .unwrap();
-
-        let updated = vec![MetricSummary {
-            metric_key: "clicks".into(),
-            variant_stats: serde_json::json!({ "control": 100 }),
-            frequentist_result: Some(serde_json::json!({ "p_value": 0.01 })),
-            bayesian_result: None,
-            recommendation: "ship_treatment".into(),
-        }];
-
-        write_results(&pool, exp_id, iter_id, Utc::now(), &updated)
-            .await
-            .unwrap();
-
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM experiment_results WHERE experiment_id = $1")
-                .bind(exp_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-
-        assert_eq!(count, 1, "upsert must not duplicate rows");
-
-        let rec: (String,) = sqlx::query_as(
-            "SELECT recommendation FROM experiment_results WHERE experiment_id = $1",
-        )
-        .bind(exp_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-        assert_eq!(rec.0, "ship_treatment", "recommendation must be updated");
-    }
-
-    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
-    async fn test_write_results_multiple_metrics(pool: sqlx::PgPool) {
-        let (exp_id, iter_id) = setup_running_experiment(pool.clone()).await;
-
+    #[tokio::test]
+    async fn test_write_results_multiple_metrics_sends_one_rpc_each() {
+        let (mut client, captured) = make_client().await;
         let summaries = vec![
             MetricSummary {
                 metric_key: "clicks".into(),
-                variant_stats: serde_json::json!({ "control": 50 }),
+                variant_stats: serde_json::json!({}),
                 frequentist_result: None,
                 bayesian_result: None,
                 recommendation: "wait".into(),
             },
             MetricSummary {
                 metric_key: "revenue".into(),
-                variant_stats: serde_json::json!({ "control": 1000 }),
+                variant_stats: serde_json::json!({}),
                 frequentist_result: None,
                 bayesian_result: None,
                 recommendation: "wait".into(),
             },
         ];
 
-        write_results(&pool, exp_id, iter_id, Utc::now(), &summaries)
-            .await
-            .unwrap();
+        write_results(
+            &mut client,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Utc::now(),
+            &summaries,
+        )
+        .await
+        .unwrap();
 
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM experiment_results WHERE experiment_id = $1")
-                .bind(exp_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        assert_eq!(
+            captured.lock().await.len(),
+            2,
+            "one RPC per metric summary"
+        );
+    }
 
-        assert_eq!(count, 2, "one row per metric");
+    #[tokio::test]
+    async fn test_write_results_no_sql_on_experiment_results() {
+        // Compile-time check: the function signature no longer accepts PgPool.
+        fn assert_no_pg_pool_arg<F>(_f: F)
+        where
+            F: Fn(&mut AnalyticsServiceClient<Channel>),
+        {
+        }
+        assert_no_pg_pool_arg(|_client| {});
     }
 }

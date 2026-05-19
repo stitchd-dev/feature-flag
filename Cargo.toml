@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/stitchd-core",
     "crates/stitchd-db",
-    "crates/stitchd-events",
+    "crates/stitchd-event-writer",
     "crates/stitchd-proto",
     "crates/xtask",
     "crates/stitchd-auth-service",

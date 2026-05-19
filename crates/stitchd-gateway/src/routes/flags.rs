@@ -79,21 +79,6 @@ pub struct UpdateHashingResponse {
     pub configs: Vec<HashingConfigJson>,
 }
 
-/// Lightweight JSON representation of a feature flag.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct FlagJson {
-    pub key: String,
-    pub enabled: bool,
-}
-
-#[cfg(test)]
-fn flag_to_json(f: &FeatureFlag) -> FlagJson {
-    FlagJson {
-        key: f.key.clone(),
-        enabled: f.enabled,
-    }
-}
-
 /// Variant as returned in admin API responses.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct VariantJson {
@@ -1407,18 +1392,6 @@ mod tests {
             "status: {}",
             resp.status()
         );
-    }
-
-    #[test]
-    fn flag_to_json_maps_fields() {
-        let f = FeatureFlag {
-            key: "my-flag".to_string(),
-            enabled: true,
-            ..Default::default()
-        };
-        let j = flag_to_json(&f);
-        assert_eq!(j.key, "my-flag");
-        assert!(j.enabled);
     }
 
     #[tokio::test]

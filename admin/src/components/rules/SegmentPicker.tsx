@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { api } from '../../lib/api'
-import type { Segment } from '../../pages/segments/types'
+import type { Segment } from '../../lib/types'
 
 interface Props {
   /** Currently selected segment ID (empty string = none selected). */

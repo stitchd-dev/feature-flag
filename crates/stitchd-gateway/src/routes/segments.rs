@@ -99,7 +99,7 @@ pub struct AdminSegmentJson {
 
 // ─── Entry patch / lookup types ───────────────────────────────────────────────
 
-/// Request body for `POST /v1/segments/{id}/entries`.
+/// Request body for `POST /v1/segments/{segment_id}/entries`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct PatchEntriesRequest {
     pub keys: Vec<String>,
@@ -109,20 +109,20 @@ pub struct PatchEntriesRequest {
     pub action: String,
 }
 
-/// Response from `POST /v1/segments/{id}/entries`.
+/// Response from `POST /v1/segments/{segment_id}/entries`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct PatchEntriesResponse {
     pub include_count: u32,
     pub exclude_count: u32,
 }
 
-/// Query params for `GET /v1/segments/{id}/entries/lookup`.
+/// Query params for `GET /v1/segments/{segment_id}/entries/lookup`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct LookupEntryQuery {
     pub key: String,
 }
 
-/// Response from `GET /v1/segments/{id}/entries/lookup`.
+/// Response from `GET /v1/segments/{segment_id}/entries/lookup`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct LookupEntryResponse {
     pub in_include: bool,
@@ -211,7 +211,7 @@ use super::require_permission;
     get,
     path = "/v1/segments",
     tag = "segments",
-    params(("env_id" = String, Query, description = "Environment ID")),
+    params(("env_id" = String, Query, description = "Environment ID (query param)")),
     responses(
         (status = 200, description = "List of segments", body = Vec<AdminSegmentJson>),
         (status = 401, description = "Unauthorized"),
@@ -300,12 +300,12 @@ pub async fn create_segment(
     ))
 }
 
-/// `POST /v1/environments/{env_id}/segments` — create a new segment scoped to an environment.
+/// `POST /v1/environments/{environment_id}/segments` — create a new segment scoped to an environment.
 #[utoipa::path(
     post,
-    path = "/v1/environments/{env_id}/segments",
+    path = "/v1/environments/{environment_id}/segments",
     tag = "segments",
-    params(("env_id" = String, Path, description = "Environment ID")),
+    params(("environment_id" = String, Path, description = "Environment ID")),
     request_body = SegmentCreateRequest,
     responses(
         (status = 201, description = "Segment created", body = AdminSegmentJson),
@@ -319,7 +319,7 @@ pub async fn create_segment(
 )]
 pub async fn create_segment_in_env(
     State(state): State<Arc<GatewayState>>,
-    Path(env_id): Path<String>,
+    Path(environment_id): Path<String>,
     req: axum::extract::Request,
 ) -> Result<impl IntoResponse, GatewayError> {
     require_permission(&req, "segment:write")?;
@@ -334,7 +334,7 @@ pub async fn create_segment_in_env(
     let condition_expr = encode_condition_expr(body.condition_expr)?;
 
     let rpc = tonic::Request::new(CreateAdminSegmentRequest {
-        environment_id: env_id,
+        environment_id,
         name: body.name,
         description: body.description.unwrap_or_default(),
         tags: body.tags.unwrap_or_default(),
@@ -355,12 +355,12 @@ pub async fn create_segment_in_env(
     ))
 }
 
-/// `GET /v1/segments/{id}` — get one segment by ID.
+/// `GET /v1/segments/{segment_id}` — get one segment by ID.
 #[utoipa::path(
     get,
-    path = "/v1/segments/{id}",
+    path = "/v1/segments/{segment_id}",
     tag = "segments",
-    params(("id" = String, Path, description = "Segment UUID")),
+    params(("segment_id" = String, Path, description = "Segment UUID")),
     responses(
         (status = 200, description = "Segment", body = AdminSegmentJson),
         (status = 401, description = "Unauthorized"),
@@ -392,12 +392,12 @@ pub async fn get_segment(
     Ok(Json(proto_to_admin_json(&resp.into_inner())))
 }
 
-/// `PUT /v1/segments/{id}` — update a segment.
+/// `PUT /v1/segments/{segment_id}` — update a segment.
 #[utoipa::path(
     put,
-    path = "/v1/segments/{id}",
+    path = "/v1/segments/{segment_id}",
     tag = "segments",
-    params(("id" = String, Path, description = "Segment UUID")),
+    params(("segment_id" = String, Path, description = "Segment UUID")),
     request_body = SegmentUpdateRequest,
     responses(
         (status = 200, description = "Updated segment", body = AdminSegmentJson),
@@ -445,12 +445,12 @@ pub async fn update_segment(
     Ok(Json(proto_to_admin_json(&resp.into_inner())))
 }
 
-/// `DELETE /v1/segments/{id}` — delete a segment.
+/// `DELETE /v1/segments/{segment_id}` — delete a segment.
 #[utoipa::path(
     delete,
-    path = "/v1/segments/{id}",
+    path = "/v1/segments/{segment_id}",
     tag = "segments",
-    params(("id" = String, Path, description = "Segment UUID")),
+    params(("segment_id" = String, Path, description = "Segment UUID")),
     responses(
         (status = 204, description = "Segment deleted"),
         (status = 401, description = "Unauthorized"),
@@ -482,12 +482,12 @@ pub async fn delete_segment(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `POST /v1/segments/{id}/entries` — patch (add/remove/replace) list entries.
+/// `POST /v1/segments/{segment_id}/entries` — patch (add/remove/replace) list entries.
 #[utoipa::path(
     post,
-    path = "/v1/segments/{id}/entries",
+    path = "/v1/segments/{segment_id}/entries",
     tag = "segments",
-    params(("id" = String, Path, description = "Segment UUID")),
+    params(("segment_id" = String, Path, description = "Segment UUID")),
     request_body = PatchEntriesRequest,
     responses(
         (status = 200, description = "Updated counts", body = PatchEntriesResponse),
@@ -537,13 +537,13 @@ pub async fn patch_segment_entries(
     }))
 }
 
-/// `GET /v1/segments/{id}/entries/lookup?key=...` — look up a single key.
+/// `GET /v1/segments/{segment_id}/entries/lookup?key=...` — look up a single key.
 #[utoipa::path(
     get,
-    path = "/v1/segments/{id}/entries/lookup",
+    path = "/v1/segments/{segment_id}/entries/lookup",
     tag = "segments",
     params(
-        ("id" = String, Path, description = "Segment UUID"),
+        ("segment_id" = String, Path, description = "Segment UUID"),
         ("key" = String, Query, description = "Key to look up"),
     ),
     responses(
@@ -654,16 +654,16 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     axum::Router::new()
         .route("/v1/segments", get(list_segments).post(create_segment))
         .route(
-            "/v1/segments/{id}",
+            "/v1/segments/{segment_id}",
             get(get_segment).put(update_segment).delete(delete_segment),
         )
         .route(
-            "/v1/environments/{env_id}/segments",
+            "/v1/environments/{environment_id}/segments",
             post(create_segment_in_env),
         )
-        .route("/v1/segments/{id}/entries", post(patch_segment_entries))
+        .route("/v1/segments/{segment_id}/entries", post(patch_segment_entries))
         .route(
-            "/v1/segments/{id}/entries/lookup",
+            "/v1/segments/{segment_id}/entries/lookup",
             get(lookup_segment_entry),
         )
         .with_state(state)

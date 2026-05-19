@@ -75,6 +75,7 @@ impl FlagSdkBackendServiceImpl {
 /// in metadata. Requests without this header indicate either a misbehaving
 /// gateway OR an SDK reaching the backend directly (bypassing auth); both
 /// cases get rejected with `Unauthenticated`.
+#[allow(clippy::result_large_err)] // tonic::Status is an external type; boxing would change the API
 fn env_id_from_metadata(req: &Request<impl Sized>) -> Result<EnvironmentId, Status> {
     let raw = req
         .metadata()

@@ -65,7 +65,7 @@ mod tests {
     use super::{MAX_STMT_LEN, scylla_span};
 
     const SAMPLE_CQL: &str =
-        "SELECT segment_id, generation FROM stitchd.segment_list_entries WHERE segment_id = ?";
+        "SELECT segment_id, generation FROM stitchd_segments.segment_list_entries WHERE segment_id = ?";
 
     /// Span is constructed without panicking.
     #[test]

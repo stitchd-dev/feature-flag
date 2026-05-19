@@ -1,10 +1,15 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
 import { usePermissions } from '../../hooks/usePermissions'
+import { usePaginatedList } from '../../hooks/usePaginatedList'
 import { PageHeader, VariantBar, Sparkline } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { Pagination } from '../../components/Pagination'
+import { LoadingSpinner } from '../../components/LoadingSpinner'
+import { ErrorBanner } from '../../components/ErrorBanner'
+import { EmptyState } from '../../components/EmptyState'
+import { PermissionGate } from '../../components/PermissionGate'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
@@ -14,21 +19,6 @@ import { CreateFlagModal } from './CreateFlagModal'
 const PER_PAGE = 50
 
 type FlagTypeFilter = 'all' | 'bool' | 'string' | 'int' | 'double' | 'json'
-
-function LockOverlay() {
-  return (
-    <>
-      <PageHeader crumbs={['Flags']} title="Feature Flags" subtitle="Manage feature flags for your project." />
-      <div className="page-body">
-        <div className="card" style={{ padding: 48, textAlign: 'center' }}>
-          <I.lock size={28} stroke="var(--fg-subtle)" style={{ marginBottom: 12 }} />
-          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>Access restricted</div>
-          <div style={{ color: 'var(--fg-muted)', fontSize: 13 }}>You do not have permission to view feature flags.</div>
-        </div>
-      </div>
-    </>
-  )
-}
 
 function Toggle({ on, onClick }: { on: boolean; onClick: (e: React.MouseEvent) => void }) {
   return <span className={`toggle ${on ? 'on' : ''}`} onClick={onClick} />
@@ -88,46 +78,34 @@ function FlagCard({ flag, orgId, onToggle }: { flag: AdminFlagResponse; orgId: s
 
 export function FlagsList() {
   const navigate = useNavigate()
-  const [searchParams, setSearchParams] = useSearchParams()
   const { tweaks } = useTweaks()
   const { projectId, orgId } = useOrgContext()
-  const { can, loading: permLoading } = usePermissions()
+  const { can } = usePermissions()
   const [layout, setLayout] = useState<'table' | 'cards' | 'grouped'>(tweaks.flagsLayout)
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState<FlagTypeFilter>('all')
   const [showArchived, setShowArchived] = useState(false)
-  const [flags, setFlags] = useState<AdminFlagResponse[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [optimisticEnabled, setOptimisticEnabled] = useState<Map<string, boolean>>(new Map())
   const [showCreate, setShowCreate] = useState(false)
 
-  const page = Math.max(1, Number(searchParams.get('page') ?? 1))
-
-  const canRead = can(PERMISSIONS.FLAG_READ)
   const canWrite = can(PERMISSIONS.FLAG_WRITE)
 
-  useEffect(() => {
-    if (!projectId) return
-    setLoading(true)
-    setError(null)
-    const qs = new URLSearchParams({ page: String(page), per_page: String(PER_PAGE) })
-    if (showArchived) qs.set('include_archived', 'true')
-    api.get<PaginatedResponse<AdminFlagResponse>>(`/v1/projects/${projectId}/flags?${qs}`)
-      .then(({ data }) => {
-        const items = data.items ?? (Array.isArray(data) ? data : [])
-        setFlags(items)
-        setTotal(data.total ?? items.length)
-        setOptimisticEnabled(new Map(items.map((f) => [f.key, f.enabled])))
-      })
-      .catch((err) => setError(err?.response?.data?.message ?? err.message ?? 'Failed to load flags'))
-      .finally(() => setLoading(false))
-  }, [projectId, showArchived, page])
-
-  function onPageChange(p: number) {
-    setSearchParams((prev) => { prev.set('page', String(p)); return prev })
-  }
+  const { data: flags, total, loading, error, page, onPageChange } = usePaginatedList<AdminFlagResponse>(
+    async ({ page: p, perPage, signal }) => {
+      if (!projectId) return { items: [], total: 0 }
+      const qs = new URLSearchParams({ page: String(p), per_page: String(perPage) })
+      if (showArchived) qs.set('include_archived', 'true')
+      const { data } = await api.get<PaginatedResponse<AdminFlagResponse>>(
+        `/v1/projects/${projectId}/flags?${qs}`,
+        { signal },
+      )
+      const items = data.items ?? (Array.isArray(data) ? data : [])
+      setOptimisticEnabled(new Map(items.map((f) => [f.key, f.enabled])))
+      return { items, total: data.total ?? items.length }
+    },
+    [projectId, showArchived],
+    PER_PAGE,
+  )
 
   function toggleFlag(key: string) {
     const current = optimisticEnabled.get(key) ?? flags.find((f) => f.key === key)?.enabled ?? false
@@ -155,35 +133,47 @@ export function FlagsList() {
   const onCount = filtered.filter((f) => f.enabled).length
   const offCount = filtered.filter((f) => !f.enabled).length
 
-  if (!permLoading && !canRead) return <LockOverlay />
+  const flagsLockFallback = (
+    <>
+      <PageHeader crumbs={['Flags']} title="Feature Flags" subtitle="Manage feature flags for your project." />
+      <div className="page-body">
+        <div className="card" style={{ padding: 48, textAlign: 'center' }}>
+          <I.lock size={28} stroke="var(--fg-subtle)" style={{ marginBottom: 12 }} />
+          <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 6 }}>Access restricted</div>
+          <div style={{ color: 'var(--fg-muted)', fontSize: 13 }}>You do not have permission to view feature flags.</div>
+        </div>
+      </div>
+    </>
+  )
 
   if (!projectId) {
     return (
-      <>
-        <PageHeader
-          crumbs={['Flags']}
-          title="Feature Flags"
-          subtitle="Manage feature flags for your project."
-        />
-        <div className="page-body">
-          <div className="card">
-            <div className="empty">
-              <div className="empty-icon"><I.flag size={20} /></div>
-              <div className="empty-title">No project selected</div>
-              <div className="empty-desc">No project selected — set a project ID in environments settings</div>
-              <button className="btn primary" style={{ marginTop: 8 }} onClick={() => navigate(`/org/${orgId}/environments`)}>
-                Go to Environments
-              </button>
+      <PermissionGate permission={PERMISSIONS.FLAG_READ} fallback={flagsLockFallback}>
+        <>
+          <PageHeader
+            crumbs={['Flags']}
+            title="Feature Flags"
+            subtitle="Manage feature flags for your project."
+          />
+          <div className="page-body">
+            <div className="card">
+              <EmptyState
+                icon={<I.flag size={20} />}
+                title="No project selected"
+                desc="No project selected — set a project ID in environments settings"
+                action={<button className="btn primary" onClick={() => navigate(`/org/${orgId}/environments`)}>Go to Environments</button>}
+              />
             </div>
           </div>
-        </div>
-      </>
+        </>
+      </PermissionGate>
     )
   }
 
   return (
-    <>
-      <PageHeader
+    <PermissionGate permission={PERMISSIONS.FLAG_READ} fallback={flagsLockFallback}>
+      <>
+        <PageHeader
         crumbs={['Flags']}
         title="Feature Flags"
         subtitle={`${total} flags. First-true rule wins; flag types are immutable after creation.`}
@@ -210,15 +200,15 @@ export function FlagsList() {
       <div className="page-body">
         {loading && (
           <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
-            <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading flags…</span>
+            <LoadingSpinner label="Loading flags…" />
           </div>
         )}
 
         {error && !loading && (
-          <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 8, color: 'var(--danger)', fontSize: 13, marginBottom: 16 }}>
-            <I.alert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-            {error}
-          </div>
+          <ErrorBanner
+            message={error}
+            icon={<I.alert size={14} />}
+          />
         )}
 
         {!loading && !error && (
@@ -270,12 +260,12 @@ export function FlagsList() {
 
             {flags.length === 0 && (
               <div className="card">
-                <div className="empty">
-                  <div className="empty-icon"><I.flag size={20} /></div>
-                  <div className="empty-title">No flags yet</div>
-                  <div className="empty-desc">Create your first feature flag to start controlling feature rollouts.</div>
-                  <button className="btn primary" style={{ marginTop: 8 }} onClick={() => setShowCreate(true)}><I.plus size={13} /> New flag</button>
-                </div>
+                <EmptyState
+                  icon={<I.flag size={20} />}
+                  title="No flags yet"
+                  desc="Create your first feature flag to start controlling feature rollouts."
+                  action={<button className="btn primary" onClick={() => setShowCreate(true)}><I.plus size={13} /> New flag</button>}
+                />
               </div>
             )}
 
@@ -343,6 +333,7 @@ export function FlagsList() {
       </div>
 
       {showCreate && <CreateFlagModal onClose={() => setShowCreate(false)} />}
-    </>
+      </>
+    </PermissionGate>
   )
 }

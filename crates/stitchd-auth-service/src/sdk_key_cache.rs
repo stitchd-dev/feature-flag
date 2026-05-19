@@ -45,6 +45,7 @@ fn reconstruct_repo_error(arc: &RepositoryError) -> RepositoryError {
 pub struct SdkKeyCache(Arc<Cache<String, SdkKey>>);
 
 impl SdkKeyCache {
+    #[must_use] 
     pub fn new() -> Self {
         let cache = Cache::builder()
             .max_capacity(MAX_CAPACITY)
@@ -54,6 +55,7 @@ impl SdkKeyCache {
     }
 
     #[cfg(test)]
+    #[must_use]
     pub fn with_ttl(ttl: Duration) -> Self {
         let cache = Cache::builder()
             .max_capacity(MAX_CAPACITY)
@@ -66,6 +68,11 @@ impl SdkKeyCache {
     ///
     /// Concurrent callers for the same `hash` are coalesced by moka: only one
     /// `loader` invocation runs, and all waiters receive the same result.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `RepositoryError` produced by `loader` on a cache miss when
+    /// the loader fails (e.g. `NotFound` if the SDK key does not exist).
     pub async fn get_or_load<F, Fut>(
         &self,
         hash: &str,

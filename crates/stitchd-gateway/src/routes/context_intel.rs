@@ -1,7 +1,7 @@
 //! Context Intelligence routes — delegates to analytics-service via gRPC.
 //!
-//! GET /v1/environments/{env_id}/context-types
-//! GET /v1/environments/{env_id}/context-types/{context_type}/params
+//! GET /v1/environments/{environment_id}/context-types
+//! GET /v1/environments/{environment_id}/context-types/{context_type}/params
 
 use axum::{
     Json,
@@ -33,7 +33,7 @@ pub struct ContextParamJson {
     pub last_seen_at: String,
 }
 
-/// `GET /v1/environments/{env_id}/context-types`
+/// `GET /v1/environments/{environment_id}/context-types`
 pub async fn list_context_types(
     State(state): State<Arc<GatewayState>>,
     Path(env_id): Path<Uuid>,
@@ -66,7 +66,7 @@ pub async fn list_context_types(
     Ok(Json(body))
 }
 
-/// `GET /v1/environments/{env_id}/context-types/{context_type}/params`
+/// `GET /v1/environments/{environment_id}/context-types/{context_type}/params`
 pub async fn list_context_params(
     State(state): State<Arc<GatewayState>>,
     Path((env_id, context_type)): Path<(Uuid, String)>,

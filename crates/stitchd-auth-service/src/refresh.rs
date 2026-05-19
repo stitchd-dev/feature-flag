@@ -17,6 +17,11 @@ use stitchd_proto::auth::v1::{RefreshTokenRequest, RefreshTokenResponse};
 ///
 /// Implements token rotation: the presented token is consumed (revoked) and a fresh
 /// refresh token is issued alongside the new JWT.
+///
+/// # Errors
+///
+/// Returns a `tonic::Status` error on invalid token format, unknown token,
+/// missing user/org membership, or internal repository failures.
 #[instrument(skip_all)]
 pub async fn refresh_token(
     req: Request<RefreshTokenRequest>,

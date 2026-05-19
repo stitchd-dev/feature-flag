@@ -1,6 +1,6 @@
 //! Integration test: eval log rows reach ClickHouse after insert.
 //!
-//! Skipped when `CLICKHOUSE_URL` is not set (CI without ClickHouse).
+//! Skipped when `STITCHD_CLICKHOUSE_URL` is not set (CI without ClickHouse).
 
 use chrono::Utc;
 use clickhouse::Row;
@@ -9,10 +9,10 @@ use stitchd_db::clickhouse::{EvalLogRow, insert_eval_log_rows};
 use uuid::Uuid;
 
 fn ch_client() -> Option<clickhouse::Client> {
-    let url = std::env::var("CLICKHOUSE_URL").ok()?;
-    let db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
-    let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
-    let password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+    let url = std::env::var("STITCHD_CLICKHOUSE_URL").ok()?;
+    let db = std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
+    let user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_default();
     Some(
         clickhouse::Client::default()
             .with_url(url)
@@ -40,7 +40,7 @@ struct EvalLogRowRead {
 #[tokio::test]
 async fn eval_log_rows_appear_in_clickhouse() {
     let Some(client) = ch_client() else {
-        eprintln!("CLICKHOUSE_URL not set — skipping ClickHouse integration test");
+        eprintln!("STITCHD_CLICKHOUSE_URL not set — skipping ClickHouse integration test");
         return;
     };
 
@@ -111,7 +111,7 @@ async fn eval_log_rows_appear_in_clickhouse() {
 #[tokio::test]
 async fn eval_log_n_contexts_produces_n_rows() {
     let Some(client) = ch_client() else {
-        eprintln!("CLICKHOUSE_URL not set — skipping ClickHouse integration test");
+        eprintln!("STITCHD_CLICKHOUSE_URL not set — skipping ClickHouse integration test");
         return;
     };
 

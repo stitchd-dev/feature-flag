@@ -3660,10 +3660,11 @@ dependencies = [
  "sqlx",
  "stitchd-core",
  "stitchd-db",
- "stitchd-events",
+ "stitchd-event-writer",
  "stitchd-proto",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
  "tracing",
@@ -3762,7 +3763,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stitchd-events"
+name = "stitchd-event-writer"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3783,6 +3784,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "futures",
+ "futures-core",
  "metrics",
  "metrics-exporter-prometheus",
  "prost",
@@ -3794,6 +3797,7 @@ dependencies = [
  "stitchd-proto",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
  "tracing",
@@ -3870,7 +3874,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "stitchd-sdk"
+name = "stitchd-sdk-rust"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
@@ -3941,6 +3945,7 @@ dependencies = [
  "stitchd-db",
  "stitchd-proto",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tonic-health",
  "tracing",

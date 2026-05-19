@@ -87,11 +87,11 @@ pub struct ListOrgUsersJson {
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
-/// `POST /v1/admin/orgs`
+/// `POST /v1/superadmin/orgs`
 #[utoipa::path(
     post,
-    path = "/v1/admin/orgs",
-    tag = "admin",
+    path = "/v1/superadmin/orgs",
+    tag = "superadmin",
     request_body = CreateOrgBody,
     responses(
         (status = 201, description = "Organisation created", body = OrgJson),
@@ -119,11 +119,11 @@ pub async fn create_org(
     ))
 }
 
-/// `POST /v1/admin/orgs/{org_id}/users` — seed the first user into a newly created org.
+/// `POST /v1/superadmin/orgs/{org_id}/users` — seed the first user into a newly created org.
 #[utoipa::path(
     post,
-    path = "/v1/admin/orgs/{org_id}/users",
-    tag = "admin",
+    path = "/v1/superadmin/orgs/{org_id}/users",
+    tag = "superadmin",
     params(("org_id" = String, Path, description = "Organisation ID")),
     request_body = SeedUserBody,
     responses(
@@ -159,7 +159,7 @@ pub async fn seed_user(
     ))
 }
 
-/// `GET /v1/admin/orgs/{org_id}`
+/// `GET /v1/superadmin/orgs/{org_id}`
 pub async fn get_org(
     State(state): State<Arc<GatewayState>>,
     Path(org_id): Path<String>,
@@ -177,7 +177,7 @@ pub async fn get_org(
     }))
 }
 
-/// `DELETE /v1/admin/orgs/{org_id}/users/{user_id}`
+/// `DELETE /v1/superadmin/orgs/{org_id}/users/{user_id}`
 pub async fn remove_org_user(
     State(state): State<Arc<GatewayState>>,
     Path((org_id, user_id)): Path<(String, String)>,
@@ -193,7 +193,7 @@ pub async fn remove_org_user(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// `GET /v1/admin/orgs/{org_id}/users`
+/// `GET /v1/superadmin/orgs/{org_id}/users`
 pub async fn list_org_users(
     State(state): State<Arc<GatewayState>>,
     Path(org_id): Path<String>,
@@ -227,7 +227,7 @@ pub async fn list_org_users(
     )))
 }
 
-/// `GET /v1/admin/orgs`
+/// `GET /v1/superadmin/orgs`
 pub async fn list_orgs(
     State(state): State<Arc<GatewayState>>,
 ) -> Result<impl IntoResponse, GatewayError> {
@@ -255,8 +255,8 @@ pub async fn list_orgs(
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     use axum::routing::{get, post};
     axum::Router::new()
-        .route("/v1/admin/orgs", get(list_orgs).post(create_org))
-        .route("/v1/admin/orgs/{org_id}/users", post(seed_user))
+        .route("/v1/superadmin/orgs", get(list_orgs).post(create_org))
+        .route("/v1/superadmin/orgs/{org_id}/users", post(seed_user))
         .with_state(state)
 }
 
@@ -277,7 +277,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v1/admin/orgs")
+                    .uri("/v1/superadmin/orgs")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"name":"Acme Corp"}"#))
                     .unwrap(),

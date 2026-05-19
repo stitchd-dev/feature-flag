@@ -205,8 +205,8 @@ pub mod tests {
             let total = all.len() as u64;
             let page = all
                 .into_iter()
-                .skip(offset as usize)
-                .take(limit as usize)
+                .skip(usize::try_from(offset).unwrap_or(usize::MAX))
+                .take(usize::try_from(limit).unwrap_or(usize::MAX))
                 .collect();
             Ok((page, total))
         }
@@ -389,8 +389,10 @@ pub mod tests {
             &self,
             ids: &[SegmentId],
         ) -> Result<Vec<Segment>, RepositoryError> {
-            let segs = self.segments.lock().unwrap();
-            let result = segs
+            let result = self
+                .segments
+                .lock()
+                .unwrap()
                 .values()
                 .filter(|s| ids.contains(&s.id))
                 .cloned()

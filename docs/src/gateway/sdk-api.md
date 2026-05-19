@@ -1,6 +1,7 @@
 # SDK APIs
 
-REST endpoints consumed by the stitchd SDK. All SDK routes authenticate via the `x-sdk-key` header — no JWT required.
+REST endpoints consumed by the stitchd SDK (`stitchd-sdk-rust`). All SDK routes authenticate
+via the `x-sdk-key` header — no JWT required.
 
 ## Auth Model
 
@@ -17,7 +18,7 @@ SDK keys are scoped to a single environment. A request with an invalid or missin
 ### Evaluate Flag
 
 ```
-POST /v1/environments/{env_id}/evaluate
+POST /v1/environments/{environment_id}/evaluate
 ```
 
 Evaluate a feature flag for a context.
@@ -51,7 +52,7 @@ Evaluate a feature flag for a context.
 ### Ingest Event
 
 ```
-POST /v1/environments/{env_id}/events
+POST /v1/environments/{environment_id}/events
 ```
 
 Record a single metric event.
@@ -84,7 +85,7 @@ Record a single metric event.
 ### Batch Ingest Events
 
 ```
-POST /v1/environments/{env_id}/events/batch
+POST /v1/environments/{environment_id}/events/batch
 ```
 
 Record multiple events in a single request.
@@ -102,41 +103,25 @@ Record multiple events in a single request.
 
 ---
 
-### List-Check Segment Membership
+### Batch Segment Membership Check (new SDK surface)
 
 ```
-POST /v1/environments/{env_id}/segments/list-check
+POST /v1/sdk/segments/list:batch
 ```
 
-Check whether a context is a member of a list segment.
-
-**Request body:**
-
-```json
-{
-  "segment_key": "beta-users",
-  "context_type": "user",
-  "context_key": "user-123"
-}
-```
-
-**Response:**
-
-```json
-{
-  "is_member": true
-}
-```
+Check membership for multiple (segment, context) pairs in one call. Available to the
+`stitchd-sdk-rust` client; uses `sdk_auth_middleware`.
 
 ---
 
-### Batch List-Check Segment Membership
+### Batch SDK Event Ingestion (new SDK surface)
 
 ```
-POST /v1/environments/{env_id}/segments/batch-list-check
+POST /v1/sdk/events:batch
 ```
 
-Check membership for multiple (segment, context) pairs in one call.
+Batch flag evaluation event ingestion (202 Accepted). Part of the new clean SDK surface
+under `/v1/sdk/`, separated from the legacy routes.
 
 ## Error Envelope
 

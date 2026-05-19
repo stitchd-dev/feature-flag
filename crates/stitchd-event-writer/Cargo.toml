@@ -1,5 +1,5 @@
 [package]
-name = "stitchd-events"
+name = "stitchd-event-writer"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true

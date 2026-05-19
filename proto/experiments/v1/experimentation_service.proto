@@ -114,6 +114,35 @@ message ListIterationsResponse {
   repeated ExperimentIteration iterations = 1;
 }
 
+// ─── Stats-service–facing messages ───────────────────────────────────────────
+
+// A compact view of a running experiment emitted by ListRunningExperiments.
+message RunningExperiment {
+  string          experiment_id = 1;
+  string          environment_id = 2;
+  string          iteration_id  = 3;
+  repeated string variant_keys  = 4;
+  repeated string metric_keys   = 5;
+  int64           started_at_ms = 6;
+  // Always "running" for results returned by this RPC.
+  string          status        = 7;
+}
+
+message ListRunningExperimentsRequest {
+  // Reserved for future filtering (e.g. project_id); currently unused.
+}
+
+message GetExperimentIterationRequest {
+  string iteration_id = 1;
+}
+
+message UpdateIterationLastComputedRequest {
+  string iteration_id       = 1;
+  int64  last_computed_at_ms = 2;
+}
+
+message UpdateIterationLastComputedResponse {}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
@@ -125,4 +154,16 @@ service ExperimentationService {
   rpc TransitionExperiment(TransitionExperimentRequest) returns (Experiment);
   rpc ListIterations(ListIterationsRequest)     returns (ListIterationsResponse);
   rpc GetResults(GetResultsRequest)             returns (ExperimentResults);
+
+  // ── Stats-service–facing RPCs ──────────────────────────────────────────────
+  // Returns a server-side stream of all currently running experiments (across
+  // all environments) so that stats-service can poll without touching PG directly.
+  rpc ListRunningExperiments(ListRunningExperimentsRequest) returns (stream RunningExperiment);
+
+  // Fetch a single iteration row (variants, metrics, time bounds).
+  rpc GetExperimentIteration(GetExperimentIterationRequest) returns (ExperimentIteration);
+
+  // Update the last_computed_at timestamp for a given iteration's stats_schedule row.
+  rpc UpdateIterationLastComputed(UpdateIterationLastComputedRequest)
+      returns (UpdateIterationLastComputedResponse);
 }

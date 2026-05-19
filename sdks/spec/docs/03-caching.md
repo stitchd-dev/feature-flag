@@ -122,6 +122,37 @@ Standard LRU: when capacity exceeded, evict the least-recently-used entry.
 "Used" means a successful `LRU.get()` (i.e. an `evaluate()` call resolved its
 membership from this entry). Background refresh writes do NOT count as use.
 
+### Refresh Recency Semantics (Implementation Note)
+
+The [Eviction](#eviction) section states that background refresh writes SHOULD
+NOT count as "use" — i.e. a refresh-insert SHOULD NOT promote recency. The
+intent is that an entry's eviction eligibility reflects genuine evaluate-time
+demand, not polling activity.
+
+**Ideal behaviour:** a cache implementation SHOULD support "silent" or
+"weight-only" updates that overwrite a value without altering the entry's
+position in the recency order.
+
+**Accepted deviation:** Many high-performance cache libraries — including
+[moka](https://docs.rs/moka) (Rust) and Caffeine-style caches (JVM) — promote
+an entry to "most recently used" on every insert, including refresh-path
+`put()` calls. This means an unused context-key can remain resident for one
+extra eviction cycle beyond what strict ideal semantics would allow.
+
+SDKs MAY use such libraries. The resulting "one extra eviction-cycle of
+liveness" for cold keys is an accepted deviation. The practical impact is
+negligible: cache capacity is bounded by `lru_max_entries`, so a transiently
+extended lifetime for cold entries cannot cause unbounded memory growth, and
+the next eviction cycle after a genuinely hot burst will still displace
+them.
+
+**Observability:** if a deployment suspects that stale cold keys are occupying
+meaningful cache capacity, the correct diagnostic is per-context-key cache
+hit-rate telemetry. An entry being refreshed but never read will show a
+hit-rate near zero and stands out immediately in any cache-metrics dashboard.
+SDK implementations SHOULD expose `cache_hits` and `cache_misses` counters per
+cache (not per key — aggregated is sufficient for this diagnosis).
+
 ### Staleness Budget
 
 Between refresh ticks, a context's membership can be stale for at most

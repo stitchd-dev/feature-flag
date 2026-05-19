@@ -1,18 +1,20 @@
-//! # Stitchd Feature Flag — Server-Side Rust SDK
+//! # stitchd-sdk-rust — Server-Side Rust SDK for Stitchd Feature Flags
 //!
-//! Embed this crate in a backend service to evaluate flags in-process. Pulls
-//! flag and segment definitions from `stitchd-gateway` via polling; caches
-//! list-segment membership in a bounded LRU.
+//! Embed this crate (`stitchd-sdk-rust`) in a backend service to evaluate
+//! feature flags entirely in-process. Flag and segment definitions are pulled
+//! from `stitchd-gateway` via gRPC polling and cached locally; list-segment
+//! membership is maintained in a bounded LRU cache. Evaluation events are
+//! submitted asynchronously via a fire-and-forget batch flush, keeping the
+//! hot evaluation path free of network I/O.
 //!
-//! This SDK conforms to the language-agnostic contract under `sdks/spec/`.
-//! See the behavioural spec in `sdks/spec/docs/` for the canonical algorithm,
-//! cache semantics, and event-delivery rules.
+//! This crate conforms to the language-agnostic SDK contract defined in
+//! `sdks/spec/`. See `sdks/spec/docs/` for the canonical evaluation algorithm,
+//! caching rules, polling lifecycle, and event-delivery semantics.
 //!
 //! # Quickstart
 //!
 //! ```ignore
-//! use stitchd_sdk::{SdkClient, SdkConfig, EvalRequest, Context};
-//! use std::time::Duration;
+//! use stitchd_sdk_rust::{SdkClient, SdkConfig, EvalRequest};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,27 +25,25 @@
 //!     };
 //!
 //!     let client = SdkClient::init(config).await?;
-//!
-//!     let context = Context::user("alice")
-//!         .with_param("plan", "pro");
-//!
+//!     let ctx    = stitchd_core::context::Context::new("user", "alice");
 //!     let results = client
-//!         .evaluate(&[EvalRequest::new("checkout-flow", context)])
+//!         .evaluate(&[EvalRequest::flag("my-flag", ctx)])
 //!         .await;
-//!
 //!     println!("variant = {}", results[0].variant_key);
+//!     client.shutdown().await;
 //!     Ok(())
 //! }
 //! ```
 //!
 //! # Modules
 //!
-//! - [`config`]  — [`SdkConfig`] and defaults
-//! - [`error`]   — [`SdkError`] taxonomy
-//!
-//! Subsequent phases of the `sdk_rewrite_20260516` track add the
-//! evaluation engine, polling loops, LRU cache, and event flush — each
-//! introducing its own module here.
+//! - [`config`]   — [`SdkConfig`] and defaults
+//! - [`client`]   — [`SdkClient`], [`EvalRequest`], [`EvalResult`]
+//! - [`error`]    — [`SdkError`] taxonomy
+//! - [`events`]   — fire-and-forget event queue and flush task
+//! - [`lru`]      — bounded list-segment membership cache
+//! - [`polling`]  — gRPC definition sync loop
+//! - [`snapshot`] — immutable [`DefinitionSnapshot`] and [`DefinitionStore`]
 
 pub mod client;
 pub mod config;

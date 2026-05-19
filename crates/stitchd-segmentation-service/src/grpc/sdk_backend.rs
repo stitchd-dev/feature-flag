@@ -159,13 +159,16 @@ mod tests {
     use stitchd_db::{ContextMembership, RepositoryError, SegmentIdMembership};
     use stitchd_proto::sdk::v1::MembershipQuery;
 
+    /// Arguments captured from `find_memberships_batch` for assertion.
+    type LastCallArgs = Option<(EnvironmentId, Vec<(String, String)>, Vec<SegmentId>)>;
+
     /// Stub that records calls + lets tests pre-program a fixed membership matrix.
     #[derive(Default)]
     struct StubSegmentRepo {
-        /// Programmed memberships: (env_id, context_type, context_key, segment_id) → is_member
+        /// Programmed memberships: (`env_id`, `context_type`, `context_key`, `segment_id`) → `is_member`
         membership_matrix: Mutex<HashMap<(EnvironmentId, String, String, SegmentId), bool>>,
-        /// Capture the last find_memberships_batch arguments for assertion.
-        last_call: Mutex<Option<(EnvironmentId, Vec<(String, String)>, Vec<SegmentId>)>>,
+        /// Capture the last `find_memberships_batch` arguments for assertion.
+        last_call: Mutex<LastCallArgs>,
     }
     impl StubSegmentRepo {
         fn arc() -> Arc<Self> {
@@ -448,23 +451,23 @@ mod tests {
         // Same order as request:
         assert_eq!(resp.results.len(), 5);
         assert_eq!(resp.results[0].context_key, "alice");
-        assert_eq!(resp.results[0].memberships[&beta.to_string()], true);
-        assert_eq!(resp.results[0].memberships[&admin.to_string()], false);
+        assert!(resp.results[0].memberships[&beta.to_string()]);
+        assert!(!resp.results[0].memberships[&admin.to_string()]);
 
         assert_eq!(resp.results[1].context_key, "bob");
-        assert_eq!(resp.results[1].memberships[&beta.to_string()], false);
-        assert_eq!(resp.results[1].memberships[&admin.to_string()], false);
+        assert!(!resp.results[1].memberships[&beta.to_string()]);
+        assert!(!resp.results[1].memberships[&admin.to_string()]);
 
         assert_eq!(resp.results[2].context_key, "carol");
-        assert_eq!(resp.results[2].memberships[&beta.to_string()], true);
-        assert_eq!(resp.results[2].memberships[&admin.to_string()], true);
+        assert!(resp.results[2].memberships[&beta.to_string()]);
+        assert!(resp.results[2].memberships[&admin.to_string()]);
 
         assert_eq!(resp.results[3].context_type, "org");
         assert_eq!(resp.results[3].context_key, "acme");
-        assert_eq!(resp.results[3].memberships[&beta.to_string()], false);
+        assert!(!resp.results[3].memberships[&beta.to_string()]);
 
         assert_eq!(resp.results[4].context_key, "widgets");
-        assert_eq!(resp.results[4].memberships[&beta.to_string()], true);
+        assert!(resp.results[4].memberships[&beta.to_string()]);
     }
 
     #[tokio::test]

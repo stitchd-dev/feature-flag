@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod compilation_tests {
-    use crate::{auth, common, events, experiments, flags, sdk, segments};
+    use crate::{analytics, auth, common, experiments, flags, management, sdk, segments, stats};
 
     // ── Existing SDK-facing types ─────────────────────────────────────────────
 
@@ -27,13 +27,6 @@ mod compilation_tests {
         let _: Option<segments::v1::RuleSegment> = None;
         let _: Option<segments::v1::ListSegment> = None;
         let _: Option<segments::v1::SegmentBundle> = None;
-    }
-
-    #[test]
-    fn event_types_accessible() {
-        let _: Option<events::v1::IngestRequest> = None;
-        let _: Option<events::v1::IngestResponse> = None;
-        let _: Option<events::v1::Event> = None;
     }
 
     // ── New microservice contracts ─────────────────────────────────────────────
@@ -66,11 +59,6 @@ mod compilation_tests {
     }
 
     #[test]
-    fn event_service_types_accessible() {
-        let _: Option<events::v1::EventDefinition> = None;
-    }
-
-    #[test]
     fn experimentation_service_types_accessible() {
         let _: Option<experiments::v1::Experiment> = None;
         let _: Option<experiments::v1::ExperimentResults> = None;
@@ -79,6 +67,70 @@ mod compilation_tests {
         let _: Option<experiments::v1::ListExperimentsRequest> = None;
         let _: Option<experiments::v1::ListExperimentsResponse> = None;
         let _: Option<experiments::v1::GetResultsRequest> = None;
+    }
+
+    #[test]
+    fn analytics_service_types_accessible() {
+        // Event ingestion
+        let _: Option<analytics::v1::MetricEvent> = None;
+        let _: Option<analytics::v1::IngestEventRequest> = None;
+        let _: Option<analytics::v1::IngestEventResponse> = None;
+        // Context registry
+        let _: Option<analytics::v1::RegisterContextRequest> = None;
+        let _: Option<analytics::v1::RegisterContextResponse> = None;
+        let _: Option<analytics::v1::ListContextTypesRequest> = None;
+        let _: Option<analytics::v1::ListContextTypesResponse> = None;
+        let _: Option<analytics::v1::ListContextParamsRequest> = None;
+        let _: Option<analytics::v1::ListContextParamsResponse> = None;
+        // Eval stats + context intelligence
+        let _: Option<analytics::v1::GetEvalStatsRequest> = None;
+        let _: Option<analytics::v1::GetEvalStatsResponse> = None;
+        let _: Option<analytics::v1::GetContextIntelligenceRequest> = None;
+        let _: Option<analytics::v1::GetContextIntelligenceResponse> = None;
+        // Experiment results (added by feature-flag-mwk.1.1 / 1.3)
+        let _: Option<analytics::v1::ExperimentResult> = None;
+        let _: Option<analytics::v1::WriteExperimentResultsRequest> = None;
+        let _: Option<analytics::v1::WriteExperimentResultsResponse> = None;
+        let _: Option<analytics::v1::ListExperimentResultsRequest> = None;
+        let _: Option<analytics::v1::GetExperimentResultRequest> = None;
+    }
+
+    #[test]
+    fn analytics_service_client_and_server_stubs_generated() {
+        type _Client<T> =
+            analytics::v1::analytics_service_client::AnalyticsServiceClient<T>;
+        type _Server<T> =
+            analytics::v1::analytics_service_server::AnalyticsServiceServer<T>;
+    }
+
+    #[test]
+    fn management_service_types_accessible() {
+        let _: Option<management::v1::CreateOrgRequest> = None;
+        let _: Option<management::v1::CreateOrgResponse> = None;
+        let _: Option<management::v1::CreateProjectRequest> = None;
+        let _: Option<management::v1::ListProjectsRequest> = None;
+        let _: Option<management::v1::ProjectSummary> = None;
+        let _: Option<management::v1::CreateEnvironmentRequest> = None;
+        let _: Option<management::v1::ListEnvironmentsRequest> = None;
+        let _: Option<management::v1::EnvironmentSummary> = None;
+        let _: Option<management::v1::RenameProjectRequest> = None;
+        let _: Option<management::v1::DeleteProjectRequest> = None;
+        let _: Option<management::v1::RenameEnvironmentRequest> = None;
+        let _: Option<management::v1::DeleteEnvironmentRequest> = None;
+    }
+
+    #[test]
+    fn stats_service_types_accessible() {
+        let _: Option<stats::v1::TriggerRecomputeRequest> = None;
+        let _: Option<stats::v1::TriggerRecomputeResponse> = None;
+        let _: Option<stats::v1::GetJobStatusRequest> = None;
+        let _: Option<stats::v1::GetJobStatusResponse> = None;
+    }
+
+    #[test]
+    fn stats_service_client_and_server_stubs_generated() {
+        type _Client<T> = stats::v1::stats_service_client::StatsServiceClient<T>;
+        type _Server<T> = stats::v1::stats_service_server::StatsServiceServer<T>;
     }
 
     // ── SDK contracts (sdks/spec/proto/sdk/v1/) ─────────────────────────────

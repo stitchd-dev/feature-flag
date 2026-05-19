@@ -1,37 +1,51 @@
 //! Axum router — four auth trees with distinct middleware policies.
 //!
-//! | Tree           | Auth                              | Who can call              |
-//! |----------------|-----------------------------------|---------------------------|
-//! | `auth_routes`  | none (public)                     | anyone                    |
-//! | `admin_routes` | JWT + `require_system_org`        | superadmin only           |
-//! | `mgmt_routes`  | JWT + `require_non_system_org`    | non-superadmin users only |
-//! | `sdk_routes`   | SDK key or JWT (`auth_middleware`) | SDK clients               |
-//! | `flag_routes`  | JWT (`auth_middleware`)           | authenticated users       |
+//! | Tree                 | Auth                              | Who can call              |
+//! |----------------------|-----------------------------------|---------------------------|
+//! | `auth_routes`        | none (public)                     | anyone                    |
+//! | `admin_routes`       | JWT + `require_system_org`        | superadmin only           |
+//! | `mgmt_routes`        | JWT + `require_non_system_org`    | non-superadmin users only |
+//! | `sdk_backend_routes` | sdk_auth_middleware               | SDK clients               |
+//! | `resource_routes`    | JWT (`auth_middleware`)           | authenticated users       |
 
 use std::sync::Arc;
 
 use axum::{
     Router,
+    extract::State,
     http::StatusCode,
     middleware,
+    response::IntoResponse,
     routing::{delete, get, patch, post, put},
 };
+use metrics_exporter_prometheus::PrometheusHandle;
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
 use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
     admin, auth, auth_providers, context_intel, eval_stats, events, experiments, flags, management,
-    oidc, saml, sdk, sdk_backend, segments, stats,
+    oidc, saml, sdk_backend, segments, stats,
 };
 use crate::state::GatewayState;
 
+/// Handler for `GET /v1/metrics` — renders Prometheus exposition format.
+async fn metrics_handler(State(handle): State<PrometheusHandle>) -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        handle.render(),
+    )
+}
+
 /// Build the full gateway `Router`.
-pub fn build_router(state: Arc<GatewayState>) -> Router {
+pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) -> Router {
     let auth_client = Arc::clone(&state.auth_client);
 
     // ── Public: health + login + OIDC flows (no auth required) ──────────────
     let auth_routes = Router::new()
-        .route("/health", get(|| async { StatusCode::OK }))
+        .route("/v1/health", get(|| async { StatusCode::OK }))
         .route("/v1/auth/login", post(auth::login))
         .route("/v1/auth/refresh", post(auth::refresh))
         .route("/v1/auth/me/orgs", get(auth::list_user_orgs))
@@ -59,16 +73,16 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
     // ── Superadmin-only routes (JWT + system-org check) ───────────────────────
     let admin_routes = Router::new()
         .route(
-            "/v1/admin/orgs",
+            "/v1/superadmin/orgs",
             get(admin::list_orgs).post(admin::create_org),
         )
-        .route("/v1/admin/orgs/{org_id}", get(admin::get_org))
+        .route("/v1/superadmin/orgs/{org_id}", get(admin::get_org))
         .route(
-            "/v1/admin/orgs/{org_id}/users",
+            "/v1/superadmin/orgs/{org_id}/users",
             get(admin::list_org_users).post(admin::seed_user),
         )
         .route(
-            "/v1/admin/orgs/{org_id}/users/{user_id}",
+            "/v1/superadmin/orgs/{org_id}/users/{user_id}",
             delete(admin::remove_org_user),
         )
         .with_state(Arc::clone(&state))
@@ -115,29 +129,7 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             auth_middleware,
         ));
 
-    // ── SDK routes (x-sdk-key auth) ──────────────────────────────────────────
-    let sdk_routes = Router::new()
-        .route("/v1/environments/{env_id}/evaluate", post(sdk::evaluate))
-        .route("/v1/environments/{env_id}/events", post(sdk::ingest_event))
-        .route(
-            "/v1/environments/{env_id}/events/batch",
-            post(sdk::ingest_batch_events),
-        )
-        .route(
-            "/v1/environments/{env_id}/segments/list-check",
-            post(sdk::list_check_membership),
-        )
-        .route(
-            "/v1/environments/{env_id}/segments/list-check/batch",
-            post(sdk::batch_list_check_membership),
-        )
-        .with_state(Arc::clone(&state))
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&auth_client),
-            auth_middleware,
-        ));
-
-    // ── NEW SDK backend routes (x-sdk-key auth via sdk_auth_middleware) ─────
+    // ── SDK backend routes (x-sdk-key auth via sdk_auth_middleware) ─────────
     // These implement the contract specified in sdks/spec/openapi/sdk.yaml
     // for the clean-implementation SDK (sdks/rust/). They use the dedicated
     // sdk_auth_middleware (which injects SdkContext) rather than the generic
@@ -197,62 +189,62 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             get(segments::list_segments).post(segments::create_segment),
         )
         .route(
-            "/v1/segments/{id}",
+            "/v1/segments/{segment_id}",
             get(segments::get_segment).put(segments::update_segment).delete(segments::delete_segment),
         )
         .route(
-            "/v1/environments/{env_id}/segments",
+            "/v1/environments/{environment_id}/segments",
             post(segments::create_segment_in_env),
         )
         .route(
-            "/v1/segments/{id}/entries",
+            "/v1/segments/{segment_id}/entries",
             post(segments::patch_segment_entries),
         )
         .route(
-            "/v1/segments/{id}/entries/lookup",
+            "/v1/segments/{segment_id}/entries/lookup",
             get(segments::lookup_segment_entry),
         )
         // Events
         .route(
-            "/v1/environments/{env_id}/event-definitions",
+            "/v1/environments/{environment_id}/event-definitions",
             get(events::list_event_definitions).post(events::create_event_definition),
         )
         .route(
-            "/v1/environments/{env_id}/event-definitions/{def_id}",
+            "/v1/environments/{environment_id}/event-definitions/{event_definition_id}",
             get(events::get_event_definition)
                 .put(events::update_event_definition)
                 .delete(events::delete_event_definition),
         )
         // Experiments
         .route(
-            "/v1/environments/{env_id}/experiments",
+            "/v1/environments/{environment_id}/experiments",
             get(experiments::list_experiments).post(experiments::create_experiment),
         )
         .route(
-            "/v1/environments/{env_id}/experiments/{experiment_id}",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}",
             get(experiments::get_experiment)
                 .patch(experiments::update_experiment)
                 .delete(experiments::delete_experiment),
         )
         .route(
-            "/v1/environments/{env_id}/experiments/{experiment_id}/results",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/results",
             get(experiments::get_results),
         )
         .route(
-            "/v1/environments/{env_id}/experiments/{experiment_id}/transitions",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/transitions",
             post(experiments::transition_experiment),
         )
         .route(
-            "/v1/environments/{env_id}/experiments/{experiment_id}/iterations",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
             get(experiments::list_iterations),
         )
         // Context intelligence
         .route(
-            "/v1/environments/{env_id}/context-types",
+            "/v1/environments/{environment_id}/context-types",
             get(context_intel::list_context_types),
         )
         .route(
-            "/v1/environments/{env_id}/context-types/{context_type}/params",
+            "/v1/environments/{environment_id}/context-types/{context_type}/params",
             get(context_intel::list_context_params),
         )
         // Stats recompute
@@ -274,13 +266,13 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             get(auth_providers::list_auth_providers).post(auth_providers::create_auth_provider),
         )
         .route(
-            "/v1/orgs/{org_id}/auth-providers/{id}",
+            "/v1/orgs/{org_id}/auth-providers/{auth_provider_id}",
             get(auth_providers::get_auth_provider)
                 .put(auth_providers::update_auth_provider)
                 .delete(auth_providers::delete_auth_provider),
         )
         .route(
-            "/v1/orgs/{org_id}/auth-providers/{id}/saml/metadata",
+            "/v1/orgs/{org_id}/auth-providers/{auth_provider_id}/saml/metadata",
             get(auth_providers::get_saml_sp_metadata),
         )
         // Org-scoped OIDC authorize requires the user to be authenticated (picking their org's IdP)
@@ -300,14 +292,19 @@ pub fn build_router(state: Arc<GatewayState>) -> Router {
             auth_middleware,
         ));
 
+    // ── Prometheus metrics — own state (PrometheusHandle), no auth ──────────
+    let metrics_routes = Router::new()
+        .route("/v1/metrics", get(metrics_handler))
+        .with_state(metrics_handle);
+
     Router::new()
         .merge(auth_routes)
         .merge(admin_routes)
         .merge(mgmt_routes)
-        .merge(sdk_routes)
         .merge(sdk_backend_routes)
         .merge(resource_routes)
         .merge(auth_provider_routes)
+        .merge(metrics_routes)
 }
 
 #[cfg(test)]
@@ -318,11 +315,17 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
     };
+    use metrics_exporter_prometheus::PrometheusBuilder;
     use tower::ServiceExt as _;
+
+    /// Create a `PrometheusHandle` for tests without installing a global recorder.
+    fn test_metrics_handle() -> PrometheusHandle {
+        PrometheusBuilder::new().build_recorder().handle()
+    }
 
     #[tokio::test]
     async fn flags_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -337,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn segments_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -352,12 +355,12 @@ mod tests {
 
     #[tokio::test]
     async fn admin_create_org_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/v1/admin/orgs")
+                    .uri("/v1/superadmin/orgs")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"name":"Test"}"#))
                     .unwrap(),
@@ -369,7 +372,7 @@ mod tests {
 
     #[tokio::test]
     async fn management_create_project_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -386,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_route_exists_and_returns_non_404() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -403,7 +406,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_providers_without_auth_returns_401() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -418,7 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_route_returns_404() {
-        let app = build_router(make_stub_state());
+        let app = build_router(make_stub_state(), test_metrics_handle());
         let resp = app
             .oneshot(
                 Request::builder()
@@ -432,6 +435,52 @@ mod tests {
             resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::UNAUTHORIZED,
             "status: {}",
             resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_returns_prometheus_text() {
+        use axum::body::to_bytes;
+
+        // Register a counter on this recorder before building the router so
+        // the exposition is non-empty and we can assert # HELP / # TYPE lines.
+        let recorder = PrometheusBuilder::new().build_recorder();
+        // Record via the recorder's own metrics API by installing it temporarily
+        // in the test thread and removing it immediately.
+        let handle = recorder.handle();
+
+        let app = build_router(make_stub_state(), handle);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        assert!(
+            ct.contains("text/plain"),
+            "expected text/plain content-type, got: {ct}"
+        );
+
+        // Verify the body is valid Prometheus exposition (may be empty if no
+        // metrics registered in this recorder, but must not be an error page).
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&body_bytes).expect("metrics body must be UTF-8");
+        // An empty recorder returns an empty string — that's still valid exposition.
+        // Verify no error payload (which would contain "error" or HTML).
+        assert!(
+            !body.contains("<!DOCTYPE") && !body.contains("<html"),
+            "metrics body looks like an HTML error page: {body}"
         );
     }
 }

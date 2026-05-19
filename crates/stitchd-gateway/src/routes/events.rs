@@ -67,12 +67,12 @@ fn body_to_event(b: &EventBody) -> MetricEvent {
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
-/// `POST /v1/environments/{env_id}/events`
+/// `POST /v1/environments/{environment_id}/events`
 #[utoipa::path(
     post,
-    path = "/v1/environments/{env_id}/events",
-    tag = "events",
-    params(("env_id" = String, Path, description = "Environment ID")),
+    path = "/v1/environments/{environment_id}/events",
+    tag = "event-definitions",
+    params(("environment_id" = String, Path, description = "Environment ID")),
     request_body = EventBody,
     responses(
         (status = 200, description = "Event ingested", body = IngestResponseJson),
@@ -83,7 +83,7 @@ fn body_to_event(b: &EventBody) -> MetricEvent {
 )]
 pub async fn ingest_event(
     State(state): State<Arc<GatewayState>>,
-    Path(_env_id): Path<String>,
+    Path(_environment_id): Path<String>,
     Json(body): Json<EventBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(IngestEventRequest {
@@ -98,12 +98,12 @@ pub async fn ingest_event(
     }))
 }
 
-/// `POST /v1/environments/{env_id}/events/batch`
+/// `POST /v1/environments/{environment_id}/events/batch`
 #[utoipa::path(
     post,
-    path = "/v1/environments/{env_id}/events/batch",
-    tag = "events",
-    params(("env_id" = String, Path, description = "Environment ID")),
+    path = "/v1/environments/{environment_id}/events/batch",
+    tag = "event-definitions",
+    params(("environment_id" = String, Path, description = "Environment ID")),
     request_body = BatchEventBody,
     responses(
         (status = 200, description = "Batch ingested", body = IngestResponseJson),
@@ -114,7 +114,7 @@ pub async fn ingest_event(
 )]
 pub async fn ingest_batch(
     State(state): State<Arc<GatewayState>>,
-    Path(_env_id): Path<String>,
+    Path(_environment_id): Path<String>,
     Json(body): Json<BatchEventBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     let events = body.events.iter().map(body_to_event).collect();
@@ -128,12 +128,12 @@ pub async fn ingest_batch(
     }))
 }
 
-/// `GET /v1/environments/{env_id}/event-definitions`
+/// `GET /v1/environments/{environment_id}/event-definitions`
 #[utoipa::path(
     get,
-    path = "/v1/environments/{env_id}/event-definitions",
-    tag = "events",
-    params(("env_id" = String, Path, description = "Environment ID")),
+    path = "/v1/environments/{environment_id}/event-definitions",
+    tag = "event-definitions",
+    params(("environment_id" = String, Path, description = "Environment ID")),
     responses(
         (status = 200, description = "Paginated list of event definitions"),
         (status = 401, description = "Unauthorized"),
@@ -142,7 +142,7 @@ pub async fn ingest_batch(
 )]
 pub async fn list_event_definitions(
     State(_state): State<Arc<GatewayState>>,
-    Path(_env_id): Path<String>,
+    Path(_environment_id): Path<String>,
     Query(pagination): Query<PaginationParams>,
 ) -> impl IntoResponse {
     // Event definitions are managed by the Event Service.
@@ -155,12 +155,12 @@ pub async fn list_event_definitions(
     ))
 }
 
-/// `POST /v1/environments/{env_id}/event-definitions`
+/// `POST /v1/environments/{environment_id}/event-definitions`
 #[utoipa::path(
     post,
-    path = "/v1/environments/{env_id}/event-definitions",
-    tag = "events",
-    params(("env_id" = String, Path, description = "Environment ID")),
+    path = "/v1/environments/{environment_id}/event-definitions",
+    tag = "event-definitions",
+    params(("environment_id" = String, Path, description = "Environment ID")),
     responses(
         (status = 202, description = "Event definition accepted"),
         (status = 401, description = "Unauthorized"),
@@ -169,20 +169,20 @@ pub async fn list_event_definitions(
 )]
 pub async fn create_event_definition(
     State(_state): State<Arc<GatewayState>>,
-    Path(_env_id): Path<String>,
+    Path(_environment_id): Path<String>,
     Json(_body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     axum::http::StatusCode::ACCEPTED
 }
 
-/// `GET /v1/environments/{env_id}/event-definitions/{def_id}`
+/// `GET /v1/environments/{environment_id}/event-definitions/{event_definition_id}`
 #[utoipa::path(
     get,
-    path = "/v1/environments/{env_id}/event-definitions/{def_id}",
-    tag = "events",
+    path = "/v1/environments/{environment_id}/event-definitions/{event_definition_id}",
+    tag = "event-definitions",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
-        ("def_id" = String, Path, description = "Event definition key"),
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("event_definition_id" = String, Path, description = "Event definition key"),
     ),
     responses(
         (status = 501, description = "Not implemented"),
@@ -192,20 +192,20 @@ pub async fn create_event_definition(
 )]
 pub async fn get_event_definition(
     State(_state): State<Arc<GatewayState>>,
-    Path((_env_id, def_id)): Path<(String, String)>,
+    Path((_environment_id, event_definition_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let _ = def_id;
+    let _ = event_definition_id;
     axum::http::StatusCode::NOT_IMPLEMENTED
 }
 
-/// `PUT /v1/environments/{env_id}/event-definitions/{def_id}`
+/// `PUT /v1/environments/{environment_id}/event-definitions/{event_definition_id}`
 #[utoipa::path(
     put,
-    path = "/v1/environments/{env_id}/event-definitions/{def_id}",
-    tag = "events",
+    path = "/v1/environments/{environment_id}/event-definitions/{event_definition_id}",
+    tag = "event-definitions",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
-        ("def_id" = String, Path, description = "Event definition key"),
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("event_definition_id" = String, Path, description = "Event definition key"),
     ),
     responses(
         (status = 202, description = "Update accepted"),
@@ -215,21 +215,21 @@ pub async fn get_event_definition(
 )]
 pub async fn update_event_definition(
     State(_state): State<Arc<GatewayState>>,
-    Path((_env_id, def_id)): Path<(String, String)>,
+    Path((_environment_id, event_definition_id)): Path<(String, String)>,
     Json(_body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let _ = def_id;
+    let _ = event_definition_id;
     axum::http::StatusCode::ACCEPTED
 }
 
-/// `DELETE /v1/environments/{env_id}/event-definitions/{def_id}`
+/// `DELETE /v1/environments/{environment_id}/event-definitions/{event_definition_id}`
 #[utoipa::path(
     delete,
-    path = "/v1/environments/{env_id}/event-definitions/{def_id}",
-    tag = "events",
+    path = "/v1/environments/{environment_id}/event-definitions/{event_definition_id}",
+    tag = "event-definitions",
     params(
-        ("env_id" = String, Path, description = "Environment ID"),
-        ("def_id" = String, Path, description = "Event definition key"),
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("event_definition_id" = String, Path, description = "Event definition key"),
     ),
     responses(
         (status = 204, description = "Deleted"),
@@ -239,9 +239,9 @@ pub async fn update_event_definition(
 )]
 pub async fn delete_event_definition(
     State(_state): State<Arc<GatewayState>>,
-    Path((_env_id, def_id)): Path<(String, String)>,
+    Path((_environment_id, event_definition_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let _ = def_id;
+    let _ = event_definition_id;
     axum::http::StatusCode::NO_CONTENT
 }
 
@@ -252,14 +252,14 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
     use axum::routing::{delete, get, post, put};
     axum::Router::new()
-        .route("/v1/environments/{env_id}/events", post(ingest_event))
-        .route("/v1/environments/{env_id}/events/batch", post(ingest_batch))
+        .route("/v1/environments/{environment_id}/events", post(ingest_event))
+        .route("/v1/environments/{environment_id}/events/batch", post(ingest_batch))
         .route(
-            "/v1/environments/{env_id}/event-definitions",
+            "/v1/environments/{environment_id}/event-definitions",
             get(list_event_definitions).post(create_event_definition),
         )
         .route(
-            "/v1/environments/{env_id}/event-definitions/{def_id}",
+            "/v1/environments/{environment_id}/event-definitions/{event_definition_id}",
             get(get_event_definition)
                 .put(update_event_definition)
                 .delete(delete_event_definition),

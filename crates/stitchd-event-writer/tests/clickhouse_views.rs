@@ -11,7 +11,7 @@ use chrono::Utc;
 use clickhouse::Client;
 use serde::Deserialize;
 use stitchd_core::event::{EventContext, EventPayload, EventValue};
-use stitchd_events::{migrations, writer::EventWriter};
+use stitchd_event_writer::{migrations, writer::EventWriter};
 use uuid::Uuid;
 
 fn experiment_payload(
@@ -417,12 +417,10 @@ async fn query_events_v2_count(client: &Client, env_id: Uuid) -> u64 {
 #[allow(dead_code)]
 async fn query_events_v2_partitions(client: &Client, env_id: Uuid) -> Vec<PartitionRow> {
     // system.parts shows active partition keys for the table.
-    let sql = format!(
-        "SELECT partition, sum(rows) AS rows \
+    let sql = "SELECT partition, sum(rows) AS rows \
          FROM system.parts \
          WHERE table = 'events_v2' AND active = 1 \
-         GROUP BY partition ORDER BY partition"
-    );
+         GROUP BY partition ORDER BY partition".to_string();
     // env_id filter not possible in system.parts; query full table partitions.
     let _ = env_id;
     client.query(&sql).fetch_all().await.unwrap_or_default()

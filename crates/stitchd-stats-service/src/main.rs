@@ -1,8 +1,14 @@
 //! `stitchd-stats-service` — Scheduled Statistics Processing Service.
 //!
 //! Runs a periodic scheduler computing experiment results for all running experiments.
-//! Exposes health and Prometheus metrics on `STATS_HTTP_PORT` (default: 9200).
-//! Exposes gRPC `StatsService` on `STATS_GRPC_PORT` (default: 50056).
+//! Exposes health and Prometheus metrics on `STITCHD_STATS_SERVICE_HTTP_PORT` (default: 9200).
+//! Exposes gRPC `StatsService` on `STITCHD_STATS_SERVICE_GRPC_PORT` (default: 50056).
+//!
+//! ## gRPC Clients
+//! - `STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL` — experimentation-service endpoint
+//!   (default: `http://localhost:50054`).
+//! - `STITCHD_ANALYTICS_SERVICE_GRPC_URL` — analytics-service endpoint
+//!   (default: `http://localhost:50055`).
 
 use std::net::SocketAddr;
 
@@ -12,14 +18,17 @@ use anyhow::Context as _;
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use chrono::Duration;
 use metrics_exporter_prometheus::PrometheusBuilder;
+use tokio::sync::Mutex;
 use tokio::signal;
-use tonic::transport::Server;
+use tonic::transport::{Channel, Server};
 use tonic_health::server::health_reporter;
 use tracing::{error, info, warn};
 
 use stitchd_db::PgContextRegistryRepository;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
+use stitchd_proto::analytics::v1::analytics_service_client::AnalyticsServiceClient;
+use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::stats::v1::stats_service_server::StatsServiceServer;
 use stitchd_stats_service::{
     config::StatsConfig,
@@ -54,13 +63,36 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to connect to PostgreSQL")?;
 
     // ── ClickHouse client ─────────────────────────────────────────────────────
-    let ch_user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
-    let ch_password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+    let ch_user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let ch_password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_default();
     let ch_client = clickhouse::Client::default()
         .with_url(&config.clickhouse_url)
         .with_database(&config.clickhouse_db)
         .with_user(ch_user)
         .with_password(ch_password);
+
+    // ── gRPC clients ──────────────────────────────────────────────────────────
+    info!(
+        url = %config.experimentation_service_grpc_url,
+        "Connecting to experimentation-service gRPC"
+    );
+    let exp_channel = Channel::from_shared(config.experimentation_service_grpc_url.clone())
+        .context("Invalid STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL")?
+        .connect()
+        .await
+        .context("Failed to connect to experimentation-service gRPC")?;
+    let exp_client = Arc::new(Mutex::new(ExperimentationServiceClient::new(exp_channel)));
+
+    info!(
+        url = %config.analytics_service_grpc_url,
+        "Connecting to analytics-service gRPC"
+    );
+    let analytics_channel = Channel::from_shared(config.analytics_service_grpc_url.clone())
+        .context("Invalid STITCHD_ANALYTICS_SERVICE_GRPC_URL")?
+        .connect()
+        .await
+        .context("Failed to connect to analytics-service gRPC")?;
+    let analytics_client = Arc::new(Mutex::new(AnalyticsServiceClient::new(analytics_channel)));
 
     // ── Context registry refresh loop (15-min cadence) ────────────────────────
     let registry_pool = pg_pool.clone();
@@ -81,48 +113,58 @@ async fn main() -> anyhow::Result<()> {
     // ── Scheduler loop ────────────────────────────────────────────────────────
     let scheduler_pool = pg_pool.clone();
     let scheduler_interval = config.scheduler_interval;
+    let scheduler_exp_client = exp_client.clone();
+    let scheduler_analytics_client = analytics_client.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(scheduler_interval);
         loop {
             ticker.tick().await;
-            match fetch_running_experiments(&scheduler_pool).await {
-                Err(e) => {
-                    error!("Failed to fetch running experiments: {e}");
-                    continue;
-                }
-                Ok(experiments) => {
-                    for exp in experiments {
-                        let pool = scheduler_pool.clone();
-                        tokio::spawn(async move {
-                            let computed_at = chrono::Utc::now();
-                            // Stats computation is deferred to Phase 3 full implementation.
-                            // For scaffold: just update the schedule to record that we ran.
-                            if let Err(e) = write_results(
-                                &pool,
-                                exp.experiment_id,
-                                exp.iteration_id,
-                                computed_at,
-                                &[],
-                            )
-                            .await
-                            {
-                                warn!(experiment_id = %exp.experiment_id, "Failed to write results: {e}");
-                                return;
-                            }
-                            if let Err(e) = update_schedule_after_run(
-                                &pool,
-                                exp.experiment_id,
-                                computed_at,
-                                Duration::from_std(scheduler_interval)
-                                    .unwrap_or(Duration::hours(1)),
-                            )
-                            .await
-                            {
-                                warn!(experiment_id = %exp.experiment_id, "Failed to update schedule: {e}");
-                            }
-                        });
+            let experiments = {
+                let mut client = scheduler_exp_client.lock().await;
+                match fetch_running_experiments(&mut client).await {
+                    Err(e) => {
+                        error!("Failed to fetch running experiments: {e}");
+                        continue;
                     }
+                    Ok(exps) => exps,
                 }
+            };
+
+            for exp in experiments {
+                let pool = scheduler_pool.clone();
+                let analytics = scheduler_analytics_client.clone();
+                tokio::spawn(async move {
+                    let computed_at = chrono::Utc::now();
+                    // Stats computation is deferred to Phase 3 full implementation.
+                    // For scaffold: just update the schedule to record that we ran.
+                    {
+                        let mut ac = analytics.lock().await;
+                        if let Err(e) = write_results(
+                            &mut ac,
+                            exp.env_id,
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            computed_at,
+                            &[],
+                        )
+                        .await
+                        {
+                            warn!(experiment_id = %exp.experiment_id, "Failed to write results: {e}");
+                            return;
+                        }
+                    }
+                    if let Err(e) = update_schedule_after_run(
+                        &pool,
+                        exp.experiment_id,
+                        computed_at,
+                        Duration::from_std(scheduler_interval)
+                            .unwrap_or(Duration::hours(1)),
+                    )
+                    .await
+                    {
+                        warn!(experiment_id = %exp.experiment_id, "Failed to update schedule: {e}");
+                    }
+                });
             }
         }
     });

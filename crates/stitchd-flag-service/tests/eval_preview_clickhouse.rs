@@ -1,16 +1,16 @@
 //! Smoke test: evaluate_preview → rows appear in ClickHouse.
 //!
-//! Requires a running flag-service on FLAG_SERVICE_ADDR (default localhost:50052)
-//! and ClickHouse on CLICKHOUSE_URL. Skipped when either is absent.
+//! Requires a running flag-service on STITCHD_FLAG_SERVICE_ADDR (default localhost:50052)
+//! and ClickHouse on STITCHD_CLICKHOUSE_URL. Skipped when either is absent.
 
 use stitchd_proto::flags::v1::EvaluatePreviewRequest;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 
 fn ch_client() -> Option<clickhouse::Client> {
-    let url = std::env::var("CLICKHOUSE_URL").ok()?;
-    let db = std::env::var("CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
-    let user = std::env::var("CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
-    let password = std::env::var("CLICKHOUSE_PASSWORD").unwrap_or_default();
+    let url = std::env::var("STITCHD_CLICKHOUSE_URL").ok()?;
+    let db = std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
+    let user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_default();
     Some(
         clickhouse::Client::default()
             .with_url(url)
@@ -21,17 +21,17 @@ fn ch_client() -> Option<clickhouse::Client> {
 }
 
 fn flag_service_addr() -> Option<String> {
-    std::env::var("FLAG_SERVICE_ADDR").ok()
+    std::env::var("STITCHD_FLAG_SERVICE_ADDR").ok()
 }
 
 #[tokio::test]
 async fn evaluate_preview_writes_rows_to_clickhouse() {
     let Some(ch) = ch_client() else {
-        eprintln!("CLICKHOUSE_URL not set — skipping");
+        eprintln!("STITCHD_CLICKHOUSE_URL not set — skipping");
         return;
     };
     let Some(addr) = flag_service_addr() else {
-        eprintln!("FLAG_SERVICE_ADDR not set — skipping");
+        eprintln!("STITCHD_FLAG_SERVICE_ADDR not set — skipping");
         return;
     };
 

@@ -6,5 +6,6 @@
 //! - `ListExperiments` — list all experiments for an environment
 //! - `GetResults` — fetch pre-computed statistical results
 
+pub mod analytics_client;
 pub mod flag_client;
 pub mod service;

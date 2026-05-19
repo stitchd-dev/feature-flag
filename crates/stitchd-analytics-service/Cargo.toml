@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
 stitchd-db = { path = "../stitchd-db" }
-stitchd-events = { path = "../stitchd-events" }
+stitchd-event-writer = { path = "../stitchd-event-writer" }
 stitchd-proto = { path = "../stitchd-proto" }
 tokio = { workspace = true }
 tonic = { workspace = true }
@@ -34,6 +34,7 @@ metrics-exporter-prometheus = { workspace = true }
 async-trait = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+tokio-stream = "0.1"
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -25,8 +25,7 @@
   - [Flag Sync](./grpc/flags_v1_flag_sync.md)
   - [Segment](./grpc/segments_v1_segment.md)
   - [Segmentation Service](./grpc/segments_v1_segmentation_service.md)
-  - [Event](./grpc/events_v1_event.md)
-  - [Event Service](./grpc/events_v1_event_service.md)
+  - [Analytics](./grpc/analytics_v1_analytics.md)
   - [Experimentation Service](./grpc/experiments_v1_experimentation_service.md)
   - [Stats Service](./grpc/stats_v1_stats_service.md)
 
