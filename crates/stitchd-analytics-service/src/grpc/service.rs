@@ -4,11 +4,13 @@ use tonic::{Request, Response, Status};
 use stitchd_db::{ContextRegistryRepository, EventDefinitionRepository, SdkKeyRepository};
 use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
-    ExperimentResult, GetContextIntelligenceRequest, GetContextIntelligenceResponse,
-    GetEvalStatsRequest, GetEvalStatsResponse, GetExperimentResultRequest,
-    IngestEventRequest, IngestEventResponse, ListContextParamsRequest,
-    ListContextParamsResponse, ListContextTypesRequest, ListContextTypesResponse,
-    ListExperimentResultsRequest, RegisterContextRequest, RegisterContextResponse,
+    CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse, ExperimentResult,
+    GetContextIntelligenceRequest, GetContextIntelligenceResponse, GetEvalStatsRequest,
+    GetEvalStatsResponse, GetExperimentResultRequest, GetMetricRequest, IngestEventRequest,
+    IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
+    ListContextTypesRequest, ListContextTypesResponse, ListExperimentResultsRequest,
+    ListMetricsRequest, ListMetricsResponse, MetricDefinition, PreviewMetricRequest,
+    PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse, UpdateMetricRequest,
     WriteExperimentResultsRequest, WriteExperimentResultsResponse,
     analytics_service_server::AnalyticsService,
 };
@@ -122,5 +124,66 @@ impl AnalyticsService for AnalyticsServiceImpl {
         request: Request<GetExperimentResultRequest>,
     ) -> Result<Response<ExperimentResult>, Status> {
         handle_get_experiment_result(&self.state.experiment_results_repo, request).await
+    }
+
+    // ── Metric definitions CRUD ─────────────────────────────────────────────
+    //
+    // These RPCs are wired in Phase 3 (`MetricService` implementation in
+    // `crates/stitchd-analytics-service/src/grpc/metric.rs`). For now they
+    // return `Unimplemented` so the proto-generated trait is satisfied and
+    // the service binary compiles.
+
+    async fn create_metric(
+        &self,
+        _request: Request<CreateMetricRequest>,
+    ) -> Result<Response<MetricDefinition>, Status> {
+        Err(Status::unimplemented(
+            "create_metric — wired in events_metrics_20260519 Phase 3",
+        ))
+    }
+
+    async fn get_metric(
+        &self,
+        _request: Request<GetMetricRequest>,
+    ) -> Result<Response<MetricDefinition>, Status> {
+        Err(Status::unimplemented(
+            "get_metric — wired in events_metrics_20260519 Phase 3",
+        ))
+    }
+
+    async fn list_metrics(
+        &self,
+        _request: Request<ListMetricsRequest>,
+    ) -> Result<Response<ListMetricsResponse>, Status> {
+        Err(Status::unimplemented(
+            "list_metrics — wired in events_metrics_20260519 Phase 3",
+        ))
+    }
+
+    async fn update_metric(
+        &self,
+        _request: Request<UpdateMetricRequest>,
+    ) -> Result<Response<MetricDefinition>, Status> {
+        Err(Status::unimplemented(
+            "update_metric — wired in events_metrics_20260519 Phase 3",
+        ))
+    }
+
+    async fn delete_metric(
+        &self,
+        _request: Request<DeleteMetricRequest>,
+    ) -> Result<Response<DeleteMetricResponse>, Status> {
+        Err(Status::unimplemented(
+            "delete_metric — wired in events_metrics_20260519 Phase 3",
+        ))
+    }
+
+    async fn preview_metric(
+        &self,
+        _request: Request<PreviewMetricRequest>,
+    ) -> Result<Response<PreviewMetricResponse>, Status> {
+        Err(Status::unimplemented(
+            "preview_metric — wired in events_metrics_20260519 Phase 3",
+        ))
     }
 }

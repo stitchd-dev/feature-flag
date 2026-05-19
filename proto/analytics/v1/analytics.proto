@@ -184,6 +184,142 @@ message GetExperimentResultRequest {
   optional string iteration_id = 5;
 }
 
+// ─── Metric Definitions ───────────────────────────────────────────────────────
+//
+// Composable metric definitions that experiments reference instead of raw
+// event keys. The `config` is a `oneof` whose variant tags
+// (`aggregation`/`ratio`/`funnel`) match the serde `kind` discriminator
+// of `stitchd-core::metric::MetricKind`.
+
+message AggregationConfig {
+  string          event_key         = 1;
+  // "count" | "sum" | "avg" | "p50" | "p90" | "p99" | "uniq"
+  string          aggregator        = 2;
+  optional string on_field          = 3;
+  // Serialised JsonLogic (e.g. `{"==":[{"var":"currency"},"USD"]}`).
+  // Empty/absent means no where-clause filter.
+  optional string where_clause_json = 4;
+}
+
+message RatioConfig {
+  string numerator_metric_id   = 1;
+  string denominator_metric_id = 2;
+  int64  min_denominator       = 3;
+}
+
+message FunnelStep {
+  string          event_key         = 1;
+  optional string where_clause_json = 2;
+}
+
+message FunnelConfig {
+  repeated FunnelStep steps          = 1;
+  int64               window_seconds = 2;
+  bool                count_repeats  = 3;
+}
+
+message MetricDefinition {
+  string          id             = 1;
+  string          environment_id = 2;
+  string          key            = 3;
+  string          name           = 4;
+  optional string description    = 5;
+  oneof kind {
+    AggregationConfig aggregation = 6;
+    RatioConfig       ratio       = 7;
+    FunnelConfig      funnel      = 8;
+  }
+  // "increase" | "decrease" | "neutral"
+  string          goal_direction = 9;
+  int64           version        = 10;
+  string          created_at     = 11;
+  string          updated_at     = 12;
+  optional string deleted_at     = 13;
+}
+
+message CreateMetricRequest {
+  // Without id/version/timestamps — server fills those in.
+  string          environment_id = 1;
+  string          key            = 2;
+  string          name           = 3;
+  optional string description    = 4;
+  oneof kind {
+    AggregationConfig aggregation = 5;
+    RatioConfig       ratio       = 6;
+    FunnelConfig      funnel      = 7;
+  }
+  string goal_direction = 8;
+}
+
+message GetMetricRequest {
+  // Either provide id, OR (environment_id + key) — server resolves
+  // whichever is non-empty.
+  optional string id             = 1;
+  optional string environment_id = 2;
+  optional string key            = 3;
+}
+
+message ListMetricsRequest {
+  string environment_id     = 1;
+  // 0-based offset; defaults to 0 when unset.
+  optional uint64 offset    = 2;
+  // Page size; defaults to 50 when unset, capped at 200.
+  optional uint64 limit     = 3;
+  // Optional kind filter ("aggregation" | "ratio" | "funnel").
+  optional string kind      = 4;
+}
+
+message ListMetricsResponse {
+  repeated MetricDefinition items    = 1;
+  uint64                    total    = 2;
+  uint64                    offset   = 3;
+  uint64                    limit    = 4;
+}
+
+message UpdateMetricRequest {
+  string          id             = 1;
+  // Caller-known version for optimistic locking.
+  int64           expected_version = 2;
+  optional string name           = 3;
+  optional string description    = 4;
+  oneof kind {
+    AggregationConfig aggregation = 5;
+    RatioConfig       ratio       = 6;
+    FunnelConfig      funnel      = 7;
+  }
+  optional string goal_direction = 8;
+}
+
+message DeleteMetricRequest {
+  string id = 1;
+}
+
+message DeleteMetricResponse {}
+
+// Inline preview of a metric's value over the last N days. Used by the
+// admin UI's metric builder for instant feedback.
+message PreviewMetricRequest {
+  // Existing metric (look up by id), OR an inline draft (build_inline).
+  oneof target {
+    string                  id           = 1;
+    MetricDefinition        build_inline = 2;
+  }
+  // Days of history to query. Defaults to 7 when unset/zero.
+  uint32 days = 3;
+}
+
+message PreviewBucket {
+  // RFC 3339 UTC day-start.
+  string day        = 1;
+  // Single scalar value — aggregations/ratios produce one float; funnels
+  // produce the step-N conversion rate (configured via `step_index`).
+  double value      = 2;
+}
+
+message PreviewMetricResponse {
+  repeated PreviewBucket buckets = 1;
+}
+
 // ─── Analytics Service ────────────────────────────────────────────────────────
 
 // AnalyticsService consolidates all analytics and context-registry operations.
@@ -216,4 +352,25 @@ service AnalyticsService {
 
   // Fetch a single result for a specific metric key within an iteration.
   rpc GetExperimentResult(GetExperimentResultRequest) returns (ExperimentResult);
+
+  // ── Metric definitions CRUD ────────────────────────────────────────────────
+
+  // Create a new metric definition (validates kind-specific config).
+  rpc CreateMetric(CreateMetricRequest) returns (MetricDefinition);
+
+  // Fetch a metric by id OR by (environment_id, key).
+  rpc GetMetric(GetMetricRequest) returns (MetricDefinition);
+
+  // List metrics in an environment, optionally filtered by kind.
+  rpc ListMetrics(ListMetricsRequest) returns (ListMetricsResponse);
+
+  // Update a metric (optimistic-locking via expected_version).
+  rpc UpdateMetric(UpdateMetricRequest) returns (MetricDefinition);
+
+  // Soft-delete a metric.
+  rpc DeleteMetric(DeleteMetricRequest) returns (DeleteMetricResponse);
+
+  // Compute a preview time-series for a metric over the last N days.
+  // Accepts either a saved metric id or an inline draft.
+  rpc PreviewMetric(PreviewMetricRequest) returns (PreviewMetricResponse);
 }
