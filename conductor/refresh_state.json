@@ -1,22 +1,29 @@
 {
-  "last_refreshed": "2026-05-16T00:00:00Z",
+  "last_refreshed": "2026-05-19T00:00:00Z",
   "scope": "all",
   "changes": {
     "product.md": [
-      "Updated Implementation Status to 2026-05-16: added flags CRUD, segments UI, eval preview, context intel, db optimizations as Complete; marked Admin UI Superadmin as Complete",
-      "Replaced stale 'Deferred: ClickHouse Query Optimisations' with 'Completed' summary",
-      "Added evaluate-preview endpoint description to Feature Flags module",
-      "Added Admin UI section describing full feature parity (flags, segments, context explorer, eval analytics, pagination)"
+      "Verified clean post-Phase-7 state — no stale crate names or route names found; no edits required beyond confirming accuracy"
     ],
     "tech-stack.md": [
-      "Added vitest ^4.1.6 to Admin UI section",
-      "Added Pagination section: PaginationParams, PaginatedResponse<T>, COUNT(*) OVER() pattern",
-      "Added Context Intelligence Layer section: tables, routes",
-      "Added PostgreSQL Index Layer section: 4 migrations with index details",
-      "Added ClickHouse Schema section: events_v2, flag_evaluation_log_v2 weekly partitions, events_experiment_daily AggregatingMergeTree + MV, combiner invariants"
+      "Verified clean post-Phase-7 state — crate renames (stitchd-event-writer, stitchd-sdk-rust), STITCHD_ prefix, Formik+Yup, ScyllaDB keyspace stitchd_segments all correct; no edits required"
     ],
-    "beads": [
-      "Closed 50 stale open issues across 4 archived epics: feature-flag-dhu (db_optim), feature-flag-c1h (context_intel), feature-flag-09e (flag_eval_preview), feature-flag-5au (segments_ui)"
+    "workflow.md": [
+      "Bumped refresh date from 2026-05-11 to 2026-05-19",
+      "Updated Setup: added ScyllaDB to docker compose startup command; added DATABASE_URL alias note for sqlx-cli",
+      "Added 'Parallel Sub-Agent Workflow' section: worker-wave model, bd close --no-auto discipline, worktree isolation, fix-gaps-as-discovered principle, parallel trait reconciliation pattern"
+    ],
+    "patterns.md": [
+      "Bumped refresh date from 2026-05-16 to 2026-05-19",
+      "Fixed Gateway gotcha: corrected actix-web body-limit entry to Axum + DefaultBodyLimit::max(bytes)",
+      "ScyllaDB: added 2 entries (gen reserved keyword; ScyllaDB direct dep containment)",
+      "Gateway: added 3 entries (proto JSON-string deserialization; tonic Channel Clone; tonic client submodule path)",
+      "Gotchas: added 5 entries (STITCHD_DATABASE_URL alias; --no-ff -D; git checkout --ours; discovered-work pattern; E2E infra-dependent test #[ignore])",
+      "Testing: added 7 entries (in-process tonic mock; per-crate cargo test; --features test-util for sdk; .sqlx/ cache check on deletion; Scylla perf #[ignore]; clippy --fix batch; #[allow(result_large_err)] for tonic)",
+      "Frontend: added 8 entries (Formik+Yup canonical pattern; validateOnChange=false; FormCheckbox spread; enableReinitialize; key={mode}; admin UI modal primitives)"
+    ],
+    "refresh_state.json": [
+      "Bumped last_refreshed to 2026-05-19T00:00:00Z; updated changes map to reflect this refresh"
     ]
   }
 }

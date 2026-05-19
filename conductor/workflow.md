@@ -1,5 +1,5 @@
 # Project Workflow
-<!-- Last refreshed: 2026-05-11 -->
+<!-- Last refreshed: 2026-05-19 -->
 
 ## Guiding Principles
 
@@ -171,11 +171,15 @@ Before marking any task complete, verify:
 # Install sqlx-cli (compile-time query checking)
 cargo install sqlx-cli --no-default-features --features rustls,postgres
 
-# Start infrastructure (Postgres + ClickHouse only — microservices are built separately)
-docker compose up postgres clickhouse -d --wait
+# Start infrastructure (Postgres + ClickHouse + ScyllaDB — all three required)
+docker compose up postgres clickhouse scylladb -d --wait
 
 # Run DB migrations
 cargo sqlx migrate run --source crates/stitchd-db/migrations
+
+# sqlx-cli requires plain DATABASE_URL (not STITCHD_DATABASE_URL)
+# Always alias before running sqlx commands:
+# export DATABASE_URL="$STITCHD_DATABASE_URL"
 ```
 
 ### Daily Development
@@ -387,6 +391,45 @@ A task is complete when:
 2. Check error logs
 3. Gather user feedback
 4. Plan next iteration
+
+## Parallel Sub-Agent Workflow
+
+For large tracks (many tasks per phase, strong parallelism), use a **parallel worker-wave model**. This pattern was first used at scale in `boundaries_20260518` (7 phases, 79 commits, 19 sub-agent workers).
+
+### Core model
+
+1. **Orchestrator agent** manages the track — reads the plan, assigns tasks to worker agents, aggregates results, merges branches.
+2. **Worker agents** operate in isolated git worktrees (`.worktrees/<track_id>_w<N>/`) created with `git worktree add`. Each worker handles one task: write code, run tests, commit, close beads task.
+3. Tasks are batched into **waves** — groups of independently executable tasks that share no intra-wave compile-time dependencies. Workers in a wave run concurrently; the orchestrator waits for all to finish before starting the next wave.
+
+### Worktree discipline
+
+- Each worktree gets its own `target/` directory — first build is slow (5–10 min for backend; 1–3 min for doc-only), but isolation is complete.
+- Always run `cargo test/clippy` from inside the worktree (`cd .worktrees/<track_id>/` or `cargo -C <path>`). Running from the main repo root silently compiles the main branch.
+- After all workers close, the orchestrator merges worker branches into the track branch with `git merge --no-ff` and deletes the worker branches with `git branch -D` (not `-d` — diverged branches require force delete).
+
+### Task lifecycle (per worker)
+
+1. Pick up a beads task (`bd update --status in_progress`).
+2. Implement, test per-crate (`cargo test -p <crate>`), commit.
+3. Close the beads task with **`bd close --no-auto`** — this prevents beads from cascading into the next phase's tasks before the orchestrator has verified the milestone.
+4. Report back to orchestrator with commit SHA and any discovered out-of-scope issues.
+
+### `bd close --no-auto` is mandatory for parallel waves
+
+Using `bd close --continue` (or the default auto-advance) with multiple concurrent workers causes beads to claim tasks from subsequent phases into `in_progress`, even when those phases are blocked behind a milestone dependency. This requires manual reset (`bd update ... --status open --assignee ""`). Always use `--no-auto`; let the orchestrator control wave advancement.
+
+### Fix gaps as discovered
+
+If a worker finds a genuine bug or drift in the current task's scope, **fix it inline and note it in the report-back**. Do not defer clearly in-scope fixes. For pre-existing issues clearly outside the current task scope, file a new beads bug with `bd create --priority 2` and reference it — do not fix inline.
+
+### Worker beads-close audit
+
+After every wave, the orchestrator verifies that every worker's beads task state matches its commit. Workers that hit an agent-runtime cutoff may leave tasks `in_progress` with no commit. Close these manually with `bd note "commit: <sha>"` + `bd close --no-auto`.
+
+### Parallel trait reconciliation
+
+When two workers define overlapping traits for the same domain (e.g. a handler-side and a repo-side worker both write a "canonical" trait), the **repo-side worker owns the trait** — it controls storage semantics. Handler-side types and method signatures are aligned to the repo-side definition during merge integration. Use the proto schema as the natural alignment point for cross-service type disagreements (add shared fields to the message; renumber if needed).
 
 ## Continuous Improvement
 
