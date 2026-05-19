@@ -265,11 +265,14 @@ fn evaluate_single(
                 conditions,
             });
         } else {
+            // Collect per-leaf traces even for non-matching rules so the UI can
+            // show which specific conditions failed (bug wub).
+            let conditions = trace_conditions(&rule.condition, &input);
             traces.push(RuleTrace {
                 rule_index: i,
                 rule_name: rule.name.clone(),
                 outcome: RuleOutcome::NoMatch,
-                conditions: vec![],
+                conditions,
             });
         }
     }
@@ -992,4 +995,69 @@ mod tests {
         assert_eq!(results[1].fired_rule_index, None);
     }
 
+    // ── Regression: bug wub — conditions populated for non-matching rules ───────
+    //
+    // Before the fix, rule_traces[*].conditions was empty for no_match rules.
+    // After the fix, every leaf in the rule's condition tree appears in conditions.
+
+    #[test]
+    fn no_match_rule_conditions_are_populated() {
+        let (mut flag, on_id, _) = make_bool_flag(true);
+
+        // Rule 0: AND(country == "US", beta == true) → on
+        // Context: country == "US", beta == false  → rule should NOT match.
+        flag.rules.push(FlagRule {
+            flag_id: flag.record.id,
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: Some("us-beta".to_string()),
+                condition: ConditionExpr::And(vec![
+                    ConditionExpr::Leaf(Condition::Eq {
+                        context_type: "user".to_string(),
+                        param: "country".to_string(),
+                        value: ParameterValue::Str("US".to_string()),
+                    }),
+                    ConditionExpr::Leaf(Condition::Eq {
+                        context_type: "user".to_string(),
+                        param: "beta".to_string(),
+                        value: ParameterValue::Bool(true),
+                    }),
+                ]),
+                output: RuleOutput::Variant(on_id),
+            },
+        });
+
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1")
+                .with_parameter("country", ParameterValue::Str("US".to_string()))
+                .with_parameter("beta", ParameterValue::Bool(false)),
+        );
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
+
+        let r = &results[0];
+        assert_eq!(r.variant_key, "off", "rule should not match");
+        assert!(matches!(r.rule_traces[0].outcome, RuleOutcome::NoMatch));
+
+        // Both leaves must now appear in conditions even though the rule didn't match.
+        assert_eq!(
+            r.rule_traces[0].conditions.len(),
+            2,
+            "no_match rule must emit per-leaf ConditionTrace entries"
+        );
+        // country == US → true; beta == true → false
+        let country_trace = r.rule_traces[0]
+            .conditions
+            .iter()
+            .find(|c| c.predicate.contains("country"))
+            .expect("country leaf must be traced");
+        assert!(country_trace.result, "country == US should be true");
+
+        let beta_trace = r.rule_traces[0]
+            .conditions
+            .iter()
+            .find(|c| c.predicate.contains("beta"))
+            .expect("beta leaf must be traced");
+        assert!(!beta_trace.result, "beta == true should be false for this context");
+    }
 }
