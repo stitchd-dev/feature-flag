@@ -1,0 +1,77 @@
+import * as Yup from 'yup'
+
+export const EXPERIMENT_MODELS = ['bayesian', 'frequentist'] as const
+export type ExperimentModel = typeof EXPERIMENT_MODELS[number]
+
+const variantSchema = Yup.object({
+  key: Yup.string()
+    .trim()
+    .min(1, 'Variant key is required')
+    .required('Variant key is required'),
+  allocation: Yup.number()
+    .min(0, 'Allocation must be >= 0')
+    .max(100, 'Allocation must be <= 100')
+    .required('Allocation is required'),
+})
+
+/** Experiment create / edit. */
+export const experimentSchema = Yup.object({
+  name: Yup.string()
+    .trim()
+    .min(1, 'Name is required')
+    .max(120, 'Name must be 120 characters or fewer')
+    .required('Name is required'),
+
+  key: Yup.string()
+    .trim()
+    .min(1, 'Key is required')
+    .matches(/^[a-z0-9][a-z0-9_-]*$/, 'Key must be lowercase with letters, digits, hyphens, underscores')
+    .required('Key is required'),
+
+  flag_key: Yup.string()
+    .trim()
+    .min(1, 'Flag key is required')
+    .required('Flag key is required'),
+
+  description: Yup.string().max(500, 'Description must be 500 characters or fewer'),
+
+  model: Yup.string()
+    .oneOf(EXPERIMENT_MODELS as unknown as string[], 'Invalid model')
+    .required('Model is required'),
+
+  primary_metric: Yup.string()
+    .trim()
+    .min(1, 'Primary metric is required')
+    .required('Primary metric is required'),
+
+  duration_days: Yup.number()
+    .integer('Duration must be a whole number of days')
+    .min(1, 'Duration must be at least 1 day')
+    .max(365, 'Duration must be 365 days or fewer')
+    .required('Duration is required'),
+
+  variants: Yup.array()
+    .of(variantSchema)
+    .min(2, 'At least 2 variants are required (control + treatment)')
+    .test(
+      'unique-variant-keys',
+      'Variant keys must be unique',
+      (variants) => {
+        if (!variants) return true
+        const keys = variants.map((v) => v.key?.trim()).filter(Boolean)
+        return new Set(keys).size === keys.length
+      },
+    )
+    .test(
+      'allocation-sums-100',
+      'Variant allocations must sum to 100%',
+      (variants) => {
+        if (!variants) return true
+        const total = variants.reduce((sum, v) => sum + (v.allocation ?? 0), 0)
+        return Math.abs(total - 100) < 0.01
+      },
+    )
+    .required(),
+})
+
+export type ExperimentFormValues = Yup.InferType<typeof experimentSchema>
