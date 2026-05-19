@@ -3,17 +3,32 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
+    http::StatusCode,
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
+use tonic::Request as TonicRequest;
 use utoipa::ToSchema;
 
-use stitchd_proto::analytics::v1::{IngestEventRequest, MetricEvent, MetricValue, metric_value};
+use stitchd_proto::analytics::v1::{
+    IngestEventRequest, MetricEvent, MetricValue, TrackEvent as ProtoTrackEvent,
+    TrackEventsRequest as ProtoTrackEventsRequest, metric_value,
+};
 
 use crate::error::GatewayError;
+use crate::middleware::sdk_auth::SdkContext;
 use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
+
+/// Header used to forward the trusted `env_id` to backend gRPC services.
+const ENV_ID_METADATA_KEY: &str = "x-env-id";
+
+/// Body size limit for `POST /v1/events/track` (5 MiB). Per spec F3.4 — one
+/// batch of ~25k tiny events. Larger payloads return `413 Payload Too Large`
+/// (axum emits this automatically when the `DefaultBodyLimit` layer rejects).
+pub const TRACK_EVENTS_BODY_LIMIT_BYTES: usize = 5 * 1024 * 1024;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
 
@@ -245,6 +260,224 @@ pub async fn delete_event_definition(
     axum::http::StatusCode::NO_CONTENT
 }
 
+// ─── POST /v1/events/track — SDK batch event ingestion ──────────────────────
+//
+// Surface owned by Phase 2 Task 2 of `events_metrics_20260519`. Lives on the
+// gateway's SDK-auth tier (NOT JWT). The SDK auth middleware resolves
+// `x-sdk-key` → [`SdkContext { environment_id, .. }`]; this handler forwards
+// the env to analytics-service via `x-env-id` gRPC metadata. The downstream
+// `TrackEvents` RPC (see `analytics-service::grpc::ingestion`) validates each
+// event against `event_definitions` and per-event rejections are surfaced
+// here as `202 Accepted` with a `rejected[]` array (NOT 400 — the batch can
+// be partially accepted).
+
+/// Typed metric value mirroring proto `MetricValue.oneof value`.
+///
+/// JSON shape (snake_case discriminator):
+/// - `{"bool": true}`     → `MetricValue::BoolValue`
+/// - `{"int": 42}`        → `MetricValue::IntValue`
+/// - `{"double": 1.5}`    → `MetricValue::DoubleValue`
+///
+/// The discriminator is `lowercase` to match the existing `MetricValue`
+/// shape consumed by the legacy `POST /v1/environments/.../events` route
+/// (which accepts a raw JSON scalar — `true` / `42` / `1.5`). The SDK-facing
+/// shape is explicit so callers don't have to rely on JSON's loose number
+/// inference (e.g. `42` could be int OR double depending on JSON parser).
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TypedValue {
+    Bool(bool),
+    Int(i64),
+    Double(f64),
+}
+
+impl TypedValue {
+    fn to_proto(&self) -> MetricValue {
+        let inner = match self {
+            TypedValue::Bool(b) => metric_value::Value::BoolValue(*b),
+            TypedValue::Int(i) => metric_value::Value::IntValue(*i),
+            TypedValue::Double(d) => metric_value::Value::DoubleValue(*d),
+        };
+        MetricValue { value: Some(inner) }
+    }
+}
+
+/// One event in a `POST /v1/events/track` batch.
+///
+/// `properties` and `occurred_at` are optional — analytics-service falls
+/// back to an empty map / ingestion timestamp respectively. The
+/// `environment_id` is **not** accepted from the SDK; the gateway populates
+/// it from the resolved [`SdkContext`].
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TrackEvent {
+    /// Pre-registered `event_definitions.key`. Unknown / archived keys are
+    /// rejected (added to `rejected[]`) rather than failing the whole batch.
+    pub event_key: String,
+    /// Dimension type (e.g. "user", "session").
+    pub context_type: String,
+    /// Dimension value (e.g. "u-42").
+    pub context_key: String,
+    /// Typed metric value. Optional for pure occurrence events where the
+    /// registered `event_definitions.value_type` is `Unit`.
+    pub value: Option<TypedValue>,
+    /// Arbitrary per-event metadata. Used by metric filters / on-field
+    /// aggregations downstream.
+    pub properties: Option<HashMap<String, String>>,
+    /// RFC 3339 client-side wall-clock timestamp. When absent,
+    /// analytics-service uses ingestion (server) time.
+    pub occurred_at: Option<String>,
+}
+
+/// Request body of `POST /v1/events/track`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct TrackEventsRequest {
+    pub events: Vec<TrackEvent>,
+}
+
+/// One rejected event in a `TrackEventsResponse`. The `reason` discriminator
+/// is one of: `"unknown_event_key"`, `"archived_event_key"`,
+/// `"value_type_mismatch"`, `"missing_value"`, `"invalid_occurred_at"`.
+#[derive(Debug, Serialize, ToSchema, PartialEq, Eq)]
+pub struct RejectedEvent {
+    pub event_key: String,
+    pub reason: String,
+}
+
+/// Response body of `POST /v1/events/track`.
+///
+/// Status code is always `202 Accepted` on success — per-event rejections do
+/// **not** turn into HTTP-level errors. The whole batch fails (502/500) only
+/// when analytics-service itself errors out.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TrackEventsResponse {
+    pub accepted_count: u32,
+    pub rejected: Vec<RejectedEvent>,
+}
+
+fn json_event_to_proto(e: TrackEvent) -> ProtoTrackEvent {
+    ProtoTrackEvent {
+        event_key: e.event_key,
+        context_type: e.context_type,
+        context_key: e.context_key,
+        value: e.value.as_ref().map(TypedValue::to_proto),
+        properties: e.properties.unwrap_or_default(),
+        occurred_at: e.occurred_at,
+    }
+}
+
+/// `POST /v1/events/track` — SDK batch event ingestion.
+///
+/// **Auth**: `x-sdk-key` header (NOT bearer JWT). Validated by
+/// [`sdk_auth_middleware`](crate::middleware::sdk_auth::sdk_auth_middleware),
+/// which injects [`SdkContext`] carrying the resolved `environment_id`.
+///
+/// **Forwarding**: builds [`ProtoTrackEventsRequest`] from the JSON batch
+/// and forwards to `AnalyticsService.TrackEvents` with `x-env-id` gRPC
+/// metadata. The analytics service performs per-event validation against
+/// `event_definitions` and returns accepted_count + per-event rejections.
+///
+/// **Body limit**: 5 MiB ([`TRACK_EVENTS_BODY_LIMIT_BYTES`]). Larger bodies
+/// are rejected with `413 Payload Too Large` by the `DefaultBodyLimit` layer
+/// before reaching this handler.
+///
+/// **Status codes**:
+/// - `202 Accepted` — batch processed (may include per-event rejections)
+/// - `400 Bad Request` — malformed JSON / invalid env_id propagation
+/// - `401 Unauthorized` — missing or invalid `x-sdk-key`
+/// - `413 Payload Too Large` — body exceeds 5 MiB
+/// - `502 Bad Gateway` — analytics-service unreachable / errored
+#[utoipa::path(
+    post,
+    path = "/v1/events/track",
+    tag = "events",
+    request_body = TrackEventsRequest,
+    responses(
+        (status = 202, description = "Batch accepted (may include per-event rejections)", body = TrackEventsResponse),
+        (status = 400, description = "Malformed request body"),
+        (status = 401, description = "Missing or invalid x-sdk-key"),
+        (status = 413, description = "Body exceeds 5 MiB"),
+        (status = 502, description = "Analytics service unavailable"),
+    ),
+    security(("sdk_key" = []))
+)]
+pub async fn track_events(
+    State(state): State<Arc<GatewayState>>,
+    req: axum::extract::Request,
+) -> Result<axum::response::Response, GatewayError> {
+    use axum::body::Bytes;
+    use axum::extract::FromRequest;
+    use axum::response::IntoResponse;
+
+    // The SdkContext extension is injected by sdk_auth_middleware. Its
+    // absence means the route was registered outside the SDK-auth tier — a
+    // server misconfiguration, not a client error.
+    let sdk_ctx = req
+        .extensions()
+        .get::<SdkContext>()
+        .cloned()
+        .ok_or_else(|| {
+            GatewayError::Upstream(
+                "SdkContext extension missing — route misconfigured \
+                 (sdk_auth_middleware not applied)"
+                    .to_string(),
+            )
+        })?;
+
+    // Use the `Bytes` extractor to honour the `DefaultBodyLimit::max(...)`
+    // layer applied to this route. `Bytes::from_request` internally wraps
+    // the body via `into_limited_body()` and produces a `BytesRejection`
+    // that already maps oversize bodies to `413 Payload Too Large` via its
+    // `IntoResponse` impl. Cheap to call regardless of payload size.
+    let bytes: Bytes = match Bytes::from_request(req, &()).await {
+        Ok(b) => b,
+        Err(rej) => return Ok(rej.into_response()),
+    };
+    let body: TrackEventsRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid JSON body: {e}")))?;
+
+    let proto_events: Vec<ProtoTrackEvent> = body.events.into_iter().map(json_event_to_proto).collect();
+
+    // env_id resolution is metadata-first on the analytics side, but we also
+    // mirror it into the body so direct callers (tests) can drive the RPC.
+    let mut tonic_req = TonicRequest::new(ProtoTrackEventsRequest {
+        env_id: sdk_ctx.environment_id.clone(),
+        events: proto_events,
+    });
+    let env_id_value = sdk_ctx
+        .environment_id
+        .parse()
+        .map_err(|_| {
+            GatewayError::Upstream(format!(
+                "env_id is not valid gRPC metadata: {:?}",
+                sdk_ctx.environment_id
+            ))
+        })?;
+    tonic_req
+        .metadata_mut()
+        .insert(ENV_ID_METADATA_KEY, env_id_value);
+
+    let resp = {
+        let mut client = state.analytics_client.lock().await;
+        client.track_events(tonic_req).await
+    }
+    .map_err(|s| GatewayError::Upstream(format!("track_events failed: {s}")))?;
+
+    let inner = resp.into_inner();
+    let body = TrackEventsResponse {
+        accepted_count: inner.accepted_count,
+        rejected: inner
+            .rejected
+            .into_iter()
+            .map(|r| RejectedEvent {
+                event_key: r.event_key,
+                reason: r.reason,
+            })
+            .collect(),
+    };
+
+    Ok((StatusCode::ACCEPTED, Json(body)).into_response())
+}
+
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -443,5 +676,583 @@ mod tests {
         };
         let e = body_to_event(&b);
         assert!(e.value.is_none());
+    }
+
+    // ─── POST /v1/events/track ────────────────────────────────────────────────
+
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use tokio_stream::Stream;
+    use tonic::transport::Channel as TonicChannel;
+    use tonic::transport::Server as TonicServer;
+    use tonic::{Request as ServerReq, Response as ServerResp, Status};
+
+    use stitchd_proto::analytics::v1::{
+        ExperimentResult, GetContextIntelligenceRequest, GetContextIntelligenceResponse,
+        GetEvalStatsRequest, GetEvalStatsResponse, GetExperimentResultRequest, GetMetricRequest,
+        ListContextParamsRequest, ListContextParamsResponse, ListContextTypesRequest,
+        ListContextTypesResponse, ListExperimentResultsRequest, ListMetricsRequest,
+        ListMetricsResponse, MetricDefinition, PreviewMetricRequest, PreviewMetricResponse,
+        RegisterContextRequest, RegisterContextResponse, RejectedEvent as ProtoRejectedEvent,
+        TrackEventsResponse as ProtoTrackEventsResponse,
+        analytics_service_client::AnalyticsServiceClient,
+        analytics_service_server::{AnalyticsService, AnalyticsServiceServer},
+        CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse, IngestEventResponse,
+        UpdateMetricRequest, WriteExperimentResultsRequest, WriteExperimentResultsResponse,
+    };
+
+    use crate::middleware::sdk_auth::SdkContext;
+    use crate::state::GatewayState;
+
+    /// `(x-env-id metadata value, TrackEvents request body)` captured per RPC.
+    type CapturedCall = (Option<String>, ProtoTrackEventsRequest);
+
+    /// Mock AnalyticsService — only `track_events` is exercised; the rest of the
+    /// trait surface returns `Unimplemented`. Records the request that was
+    /// received so tests can assert on metadata + body forwarding.
+    struct MockAnalyticsService {
+        /// Canned response returned on each `track_events` call.
+        response: ProtoTrackEventsResponse,
+        /// Captured calls in arrival order.
+        captured: Arc<Mutex<Vec<CapturedCall>>>,
+    }
+
+    #[async_trait]
+    impl AnalyticsService for MockAnalyticsService {
+        type ListExperimentResultsStream =
+            Pin<Box<dyn Stream<Item = Result<ExperimentResult, Status>> + Send + 'static>>;
+
+        async fn track_events(
+            &self,
+            request: ServerReq<ProtoTrackEventsRequest>,
+        ) -> Result<ServerResp<ProtoTrackEventsResponse>, Status> {
+            let env_id_meta = request
+                .metadata()
+                .get(ENV_ID_METADATA_KEY)
+                .and_then(|v| v.to_str().ok())
+                .map(std::string::ToString::to_string);
+            let inner = request.into_inner();
+            self.captured
+                .lock()
+                .unwrap()
+                .push((env_id_meta, inner));
+            Ok(ServerResp::new(self.response.clone()))
+        }
+
+        // ── Unimplemented methods ──────────────────────────────────────────────
+        async fn ingest_event(
+            &self,
+            _req: ServerReq<IngestEventRequest>,
+        ) -> Result<ServerResp<IngestEventResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn register_context(
+            &self,
+            _req: ServerReq<RegisterContextRequest>,
+        ) -> Result<ServerResp<RegisterContextResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_context_types(
+            &self,
+            _req: ServerReq<ListContextTypesRequest>,
+        ) -> Result<ServerResp<ListContextTypesResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_context_params(
+            &self,
+            _req: ServerReq<ListContextParamsRequest>,
+        ) -> Result<ServerResp<ListContextParamsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_eval_stats(
+            &self,
+            _req: ServerReq<GetEvalStatsRequest>,
+        ) -> Result<ServerResp<GetEvalStatsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_context_intelligence(
+            &self,
+            _req: ServerReq<GetContextIntelligenceRequest>,
+        ) -> Result<ServerResp<GetContextIntelligenceResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn write_experiment_results(
+            &self,
+            _req: ServerReq<WriteExperimentResultsRequest>,
+        ) -> Result<ServerResp<WriteExperimentResultsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_experiment_results(
+            &self,
+            _req: ServerReq<ListExperimentResultsRequest>,
+        ) -> Result<ServerResp<Self::ListExperimentResultsStream>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_experiment_result(
+            &self,
+            _req: ServerReq<GetExperimentResultRequest>,
+        ) -> Result<ServerResp<ExperimentResult>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn create_metric(
+            &self,
+            _req: ServerReq<CreateMetricRequest>,
+        ) -> Result<ServerResp<MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_metric(
+            &self,
+            _req: ServerReq<GetMetricRequest>,
+        ) -> Result<ServerResp<MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_metrics(
+            &self,
+            _req: ServerReq<ListMetricsRequest>,
+        ) -> Result<ServerResp<ListMetricsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn update_metric(
+            &self,
+            _req: ServerReq<UpdateMetricRequest>,
+        ) -> Result<ServerResp<MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn delete_metric(
+            &self,
+            _req: ServerReq<DeleteMetricRequest>,
+        ) -> Result<ServerResp<DeleteMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn preview_metric(
+            &self,
+            _req: ServerReq<PreviewMetricRequest>,
+        ) -> Result<ServerResp<PreviewMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+    }
+
+    /// Spin up an in-process AnalyticsService stub and return both a client
+    /// and the captured-request handle.
+    ///
+    /// Pattern per `conductor/patterns.md`: bind a random localhost port,
+    /// wrap in a `TcpListenerStream`, hand off via `serve_with_incoming` in a
+    /// `tokio::spawn`. No external mocking library; no port conflicts.
+    async fn spawn_analytics_mock(
+        response: ProtoTrackEventsResponse,
+    ) -> (AnalyticsServiceClient<TonicChannel>, Arc<Mutex<Vec<CapturedCall>>>) {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let svc = MockAnalyticsService {
+            response,
+            captured: Arc::clone(&captured),
+        };
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            TonicServer::builder()
+                .add_service(AnalyticsServiceServer::new(svc))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        // Connect — `Endpoint` retries internally until the listener accepts.
+        let client = AnalyticsServiceClient::connect(format!("http://{addr}"))
+            .await
+            .expect("mock analytics-service should accept connection");
+        (client, captured)
+    }
+
+    /// Build a `GatewayState` whose `analytics_client` points at the supplied
+    /// mock client. Other clients are stubbed lazily — the track_events
+    /// handler only touches `analytics_client`.
+    fn state_with_analytics(
+        analytics_client: AnalyticsServiceClient<TonicChannel>,
+    ) -> Arc<GatewayState> {
+        let stub = make_stub_state();
+        // GatewayState fields are public — overwrite analytics_client only.
+        // Cloning the rest preserves the lazy stub channels.
+        Arc::new(GatewayState {
+            analytics_client: Arc::new(tokio::sync::Mutex::new(analytics_client)),
+            auth_client: Arc::clone(&stub.auth_client),
+            flag_client: Arc::clone(&stub.flag_client),
+            segmentation_client: Arc::clone(&stub.segmentation_client),
+            experimentation_client: Arc::clone(&stub.experimentation_client),
+            management_client: Arc::clone(&stub.management_client),
+            auth_provider_client: Arc::clone(&stub.auth_provider_client),
+            oidc_login_client: Arc::clone(&stub.oidc_login_client),
+            saml_login_client: Arc::clone(&stub.saml_login_client),
+            stats_client: Arc::clone(&stub.stats_client),
+            flag_sdk_backend_client: Arc::clone(&stub.flag_sdk_backend_client),
+            segmentation_sdk_backend_client: Arc::clone(&stub.segmentation_sdk_backend_client),
+        })
+    }
+
+    /// Build a request body for the track_events route.
+    fn track_events_body_json(event_keys: &[&str]) -> String {
+        let events: Vec<serde_json::Value> = event_keys
+            .iter()
+            .map(|k| {
+                serde_json::json!({
+                    "event_key": k,
+                    "context_type": "user",
+                    "context_key": "u1",
+                    "value": { "int": 1 },
+                })
+            })
+            .collect();
+        serde_json::json!({ "events": events }).to_string()
+    }
+
+    /// Build a router with the `track_events` handler wired but **no** SDK
+    /// auth middleware applied — instead we inject `SdkContext` directly into
+    /// the request via an extension layer. Used to test behaviour downstream
+    /// of auth (env_id forwarding, response translation, body limit).
+    fn track_events_router_with_ctx(
+        state: Arc<GatewayState>,
+        sdk_ctx: SdkContext,
+    ) -> axum::Router {
+        use axum::extract::Request as ExtractRequest;
+        use axum::middleware::{Next, from_fn};
+        use axum::routing::post;
+
+        let layer = from_fn(move |mut req: ExtractRequest, next: Next| {
+            let ctx = sdk_ctx.clone();
+            async move {
+                req.extensions_mut().insert(ctx);
+                next.run(req).await
+            }
+        });
+
+        axum::Router::new()
+            .route(
+                "/v1/events/track",
+                post(track_events).layer(axum::extract::DefaultBodyLimit::max(
+                    TRACK_EVENTS_BODY_LIMIT_BYTES,
+                )),
+            )
+            .with_state(state)
+            .layer(layer)
+    }
+
+    fn sample_sdk_ctx(env_id: &str) -> SdkContext {
+        SdkContext {
+            environment_id: env_id.to_string(),
+            organisation_id: "00000000-0000-0000-0000-000000000aaa".to_string(),
+            sdk_key_id: "00000000-0000-0000-0000-000000000bbb".to_string(),
+        }
+    }
+
+    // ── 1. Valid batch → 202 ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_track_events_returns_202_for_valid_batch() {
+        let (client, _captured) = spawn_analytics_mock(ProtoTrackEventsResponse {
+            accepted_count: 2,
+            rejected: vec![],
+        })
+        .await;
+        let state = state_with_analytics(client);
+        let env_id = "00000000-0000-0000-0000-000000000001";
+        let app = track_events_router_with_ctx(state, sample_sdk_ctx(env_id));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["click", "purchase"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["accepted_count"], 2);
+        assert!(body["rejected"].as_array().unwrap().is_empty());
+    }
+
+    // ── 2. Oversize body → 413 ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_track_events_returns_413_for_oversize_body() {
+        // No analytics mock needed — body limit fires before any forwarding.
+        let state = make_stub_state();
+        let env_id = "00000000-0000-0000-0000-000000000001";
+        let app = track_events_router_with_ctx(state, sample_sdk_ctx(env_id));
+
+        // 5 MiB + 1 byte of padding inside a JSON string.
+        let oversize_payload = vec![b'a'; TRACK_EVENTS_BODY_LIMIT_BYTES + 1];
+        let body = format!(
+            r#"{{"events":[{{"event_key":"k","context_type":"user","context_key":"u","value":{{"int":1}},"properties":{{"pad":"{}"}}}}]}}"#,
+            std::str::from_utf8(&oversize_payload).unwrap()
+        );
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    // ── 3. Missing SDK key → 401 ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_track_events_returns_401_without_sdk_key() {
+        // Use the FULL router so sdk_auth_middleware actually runs.
+        use crate::router::build_router;
+        use metrics_exporter_prometheus::PrometheusBuilder;
+
+        let handle = PrometheusBuilder::new().build_recorder().handle();
+        let app = build_router(make_stub_state(), handle);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["click"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        // sdk_auth_middleware should reject (no x-sdk-key).
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ── 4. env_id propagation → x-env-id metadata ─────────────────────────────
+
+    #[tokio::test]
+    async fn test_track_events_forwards_env_id_to_backend() {
+        let (client, captured) = spawn_analytics_mock(ProtoTrackEventsResponse {
+            accepted_count: 1,
+            rejected: vec![],
+        })
+        .await;
+        let state = state_with_analytics(client);
+        let env_id = "11111111-2222-3333-4444-555555555555";
+        let app = track_events_router_with_ctx(state, sample_sdk_ctx(env_id));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["signup"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1, "expected one backend call");
+        let (env_meta, body) = &captured[0];
+        assert_eq!(
+            env_meta.as_deref(),
+            Some(env_id),
+            "x-env-id metadata must equal SDK context environment_id"
+        );
+        // Body env_id mirrored too — matches analytics-service metadata-first
+        // resolution but provides a fallback for tests/direct callers.
+        assert_eq!(body.env_id, env_id);
+        assert_eq!(body.events.len(), 1);
+        assert_eq!(body.events[0].event_key, "signup");
+    }
+
+    // ── 5. Per-event rejections translated to JSON ────────────────────────────
+
+    #[tokio::test]
+    async fn test_track_events_translates_per_event_rejection() {
+        let (client, _captured) = spawn_analytics_mock(ProtoTrackEventsResponse {
+            accepted_count: 1,
+            rejected: vec![
+                ProtoRejectedEvent {
+                    event_key: "missing_def".to_string(),
+                    reason: "unknown_event_key".to_string(),
+                },
+                ProtoRejectedEvent {
+                    event_key: "bad_type".to_string(),
+                    reason: "value_type_mismatch".to_string(),
+                },
+            ],
+        })
+        .await;
+        let state = state_with_analytics(client);
+        let env_id = "00000000-0000-0000-0000-000000000001";
+        let app = track_events_router_with_ctx(state, sample_sdk_ctx(env_id));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&[
+                        "click",
+                        "missing_def",
+                        "bad_type",
+                    ])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::ACCEPTED,
+            "per-event rejections must NOT change HTTP status"
+        );
+
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["accepted_count"], 1);
+        let rejected = body["rejected"].as_array().unwrap();
+        assert_eq!(rejected.len(), 2);
+        assert_eq!(rejected[0]["event_key"], "missing_def");
+        assert_eq!(rejected[0]["reason"], "unknown_event_key");
+        assert_eq!(rejected[1]["event_key"], "bad_type");
+        assert_eq!(rejected[1]["reason"], "value_type_mismatch");
+    }
+
+    // ── Pure helpers ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn typed_value_serde_round_trip() {
+        let cases = [
+            (TypedValue::Bool(true), r#"{"bool":true}"#),
+            (TypedValue::Int(42), r#"{"int":42}"#),
+            (TypedValue::Double(1.5), r#"{"double":1.5}"#),
+        ];
+        for (val, expected_json) in cases {
+            let s = serde_json::to_string(&val).unwrap();
+            assert_eq!(s, expected_json);
+            let parsed: TypedValue = serde_json::from_str(&s).unwrap();
+            assert_eq!(parsed, val);
+        }
+    }
+
+    #[test]
+    fn typed_value_to_proto_bool() {
+        let pv = TypedValue::Bool(false).to_proto();
+        assert!(matches!(
+            pv.value,
+            Some(metric_value::Value::BoolValue(false))
+        ));
+    }
+
+    #[test]
+    fn typed_value_to_proto_int() {
+        let pv = TypedValue::Int(7).to_proto();
+        assert!(matches!(pv.value, Some(metric_value::Value::IntValue(7))));
+    }
+
+    #[test]
+    fn typed_value_to_proto_double() {
+        let pv = TypedValue::Double(2.5).to_proto();
+        assert!(matches!(
+            pv.value,
+            Some(metric_value::Value::DoubleValue(d)) if (d - 2.5).abs() < 1e-9
+        ));
+    }
+
+    #[test]
+    fn json_event_to_proto_passes_properties_and_occurred_at() {
+        let mut props = HashMap::new();
+        props.insert("currency".to_string(), "USD".to_string());
+        let e = TrackEvent {
+            event_key: "purchase".into(),
+            context_type: "user".into(),
+            context_key: "u42".into(),
+            value: Some(TypedValue::Int(100)),
+            properties: Some(props),
+            occurred_at: Some("2026-05-19T12:00:00Z".into()),
+        };
+        let p = json_event_to_proto(e);
+        assert_eq!(p.event_key, "purchase");
+        assert_eq!(p.context_type, "user");
+        assert_eq!(p.context_key, "u42");
+        assert_eq!(p.properties.get("currency").map(String::as_str), Some("USD"));
+        assert_eq!(p.occurred_at.as_deref(), Some("2026-05-19T12:00:00Z"));
+        assert!(matches!(
+            p.value,
+            Some(MetricValue {
+                value: Some(metric_value::Value::IntValue(100))
+            })
+        ));
+    }
+
+    #[test]
+    fn json_event_to_proto_defaults_optional_fields() {
+        let e = TrackEvent {
+            event_key: "ping".into(),
+            context_type: "user".into(),
+            context_key: "u1".into(),
+            value: None,
+            properties: None,
+            occurred_at: None,
+        };
+        let p = json_event_to_proto(e);
+        assert!(p.value.is_none());
+        assert!(p.properties.is_empty());
+        assert!(p.occurred_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn track_events_returns_500_when_sdk_context_missing() {
+        // No middleware to inject SdkContext → handler must refuse to proxy.
+        let state = make_stub_state();
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/events/track")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(track_events_body_json(&["click"])))
+            .unwrap();
+        let result = track_events(axum::extract::State(state), req).await;
+        let err = result.unwrap_err();
+        assert!(format!("{err:?}").contains("SdkContext"));
+    }
+
+    #[tokio::test]
+    async fn track_events_rejects_malformed_body() {
+        let state = make_stub_state();
+        let env_id = "00000000-0000-0000-0000-000000000001";
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/v1/events/track")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("not-json"))
+            .unwrap();
+        req.extensions_mut().insert(sample_sdk_ctx(env_id));
+        let result = track_events(axum::extract::State(state), req).await;
+        let err = result.unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("invalid JSON body") || msg.contains("BadRequest"),
+            "got {msg}"
+        );
     }
 }

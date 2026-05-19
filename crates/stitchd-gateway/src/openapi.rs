@@ -60,6 +60,8 @@ use utoipa::{
         crate::routes::events::get_event_definition,
         crate::routes::events::update_event_definition,
         crate::routes::events::delete_event_definition,
+        // Event tracking (SDK key)
+        crate::routes::events::track_events,
         // Experiments (JWT)
         crate::routes::experiments::list_experiments,
         crate::routes::experiments::create_experiment,
@@ -106,6 +108,11 @@ use utoipa::{
             crate::routes::events::EventBody,
             crate::routes::events::BatchEventBody,
             crate::routes::events::IngestResponseJson,
+            crate::routes::events::TypedValue,
+            crate::routes::events::TrackEvent,
+            crate::routes::events::TrackEventsRequest,
+            crate::routes::events::RejectedEvent,
+            crate::routes::events::TrackEventsResponse,
             // Experiments
             crate::routes::experiments::CreateExperimentBody,
             crate::routes::experiments::UpdateExperimentBody,

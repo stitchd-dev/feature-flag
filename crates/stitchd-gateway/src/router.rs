@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     middleware,
     response::IntoResponse,
@@ -134,12 +134,22 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
     // for the clean-implementation SDK (sdks/rust/). They use the dedicated
     // sdk_auth_middleware (which injects SdkContext) rather than the generic
     // auth_middleware (which only injects RbacContext).
+    //
+    // POST /v1/events/track has a 5 MiB body limit (per spec F3.4) applied
+    // as a per-route `DefaultBodyLimit` layer so the rest of the SDK tier
+    // continues to use axum's small default (2 MiB) without surprise.
     let sdk_backend_routes = Router::new()
         .route(
             "/v1/sdk/segments/list:batch",
             post(sdk_backend::segments_list_batch),
         )
         .route("/v1/sdk/events:batch", post(sdk_backend::events_batch))
+        .route(
+            "/v1/events/track",
+            post(events::track_events).layer(DefaultBodyLimit::max(
+                events::TRACK_EVENTS_BODY_LIMIT_BYTES,
+            )),
+        )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&auth_client),
