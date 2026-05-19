@@ -51,13 +51,13 @@ analytics-service + ClickHouse batch write + per-env quota.
   - SDK auth middleware extracts env_id, propagates as `x-env-id` to analytics-service
   - Returns 202 with per-event accepted/rejected detail; 413 on >5MB body
   - utoipa annotation for OpenAPI surface
-- [~] Task 2.3: Per-env quota middleware (governor) for ingestion route
+- [x] Task 2.3: Per-env quota middleware (governor) for ingestion route [b27de1e]
   <!-- files: crates/stitchd-gateway/src/middleware/event_quota.rs, crates/stitchd-gateway/src/lib.rs -->
   <!-- depends: task2 -->
   - Default 1000 events/sec/env_id; configurable via `STITCHD_EVENT_QUOTA_PER_SEC`
   - Per-env state via `governor::Quota` keyed on `env_id` string
   - TDD: per-env limit enforced, exceeded returns 429
-- [ ] Task 2.4: Conductor - User Manual Verification 'Backend Ingestion Path' (Protocol in workflow.md)
+- [x] Task 2.4: Conductor - User Manual Verification 'Backend Ingestion Path' [auto-verify]
 
 ## Phase 3: Metric CRUD API & Service
 <!-- execution: parallel -->
