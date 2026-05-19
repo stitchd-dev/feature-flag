@@ -18,11 +18,17 @@ export const userInviteSchema = Yup.object({
     .email('Must be a valid email address')
     .required('Email is required'),
 
-  display_name: Yup.string()
-    .trim()
-    .min(1, 'Display name is required')
-    .max(120, 'Display name must be 120 characters or fewer')
-    .required('Display name is required'),
+  /** Display name — required only when creating a new user (existing users already have one). */
+  display_name: Yup.string().when('mode', {
+    is: 'new',
+    then: (s) =>
+      s
+        .trim()
+        .min(1, 'Display name is required')
+        .max(120, 'Display name must be 120 characters or fewer')
+        .required('Display name is required'),
+    otherwise: (s) => s.optional(),
+  }),
 
   org_role: Yup.string()
     .oneOf(['org_admin', 'member'], 'Invalid role')
