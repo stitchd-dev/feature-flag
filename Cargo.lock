@@ -3851,6 +3851,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "stitchd-core",
  "stitchd-proto",
  "thiserror 2.0.18",
  "tokio",

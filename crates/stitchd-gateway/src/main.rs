@@ -10,8 +10,10 @@
 //! - `STITCHD_EXPERIMENTATION_SERVICE_ADDR` (default: `http://localhost:50055`)
 //! - `STITCHD_STATS_SERVICE_ADDR` (default: `http://localhost:50056`)
 //!
-//! Prometheus metrics are served at `GET /v1/metrics` on the same port as the
+//! Prometheus metrics are served at `GET /metrics` on the same port as the
 //! REST API (Prometheus text exposition format, `text/plain; version=0.0.4`).
+//! `/v1/metrics` is reserved for the metric-definitions admin REST surface
+//! (CRUD + preview) under JWT auth.
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -48,14 +50,14 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // Install Prometheus recorder and obtain a handle for the /v1/metrics handler.
-    // The handle is passed into the router so the GET /v1/metrics route can call
+    // Install Prometheus recorder and obtain a handle for the /metrics handler.
+    // The handle is passed into the router so the GET /metrics route can call
     // handle.render() to return real Prometheus exposition text on the main port.
     let metrics_handle = PrometheusBuilder::new().install_recorder()?;
     // Emit a startup counter so the exposition is never completely empty even
     // before request-level metrics are recorded.
     metrics::counter!("gateway_up_total").increment(1);
-    info!("prometheus metrics recorder installed (served at GET /v1/metrics)");
+    info!("prometheus metrics recorder installed (served at GET /metrics)");
 
     let state = GatewayState::connect(
         env_or("STITCHD_AUTH_SERVICE_ADDR", "http://localhost:50051"),

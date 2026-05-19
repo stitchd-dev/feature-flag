@@ -30,6 +30,7 @@ pub mod events;
 pub mod experiments;
 pub mod flags;
 pub mod management;
+pub mod metrics;
 pub mod oidc;
 pub mod saml;
 pub mod sdk_backend;
