@@ -37,17 +37,19 @@
 //!
 //! # Modules
 //!
-//! - [`config`]   — [`SdkConfig`] and defaults
-//! - [`client`]   — [`SdkClient`], [`EvalRequest`], [`EvalResult`]
-//! - [`error`]    — [`SdkError`] taxonomy
-//! - [`events`]   — fire-and-forget event queue and flush task
-//! - [`lru`]      — bounded list-segment membership cache
-//! - [`polling`]  — gRPC definition sync loop
-//! - [`snapshot`] — immutable [`DefinitionSnapshot`] and [`DefinitionStore`]
+//! - [`config`]       — [`SdkConfig`] and defaults
+//! - [`client`]       — [`SdkClient`], [`EvalRequest`], [`EvalResult`]
+//! - [`error`]        — [`SdkError`] taxonomy
+//! - [`event_buffer`] — client-side track-event buffer + flush (Phase 5)
+//! - [`events`]       — fire-and-forget flag-evaluation event queue
+//! - [`lru`]          — bounded list-segment membership cache
+//! - [`polling`]      — gRPC definition sync loop
+//! - [`snapshot`]     — immutable [`DefinitionSnapshot`] and [`DefinitionStore`]
 
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod event_buffer;
 pub mod events;
 pub mod lru;
 pub mod polling;
@@ -59,6 +61,9 @@ pub use client::{
 };
 pub use config::SdkConfig;
 pub use error::SdkError;
+pub use event_buffer::{
+    BufferedEvent, EventBuffer, EventBufferConfig, FlushError, FlushReport, TypedValue,
+};
 pub use events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, ParameterValue};
 pub use lru::{ContextKey, MembershipCache, MembershipMap};
 pub use polling::{DefinitionFetcher, PollTask};
