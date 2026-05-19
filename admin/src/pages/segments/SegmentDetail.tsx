@@ -10,9 +10,15 @@ import type { Segment } from './types'
 import { EditSegmentModal } from './EditSegmentModal'
 import { ConditionExprEditor } from '../../components/rules/RuleCard'
 import type { ConditionExpr } from '../../lib/ruleTypes'
-import { defaultCondition } from '../../lib/ruleTypes'
 
 // ─── Segment condition builder ────────────────────────────────────────────────
+
+/** Empty-And is the correct no-op initial state for a rule-based segment with no rules yet.
+ * The Rust evaluator treats And([]) as always-true, so we never persist an empty And — the
+ * user must add at least one condition before saving.  Initialising with And([]) avoids the
+ * phantom empty-Leaf that `defaultCondition()` used to inject on first mount.
+ */
+const EMPTY_CONDITION: ConditionExpr = { And: [] }
 
 function SegmentConditionEditor({
   segment,
@@ -26,7 +32,7 @@ function SegmentConditionEditor({
   onSaved: (updated: Segment) => void
 }) {
   const [expr, setExpr] = useState<ConditionExpr>(
-    (segment.condition_expr as ConditionExpr | null | undefined) ?? defaultCondition()
+    (segment.condition_expr as ConditionExpr | null | undefined) ?? EMPTY_CONDITION
   )
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)

@@ -110,6 +110,47 @@ describe('defaultOutput', () => {
   })
 })
 
+// ─── Regression: phantom empty leaf in segment rule editor (feature-flag-qjw) ──
+//
+// SegmentDetail now initialises with { And: [] } rather than defaultCondition().
+// The tests below assert that:
+//   1. { And: [] } is a valid ConditionExpr (empty-And = always-true catch-all).
+//   2. defaultCondition() itself is still a Leaf (used internally by the rule
+//      builder when the user explicitly adds a condition row).
+//   3. The empty-And cannot accidentally contain a phantom leaf on first mount.
+describe('segment rule editor — no phantom empty leaf on init', () => {
+  it('empty And is a valid ConditionExpr and has no children', () => {
+    const emptyAnd: ConditionExpr = { And: [] }
+    expect(exprKey(emptyAnd)).toBe('And')
+    expect((emptyAnd as { And: ConditionExpr[] }).And).toHaveLength(0)
+  })
+
+  it('defaultCondition still returns a Leaf (used for explicit Add condition)', () => {
+    const expr = defaultCondition()
+    expect(exprKey(expr)).toBe('Leaf')
+  })
+
+  it('segment init value is empty And — not a phantom leaf', () => {
+    // This mirrors the logic in SegmentConditionEditor:
+    //   (segment.condition_expr as ConditionExpr | null) ?? EMPTY_CONDITION
+    // When condition_expr is null, result must be { And: [] }, never a Leaf.
+    const conditionExprFromDb: ConditionExpr | null = null
+    const EMPTY_CONDITION: ConditionExpr = { And: [] }
+    const initialExpr = conditionExprFromDb ?? EMPTY_CONDITION
+    expect(exprKey(initialExpr)).toBe('And')
+    expect((initialExpr as { And: ConditionExpr[] }).And).toHaveLength(0)
+  })
+
+  it('after one Add condition the And contains exactly one leaf (no phantom)', () => {
+    // Simulates: user starts with { And: [] }, clicks Add condition (addLeaf),
+    // which appends defaultCondition() to the children array.
+    const initial: ConditionExpr = { And: [] }
+    const children = (initial as { And: ConditionExpr[] }).And
+    const afterAddLeaf: ConditionExpr = { And: [...children, defaultCondition()] }
+    expect((afterAddLeaf as { And: ConditionExpr[] }).And).toHaveLength(1)
+  })
+})
+
 describe('localId', () => {
   it('returns a non-empty string', () => {
     expect(localId().length).toBeGreaterThan(0)

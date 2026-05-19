@@ -97,8 +97,15 @@ export function ConditionExprEditor({
   function deleteChild(i: number) {
     const next = children.filter((_, j) => j !== i)
     if (next.length === 0) {
-      // Replace empty group with a new default leaf
-      onChange(defaultCondition())
+      if (depth === 0) {
+        // At the root level keep the empty group so "Add condition" / "Add group"
+        // buttons remain visible — avoids re-injecting a phantom empty leaf.
+        onChange({ [key]: [] } as unknown as ConditionExpr)
+      } else {
+        // Nested group: replace with a fresh empty leaf so the parent can still
+        // render the row and the user can type without an extra click.
+        onChange(defaultCondition())
+      }
     } else if (next.length === 1 && depth > 0) {
       // Collapse single-child group
       onChange(next[0])
