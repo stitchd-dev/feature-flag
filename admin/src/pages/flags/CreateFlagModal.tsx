@@ -1,11 +1,19 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Formik, Form, useFormikContext, useField } from 'formik'
+import * as Yup from 'yup'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
+import { FormField } from '../../components/form/FormField'
+import { FormSelect } from '../../components/form/FormSelect'
+import { FormTextarea } from '../../components/form/FormTextarea'
+import { FormErrorBanner } from '../../components/form/FormErrorBanner'
+import { FormSubmit } from '../../components/form/FormSubmit'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { slugify } from '../../lib/utils'
 import { extractErrorMessage } from '../../lib/errors'
+import { flagSchema } from '../../lib/validation/flagSchema'
 import type { AdminFlagResponse } from '../../lib/types'
 
 type FlagType = 'bool' | 'string' | 'int' | 'double' | 'json'
@@ -23,6 +31,14 @@ const DEFAULT_VARIANTS: Record<FlagType, VariantInput[]> = {
   json: [{ key: 'control', value: '{}' }, { key: 'treatment', value: '{}' }],
 }
 
+const FLAG_TYPE_OPTIONS = [
+  { value: 'bool', label: 'Boolean — on/off toggle' },
+  { value: 'string', label: 'String — text values' },
+  { value: 'int', label: 'Integer — whole numbers' },
+  { value: 'double', label: 'Double — decimal numbers' },
+  { value: 'json', label: 'JSON — arbitrary objects' },
+]
+
 function parseVariantValue(raw: string, type: FlagType): unknown {
   if (type === 'bool') return raw === 'true'
   if (type === 'int') return parseInt(raw, 10)
@@ -31,9 +47,8 @@ function parseVariantValue(raw: string, type: FlagType): unknown {
   return raw
 }
 
-/** Returns an error string if the raw value doesn't match the flag type, or null if valid. */
 function validateVariantValue(raw: string, type: FlagType): string | null {
-  if (type === 'bool') return null // dropdown — always valid
+  if (type === 'bool') return null
   if (type === 'int') {
     if (!/^-?\d+$/.test(raw.trim())) return 'Must be a whole number (e.g. 42)'
   }
@@ -47,207 +62,307 @@ function validateVariantValue(raw: string, type: FlagType): string | null {
   return null
 }
 
+// ── Auto-slug subcomponent ────────────────────────────────────────────────────
+// Keeps the key field in sync with name unless the user has manually edited it.
+
+function AutoSlugKey() {
+  const { values, setFieldValue } = useFormikContext<FlagFormValues>()
+  const keyEditedRef = useRef(false)
+  const prevNameRef = useRef('')
+
+  useEffect(() => {
+    if (!keyEditedRef.current && values.name !== prevNameRef.current) {
+      prevNameRef.current = values.name
+      void setFieldValue('key', slugify(values.name), false)
+    }
+  }, [values.name, setFieldValue])
+
+  const [, , keyHelpers] = useField('key')
+  // Mark as manually edited when user types directly into key
+  const originalSetValue = keyHelpers.setValue
+  const markEdited = useCallback(
+    (v: string) => {
+      keyEditedRef.current = true
+      void originalSetValue(v)
+    },
+    [originalSetValue],
+  )
+
+  return <input type="hidden" data-slug-sync="true" onChange={() => markEdited('')} />
+}
+
+// ── Variant rows editor ───────────────────────────────────────────────────────
+
+function VariantEditor() {
+  const { values, setFieldValue } = useFormikContext<FlagFormValues>()
+  const flagType = values.value_type as FlagType
+
+  function setVariantKey(i: number, val: string) {
+    const next = values.variants.map((v, j) => j === i ? { ...v, key: val } : v)
+    void setFieldValue('variants', next)
+  }
+
+  function setVariantValue(i: number, val: string) {
+    const next = values.variants.map((v, j) => j === i ? { ...v, value: val } : v)
+    void setFieldValue('variants', next)
+  }
+
+  function addVariant() {
+    void setFieldValue('variants', [...values.variants, { key: '', value: '' }])
+  }
+
+  function removeVariant(i: number) {
+    if (values.variants.length <= 1) return
+    void setFieldValue('variants', values.variants.filter((_, j) => j !== i))
+  }
+
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <label className="label" style={{ margin: 0 }}>Initial variants</label>
+        <button type="button" className="btn sm" onClick={addVariant}><I.plus size={11} /> Add</button>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {values.variants.map((v, i) => {
+          const valueErr = validateVariantValue(v.value, flagType)
+          return (
+            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  className="input"
+                  style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
+                  placeholder="name"
+                  value={v.key}
+                  onChange={(e) => setVariantKey(i, e.target.value)}
+                />
+                {flagType === 'bool' ? (
+                  <select
+                    className="input"
+                    style={{ flex: 1, fontSize: 12 }}
+                    value={v.value}
+                    onChange={(e) => setVariantValue(i, e.target.value)}
+                  >
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                ) : (
+                  <input
+                    className="input"
+                    style={{
+                      flex: 1,
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 12,
+                      borderColor: valueErr ? 'var(--danger)' : undefined,
+                    }}
+                    placeholder={flagType === 'json' ? '{}' : flagType === 'int' ? '42' : flagType === 'double' ? '3.14' : 'value'}
+                    value={v.value}
+                    onChange={(e) => setVariantValue(i, e.target.value)}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="icon-btn"
+                  style={{ color: values.variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
+                  disabled={values.variants.length <= 1}
+                  onClick={() => removeVariant(i)}
+                >
+                  <I.x size={12} />
+                </button>
+              </div>
+              {valueErr && (
+                <div style={{ fontSize: 11, color: 'var(--danger)', paddingLeft: 128 }}>
+                  {valueErr}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface FlagFormValues {
+  name: string
+  key: string
+  description: string
+  value_type: string
+  variants: VariantInput[]
+}
+
 interface Props {
   onClose: () => void
 }
+
+// ── Flag type change resets variants ─────────────────────────────────────────
+
+function FlagTypeWatcher() {
+  const { values, setFieldValue } = useFormikContext<FlagFormValues>()
+  const prevTypeRef = useRef(values.value_type)
+
+  useEffect(() => {
+    if (values.value_type !== prevTypeRef.current) {
+      prevTypeRef.current = values.value_type
+      const defaults = DEFAULT_VARIANTS[values.value_type as FlagType] ?? DEFAULT_VARIANTS.bool
+      void setFieldValue('variants', defaults.map((v) => ({ ...v })))
+    }
+  }, [values.value_type, setFieldValue])
+
+  return null
+}
+
+// ── Async key uniqueness validation schema ────────────────────────────────────
+
+function buildFlagSchemaWithAsyncKey(projectId: string | null) {
+  if (!projectId) return flagSchema
+
+  return flagSchema.shape({
+    key: Yup.string()
+      .trim()
+      .min(1, 'Key is required')
+      .max(120, 'Key must be 120 characters or fewer')
+      .matches(
+        /^[a-z0-9][a-z0-9_-]*$/,
+        'Key must start with a letter/digit and contain only lowercase letters, digits, hyphens, underscores',
+      )
+      .test('key-unique', 'This key is already taken', async (value) => {
+        if (!value || value.trim().length < 2) return true
+        try {
+          await api.get(`/v1/projects/${projectId}/flags/${value.trim()}`)
+          // If we get a 200, the key exists
+          return false
+        } catch {
+          // 404 = key is available
+          return true
+        }
+      })
+      .required('Key is required'),
+  })
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 
 export function CreateFlagModal({ onClose }: Props) {
   const navigate = useNavigate()
   const { projectId, orgId } = useOrgContext()
 
-  const [name, setName] = useState('')
-  const [key, setKey] = useState('')
-  const [keyEdited, setKeyEdited] = useState(false)
-  const [description, setDescription] = useState('')
-  const [flagType, setFlagType] = useState<FlagType>('bool')
-  const [variants, setVariants] = useState<VariantInput[]>(DEFAULT_VARIANTS.bool)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  // Per-row value validation errors (index → message | null)
-  const [variantErrors, setVariantErrors] = useState<(string | null)[]>([null, null])
+  const schema = buildFlagSchemaWithAsyncKey(projectId)
 
-  // Auto-generate key from name unless user edited it manually
-  useEffect(() => {
-    if (!keyEdited) setKey(slugify(name))
-  }, [name, keyEdited])
-
-  // Reset variants and errors when flag type changes
-  useEffect(() => {
-    setVariants(DEFAULT_VARIANTS[flagType].map((v) => ({ ...v })))
-    setVariantErrors(DEFAULT_VARIANTS[flagType].map(() => null))
-  }, [flagType])
-
-  function setVariantKey(i: number, val: string) {
-    setVariants(variants.map((v, j) => j === i ? { ...v, key: val } : v))
+  const initialValues: FlagFormValues = {
+    name: '',
+    key: '',
+    description: '',
+    value_type: 'bool',
+    variants: DEFAULT_VARIANTS.bool.map((v) => ({ ...v })),
   }
 
-  function setVariantValue(i: number, val: string) {
-    const next = variants.map((v, j) => j === i ? { ...v, value: val } : v)
-    setVariants(next)
-    setVariantErrors(next.map((v) => validateVariantValue(v.value, flagType)))
-  }
-
-  function addVariant() {
-    setVariants([...variants, { key: '', value: '' }])
-    setVariantErrors([...variantErrors, null])
-  }
-
-  function removeVariant(i: number) {
-    if (variants.length <= 1) return
-    setVariants(variants.filter((_, j) => j !== i))
-    setVariantErrors(variantErrors.filter((_, j) => j !== i))
-  }
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
+  async function handleSubmit(
+    values: FlagFormValues,
+    { setStatus }: { setStatus: (s: unknown) => void },
+  ) {
     if (!projectId) return
-    if (!name.trim()) { setError('Name is required'); return }
-    if (!key.trim()) { setError('Key is required'); return }
-
-    const validVariants = variants.filter((v) => v.key.trim())
-
-    const keys = validVariants.map((v) => v.key.trim())
-    if (new Set(keys).size !== keys.length) {
-      setError('Variant keys must be unique')
-      return
-    }
+    const flagType = values.value_type as FlagType
+    const validVariants = values.variants.filter((v) => v.key.trim())
 
     for (const v of validVariants) {
       const err = validateVariantValue(v.value, flagType)
-      if (err) { setError(`Variant "${v.key}": ${err}`); return }
+      if (err) {
+        setStatus({ error: `Variant "${v.key}": ${err}` })
+        return
+      }
     }
 
-    setSaving(true)
-    setError(null)
     try {
       const body = {
-        key: key.trim(),
-        name: name.trim(),
-        description: description.trim(),
+        key: values.key.trim(),
+        name: values.name.trim(),
+        description: values.description.trim(),
         enabled: false,
         value_type: flagType,
-        variants: validVariants.map((v) => ({ key: v.key.trim(), value: parseVariantValue(v.value, flagType) })),
+        variants: validVariants.map((v) => ({
+          key: v.key.trim(),
+          value: parseVariantValue(v.value, flagType),
+        })),
       }
       const { data } = await api.post<AdminFlagResponse>(`/v1/projects/${projectId}/flags`, body)
       onClose()
       navigate(`/org/${orgId}/flags/${data.key}`)
     } catch (err: unknown) {
-      setError(extractErrorMessage(err))
-    } finally {
-      setSaving(false)
+      setStatus({ error: extractErrorMessage(err) })
     }
   }
 
   const header = (
     <div className="card-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
       <div className="card-title"><I.flag size={15} /> New feature flag</div>
-      <button className="icon-btn" onClick={onClose}><I.x size={16} /></button>
-    </div>
-  )
-
-  const footer = (
-    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
-      <button type="button" className="btn" onClick={onClose}>Cancel</button>
-      <button type="submit" className="btn primary" form="create-flag-form" disabled={saving}>
-        {saving ? 'Creating…' : <><I.plus size={13} /> Create flag</>}
-      </button>
+      <button type="button" className="icon-btn" onClick={onClose}><I.x size={16} /></button>
     </div>
   )
 
   return (
-    <Modal isOpen onClose={onClose} size="md" title={header} footer={footer}>
-      <form id="create-flag-form" onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {error && (
-          <div style={{ padding: '10px 14px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 13 }}>
-            <I.alert size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />{error}
+    <Formik
+      initialValues={initialValues}
+      validationSchema={schema}
+      validateOnChange={false}
+      onSubmit={handleSubmit}
+    >
+      {({ isSubmitting }) => {
+        const footer = (
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
+            <button type="button" className="btn" onClick={onClose}>Cancel</button>
+            <FormSubmit label="Create flag" loadingLabel="Creating…" />
           </div>
-        )}
+        )
 
-        <div>
-          <label className="label">Name <span style={{ color: 'var(--danger)' }}>*</span></label>
-          <input className="input" style={{ width: '100%' }} placeholder="e.g. Dark Mode Beta"
-            value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-        </div>
+        return (
+          <Modal isOpen onClose={onClose} size="md" title={header} footer={footer}>
+            <Form id="create-flag-form" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <AutoSlugKey />
+              <FlagTypeWatcher />
+              <FormErrorBanner />
 
-        <div>
-          <label className="label">Key <span style={{ color: 'var(--danger)' }}>*</span></label>
-          <input
-            className="input" style={{ width: '100%', fontFamily: 'var(--font-mono)' }}
-            placeholder="e.g. dark-mode-beta"
-            value={key}
-            onChange={(e) => { setKey(e.target.value); setKeyEdited(true) }}
-          />
-          <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-            Immutable after creation. Used in SDK calls.
-          </div>
-        </div>
+              <FormField
+                name="name"
+                label="Name"
+                placeholder="e.g. Dark Mode Beta"
+                autoFocus
+              />
 
-        <div>
-          <label className="label">Description</label>
-          <textarea className="input" style={{ width: '100%', minHeight: 64, resize: 'vertical' }}
-            placeholder="Optional description of what this flag controls"
-            value={description} onChange={(e) => setDescription(e.target.value)} />
-        </div>
-
-        <div>
-          <label className="label">Flag type</label>
-          <select className="input" style={{ width: '100%' }} value={flagType}
-            onChange={(e) => setFlagType(e.target.value as FlagType)}>
-            <option value="bool">Boolean — on/off toggle</option>
-            <option value="string">String — text values</option>
-            <option value="int">Integer — whole numbers</option>
-            <option value="double">Double — decimal numbers</option>
-            <option value="json">JSON — arbitrary objects</option>
-          </select>
-        </div>
-
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <label className="label" style={{ margin: 0 }}>Initial variants</label>
-            <button type="button" className="btn sm" onClick={addVariant}><I.plus size={11} /> Add</button>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {variants.map((v, i) => (
-              <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <input className="input" style={{ width: 120, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                    placeholder="name" value={v.key}
-                    onChange={(e) => setVariantKey(i, e.target.value)} />
-                  {flagType === 'bool' ? (
-                    <select className="input" style={{ flex: 1, fontSize: 12 }}
-                      value={v.value} onChange={(e) => setVariantValue(i, e.target.value)}>
-                      <option value="true">true</option>
-                      <option value="false">false</option>
-                    </select>
-                  ) : (
-                    <input
-                      className="input"
-                      style={{
-                        flex: 1,
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 12,
-                        borderColor: variantErrors[i] ? 'var(--danger)' : undefined,
-                      }}
-                      placeholder={flagType === 'json' ? '{}' : flagType === 'int' ? '42' : flagType === 'double' ? '3.14' : 'value'}
-                      value={v.value}
-                      onChange={(e) => setVariantValue(i, e.target.value)}
-                    />
-                  )}
-                  <button type="button" className="icon-btn" style={{ color: variants.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
-                    disabled={variants.length <= 1} onClick={() => removeVariant(i)}>
-                    <I.x size={12} />
-                  </button>
+              <div>
+                <FormField
+                  name="key"
+                  label="Key"
+                  placeholder="e.g. dark-mode-beta"
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                />
+                <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+                  Immutable after creation. Used in SDK calls.
                 </div>
-                {variantErrors[i] && (
-                  <div style={{ fontSize: 11, color: 'var(--danger)', paddingLeft: 128 }}>
-                    {variantErrors[i]}
-                  </div>
-                )}
               </div>
-            ))}
-          </div>
-        </div>
-      </form>
-    </Modal>
+
+              <FormTextarea
+                name="description"
+                label="Description"
+                placeholder="Optional description of what this flag controls"
+                style={{ minHeight: 64 }}
+              />
+
+              <FormSelect
+                name="value_type"
+                label="Flag type"
+                options={FLAG_TYPE_OPTIONS}
+              />
+
+              <VariantEditor />
+
+              {/* suppress unused variable warning */}
+              <input type="hidden" value={isSubmitting ? '1' : '0'} />
+            </Form>
+          </Modal>
+        )
+      }}
+    </Formik>
   )
 }
