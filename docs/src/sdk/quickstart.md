@@ -4,7 +4,7 @@
 > Run `cargo xtask docs` to regenerate.
 
 ```ignore
-use stitchd_sdk::{SdkClient, SdkConfig, EvalRequest};
+use stitchd_sdk_rust::{SdkClient, SdkConfig, EvalRequest};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

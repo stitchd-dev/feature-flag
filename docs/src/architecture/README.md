@@ -10,7 +10,7 @@ graph TB
     subgraph Clients
         AdminUI[Admin UI / curl]
         App[Your Application]
-        SDK[stitchd-sdk]
+        SDK[stitchd-sdk-rust]
     end
 
     subgraph Gateway["stitchd-gateway"]
