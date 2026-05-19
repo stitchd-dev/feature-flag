@@ -488,9 +488,13 @@ pub trait SegmentRepository: Send + Sync {
 
     /// SDK-facing batch list-membership check, keyed on `SegmentId` (UUID).
     ///
-    /// Uses a single SQL query (cross-join over the supplied contexts and
-    /// segment ids). Membership semantics match `check_list_membership`:
-    /// member iff included AND NOT excluded; exclude takes precedence.
+    /// Membership semantics match `check_list_membership`: member iff included
+    /// AND NOT excluded; exclude takes precedence. The production
+    /// implementation
+    /// (`crate::repository::composite::CompositeSegmentRepository`) services
+    /// this via `ScyllaDB` point reads; the PG-only impl is a fail-safe stub
+    /// that returns all-false memberships (see Phase 3 migration
+    /// `20260516000005_drop_segment_list_entries`).
     ///
     /// Returns one entry per context, with the memberships map covering every
     /// supplied `segment_id` (defaulting to `false` for segments with no

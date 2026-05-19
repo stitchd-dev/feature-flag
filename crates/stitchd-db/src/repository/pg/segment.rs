@@ -490,97 +490,59 @@ impl SegmentRepository for PgSegmentRepository {
         )))
     }
 
+    // ── List-membership reads — STUBBED on the PG backend ────────────────────
+    //
+    // Historically these queried the `segment_list_entries` PG table, but that
+    // table was dropped in migration `20260516000005_drop_segment_list_entries`
+    // (Phase 3: list-entry membership moved to ScyllaDB). If we ran the old
+    // SQL now the queries would fail with `relation segment_list_entries does
+    // not exist`.
+    //
+    // In production, `SegmentRepository` is provided by
+    // [`crate::repository::composite::CompositeSegmentRepository`], which
+    // overrides each of these methods and routes list-membership reads to
+    // Scylla. `PgSegmentRepository` is also used directly by some unit tests
+    // and by `Composite` itself for metadata operations (`find_by_key`,
+    // `find_by_id`, …) — so it must still implement the trait, but the
+    // list-read methods are intentionally inert here.
+    //
+    // The stubs return empty / all-false results rather than `Err` so any
+    // accidental caller fails-safe to "no membership" instead of crashing.
+
     async fn check_list_membership(
         &self,
-        environment_id: EnvironmentId,
-        context_type: &str,
-        context_key: &str,
-        segment_keys: &[String],
+        _environment_id: EnvironmentId,
+        _context_type: &str,
+        _context_key: &str,
+        _segment_keys: &[String],
     ) -> Result<HashMap<String, bool>, RepositoryError> {
-        if segment_keys.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        // sqlx::query (non-macro) used here to avoid breaking offline mode.
-        // Exclude takes precedence: member iff included AND NOT excluded.
-        let rows = sqlx::query(
-            r"
-            SELECT
-                s.key AS segment_key,
-                (
-                    EXISTS (
-                        SELECT 1 FROM segment_list_entries e1
-                        WHERE e1.segment_id = s.id
-                          AND e1.context_type = $2
-                          AND e1.entry_key    = $3
-                          AND e1.list_type    = 'include'
-                    )
-                    AND NOT EXISTS (
-                        SELECT 1 FROM segment_list_entries e2
-                        WHERE e2.segment_id = s.id
-                          AND e2.context_type = $2
-                          AND e2.entry_key    = $3
-                          AND e2.list_type    = 'exclude'
-                    )
-                ) AS is_member
-            FROM segments s
-            WHERE s.environment_id = $1
-              AND s.key = ANY($4)
-              AND s.deleted_at IS NULL
-              AND s.segment_type = 'list'
-            ",
-        )
-        .bind(environment_id.as_uuid())
-        .bind(context_type)
-        .bind(context_key)
-        .bind(segment_keys)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        let mut result = HashMap::with_capacity(rows.len());
-        for row in rows {
-            let key: String = row.get("segment_key");
-            let is_member: bool = row.get("is_member");
-            result.insert(key, is_member);
-        }
-        Ok(result)
+        // Empty map: per trait contract, segment keys missing from the map
+        // are treated as "not a member" by callers. Use the Composite
+        // implementation to get real Scylla-backed answers.
+        Ok(HashMap::new())
     }
 
     async fn batch_check_list_membership(
         &self,
-        environment_id: EnvironmentId,
-        contexts: &[(String, String)],
-        segment_keys: &[String],
+        _environment_id: EnvironmentId,
+        _contexts: &[(String, String)],
+        _segment_keys: &[String],
     ) -> Result<Vec<ContextMembership>, RepositoryError> {
-        if segment_keys.is_empty() || contexts.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut results = Vec::with_capacity(contexts.len());
-        for (context_type, context_key) in contexts {
-            let memberships = self
-                .check_list_membership(environment_id, context_type, context_key, segment_keys)
-                .await?;
-            results.push(ContextMembership {
-                context_type: context_type.clone(),
-                context_key: context_key.clone(),
-                memberships,
-            });
-        }
-        Ok(results)
+        // See module note above — Scylla-backed in production.
+        Ok(Vec::new())
     }
 
     async fn find_memberships_batch(
         &self,
-        environment_id: EnvironmentId,
+        _environment_id: EnvironmentId,
         contexts: &[(String, String)],
         segment_ids: &[SegmentId],
     ) -> Result<Vec<crate::SegmentIdMembership>, RepositoryError> {
-        // Always initialise every (context, segment_id) cell to `false` —
-        // even when there are no matching list_entries, the SDK expects the
-        // map to be fully populated.
-        let mut results: Vec<crate::SegmentIdMembership> = contexts
+        // SDK-facing path expects a fully-populated map per context — every
+        // supplied `segment_id` must appear in the output (defaulting to
+        // false). Return that shape with all-false entries so any accidental
+        // caller still gets a structurally-valid response.
+        let results: Vec<crate::SegmentIdMembership> = contexts
             .iter()
             .map(|(t, k)| crate::SegmentIdMembership {
                 context_type: t.clone(),
@@ -588,77 +550,6 @@ impl SegmentRepository for PgSegmentRepository {
                 memberships: segment_ids.iter().map(|id| (*id, false)).collect(),
             })
             .collect();
-
-        if segment_ids.is_empty() || contexts.is_empty() {
-            return Ok(results);
-        }
-
-        let segment_uuids: Vec<uuid::Uuid> = segment_ids
-            .iter()
-            .map(stitchd_core::id::SegmentId::as_uuid)
-            .collect();
-        let context_types: Vec<String> = contexts.iter().map(|(t, _)| t.clone()).collect();
-        let context_keys: Vec<String> = contexts.iter().map(|(_, k)| k.clone()).collect();
-
-        // Single SQL pass: cross-join segments × contexts, then test membership
-        // via two EXISTS subqueries (include AND NOT exclude — exclude takes
-        // precedence). Returns one row per (segment_id, context_type, context_key).
-        let rows = sqlx::query(
-            r"
-            SELECT
-                s.id           AS segment_id,
-                q.context_type AS context_type,
-                q.context_key  AS context_key,
-                (
-                    EXISTS (
-                        SELECT 1 FROM segment_list_entries e1
-                        WHERE e1.segment_id   = s.id
-                          AND e1.context_type = q.context_type
-                          AND e1.entry_key    = q.context_key
-                          AND e1.list_type    = 'include'
-                    )
-                    AND NOT EXISTS (
-                        SELECT 1 FROM segment_list_entries e2
-                        WHERE e2.segment_id   = s.id
-                          AND e2.context_type = q.context_type
-                          AND e2.entry_key    = q.context_key
-                          AND e2.list_type    = 'exclude'
-                    )
-                ) AS is_member
-            FROM segments s
-            CROSS JOIN UNNEST($2::text[], $3::text[]) AS q(context_type, context_key)
-            WHERE s.environment_id = $1
-              AND s.id             = ANY($4)
-              AND s.deleted_at     IS NULL
-              AND s.segment_type   = 'list'
-            ",
-        )
-        .bind(environment_id.as_uuid())
-        .bind(&context_types)
-        .bind(&context_keys)
-        .bind(&segment_uuids)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        // Build a lookup index from (context_type, context_key) → result index.
-        let mut idx: HashMap<(String, String), usize> = HashMap::with_capacity(contexts.len());
-        for (i, (t, k)) in contexts.iter().enumerate() {
-            idx.insert((t.clone(), k.clone()), i);
-        }
-
-        for row in rows {
-            let seg_uuid: uuid::Uuid = row.get("segment_id");
-            let ctx_type: String = row.get("context_type");
-            let ctx_key: String = row.get("context_key");
-            let is_member: bool = row.get("is_member");
-            if let Some(&i) = idx.get(&(ctx_type, ctx_key)) {
-                results[i]
-                    .memberships
-                    .insert(SegmentId::from_uuid(seg_uuid), is_member);
-            }
-        }
-
         Ok(results)
     }
 
