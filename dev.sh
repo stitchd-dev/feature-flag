@@ -35,9 +35,28 @@ start_service() {
   fi
 
   echo "  ▶  ${name}"
-  cargo run --release -p "${bin}" > "$log" 2>&1 &
+  # Use the pre-built binary directly (cargo build --release already ran above).
+  # This avoids each service competing for the Cargo package-cache file lock
+  # when launched concurrently via `cargo run --release`.
+  "$ROOT/target/release/${bin}" > "$log" 2>&1 &
   local pid=$!
   echo "${pid} ${name}" >> "$PIDS_FILE"
+}
+
+# Wait for a gRPC port to accept connections (used to sequence startup).
+wait_for_port() {
+  local port="$1"
+  local name="$2"
+  local i=0
+  while ! nc -z 127.0.0.1 "$port" 2>/dev/null; do
+    i=$((i+1))
+    if [[ $i -gt 30 ]]; then
+      echo "  ✗  ${name} did not start on port ${port} after 30 s" >&2
+      return 1
+    fi
+    sleep 1
+  done
+  echo "  ✓  ${name} ready (port ${port})"
 }
 
 stop_all() {
@@ -95,14 +114,23 @@ touch "$PIDS_FILE"
 echo "Starting services (logs → .dev-logs/)…"
 
 case "$CMD" in
-  all)
+  all|start)
+    # Tier 1 — no upstream service dependencies
     start_service "auth-service"           "stitchd-auth-service"
     start_service "flag-service"           "stitchd-flag-service"
     start_service "segmentation-service"   "stitchd-segmentation-service"
     start_service "analytics-service"      "stitchd-analytics-service"
+    wait_for_port "${STITCHD_AUTH_SERVICE_GRPC_PORT}"      "auth-service"
+    wait_for_port "${STITCHD_FLAG_SERVICE_GRPC_PORT}"      "flag-service"
+    wait_for_port "${STITCHD_SEGMENTATION_SERVICE_GRPC_PORT}" "segmentation-service"
+    wait_for_port "${STITCHD_ANALYTICS_SERVICE_GRPC_PORT}" "analytics-service"
+    # Tier 2 — depend on analytics and flag being ready
     start_service "experimentation-service" "stitchd-experimentation-service"
-    start_service "stats-service"          "stitchd-stats-service"
-    start_service "gateway"               "stitchd-gateway"
+    start_service "stats-service"           "stitchd-stats-service"
+    wait_for_port "${STITCHD_EXPERIMENTATION_SERVICE_GRPC_PORT}" "experimentation-service"
+    wait_for_port "${STITCHD_STATS_SERVICE_GRPC_PORT}"     "stats-service"
+    # Tier 3 — gateway requires all upstream services
+    start_service "gateway"                "stitchd-gateway"
     ;;
   auth)        start_service "auth-service"           "stitchd-auth-service" ;;
   flag)        start_service "flag-service"           "stitchd-flag-service" ;;
@@ -120,15 +148,16 @@ esac
 
 echo ""
 echo "Services started. Endpoints:"
-echo "  Gateway API   → http://localhost:${GATEWAY_PORT}"
-echo "  Auth gRPC     → localhost:${AUTH_SERVICE_PORT}"
-echo "  Flag gRPC     → localhost:${FLAG_SERVICE_PORT}"
-echo "  Segment gRPC  → localhost:${SEGMENTATION_SERVICE_PORT}"
-echo "  Analytics gRPC→ localhost:${ANALYTICS_GRPC_PORT}"
-echo "  Exp gRPC      → localhost:${EXPERIMENTATION_SERVICE_PORT}"
-echo "  Stats gRPC    → localhost:${STATS_SERVICE_PORT}"
-echo "  Stats HTTP    → http://localhost:${STATS_HTTP_PORT}"
+echo "  Gateway REST  → http://localhost:${STITCHD_GATEWAY_HTTP_PORT}"
+echo "  Gateway Prom  → http://localhost:${STITCHD_GATEWAY_METRICS_PORT}/v1/metrics"
+echo "  Auth gRPC     → localhost:${STITCHD_AUTH_SERVICE_GRPC_PORT}"
+echo "  Flag gRPC     → localhost:${STITCHD_FLAG_SERVICE_GRPC_PORT}"
+echo "  Segment gRPC  → localhost:${STITCHD_SEGMENTATION_SERVICE_GRPC_PORT}"
+echo "  Analytics gRPC→ localhost:${STITCHD_ANALYTICS_SERVICE_GRPC_PORT}"
+echo "  Exp gRPC      → localhost:${STITCHD_EXPERIMENTATION_SERVICE_GRPC_PORT}"
+echo "  Stats gRPC    → localhost:${STITCHD_STATS_SERVICE_GRPC_PORT}"
+echo "  Stats HTTP    → http://localhost:${STITCHD_STATS_SERVICE_HTTP_PORT}"
 echo ""
-echo "  ./dev.sh stop       — stop all services"
-echo "  ./dev.sh logs       — tail all logs"
-echo "  ./dev.sh logs:gateway — tail gateway only"
+echo "  ./dev.sh stop             — stop all services"
+echo "  ./dev.sh logs             — tail all logs"
+echo "  ./dev.sh logs:gateway     — tail gateway only"
