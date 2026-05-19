@@ -65,7 +65,7 @@ export function CreateEventModal({ onClose, onCreated }: Props) {
   const footer = (
     <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
       <button type="button" className="btn" onClick={onClose}>Cancel</button>
-      <FormSubmit label="Register event" loadingLabel="Registering…" />
+      <FormSubmit label="Register event" loadingLabel="Registering…" form="create-event-form" />
     </div>
   )
 
@@ -76,7 +76,7 @@ export function CreateEventModal({ onClose, onCreated }: Props) {
       onSubmit={handleSubmit}
     >
       <Modal isOpen onClose={onClose} size="md" title={header} footer={footer}>
-        <Form style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <Form id="create-event-form" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <FormErrorBanner />
 
           <FormField

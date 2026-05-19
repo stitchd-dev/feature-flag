@@ -312,7 +312,7 @@ export function CreateFlagModal({ onClose }: Props) {
         const footer = (
           <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
             <button type="button" className="btn" onClick={onClose}>Cancel</button>
-            <FormSubmit label="Create flag" loadingLabel="Creating…" />
+            <FormSubmit label="Create flag" loadingLabel="Creating…" form="create-flag-form" />
           </div>
         )
 
