@@ -45,14 +45,20 @@ export function LoginPage() {
         const roles = auth.decodeRoles(res.access_token)
         const permissions = auth.decodePermissions(res.access_token)
         auth.setSession({ token: res.access_token, refreshToken: res.refresh_token, orgId: res.org_id, isSystem, userId: res.user_id, roles, permissions })
+        let orgs: Awaited<ReturnType<typeof listUserOrgs>> = []
         try {
-          const orgs = await listUserOrgs()
+          orgs = await listUserOrgs()
           auth.setOrgs(orgs)
         } catch {
           auth.setOrgs([])
         }
         if (isSystem) {
-          navigate('/superadmin')
+          // Superadmins with at least one non-system org membership get a
+          // context chooser; they can land in /superadmin OR switch to an
+          // org which re-issues an org-scoped JWT via /v1/auth/switch-org.
+          // ListUserOrgs filters out is_system orgs server-side, so any
+          // org appearing here is a legitimate non-system membership.
+          navigate(orgs.length > 0 ? '/choose-context' : '/superadmin')
         } else {
           auth.addOrgToHistory({ orgId: res.org_id, orgName: res.org_id })
           navigate(`/org/${res.org_id}`)

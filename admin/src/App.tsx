@@ -15,6 +15,7 @@ import { SuperAdminGuard, OrgGuard } from './shell/guards'
 import { OrgProvider } from './context/OrgContext'
 import { LoginPage } from './pages/Login'
 import { OidcCallbackPage } from './pages/OidcCallback'
+import { ChooseContext } from './pages/ChooseContext'
 import { OrgDashboard } from './pages/OrgDashboard'
 import { FlagsList } from './pages/flags/FlagsList'
 import { FlagDetail } from './pages/flags/FlagDetail'
@@ -85,6 +86,11 @@ function AppRoutes() {
       {/* Public */}
       <Route path="/login" element={<LoginPage />} />
       <Route path="/auth/callback" element={<OidcCallbackPage />} />
+
+      {/* Post-login chooser for superadmins with non-system org memberships.
+          Lets them pick either superadmin mode or an org context, and the
+          auth-service issues a fresh JWT for the chosen org via switch-org. */}
+      <Route path="/choose-context" element={<ChooseContext />} />
 
       {/* Superadmin section — is_system=true only */}
       <Route element={<SuperAdminGuard />}>
