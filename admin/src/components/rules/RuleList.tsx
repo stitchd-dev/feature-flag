@@ -12,10 +12,14 @@ interface Props {
   defaultVariantKey: string | null
   /** For the ENABLED catch-all: the output of the last always-true rule. */
   catchAllOutput: RuleOutputJson
+  /** Optional name for the catch-all rule (empty string = unnamed). */
+  catchAllName?: string
   flagEnabled: boolean
   onChange: (rules: RuleState[]) => void
   /** Called when the catch-all output changes; parent marks dirty + saves with rules. */
   onCatchAllChange: (output: RuleOutputJson) => void
+  /** Called when the catch-all name changes. */
+  onCatchAllNameChange?: (name: string) => void
   canWrite?: boolean
   /** Only used when flag is DISABLED — auto-saves default_variant_key. */
   onSaveDefaultVariant?: (key: string) => Promise<void>
@@ -26,8 +30,9 @@ interface Props {
 }
 
 export function RuleList({
-  rules, variants, defaultVariantKey, catchAllOutput, flagEnabled,
-  onChange, onCatchAllChange, canWrite, onSaveDefaultVariant, envId, orgId,
+  rules, variants, defaultVariantKey, catchAllOutput, catchAllName, flagEnabled,
+  onChange, onCatchAllChange, onCatchAllNameChange,
+  canWrite, onSaveDefaultVariant, envId, orgId,
 }: Props) {
   const [dragSourceIndex, setDragSourceIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
@@ -75,9 +80,11 @@ export function RuleList({
       flagEnabled={flagEnabled}
       defaultVariantKey={defaultVariantKey}
       catchAllOutput={catchAllOutput}
+      catchAllName={catchAllName}
       variants={variants}
       canWrite={canWrite}
       onCatchAllChange={onCatchAllChange}
+      onCatchAllNameChange={onCatchAllNameChange}
       onSaveDefaultVariant={onSaveDefaultVariant}
     />
   )
@@ -152,17 +159,21 @@ function DefaultRuleFooter({
   flagEnabled,
   defaultVariantKey,
   catchAllOutput,
+  catchAllName,
   variants,
   canWrite,
   onCatchAllChange,
+  onCatchAllNameChange,
   onSaveDefaultVariant,
 }: {
   flagEnabled: boolean
   defaultVariantKey: string | null
   catchAllOutput: RuleOutputJson
+  catchAllName?: string
   variants: string[]
   canWrite?: boolean
   onCatchAllChange: (o: RuleOutputJson) => void
+  onCatchAllNameChange?: (name: string) => void
   onSaveDefaultVariant?: (key: string) => Promise<void>
 }) {
   // ── DISABLED state: simple single-variant auto-save ──────────────────────
@@ -195,6 +206,21 @@ function DefaultRuleFooter({
           — applied to all remaining contexts
         </span>
       </div>
+
+      {canWrite && onCatchAllNameChange && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600, marginBottom: 6 }}>
+            Rule name (optional)
+          </div>
+          <input
+            className="input"
+            placeholder="Default rule"
+            value={catchAllName ?? ''}
+            onChange={(e) => onCatchAllNameChange(e.target.value)}
+            style={{ width: '100%', fontSize: 13 }}
+          />
+        </div>
+      )}
 
       {canWrite ? (
         <CatchAllOutputEditor

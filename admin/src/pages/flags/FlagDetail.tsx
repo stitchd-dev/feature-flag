@@ -313,6 +313,11 @@ function TargetingPanel({
       ? last.output
       : { variant_key: variantKeys[0] ?? '' }
   })
+  const [catchAllName, setCatchAllName] = useState<string>(() => {
+    const all = flag.rules.map(parseRuleState)
+    const last = all[all.length - 1]
+    return last && isCatchAll(last) ? (last.name ?? '') : ''
+  })
 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -332,6 +337,11 @@ function TargetingPanel({
     markDirty()
   }
 
+  function updateCatchAllName(name: string) {
+    setCatchAllName(name)
+    markDirty()
+  }
+
   async function saveRules() {
     const err = validateRules(rules, catchAllOutput)
     if (err) { setError(err); return }
@@ -342,6 +352,10 @@ function TargetingPanel({
       // Append the catch-all as the last rule (always-true sentinel AND: []).
       const catchAll = defaultCatchAll('')
       catchAll.output = catchAllOutput
+      const trimmedCatchAllName = catchAllName.trim()
+      if (trimmedCatchAllName) {
+        catchAll.name = trimmedCatchAllName
+      }
       const allRules = [...rules, catchAll]
       const body = {
         rules: allRules.map((r) => ({ ...(r.name ? { name: r.name } : {}), condition: r.condition, output: r.output })),
@@ -402,9 +416,11 @@ function TargetingPanel({
           variants={variantKeys}
           defaultVariantKey={flag.default_variant_key}
           catchAllOutput={catchAllOutput}
+          catchAllName={catchAllName}
           flagEnabled={flag.enabled}
           onChange={canWrite ? updateRules : () => undefined}
           onCatchAllChange={canWrite ? updateCatchAll : () => undefined}
+          onCatchAllNameChange={canWrite ? updateCatchAllName : undefined}
           canWrite={canWrite}
           onSaveDefaultVariant={canWrite ? saveDefaultVariant : undefined}
           envId={envId}

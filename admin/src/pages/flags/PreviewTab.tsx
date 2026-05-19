@@ -99,8 +99,12 @@ const DEFAULT_JSON = JSON.stringify([{ _type: '', key: '', parameters: {} }], nu
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function RuleTraceRow({ trace }: { trace: RuleTrace }) {
+function RuleTraceRow({ trace, isCatchAll }: { trace: RuleTrace; isCatchAll: boolean }) {
   const [open, setOpen] = useState(false)
+  // Fallback label: the last rule is always the always-true catch-all (see
+  // `isCatchAll` in `lib/ruleTypes.ts`), so render it as "Default rule"
+  // rather than the generic "Unnamed rule" used for user-authored rules.
+  const fallbackName = isCatchAll ? 'Default rule' : 'Unnamed rule'
   return (
     <div style={{ borderLeft: '2px solid var(--border-faint)', paddingLeft: 10, marginBottom: 6 }}>
       <button
@@ -112,7 +116,7 @@ function RuleTraceRow({ trace }: { trace: RuleTrace }) {
         }}
       >
         <span>{trace.outcome === 'match' ? '✓' : '✗'}</span>
-        <span>{trace.rule_name ?? 'Unnamed rule'}</span>
+        <span>{trace.rule_name ?? fallbackName}</span>
         <span style={{ opacity: 0.5 }}>{open ? '▾' : '▸'}</span>
       </button>
       {open && (
@@ -199,7 +203,11 @@ function ContextResultCard({ result }: { result: ContextResult }) {
           </div>
         )}
         {result.rule_traces.map((trace, i) => (
-          <RuleTraceRow key={i} trace={trace} />
+          <RuleTraceRow
+            key={i}
+            trace={trace}
+            isCatchAll={i === result.rule_traces.length - 1}
+          />
         ))}
         {result.rollout_debug && <RolloutDebugPanel debug={result.rollout_debug} />}
       </div>
