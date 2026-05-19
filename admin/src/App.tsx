@@ -23,6 +23,7 @@ import { SegmentsList } from './pages/segments/SegmentsList'
 import { SegmentDetail } from './pages/segments/SegmentDetail'
 import { ExperimentsList } from './pages/experiments/ExperimentsList'
 import { ExperimentDetail } from './pages/experiments/ExperimentDetail'
+import { MetricsList } from './pages/metrics/MetricsList'
 import { OrgsList, OrgDetail, SeedUser } from './pages/superadmin'
 import {
   EventsRegistry, Members, AuditLog,
@@ -113,6 +114,7 @@ function AppRoutes() {
           <Route path="/org/:orgId/experiments" element={<ExperimentsList />} />
           <Route path="/org/:orgId/experiments/:key" element={<ExperimentDetail />} />
           <Route path="/org/:orgId/events" element={<EventsRegistry />} />
+          <Route path="/org/:orgId/metrics" element={<MetricsList />} />
           <Route path="/org/:orgId/environments" element={<Environments />} />
           <Route path="/org/:orgId/context-explorer" element={<ContextExplorer />} />
           <Route path="/org/:orgId/members" element={<Members />} />

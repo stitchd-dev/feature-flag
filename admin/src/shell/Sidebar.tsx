@@ -18,6 +18,7 @@ function getOrgNav(orgId: string) {
     { id: 'segments', path: `${p}/segments`, label: 'Segments', icon: 'segment', badge: '' },
     { id: 'experiments', path: `${p}/experiments`, label: 'Experiments', icon: 'beaker', badge: '' },
     { id: 'events', path: `${p}/events`, label: 'Events', icon: 'event', badge: '' },
+    { id: 'metrics', path: `${p}/metrics`, label: 'Metrics', icon: 'metric', badge: '' },
   ]
 }
 

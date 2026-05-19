@@ -87,4 +87,9 @@ export const I: Record<string, IconRenderer> = {
   fingerprint: (p) => <Icon {...p}><path d="M12 11v2a10 10 0 0 1-2 6M5 19a17 17 0 0 0 2-9 5 5 0 0 1 9-3M19 16a18 18 0 0 0 .9-7M16 11v2a10 10 0 0 0 .8 4M9 11a3 3 0 0 1 6 0v3"/></Icon>,
   database: (p) => <Icon {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></Icon>,
   building: (p) => <Icon {...p}><path d="M3 21h18M5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16M9 9h.01M9 13h.01M9 17h.01M15 9h.01M15 13h.01M15 17h.01"/></Icon>,
+  gauge: (p) => <Icon {...p}><path d="M12 14l4-4M3.34 19A10 10 0 1 1 20.66 19M2 22h20"/></Icon>,
+  metric: (p) => <Icon {...p}><path d="M3 3v18h18M7 14l3-3 4 4 5-5"/></Icon>,
+  funnel: (p) => <Icon {...p}><path d="M22 3H2l8 9.5V19l4 2v-8.5z"/></Icon>,
+  ratio: (p) => <Icon {...p}><circle cx="6" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M19 5L5 19"/></Icon>,
+  trash2: (p) => <Icon {...p}><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></Icon>,
 }
