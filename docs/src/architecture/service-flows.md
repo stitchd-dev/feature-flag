@@ -13,7 +13,7 @@ sequenceDiagram
     participant FS as stitchd-flag-service<br/>(gRPC :50051)
     participant SS as stitchd-segmentation-service<br/>(gRPC :50053)
 
-    SDK->>GW: POST /v1/environments/{env}/evaluate<br/>x-sdk-key: sdk_live_...
+    SDK->>GW: POST /v1/environments/{environment_id}/evaluate<br/>x-sdk-key: sdk_live_...
     GW->>FS: ValidateSdkKey(environment_id, sdk_key)
     FS-->>GW: Ok(environment)
 
@@ -39,7 +39,7 @@ sequenceDiagram
     participant FS as stitchd-flag-service<br/>(gRPC :50051)
     participant ANS as stitchd-analytics-service<br/>(gRPC :50053)
 
-    SDK->>GW: POST /v1/environments/{env}/events<br/>x-sdk-key: sdk_live_...
+    SDK->>GW: POST /v1/environments/{environment_id}/events<br/>x-sdk-key: sdk_live_...
     GW->>FS: ValidateSdkKey(environment_id, sdk_key)
     FS-->>GW: Ok(environment)
 

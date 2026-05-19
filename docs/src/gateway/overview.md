@@ -16,14 +16,17 @@ Incoming requests are dispatched by path prefix:
 | Path Prefix | Auth | Upstream Service |
 |-------------|------|-----------------|
 | `POST /v1/auth/login` | none | `stitchd-auth-service` |
-| `/v1/admin/**` | Bearer JWT (system-org only) | `stitchd-auth-service` |
+| `/v1/superadmin/**` | Bearer JWT (system-org only) | `stitchd-auth-service` |
 | `/v1/management/**` | Bearer JWT | `stitchd-auth-service` / `stitchd-flag-service` |
-| `/v1/environments/{id}/evaluate` | `x-sdk-key` | `stitchd-flag-service` |
-| `/v1/environments/{id}/events` | `x-sdk-key` or Bearer JWT | `stitchd-analytics-service` |
-| `/v1/environments/{id}/segments/**` | `x-sdk-key` or Bearer JWT | `stitchd-segmentation-service` |
-| `/v1/environments/{id}/flags/**` | Bearer JWT | `stitchd-flag-service` |
-| `/v1/environments/{id}/experiments/**` | Bearer JWT | `stitchd-experimentation-service` |
-| `/v1/environments/{id}/event-definitions/**` | Bearer JWT | `stitchd-analytics-service` |
+| `/v1/environments/{environment_id}/evaluate` | `x-sdk-key` | `stitchd-flag-service` |
+| `/v1/environments/{environment_id}/events` | `x-sdk-key` or Bearer JWT | `stitchd-analytics-service` |
+| `/v1/environments/{environment_id}/segments/**` | `x-sdk-key` or Bearer JWT | `stitchd-segmentation-service` |
+| `/v1/projects/{project_id}/flags/**` | Bearer JWT | `stitchd-flag-service` |
+| `/v1/environments/{environment_id}/experiments/**` | Bearer JWT | `stitchd-experimentation-service` |
+| `/v1/environments/{environment_id}/event-definitions/**` | Bearer JWT | `stitchd-analytics-service` |
+| `/v1/sdk/**` | `x-sdk-key` | `stitchd-segmentation-service` / `stitchd-analytics-service` |
+| `/v1/health` | none | gateway |
+| `/v1/metrics` | none | gateway (Prometheus exposition) |
 
 ## Auth Header Matrix
 
@@ -64,7 +67,7 @@ The gateway adds the following endpoints that did not exist in `stitchd-server`:
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /v1/environments/{id}/events/batch` | Bulk event ingestion in a single request |
+| `POST /v1/environments/{environment_id}/events/batch` | Bulk event ingestion in a single request |
 | `POST /v1/environments/{id}/segments/batch-list-check` | Bulk segment membership check |
 | `GET/POST/PUT/DELETE /v1/environments/{id}/experiments/**` | Full experimentation CRUD |
 | `GET/POST/PUT/DELETE /v1/environments/{id}/event-definitions/**` | Event definition management |

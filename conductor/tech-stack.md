@@ -1,21 +1,27 @@
 # Tech Stack
-<!-- Last refreshed: 2026-05-18 -->
+<!-- Last refreshed: 2026-05-19 -->
 
 ## Architecture
 
-The system is decomposed into six Cargo workspace crates, each a standalone gRPC microservice, fronted by a REST gateway:
+The system is decomposed into seven Cargo workspace crates, each a standalone gRPC microservice, fronted by a REST gateway. Two library crates (`stitchd-event-writer`, `stitchd-sdk-rust`) support services and SDK consumers respectively:
 
-| Crate | Role |
-|---|---|
-| `stitchd-gateway` | REST API facade — translates JSON ↔ gRPC, calls all domain services; hosts OpenAPI spec |
-| `stitchd-auth-service` | JWT / SDK-key credential validation; RBAC context assembly |
-| `stitchd-flag-service` | Flag + variant CRUD; server-streaming definition sync for SDK |
-| `stitchd-segmentation-service` | Segment CRUD; rule-based + list-based membership evaluation; ScyllaDB-backed list entry storage |
-| `stitchd-event-service` | Event definition registry; ClickHouse ingestion gRPC |
-| `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from PostgreSQL |
-| `stitchd-stats-service` | Scheduled stats computation (60-min interval); writes pre-aggregated experiment results to PostgreSQL `experiment_results` table |
+| Crate | Role | Type |
+|---|---|---|
+| `stitchd-gateway` | REST API facade — translates JSON ↔ gRPC, calls all domain services; hosts OpenAPI spec; serves real Prometheus metrics at `GET /v1/metrics` | Binary |
+| `stitchd-auth-service` | JWT / SDK-key credential validation; RBAC context assembly | Binary |
+| `stitchd-flag-service` | Flag + variant CRUD; server-streaming definition sync for SDK | Binary |
+| `stitchd-segmentation-service` | Segment CRUD; rule-based + list-based membership evaluation; ScyllaDB-backed list entry storage | Binary |
+| `stitchd-analytics-service` | Event definition registry; ClickHouse ingestion gRPC (owns `experiment_results` in ClickHouse) | Binary |
+| `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from ClickHouse `experiment_results` table | Binary |
+| `stitchd-stats-service` | Scheduled stats computation (60-min interval); gRPC-only consumer; writes pre-aggregated results to ClickHouse `experiment_results` table (PG table dropped in `20260519000001_drop_experiment_results.sql`) | Binary |
+| `stitchd-event-writer` | ClickHouse event ingestion and migration helpers (library; replaces retired `stitchd-events` crate name) | Library |
+| `stitchd-sdk-rust` | Server-side Rust SDK — in-process flag evaluation (library; naming convention: `stitchd-sdk-{lang}`) | Library |
+| `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types | Library |
+| `stitchd-db` | Database access layer (sqlx repositories + ClickHouse) | Library |
+| `stitchd-proto` | Protobuf definitions and generated tonic stubs for all services | Library |
+| `xtask` | Build tool: mdBook docs generation, tool installation | Binary |
 
-Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous monolith) has been removed.
+Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous monolith) has been removed. The `stitchd-events` crate was renamed to `stitchd-event-writer` as part of the `boundaries_20260518` refactor; all references to the old name are retired.
 
 ## Backend
 
@@ -26,8 +32,8 @@ Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous m
 | Internal RPC | gRPC (tonic 0.13 + prost 0.13) |
 | Config / Flag Store | PostgreSQL 16+ (sqlx 0.8) — offline cache (`.sqlx/`) for compile-time safety in CI |
 | DB Extensions | pg_partman (for segment list partitioning) |
-| List-Entry Store | ScyllaDB 6+ (scylla 1.5, Cassandra-compatible CQL) — wide-row tables per segment; LWT-based generation swap |
-| Events / Experiments Store | ClickHouse 24+ |
+| List-Entry Store | ScyllaDB 6+ (scylla 1.5, Cassandra-compatible CQL) — wide-row tables per segment; LWT-based generation swap; keyspace renamed `stitchd_segments` (was `stitchd`) |
+| Events / Experiments Store | ClickHouse 24+ (owns `experiment_results` table; PG version retired) |
 | Human Auth | JWT (jsonwebtoken 9) + OAuth2/OIDC (openidconnect 3) + SAML 2.0 (quick-xml 0.36 + flate2) |
 | SDK Auth | SDK Key — scoped to project + environment; min 1 active enforced; Project Admin manages create/revoke |
 | MFA | TOTP via totp-rs 5 (secrets AES-256-GCM encrypted with aes-gcm 0.10) |
@@ -35,6 +41,17 @@ Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous m
 | Email Delivery | lettre 0.11 (SMTP); offline link fallback when SMTP unconfigured |
 | Rate Limiting | governor 0.10 + tower_governor 0.8; SmartIpKeyExtractor (x-forwarded-for / x-real-ip / peer) |
 | Observability | OpenTelemetry (0.28) + Prometheus (metrics-exporter-prometheus 0.16) |
+
+### Environment Variable Naming Convention
+
+All Stitchd-owned environment variables carry the `STITCHD_` prefix (the sole exception is `RUST_LOG`, which follows the Rust ecosystem standard). Service ports follow a standard pattern:
+
+| Pattern | Example |
+|---|---|
+| `STITCHD_{SERVICE}_GRPC_PORT` | `STITCHD_AUTH_SERVICE_GRPC_PORT=50051` |
+| `STITCHD_{SERVICE}_METRICS_PORT` | `STITCHD_AUTH_SERVICE_METRICS_PORT=9091` |
+| `STITCHD_GATEWAY_HTTP_PORT` | `STITCHD_GATEWAY_HTTP_PORT=8080` (gateway REST) |
+| `STITCHD_GATEWAY_METRICS_PORT` | `STITCHD_GATEWAY_METRICS_PORT=9080` (gateway Prometheus) |
 
 ## Admin UI (Frontend)
 
@@ -47,9 +64,11 @@ Located in `admin/` at the workspace root. Built with:
 | Build Tool | Vite 8 |
 | Language | TypeScript 6 (`verbatimModuleSyntax: true` — requires `import type` for type-only imports) |
 | HTTP Client | Axios |
+| Form Layer | Formik 2.x (`^2.4.9`) + Yup 1.x (`^1.7.1`) — all admin forms use `<Formik>` + Yup schema; primitives in `admin/src/components/form/`; schemas in `admin/src/lib/validation/` |
 | Dev Proxy | Vite server proxy: `/api → http://localhost:8080` (strips `/api` prefix, `changeOrigin: true`) |
 | Linting | ESLint with `eslint-plugin-react-hooks` + `eslint-plugin-react-refresh` |
 | Testing | Vitest `^4.1.6` + `@vitest/ui`; run with `npm test` (CI mode) or `npm run test:ui` |
+| Package Name | `@stitchd/admin` |
 
 Auth model: JWT decoded client-side (base64 payload only) to extract `is_system`. `org_id` comes from the login response body. Superadmin users (`is_system=true`) use `/superadmin/*` routes; org users use `/org/:orgId/*`.
 
@@ -159,7 +178,7 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 
 ## ClickHouse Schema
 
-**Tables and materialized views as of 2026-05-16:**
+**Tables and materialized views as of 2026-05-19 (post-`boundaries_20260518`):**
 
 | Table | Engine | Notes |
 |---|---|---|
@@ -168,6 +187,7 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 | `flag_evaluation_log_v2` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log (migration `0004_flag_evaluation_log_v2.sql`) |
 | `events_experiment_daily` | AggregatingMergeTree | Pre-aggregated experiment stats by `(env_id, experiment_id, variant_key, metric_key, day)` |
 | `events_experiment_daily_mv` | Materialized View | Auto-populates `events_experiment_daily` on `events` insert using `*State` combiners |
+| `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`; replaces the retired PostgreSQL `experiment_results` table (PG drop migration `20260519000001_drop_experiment_results.sql`) |
 
 **AggregatingMergeTree invariants:**
 - Insert: use `*State` combiners (`countState()`, `sumState(Float64)`, `uniqState()`)

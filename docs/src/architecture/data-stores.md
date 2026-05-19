@@ -20,7 +20,7 @@ graph LR
     XS -->|config reads/writes\nsqlx| PG
     ANS -->|event writes| CH[(ClickHouse\nevents store)]
 
-    SDK[stitchd-sdk] -->|list-segment membership\nREST| GW
+    SDK[stitchd-sdk-rust] -->|list-segment membership\nREST| GW
     GW -->|gRPC| SS
 ```
 
@@ -43,7 +43,7 @@ All writes go through `stitchd-db` which enforces tenant isolation via parameter
 
 **Migration tool:** [sqlx-cli](https://github.com/launchbahq/sqlx) — run `sqlx migrate run` before starting the services.
 
-## ClickHouse — Events Store *(Upcoming)*
+## ClickHouse — Events Store
 
 **Role:** Append-only event ingestion and analytical aggregations.
 
@@ -59,11 +59,11 @@ reads in PostgreSQL.
 | Data Category | Notes |
 |---------------|-------|
 | Evaluation events | One row per `(flag, context, variant, timestamp)` |
-| Experiment results | Pre-aggregated metric values per experiment arm |
+| Experiment results | Pre-computed results in `experiment_results` table (owned by `stitchd-analytics-service`; written by `stitchd-stats-service`; PG version retired in `boundaries_20260518`) |
 | Telemetry | Optional flag evaluation counts (for dashboards) |
 
-> ClickHouse integration is implemented by `stitchd-event-writer`. The HTTP interface (port 8123)
-> is used for writes; native protocol (port 9000) for bulk analytical reads.
+ClickHouse integration is implemented by the `stitchd-event-writer` library crate. The HTTP
+interface (port 8123) is used for writes; native protocol (port 9000) for bulk analytical reads.
 
 ## Choosing the Right Store
 

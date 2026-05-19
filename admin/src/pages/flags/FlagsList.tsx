@@ -90,7 +90,7 @@ export function FlagsList() {
 
   const canWrite = can(PERMISSIONS.FLAG_WRITE)
 
-  const { data: flags, total, loading, error, page, onPageChange, refresh: _refresh } = usePaginatedList<AdminFlagResponse>(
+  const { data: flags, total, loading, error, page, onPageChange } = usePaginatedList<AdminFlagResponse>(
     async ({ page: p, perPage, signal }) => {
       if (!projectId) return { items: [], total: 0 }
       const qs = new URLSearchParams({ page: String(p), per_page: String(perPage) })

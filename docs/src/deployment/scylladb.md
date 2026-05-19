@@ -20,7 +20,7 @@ Five tables managed by versioned CQL migrations in `crates/stitchd-db/scylla-mig
 
 | Migration | Table | Purpose |
 |---|---|---|
-| `0001_keyspace.cql` | `stitchd` keyspace | Replication strategy (SimpleStrategy, RF=1 dev default) |
+| `0001_keyspace.cql` | `stitchd_segments` keyspace | Replication strategy (SimpleStrategy, RF=1 dev default); renamed from `stitchd` in `boundaries_20260518` |
 | `0002_segment_list_entries.cql` | `segment_list_entries` | Entry rows per `(segment_id, context_type, generation, list_type, entry_key)` |
 | `0003_segment_list_generations.cql` | `segment_list_generations` | Current active generation pointer per `(segment_id, context_type)` |
 | `0004_segment_list_summary.cql` | `segment_list_summary` | Counter table: include/exclude entry counts per `(segment_id, context_type, generation)` |
@@ -31,7 +31,7 @@ Five tables managed by versioned CQL migrations in `crates/stitchd-db/scylla-mig
 For **production** deployments the keyspace should be created with `NetworkTopologyStrategy` and `RF ≥ 3`:
 
 ```cql
-CREATE KEYSPACE IF NOT EXISTS stitchd
+CREATE KEYSPACE IF NOT EXISTS stitchd_segments
 WITH REPLICATION = {
     'class': 'NetworkTopologyStrategy',
     'datacenter1': 3
@@ -51,7 +51,7 @@ Default consistency levels used by the driver:
 | Variable | Default | Description |
 |---|---|---|
 | `STITCHD_SCYLLA_URI` | `127.0.0.1:9042` | Contact point (host:port) |
-| `STITCHD_SCYLLA_KEYSPACE` | `stitchd` | Keyspace used for all tables |
+| `STITCHD_SCYLLA_KEYSPACE` | `stitchd_segments` | Keyspace used for all tables (renamed from `stitchd` in `boundaries_20260518`) |
 | `SWEEPER_RETENTION_SECS` | `86400` (24 h) | How old an orphaned generation must be before it's deleted |
 | `SWEEPER_INTERVAL_SECS` | `3600` (1 h) | How often the generation sweeper runs |
 
