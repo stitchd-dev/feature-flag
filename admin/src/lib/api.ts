@@ -237,9 +237,10 @@ export interface CreateSdkKeyResponse {
   raw_key: string
 }
 
-export async function createSdkKey(environmentId: string): Promise<CreateSdkKeyResponse> {
+export async function createSdkKey(environmentId: string, name?: string): Promise<CreateSdkKeyResponse> {
   const { data } = await api.post<CreateSdkKeyResponse>(
     `/v1/management/environments/${environmentId}/sdk-keys`,
+    name ? { name } : undefined,
   )
   return data
 }

@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react'
+import { Formik, Form } from 'formik'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
+import { FormField } from '../../components/form/FormField'
+import { FormTextarea } from '../../components/form/FormTextarea'
+import { FormErrorBanner } from '../../components/form/FormErrorBanner'
+import { FormSubmit } from '../../components/form/FormSubmit'
 import { api } from '../../lib/api'
 import { extractErrorMessage } from '../../lib/errors'
 import type { Segment } from './types'
@@ -12,67 +17,61 @@ interface Props {
   onSaved: (segment: Segment) => void
 }
 
+interface EditFormValues {
+  name: string
+  description: string
+  tags: string
+  context_type: string
+}
+
 export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
-  const [name, setName] = useState(segment.name)
-  const [description, setDescription] = useState(segment.description ?? '')
-  const [tagsInput, setTagsInput] = useState(segment.tags.join(', '))
   const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [nameError, setNameError] = useState(false)
   const [fresh, setFresh] = useState<Segment | null>(null)
-  const [contextType, setContextType] = useState(segment.context_type ?? 'user')
 
   const resolvedFresh = fresh ?? segment
   const isListType = isListSegment(resolvedFresh)
 
   useEffect(() => {
-    setLoading(true) // eslint-disable-line react-hooks/set-state-in-effect
+    setLoading(true)
     api.get<Segment>(`/v1/segments/${segment.id}`)
-      .then(({ data }) => {
-        setFresh(data)
-        setName(data.name)
-        setDescription(data.description ?? '')
-        setTagsInput(data.tags.join(', '))
-        setContextType(data.context_type ?? 'user')
-      })
-      .catch(() => {
-        setFresh(segment)
-      })
+      .then(({ data }) => { setFresh(data) })
+      .catch(() => { setFresh(segment) })
       .finally(() => setLoading(false))
   }, [segment])
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!name.trim()) {
-      setNameError(true)
-      setError('Name is required')
+  const initialValues: EditFormValues = {
+    name: resolvedFresh.name,
+    description: resolvedFresh.description ?? '',
+    tags: resolvedFresh.tags.join(', '),
+    context_type: resolvedFresh.context_type ?? 'user',
+  }
+
+  async function handleSubmit(
+    values: EditFormValues,
+    { setStatus }: { setStatus: (s: unknown) => void },
+  ) {
+    if (!values.name.trim()) {
+      setStatus({ error: 'Name is required' })
       return
     }
-    setNameError(false)
-    setError(null)
-
-    const tags = tagsInput
+    const tags = values.tags
       .split(',')
       .map((t) => t.trim())
       .filter((t) => t.length > 0)
 
-    setSaving(true)
     try {
       const body = {
-        name: name.trim(),
-        description: description.trim() || undefined,
+        name: values.name.trim(),
+        description: values.description.trim() || undefined,
         tags,
         condition_expr: (fresh ?? segment).condition_expr,
         user_list: [],
-        context_type: isListType ? contextType : undefined,
+        context_type: isListType ? values.context_type : undefined,
       }
       const { data } = await api.put<Segment>(`/v1/segments/${segment.id}`, body)
       onSaved(data)
     } catch (err: unknown) {
-      setError(extractErrorMessage(err))
-    } finally {
-      setSaving(false)
+      setStatus({ error: extractErrorMessage(err) })
     }
   }
 
@@ -96,91 +95,71 @@ export function EditSegmentModal({ segment, onClose, onSaved }: Props) {
         <div className="card-title"><I.pencil size={15} /> Edit segment</div>
         {typeBadge}
       </div>
-      <button className="icon-btn" onClick={onClose}><I.x size={16} /></button>
-    </div>
-  )
-
-  const footer = (
-    <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
-      <button type="button" className="btn" onClick={onClose}>Cancel</button>
-      <button type="submit" className="btn primary" form="edit-segment-form" disabled={saving}>
-        {saving ? 'Saving…' : <><I.check size={13} /> Save changes</>}
-      </button>
+      <button type="button" className="icon-btn" onClick={onClose}><I.x size={16} /></button>
     </div>
   )
 
   return (
-    <Modal isOpen onClose={onClose} size="md" title={header} footer={footer}>
+    <Modal isOpen onClose={onClose} size="md" title={header} footer={null}>
       {loading ? (
         <div style={{ padding: 48, display: 'flex', justifyContent: 'center' }}>
           <span style={{ color: 'var(--fg-muted)', fontSize: 14 }}>Loading…</span>
         </div>
       ) : (
-        <form id="edit-segment-form" onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {error && (
-            <div style={{ padding: '10px 14px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 13 }}>
-              <I.alert size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />{error}
-            </div>
-          )}
+        <Formik
+          initialValues={initialValues}
+          enableReinitialize
+          onSubmit={handleSubmit}
+        >
+          <Form id="edit-segment-form" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <FormErrorBanner />
 
-          <div>
-            <label className="label">
-              Name <span style={{ color: 'var(--danger)' }}>*</span>
-            </label>
-            <input
-              className="input"
-              style={{ width: '100%', borderColor: nameError ? 'var(--danger)' : undefined }}
+            <FormField
+              name="name"
+              label="Name"
               placeholder="e.g. Beta Users"
-              value={name}
-              onChange={(e) => { setName(e.target.value); if (e.target.value.trim()) setNameError(false) }}
               autoFocus
             />
-          </div>
 
-          <div>
-            <label className="label">Description</label>
-            <textarea
-              className="input"
-              style={{ width: '100%', minHeight: 64, resize: 'vertical' }}
+            <FormTextarea
+              name="description"
+              label="Description"
               placeholder="Optional description of what this segment represents"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              style={{ minHeight: 64 }}
             />
-          </div>
 
-          <div>
-            <label className="label">Tags</label>
-            <input
-              className="input"
-              style={{ width: '100%' }}
+            <FormField
+              name="tags"
+              label="Tags"
               placeholder="Comma-separated tags, e.g. beta, internal, us-only"
-              value={tagsInput}
-              onChange={(e) => setTagsInput(e.target.value)}
+              hint="Separate tags with commas."
             />
-            <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-              Separate tags with commas.
-            </div>
-          </div>
 
-          {isListType ? (
-            <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', borderRadius: 8, fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-              <I.info size={13} style={{ marginTop: 1, flexShrink: 0, color: 'var(--info)' }} />
-              <span>
-                Include / exclude keys and CSV imports are managed from the{' '}
-                <strong style={{ color: 'var(--fg)' }}>segment detail page</strong>.
-                Save name/description/tags changes here.
-              </span>
+            {isListType ? (
+              <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', borderRadius: 8, fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <I.info size={13} style={{ marginTop: 1, flexShrink: 0, color: 'var(--info)' }} />
+                <span>
+                  Include / exclude keys and CSV imports are managed from the{' '}
+                  <strong style={{ color: 'var(--fg)' }}>segment detail page</strong>.
+                  Save name/description/tags changes here.
+                </span>
+              </div>
+            ) : (
+              <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', borderRadius: 8, fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <I.info size={13} style={{ marginTop: 1, flexShrink: 0 }} />
+                <span>
+                  Targeting rules are managed from the segment detail page where you can build
+                  AND / OR condition trees.
+                </span>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
+              <button type="button" className="btn" onClick={onClose}>Cancel</button>
+              <FormSubmit label="Save changes" loadingLabel="Saving…" />
             </div>
-          ) : (
-            <div style={{ padding: '12px 14px', background: 'var(--bg-sunken)', borderRadius: 8, fontSize: 12, color: 'var(--fg-muted)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-              <I.info size={13} style={{ marginTop: 1, flexShrink: 0 }} />
-              <span>
-                Targeting rules are managed from the segment detail page where you can build
-                AND / OR condition trees.
-              </span>
-            </div>
-          )}
-        </form>
+          </Form>
+        </Formik>
       )}
     </Modal>
   )

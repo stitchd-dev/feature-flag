@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Formik, Form, Field } from 'formik'
+import * as Yup from 'yup'
 import type { EnvironmentSummary, SdkKeySummary } from '../../lib/api'
 import {
   createEnvironment,
@@ -14,6 +16,8 @@ import { PageHeader } from '../../components/primitives'
 import { useOrgContext } from '../../context/OrgContext'
 import { usePermissions } from '../../hooks/usePermissions'
 import { PERMISSIONS } from '../../lib/permissions'
+
+const envNameSchema = Yup.object({ name: Yup.string().trim().min(1, 'Name required').required() })
 
 // ─── Section lock overlay ─────────────────────────────────────────────────────
 
@@ -110,6 +114,7 @@ function SdkKeysSection({ environmentId, environmentName, canCreate, canRevoke }
   const [loading, setLoading] = useState(true)
   const [newRawKey, setNewRawKey] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [showCreateForm, setShowCreateForm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -123,12 +128,13 @@ function SdkKeysSection({ environmentId, environmentName, canCreate, canRevoke }
 
   useEffect(() => { load() }, [load])
 
-  async function handleCreate() {
+  async function handleCreate(name: string) {
     setBusy(true)
     setError(null)
     try {
-      const res = await createSdkKey(environmentId)
+      const res = await createSdkKey(environmentId, name || undefined)
       setNewRawKey(res.raw_key)
+      setShowCreateForm(false)
       load()
     } catch {
       setError('Failed to create SDK key')
@@ -167,11 +173,34 @@ function SdkKeysSection({ environmentId, environmentName, canCreate, canRevoke }
           className="btn primary sm"
           disabled={!canCreate || busy}
           title={canCreate ? 'Create new SDK key' : 'No permission to create SDK keys'}
-          onClick={() => void handleCreate()}
+          onClick={() => setShowCreateForm((v) => !v)}
         >
           <I.plus size={12} /> New key
         </button>
       </div>
+      {showCreateForm && (
+        <Formik
+          initialValues={{ name: '' }}
+          onSubmit={(values) => handleCreate(values.name)}
+        >
+          {({ isSubmitting }) => (
+            <Form>
+              <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'center', borderBottom: '1px solid var(--border-faint)' }}>
+                <Field
+                  name="name"
+                  className="input"
+                  placeholder="Key name (optional)"
+                  style={{ maxWidth: 220 }}
+                  disabled={busy || isSubmitting}
+                  autoFocus
+                />
+                <button type="submit" className="btn primary sm" disabled={busy || isSubmitting}>Create</button>
+                <button type="button" className="btn sm" disabled={busy || isSubmitting} onClick={() => setShowCreateForm(false)}>Cancel</button>
+              </div>
+            </Form>
+          )}
+        </Formik>
+      )}
       <div style={{ padding: '0 16px' }}>
         {error && (
           <div style={{ fontSize: 12, color: 'var(--danger)', padding: '8px 0' }}>{error}</div>
@@ -241,9 +270,7 @@ export function Environments() {
   const [envs, setEnvs] = useState<EnvironmentSummary[]>([])
   const [envsLoading, setEnvsLoading] = useState(false)
   const [creatingEnv, setCreatingEnv] = useState(false)
-  const [newEnvName, setNewEnvName] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
-  const [renameValue, setRenameValue] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -276,14 +303,13 @@ export function Environments() {
 
   const selectedEnv = envs.find((e) => e.environment_id === envId) ?? envs[0] ?? null
 
-  async function handleCreateEnv() {
-    if (!newEnvName.trim() || !projectId) return
+  async function handleCreateEnv(name: string) {
+    if (!projectId) return
     setBusy(true)
     setError(null)
     try {
-      const res = await createEnvironment(projectId, newEnvName.trim())
+      const res = await createEnvironment(projectId, name.trim())
       setCreatingEnv(false)
-      setNewEnvName('')
       loadEnvs()
       setEnvId(res.environment_id)
     } catch {
@@ -293,12 +319,11 @@ export function Environments() {
     }
   }
 
-  async function handleRename(id: string) {
-    if (!renameValue.trim()) return
+  async function handleRename(id: string, name: string) {
     setBusy(true)
     setError(null)
     try {
-      await renameEnvironment(id, renameValue.trim())
+      await renameEnvironment(id, name.trim())
       setRenamingId(null)
       loadEnvs()
     } catch {
@@ -337,7 +362,6 @@ export function Environments() {
             style={{ opacity: canCreate ? 1 : 0.45 }}
             onClick={() => {
               setCreatingEnv(true)
-              setNewEnvName('')
               setTimeout(() => newEnvRef.current?.focus(), 0)
             }}
           >
@@ -354,24 +378,29 @@ export function Environments() {
 
         {/* Inline create form */}
         {creatingEnv && (
-          <div className="card" style={{ padding: '12px 16px', marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              ref={newEnvRef}
-              className="input"
-              placeholder="Environment name"
-              value={newEnvName}
-              onChange={(e) => setNewEnvName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void handleCreateEnv()
-                if (e.key === 'Escape') { setCreatingEnv(false); setNewEnvName('') }
-              }}
-              disabled={busy}
-              style={{ maxWidth: 240 }}
-              autoFocus
-            />
-            <button className="btn primary sm" disabled={busy} onClick={() => void handleCreateEnv()}>Create</button>
-            <button className="btn sm" disabled={busy} onClick={() => { setCreatingEnv(false); setNewEnvName('') }}>Cancel</button>
-          </div>
+          <Formik
+            initialValues={{ name: '' }}
+            validationSchema={envNameSchema}
+            onSubmit={(values) => handleCreateEnv(values.name)}
+          >
+            {({ isSubmitting }) => (
+              <Form>
+                <div className="card" style={{ padding: '12px 16px', marginBottom: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Field
+                    innerRef={newEnvRef}
+                    name="name"
+                    className="input"
+                    placeholder="Environment name"
+                    disabled={busy || isSubmitting}
+                    style={{ maxWidth: 240 }}
+                    autoFocus
+                  />
+                  <button type="submit" className="btn primary sm" disabled={busy || isSubmitting}>Create</button>
+                  <button type="button" className="btn sm" disabled={busy || isSubmitting} onClick={() => setCreatingEnv(false)}>Cancel</button>
+                </div>
+              </Form>
+            )}
+          </Formik>
         )}
 
         {/* Environment cards */}
@@ -395,25 +424,31 @@ export function Environments() {
 
               if (renamingId === env.environment_id) {
                 return (
-                  <div key={env.environment_id} className={`card env-card ${isSelected ? 'env-card--selected' : ''}`} style={{ padding: '12px 14px' }}>
-                    <input
-                      ref={renameRef}
-                      className="input"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void handleRename(env.environment_id)
-                        if (e.key === 'Escape') setRenamingId(null)
-                      }}
-                      disabled={busy}
-                      autoFocus
-                      style={{ marginBottom: 8 }}
-                    />
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      <button className="btn primary sm" disabled={busy} onClick={() => void handleRename(env.environment_id)}><I.check size={12} /></button>
-                      <button className="btn sm" disabled={busy} onClick={() => setRenamingId(null)}><I.x size={12} /></button>
-                    </div>
-                  </div>
+                  <Formik
+                    key={env.environment_id}
+                    initialValues={{ name: env.environment_name }}
+                    validationSchema={envNameSchema}
+                    onSubmit={(values) => handleRename(env.environment_id, values.name)}
+                  >
+                    {({ isSubmitting }) => (
+                      <Form>
+                        <div className={`card env-card ${isSelected ? 'env-card--selected' : ''}`} style={{ padding: '12px 14px' }}>
+                          <Field
+                            innerRef={renameRef}
+                            name="name"
+                            className="input"
+                            disabled={busy || isSubmitting}
+                            autoFocus
+                            style={{ marginBottom: 8 }}
+                          />
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button type="submit" className="btn primary sm" disabled={busy || isSubmitting}><I.check size={12} /></button>
+                            <button type="button" className="btn sm" disabled={busy || isSubmitting} onClick={() => setRenamingId(null)}><I.x size={12} /></button>
+                          </div>
+                        </div>
+                      </Form>
+                    )}
+                  </Formik>
                 )
               }
 
@@ -456,7 +491,6 @@ export function Environments() {
                       onClick={(e) => {
                         e.stopPropagation()
                         setRenamingId(env.environment_id)
-                        setRenameValue(env.environment_name)
                         setTimeout(() => renameRef.current?.focus(), 0)
                       }}
                     >
