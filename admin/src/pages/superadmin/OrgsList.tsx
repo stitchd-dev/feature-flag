@@ -1,20 +1,25 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Formik, Form } from 'formik'
 import { createOrg, listOrgs } from '../../lib/api'
 import type { OrgSummary } from '../../lib/api'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { EmptyState } from '../../components/EmptyState'
+import { FormField } from '../../components/form/FormField'
+import { FormErrorBanner } from '../../components/form/FormErrorBanner'
+import { FormSubmit } from '../../components/form/FormSubmit'
+import { orgSchema } from '../../lib/validation/orgSchema'
+import type { OrgFormValues } from '../../lib/validation/orgSchema'
+import { extractErrorMessage } from '../../lib/errors'
 
 export function OrgsList() {
   const navigate = useNavigate()
   const [orgs, setOrgs] = useState<OrgSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [name, setName] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [listError, setListError] = useState<string | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -22,28 +27,26 @@ export function OrgsList() {
     listOrgs(controller.signal)
       .then(setOrgs)
       .catch((err: unknown) => {
-        if ((err as { name?: string }).name !== 'CanceledError') setError('Failed to load organisations')
+        if ((err as { name?: string }).name !== 'CanceledError') setListError('Failed to load organisations')
       })
       .finally(() => setLoading(false))
     return () => controller.abort()
   }, [])
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault()
-    if (!name.trim()) return
-    setCreating(true)
-    setError(null)
+  const initialValues: OrgFormValues = { name: '' }
+
+  async function handleCreate(
+    values: OrgFormValues,
+    { setStatus, resetForm }: { setStatus: (s: unknown) => void; resetForm: () => void },
+  ) {
     try {
-      await createOrg(name.trim())
-      setName('')
+      await createOrg(values.name.trim())
+      resetForm()
       setShowForm(false)
-      // Re-fetch the list after creating
       const updated = await listOrgs()
       setOrgs(updated)
-    } catch {
-      setError('Failed to create organisation')
-    } finally {
-      setCreating(false)
+    } catch (err: unknown) {
+      setStatus({ error: extractErrorMessage(err) })
     }
   }
 
@@ -56,7 +59,7 @@ export function OrgsList() {
         actions={
           <button
             className="btn primary"
-            onClick={() => { setShowForm((v) => !v); setError(null) }}
+            onClick={() => { setShowForm((v) => !v); setListError(null) }}
           >
             <I.plus size={14} /> New Organisation
           </button>
@@ -71,33 +74,39 @@ export function OrgsList() {
               <span className="card-title"><I.home size={13} /> Create Organisation</span>
             </div>
             <div className="card-body">
-              <form onSubmit={handleCreate} style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-                <div style={{ flex: 1 }}>
-                  <label className="label">Organisation name</label>
-                  <input
-                    className="input"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Acme Corp"
-                    autoFocus
-                    disabled={creating}
-                    required
-                  />
-                </div>
-                <button className="btn primary" type="submit" disabled={creating || !name.trim()}>
-                  {creating ? 'Creating…' : 'Create'}
-                </button>
-                <button className="btn" type="button" onClick={() => { setShowForm(false); setError(null) }} disabled={creating}>
-                  Cancel
-                </button>
-              </form>
-              {error && (
-                <div style={{ marginTop: 10 }}>
-                  <ErrorBanner message={error} onDismiss={() => setError(null)} />
-                </div>
-              )}
+              <Formik
+                initialValues={initialValues}
+                validationSchema={orgSchema}
+                onSubmit={handleCreate}
+              >
+                <Form style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <FormErrorBanner />
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                      <FormField
+                        name="name"
+                        label="Organisation name"
+                        placeholder="e.g. Acme Corp"
+                        autoFocus
+                      />
+                    </div>
+                    <FormSubmit label="Create" loadingLabel="Creating…" />
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => setShowForm(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </Form>
+              </Formik>
             </div>
           </div>
+        )}
+
+        {listError && (
+          <ErrorBanner message={listError} onDismiss={() => setListError(null)} />
         )}
 
         {loading ? (
