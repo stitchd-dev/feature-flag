@@ -13,7 +13,7 @@
  * Returns:
  *   { data, total, loading, error, page, perPage, onPageChange }
  */
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { extractErrorMessage } from '../lib/errors'
 
@@ -45,9 +45,12 @@ export function usePaginatedList<T>(
   const [error, setError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
 
-  // Stable ref to fetcher to avoid spurious re-runs
+  // Stable ref to fetcher to avoid spurious re-runs.
+  // Use useLayoutEffect (not render-time assignment) to satisfy react-hooks/no-direct-mutation-in-render.
   const fetcherRef = useRef(fetcher)
-  fetcherRef.current = fetcher
+  useLayoutEffect(() => {
+    fetcherRef.current = fetcher
+  })
 
   useEffect(() => {
     const controller = new AbortController()
