@@ -20,7 +20,11 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use clickhouse::Client as ChClient;
 use metrics_exporter_prometheus::PrometheusBuilder;
-use stitchd_db::{PgFlagRepository, PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository};
+use stitchd_db::{
+    CompositeSegmentRepository, PgFlagRepository, PgSdkKeyRepository, PgSegmentRepository,
+    PgVariantRepository,
+    scylla::{ScyllaConfig, segment::ScyllaSegmentStore},
+};
 use stitchd_flag_service::sdk_backend::FlagSdkBackendServiceImpl;
 use stitchd_flag_service::service::FlagServiceImpl;
 use stitchd_proto::flags::v1::flag_service_server::FlagServiceServer;
@@ -64,8 +68,21 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PgVariantRepository::new(pool.clone(), audit_raw.clone()));
     let sdk_key_repo: Arc<dyn stitchd_db::SdkKeyRepository> =
         Arc::new(PgSdkKeyRepository::new(pool.clone(), audit_raw.clone()));
+    // ── ScyllaDB (list-segment membership reads) ──────────────────────────────
+    let scylla_config = ScyllaConfig::from_env();
+    tracing::info!(
+        uri = %scylla_config.uri,
+        keyspace = %scylla_config.keyspace,
+        "connecting to ScyllaDB for list-segment membership"
+    );
+    let scylla_client = stitchd_db::scylla::ScyllaClient::connect(&scylla_config)
+        .await
+        .context("failed to connect to ScyllaDB")?;
+    let scylla_store = Arc::new(ScyllaSegmentStore::new(scylla_client));
+
+    let pg_segment_repo = Arc::new(PgSegmentRepository::new(pool, audit_raw.clone()));
     let segment_repo: Arc<dyn stitchd_db::SegmentRepository> =
-        Arc::new(PgSegmentRepository::new(pool, audit_raw.clone()));
+        Arc::new(CompositeSegmentRepository::new(pg_segment_repo, scylla_store));
 
     // ── ClickHouse (optional — evaluation telemetry) ───────────────────────────
     let ch_url =

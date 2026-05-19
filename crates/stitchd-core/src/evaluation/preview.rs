@@ -76,19 +76,31 @@ pub struct ContextPreviewResult {
 /// referenced by this flag's rules. For each context, the core resolves
 /// segment membership via `SegmentEvaluator`, then runs rule evaluation.
 ///
+/// `pre_resolved_list_memberships` supplies extra per-context segment IDs (one
+/// `HashSet<SegmentId>` per evaluation context, aligned by index). These are
+/// merged with the rule-based resolved segments before evaluation. Use this to
+/// inject list-segment membership results obtained externally (e.g. via a
+/// ScyllaDB batch check in the flag service) without having to load full
+/// include/exclude sets into memory.  Pass an empty slice when not needed.
+///
 /// Does not record events or affect any counters — preview only.
 pub fn evaluate_preview(
     flag: &Flag,
     evaluation_contexts: &[EvaluationContext],
     segment_definitions: &[SegmentDefinition],
     env_id: EnvironmentId,
+    pre_resolved_list_memberships: &[HashSet<SegmentId>],
 ) -> Vec<ContextPreviewResult> {
     evaluation_contexts
         .iter()
         .enumerate()
         .map(|(idx, ec)| {
-            // Resolve segment membership for this specific context.
-            let resolved_segments = resolve_segments(ec, segment_definitions);
+            // Resolve segment membership for this specific context from rule-based definitions.
+            let mut resolved_segments = resolve_segments(ec, segment_definitions);
+            // Merge any pre-resolved list-segment memberships supplied by the caller.
+            if let Some(extra) = pre_resolved_list_memberships.get(idx) {
+                resolved_segments.extend(extra.iter().copied());
+            }
             evaluate_single(flag, ec, &resolved_segments, env_id, idx)
         })
         .collect()
@@ -500,7 +512,7 @@ mod tests {
         let ec = EvaluationContext::new().with_context(
             Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
         );
-        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
 
         assert_eq!(results.len(), 1);
         let r = &results[0];
@@ -521,7 +533,7 @@ mod tests {
         let ec = EvaluationContext::new().with_context(
             Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
         );
-        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
 
         let r = &results[0];
         assert_eq!(r.variant_key, "on");
@@ -547,7 +559,7 @@ mod tests {
         let ec = EvaluationContext::new().with_context(
             Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false)),
         );
-        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
 
         let r = &results[0];
         assert_eq!(r.variant_key, "off");
@@ -618,7 +630,7 @@ mod tests {
                 .with_parameter("beta", ParameterValue::Bool(false))
                 .with_parameter("country", ParameterValue::Str("US".to_string())),
         );
-        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
 
         let r = &results[0];
         assert_eq!(r.variant_key, "variant2");
@@ -652,7 +664,7 @@ mod tests {
         });
 
         let ec = EvaluationContext::new().with_context(Context::new("user", "u1"));
-        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
 
         let r = &results[0];
         assert!(r.rollout_debug.is_some());
@@ -680,7 +692,7 @@ mod tests {
             Context::new("user", "u2").with_parameter("beta", ParameterValue::Bool(false)),
         );
 
-        let results = evaluate_preview(&flag, &[ec1, ec2], &[], env_id());
+        let results = evaluate_preview(&flag, &[ec1, ec2], &[], env_id(), &[]);
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].context_index, 0);
@@ -854,12 +866,12 @@ mod tests {
 
         // u1 is in segment → rule fires → "on"
         let ec_in = EvaluationContext::new().with_context(Context::new("user", "u1"));
-        let results = evaluate_preview(&flag, &[ec_in], std::slice::from_ref(&segment_def), env_id());
+        let results = evaluate_preview(&flag, &[ec_in], std::slice::from_ref(&segment_def), env_id(), &[]);
         assert_eq!(results[0].variant_key, "on");
 
         // u2 is NOT in segment → default "off"
         let ec_out = EvaluationContext::new().with_context(Context::new("user", "u2"));
-        let results = evaluate_preview(&flag, &[ec_out], &[segment_def], env_id());
+        let results = evaluate_preview(&flag, &[ec_out], &[segment_def], env_id(), &[]);
         assert_eq!(results[0].variant_key, "off");
     }
 
@@ -896,7 +908,7 @@ mod tests {
                 .with_parameter("beta", ParameterValue::Bool(true))
                 .with_parameter("country", ParameterValue::Str("US".to_string())),
         );
-        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
         let r = &results[0];
         assert_eq!(r.variant_key, "on");
         // Both leaf conditions should appear in traces for the fired rule.
@@ -929,10 +941,55 @@ mod tests {
             Context::new("user", "u1")
                 .with_parameter("account_id", ParameterValue::Str("acct-123".to_string())),
         );
-        let results = evaluate_preview(&flag, &[ec], &[], env_id());
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
         let r = &results[0];
         assert!(r.rollout_debug.is_some());
         let debug = r.rollout_debug.as_ref().unwrap();
         assert!(debug.hash_input.contains("acct-123"));
     }
+
+    // ── Regression: bug 1hu — list-segment via pre_resolved_list_memberships ───
+    //
+    // Tests the path used by the flag service, where list-segment membership is
+    // resolved externally (via ScyllaDB) and injected as pre-resolved IDs rather
+    // than loading full include/exclude sets into ListBasedSegment definitions.
+
+    #[test]
+    fn list_segment_via_pre_resolved_memberships_matches() {
+        let (mut flag, on_id, _) = make_bool_flag(true);
+        let seg_id = SegmentId::new();
+
+        flag.rules.push(FlagRule {
+            flag_id: flag.record.id,
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::Leaf(Condition::InSegment(seg_id)),
+                output: RuleOutput::Variant(on_id),
+            },
+        });
+
+        // Pre-resolved: context 0 is in the segment, context 1 is not.
+        let pre_resolved_in: HashSet<SegmentId> = [seg_id].into_iter().collect();
+        let pre_resolved_out: HashSet<SegmentId> = HashSet::new();
+
+        let ec_in = EvaluationContext::new().with_context(Context::new("user", "alice@acme.com"));
+        let ec_out = EvaluationContext::new().with_context(Context::new("user", "spam@acme.com"));
+
+        // No segment_definitions supplied — membership comes entirely from pre_resolved.
+        let results = evaluate_preview(
+            &flag,
+            &[ec_in, ec_out],
+            &[], // no in-process definitions
+            env_id(),
+            &[pre_resolved_in, pre_resolved_out],
+        );
+
+        assert_eq!(results[0].variant_key, "on", "alice (in segment) must match rule 0");
+        assert_eq!(results[0].fired_rule_index, Some(0));
+        assert_eq!(results[1].variant_key, "off", "spam (not in segment) must fall through to default");
+        assert_eq!(results[1].fired_rule_index, None);
+    }
+
 }

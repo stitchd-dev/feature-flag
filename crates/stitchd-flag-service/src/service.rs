@@ -104,6 +104,88 @@ impl FlagServiceImpl {
         Ok(definitions)
     }
 
+    /// Resolve list-segment membership for every evaluation context.
+    ///
+    /// Returns one `HashSet<SegmentId>` per context (aligned by index), each
+    /// containing the IDs of list-type segments the context is a member of.
+    /// Rule-based segments are excluded — those are handled by `fetch_segment_definitions`.
+    ///
+    /// Membership is checked against ScyllaDB via `find_memberships_batch`, which
+    /// returns `include AND NOT exclude` semantics.
+    async fn resolve_list_memberships(
+        &self,
+        all_segment_ids: &std::collections::HashSet<stitchd_core::id::SegmentId>,
+        evaluation_contexts: &[stitchd_core::context::EvaluationContext],
+        env_id: stitchd_core::id::EnvironmentId,
+    ) -> Result<Vec<std::collections::HashSet<stitchd_core::id::SegmentId>>, Status> {
+        use stitchd_core::segment::SegmentType;
+
+        if all_segment_ids.is_empty() || evaluation_contexts.is_empty() {
+            return Ok(vec![
+                std::collections::HashSet::new();
+                evaluation_contexts.len()
+            ]);
+        }
+
+        // Identify which of the referenced segment IDs are list-type.
+        let id_slice: Vec<_> = all_segment_ids.iter().copied().collect();
+        let segments = self
+            .segment_repo
+            .find_batch_by_ids(&id_slice)
+            .await
+            .map_err(|e| Status::internal(format!("segment batch lookup failed: {e}")))?;
+
+        let list_segment_ids: Vec<stitchd_core::id::SegmentId> = segments
+            .iter()
+            .filter(|s| s.segment_type == SegmentType::List)
+            .map(|s| s.id)
+            .collect();
+
+        if list_segment_ids.is_empty() {
+            return Ok(vec![
+                std::collections::HashSet::new();
+                evaluation_contexts.len()
+            ]);
+        }
+
+        // Build (context_type, context_key) pairs from each EvaluationContext's first sub-context.
+        // The flag-service preview path uses single-sub-context EvaluationContexts.
+        let contexts_for_batch: Vec<(String, String)> = evaluation_contexts
+            .iter()
+            .map(|ec| {
+                ec.contexts
+                    .first()
+                    .map(|c| (c.context_type.clone(), c.key.clone()))
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        let memberships = self
+            .segment_repo
+            .find_memberships_batch(env_id, &contexts_for_batch, &list_segment_ids)
+            .await
+            .map_err(|e| Status::internal(format!("list membership batch check failed: {e}")))?;
+
+        // Align results back to context index order.
+        // `find_memberships_batch` returns one `SegmentIdMembership` per context pair,
+        // in the same order as `contexts_for_batch`.
+        let pre_resolved: Vec<std::collections::HashSet<stitchd_core::id::SegmentId>> = memberships
+            .into_iter()
+            .map(|m| {
+                m.memberships
+                    .into_iter()
+                    .filter_map(|(seg_id, is_member)| if is_member { Some(seg_id) } else { None })
+                    .collect()
+            })
+            .collect();
+
+        // Pad with empty sets if fewer results were returned than contexts
+        // (defensive — should not happen in practice).
+        let mut result = pre_resolved;
+        result.resize_with(evaluation_contexts.len(), std::collections::HashSet::new);
+        Ok(result)
+    }
+
     /// Extract and validate the SDK key from gRPC metadata, returning the environment ID.
     async fn authenticate_sdk(
         &self,
@@ -731,11 +813,22 @@ impl FlagService for FlagServiceImpl {
         };
         let env_id = stitchd_core::id::EnvironmentId::from_uuid(env_uuid);
 
+        // Resolve list-segment membership via ScyllaDB for all evaluation contexts.
+        //
+        // `fetch_segment_definitions` only returns RuleBased definitions (list-based
+        // segment entries live in ScyllaDB and cannot be loaded wholesale). Instead,
+        // we call `find_memberships_batch` here to get per-context boolean membership
+        // for each list-type segment, then pass the results as `pre_resolved_list_memberships`
+        // into `evaluate_preview` so `InSegment` leaves evaluate correctly.
+        let pre_resolved_list_memberships =
+            self.resolve_list_memberships(&segment_ids, &evaluation_contexts, env_id).await?;
+
         let results = stitchd_core::evaluation::preview::evaluate_preview(
             &flag,
             &evaluation_contexts,
             &segment_definitions,
             env_id,
+            &pre_resolved_list_memberships,
         );
 
         // NOTE: evaluate_preview intentionally does NOT write to flag_evaluation_log.
