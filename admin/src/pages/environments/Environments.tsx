@@ -114,6 +114,7 @@ function SdkKeysSection({ environmentId, environmentName, canCreate, canRevoke }
   const [loading, setLoading] = useState(true)
   const [newRawKey, setNewRawKey] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [showCreateForm, setShowCreateForm] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -127,12 +128,13 @@ function SdkKeysSection({ environmentId, environmentName, canCreate, canRevoke }
 
   useEffect(() => { load() }, [load])
 
-  async function handleCreate() {
+  async function handleCreate(name: string) {
     setBusy(true)
     setError(null)
     try {
-      const res = await createSdkKey(environmentId)
+      const res = await createSdkKey(environmentId, name || undefined)
       setNewRawKey(res.raw_key)
+      setShowCreateForm(false)
       load()
     } catch {
       setError('Failed to create SDK key')
@@ -171,11 +173,34 @@ function SdkKeysSection({ environmentId, environmentName, canCreate, canRevoke }
           className="btn primary sm"
           disabled={!canCreate || busy}
           title={canCreate ? 'Create new SDK key' : 'No permission to create SDK keys'}
-          onClick={() => void handleCreate()}
+          onClick={() => setShowCreateForm((v) => !v)}
         >
           <I.plus size={12} /> New key
         </button>
       </div>
+      {showCreateForm && (
+        <Formik
+          initialValues={{ name: '' }}
+          onSubmit={(values) => handleCreate(values.name)}
+        >
+          {({ isSubmitting }) => (
+            <Form>
+              <div style={{ padding: '10px 16px', display: 'flex', gap: 8, alignItems: 'center', borderBottom: '1px solid var(--border-faint)' }}>
+                <Field
+                  name="name"
+                  className="input"
+                  placeholder="Key name (optional)"
+                  style={{ maxWidth: 220 }}
+                  disabled={busy || isSubmitting}
+                  autoFocus
+                />
+                <button type="submit" className="btn primary sm" disabled={busy || isSubmitting}>Create</button>
+                <button type="button" className="btn sm" disabled={busy || isSubmitting} onClick={() => setShowCreateForm(false)}>Cancel</button>
+              </div>
+            </Form>
+          )}
+        </Formik>
+      )}
       <div style={{ padding: '0 16px' }}>
         {error && (
           <div style={{ fontSize: 12, color: 'var(--danger)', padding: '8px 0' }}>{error}</div>
