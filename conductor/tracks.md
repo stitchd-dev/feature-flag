@@ -49,3 +49,9 @@ This file tracks all major tracks for the project.
 - gateway_lean_20260518 (Gateway Lean Refactor — strip DB connections, new analytics-service, retire event-service)
 - boundaries_20260518 (Boundary Hardening Refactor — DDD service boundaries, URL canonical rewrite, STITCHD_ env vars, admin UI primitives + Formik migration, SDK spec alignment)
 -->
+
+---
+
+## [ ] Track: Build the complete Events + Metrics module as base for experimentation — admin UI CRUD + tester, REST batch ingestion, Rust SDK track() + buffer, composable metric_definitions (aggregation/ratio/funnel), experiment cutover to metric_ids
+*Link: [./conductor/tracks/events_metrics_20260519/](./conductor/tracks/events_metrics_20260519/)*
+
