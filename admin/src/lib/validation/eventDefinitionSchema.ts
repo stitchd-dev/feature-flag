@@ -34,3 +34,28 @@ export const eventDefinitionSchema = Yup.object({
 })
 
 export type EventDefinitionFormValues = Yup.InferType<typeof eventDefinitionSchema>
+
+/**
+ * Edit-mode schema — same as create but `key` is immutable, so it's omitted.
+ * The form still surfaces the key as a read-only display field; this schema
+ * only validates the editable subset.
+ */
+export const eventDefinitionEditSchema = Yup.object({
+  metric_type: Yup.string()
+    .oneOf(METRIC_TYPES as unknown as string[], 'Invalid metric type')
+    .required('Metric type is required'),
+
+  description: Yup.string().max(500, 'Description must be 500 characters or fewer'),
+
+  schema: Yup.string().test('valid-json-or-empty', 'Schema must be valid JSON', (value) => {
+    if (!value || value.trim() === '') return true
+    try {
+      JSON.parse(value)
+      return true
+    } catch {
+      return false
+    }
+  }),
+})
+
+export type EventDefinitionEditValues = Yup.InferType<typeof eventDefinitionEditSchema>
