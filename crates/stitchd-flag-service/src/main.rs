@@ -21,8 +21,8 @@ use anyhow::Context as _;
 use clickhouse::Client as ChClient;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use stitchd_db::{
-    CompositeSegmentRepository, PgFlagRepository, PgSdkKeyRepository, PgSegmentRepository,
-    PgVariantRepository,
+    CompositeSegmentRepository, PgEventDefinitionRepository, PgFlagRepository, PgSdkKeyRepository,
+    PgSegmentRepository, PgVariantRepository,
     scylla::{ScyllaConfig, segment::ScyllaSegmentStore},
 };
 use stitchd_flag_service::sdk_backend::FlagSdkBackendServiceImpl;
@@ -80,9 +80,14 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to connect to ScyllaDB")?;
     let scylla_store = Arc::new(ScyllaSegmentStore::new(scylla_client));
 
-    let pg_segment_repo = Arc::new(PgSegmentRepository::new(pool, audit_raw.clone()));
+    let pg_segment_repo = Arc::new(PgSegmentRepository::new(pool.clone(), audit_raw.clone()));
     let segment_repo: Arc<dyn stitchd_db::SegmentRepository> =
         Arc::new(CompositeSegmentRepository::new(pg_segment_repo, scylla_store));
+
+    // Event-definition repo — supplies the SDK's track() validation cache
+    // via SyncDefinitions.
+    let event_definition_repo: Arc<dyn stitchd_db::EventDefinitionRepository> =
+        Arc::new(PgEventDefinitionRepository::new(pool, audit_raw.clone()));
 
     // ── ClickHouse (optional — evaluation telemetry) ───────────────────────────
     let ch_url =
@@ -118,7 +123,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&variant_repo),
         Arc::clone(&segment_repo),
     )
-    .with_clickhouse(ch_client);
+    .with_clickhouse(ch_client)
+    .with_event_definition_repo(Arc::clone(&event_definition_repo));
 
     let (health_reporter, health_service) = health_reporter();
     health_reporter

@@ -61,6 +61,22 @@ impl EventValueType {
             TypedValue::Double(_) => Self::Double,
         }
     }
+
+    /// Parse the wire-form `value_type` string used by
+    /// `EventDefinitionMeta.value_type` in `SyncDefinitions`. Returns
+    /// `None` for unknown variants — the polling layer drops those entries
+    /// silently rather than failing the whole sync. This keeps the SDK
+    /// forward-compatible if the gateway introduces a new value type the
+    /// SDK doesn't yet understand.
+    #[must_use]
+    pub fn from_wire_str(s: &str) -> Option<Self> {
+        match s {
+            "bool" => Some(Self::Bool),
+            "int" => Some(Self::Int),
+            "double" => Some(Self::Double),
+            _ => None,
+        }
+    }
 }
 
 /// Immutable in-memory snapshot of the SDK's environment.
@@ -82,14 +98,10 @@ pub struct DefinitionSnapshot {
     /// Used by `Client::track()` for client-side validation (unknown
     /// event_keys + value-type mismatches are warned + skipped).
     ///
-    /// TODO(feature-flag-7an.5.x — polling extension): the `SdkService`
-    /// gRPC `SyncDefinitions` does NOT currently carry event_definitions.
-    /// Until the polling layer is extended, this map is populated only by
-    /// tests and the conformance runner via [`Self::with_event_definitions`].
-    /// In production today the cache is empty, which means every
-    /// `Client::track()` call will warn-skip (per spec F2.4) — matching
-    /// the safest possible behaviour. See
-    /// `bd show feature-flag-7an.5.2` for the planned polling extension.
+    /// Populated automatically by [`Self::from_proto`] from the
+    /// `SyncDefinitions.event_definitions` field on every poll. Tests and
+    /// the conformance runner may seed entries directly via
+    /// [`Self::with_event_definitions`].
     event_definitions: HashMap<String, EventValueType>,
     /// Server clock at snapshot construction (`SyncDefinitionsResponse.server_timestamp_ms`).
     /// Diagnostic only — useful for "how stale is my snapshot" logging.
@@ -128,11 +140,22 @@ impl DefinitionSnapshot {
         for s in resp.list_segments {
             list_segments.insert(s.id.clone(), s);
         }
+        // Event definitions: filter unparseable value_type strings rather
+        // than failing the whole snapshot — keeps the SDK forward-compatible
+        // with a gateway that ships a new value-type variant. Dropped
+        // entries effectively become "unregistered" on this SDK build,
+        // which is the safest fallback (warn + skip on track()).
+        let mut event_definitions = HashMap::with_capacity(resp.event_definitions.len());
+        for d in resp.event_definitions {
+            if let Some(vt) = EventValueType::from_wire_str(&d.value_type) {
+                event_definitions.insert(d.event_key, vt);
+            }
+        }
         Self {
             flags,
             rule_segments,
             list_segments,
-            event_definitions: HashMap::new(),
+            event_definitions,
             server_timestamp_ms: resp.server_timestamp_ms,
             environment_id: resp.environment_id,
         }
@@ -140,11 +163,10 @@ impl DefinitionSnapshot {
 
     /// Replace the `event_definitions` cache with the supplied map.
     ///
-    /// Currently this is the ONLY way to populate the cache — the SDK's
-    /// `SyncDefinitions` proto does not yet carry event definitions
-    /// alongside flags. Tests and the conformance runner use this method
-    /// directly. Once the polling layer is extended (tracked separately),
-    /// `from_proto` will start populating this automatically.
+    /// In production [`Self::from_proto`] populates this automatically from
+    /// the polled `SyncDefinitions` response. This builder remains useful
+    /// for tests and the conformance runner that don't go through the
+    /// polling layer.
     #[must_use]
     pub fn with_event_definitions(mut self, defs: HashMap<String, EventValueType>) -> Self {
         self.event_definitions = defs;
@@ -340,6 +362,7 @@ mod tests {
             list_segments,
             server_timestamp_ms: 1_700_000_000_000,
             environment_id: "env-1".to_string(),
+            event_definitions: vec![],
         })
     }
 
@@ -544,6 +567,92 @@ mod tests {
         assert_eq!(s.event_definition("revenue"), Some(EventValueType::Double));
         assert_eq!(s.event_definition("clicks"), Some(EventValueType::Int));
         assert!(s.event_definition("not_registered").is_none());
+    }
+
+    // ── from_proto event_definitions wiring ─────────────────────────────────
+
+    #[test]
+    fn from_proto_populates_event_definitions_cache() {
+        use stitchd_proto::sdk::v1::EventDefinitionMeta;
+        let resp = SyncDefinitionsResponse {
+            flags: vec![],
+            rule_segments: vec![],
+            list_segments: vec![],
+            server_timestamp_ms: 0,
+            environment_id: String::new(),
+            event_definitions: vec![
+                EventDefinitionMeta {
+                    event_key: "checkout_completed".into(),
+                    value_type: "bool".into(),
+                },
+                EventDefinitionMeta {
+                    event_key: "revenue".into(),
+                    value_type: "double".into(),
+                },
+                EventDefinitionMeta {
+                    event_key: "clicks".into(),
+                    value_type: "int".into(),
+                },
+            ],
+        };
+        let s = DefinitionSnapshot::from_proto(resp);
+        assert_eq!(s.event_definition_count(), 3);
+        assert_eq!(
+            s.event_definition("checkout_completed"),
+            Some(EventValueType::Bool)
+        );
+        assert_eq!(s.event_definition("revenue"), Some(EventValueType::Double));
+        assert_eq!(s.event_definition("clicks"), Some(EventValueType::Int));
+    }
+
+    #[test]
+    fn from_proto_handles_unknown_value_type_gracefully() {
+        // A gateway running a newer schema might ship a value_type the SDK
+        // doesn't yet understand. Drop that entry but keep the rest — never
+        // fail the whole snapshot.
+        use stitchd_proto::sdk::v1::EventDefinitionMeta;
+        let resp = SyncDefinitionsResponse {
+            flags: vec![],
+            rule_segments: vec![],
+            list_segments: vec![],
+            server_timestamp_ms: 0,
+            environment_id: String::new(),
+            event_definitions: vec![
+                EventDefinitionMeta {
+                    event_key: "checkout_completed".into(),
+                    value_type: "bool".into(),
+                },
+                EventDefinitionMeta {
+                    event_key: "future_thing".into(),
+                    value_type: "garbage".into(),
+                },
+                EventDefinitionMeta {
+                    event_key: "revenue".into(),
+                    value_type: "double".into(),
+                },
+            ],
+        };
+        let s = DefinitionSnapshot::from_proto(resp);
+        assert_eq!(s.event_definition_count(), 2);
+        assert_eq!(
+            s.event_definition("checkout_completed"),
+            Some(EventValueType::Bool)
+        );
+        assert_eq!(s.event_definition("revenue"), Some(EventValueType::Double));
+        assert!(s.event_definition("future_thing").is_none());
+    }
+
+    #[test]
+    fn from_wire_str_round_trips_known_variants() {
+        assert_eq!(EventValueType::from_wire_str("bool"), Some(EventValueType::Bool));
+        assert_eq!(EventValueType::from_wire_str("int"), Some(EventValueType::Int));
+        assert_eq!(
+            EventValueType::from_wire_str("double"),
+            Some(EventValueType::Double)
+        );
+        assert_eq!(EventValueType::from_wire_str(""), None);
+        assert_eq!(EventValueType::from_wire_str("Bool"), None); // case sensitive
+        assert_eq!(EventValueType::from_wire_str("string"), None);
     }
 
     #[test]
