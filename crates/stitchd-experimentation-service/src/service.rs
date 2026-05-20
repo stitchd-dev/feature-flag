@@ -419,24 +419,21 @@ impl ExperimentationService for ExperimentationServiceImpl {
             if let Some(obj) = variant_stats.as_object() {
                 for (variant_key, count_val) in obj {
                     let participant_count = count_val.as_u64().unwrap_or(0);
-                    let entry = by_variant
-                        .entry(variant_key.clone())
-                        .or_insert_with(|| VariantResult {
-                            variant_key: variant_key.clone(),
-                            participant_count,
-                            metric_values: HashMap::new(),
-                            p_value: 0.0,
-                            p_value_present: false,
-                        });
+                    let entry =
+                        by_variant
+                            .entry(variant_key.clone())
+                            .or_insert_with(|| VariantResult {
+                                variant_key: variant_key.clone(),
+                                participant_count,
+                                metric_values: HashMap::new(),
+                                p_value: 0.0,
+                                p_value_present: false,
+                            });
 
                     // Extract p_value from frequentist_result JSON string if present.
                     if let Some(freq_str) = &result.frequentist_result {
-                        if let Ok(freq_json) =
-                            serde_json::from_str::<serde_json::Value>(freq_str)
-                        {
-                            if let Some(p_val) =
-                                freq_json.get("p_value").and_then(|v| v.as_f64())
-                            {
+                        if let Ok(freq_json) = serde_json::from_str::<serde_json::Value>(freq_str) {
+                            if let Some(p_val) = freq_json.get("p_value").and_then(|v| v.as_f64()) {
                                 entry.p_value = p_val;
                                 entry.p_value_present = true;
                             }
@@ -496,11 +493,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
     /// message. The stream is short-lived (no long-poll); stats-service should
     /// call this on a cadence of its choosing.
     type ListRunningExperimentsStream = std::pin::Pin<
-        Box<
-            dyn futures_core::Stream<Item = Result<RunningExperiment, Status>>
-                + Send
-                + 'static,
-        >,
+        Box<dyn futures_core::Stream<Item = Result<RunningExperiment, Status>> + Send + 'static>,
     >;
 
     #[instrument(skip(self))]
@@ -515,7 +508,8 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .map_err(repo_err_to_status)?;
 
         // For each running experiment, fetch the active (un-ended) iteration.
-        let mut items: Vec<Result<RunningExperiment, Status>> = Vec::with_capacity(experiments.len());
+        let mut items: Vec<Result<RunningExperiment, Status>> =
+            Vec::with_capacity(experiments.len());
         for exp in experiments {
             let iterations = self
                 .experiment_repo
@@ -1362,7 +1356,13 @@ mod tests {
         let exp_id = Uuid::new_v4();
         let results = vec![
             make_analytics_result(&env_id_str, &exp_id.to_string(), "control", "checkout", 100),
-            make_analytics_result(&env_id_str, &exp_id.to_string(), "treatment", "checkout", 120),
+            make_analytics_result(
+                &env_id_str,
+                &exp_id.to_string(),
+                "treatment",
+                "checkout",
+                120,
+            ),
         ];
         let svc = ExperimentationServiceImpl::new(
             Arc::new(AlwaysSucceedRepo { env_id }),
@@ -1381,7 +1381,11 @@ mod tests {
         assert_eq!(resp.variant_results.len(), 2);
         // Both variants should have p_value_present since we set frequentist_result
         for vr in &resp.variant_results {
-            assert!(vr.p_value_present, "variant {} should have p_value_present", vr.variant_key);
+            assert!(
+                vr.p_value_present,
+                "variant {} should have p_value_present",
+                vr.variant_key
+            );
             assert!((vr.p_value - 0.04).abs() < 1e-9);
         }
     }
@@ -1811,7 +1815,10 @@ mod tests {
             last_computed_at_ms: Utc::now().timestamp_millis(),
         });
         let result = svc.update_iteration_last_computed(req).await;
-        assert!(result.is_ok(), "update_iteration_last_computed should succeed");
+        assert!(
+            result.is_ok(),
+            "update_iteration_last_computed should succeed"
+        );
     }
 
     /// Invalid UUID returns InvalidArgument.

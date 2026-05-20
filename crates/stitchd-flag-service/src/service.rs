@@ -5,9 +5,6 @@
 use std::sync::Arc;
 
 use clickhouse::Client as ChClient;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status};
 use stitchd_db::{FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository};
 use stitchd_proto::flags::v1::{
     EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
@@ -15,6 +12,9 @@ use stitchd_proto::flags::v1::{
     MutationKind, UpdateFlagHashingRequest, UpdateFlagHashingResponse,
     flag_service_server::FlagService,
 };
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tonic::{Request, Response, Status};
 
 use crate::{error::FlagServiceError, mapping};
 
@@ -820,8 +820,9 @@ impl FlagService for FlagServiceImpl {
         // we call `find_memberships_batch` here to get per-context boolean membership
         // for each list-type segment, then pass the results as `pre_resolved_list_memberships`
         // into `evaluate_preview` so `InSegment` leaves evaluate correctly.
-        let pre_resolved_list_memberships =
-            self.resolve_list_memberships(&segment_ids, &evaluation_contexts, env_id).await?;
+        let pre_resolved_list_memberships = self
+            .resolve_list_memberships(&segment_ids, &evaluation_contexts, env_id)
+            .await?;
 
         let results = stitchd_core::evaluation::preview::evaluate_preview(
             &flag,

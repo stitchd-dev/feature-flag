@@ -56,7 +56,8 @@ async fn main() -> anyhow::Result<()> {
         .context("failed to install Prometheus recorder")?;
 
     // ── Database ───────────────────────────────────────────────────────────────
-    let database_url = std::env::var("STITCHD_DATABASE_URL").context("STITCHD_DATABASE_URL is required")?;
+    let database_url =
+        std::env::var("STITCHD_DATABASE_URL").context("STITCHD_DATABASE_URL is required")?;
     let pool = sqlx::PgPool::connect(&database_url)
         .await
         .context("failed to connect to database")?;
@@ -81,8 +82,9 @@ async fn main() -> anyhow::Result<()> {
     let scylla_store = Arc::new(ScyllaSegmentStore::new(scylla_client));
 
     let pg_segment_repo = Arc::new(PgSegmentRepository::new(pool.clone(), audit_raw.clone()));
-    let segment_repo: Arc<dyn stitchd_db::SegmentRepository> =
-        Arc::new(CompositeSegmentRepository::new(pg_segment_repo, scylla_store));
+    let segment_repo: Arc<dyn stitchd_db::SegmentRepository> = Arc::new(
+        CompositeSegmentRepository::new(pg_segment_repo, scylla_store),
+    );
 
     // Event-definition repo — supplies the SDK's track() validation cache
     // via SyncDefinitions.
@@ -90,10 +92,11 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PgEventDefinitionRepository::new(pool, audit_raw.clone()));
 
     // ── ClickHouse (optional — evaluation telemetry) ───────────────────────────
-    let ch_url =
-        std::env::var("STITCHD_CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let ch_url = std::env::var("STITCHD_CLICKHOUSE_URL")
+        .unwrap_or_else(|_| "http://localhost:8123".to_string());
     let ch_db = std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
-    let ch_user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let ch_user =
+        std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
     let ch_password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_default();
     let ch_client = Arc::new(
         ChClient::default()

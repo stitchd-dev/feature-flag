@@ -20,8 +20,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use stitchd_db::{PgAuditLogger, PgExperimentRepository, PgStatsScheduleRepository};
 use stitchd_experimentation_service::{
-    analytics_client::AnalyticsClient, flag_client::FlagClient,
-    service::ExperimentationServiceImpl,
+    analytics_client::AnalyticsClient, flag_client::FlagClient, service::ExperimentationServiceImpl,
 };
 use stitchd_proto::experiments::v1::experimentation_service_server::ExperimentationServiceServer;
 
@@ -45,7 +44,8 @@ async fn main() -> anyhow::Result<()> {
         .context("install Prometheus metrics recorder")?;
 
     // ── Database ─────────────────────────────────────────────────────────────
-    let database_url = std::env::var("STITCHD_DATABASE_URL").context("STITCHD_DATABASE_URL must be set")?;
+    let database_url =
+        std::env::var("STITCHD_DATABASE_URL").context("STITCHD_DATABASE_URL must be set")?;
     let pool = PgPoolOptions::new()
         .max_connections(10)
         .connect(&database_url)
@@ -66,8 +66,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(addr = %analytics_addr, "Connected to Analytics Service");
 
     // ── Flag Service client ───────────────────────────────────────────────────
-    let flag_service_addr =
-        std::env::var("STITCHD_FLAG_SERVICE_ADDR").unwrap_or_else(|_| "http://localhost:50052".to_string());
+    let flag_service_addr = std::env::var("STITCHD_FLAG_SERVICE_ADDR")
+        .unwrap_or_else(|_| "http://localhost:50052".to_string());
 
     let flag_client = match FlagClient::connect(flag_service_addr.clone()).await {
         Ok(fc) => {

@@ -85,13 +85,21 @@ fn row_to_metric(row: &sqlx::postgres::PgRow) -> Result<MetricDefinition, Reposi
         ),
         key: row.try_get("key").map_err(RepositoryError::Database)?,
         name: row.try_get("name").map_err(RepositoryError::Database)?,
-        description: row.try_get("description").map_err(RepositoryError::Database)?,
+        description: row
+            .try_get("description")
+            .map_err(RepositoryError::Database)?,
         kind,
         goal_direction,
         version: row.try_get("version").map_err(RepositoryError::Database)?,
-        created_at: row.try_get("created_at").map_err(RepositoryError::Database)?,
-        updated_at: row.try_get("updated_at").map_err(RepositoryError::Database)?,
-        deleted_at: row.try_get("deleted_at").map_err(RepositoryError::Database)?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(RepositoryError::Database)?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(RepositoryError::Database)?,
+        deleted_at: row
+            .try_get("deleted_at")
+            .map_err(RepositoryError::Database)?,
     })
 }
 
@@ -373,10 +381,7 @@ impl MetricRepository for PgMetricRepository {
         Ok(())
     }
 
-    async fn update(
-        &self,
-        metric: &MetricDefinition,
-    ) -> Result<MetricDefinition, RepositoryError> {
+    async fn update(&self, metric: &MetricDefinition) -> Result<MetricDefinition, RepositoryError> {
         let (kind_str, config) = split_kind(&metric.kind)?;
         let new_version = metric.version + 1;
 

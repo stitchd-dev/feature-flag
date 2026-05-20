@@ -164,12 +164,11 @@ impl StatsScheduleRepository for PgStatsScheduleRepository {
         use chrono::TimeZone as _;
 
         // Resolve the experiment_id from the iteration.
-        let experiment_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT experiment_id FROM experiment_iterations WHERE id = $1",
-        )
-        .bind(iteration_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let experiment_id: Option<Uuid> =
+            sqlx::query_scalar("SELECT experiment_id FROM experiment_iterations WHERE id = $1")
+                .bind(iteration_id)
+                .fetch_optional(&self.pool)
+                .await?;
 
         let Some(experiment_id) = experiment_id else {
             // Iteration not found — no-op.

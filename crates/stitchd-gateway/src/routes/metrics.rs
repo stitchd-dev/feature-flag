@@ -42,8 +42,8 @@ use stitchd_proto::analytics::v1::{
     AggregationConfig as ProtoAggregationConfig, CreateMetricRequest, DeleteMetricRequest,
     FunnelConfig as ProtoFunnelConfig, FunnelStep as ProtoFunnelStep, GetMetricRequest,
     ListMetricsRequest, MetricDefinition as ProtoMetric, PreviewMetricRequest,
-    RatioConfig as ProtoRatioConfig, UpdateMetricRequest, create_metric_request,
-    metric_definition, preview_metric_request, update_metric_request,
+    RatioConfig as ProtoRatioConfig, UpdateMetricRequest, create_metric_request, metric_definition,
+    preview_metric_request, update_metric_request,
 };
 
 use crate::error::GatewayError;
@@ -273,9 +273,7 @@ fn parse_goal_direction(s: &str) -> Result<GoalDirection, GatewayError> {
     }
 }
 
-fn parse_where_clause_json(
-    s: Option<&str>,
-) -> Result<Option<serde_json::Value>, GatewayError> {
+fn parse_where_clause_json(s: Option<&str>) -> Result<Option<serde_json::Value>, GatewayError> {
     match s {
         None | Some("") => Ok(None),
         Some(raw) => serde_json::from_str(raw).map(Some).map_err(|e| {
@@ -360,9 +358,7 @@ fn proto_to_domain(p: ProtoMetric) -> Result<MetricDefinition, GatewayError> {
             .deleted_at
             .as_deref()
             .filter(|s| !s.is_empty())
-            .map(|s| {
-                chrono::DateTime::parse_from_rfc3339(s).map(|d| d.with_timezone(&chrono::Utc))
-            })
+            .map(|s| chrono::DateTime::parse_from_rfc3339(s).map(|d| d.with_timezone(&chrono::Utc)))
             .transpose()
             .map_err(|e| GatewayError::Upstream(format!("bad deleted_at: {e}")))?,
     })
@@ -644,7 +640,10 @@ pub async fn preview_metric(
     // bucket list legitimately means "no events in the window", not "the
     // backend isn't implemented yet". `warning` stays in the response
     // shape (proto compat) but is always None.
-    Ok(Json(PreviewMetricResponseJson { buckets, warning: None }))
+    Ok(Json(PreviewMetricResponseJson {
+        buckets,
+        warning: None,
+    }))
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -684,8 +683,8 @@ mod tests {
         ListContextParamsRequest, ListContextParamsResponse, ListContextTypesRequest,
         ListContextTypesResponse, ListExperimentResultsRequest, ListMetricsRequest,
         ListMetricsResponse, MetricDefinition as ProtoMetric, PreviewBucket, PreviewMetricRequest,
-        PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse,
-        TrackEventsRequest, TrackEventsResponse, UpdateMetricRequest,
+        PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse, TrackEventsRequest,
+        TrackEventsResponse, UpdateMetricRequest,
         analytics_service_client::AnalyticsServiceClient,
         analytics_service_server::{AnalyticsService as Svc, AnalyticsServiceServer},
         metric_definition,
@@ -895,7 +894,8 @@ mod tests {
         async fn get_event_firings(
             &self,
             _req: tonic::Request<stitchd_proto::analytics::v1::GetEventFiringsRequest>,
-        ) -> Result<Response<stitchd_proto::analytics::v1::GetEventFiringsResponse>, Status> {
+        ) -> Result<Response<stitchd_proto::analytics::v1::GetEventFiringsResponse>, Status>
+        {
             Err(Status::unimplemented("not used in metric tests"))
         }
         async fn get_event_stats(
@@ -1020,12 +1020,14 @@ mod tests {
             key: key.to_string(),
             name: format!("Metric {key}"),
             description: Some("for test".into()),
-            kind: Some(metric_definition::Kind::Aggregation(ProtoAggregationConfig {
-                event_key: "checkout".into(),
-                aggregator: "count".into(),
-                on_field: None,
-                where_clause_json: None,
-            })),
+            kind: Some(metric_definition::Kind::Aggregation(
+                ProtoAggregationConfig {
+                    event_key: "checkout".into(),
+                    aggregator: "count".into(),
+                    on_field: None,
+                    where_clause_json: None,
+                },
+            )),
             goal_direction: "increase".into(),
             version: 1,
             created_at: "2026-05-19T00:00:00Z".into(),
@@ -1318,11 +1320,8 @@ mod tests {
                 Uuid::new_v4(),
                 "k",
             ))));
-            *mock.update.lock().await = Some(Ok(sample_metric(
-                Uuid::new_v4(),
-                Uuid::new_v4(),
-                "k",
-            )));
+            *mock.update.lock().await =
+                Some(Ok(sample_metric(Uuid::new_v4(), Uuid::new_v4(), "k")));
             *mock.delete.lock().await = Some(Ok(()));
             test_router(state)
         };
@@ -1406,10 +1405,7 @@ mod tests {
     #[test]
     fn status_to_gw_err_delegates_to_default_mapping() {
         let s = Status::not_found("missing");
-        assert!(matches!(
-            status_to_gw_err(s),
-            GatewayError::NotFound(_)
-        ));
+        assert!(matches!(status_to_gw_err(s), GatewayError::NotFound(_)));
     }
 
     #[test]

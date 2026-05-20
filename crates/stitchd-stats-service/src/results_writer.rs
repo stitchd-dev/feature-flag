@@ -7,8 +7,7 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 
 use stitchd_proto::analytics::v1::{
-    WriteExperimentResultsRequest,
-    analytics_service_client::AnalyticsServiceClient,
+    WriteExperimentResultsRequest, analytics_service_client::AnalyticsServiceClient,
 };
 
 /// A summarized metric result for one (variant_group, metric_key) pair,
@@ -51,10 +50,7 @@ pub async fn write_results(
             metric_key: summary.metric_key.clone(),
             metric_type: "count".to_string(),
             variant_stats: summary.variant_stats.to_string(),
-            frequentist_result: summary
-                .frequentist_result
-                .as_ref()
-                .map(|v| v.to_string()),
+            frequentist_result: summary.frequentist_result.as_ref().map(|v| v.to_string()),
             bayesian_result: summary.bayesian_result.as_ref().map(|v| v.to_string()),
             recommendation: summary.recommendation.clone(),
             computed_at: computed_at_rfc.clone(),
@@ -80,16 +76,12 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     use stitchd_proto::analytics::v1::{
-        ExperimentResult,
-        GetContextIntelligenceResponse,
-        GetEvalStatsResponse,
-        IngestEventResponse,
-        ListContextParamsResponse,
-        ListContextTypesResponse,
-        RegisterContextResponse,
-        WriteExperimentResultsRequest,
-        WriteExperimentResultsResponse,
-        analytics_service_server::{AnalyticsService as AnalyticsServiceTrait, AnalyticsServiceServer},
+        ExperimentResult, GetContextIntelligenceResponse, GetEvalStatsResponse,
+        IngestEventResponse, ListContextParamsResponse, ListContextTypesResponse,
+        RegisterContextResponse, WriteExperimentResultsRequest, WriteExperimentResultsResponse,
+        analytics_service_server::{
+            AnalyticsService as AnalyticsServiceTrait, AnalyticsServiceServer,
+        },
     };
 
     // ── Mock analytics service ────────────────────────────────────────────────
@@ -207,7 +199,8 @@ mod tests {
         async fn get_event_firings(
             &self,
             _req: Request<stitchd_proto::analytics::v1::GetEventFiringsRequest>,
-        ) -> Result<Response<stitchd_proto::analytics::v1::GetEventFiringsResponse>, Status> {
+        ) -> Result<Response<stitchd_proto::analytics::v1::GetEventFiringsResponse>, Status>
+        {
             Err(Status::unimplemented("not used in tests"))
         }
         async fn get_event_stats(
@@ -258,8 +251,7 @@ mod tests {
     ) {
         use tonic::transport::Server;
 
-        let captured: Arc<Mutex<Vec<WriteExperimentResultsRequest>>> =
-            Arc::new(Mutex::new(vec![]));
+        let captured: Arc<Mutex<Vec<WriteExperimentResultsRequest>>> = Arc::new(Mutex::new(vec![]));
         let svc = MockAnalyticsService {
             received: captured.clone(),
         };
@@ -363,11 +355,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(
-            captured.lock().await.len(),
-            2,
-            "one RPC per metric summary"
-        );
+        assert_eq!(captured.lock().await.len(), 2, "one RPC per metric summary");
     }
 
     #[tokio::test]

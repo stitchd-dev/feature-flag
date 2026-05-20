@@ -86,7 +86,10 @@ pub fn build_funnel_query(
     // the metric_key IN (...) filter.
     let mut step_event_phs = Vec::with_capacity(cfg.steps.len());
     for step in &cfg.steps {
-        step_event_phs.push(push_bind(&mut binds, QueryBind::Str(step.event_key.clone())));
+        step_event_phs.push(push_bind(
+            &mut binds,
+            QueryBind::Str(step.event_key.clone()),
+        ));
     }
 
     // Build `metric_key = {p_step_0} OR metric_key = {p_step_1} OR ...` —
@@ -154,9 +157,7 @@ pub fn build_funnel_query(
         let conversion_rate_expr = if step_index == 0 {
             "1.0".to_owned()
         } else {
-            format!(
-                "countIf(level >= {level_threshold}) / nullIf(countIf(level >= 1), 0)"
-            )
+            format!("countIf(level >= {level_threshold}) / nullIf(countIf(level >= 1), 0)")
         };
 
         let step_count_expr = if step_index == 0 {
@@ -290,13 +291,15 @@ mod tests {
         );
         // Step 1: countIf(level >= 2) / nullIf(countIf(level >= 1), 0)
         assert!(
-            q.sql.contains("countIf(level >= 2) / nullIf(countIf(level >= 1), 0)"),
+            q.sql
+                .contains("countIf(level >= 2) / nullIf(countIf(level >= 1), 0)"),
             "step 1 conversion-rate expr missing, got:\n{}",
             q.sql
         );
         // Step 2: countIf(level >= 3) / nullIf(countIf(level >= 1), 0)
         assert!(
-            q.sql.contains("countIf(level >= 3) / nullIf(countIf(level >= 1), 0)"),
+            q.sql
+                .contains("countIf(level >= 3) / nullIf(countIf(level >= 1), 0)"),
             "step 2 conversion-rate expr missing, got:\n{}",
             q.sql
         );
@@ -312,7 +315,11 @@ mod tests {
         let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
         // 4 steps → 3 UNION ALL separators.
         let unions = q.sql.matches("UNION ALL").count();
-        assert_eq!(unions, 3, "expected 3 UNION ALL, got {unions} in:\n{}", q.sql);
+        assert_eq!(
+            unions, 3,
+            "expected 3 UNION ALL, got {unions} in:\n{}",
+            q.sql
+        );
     }
 
     #[test]

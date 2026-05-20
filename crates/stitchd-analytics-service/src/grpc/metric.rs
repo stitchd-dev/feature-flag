@@ -39,18 +39,18 @@ use stitchd_db::{
     ExperimentRepository, MetricRepository as _, RepositoryError,
     repository::pg::PgMetricRepository,
 };
+use stitchd_proto::analytics::v1::{
+    AggregationConfig as ProtoAggregationConfig, CreateMetricRequest, DeleteMetricRequest,
+    DeleteMetricResponse, FunnelConfig as ProtoFunnelConfig, FunnelStep as ProtoFunnelStep,
+    GetMetricRequest, ListMetricsRequest, ListMetricsResponse, MetricDefinition as ProtoMetric,
+    PreviewBucket, PreviewMetricRequest, PreviewMetricResponse, RatioConfig as ProtoRatioConfig,
+    UpdateMetricRequest, create_metric_request, metric_definition, preview_metric_request,
+    update_metric_request,
+};
 use stitchd_stats_service::{
     dispatch::{DispatchError, dispatch_preview_query},
     queries::{QueryBind, QueryBuildError},
     recompute_trigger::{RecomputeTrigger, trigger_recompute_for_metric},
-};
-use stitchd_proto::analytics::v1::{
-    AggregationConfig as ProtoAggregationConfig, CreateMetricRequest,
-    DeleteMetricRequest, DeleteMetricResponse, FunnelConfig as ProtoFunnelConfig,
-    FunnelStep as ProtoFunnelStep, GetMetricRequest, ListMetricsRequest, ListMetricsResponse,
-    MetricDefinition as ProtoMetric, PreviewBucket, PreviewMetricRequest, PreviewMetricResponse,
-    RatioConfig as ProtoRatioConfig, UpdateMetricRequest, create_metric_request,
-    metric_definition, preview_metric_request, update_metric_request,
 };
 
 // ---------------------------------------------------------------------------
@@ -130,10 +130,7 @@ const fn aggregator_to_str(op: AggregationOperator) -> &'static str {
 }
 
 #[allow(clippy::result_large_err)]
-fn parse_where_clause(
-    s: Option<&str>,
-    field: &str,
-) -> Result<Option<serde_json::Value>, Status> {
+fn parse_where_clause(s: Option<&str>, field: &str) -> Result<Option<serde_json::Value>, Status> {
     match s {
         None | Some("") => Ok(None),
         Some(raw) => serde_json::from_str(raw)
@@ -148,9 +145,7 @@ fn where_clause_to_proto(v: &Option<serde_json::Value>) -> Option<String> {
 }
 
 #[allow(clippy::result_large_err)]
-fn proto_aggregation_to_domain(
-    cfg: ProtoAggregationConfig,
-) -> Result<AggregationConfig, Status> {
+fn proto_aggregation_to_domain(cfg: ProtoAggregationConfig) -> Result<AggregationConfig, Status> {
     let aggregator = parse_aggregator(&cfg.aggregator)?;
     let where_clause = parse_where_clause(cfg.where_clause_json.as_deref(), "where_clause_json")?;
     Ok(AggregationConfig {
@@ -230,12 +225,14 @@ fn update_kind_to_domain(kind: Option<update_metric_request::Kind>) -> Result<Me
 
 fn domain_kind_to_proto(kind: &MetricKind) -> metric_definition::Kind {
     match kind {
-        MetricKind::Aggregation(c) => metric_definition::Kind::Aggregation(ProtoAggregationConfig {
-            event_key: c.event_key.clone(),
-            aggregator: aggregator_to_str(c.aggregator).to_string(),
-            on_field: c.on_field.clone(),
-            where_clause_json: where_clause_to_proto(&c.where_clause),
-        }),
+        MetricKind::Aggregation(c) => {
+            metric_definition::Kind::Aggregation(ProtoAggregationConfig {
+                event_key: c.event_key.clone(),
+                aggregator: aggregator_to_str(c.aggregator).to_string(),
+                on_field: c.on_field.clone(),
+                where_clause_json: where_clause_to_proto(&c.where_clause),
+            })
+        }
         MetricKind::Ratio(c) => metric_definition::Kind::Ratio(ProtoRatioConfig {
             numerator_metric_id: c.numerator_metric_id.to_string(),
             denominator_metric_id: c.denominator_metric_id.to_string(),
@@ -289,9 +286,9 @@ fn repo_err_to_status(err: RepositoryError, ctx: &str) -> Status {
         RepositoryError::UniqueViolation { field } => Status::already_exists(format!(
             "{ctx}: unique violation on `{field}` (metric.key must be unique per environment)"
         )),
-        RepositoryError::ForeignKeyViolation { constraint } => Status::failed_precondition(
-            format!("{ctx}: foreign key violation on `{constraint}`"),
-        ),
+        RepositoryError::ForeignKeyViolation { constraint } => {
+            Status::failed_precondition(format!("{ctx}: foreign key violation on `{constraint}`"))
+        }
         RepositoryError::InvalidState { reason } => {
             Status::failed_precondition(format!("{ctx}: invalid state — {reason}"))
         }
@@ -736,7 +733,10 @@ mod proto_mapping_tests {
 
     #[test]
     fn parse_aggregator_matches_all_operators() {
-        assert_eq!(parse_aggregator("count").unwrap(), AggregationOperator::Count);
+        assert_eq!(
+            parse_aggregator("count").unwrap(),
+            AggregationOperator::Count
+        );
         assert_eq!(parse_aggregator("sum").unwrap(), AggregationOperator::Sum);
         assert_eq!(parse_aggregator("avg").unwrap(), AggregationOperator::Avg);
         assert_eq!(parse_aggregator("p50").unwrap(), AggregationOperator::P50);
@@ -853,12 +853,7 @@ mod proto_mapping_tests {
 
     #[test]
     fn repo_err_not_found_maps_to_not_found() {
-        let s = repo_err_to_status(
-            RepositoryError::NotFound {
-                id: "abc".into(),
-            },
-            "get_metric",
-        );
+        let s = repo_err_to_status(RepositoryError::NotFound { id: "abc".into() }, "get_metric");
         assert_eq!(s.code(), tonic::Code::NotFound);
         assert!(s.message().contains("abc"));
     }
@@ -903,7 +898,6 @@ mod proto_mapping_tests {
             other => panic!("expected Aggregation, got {other:?}"),
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -921,8 +915,7 @@ mod handler_tests {
     use stitchd_db::{
         EnvironmentRepository, OrganisationRepository, ProjectRepository,
         repository::pg::{
-            PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository,
-            PgProjectRepository,
+            PgAuditLogger, PgEnvironmentRepository, PgOrganisationRepository, PgProjectRepository,
         },
     };
 
@@ -1290,7 +1283,9 @@ mod handler_tests {
                 count_repeats: false,
             })),
         });
-        let err = handle_update_metric(&repo, None, None, req).await.unwrap_err();
+        let err = handle_update_metric(&repo, None, None, req)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
@@ -1399,7 +1394,10 @@ mod handler_tests {
     }
 
     async fn wait_for_merge(client: &clickhouse::Client) {
-        let _ = client.query("OPTIMIZE TABLE events_v2 FINAL").execute().await;
+        let _ = client
+            .query("OPTIMIZE TABLE events_v2 FINAL")
+            .execute()
+            .await;
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]
@@ -1437,7 +1435,9 @@ mod handler_tests {
         let (repo, _env) = seed_env(&pool).await;
         let ch = make_ch_client();
         let req = Request::new(PreviewMetricRequest {
-            target: Some(preview_metric_request::Target::Id(MetricId::new().to_string())),
+            target: Some(preview_metric_request::Target::Id(
+                MetricId::new().to_string(),
+            )),
             days: 7,
         });
         let err = handle_preview_metric(&repo, &ch, req).await.unwrap_err();
@@ -1504,7 +1504,10 @@ mod handler_tests {
             target: Some(preview_metric_request::Target::Id(created.id.clone())),
             days: 9999,
         });
-        let resp = handle_preview_metric(&repo, &ch, req).await.unwrap().into_inner();
+        let resp = handle_preview_metric(&repo, &ch, req)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(resp.buckets.len(), PREVIEW_MAX_DAYS as usize);
     }
 
@@ -1522,7 +1525,10 @@ mod handler_tests {
             target: Some(preview_metric_request::Target::Id(created.id.clone())),
             days: 0,
         });
-        let resp = handle_preview_metric(&repo, &ch, req).await.unwrap().into_inner();
+        let resp = handle_preview_metric(&repo, &ch, req)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(resp.buckets.len(), PREVIEW_DEFAULT_DAYS as usize);
     }
 
@@ -1590,12 +1596,12 @@ mod handler_tests {
     // -----------------------------------------------------------------------
 
     use async_trait::async_trait;
+    use std::sync::Mutex;
     use stitchd_core::experimentation::{Experiment, ExperimentIteration, ExperimentStatus};
     use stitchd_core::id::ExperimentId;
     use stitchd_core::id::RuleId;
     use stitchd_db::ExperimentRepository;
     use stitchd_stats_service::recompute_trigger::RecomputeTrigger;
-    use std::sync::Mutex;
 
     /// Hand-rolled `RecomputeTrigger` that records every call.
     /// Optionally returns `Err` from `trigger()` to validate the
@@ -1671,10 +1677,7 @@ mod handler_tests {
         ) -> Result<Experiment, stitchd_db::RepositoryError> {
             unimplemented!()
         }
-        async fn soft_delete(
-            &self,
-            _id: ExperimentId,
-        ) -> Result<(), stitchd_db::RepositoryError> {
+        async fn soft_delete(&self, _id: ExperimentId) -> Result<(), stitchd_db::RepositoryError> {
             unimplemented!()
         }
         async fn list_iterations(
@@ -1691,9 +1694,7 @@ mod handler_tests {
         ) -> Result<Experiment, stitchd_db::RepositoryError> {
             unimplemented!()
         }
-        async fn list_all_running(
-            &self,
-        ) -> Result<Vec<Experiment>, stitchd_db::RepositoryError> {
+        async fn list_all_running(&self) -> Result<Vec<Experiment>, stitchd_db::RepositoryError> {
             unimplemented!()
         }
         async fn find_iteration_by_id(
@@ -1736,9 +1737,8 @@ mod handler_tests {
 
         let exp = running_exp_with_metric(env, created_metric_id);
         let exp_id = exp.id;
-        let exp_repo: Arc<dyn ExperimentRepository> = Arc::new(OneRunningExperimentRepo {
-            rows: vec![exp],
-        });
+        let exp_repo: Arc<dyn ExperimentRepository> =
+            Arc::new(OneRunningExperimentRepo { rows: vec![exp] });
         let dispatcher = Arc::new(CapturingDispatcher::default());
         let dispatcher_arc: Arc<dyn RecomputeTrigger> = dispatcher.clone();
 
@@ -1757,11 +1757,10 @@ mod handler_tests {
                 },
             )),
         });
-        let updated =
-            handle_update_metric(&repo, Some(exp_repo), Some(dispatcher_arc), req)
-                .await
-                .unwrap()
-                .into_inner();
+        let updated = handle_update_metric(&repo, Some(exp_repo), Some(dispatcher_arc), req)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(updated.version, 2);
 
         // Trigger is fire-and-forget — yield the scheduler so the
@@ -1780,17 +1779,15 @@ mod handler_tests {
     #[sqlx::test(migrations = "../stitchd-db/migrations")]
     async fn test_handler_recompute_failure_does_not_fail_update(pool: sqlx::PgPool) {
         let (repo, env) = seed_env(&pool).await;
-        let created =
-            handle_create_metric(&repo, agg_create_request(env, "still_succeeds"))
-                .await
-                .unwrap()
-                .into_inner();
+        let created = handle_create_metric(&repo, agg_create_request(env, "still_succeeds"))
+            .await
+            .unwrap()
+            .into_inner();
         let created_metric_id = MetricId::from_uuid(uuid::Uuid::parse_str(&created.id).unwrap());
 
         let exp = running_exp_with_metric(env, created_metric_id);
-        let exp_repo: Arc<dyn ExperimentRepository> = Arc::new(OneRunningExperimentRepo {
-            rows: vec![exp],
-        });
+        let exp_repo: Arc<dyn ExperimentRepository> =
+            Arc::new(OneRunningExperimentRepo { rows: vec![exp] });
         // Dispatcher whose trigger() always returns Err — must NOT
         // surface to caller.
         let dispatcher = Arc::new(CapturingDispatcher {
@@ -1814,8 +1811,7 @@ mod handler_tests {
                 },
             )),
         });
-        let resp =
-            handle_update_metric(&repo, Some(exp_repo), Some(dispatcher_arc), req).await;
+        let resp = handle_update_metric(&repo, Some(exp_repo), Some(dispatcher_arc), req).await;
         // PATCH still succeeds despite the dispatcher's forced Err.
         let updated = resp.expect("update should succeed").into_inner();
         assert_eq!(updated.version, 2);

@@ -22,14 +22,15 @@ impl Config {
             .and_then(|v| v.parse().ok())
             .unwrap_or(9104);
 
-        let database_url = std::env::var("STITCHD_DATABASE_URL")
-            .map_err(|_| anyhow::anyhow!("STITCHD_DATABASE_URL environment variable is required"))?;
+        let database_url = std::env::var("STITCHD_DATABASE_URL").map_err(|_| {
+            anyhow::anyhow!("STITCHD_DATABASE_URL environment variable is required")
+        })?;
 
         let clickhouse_url = std::env::var("STITCHD_CLICKHOUSE_URL")
             .unwrap_or_else(|_| "http://localhost:8123".to_string());
 
-        let clickhouse_db = std::env::var("STITCHD_CLICKHOUSE_DB")
-            .unwrap_or_else(|_| "stitchd".to_string());
+        let clickhouse_db =
+            std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
 
         let clickhouse_user = std::env::var("STITCHD_CLICKHOUSE_USER").ok();
         let clickhouse_password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").ok();

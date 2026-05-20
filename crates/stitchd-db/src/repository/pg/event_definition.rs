@@ -43,7 +43,9 @@ fn row_to_event_definition(
     let env_id: uuid::Uuid = row
         .try_get("environment_id")
         .map_err(RepositoryError::Database)?;
-    let value_type_str: String = row.try_get("value_type").map_err(RepositoryError::Database)?;
+    let value_type_str: String = row
+        .try_get("value_type")
+        .map_err(RepositoryError::Database)?;
     let value_type = match value_type_str.as_str() {
         "bool" => EventValueType::Bool,
         "int" => EventValueType::Int,
@@ -78,14 +80,22 @@ fn row_to_event_definition(
         // Backfill: if `name` is null (legacy row), surface `key` so the
         // admin UI doesn't render empty cells.
         name: name.unwrap_or_else(|| key.clone()),
-        description: row.try_get("description").map_err(RepositoryError::Database)?,
+        description: row
+            .try_get("description")
+            .map_err(RepositoryError::Database)?,
         key,
         value_type,
         metric_type,
         schema: row.try_get("schema").map_err(RepositoryError::Database)?,
-        created_at: row.try_get("created_at").map_err(RepositoryError::Database)?,
-        updated_at: row.try_get("updated_at").map_err(RepositoryError::Database)?,
-        deleted_at: row.try_get("deleted_at").map_err(RepositoryError::Database)?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(RepositoryError::Database)?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(RepositoryError::Database)?,
+        deleted_at: row
+            .try_get("deleted_at")
+            .map_err(RepositoryError::Database)?,
         version: row.try_get("version").map_err(RepositoryError::Database)?,
     })
 }

@@ -24,7 +24,6 @@ pub use auth::{
     challenge_token_hash,
 };
 pub use error::RepositoryError;
-pub use stitchd_core::id::ExperimentIterationId;
 pub use repository::{
     AuditLogger, ContextRegistryRepository, EnvironmentRepository, EventDefinitionRepository,
     ExperimentRepository, FlagRepository, ListContextCounts, ListSegmentSummary, MetricRepository,
@@ -33,9 +32,9 @@ pub use repository::{
     composite::CompositeSegmentRepository,
     pg::{
         PgAuditLogger, PgContextRegistryRepository, PgEnvironmentRepository,
-        PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository,
-        PgMetricRepository, PgOrganisationRepository, PgProjectRepository, PgRoleRepository,
-        PgSdkKeyRepository, PgSegmentRepository, PgUserRepository, PgVariantRepository,
+        PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository, PgMetricRepository,
+        PgOrganisationRepository, PgProjectRepository, PgRoleRepository, PgSdkKeyRepository,
+        PgSegmentRepository, PgUserRepository, PgVariantRepository,
     },
 };
 pub use stats_jobs::{
@@ -45,6 +44,7 @@ pub use stats_schedule::{
     ComputationStatus, PgStatsScheduleRepository, StatsScheduleRepository, StatsScheduleRow,
     UpsertStatsSchedule,
 };
+pub use stitchd_core::id::ExperimentIterationId;
 
 /// Membership result for a single evaluation context (batch list-check responses).
 #[derive(Debug, Clone)]

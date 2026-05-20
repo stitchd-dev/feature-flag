@@ -64,14 +64,22 @@ async fn main() -> anyhow::Result<()> {
     let state = GatewayState::connect(
         env_or("STITCHD_AUTH_SERVICE_ADDR", "http://localhost:50051"),
         env_or("STITCHD_FLAG_SERVICE_ADDR", "http://localhost:50052"),
-        env_or("STITCHD_SEGMENTATION_SERVICE_ADDR", "http://localhost:50053"),
+        env_or(
+            "STITCHD_SEGMENTATION_SERVICE_ADDR",
+            "http://localhost:50053",
+        ),
         env_or("STITCHD_ANALYTICS_SERVICE_ADDR", "http://localhost:50054"),
-        env_or("STITCHD_EXPERIMENTATION_SERVICE_ADDR", "http://localhost:50055"),
+        env_or(
+            "STITCHD_EXPERIMENTATION_SERVICE_ADDR",
+            "http://localhost:50055",
+        ),
         env_or("STITCHD_STATS_SERVICE_ADDR", "http://localhost:50056"),
     )
     .await?;
 
-    let gateway_port: u16 = env_or("STITCHD_GATEWAY_HTTP_PORT", "8080").parse().unwrap_or(8080);
+    let gateway_port: u16 = env_or("STITCHD_GATEWAY_HTTP_PORT", "8080")
+        .parse()
+        .unwrap_or(8080);
     let addr: SocketAddr = format!("0.0.0.0:{gateway_port}").parse()?;
 
     let grpc_port: u16 = env_or("STITCHD_GATEWAY_GRPC_PORT", "50050")

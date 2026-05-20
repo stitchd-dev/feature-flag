@@ -218,9 +218,9 @@ fn emit_in(
         )));
     }
     let field = extract_var(&args[0])?;
-    let needle_list = args[1].as_array().ok_or_else(|| {
-        QueryBuildError::InvalidJsonLogic("`in` RHS must be an array".into())
-    })?;
+    let needle_list = args[1]
+        .as_array()
+        .ok_or_else(|| QueryBuildError::InvalidJsonLogic("`in` RHS must be an array".into()))?;
     if needle_list.is_empty() {
         return Err(QueryBuildError::InvalidJsonLogic(
             "`in` RHS array must be non-empty".into(),
@@ -345,11 +345,7 @@ mod tests {
     #[test]
     fn jsonlogic_eq_emits_equality_with_bind() {
         let mut binds = Vec::new();
-        let sql = jsonlogic_to_sql(
-            &json!({"==": [{"var": "country"}, "US"]}),
-            &mut binds,
-        )
-        .unwrap();
+        let sql = jsonlogic_to_sql(&json!({"==": [{"var": "country"}, "US"]}), &mut binds).unwrap();
         assert_eq!(sql, "properties['country'] = {p0}");
         assert_eq!(binds, vec![QueryBind::Str("US".into())]);
     }
@@ -357,11 +353,7 @@ mod tests {
     #[test]
     fn jsonlogic_ne_emits_inequality_with_bind() {
         let mut binds = Vec::new();
-        let sql = jsonlogic_to_sql(
-            &json!({"!=": [{"var": "tier"}, "free"]}),
-            &mut binds,
-        )
-        .unwrap();
+        let sql = jsonlogic_to_sql(&json!({"!=": [{"var": "tier"}, "free"]}), &mut binds).unwrap();
         assert_eq!(sql, "properties['tier'] != {p0}");
         assert_eq!(binds, vec![QueryBind::Str("free".into())]);
     }
@@ -390,8 +382,7 @@ mod tests {
     #[test]
     fn jsonlogic_in_empty_array_rejected() {
         let mut binds = Vec::new();
-        let err =
-            jsonlogic_to_sql(&json!({"in": [{"var": "x"}, []]}), &mut binds).unwrap_err();
+        let err = jsonlogic_to_sql(&json!({"in": [{"var": "x"}, []]}), &mut binds).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidJsonLogic(_)));
     }
 
@@ -445,29 +436,21 @@ mod tests {
     fn jsonlogic_unsupported_operator_returns_typed_error() {
         let mut binds = Vec::new();
         let err = jsonlogic_to_sql(&json!({"%": [1, 2]}), &mut binds).unwrap_err();
-        assert_eq!(
-            err,
-            QueryBuildError::UnsupportedJsonLogic("%".to_string())
-        );
+        assert_eq!(err, QueryBuildError::UnsupportedJsonLogic("%".to_string()));
     }
 
     #[test]
     fn jsonlogic_eq_with_wrong_arity_rejected() {
         let mut binds = Vec::new();
-        let err = jsonlogic_to_sql(
-            &json!({"==": [{"var": "a"}, "b", "c"]}),
-            &mut binds,
-        )
-        .unwrap_err();
+        let err =
+            jsonlogic_to_sql(&json!({"==": [{"var": "a"}, "b", "c"]}), &mut binds).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidJsonLogic(_)));
     }
 
     #[test]
     fn jsonlogic_eq_without_var_lhs_rejected() {
         let mut binds = Vec::new();
-        let err =
-            jsonlogic_to_sql(&json!({"==": ["literal", "literal"]}), &mut binds)
-                .unwrap_err();
+        let err = jsonlogic_to_sql(&json!({"==": ["literal", "literal"]}), &mut binds).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidJsonLogic(_)));
     }
 
@@ -492,8 +475,7 @@ mod tests {
     #[test]
     fn jsonlogic_literal_number_coerced_to_string_bind() {
         let mut binds = Vec::new();
-        let sql = jsonlogic_to_sql(&json!({"==": [{"var": "age"}, 42]}), &mut binds)
-            .unwrap();
+        let sql = jsonlogic_to_sql(&json!({"==": [{"var": "age"}, 42]}), &mut binds).unwrap();
         assert_eq!(sql, "properties['age'] = {p0}");
         assert_eq!(binds, vec![QueryBind::Str("42".into())]);
     }
@@ -501,11 +483,7 @@ mod tests {
     #[test]
     fn jsonlogic_literal_bool_coerced_to_string_bind() {
         let mut binds = Vec::new();
-        let sql = jsonlogic_to_sql(
-            &json!({"==": [{"var": "active"}, true]}),
-            &mut binds,
-        )
-        .unwrap();
+        let sql = jsonlogic_to_sql(&json!({"==": [{"var": "active"}, true]}), &mut binds).unwrap();
         assert_eq!(sql, "properties['active'] = {p0}");
         assert_eq!(binds, vec![QueryBind::Str("true".into())]);
     }

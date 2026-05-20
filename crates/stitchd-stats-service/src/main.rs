@@ -18,8 +18,8 @@ use anyhow::Context as _;
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use chrono::Duration;
 use metrics_exporter_prometheus::PrometheusBuilder;
-use tokio::sync::Mutex;
 use tokio::signal;
+use tokio::sync::Mutex;
 use tonic::transport::{Channel, Server};
 use tonic_health::server::health_reporter;
 use tracing::{error, info, warn};
@@ -63,7 +63,8 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to connect to PostgreSQL")?;
 
     // ── ClickHouse client ─────────────────────────────────────────────────────
-    let ch_user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let ch_user =
+        std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
     let ch_password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_default();
     let ch_client = clickhouse::Client::default()
         .with_url(&config.clickhouse_url)
@@ -157,8 +158,7 @@ async fn main() -> anyhow::Result<()> {
                         &pool,
                         exp.experiment_id,
                         computed_at,
-                        Duration::from_std(scheduler_interval)
-                            .unwrap_or(Duration::hours(1)),
+                        Duration::from_std(scheduler_interval).unwrap_or(Duration::hours(1)),
                     )
                     .await
                     {

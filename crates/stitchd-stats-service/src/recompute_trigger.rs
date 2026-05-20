@@ -75,7 +75,10 @@ pub async fn trigger_recompute_for_metric(
         .await?;
 
     let mut fired = 0usize;
-    for exp in experiments.iter().filter(|e| references_metric(e, metric_id)) {
+    for exp in experiments
+        .iter()
+        .filter(|e| references_metric(e, metric_id))
+    {
         match trigger.trigger(exp.id).await {
             Ok(()) => fired += 1,
             Err(e) => {
@@ -196,10 +199,7 @@ mod tests {
 
     #[async_trait]
     impl ExperimentRepository for InMemoryExperimentRepo {
-        async fn find_by_id(
-            &self,
-            _id: ExperimentId,
-        ) -> Result<Experiment, RepositoryError> {
+        async fn find_by_id(&self, _id: ExperimentId) -> Result<Experiment, RepositoryError> {
             unimplemented!("not used in recompute_trigger tests")
         }
         async fn list_by_environment(
@@ -237,10 +237,7 @@ mod tests {
         async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
             unimplemented!()
         }
-        async fn update(
-            &self,
-            _experiment: &Experiment,
-        ) -> Result<Experiment, RepositoryError> {
+        async fn update(&self, _experiment: &Experiment) -> Result<Experiment, RepositoryError> {
             unimplemented!()
         }
         async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {

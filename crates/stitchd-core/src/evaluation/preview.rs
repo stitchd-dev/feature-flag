@@ -869,7 +869,13 @@ mod tests {
 
         // u1 is in segment → rule fires → "on"
         let ec_in = EvaluationContext::new().with_context(Context::new("user", "u1"));
-        let results = evaluate_preview(&flag, &[ec_in], std::slice::from_ref(&segment_def), env_id(), &[]);
+        let results = evaluate_preview(
+            &flag,
+            &[ec_in],
+            std::slice::from_ref(&segment_def),
+            env_id(),
+            &[],
+        );
         assert_eq!(results[0].variant_key, "on");
 
         // u2 is NOT in segment → default "off"
@@ -989,9 +995,15 @@ mod tests {
             &[pre_resolved_in, pre_resolved_out],
         );
 
-        assert_eq!(results[0].variant_key, "on", "alice (in segment) must match rule 0");
+        assert_eq!(
+            results[0].variant_key, "on",
+            "alice (in segment) must match rule 0"
+        );
         assert_eq!(results[0].fired_rule_index, Some(0));
-        assert_eq!(results[1].variant_key, "off", "spam (not in segment) must fall through to default");
+        assert_eq!(
+            results[1].variant_key, "off",
+            "spam (not in segment) must fall through to default"
+        );
         assert_eq!(results[1].fired_rule_index, None);
     }
 
@@ -1058,6 +1070,9 @@ mod tests {
             .iter()
             .find(|c| c.predicate.contains("beta"))
             .expect("beta leaf must be traced");
-        assert!(!beta_trace.result, "beta == true should be false for this context");
+        assert!(
+            !beta_trace.result,
+            "beta == true should be false for this context"
+        );
     }
 }

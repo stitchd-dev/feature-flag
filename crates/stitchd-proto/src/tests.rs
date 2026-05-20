@@ -97,10 +97,8 @@ mod compilation_tests {
 
     #[test]
     fn analytics_service_client_and_server_stubs_generated() {
-        type _Client<T> =
-            analytics::v1::analytics_service_client::AnalyticsServiceClient<T>;
-        type _Server<T> =
-            analytics::v1::analytics_service_server::AnalyticsServiceServer<T>;
+        type _Client<T> = analytics::v1::analytics_service_client::AnalyticsServiceClient<T>;
+        type _Server<T> = analytics::v1::analytics_service_server::AnalyticsServiceServer<T>;
     }
 
     #[test]

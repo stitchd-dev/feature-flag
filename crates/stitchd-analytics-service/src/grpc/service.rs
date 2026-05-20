@@ -5,23 +5,23 @@ use stitchd_db::{
     ContextRegistryRepository, EventDefinitionRepository, ExperimentRepository, SdkKeyRepository,
     repository::pg::PgMetricRepository,
 };
-use stitchd_stats_service::recompute_trigger::RecomputeTrigger;
 use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
     CreateEventDefinitionRequest, CreateMetricRequest, DeleteEventDefinitionRequest,
-    DeleteEventDefinitionResponse, DeleteMetricRequest, DeleteMetricResponse,
-    EventDefinitionMsg, ExperimentResult, GetContextIntelligenceRequest,
-    GetContextIntelligenceResponse, GetEvalStatsRequest, GetEvalStatsResponse,
-    GetEventDefinitionRequest, GetEventFiringsRequest, GetEventFiringsResponse,
-    GetEventStatsRequest, GetEventStatsResponse, GetExperimentResultRequest, GetMetricRequest,
-    IngestEventRequest, IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
-    ListContextTypesRequest, ListContextTypesResponse, ListEventDefinitionsRequest,
-    ListEventDefinitionsResponse, ListExperimentResultsRequest, ListMetricsRequest,
-    ListMetricsResponse, MetricDefinition, PreviewMetricRequest, PreviewMetricResponse,
-    RegisterContextRequest, RegisterContextResponse, TrackEventsRequest, TrackEventsResponse,
-    UpdateEventDefinitionRequest, UpdateMetricRequest, WriteExperimentResultsRequest,
-    WriteExperimentResultsResponse, analytics_service_server::AnalyticsService,
+    DeleteEventDefinitionResponse, DeleteMetricRequest, DeleteMetricResponse, EventDefinitionMsg,
+    ExperimentResult, GetContextIntelligenceRequest, GetContextIntelligenceResponse,
+    GetEvalStatsRequest, GetEvalStatsResponse, GetEventDefinitionRequest, GetEventFiringsRequest,
+    GetEventFiringsResponse, GetEventStatsRequest, GetEventStatsResponse,
+    GetExperimentResultRequest, GetMetricRequest, IngestEventRequest, IngestEventResponse,
+    ListContextParamsRequest, ListContextParamsResponse, ListContextTypesRequest,
+    ListContextTypesResponse, ListEventDefinitionsRequest, ListEventDefinitionsResponse,
+    ListExperimentResultsRequest, ListMetricsRequest, ListMetricsResponse, MetricDefinition,
+    PreviewMetricRequest, PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse,
+    TrackEventsRequest, TrackEventsResponse, UpdateEventDefinitionRequest, UpdateMetricRequest,
+    WriteExperimentResultsRequest, WriteExperimentResultsResponse,
+    analytics_service_server::AnalyticsService,
 };
+use stitchd_stats_service::recompute_trigger::RecomputeTrigger;
 
 use super::context_intel::handle_get_context_intelligence;
 use super::context_registry::{
@@ -29,9 +29,8 @@ use super::context_registry::{
 };
 use super::eval_stats::handle_get_eval_stats;
 use super::event_definition::{
-    handle_create_event_definition, handle_delete_event_definition,
-    handle_get_event_definition, handle_list_event_definitions,
-    handle_update_event_definition,
+    handle_create_event_definition, handle_delete_event_definition, handle_get_event_definition,
+    handle_list_event_definitions, handle_update_event_definition,
 };
 use super::event_ingestion::{EventIngestionState, handle_ingest_event};
 use super::event_query::{handle_get_event_firings, handle_get_event_stats};

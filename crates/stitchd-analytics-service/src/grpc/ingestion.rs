@@ -470,7 +470,9 @@ mod tests {
         id::{EnvironmentId, EventDefinitionId},
     };
     use stitchd_db::{EventDefinitionRepository, RepositoryError};
-    use stitchd_proto::analytics::v1::{MetricValue, RejectedEvent, TrackEvent, TrackEventsRequest};
+    use stitchd_proto::analytics::v1::{
+        MetricValue, RejectedEvent, TrackEvent, TrackEventsRequest,
+    };
 
     use super::*;
 
@@ -512,8 +514,7 @@ mod tests {
         }
 
         fn calls(&self) -> usize {
-            self.call_count
-                .load(std::sync::atomic::Ordering::SeqCst)
+            self.call_count.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -832,10 +833,10 @@ mod tests {
         );
 
         let events = vec![
-            bool_event("conversion", true),                  // ok
-            int_event("clicks", 5),                          // ok
-            int_event("unknown_key", 1),                     // reject: unknown
-            int_event("conversion", 7),                      // reject: type_mismatch
+            bool_event("conversion", true), // ok
+            int_event("clicks", 5),         // ok
+            int_event("unknown_key", 1),    // reject: unknown
+            int_event("conversion", 7),     // reject: type_mismatch
             TrackEvent {
                 // Count metric_type — value optional. `make_state_with_ch`
                 // registers every fixture as `MetricType::Count`, so this
@@ -864,7 +865,10 @@ mod tests {
         // marker (see feature-flag-jam exploration).
         let client = make_ch_client();
         let count = count_events_for_env(&client, env_id).await;
-        assert_eq!(count, 3, "expected 3 valid rows in events_v2 (count-no-value is now accepted)");
+        assert_eq!(
+            count, 3,
+            "expected 3 valid rows in events_v2 (count-no-value is now accepted)"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -937,7 +941,11 @@ mod tests {
             occurred_at: None,
         };
         let row = validate_event(&event, &def, env_id, 0).expect("event should validate");
-        assert_eq!(row.contexts.len(), 3, "all 3 contexts must reach the CH row");
+        assert_eq!(
+            row.contexts.len(),
+            3,
+            "all 3 contexts must reach the CH row"
+        );
         // HashMap iteration order is non-deterministic — assert membership.
         let by_type: HashMap<_, _> = row.contexts.iter().cloned().collect();
         assert_eq!(by_type.get("user").map(String::as_str), Some("u-42"));
@@ -971,8 +979,7 @@ mod tests {
             properties: HashMap::new(),
             occurred_at: None,
         };
-        let err = validate_event(&event, &def, env_id, 0)
-            .expect_err("empty contexts must reject");
+        let err = validate_event(&event, &def, env_id, 0).expect_err("empty contexts must reject");
         assert_eq!(err.reason, "missing_contexts");
     }
 
@@ -1008,7 +1015,8 @@ mod tests {
             properties: HashMap::new(),
             occurred_at: None,
         };
-        let row = validate_event(&event, &def, env_id, 0).expect("count event must accept missing value");
+        let row =
+            validate_event(&event, &def, env_id, 0).expect("count event must accept missing value");
         // All three value columns stay None — CH `count()` ignores them.
         assert!(row.value_bool.is_none());
         assert!(row.value_int.is_none());
@@ -1109,7 +1117,10 @@ mod tests {
 
         // First lookup: NotFound → rejected.
         let req1 = make_request(env_id, vec![int_event("future_key", 1)]);
-        let resp1 = handle_track_events(&state, req1).await.unwrap().into_inner();
+        let resp1 = handle_track_events(&state, req1)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(resp1.rejected.len(), 1);
 
         // Allow the TTL to elapse so the next lookup actually goes to the repo.

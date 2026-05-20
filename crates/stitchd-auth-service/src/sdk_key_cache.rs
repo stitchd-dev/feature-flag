@@ -45,7 +45,7 @@ fn reconstruct_repo_error(arc: &RepositoryError) -> RepositoryError {
 pub struct SdkKeyCache(Arc<Cache<String, SdkKey>>);
 
 impl SdkKeyCache {
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         let cache = Cache::builder()
             .max_capacity(MAX_CAPACITY)

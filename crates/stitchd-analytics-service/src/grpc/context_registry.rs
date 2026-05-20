@@ -303,11 +303,9 @@ mod tests {
     #[tokio::test]
     async fn list_context_types_returns_types() {
         let (env_id, env_str) = env_id_str();
-        let repo: Arc<dyn ContextRegistryRepository> =
-            Arc::new(MockContextRegistry::new_with_types(
-                env_id,
-                vec!["user", "device"],
-            ));
+        let repo: Arc<dyn ContextRegistryRepository> = Arc::new(
+            MockContextRegistry::new_with_types(env_id, vec!["user", "device"]),
+        );
         let req = Request::new(ListContextTypesRequest {
             environment_id: env_str,
         });
@@ -346,11 +344,9 @@ mod tests {
     #[tokio::test]
     async fn list_context_params_returns_params() {
         let (env_id, env_str) = env_id_str();
-        let repo: Arc<dyn ContextRegistryRepository> =
-            Arc::new(MockContextRegistry::new_with_params(
-                env_id,
-                vec![("plan", "user"), ("email", "user")],
-            ));
+        let repo: Arc<dyn ContextRegistryRepository> = Arc::new(
+            MockContextRegistry::new_with_params(env_id, vec![("plan", "user"), ("email", "user")]),
+        );
         let req = Request::new(ListContextParamsRequest {
             environment_id: env_str,
             context_type: "user".into(),

@@ -154,22 +154,21 @@ mod tests {
     /// (if `env_id` is `Some`), then the quota layer, then a permissive
     /// `200 OK` handler. Mirrors how the real router wires sdk_auth →
     /// event_quota → handler.
-    fn test_app(
-        limiter: Arc<EnvKeyedRateLimiter>,
-        env_id: Option<&'static str>,
-    ) -> Router {
+    fn test_app(limiter: Arc<EnvKeyedRateLimiter>, env_id: Option<&'static str>) -> Router {
         let app = Router::new()
             .route("/v1/events/track", post(|| async { StatusCode::OK }))
             .layer(from_fn_with_state(limiter, event_quota_middleware));
         if let Some(id) = env_id {
-            app.layer(axum::middleware::from_fn(move |mut req: Request, next: Next| async move {
-                req.extensions_mut().insert(SdkContext {
-                    environment_id: id.to_string(),
-                    organisation_id: "org".into(),
-                    sdk_key_id: "key".into(),
-                });
-                next.run(req).await
-            }))
+            app.layer(axum::middleware::from_fn(
+                move |mut req: Request, next: Next| async move {
+                    req.extensions_mut().insert(SdkContext {
+                        environment_id: id.to_string(),
+                        organisation_id: "org".into(),
+                        sdk_key_id: "key".into(),
+                    });
+                    next.run(req).await
+                },
+            ))
         } else {
             app
         }

@@ -202,7 +202,10 @@ mod tests {
         // Funnel with only 1 step — kind validator should fire.
         let mut m = make_valid_metric();
         m.kind = MetricKind::Funnel(FunnelConfig {
-            steps: vec![FunnelStep { event_key: "only".into(), where_clause: None }],
+            steps: vec![FunnelStep {
+                event_key: "only".into(),
+                where_clause: None,
+            }],
             window_seconds: 60,
             count_repeats: false,
         });

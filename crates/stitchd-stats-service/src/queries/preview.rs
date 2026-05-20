@@ -42,9 +42,7 @@
 //! `pub(super)`-shared from [`super::aggregation`] so the aggregator-to-CH
 //! mapping has a single source of truth.
 
-use stitchd_core::metric::{
-    AggregationConfig, FunnelConfig, RatioConfig,
-};
+use stitchd_core::metric::{AggregationConfig, FunnelConfig, RatioConfig};
 
 use super::{
     BuiltQuery, QueryBind, QueryBuildError, aggregation::render_aggregator, jsonlogic_to_sql,
@@ -159,9 +157,8 @@ pub fn build_preview_ratio_query(
     let den_sql_shifted = shift_placeholders(&den_q.sql, den_offset);
     let den_count_sql_shifted = shift_placeholders(&den_count_q.sql, den_count_offset);
 
-    let mut binds = Vec::with_capacity(
-        num_q.binds.len() + den_q.binds.len() + den_count_q.binds.len() + 1,
-    );
+    let mut binds =
+        Vec::with_capacity(num_q.binds.len() + den_q.binds.len() + den_count_q.binds.len() + 1);
     binds.extend(num_q.binds);
     binds.extend(den_q.binds);
     binds.extend(den_count_q.binds);
@@ -241,13 +238,19 @@ pub fn build_preview_funnel_query(
 
     let mut predicate_phs = Vec::with_capacity(cfg.steps.len());
     for step in &cfg.steps {
-        predicate_phs.push(push_bind(&mut binds, QueryBind::Str(step.event_key.clone())));
+        predicate_phs.push(push_bind(
+            &mut binds,
+            QueryBind::Str(step.event_key.clone()),
+        ));
     }
     let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
     let days_ph = push_bind(&mut binds, QueryBind::I64(i64::from(days)));
     let mut filter_phs = Vec::with_capacity(cfg.steps.len());
     for step in &cfg.steps {
-        filter_phs.push(push_bind(&mut binds, QueryBind::Str(step.event_key.clone())));
+        filter_phs.push(push_bind(
+            &mut binds,
+            QueryBind::Str(step.event_key.clone()),
+        ));
     }
     let metric_key_filter = filter_phs
         .iter()
@@ -376,7 +379,8 @@ mod tests {
         // count() wrapped in CAST so the wire shape is Nullable(Float64)
         // — uniform with funnel/ratio outputs that nullIf can produce.
         assert!(
-            q.sql.contains("CAST(count() AS Nullable(Float64)) AS value"),
+            q.sql
+                .contains("CAST(count() AS Nullable(Float64)) AS value"),
             "got: {}",
             q.sql
         );
@@ -478,8 +482,7 @@ mod tests {
             denominator_metric_id: MetricId::new(),
             min_denominator: 30,
         };
-        let q =
-            build_preview_ratio_query(&ratio_cfg, &num_cfg, &den_cfg, ENV_ID, 14).unwrap();
+        let q = build_preview_ratio_query(&ratio_cfg, &num_cfg, &den_cfg, ENV_ID, 14).unwrap();
         assert!(q.sql.contains("WITH numerator AS"));
         assert!(q.sql.contains("denominator AS"));
         assert!(q.sql.contains("denominator_count AS"));
@@ -513,8 +516,7 @@ mod tests {
             denominator_metric_id: MetricId::new(),
             min_denominator: 0,
         };
-        let q =
-            build_preview_ratio_query(&ratio_cfg, &num_cfg, &den_cfg, ENV_ID, 14).unwrap();
+        let q = build_preview_ratio_query(&ratio_cfg, &num_cfg, &den_cfg, ENV_ID, 14).unwrap();
         assert!(q.sql.contains("nullIf(denominator.value, 0)"));
     }
 
@@ -524,8 +526,14 @@ mod tests {
     fn funnel_strict_order_emits_window_funnel_with_mode() {
         let cfg = FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "signup_started".into(), where_clause: None },
-                FunnelStep { event_key: "signup_completed".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "signup_started".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "signup_completed".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 3600,
             count_repeats: false,
@@ -546,9 +554,18 @@ mod tests {
     fn funnel_count_repeats_omits_strict_order() {
         let cfg = FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "a".into(), where_clause: None },
-                FunnelStep { event_key: "b".into(), where_clause: None },
-                FunnelStep { event_key: "c".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "a".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "b".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "c".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 86400,
             count_repeats: true,
@@ -562,7 +579,10 @@ mod tests {
     #[test]
     fn funnel_rejects_fewer_than_two_steps() {
         let cfg = FunnelConfig {
-            steps: vec![FunnelStep { event_key: "only".into(), where_clause: None }],
+            steps: vec![FunnelStep {
+                event_key: "only".into(),
+                where_clause: None,
+            }],
             window_seconds: 3600,
             count_repeats: false,
         };
@@ -574,8 +594,14 @@ mod tests {
     fn funnel_rejects_non_positive_window() {
         let cfg = FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "a".into(), where_clause: None },
-                FunnelStep { event_key: "b".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "a".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "b".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 0,
             count_repeats: false,

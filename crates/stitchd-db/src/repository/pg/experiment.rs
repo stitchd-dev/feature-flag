@@ -196,8 +196,11 @@ impl ExperimentRepository for PgExperimentRepository {
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError> {
         // sqlx can't infer `Vec<MetricId>` for a `UUID[]` bind through the
         // query!() macro, so we project to `Vec<Uuid>` at the bind site.
-        let metric_uuids: Vec<uuid::Uuid> =
-            experiment.metric_ids.iter().map(MetricId::as_uuid).collect();
+        let metric_uuids: Vec<uuid::Uuid> = experiment
+            .metric_ids
+            .iter()
+            .map(MetricId::as_uuid)
+            .collect();
         sqlx::query!(
             r#"
             INSERT INTO experiments
@@ -280,8 +283,11 @@ impl ExperimentRepository for PgExperimentRepository {
         }
 
         let new_version = experiment.version + 1;
-        let metric_uuids: Vec<uuid::Uuid> =
-            experiment.metric_ids.iter().map(MetricId::as_uuid).collect();
+        let metric_uuids: Vec<uuid::Uuid> = experiment
+            .metric_ids
+            .iter()
+            .map(MetricId::as_uuid)
+            .collect();
         let result = sqlx::query_as!(
             Experiment,
             r#"
@@ -727,8 +733,7 @@ impl ExperimentRepository for PgExperimentRepository {
         })?;
 
         let metric_uuids: Vec<uuid::Uuid> = row.get("metric_ids");
-        let metric_ids: Vec<MetricId> =
-            metric_uuids.into_iter().map(MetricId::from_uuid).collect();
+        let metric_ids: Vec<MetricId> = metric_uuids.into_iter().map(MetricId::from_uuid).collect();
         Ok(ExperimentIteration {
             id: ExperimentIterationId::from_uuid(row.get("id")),
             experiment_id: ExperimentId::from_uuid(row.get("experiment_id")),

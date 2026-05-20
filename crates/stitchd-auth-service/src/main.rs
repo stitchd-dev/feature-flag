@@ -66,8 +66,8 @@ async fn main() -> anyhow::Result<()> {
     info!(%metrics_addr, "Prometheus metrics endpoint ready");
     drop(handle);
 
-    let database_url =
-        std::env::var("STITCHD_DATABASE_URL").expect("STITCHD_DATABASE_URL environment variable must be set");
+    let database_url = std::env::var("STITCHD_DATABASE_URL")
+        .expect("STITCHD_DATABASE_URL environment variable must be set");
     let pool = sqlx::PgPool::connect(&database_url).await?;
 
     // Run migrations.
@@ -90,7 +90,8 @@ async fn main() -> anyhow::Result<()> {
     // Provider caches — zero providers loaded at startup; built lazily on first login.
     let provider_caches = Arc::new(ProviderCaches::from_env());
     let auth_provider_repo = Arc::new(PgAuthProviderRepository::new(pool.clone()));
-    let crypto_key = Arc::new(CryptoKey::from_env().expect("STITCHD_AUTH_ENCRYPTION_KEY must be set"));
+    let crypto_key =
+        Arc::new(CryptoKey::from_env().expect("STITCHD_AUTH_ENCRYPTION_KEY must be set"));
 
     // Bootstrap superadmin if configured.
     seed_superadmin(

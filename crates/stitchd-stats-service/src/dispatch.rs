@@ -30,7 +30,8 @@ use stitchd_db::{RepositoryError, repository::MetricRepository};
 use thiserror::Error;
 
 use crate::queries::{
-    BuiltQuery, QueryBuildError, aggregation::build_aggregation_query,
+    BuiltQuery, QueryBuildError,
+    aggregation::build_aggregation_query,
     funnel::build_funnel_query,
     preview::{
         build_preview_aggregation_query, build_preview_funnel_query, build_preview_ratio_query,
@@ -139,7 +140,9 @@ pub async fn dispatch_metric_query(
             let numerator_def = resolved
                 .iter()
                 .find(|m| m.id == cfg.numerator_metric_id)
-                .ok_or_else(|| DispatchError::MetricNotFound(cfg.numerator_metric_id.to_string()))?;
+                .ok_or_else(|| {
+                    DispatchError::MetricNotFound(cfg.numerator_metric_id.to_string())
+                })?;
             let denominator_def = resolved
                 .iter()
                 .find(|m| m.id == cfg.denominator_metric_id)
@@ -187,9 +190,7 @@ pub async fn dispatch_preview_query(
     days: u32,
 ) -> Result<BuiltQuery, DispatchError> {
     match &metric.kind {
-        MetricKind::Aggregation(cfg) => {
-            Ok(build_preview_aggregation_query(cfg, env_id, days)?)
-        }
+        MetricKind::Aggregation(cfg) => Ok(build_preview_aggregation_query(cfg, env_id, days)?),
         MetricKind::Funnel(cfg) => Ok(build_preview_funnel_query(cfg, env_id, days)?),
         MetricKind::Ratio(cfg) => {
             // Same batch-resolve trick as the experiment-scoped dispatcher.
@@ -199,7 +200,9 @@ pub async fn dispatch_preview_query(
             let numerator_def = resolved
                 .iter()
                 .find(|m| m.id == cfg.numerator_metric_id)
-                .ok_or_else(|| DispatchError::MetricNotFound(cfg.numerator_metric_id.to_string()))?;
+                .ok_or_else(|| {
+                    DispatchError::MetricNotFound(cfg.numerator_metric_id.to_string())
+                })?;
             let denominator_def = resolved
                 .iter()
                 .find(|m| m.id == cfg.denominator_metric_id)
@@ -334,10 +337,7 @@ mod tests {
 
     #[async_trait]
     impl MetricRepository for MockMetricRepository {
-        async fn find_by_id(
-            &self,
-            _id: MetricId,
-        ) -> Result<MetricDefinition, RepositoryError> {
+        async fn find_by_id(&self, _id: MetricId) -> Result<MetricDefinition, RepositoryError> {
             unimplemented!("dispatcher tests do not exercise find_by_id")
         }
 
@@ -486,11 +486,7 @@ mod tests {
             .expect("funnel dispatch should succeed");
 
         // The funnel builder's SQL starts with `WITH levels AS (`.
-        assert!(
-            q.sql.starts_with("WITH levels AS"),
-            "got SQL: {}",
-            q.sql
-        );
+        assert!(q.sql.starts_with("WITH levels AS"), "got SQL: {}", q.sql);
         // windowFunnel call is present.
         assert!(q.sql.contains("windowFunnel"), "got SQL: {}", q.sql);
     }
@@ -529,11 +525,7 @@ mod tests {
             .expect("ratio dispatch should succeed");
 
         // Both event keys should be bound in the final query.
-        let str_binds: Vec<&str> = q
-            .binds
-            .iter()
-            .filter_map(|b| b.as_str())
-            .collect();
+        let str_binds: Vec<&str> = q.binds.iter().filter_map(|b| b.as_str()).collect();
         assert!(
             str_binds.contains(&"checkout_completed"),
             "numerator event_key missing from binds: {str_binds:?}"
@@ -544,11 +536,7 @@ mod tests {
         );
         // Ratio SQL wraps the two legs in CTEs.
         assert!(q.sql.contains("WITH numerator AS"), "got SQL: {}", q.sql);
-        assert!(
-            q.sql.contains("denominator AS"),
-            "got SQL: {}",
-            q.sql
-        );
+        assert!(q.sql.contains("denominator AS"), "got SQL: {}", q.sql);
     }
 
     // ── Ratio dispatch: non-aggregation side ─────────────────────────────────
@@ -643,10 +631,7 @@ mod tests {
         // Single-digit + multi-digit placeholders in the same string,
         // mixed with non-placeholder content.
         let input = "SELECT {p0}, {p1}, {p10}".to_owned();
-        assert_eq!(
-            rewrite_placeholders_to_clickhouse(input),
-            "SELECT ?, ?, ?"
-        );
+        assert_eq!(rewrite_placeholders_to_clickhouse(input), "SELECT ?, ?, ?");
 
         // Bind ORDER is preserved — the rewrite is purely positional.
         let input = "WHERE a = {p2} AND b = {p0} AND c = {p1}".to_owned();

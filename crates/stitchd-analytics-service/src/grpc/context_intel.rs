@@ -182,7 +182,9 @@ mod tests {
         let req = Request::new(GetContextIntelligenceRequest {
             environment_id: "bad-uuid".into(),
         });
-        let err = handle_get_context_intelligence(&repo, req).await.unwrap_err();
+        let err = handle_get_context_intelligence(&repo, req)
+            .await
+            .unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
@@ -223,7 +225,11 @@ mod tests {
             .into_inner();
         assert_eq!(resp.types.len(), 2);
 
-        let user = resp.types.iter().find(|t| t.context_type == "user").unwrap();
+        let user = resp
+            .types
+            .iter()
+            .find(|t| t.context_type == "user")
+            .unwrap();
         assert_eq!(user.params.len(), 2);
 
         let device = resp

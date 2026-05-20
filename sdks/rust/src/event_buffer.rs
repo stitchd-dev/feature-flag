@@ -65,9 +65,8 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use crate::metrics::{
-    record_buffer_size, record_buffered, record_dropped_permanent,
-    record_dropped_retry_exhausted, record_dropped_shutdown_timeout, record_flushed_accepted,
-    record_flushed_rejected,
+    record_buffer_size, record_buffered, record_dropped_permanent, record_dropped_retry_exhausted,
+    record_dropped_shutdown_timeout, record_flushed_accepted, record_flushed_rejected,
 };
 
 // ============================================================================
@@ -433,7 +432,9 @@ impl EventBuffer {
                     context_key: &e.context_key,
                     value: e.value.as_ref(),
                     properties: e.properties.as_ref(),
-                    occurred_at: e.occurred_at.map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+                    occurred_at: e
+                        .occurred_at
+                        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
                 })
                 .collect(),
         };
@@ -1029,8 +1030,7 @@ mod tests {
         }
         impl Respond for Capture {
             fn respond(&self, req: &Request) -> ResponseTemplate {
-                *self.slot.lock().unwrap() =
-                    Some(serde_json::from_slice(&req.body).unwrap());
+                *self.slot.lock().unwrap() = Some(serde_json::from_slice(&req.body).unwrap());
                 ResponseTemplate::new(202).set_body_json(serde_json::json!({
                     "accepted_count": 1,
                     "rejected": []
@@ -1082,9 +1082,7 @@ mod tests {
     // inside the test sees the same recorder. The recorder snapshot exposes
     // the raw counter / gauge values we can assert against.
 
-    use crate::metrics::{
-        EVENTS_BUFFERED_TOTAL, EVENTS_FLUSHED_TOTAL, EVENT_BUFFER_SIZE,
-    };
+    use crate::metrics::{EVENT_BUFFER_SIZE, EVENTS_BUFFERED_TOTAL, EVENTS_FLUSHED_TOTAL};
     use ::metrics_util::debugging::{DebugValue, DebuggingRecorder};
 
     /// Sum every counter sample whose key matches `name`, across all

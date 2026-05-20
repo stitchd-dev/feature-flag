@@ -135,10 +135,7 @@ pub(super) fn render_aggregator(cfg: &AggregationConfig) -> Result<String, Query
 /// is "value", and applies `toFloat64OrNull` only to property-string
 /// references).
 fn percentile(cfg: &AggregationConfig, q: &str) -> Result<String, QueryBuildError> {
-    Ok(format!(
-        "quantile({q})({})",
-        numeric_value_expr(cfg)?
-    ))
+    Ok(format!("quantile({q})({})", numeric_value_expr(cfg)?))
 }
 
 /// Build a `Float64`-valued expression for a numeric aggregator's
@@ -307,9 +304,8 @@ mod tests {
         };
         let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
         assert!(
-            q.sql.contains(
-                "quantile(0.9)(ifNull(toFloat64OrNull(properties['latency_ms']), 0.0))"
-            ),
+            q.sql
+                .contains("quantile(0.9)(ifNull(toFloat64OrNull(properties['latency_ms']), 0.0))"),
             "P90 should emit quantile(0.9)(...), got:\n{}",
             q.sql
         );
@@ -325,7 +321,8 @@ mod tests {
         };
         let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
         assert!(
-            q.sql.contains("uniq(properties['user_id']) AS metric_value"),
+            q.sql
+                .contains("uniq(properties['user_id']) AS metric_value"),
             "uniq aggregator missing or wrong, got:\n{}",
             q.sql
         );
@@ -389,8 +386,7 @@ mod tests {
             on_field: None,
             where_clause: Some(json!({"%": [{"var": "a"}, 2]})),
         };
-        let err =
-            build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
+        let err = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
         assert_eq!(err, QueryBuildError::UnsupportedJsonLogic("%".into()));
     }
 
@@ -402,8 +398,7 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let err =
-            build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
+        let err = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 

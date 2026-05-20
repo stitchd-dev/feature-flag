@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::TimeZone as _;
-use tokio_stream::{iter as stream_iter, Stream};
+use tokio_stream::{Stream, iter as stream_iter};
 use tonic::{Request, Response, Status};
 
 use stitchd_proto::analytics::v1::{
@@ -104,18 +104,17 @@ pub async fn handle_write_experiment_results(
         return Err(Status::invalid_argument("recommendation must not be empty"));
     }
 
-    let variant_stats: serde_json::Value =
-        serde_json::from_str(&req.variant_stats).map_err(|e| {
-            Status::invalid_argument(format!("variant_stats is not valid JSON: {e}"))
-        })?;
+    let variant_stats: serde_json::Value = serde_json::from_str(&req.variant_stats)
+        .map_err(|e| Status::invalid_argument(format!("variant_stats is not valid JSON: {e}")))?;
 
     let frequentist_result = req
         .frequentist_result
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(|s| {
-            serde_json::from_str::<serde_json::Value>(s)
-                .map_err(|e| Status::invalid_argument(format!("frequentist_result not valid JSON: {e}")))
+            serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
+                Status::invalid_argument(format!("frequentist_result not valid JSON: {e}"))
+            })
         })
         .transpose()?;
 
@@ -124,8 +123,9 @@ pub async fn handle_write_experiment_results(
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(|s| {
-            serde_json::from_str::<serde_json::Value>(s)
-                .map_err(|e| Status::invalid_argument(format!("bayesian_result not valid JSON: {e}")))
+            serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
+                Status::invalid_argument(format!("bayesian_result not valid JSON: {e}"))
+            })
         })
         .transpose()?;
 
@@ -135,9 +135,7 @@ pub async fn handle_write_experiment_results(
         req.computed_at
             .parse::<chrono::DateTime<chrono::Utc>>()
             .map_err(|e| {
-                Status::invalid_argument(format!(
-                    "computed_at must be RFC 3339 UTC: {e}"
-                ))
+                Status::invalid_argument(format!("computed_at must be RFC 3339 UTC: {e}"))
             })?
     };
 
@@ -191,8 +189,7 @@ pub async fn handle_list_experiment_results(
         .await
         .map_err(|e| Status::internal(format!("list failed: {e}")))?;
 
-    let stream: ResultStream =
-        Box::pin(stream_iter(rows.into_iter().map(|r| Ok(row_to_proto(r)))));
+    let stream: ResultStream = Box::pin(stream_iter(rows.into_iter().map(|r| Ok(row_to_proto(r)))));
 
     Ok(Response::new(stream))
 }
@@ -222,15 +219,17 @@ pub async fn handle_get_experiment_result(
         .transpose()?;
 
     let row = repo
-        .get(env_id, experiment_id, &req.variant_key, &req.metric_key, iteration_id)
+        .get(
+            env_id,
+            experiment_id,
+            &req.variant_key,
+            &req.metric_key,
+            iteration_id,
+        )
         .await
         .map_err(|e| match e {
-            RepoError::Clickhouse(ref inner) => {
-                Status::internal(format!("get failed: {inner}"))
-            }
-            RepoError::Json(ref inner) => {
-                Status::internal(format!("get failed (json): {inner}"))
-            }
+            RepoError::Clickhouse(ref inner) => Status::internal(format!("get failed: {inner}")),
+            RepoError::Json(ref inner) => Status::internal(format!("get failed (json): {inner}")),
         })?
         .ok_or_else(|| {
             Status::not_found(format!(
@@ -348,9 +347,7 @@ mod tests {
                 .filter(|r| {
                     r.env_id == filter.env_id
                         && r.experiment_id == filter.experiment_id
-                        && filter
-                            .iteration_id
-                            .is_none_or(|it| r.iteration_id == it)
+                        && filter.iteration_id.is_none_or(|it| r.iteration_id == it)
                 })
                 .cloned()
                 .collect())
@@ -694,9 +691,7 @@ mod tests {
             metric_key: "checkout".to_string(),
             iteration_id: None,
         });
-        let err = handle_get_experiment_result(&repo, req)
-            .await
-            .unwrap_err();
+        let err = handle_get_experiment_result(&repo, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("env_id"));
     }
@@ -711,9 +706,7 @@ mod tests {
             metric_key: "checkout".to_string(),
             iteration_id: None,
         });
-        let err = handle_get_experiment_result(&repo, req)
-            .await
-            .unwrap_err();
+        let err = handle_get_experiment_result(&repo, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("experiment_id"));
     }
@@ -728,9 +721,7 @@ mod tests {
             metric_key: "checkout".to_string(),
             iteration_id: None,
         });
-        let err = handle_get_experiment_result(&repo, req)
-            .await
-            .unwrap_err();
+        let err = handle_get_experiment_result(&repo, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("variant_key"));
     }
@@ -745,9 +736,7 @@ mod tests {
             metric_key: String::new(),
             iteration_id: None,
         });
-        let err = handle_get_experiment_result(&repo, req)
-            .await
-            .unwrap_err();
+        let err = handle_get_experiment_result(&repo, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("metric_key"));
     }
@@ -762,9 +751,7 @@ mod tests {
             metric_key: "checkout".to_string(),
             iteration_id: None,
         });
-        let err = handle_get_experiment_result(&repo, req)
-            .await
-            .unwrap_err();
+        let err = handle_get_experiment_result(&repo, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
         assert!(err.message().contains("checkout"));
     }
@@ -779,9 +766,7 @@ mod tests {
             metric_key: "checkout".to_string(),
             iteration_id: None,
         });
-        let err = handle_get_experiment_result(&repo, req)
-            .await
-            .unwrap_err();
+        let err = handle_get_experiment_result(&repo, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Internal);
     }
 }

@@ -172,7 +172,11 @@ pub async fn handle_create_event_definition(
         name: r.name.trim().to_string(),
         description: r.description.and_then(|s| {
             let trimmed = s.trim().to_string();
-            if trimmed.is_empty() { None } else { Some(trimmed) }
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
         }),
         value_type,
         metric_type,

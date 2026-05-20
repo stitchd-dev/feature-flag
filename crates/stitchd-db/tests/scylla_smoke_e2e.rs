@@ -93,7 +93,9 @@ async fn bulk_import_one_million_entries() {
     // Subsequent batches add to the same generation.
     for batch in 1..BATCHES {
         let offset = batch * BATCH;
-        let keys: Vec<String> = (0..BATCH).map(|i| format!("user_{:08}", offset + i)).collect();
+        let keys: Vec<String> = (0..BATCH)
+            .map(|i| format!("user_{:08}", offset + i))
+            .collect();
         store
             .add_entries(seg_id, "user", "include", &keys)
             .await
@@ -121,7 +123,10 @@ async fn bulk_import_one_million_entries() {
         .check_membership(seg_id, "user", "exc_0000")
         .await
         .expect("check exclude");
-    assert!(!excluded, "exc_0000 is in exclude list — should not be a member");
+    assert!(
+        !excluded,
+        "exc_0000 is in exclude list — should not be a member"
+    );
 
     // A key that was never added
     let absent = store
@@ -256,7 +261,10 @@ async fn swap_atomicity_under_concurrent_reads() {
         .expect("swap to new generation");
 
     let errors = reader_handle.await.expect("reader task");
-    assert_eq!(errors, 0, "readers encountered {errors} query errors during swap");
+    assert_eq!(
+        errors, 0,
+        "readers encountered {errors} query errors during swap"
+    );
 
     // Post-swap: verify new generation is fully visible and old is fully gone.
     // Check a sample of 10 keys from each generation.
@@ -274,7 +282,10 @@ async fn swap_atomicity_under_concurrent_reads() {
             .unwrap_or(true);
 
         assert!(new_in, "{new_key} should be in new generation");
-        assert!(!old_in, "{old_key} should not be in new generation (cross-generation pollution)");
+        assert!(
+            !old_in,
+            "{old_key} should not be in new generation (cross-generation pollution)"
+        );
     }
 
     cleanup(&client, &ks).await;

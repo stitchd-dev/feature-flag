@@ -102,7 +102,8 @@ pub fn build_ratio_query(
     let den_count_sql_shifted = shift_placeholders(&den_count_q.sql, den_count_offset);
 
     // Combine binds in CTE-emission order.
-    let mut binds = Vec::with_capacity(num_q.binds.len() + den_q.binds.len() + den_count_q.binds.len() + 1);
+    let mut binds =
+        Vec::with_capacity(num_q.binds.len() + den_q.binds.len() + den_count_q.binds.len() + 1);
     binds.extend(num_q.binds);
     binds.extend(den_q.binds);
     binds.extend(den_count_q.binds);

@@ -329,7 +329,10 @@ mod tests {
 
     #[test]
     fn render_properties_json_round_trip() {
-        let pairs = vec![("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())];
+        let pairs = vec![
+            ("a".to_string(), "1".to_string()),
+            ("b".to_string(), "2".to_string()),
+        ];
         let s = render_properties_json(&pairs);
         let parsed: JsonValue = serde_json::from_str(&s).unwrap();
         assert_eq!(parsed["a"], "1");
@@ -561,7 +564,15 @@ mod tests {
         let now = Utc::now().timestamp_millis();
 
         for i in 0..10 {
-            insert_event(&client, env_id, "view", &format!("u{i}"), now + i64::from(i) * 1000, None).await;
+            insert_event(
+                &client,
+                env_id,
+                "view",
+                &format!("u{i}"),
+                now + i64::from(i) * 1000,
+                None,
+            )
+            .await;
         }
         wait_for_merge(&client).await;
 

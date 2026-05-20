@@ -181,7 +181,9 @@ async fn list_by_environment_returns_only_live(pool: sqlx::PgPool) {
 async fn list_by_environment_paginated_returns_total(pool: sqlx::PgPool) {
     let (repo, env) = seed_env(&pool).await;
     for i in 0..5 {
-        repo.create(&make_aggregation(env, &format!("m{i}"))).await.unwrap();
+        repo.create(&make_aggregation(env, &format!("m{i}")))
+            .await
+            .unwrap();
     }
     let (page, total) = repo.list_by_environment_paginated(env, 0, 3).await.unwrap();
     assert_eq!(page.len(), 3);
@@ -195,7 +197,10 @@ async fn list_by_environment_paginated_returns_total(pool: sqlx::PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn list_by_environment_paginated_empty(pool: sqlx::PgPool) {
     let (repo, env) = seed_env(&pool).await;
-    let (page, total) = repo.list_by_environment_paginated(env, 0, 50).await.unwrap();
+    let (page, total) = repo
+        .list_by_environment_paginated(env, 0, 50)
+        .await
+        .unwrap();
     assert!(page.is_empty());
     assert_eq!(total, 0);
 }
@@ -284,9 +289,18 @@ async fn funnel_metric_round_trips_with_steps(pool: sqlx::PgPool) {
         description: Some("3-step purchase funnel".into()),
         kind: MetricKind::Funnel(FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "view_product".into(), where_clause: None },
-                FunnelStep { event_key: "add_to_cart".into(), where_clause: None },
-                FunnelStep { event_key: "checkout_completed".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "view_product".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "add_to_cart".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "checkout_completed".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 86_400,
             count_repeats: false,
@@ -371,9 +385,18 @@ async fn list_referencing_event_matches_funnel_step_event_key(pool: sqlx::PgPool
         description: None,
         kind: MetricKind::Funnel(FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "view_item".into(), where_clause: None },
-                FunnelStep { event_key: "add_to_cart".into(), where_clause: None },
-                FunnelStep { event_key: "checkout_completed".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "view_item".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "add_to_cart".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "checkout_completed".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 3600,
             count_repeats: false,
@@ -387,7 +410,10 @@ async fn list_referencing_event_matches_funnel_step_event_key(pool: sqlx::PgPool
     repo.create(&funnel).await.unwrap();
 
     // Matches via any step's event_key (mid-funnel).
-    let hits = repo.list_referencing_event(env, "add_to_cart").await.unwrap();
+    let hits = repo
+        .list_referencing_event(env, "add_to_cart")
+        .await
+        .unwrap();
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].id, funnel.id);
 

@@ -52,9 +52,9 @@ impl From<SegmentationServiceError> for Status {
     fn from(e: SegmentationServiceError) -> Self {
         match e {
             SegmentationServiceError::NotFound(msg) => Self::not_found(msg),
-            SegmentationServiceError::VersionConflict { expected, actual } => Self::aborted(format!(
-                "version conflict: expected {expected}, actual {actual}"
-            )),
+            SegmentationServiceError::VersionConflict { expected, actual } => Self::aborted(
+                format!("version conflict: expected {expected}, actual {actual}"),
+            ),
             SegmentationServiceError::UniqueViolation { field } => {
                 Self::already_exists(format!("unique violation on: {field}"))
             }
@@ -85,7 +85,10 @@ mod tests {
             actual: 3,
         };
         let svc_err = SegmentationServiceError::from(repo_err);
-        assert!(matches!(svc_err, SegmentationServiceError::VersionConflict { .. }));
+        assert!(matches!(
+            svc_err,
+            SegmentationServiceError::VersionConflict { .. }
+        ));
     }
 
     #[test]
@@ -94,7 +97,10 @@ mod tests {
             field: "key".to_string(),
         };
         let svc_err = SegmentationServiceError::from(repo_err);
-        assert!(matches!(svc_err, SegmentationServiceError::UniqueViolation { .. }));
+        assert!(matches!(
+            svc_err,
+            SegmentationServiceError::UniqueViolation { .. }
+        ));
     }
 
     #[test]

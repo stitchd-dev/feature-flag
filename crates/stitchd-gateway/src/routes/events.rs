@@ -473,7 +473,8 @@ async fn forward_to_analytics(
 
     if mark_test {
         for ev in &mut proto_events {
-            ev.properties.insert("_test".to_string(), "true".to_string());
+            ev.properties
+                .insert("_test".to_string(), "true".to_string());
         }
     }
 
@@ -779,8 +780,14 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
     use axum::routing::{delete, get, post, put};
     axum::Router::new()
-        .route("/v1/environments/{environment_id}/events", post(ingest_event))
-        .route("/v1/environments/{environment_id}/events/batch", post(ingest_batch))
+        .route(
+            "/v1/environments/{environment_id}/events",
+            post(ingest_event),
+        )
+        .route(
+            "/v1/environments/{environment_id}/events/batch",
+            post(ingest_batch),
+        )
         .route(
             "/v1/environments/{environment_id}/event-definitions",
             get(list_event_definitions).post(create_event_definition),
@@ -984,19 +991,18 @@ mod tests {
     use tonic::{Request as ServerReq, Response as ServerResp, Status};
 
     use stitchd_proto::analytics::v1::{
-        ExperimentResult, GetContextIntelligenceRequest, GetContextIntelligenceResponse,
-        GetEvalStatsRequest, GetEvalStatsResponse, GetEventFiringsRequest,
-        GetEventFiringsResponse, GetEventStatsRequest, GetEventStatsResponse,
-        GetExperimentResultRequest, GetMetricRequest, ListContextParamsRequest,
-        ListContextParamsResponse, ListContextTypesRequest, ListContextTypesResponse,
-        ListExperimentResultsRequest, ListMetricsRequest, ListMetricsResponse, MetricDefinition,
-        PreviewMetricRequest, PreviewMetricResponse, RegisterContextRequest,
-        RegisterContextResponse, RejectedEvent as ProtoRejectedEvent,
-        TrackEventsResponse as ProtoTrackEventsResponse,
+        CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse, ExperimentResult,
+        GetContextIntelligenceRequest, GetContextIntelligenceResponse, GetEvalStatsRequest,
+        GetEvalStatsResponse, GetEventFiringsRequest, GetEventFiringsResponse,
+        GetEventStatsRequest, GetEventStatsResponse, GetExperimentResultRequest, GetMetricRequest,
+        IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
+        ListContextTypesRequest, ListContextTypesResponse, ListExperimentResultsRequest,
+        ListMetricsRequest, ListMetricsResponse, MetricDefinition, PreviewMetricRequest,
+        PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse,
+        RejectedEvent as ProtoRejectedEvent, TrackEventsResponse as ProtoTrackEventsResponse,
+        UpdateMetricRequest, WriteExperimentResultsRequest, WriteExperimentResultsResponse,
         analytics_service_client::AnalyticsServiceClient,
         analytics_service_server::{AnalyticsService, AnalyticsServiceServer},
-        CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse, IngestEventResponse,
-        UpdateMetricRequest, WriteExperimentResultsRequest, WriteExperimentResultsResponse,
     };
 
     use crate::middleware::sdk_auth::SdkContext;
@@ -1030,10 +1036,7 @@ mod tests {
                 .and_then(|v| v.to_str().ok())
                 .map(std::string::ToString::to_string);
             let inner = request.into_inner();
-            self.captured
-                .lock()
-                .unwrap()
-                .push((env_id_meta, inner));
+            self.captured.lock().unwrap().push((env_id_meta, inner));
             Ok(ServerResp::new(self.response.clone()))
         }
 
@@ -1183,7 +1186,10 @@ mod tests {
     /// `tokio::spawn`. No external mocking library; no port conflicts.
     async fn spawn_analytics_mock(
         response: ProtoTrackEventsResponse,
-    ) -> (AnalyticsServiceClient<TonicChannel>, Arc<Mutex<Vec<CapturedCall>>>) {
+    ) -> (
+        AnalyticsServiceClient<TonicChannel>,
+        Arc<Mutex<Vec<CapturedCall>>>,
+    ) {
         let captured = Arc::new(Mutex::new(Vec::new()));
         let svc = MockAnalyticsService {
             response,
@@ -1253,10 +1259,7 @@ mod tests {
     /// auth middleware applied — instead we inject `SdkContext` directly into
     /// the request via an extension layer. Used to test behaviour downstream
     /// of auth (env_id forwarding, response translation, body limit).
-    fn track_events_router_with_ctx(
-        state: Arc<GatewayState>,
-        sdk_ctx: SdkContext,
-    ) -> axum::Router {
+    fn track_events_router_with_ctx(state: Arc<GatewayState>, sdk_ctx: SdkContext) -> axum::Router {
         use axum::extract::Request as ExtractRequest;
         use axum::middleware::{Next, from_fn};
         use axum::routing::post;
@@ -1540,7 +1543,10 @@ mod tests {
         let p = json_event_to_proto(e);
         assert_eq!(p.event_key, "purchase");
         assert_eq!(p.contexts.get("user").map(String::as_str), Some("u42"));
-        assert_eq!(p.properties.get("currency").map(String::as_str), Some("USD"));
+        assert_eq!(
+            p.properties.get("currency").map(String::as_str),
+            Some("USD")
+        );
         assert_eq!(p.occurred_at.as_deref(), Some("2026-05-19T12:00:00Z"));
         assert!(matches!(
             p.value,
@@ -1653,10 +1659,11 @@ mod tests {
             request: ServerReq<GetEventFiringsRequest>,
         ) -> Result<ServerResp<GetEventFiringsResponse>, Status> {
             let inner = request.into_inner();
-            self.firings
-                .lock()
-                .unwrap()
-                .push((inner.env_id.clone(), inner.event_key.clone(), inner.limit));
+            self.firings.lock().unwrap().push((
+                inner.env_id.clone(),
+                inner.event_key.clone(),
+                inner.limit,
+            ));
             // Canned response — one firing row so the JSON-shape mapping is exercised.
             let mut ctxs = std::collections::HashMap::new();
             ctxs.insert("user".to_string(), "u1".to_string());
@@ -1676,10 +1683,11 @@ mod tests {
             request: ServerReq<GetEventStatsRequest>,
         ) -> Result<ServerResp<GetEventStatsResponse>, Status> {
             let inner = request.into_inner();
-            self.stats
-                .lock()
-                .unwrap()
-                .push((inner.env_id.clone(), inner.event_key.clone(), inner.days));
+            self.stats.lock().unwrap().push((
+                inner.env_id.clone(),
+                inner.event_key.clone(),
+                inner.days,
+            ));
             Ok(ServerResp::new(GetEventStatsResponse {
                 buckets: vec![stitchd_proto::analytics::v1::EventStatsBucket {
                     day: "2026-05-19T00:00:00Z".into(),
@@ -1857,7 +1865,10 @@ mod tests {
     fn firings_router(state: Arc<GatewayState>) -> axum::Router {
         use axum::routing::get as get_route;
         axum::Router::new()
-            .route("/v1/events/{event_key}/firings", get_route(get_event_firings))
+            .route(
+                "/v1/events/{event_key}/firings",
+                get_route(get_event_firings),
+            )
             .route("/v1/events/{event_key}/stats", get_route(get_event_stats))
             .with_state(state)
     }

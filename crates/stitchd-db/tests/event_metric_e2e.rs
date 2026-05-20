@@ -58,8 +58,9 @@ use stitchd_db::{
     EnvironmentRepository, EventDefinitionRepository, ExperimentRepository, FlagRepository,
     MetricRepository, OrganisationRepository, ProjectRepository,
     repository::pg::{
-        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository, PgExperimentRepository,
-        PgFlagRepository, PgMetricRepository, PgOrganisationRepository, PgProjectRepository,
+        PgAuditLogger, PgEnvironmentRepository, PgEventDefinitionRepository,
+        PgExperimentRepository, PgFlagRepository, PgMetricRepository, PgOrganisationRepository,
+        PgProjectRepository,
     },
 };
 use stitchd_stats_service::{
@@ -122,8 +123,9 @@ struct RatioResultRow {
 /// Build a [`PgPool`] from `DATABASE_URL`. Panics if unset — by design,
 /// the test is `#[ignore]`d so callers must opt in.
 async fn pg_pool() -> sqlx::PgPool {
-    let url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set (e.g. postgres://stitchd:stitchd@localhost:5432/stitchd)");
+    let url = std::env::var("DATABASE_URL").expect(
+        "DATABASE_URL must be set (e.g. postgres://stitchd:stitchd@localhost:5432/stitchd)",
+    );
     sqlx::postgres::PgPoolOptions::new()
         .max_connections(5)
         .connect(&url)
@@ -231,9 +233,9 @@ async fn seed_event_definitions(pool: &sqlx::PgPool, env_id: EnvironmentId) {
         environment_id: env_id,
         key: "checkout_started".into(),
         name: "checkout_started".into(),
-                description: None,
-                metric_type: MetricType::Count,
-                schema: None,
+        description: None,
+        metric_type: MetricType::Count,
+        schema: None,
         value_type: EventValueType::Bool,
         created_at: now,
         updated_at: now,
@@ -245,9 +247,9 @@ async fn seed_event_definitions(pool: &sqlx::PgPool, env_id: EnvironmentId) {
         environment_id: env_id,
         key: "checkout_completed".into(),
         name: "checkout_completed".into(),
-                description: None,
-                metric_type: MetricType::Count,
-                schema: None,
+        description: None,
+        metric_type: MetricType::Count,
+        schema: None,
         value_type: EventValueType::Bool,
         created_at: now,
         updated_at: now,
@@ -465,8 +467,7 @@ async fn sdk_fires_events_experiment_reads_via_ratio_metric() {
     let (env_id, flag_rule_id) = seed_tenant(&pool).await;
     seed_event_definitions(&pool, env_id).await;
     let (_count_started_id, _count_completed_id, ratio_id) = seed_metrics(&pool, env_id).await;
-    let (exp_id, iter_uuid) =
-        seed_running_experiment(&pool, env_id, flag_rule_id, ratio_id).await;
+    let (exp_id, iter_uuid) = seed_running_experiment(&pool, env_id, flag_rule_id, ratio_id).await;
 
     // ── 2. Fire events directly into ClickHouse ───────────────────────────
     //

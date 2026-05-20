@@ -360,8 +360,7 @@ mod tests {
         assert_eq!(parsed["control"], serde_json::json!(100));
 
         // frequentist_result populated.
-        let fr: serde_json::Value =
-            serde_json::from_str(&ch_row.frequentist_result).unwrap();
+        let fr: serde_json::Value = serde_json::from_str(&ch_row.frequentist_result).unwrap();
         assert_eq!(fr["p_value"], serde_json::json!(0.03));
 
         // bayesian_result absent → empty string.
@@ -406,11 +405,9 @@ mod tests {
             computed_at: Utc::now(),
         };
         let ch_row = ClickHouseExperimentResultsRepository::to_ch_row(row).unwrap();
-        let fr: serde_json::Value =
-            serde_json::from_str(&ch_row.frequentist_result).unwrap();
+        let fr: serde_json::Value = serde_json::from_str(&ch_row.frequentist_result).unwrap();
         assert_eq!(fr["ci_lower"], serde_json::json!(0.1));
-        let br: serde_json::Value =
-            serde_json::from_str(&ch_row.bayesian_result).unwrap();
+        let br: serde_json::Value = serde_json::from_str(&ch_row.bayesian_result).unwrap();
         assert_eq!(br["posterior_prob"], serde_json::json!(0.95));
     }
 
@@ -434,15 +431,12 @@ mod tests {
     /// `to_ch_row` sets created_at to a non-zero timestamp.
     #[test]
     fn to_ch_row_sets_created_at() {
-        let row = make_write_row(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            "c",
-            "m",
-        );
+        let row = make_write_row(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(), "c", "m");
         let ch_row = ClickHouseExperimentResultsRepository::to_ch_row(row).unwrap();
-        assert!(ch_row.created_at > 0, "created_at must be a positive epoch ms");
+        assert!(
+            ch_row.created_at > 0,
+            "created_at must be a positive epoch ms"
+        );
     }
 
     /// `write` with empty slice short-circuits without touching ClickHouse.
@@ -451,19 +445,19 @@ mod tests {
     /// network call it would fail with a connection error.
     #[tokio::test]
     async fn write_empty_slice_is_no_op() {
-        let client =
-            clickhouse::Client::default().with_url("http://127.0.0.1:19999");
+        let client = clickhouse::Client::default().with_url("http://127.0.0.1:19999");
         let repo = ClickHouseExperimentResultsRepository::new(client);
         // Should succeed immediately without attempting a network connection.
-        repo.write(vec![]).await.expect("empty write must be a no-op");
+        repo.write(vec![])
+            .await
+            .expect("empty write must be a no-op");
     }
 
     /// The trait object can be constructed behind `Arc<dyn ExperimentResultsRepository>`.
     #[test]
     fn trait_object_construction() {
         use std::sync::Arc;
-        let client =
-            clickhouse::Client::default().with_url("http://127.0.0.1:19999");
+        let client = clickhouse::Client::default().with_url("http://127.0.0.1:19999");
         let repo: Arc<dyn ExperimentResultsRepository> =
             Arc::new(ClickHouseExperimentResultsRepository::new(client));
         // Simply verifying the type compiles and can be behind Arc<dyn Trait>.

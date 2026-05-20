@@ -113,19 +113,11 @@ async fn write_keys_parallel(
          (segment_id, context_type, generation, list_type, entry_key) \
          VALUES (?, ?, ?, ?, ?)"
     );
-    let stmt = Arc::new(
-        client
-            .prepare(&insert_cql)
-            .await
-            .expect("prepare insert"),
-    );
+    let stmt = Arc::new(client.prepare(&insert_cql).await.expect("prepare insert"));
     let ctx = context_type.to_string();
 
     // Split into chunks, then dispatch up to PARALLEL_TASKS chunks concurrently.
-    let chunks: Vec<Vec<String>> = keys
-        .chunks(KEYS_PER_TASK)
-        .map(|c| c.to_vec())
-        .collect();
+    let chunks: Vec<Vec<String>> = keys.chunks(KEYS_PER_TASK).map(|c| c.to_vec()).collect();
 
     let mut idx = 0;
     while idx < chunks.len() {
@@ -242,8 +234,7 @@ async fn perf_40_segments_1m_entries_each() {
     eprintln!("[perf] Generating {UNIQUE_KEYS} unique keys …");
     let t_keygen = Instant::now();
     // "k{i:010}" → 12 bytes each → ~120 MB heap for 10M strings.
-    let keys: Arc<Vec<String>> =
-        Arc::new((0..UNIQUE_KEYS).map(|i| format!("k{i:010}")).collect());
+    let keys: Arc<Vec<String>> = Arc::new((0..UNIQUE_KEYS).map(|i| format!("k{i:010}")).collect());
     eprintln!(
         "[perf] Key pool ready in {:.1}s",
         t_keygen.elapsed().as_secs_f32()
@@ -301,7 +292,10 @@ async fn perf_40_segments_1m_entries_each() {
         "║  Total entries      : {:.0}M ({SEGMENTS} segments × 1M)",
         total_entries as f64 / 1_000_000.0
     );
-    eprintln!("║  Unique keys (pool) : {}M  (each key in ~4 segs)", UNIQUE_KEYS / 1_000_000);
+    eprintln!(
+        "║  Unique keys (pool) : {}M  (each key in ~4 segs)",
+        UNIQUE_KEYS / 1_000_000
+    );
     eprintln!("║  Total wall time    : {:.1}s", total_wall.as_secs_f32());
     eprintln!("║  Aggregate throughput: {throughput:.0} entries/sec");
     eprintln!("║  Per-segment write time:");

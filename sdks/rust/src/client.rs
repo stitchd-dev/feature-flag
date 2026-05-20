@@ -46,9 +46,7 @@ use stitchd_proto::sdk::v1::sdk_service_client::SdkServiceClient;
 
 use crate::config::SdkConfig;
 use crate::error::{SdkError, TrackError};
-use crate::event_buffer::{
-    BufferedEvent, EventBuffer, EventBufferConfig, FlushReport, TypedValue,
-};
+use crate::event_buffer::{BufferedEvent, EventBuffer, EventBufferConfig, FlushReport, TypedValue};
 use crate::events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, ParameterValue};
 use crate::lru::{ContextKey, MembershipCache, MembershipMap};
 use crate::polling::{DefinitionFetcher, PollTask};
@@ -2272,8 +2270,7 @@ mod tests {
         }
         impl Respond for Capture {
             fn respond(&self, req: &Request) -> ResponseTemplate {
-                *self.slot.lock().unwrap() =
-                    Some(serde_json::from_slice(&req.body).unwrap());
+                *self.slot.lock().unwrap() = Some(serde_json::from_slice(&req.body).unwrap());
                 ResponseTemplate::new(202).set_body_json(serde_json::json!({
                     "accepted_count": 1,
                     "rejected": []

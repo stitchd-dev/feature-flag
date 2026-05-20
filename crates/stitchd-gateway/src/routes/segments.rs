@@ -661,7 +661,10 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
             "/v1/environments/{environment_id}/segments",
             post(create_segment_in_env),
         )
-        .route("/v1/segments/{segment_id}/entries", post(patch_segment_entries))
+        .route(
+            "/v1/segments/{segment_id}/entries",
+            post(patch_segment_entries),
+        )
         .route(
             "/v1/segments/{segment_id}/entries/lookup",
             get(lookup_segment_entry),

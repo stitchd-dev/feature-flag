@@ -63,7 +63,9 @@ pub async fn authenticate(
         return Ok(stitchd_core::id::EnvironmentId::from_uuid(uuid));
     }
 
-    Err(Status::unauthenticated("missing x-sdk-key or x-env-id metadata"))
+    Err(Status::unauthenticated(
+        "missing x-sdk-key or x-env-id metadata",
+    ))
 }
 
 /// Handle an IngestEvent RPC — validates, accepts, and writes to ClickHouse.
@@ -105,7 +107,9 @@ pub async fn handle_ingest_event(
                 Some(stitchd_proto::analytics::v1::metric_value::Value::BoolValue(_))
             ) | (
                 EventValueType::Int,
-                Some(stitchd_proto::analytics::v1::metric_value::Value::IntValue(_))
+                Some(stitchd_proto::analytics::v1::metric_value::Value::IntValue(
+                    _
+                ))
             ) | (
                 EventValueType::Double,
                 Some(stitchd_proto::analytics::v1::metric_value::Value::DoubleValue(_))
@@ -153,8 +157,7 @@ pub async fn handle_ingest_event(
     }
 
     metrics::counter!("analytics_service.events.accepted").increment(u64::from(accepted_count));
-    metrics::counter!("analytics_service.events.rejected")
-        .increment(rejected_keys.len() as u64);
+    metrics::counter!("analytics_service.events.rejected").increment(rejected_keys.len() as u64);
 
     Ok(Response::new(IngestEventResponse {
         accepted_count,
@@ -181,7 +184,9 @@ mod tests {
         tenant::SdkKey,
     };
     use stitchd_db::{EventDefinitionRepository, RepositoryError, SdkKeyRepository};
-    use stitchd_proto::analytics::v1::{IngestEventRequest, MetricEvent, MetricValue, metric_value::Value};
+    use stitchd_proto::analytics::v1::{
+        IngestEventRequest, MetricEvent, MetricValue, metric_value::Value,
+    };
 
     use super::*;
 
@@ -385,7 +390,10 @@ mod tests {
         }
     }
 
-    fn make_request_with_sdk_key(events: Vec<MetricEvent>, raw_key: &str) -> Request<IngestEventRequest> {
+    fn make_request_with_sdk_key(
+        events: Vec<MetricEvent>,
+        raw_key: &str,
+    ) -> Request<IngestEventRequest> {
         let mut req = Request::new(IngestEventRequest { events });
         req.metadata_mut().insert(
             "x-sdk-key",
@@ -649,7 +657,9 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
         ) -> Result<Vec<EventDefinition>, RepositoryError> {
-            Err(RepositoryError::Unexpected(anyhow::anyhow!("db unavailable")))
+            Err(RepositoryError::Unexpected(anyhow::anyhow!(
+                "db unavailable"
+            )))
         }
 
         async fn list_by_environment_paginated(
@@ -659,7 +669,9 @@ mod tests {
             _limit: u64,
             _include_archived: bool,
         ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
-            Err(RepositoryError::Unexpected(anyhow::anyhow!("db unavailable")))
+            Err(RepositoryError::Unexpected(anyhow::anyhow!(
+                "db unavailable"
+            )))
         }
 
         async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {

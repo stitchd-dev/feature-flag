@@ -54,8 +54,8 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_METRICS_PORT);
 
-    let database_url =
-        std::env::var("STITCHD_DATABASE_URL").context("STITCHD_DATABASE_URL environment variable is required")?;
+    let database_url = std::env::var("STITCHD_DATABASE_URL")
+        .context("STITCHD_DATABASE_URL environment variable is required")?;
 
     // ── Prometheus metrics ────────────────────────────────────────────────────
     let metrics_addr: std::net::SocketAddr = format!("0.0.0.0:{metrics_port}")

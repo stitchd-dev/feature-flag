@@ -7,8 +7,7 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 
 use stitchd_proto::experiments::v1::{
-    ListRunningExperimentsRequest,
-    experimentation_service_client::ExperimentationServiceClient,
+    ListRunningExperimentsRequest, experimentation_service_client::ExperimentationServiceClient,
 };
 
 /// A running experiment with its active iteration, ready for stats computation.
@@ -89,11 +88,11 @@ mod tests {
     use tonic::{Request, Response, Status};
 
     use stitchd_proto::experiments::v1::{
-        ExperimentIteration, ExperimentResults,
-        ListRunningExperimentsRequest,
-        RunningExperiment as ProtoRunningExperiment,
-        UpdateIterationLastComputedResponse,
-        experimentation_service_server::{ExperimentationService as ExperimentationServiceTrait, ExperimentationServiceServer},
+        ExperimentIteration, ExperimentResults, ListRunningExperimentsRequest,
+        RunningExperiment as ProtoRunningExperiment, UpdateIterationLastComputedResponse,
+        experimentation_service_server::{
+            ExperimentationService as ExperimentationServiceTrait, ExperimentationServiceServer,
+        },
     };
 
     // ── Mock experimentation service ──────────────────────────────────────────
@@ -181,7 +180,9 @@ mod tests {
             for item in items {
                 tx.send(Ok(item)).await.ok();
             }
-            Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+            Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+                rx,
+            )))
         }
     }
 

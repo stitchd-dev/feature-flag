@@ -64,16 +64,20 @@ async fn main() -> anyhow::Result<()> {
     let sdk_key_repo: Arc<dyn stitchd_db::SdkKeyRepository> = Arc::new(
         stitchd_db::PgSdkKeyRepository::new(pg_pool.clone(), audit_logger.clone()),
     );
-    let context_registry: Arc<dyn stitchd_db::ContextRegistryRepository> =
-        Arc::new(stitchd_db::PgContextRegistryRepository::new(pg_pool.clone()));
+    let context_registry: Arc<dyn stitchd_db::ContextRegistryRepository> = Arc::new(
+        stitchd_db::PgContextRegistryRepository::new(pg_pool.clone()),
+    );
     let metric_repo = Arc::new(stitchd_db::PgMetricRepository::new(
         pg_pool.clone(),
         audit_logger.clone(),
     ));
     let event_writer = stitchd_event_writer::writer::EventWriter::new(ch_client.clone());
 
-    let experiment_results_repo: Arc<dyn stitchd_analytics_service::repo::experiment_results::ExperimentResultsRepository> =
-        Arc::new(ClickHouseExperimentResultsRepository::new(ch_client.clone()));
+    let experiment_results_repo: Arc<
+        dyn stitchd_analytics_service::repo::experiment_results::ExperimentResultsRepository,
+    > = Arc::new(ClickHouseExperimentResultsRepository::new(
+        ch_client.clone(),
+    ));
 
     // Phase 4 Task 3 (events_metrics_20260519): event-driven recompute
     // trigger on `update_metric`. Wiring the real ExperimentRepository

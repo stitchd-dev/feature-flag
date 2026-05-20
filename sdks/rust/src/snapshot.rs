@@ -543,9 +543,15 @@ mod tests {
     #[test]
     fn event_value_type_of_typed_value() {
         use crate::event_buffer::TypedValue;
-        assert_eq!(EventValueType::of(&TypedValue::Bool(true)), EventValueType::Bool);
+        assert_eq!(
+            EventValueType::of(&TypedValue::Bool(true)),
+            EventValueType::Bool
+        );
         assert_eq!(EventValueType::of(&TypedValue::Int(7)), EventValueType::Int);
-        assert_eq!(EventValueType::of(&TypedValue::Double(1.5)), EventValueType::Double);
+        assert_eq!(
+            EventValueType::of(&TypedValue::Double(1.5)),
+            EventValueType::Double
+        );
     }
 
     #[test]
@@ -563,7 +569,10 @@ mod tests {
         defs.insert("clicks".to_string(), EventValueType::Int);
         let s = snapshot_with(vec![], vec![], vec![]).with_event_definitions(defs);
         assert_eq!(s.event_definition_count(), 3);
-        assert_eq!(s.event_definition("checkout_completed"), Some(EventValueType::Bool));
+        assert_eq!(
+            s.event_definition("checkout_completed"),
+            Some(EventValueType::Bool)
+        );
         assert_eq!(s.event_definition("revenue"), Some(EventValueType::Double));
         assert_eq!(s.event_definition("clicks"), Some(EventValueType::Int));
         assert!(s.event_definition("not_registered").is_none());
@@ -644,8 +653,14 @@ mod tests {
 
     #[test]
     fn from_wire_str_round_trips_known_variants() {
-        assert_eq!(EventValueType::from_wire_str("bool"), Some(EventValueType::Bool));
-        assert_eq!(EventValueType::from_wire_str("int"), Some(EventValueType::Int));
+        assert_eq!(
+            EventValueType::from_wire_str("bool"),
+            Some(EventValueType::Bool)
+        );
+        assert_eq!(
+            EventValueType::from_wire_str("int"),
+            Some(EventValueType::Int)
+        );
         assert_eq!(
             EventValueType::from_wire_str("double"),
             Some(EventValueType::Double)

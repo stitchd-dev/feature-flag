@@ -46,7 +46,9 @@ pub async fn seed_superadmin(
         .ok()
         .filter(|v| !v.is_empty())
     else {
-        warn!("STITCHD_SUPERADMIN_EMAIL is set but STITCHD_SUPERADMIN_PASSWORD is missing — skipping bootstrap");
+        warn!(
+            "STITCHD_SUPERADMIN_EMAIL is set but STITCHD_SUPERADMIN_PASSWORD is missing — skipping bootstrap"
+        );
         return Ok(());
     };
 

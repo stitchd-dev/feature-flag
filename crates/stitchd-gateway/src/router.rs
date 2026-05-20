@@ -162,9 +162,7 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
                     Arc::clone(&event_quota_limiter),
                     event_quota_middleware,
                 ))
-                .layer(DefaultBodyLimit::max(
-                    events::TRACK_EVENTS_BODY_LIMIT_BYTES,
-                )),
+                .layer(DefaultBodyLimit::max(events::TRACK_EVENTS_BODY_LIMIT_BYTES)),
         )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(

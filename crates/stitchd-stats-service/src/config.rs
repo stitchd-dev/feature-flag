@@ -31,11 +31,12 @@ impl StatsConfig {
     /// # Errors
     /// Returns an error if `STITCHD_DATABASE_URL` is not set.
     pub fn from_env() -> anyhow::Result<Self> {
-        let database_url = std::env::var("STITCHD_DATABASE_URL")
-            .map_err(|_| anyhow::anyhow!("STITCHD_DATABASE_URL environment variable is required"))?;
+        let database_url = std::env::var("STITCHD_DATABASE_URL").map_err(|_| {
+            anyhow::anyhow!("STITCHD_DATABASE_URL environment variable is required")
+        })?;
 
-        let clickhouse_url =
-            std::env::var("STITCHD_CLICKHOUSE_URL").unwrap_or_else(|_| "http://localhost:8123".to_string());
+        let clickhouse_url = std::env::var("STITCHD_CLICKHOUSE_URL")
+            .unwrap_or_else(|_| "http://localhost:8123".to_string());
 
         let clickhouse_db =
             std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
@@ -112,7 +113,10 @@ mod tests {
         let result = StatsConfig::from_env();
         assert!(result.is_err(), "should fail without STITCHD_DATABASE_URL");
         assert!(
-            result.unwrap_err().to_string().contains("STITCHD_DATABASE_URL"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("STITCHD_DATABASE_URL"),
             "error message should mention STITCHD_DATABASE_URL"
         );
     }
@@ -121,7 +125,12 @@ mod tests {
     #[serial]
     fn test_config_loads_database_url() {
         let _g = EnvGuard::new("STITCHD_DATABASE_URL");
-        unsafe { std::env::set_var("STITCHD_DATABASE_URL", "postgresql://test:test@localhost/test") };
+        unsafe {
+            std::env::set_var(
+                "STITCHD_DATABASE_URL",
+                "postgresql://test:test@localhost/test",
+            )
+        };
         let config = StatsConfig::from_env().expect("should load with STITCHD_DATABASE_URL set");
         assert_eq!(config.database_url, "postgresql://test:test@localhost/test");
     }
@@ -246,12 +255,12 @@ mod tests {
         let _g = EnvGuard::new("STITCHD_ANALYTICS_SERVICE_GRPC_URL");
         unsafe {
             std::env::set_var("STITCHD_DATABASE_URL", "postgresql://x:x@localhost/x");
-            std::env::set_var("STITCHD_ANALYTICS_SERVICE_GRPC_URL", "http://analytics:50055");
+            std::env::set_var(
+                "STITCHD_ANALYTICS_SERVICE_GRPC_URL",
+                "http://analytics:50055",
+            );
         }
         let config = StatsConfig::from_env().unwrap();
-        assert_eq!(
-            config.analytics_service_grpc_url,
-            "http://analytics:50055"
-        );
+        assert_eq!(config.analytics_service_grpc_url, "http://analytics:50055");
     }
 }

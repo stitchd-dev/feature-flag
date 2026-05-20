@@ -81,10 +81,7 @@ impl FlagSdkBackendServiceImpl {
     /// the per-environment event definitions used by the SDK for
     /// `Client::track()` validation.
     #[must_use]
-    pub fn with_event_definition_repo(
-        mut self,
-        repo: Arc<dyn EventDefinitionRepository>,
-    ) -> Self {
+    pub fn with_event_definition_repo(mut self, repo: Arc<dyn EventDefinitionRepository>) -> Self {
         self.event_definition_repo = Some(repo);
         self
     }
@@ -756,10 +753,7 @@ mod tests {
         async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
             unimplemented!()
         }
-        async fn update(
-            &self,
-            _def: &EventDefinition,
-        ) -> Result<EventDefinition, RepositoryError> {
+        async fn update(&self, _def: &EventDefinition) -> Result<EventDefinition, RepositoryError> {
             unimplemented!()
         }
         async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> {
@@ -986,11 +980,8 @@ mod tests {
             make_event_def(env_id, "revenue", EventValueType::Double),
         );
 
-        let svc = make_service_with_event_defs(
-            StubFlagRepo::arc(),
-            StubSegmentRepo::arc(),
-            event_repo,
-        );
+        let svc =
+            make_service_with_event_defs(StubFlagRepo::arc(), StubSegmentRepo::arc(), event_repo);
         let resp = svc
             .sync_definitions(make_request_with_env(env_id))
             .await
@@ -1023,11 +1014,8 @@ mod tests {
         event_repo.with_def(env_id, live_def);
         event_repo.with_def(env_id, archived_def);
 
-        let svc = make_service_with_event_defs(
-            StubFlagRepo::arc(),
-            StubSegmentRepo::arc(),
-            event_repo,
-        );
+        let svc =
+            make_service_with_event_defs(StubFlagRepo::arc(), StubSegmentRepo::arc(), event_repo);
         let resp = svc
             .sync_definitions(make_request_with_env(env_id))
             .await
@@ -1044,13 +1032,13 @@ mod tests {
         let env_a = EnvironmentId::new();
         let env_b = EnvironmentId::new();
         let event_repo = StubEventDefinitionRepo::arc();
-        event_repo.with_def(env_a, make_event_def(env_a, "env_a_event", EventValueType::Bool));
-
-        let svc = make_service_with_event_defs(
-            StubFlagRepo::arc(),
-            StubSegmentRepo::arc(),
-            event_repo,
+        event_repo.with_def(
+            env_a,
+            make_event_def(env_a, "env_a_event", EventValueType::Bool),
         );
+
+        let svc =
+            make_service_with_event_defs(StubFlagRepo::arc(), StubSegmentRepo::arc(), event_repo);
 
         let resp_a = svc
             .sync_definitions(make_request_with_env(env_a))

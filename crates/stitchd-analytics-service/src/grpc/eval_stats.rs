@@ -8,9 +8,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use tonic::{Request, Response, Status};
 
-use stitchd_proto::analytics::v1::{
-    EvalStatsBucket, GetEvalStatsRequest, GetEvalStatsResponse,
-};
+use stitchd_proto::analytics::v1::{EvalStatsBucket, GetEvalStatsRequest, GetEvalStatsResponse};
 
 /// Resolve the effective granularity — forces "day" when range exceeds 24 hours.
 pub fn resolve_granularity(from: DateTime<Utc>, to: DateTime<Utc>, requested: &str) -> String {
@@ -152,22 +150,34 @@ mod tests {
 
     #[test]
     fn granularity_stays_hour_within_24h() {
-        assert_eq!(resolve_granularity(ts(2026, 5, 1, 0), ts(2026, 5, 1, 23), "hour"), "hour");
+        assert_eq!(
+            resolve_granularity(ts(2026, 5, 1, 0), ts(2026, 5, 1, 23), "hour"),
+            "hour"
+        );
     }
 
     #[test]
     fn granularity_auto_switches_to_day_over_24h() {
-        assert_eq!(resolve_granularity(ts(2026, 5, 1, 0), ts(2026, 5, 3, 0), "hour"), "day");
+        assert_eq!(
+            resolve_granularity(ts(2026, 5, 1, 0), ts(2026, 5, 3, 0), "hour"),
+            "day"
+        );
     }
 
     #[test]
     fn granularity_exactly_24h_stays_hour() {
-        assert_eq!(resolve_granularity(ts(2026, 5, 1, 0), ts(2026, 5, 2, 0), "hour"), "hour");
+        assert_eq!(
+            resolve_granularity(ts(2026, 5, 1, 0), ts(2026, 5, 2, 0), "hour"),
+            "hour"
+        );
     }
 
     #[test]
     fn granularity_30_day_range_forces_day() {
-        assert_eq!(resolve_granularity(ts(2026, 4, 1, 0), ts(2026, 5, 1, 0), "hour"), "day");
+        assert_eq!(
+            resolve_granularity(ts(2026, 4, 1, 0), ts(2026, 5, 1, 0), "hour"),
+            "day"
+        );
     }
 
     #[test]

@@ -323,8 +323,14 @@ mod tests {
     fn funnel_with_two_steps_validates() {
         let cfg = FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "start".into(), where_clause: None },
-                FunnelStep { event_key: "complete".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "start".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "complete".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 3600,
             count_repeats: false,
@@ -335,7 +341,10 @@ mod tests {
     #[test]
     fn funnel_with_single_step_fails() {
         let cfg = FunnelConfig {
-            steps: vec![FunnelStep { event_key: "lonely".into(), where_clause: None }],
+            steps: vec![FunnelStep {
+                event_key: "lonely".into(),
+                where_clause: None,
+            }],
             window_seconds: 3600,
             count_repeats: false,
         };
@@ -349,8 +358,14 @@ mod tests {
     fn funnel_with_zero_window_fails() {
         let cfg = FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "a".into(), where_clause: None },
-                FunnelStep { event_key: "b".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "a".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "b".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 0,
             count_repeats: false,
@@ -397,9 +412,18 @@ mod tests {
     fn funnel_serde_round_trip_strict_order() {
         let kind = MetricKind::Funnel(FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "view".into(), where_clause: None },
-                FunnelStep { event_key: "add_to_cart".into(), where_clause: None },
-                FunnelStep { event_key: "checkout".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "view".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "add_to_cart".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "checkout".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 86_400,
             count_repeats: false,
@@ -426,8 +450,14 @@ mod tests {
         });
         let m_f = MetricKind::Funnel(FunnelConfig {
             steps: vec![
-                FunnelStep { event_key: "a".into(), where_clause: None },
-                FunnelStep { event_key: "b".into(), where_clause: None },
+                FunnelStep {
+                    event_key: "a".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "b".into(),
+                    where_clause: None,
+                },
             ],
             window_seconds: 60,
             count_repeats: false,
@@ -441,7 +471,10 @@ mod tests {
     fn metric_kind_validate_propagates_to_variant() {
         // Invalid funnel: only 1 step.
         let bad = MetricKind::Funnel(FunnelConfig {
-            steps: vec![FunnelStep { event_key: "only".into(), where_clause: None }],
+            steps: vec![FunnelStep {
+                event_key: "only".into(),
+                where_clause: None,
+            }],
             window_seconds: 60,
             count_repeats: false,
         });
