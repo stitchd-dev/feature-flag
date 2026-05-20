@@ -787,7 +787,7 @@ pub trait MetricRepository: Send + Sync {
     /// references are transitive — caller resolves at a higher layer).
     ///
     /// Result is bounded by what fits in one env's metric set; no
-    /// pagination is offered because the back-link UI on EventDetail
+    /// pagination is offered because the back-link UI on `EventDetail`
     /// surfaces them all in one go.
     async fn list_referencing_event(
         &self,
@@ -810,8 +810,5 @@ pub trait MetricRepository: Send + Sync {
     ) -> Result<stitchd_core::metric::MetricDefinition, RepositoryError>;
 
     /// Soft-delete a metric by setting `deleted_at`.
-    async fn soft_delete(
-        &self,
-        id: stitchd_core::id::MetricId,
-    ) -> Result<(), RepositoryError>;
+    async fn soft_delete(&self, id: stitchd_core::id::MetricId) -> Result<(), RepositoryError>;
 }
