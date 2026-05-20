@@ -10,7 +10,8 @@ use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
     CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse, ExperimentResult,
     GetContextIntelligenceRequest, GetContextIntelligenceResponse, GetEvalStatsRequest,
-    GetEvalStatsResponse, GetExperimentResultRequest, GetMetricRequest, IngestEventRequest,
+    GetEvalStatsResponse, GetEventFiringsRequest, GetEventFiringsResponse, GetEventStatsRequest,
+    GetEventStatsResponse, GetExperimentResultRequest, GetMetricRequest, IngestEventRequest,
     IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
     ListContextTypesRequest, ListContextTypesResponse, ListExperimentResultsRequest,
     ListMetricsRequest, ListMetricsResponse, MetricDefinition, PreviewMetricRequest,
@@ -25,6 +26,7 @@ use super::context_registry::{
 };
 use super::eval_stats::handle_get_eval_stats;
 use super::event_ingestion::{EventIngestionState, handle_ingest_event};
+use super::event_query::{handle_get_event_firings, handle_get_event_stats};
 use super::experiment_results::{
     ResultStream, handle_get_experiment_result, handle_list_experiment_results,
     handle_write_experiment_results,
@@ -212,5 +214,21 @@ impl AnalyticsService for AnalyticsServiceImpl {
         request: Request<PreviewMetricRequest>,
     ) -> Result<Response<PreviewMetricResponse>, Status> {
         handle_preview_metric(&self.state.metric_repo, request).await
+    }
+
+    // ── Event firings + stats (EventDetail page) ────────────────────────────
+
+    async fn get_event_firings(
+        &self,
+        request: Request<GetEventFiringsRequest>,
+    ) -> Result<Response<GetEventFiringsResponse>, Status> {
+        handle_get_event_firings(&self.state.ch_client, request).await
+    }
+
+    async fn get_event_stats(
+        &self,
+        request: Request<GetEventStatsRequest>,
+    ) -> Result<Response<GetEventStatsResponse>, Status> {
+        handle_get_event_stats(&self.state.ch_client, request).await
     }
 }

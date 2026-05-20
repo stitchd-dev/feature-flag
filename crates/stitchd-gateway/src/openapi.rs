@@ -62,6 +62,9 @@ use utoipa::{
         crate::routes::events::delete_event_definition,
         // Event tracking (SDK key)
         crate::routes::events::track_events,
+        // EventDetail page (JWT)
+        crate::routes::events::get_event_firings,
+        crate::routes::events::get_event_stats,
         // Metrics (JWT)
         crate::routes::metrics::create_metric,
         crate::routes::metrics::list_metrics,
@@ -120,6 +123,12 @@ use utoipa::{
             crate::routes::events::TrackEventsRequest,
             crate::routes::events::RejectedEvent,
             crate::routes::events::TrackEventsResponse,
+            crate::routes::events::FiringsQuery,
+            crate::routes::events::StatsQuery,
+            crate::routes::events::EventFiringJson,
+            crate::routes::events::EventFiringsResponseJson,
+            crate::routes::events::EventStatsBucketJson,
+            crate::routes::events::EventStatsResponseJson,
             // Metrics
             crate::routes::metrics::CreateMetricBody,
             crate::routes::metrics::UpdateMetricBody,

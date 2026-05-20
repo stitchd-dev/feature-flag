@@ -241,6 +241,15 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
                 .put(events::update_event_definition)
                 .delete(events::delete_event_definition),
         )
+        // EventDetail page — recent firings + daily-count sparkline.
+        .route(
+            "/v1/events/{event_key}/firings",
+            get(events::get_event_firings),
+        )
+        .route(
+            "/v1/events/{event_key}/stats",
+            get(events::get_event_stats),
+        )
         // Metrics (admin CRUD + preview) — env_id is a query param on list;
         // path params identify a specific metric.
         .route(

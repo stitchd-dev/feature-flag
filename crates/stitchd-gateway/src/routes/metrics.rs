@@ -887,6 +887,18 @@ mod tests {
                     .expect("test forgot to load preview response"),
             ))
         }
+        async fn get_event_firings(
+            &self,
+            _req: tonic::Request<stitchd_proto::analytics::v1::GetEventFiringsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::GetEventFiringsResponse>, Status> {
+            Err(Status::unimplemented("not used in metric tests"))
+        }
+        async fn get_event_stats(
+            &self,
+            _req: tonic::Request<stitchd_proto::analytics::v1::GetEventStatsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::GetEventStatsResponse>, Status> {
+            Err(Status::unimplemented("not used in metric tests"))
+        }
     }
 
     /// Spin up an in-process gRPC mock and return the `AnalyticsServiceClient`
