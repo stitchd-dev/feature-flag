@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -653,7 +654,10 @@ async fn run_scenario(scenario_dir: &Path, scenario_name: &str) {
         );
     }
 
-    client.shutdown().await;
+    // Phase 5 Task 5.3 — shutdown now takes a timeout for the final
+    // track-event buffer drain. Conformance scenarios don't track()
+    // anything, so the timeout is largely irrelevant.
+    let _ = client.shutdown(Duration::from_millis(100)).await;
 }
 
 #[tokio::test]

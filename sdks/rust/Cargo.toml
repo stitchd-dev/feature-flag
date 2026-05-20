@@ -36,6 +36,12 @@ serde_json = { workspace = true }
 # Errors + observability
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Prometheus-compatible metric emission (counters + gauges from
+# `EventBuffer::enqueue` / `flush`). The host process is expected to
+# install a global recorder (e.g. `metrics-exporter-prometheus`); when
+# no recorder is installed the calls are no-ops, so binding the SDK to
+# a specific exporter is unnecessary.
+metrics = { workspace = true }
 
 # async trait support for EventSink (boxed-future signatures)
 async-trait = { workspace = true }
@@ -64,3 +70,5 @@ stitchd-core  = { path = "../../crates/stitchd-core" }
 async-trait         = { workspace = true }
 uuid                = { workspace = true }
 tracing-subscriber  = { workspace = true }
+# In-process debugging recorder for metric assertions (Phase 5 Task 5.4).
+metrics-util        = "0.19"
