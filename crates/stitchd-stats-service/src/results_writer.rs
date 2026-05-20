@@ -216,6 +216,39 @@ mod tests {
         ) -> Result<Response<stitchd_proto::analytics::v1::GetEventStatsResponse>, Status> {
             Err(Status::unimplemented("not used in tests"))
         }
+        // Event-definitions CRUD — closed in feature-flag-wr4.
+        async fn create_event_definition(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::CreateEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_event_definition(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_event_definitions(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::ListEventDefinitionsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::ListEventDefinitionsResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn update_event_definition(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::UpdateEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn delete_event_definition(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::DeleteEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::DeleteEventDefinitionResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
     }
 
     /// Spin up an in-process gRPC server and return (client, captured_requests).

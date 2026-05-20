@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use stitchd_core::{
-    event::{EventDefinition, EventValueType},
+    event::{EventDefinition, EventValueType, MetricType},
     id::{EnvironmentId, EventDefinitionId, OrganisationId, ProjectId},
     tenant::{Environment, Organisation, Project},
 };
@@ -60,6 +60,10 @@ fn make_def(env_id: EnvironmentId, key: &str) -> EventDefinition {
         id: EventDefinitionId::new(),
         environment_id: env_id,
         key: key.to_string(),
+        name: key.to_string(),
+                description: None,
+                metric_type: MetricType::Count,
+                schema: None,
         value_type: EventValueType::Int,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
@@ -121,7 +125,7 @@ async fn update_not_found_returns_error(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn update_stores_new_key_and_type(pool: sqlx::PgPool) {
+async fn update_stores_new_value_type_and_bumps_version(pool: sqlx::PgPool) {
     let env_id = setup(&pool).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgEventDefinitionRepository::new(pool, audit);
@@ -129,11 +133,15 @@ async fn update_stores_new_key_and_type(pool: sqlx::PgPool) {
     let def = make_def(env_id, "original_key");
     repo.create(&def).await.unwrap();
 
+    // `key` is intentionally immutable post-creation (admin UI shows it
+    // as read-only on EditEventModal). We update the mutable fields only
+    // and assert the key stays put.
     let mut updated = def.clone();
-    updated.key = "updated_key".to_string();
     updated.value_type = EventValueType::Double;
+    updated.name = "Renamed".to_string();
     let result = repo.update(&updated).await.unwrap();
-    assert_eq!(result.key, "updated_key");
+    assert_eq!(result.key, "original_key", "key is immutable post-create");
     assert_eq!(result.value_type, EventValueType::Double);
+    assert_eq!(result.name, "Renamed");
     assert_eq!(result.version, 2);
 }

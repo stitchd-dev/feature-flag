@@ -34,8 +34,19 @@ pub struct EventDefinition {
     pub environment_id: EnvironmentId,
     /// URL-safe string key, unique within the environment.
     pub key: String,
-    /// The type of metric value this event carries.
+    /// Human-friendly display name. Defaults to `key` when omitted.
+    pub name: String,
+    /// Optional long-form description shown in the admin UI.
+    pub description: Option<String>,
+    /// The wire-level type of metric value this event carries — enforced
+    /// at the ingestion path by analytics-service.
     pub value_type: EventValueType,
+    /// Admin / UI metric classification. Distinct from `value_type` —
+    /// drives the `TestEventWidget` value-field shape + the experiment
+    /// metric picker.
+    pub metric_type: MetricType,
+    /// Optional JSON Schema for payload validation.
+    pub schema: Option<serde_json::Value>,
     /// When this record was created.
     pub created_at: DateTime<Utc>,
     /// When this record was last modified.
@@ -44,6 +55,41 @@ pub struct EventDefinition {
     pub deleted_at: Option<DateTime<Utc>>,
     /// Optimistic-concurrency version counter.
     pub version: i64,
+}
+
+/// Admin / UI classification of an event definition. Distinct from
+/// [`EventValueType`] which constrains the wire-level value column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum MetricType {
+    /// Counter — no value needed; every fire counts as 1.
+    Count,
+    /// Boolean conversion event (true/false).
+    Conversion,
+    /// Currency / revenue value (double).
+    Revenue,
+    /// Duration in seconds (double).
+    Duration,
+    /// Free-form numeric value (double).
+    Numeric,
+    /// Custom JSON payload (no strict value-type enforcement).
+    Custom,
+}
+
+impl MetricType {
+    /// Default `value_type` for a given `metric_type` at create time
+    /// when the caller doesn't specify one explicitly. Aligns with the
+    /// admin UI's `TestEventWidget` value-field shape.
+    #[must_use]
+    pub const fn default_value_type(self) -> EventValueType {
+        match self {
+            Self::Count | Self::Numeric => EventValueType::Int,
+            Self::Conversion => EventValueType::Bool,
+            Self::Revenue | Self::Duration | Self::Custom => EventValueType::Double,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

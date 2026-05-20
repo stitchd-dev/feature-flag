@@ -40,7 +40,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use serde::Serialize;
 use stitchd_core::{
-    event::{EventDefinition, EventValueType},
+    event::{EventDefinition, EventValueType, MetricType},
     experimentation::{Experiment, ExperimentStatus},
     flag::{FlagRecord, FlagRule, FlagValueType},
     id::{
@@ -230,6 +230,10 @@ async fn seed_event_definitions(pool: &sqlx::PgPool, env_id: EnvironmentId) {
         id: EventDefinitionId::new(),
         environment_id: env_id,
         key: "checkout_started".into(),
+        name: "checkout_started".into(),
+                description: None,
+                metric_type: MetricType::Count,
+                schema: None,
         value_type: EventValueType::Bool,
         created_at: now,
         updated_at: now,
@@ -240,6 +244,10 @@ async fn seed_event_definitions(pool: &sqlx::PgPool, env_id: EnvironmentId) {
         id: EventDefinitionId::new(),
         environment_id: env_id,
         key: "checkout_completed".into(),
+        name: "checkout_completed".into(),
+                description: None,
+                metric_type: MetricType::Count,
+                schema: None,
         value_type: EventValueType::Bool,
         created_at: now,
         updated_at: now,

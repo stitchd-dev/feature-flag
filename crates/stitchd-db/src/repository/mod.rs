@@ -710,6 +710,17 @@ pub trait EventDefinitionRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<EventDefinition>, RepositoryError>;
 
+    /// List definitions for an environment with offset pagination.
+    /// Returns `(page_items, total_count)`. `include_archived = true`
+    /// includes soft-deleted rows in both the page and the total.
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+        include_archived: bool,
+    ) -> Result<(Vec<EventDefinition>, u64), RepositoryError>;
+
     /// Persist a new definition.
     async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError>;
 

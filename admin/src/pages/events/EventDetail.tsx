@@ -163,7 +163,7 @@ export function EventDetail() {
     const ac = new AbortController()
     setLoading(true)
     setError(null)
-    api.get<EventDefinitionDetail>(`/v1/events/${encodeURIComponent(eventKey)}`, { signal: ac.signal })
+    api.get<EventDefinitionDetail>(`/v1/events/${encodeURIComponent(eventKey)}?env_id=${envId ?? ''}`, { signal: ac.signal })
       .then(({ data }) => setEvent(data))
       .catch((err: unknown) => {
         if (ac.signal.aborted) return

@@ -24,8 +24,8 @@ use crate::middleware::auth::{auth_middleware, require_non_system_org, require_s
 use crate::middleware::event_quota::{build_limiter_from_env, event_quota_middleware};
 use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
-    admin, auth, auth_providers, context_intel, eval_stats, events, experiments, flags, management,
-    metrics, oidc, saml, sdk_backend, segments, stats,
+    admin, auth, auth_providers, context_intel, eval_stats, event_admin, events, experiments,
+    flags, management, metrics, oidc, saml, sdk_backend, segments, stats,
 };
 use crate::state::GatewayState;
 
@@ -249,6 +249,19 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         .route(
             "/v1/events/{event_key}/stats",
             get(events::get_event_stats),
+        )
+        // Admin event-definition CRUD — closed feature-flag-wr4. The admin UI's
+        // EventsList/CreateEventModal/EditEventModal/ArchiveEventModal use these.
+        // env_id flows as a query param (matches the /v1/metrics pattern).
+        .route(
+            "/v1/events",
+            get(event_admin::list_events).post(event_admin::create_event),
+        )
+        .route(
+            "/v1/events/{event_key}",
+            get(event_admin::get_event)
+                .patch(event_admin::update_event)
+                .delete(event_admin::delete_event),
         )
         // Admin-auth path for /v1/events/track — used by the test-event widget
         // on EventDetail. env_id is lifted from RbacContext; analytics-service

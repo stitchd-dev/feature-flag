@@ -8,15 +8,18 @@ use stitchd_db::{
 use stitchd_stats_service::recompute_trigger::RecomputeTrigger;
 use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
-    CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse, ExperimentResult,
-    GetContextIntelligenceRequest, GetContextIntelligenceResponse, GetEvalStatsRequest,
-    GetEvalStatsResponse, GetEventFiringsRequest, GetEventFiringsResponse, GetEventStatsRequest,
-    GetEventStatsResponse, GetExperimentResultRequest, GetMetricRequest, IngestEventRequest,
-    IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
-    ListContextTypesRequest, ListContextTypesResponse, ListExperimentResultsRequest,
-    ListMetricsRequest, ListMetricsResponse, MetricDefinition, PreviewMetricRequest,
-    PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse, TrackEventsRequest,
-    TrackEventsResponse, UpdateMetricRequest, WriteExperimentResultsRequest,
+    CreateEventDefinitionRequest, CreateMetricRequest, DeleteEventDefinitionRequest,
+    DeleteEventDefinitionResponse, DeleteMetricRequest, DeleteMetricResponse,
+    EventDefinitionMsg, ExperimentResult, GetContextIntelligenceRequest,
+    GetContextIntelligenceResponse, GetEvalStatsRequest, GetEvalStatsResponse,
+    GetEventDefinitionRequest, GetEventFiringsRequest, GetEventFiringsResponse,
+    GetEventStatsRequest, GetEventStatsResponse, GetExperimentResultRequest, GetMetricRequest,
+    IngestEventRequest, IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
+    ListContextTypesRequest, ListContextTypesResponse, ListEventDefinitionsRequest,
+    ListEventDefinitionsResponse, ListExperimentResultsRequest, ListMetricsRequest,
+    ListMetricsResponse, MetricDefinition, PreviewMetricRequest, PreviewMetricResponse,
+    RegisterContextRequest, RegisterContextResponse, TrackEventsRequest, TrackEventsResponse,
+    UpdateEventDefinitionRequest, UpdateMetricRequest, WriteExperimentResultsRequest,
     WriteExperimentResultsResponse, analytics_service_server::AnalyticsService,
 };
 
@@ -25,6 +28,11 @@ use super::context_registry::{
     handle_list_context_params, handle_list_context_types, handle_register_context,
 };
 use super::eval_stats::handle_get_eval_stats;
+use super::event_definition::{
+    handle_create_event_definition, handle_delete_event_definition,
+    handle_get_event_definition, handle_list_event_definitions,
+    handle_update_event_definition,
+};
 use super::event_ingestion::{EventIngestionState, handle_ingest_event};
 use super::event_query::{handle_get_event_firings, handle_get_event_stats};
 use super::experiment_results::{
@@ -230,5 +238,45 @@ impl AnalyticsService for AnalyticsServiceImpl {
         request: Request<GetEventStatsRequest>,
     ) -> Result<Response<GetEventStatsResponse>, Status> {
         handle_get_event_stats(&self.state.ch_client, request).await
+    }
+
+    // ── Event definitions CRUD (admin UI) ────────────────────────────────────
+    //
+    // Closes `feature-flag-wr4`. Delegates to the existing
+    // `PgEventDefinitionRepository` already on `ServiceState`.
+
+    async fn create_event_definition(
+        &self,
+        request: Request<CreateEventDefinitionRequest>,
+    ) -> Result<Response<EventDefinitionMsg>, Status> {
+        handle_create_event_definition(&self.state.event_def_repo, request).await
+    }
+
+    async fn get_event_definition(
+        &self,
+        request: Request<GetEventDefinitionRequest>,
+    ) -> Result<Response<EventDefinitionMsg>, Status> {
+        handle_get_event_definition(&self.state.event_def_repo, request).await
+    }
+
+    async fn list_event_definitions(
+        &self,
+        request: Request<ListEventDefinitionsRequest>,
+    ) -> Result<Response<ListEventDefinitionsResponse>, Status> {
+        handle_list_event_definitions(&self.state.event_def_repo, request).await
+    }
+
+    async fn update_event_definition(
+        &self,
+        request: Request<UpdateEventDefinitionRequest>,
+    ) -> Result<Response<EventDefinitionMsg>, Status> {
+        handle_update_event_definition(&self.state.event_def_repo, request).await
+    }
+
+    async fn delete_event_definition(
+        &self,
+        request: Request<DeleteEventDefinitionRequest>,
+    ) -> Result<Response<DeleteEventDefinitionResponse>, Status> {
+        handle_delete_event_definition(&self.state.event_def_repo, request).await
     }
 }

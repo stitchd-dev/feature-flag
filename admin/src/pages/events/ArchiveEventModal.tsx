@@ -4,6 +4,8 @@ import { Modal } from '../../components/Modal'
 import { api } from '../../lib/api'
 import { extractErrorMessage } from '../../lib/errors'
 
+import { useOrgContext } from '../../context/OrgContext'
+
 interface Props {
   /** The event being archived — used in the confirmation copy + the DELETE URL. */
   eventKey: string
@@ -22,6 +24,7 @@ interface Props {
  * but the UI gets a clean "already archived" experience).
  */
 export function ArchiveEventModal({ eventKey, onClose, onArchived }: Props) {
+  const { envId } = useOrgContext()
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -29,7 +32,7 @@ export function ArchiveEventModal({ eventKey, onClose, onArchived }: Props) {
     setSubmitting(true)
     setError(null)
     try {
-      await api.delete(`/v1/events/${encodeURIComponent(eventKey)}`)
+      await api.delete(`/v1/events/${encodeURIComponent(eventKey)}?env_id=${envId ?? ''}`)
       onArchived()
     } catch (err: unknown) {
       setError(extractErrorMessage(err))

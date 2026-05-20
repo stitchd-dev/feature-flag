@@ -899,6 +899,39 @@ mod tests {
         ) -> Result<Response<stitchd_proto::analytics::v1::GetEventStatsResponse>, Status> {
             Err(Status::unimplemented("not used in metric tests"))
         }
+        // Event-definitions CRUD — closed in feature-flag-wr4.
+        async fn create_event_definition(
+            &self,
+            _req: tonic::Request<stitchd_proto::analytics::v1::CreateEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in metric tests"))
+        }
+        async fn get_event_definition(
+            &self,
+            _req: tonic::Request<stitchd_proto::analytics::v1::GetEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in metric tests"))
+        }
+        async fn list_event_definitions(
+            &self,
+            _req: tonic::Request<stitchd_proto::analytics::v1::ListEventDefinitionsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::ListEventDefinitionsResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in metric tests"))
+        }
+        async fn update_event_definition(
+            &self,
+            _req: tonic::Request<stitchd_proto::analytics::v1::UpdateEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in metric tests"))
+        }
+        async fn delete_event_definition(
+            &self,
+            _req: tonic::Request<stitchd_proto::analytics::v1::DeleteEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::DeleteEventDefinitionResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in metric tests"))
+        }
     }
 
     /// Spin up an in-process gRPC mock and return the `AnalyticsServiceClient`

@@ -65,7 +65,7 @@ function formatCount24h(count: number | null | undefined): string {
 
 export function EventsList() {
   const navigate = useNavigate()
-  const { orgId } = useOrgContext()
+  const { orgId, envId } = useOrgContext()
   const [search, setSearch] = useState('')
   const [metricType, setMetricType] = useState<MetricTypeFilter>('all')
   const [status, setStatus] = useState<StatusFilter>('active')
@@ -74,6 +74,10 @@ export function EventsList() {
   const { data: events, total, loading, error, page, onPageChange, refresh } = usePaginatedList<EventDefinitionListItem>(
     async ({ page: p, perPage, signal }) => {
       const qs = new URLSearchParams({ page: String(p), per_page: String(perPage) })
+      // env_id is required by the gateway (`/v1/events?env_id=...`) —
+      // mirrors the `/v1/metrics` pattern; admin JWTs are org-scoped, not
+      // env-scoped, so we surface the EnvSwitcher selection here.
+      if (envId) qs.set('env_id', envId)
       if (status === 'archived') qs.set('include_archived', 'true')
       if (status === 'all') qs.set('include_archived', 'true')
       const { data } = await api.get<PaginatedResponse<EventDefinitionListItem>>(
@@ -83,7 +87,7 @@ export function EventsList() {
       const items = data.items ?? (Array.isArray(data) ? data : [])
       return { items, total: data.total ?? items.length }
     },
-    [status],
+    [status, envId],
     PER_PAGE,
   )
 

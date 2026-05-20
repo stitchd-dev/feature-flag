@@ -744,6 +744,15 @@ mod tests {
                 .filter(|d| d.deleted_at.is_none())
                 .collect())
         }
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+            _include_archived: bool,
+        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+            unimplemented!()
+        }
         async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
             unimplemented!()
         }
@@ -827,7 +836,11 @@ mod tests {
             id: EventDefinitionId::new(),
             environment_id: env_id,
             key: key.to_string(),
+            name: key.to_string(),
+            description: None,
             value_type,
+            metric_type: stitchd_core::event::MetricType::Count,
+            schema: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             deleted_at: None,

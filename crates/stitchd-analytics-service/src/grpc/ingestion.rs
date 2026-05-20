@@ -465,7 +465,11 @@ mod tests {
                     id: EventDefinitionId::new(),
                     environment_id: env_id,
                     key: key.to_string(),
+                    name: key.to_string(),
+                    description: None,
                     value_type,
+                    metric_type: stitchd_core::event::MetricType::Count,
+                    schema: None,
                     created_at: now,
                     updated_at: now,
                     deleted_at: if archived { Some(now) } else { None },
@@ -517,6 +521,16 @@ mod tests {
             _environment_id: EnvironmentId,
         ) -> Result<Vec<EventDefinition>, RepositoryError> {
             Ok(vec![])
+        }
+
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+            _include_archived: bool,
+        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+            Ok((vec![], 0))
         }
 
         async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
@@ -953,6 +967,16 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
         ) -> Result<Vec<EventDefinition>, RepositoryError> {
+            Err(RepositoryError::Unexpected(anyhow::anyhow!("db down")))
+        }
+
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+            _include_archived: bool,
+        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
             Err(RepositoryError::Unexpected(anyhow::anyhow!("db down")))
         }
 

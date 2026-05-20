@@ -239,6 +239,80 @@ message GetExperimentResultRequest {
   optional string iteration_id = 5;
 }
 
+// ─── Event Definitions (admin CRUD) ───────────────────────────────────────────
+//
+// Pre-registered event definitions scoped per environment. Resolves the
+// pre-existing gap where the admin UI assumed CRUD endpoints existed but
+// the gateway had only stub handlers. See `feature-flag-wr4`.
+
+message EventDefinitionMsg {
+  string          id             = 1;
+  string          environment_id = 2;
+  string          key            = 3;
+  string          name           = 4;
+  optional string description    = 5;
+  // "bool" | "int" | "double"
+  string          value_type     = 6;
+  // "count" | "conversion" | "revenue" | "duration" | "numeric" | "custom"
+  string          metric_type    = 7;
+  // Optional JSON Schema for payload validation, serialised as a JSON
+  // string. Empty string = no schema.
+  string          schema_json    = 8;
+  int64           version        = 9;
+  string          created_at     = 10;
+  string          updated_at     = 11;
+  optional string deleted_at     = 12;
+}
+
+message CreateEventDefinitionRequest {
+  string          environment_id = 1;
+  string          key            = 2;
+  string          name           = 3;
+  optional string description    = 4;
+  // Optional — defaults derived from metric_type at server side.
+  optional string value_type     = 5;
+  string          metric_type    = 6;
+  optional string schema_json    = 7;
+}
+
+message GetEventDefinitionRequest {
+  // Either provide id OR (environment_id + key) — server resolves whichever
+  // is non-empty.
+  optional string id             = 1;
+  optional string environment_id = 2;
+  optional string key            = 3;
+}
+
+message ListEventDefinitionsRequest {
+  string          environment_id    = 1;
+  optional uint64 offset            = 2;
+  optional uint64 limit             = 3;
+  optional bool   include_archived  = 4;
+}
+
+message ListEventDefinitionsResponse {
+  repeated EventDefinitionMsg items  = 1;
+  uint64                      total  = 2;
+  uint64                      offset = 3;
+  uint64                      limit  = 4;
+}
+
+message UpdateEventDefinitionRequest {
+  string          id               = 1;
+  int64           expected_version = 2;
+  optional string name             = 3;
+  optional string description      = 4;
+  optional string value_type       = 5;
+  optional string metric_type      = 6;
+  optional string schema_json      = 7;
+}
+
+message DeleteEventDefinitionRequest {
+  string id = 1;
+}
+
+message DeleteEventDefinitionResponse {}
+
 // ─── Metric Definitions ───────────────────────────────────────────────────────
 //
 // Composable metric definitions that experiments reference instead of raw
@@ -503,4 +577,15 @@ service AnalyticsService {
   // Daily firing counts + unique context keys for `event_key` over the last
   // `days` days within `env_id`.
   rpc GetEventStats(GetEventStatsRequest) returns (GetEventStatsResponse);
+
+  // ── Event definitions CRUD (admin UI) ──────────────────────────────────────
+  //
+  // Closes the pre-existing gap (`feature-flag-wr4`) where the admin UI
+  // assumed `/v1/events*` endpoints existed but the gateway had only stub
+  // handlers.
+  rpc CreateEventDefinition(CreateEventDefinitionRequest) returns (EventDefinitionMsg);
+  rpc GetEventDefinition(GetEventDefinitionRequest) returns (EventDefinitionMsg);
+  rpc ListEventDefinitions(ListEventDefinitionsRequest) returns (ListEventDefinitionsResponse);
+  rpc UpdateEventDefinition(UpdateEventDefinitionRequest) returns (EventDefinitionMsg);
+  rpc DeleteEventDefinition(DeleteEventDefinitionRequest) returns (DeleteEventDefinitionResponse);
 }

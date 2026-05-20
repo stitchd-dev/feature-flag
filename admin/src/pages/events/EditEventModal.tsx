@@ -25,6 +25,9 @@ const METRIC_TYPE_OPTIONS = METRIC_TYPES.map((t) => ({
  */
 export interface EventDefinition {
   event_key: string
+  /// Environment ID — wire-required for the `?env_id=` query param on
+  /// PATCH/DELETE since the gateway needs to scope key→id resolution.
+  environment_id?: string
   metric_type: string
   description: string
   schema: string | null
@@ -69,7 +72,7 @@ export function EditEventModal({ event, onClose, onSaved }: Props) {
         expected_version: event.version,
       }
       const { data } = await api.patch<EventDefinition>(
-        `/v1/events/${encodeURIComponent(event.event_key)}`,
+        `/v1/events/${encodeURIComponent(event.event_key)}?env_id=${event.environment_id ?? ''}`,
         body,
       )
       onSaved(data)
