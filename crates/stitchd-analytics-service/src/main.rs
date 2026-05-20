@@ -75,6 +75,12 @@ async fn main() -> anyhow::Result<()> {
     let experiment_results_repo: Arc<dyn stitchd_analytics_service::repo::experiment_results::ExperimentResultsRepository> =
         Arc::new(ClickHouseExperimentResultsRepository::new(ch_client.clone()));
 
+    // Phase 4 Task 3 (events_metrics_20260519): event-driven recompute
+    // trigger on `update_metric`. Wiring the real ExperimentRepository
+    // + stats-service gRPC channel is deferred to a follow-up env-var
+    // bootstrap; until then we ship the handler with `None`s, which
+    // disables the side effect cleanly. The handler logic and tests
+    // are already in place.
     let state = ServiceState {
         pg_pool: Arc::new(pg_pool),
         ch_client: Arc::new(ch_client),
@@ -84,6 +90,8 @@ async fn main() -> anyhow::Result<()> {
         context_registry,
         experiment_results_repo,
         metric_repo,
+        experiment_repo: None,
+        recompute_dispatcher: None,
         event_def_cache: EventDefinitionCache::new(),
     };
     let svc = AnalyticsServiceImpl::new(state);

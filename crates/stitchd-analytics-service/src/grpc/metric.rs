@@ -21,6 +21,8 @@
 //! [`handle_preview_metric`] currently returns an empty `buckets` array
 //! and logs a `tracing::warn!` so callers know the wiring is pending.
 
+use std::sync::Arc;
+
 use chrono::Utc;
 use tonic::{Request, Response, Status};
 use tracing::{instrument, warn};
@@ -33,7 +35,13 @@ use stitchd_core::{
         MetricDefinition as DomainMetric, MetricKind, RatioConfig,
     },
 };
-use stitchd_db::{MetricRepository as _, RepositoryError, repository::pg::PgMetricRepository};
+use stitchd_db::{
+    ExperimentRepository, MetricRepository as _, RepositoryError,
+    repository::pg::PgMetricRepository,
+};
+use stitchd_stats_service::recompute_trigger::{
+    RecomputeTrigger, trigger_recompute_for_metric,
+};
 use stitchd_proto::analytics::v1::{
     AggregationConfig as ProtoAggregationConfig, CreateMetricRequest,
     DeleteMetricRequest, DeleteMetricResponse, FunnelConfig as ProtoFunnelConfig,
@@ -407,10 +415,29 @@ pub async fn handle_list_metrics(
 /// Handle `UpdateMetric` — optimistic-locking update; rebuilds the
 /// metric from the existing row, applies the patch, then calls
 /// `repo.update`.
+///
+/// # Event-driven recompute (Phase 4 Task 3)
+/// On a successful update, this handler fires (via `tokio::spawn`) a
+/// `TriggerRecompute` for every *running* experiment that references
+/// the metric's `key`. This keeps the analytics-service PATCH response
+/// fast while ensuring stale results don't sit in the cache until the
+/// next scheduled stats run.
+///
+/// The dispatch is **fire-and-forget** — repo / RPC errors are
+/// logged at WARN but never propagate to the caller. See
+/// `crates/stitchd-stats-service/src/recompute_trigger.rs`.
+///
+/// Pass `recompute_dispatcher = None` (e.g. in unit tests or before
+/// the channel is wired) to skip the side effect entirely.
 #[allow(clippy::result_large_err)]
-#[instrument(skip(repo, request), name = "analytics.update_metric")]
+#[instrument(
+    skip(repo, experiment_repo, recompute_dispatcher, request),
+    name = "analytics.update_metric"
+)]
 pub async fn handle_update_metric(
     repo: &PgMetricRepository,
+    experiment_repo: Option<Arc<dyn ExperimentRepository>>,
+    recompute_dispatcher: Option<Arc<dyn RecomputeTrigger>>,
     request: Request<UpdateMetricRequest>,
 ) -> Result<Response<ProtoMetric>, Status> {
     let req = request.into_inner();
@@ -444,6 +471,40 @@ pub async fn handle_update_metric(
         .update(&metric)
         .await
         .map_err(|e| repo_err_to_status(e, "update_metric"))?;
+
+    // Fire-and-forget recompute trigger for running experiments that
+    // reference this metric. Failure here MUST NOT surface to the
+    // caller — log + drop.
+    if let (Some(exp_repo), Some(dispatch)) = (experiment_repo, recompute_dispatcher) {
+        let metric_key = updated.key.clone();
+        let env_id = updated.environment_id;
+        tokio::spawn(async move {
+            match trigger_recompute_for_metric(
+                dispatch.as_ref(),
+                exp_repo.as_ref(),
+                &metric_key,
+                env_id,
+            )
+            .await
+            {
+                Ok(n) => {
+                    tracing::info!(
+                        metric_key = %metric_key,
+                        environment_id = %env_id,
+                        triggers_fired = n,
+                        "update_metric: recompute triggers dispatched",
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        metric_key = %metric_key,
+                        environment_id = %env_id,
+                        "update_metric: recompute dispatch failed: {e}",
+                    );
+                }
+            }
+        });
+    }
 
     Ok(Response::new(domain_to_proto(&updated)))
 }
@@ -976,7 +1037,10 @@ mod handler_tests {
                 },
             )),
         });
-        let updated = handle_update_metric(&repo, req).await.unwrap().into_inner();
+        let updated = handle_update_metric(&repo, None, None, req)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(updated.version, 2);
         assert_eq!(updated.name, "New Name");
         assert_eq!(updated.description.as_deref(), Some("Updated"));
@@ -994,6 +1058,8 @@ mod handler_tests {
         // First update bumps to v2.
         handle_update_metric(
             &repo,
+            None,
+            None,
             Request::new(UpdateMetricRequest {
                 id: created.id.clone(),
                 expected_version: 1,
@@ -1016,6 +1082,8 @@ mod handler_tests {
         // Second update with stale `expected_version=1` → Aborted.
         let err = handle_update_metric(
             &repo,
+            None,
+            None,
             Request::new(UpdateMetricRequest {
                 id: created.id.clone(),
                 expected_version: 1,
@@ -1062,7 +1130,7 @@ mod handler_tests {
                 count_repeats: false,
             })),
         });
-        let err = handle_update_metric(&repo, req).await.unwrap_err();
+        let err = handle_update_metric(&repo, None, None, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
@@ -1136,5 +1204,253 @@ mod handler_tests {
         });
         let err = handle_preview_metric(&repo, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 4 Task 3: update_metric dispatches recompute trigger
+    // -----------------------------------------------------------------------
+
+    use async_trait::async_trait;
+    use stitchd_core::experimentation::{Experiment, ExperimentIteration, ExperimentStatus};
+    use stitchd_core::id::ExperimentId;
+    use stitchd_core::id::RuleId;
+    use stitchd_db::ExperimentRepository;
+    use stitchd_stats_service::recompute_trigger::RecomputeTrigger;
+    use std::sync::Mutex;
+
+    /// Hand-rolled `RecomputeTrigger` that records every call.
+    /// Optionally returns `Err` from `trigger()` to validate the
+    /// fire-and-forget contract.
+    #[derive(Default)]
+    struct CapturingDispatcher {
+        calls: Mutex<Vec<ExperimentId>>,
+        always_fail: bool,
+    }
+
+    impl CapturingDispatcher {
+        fn calls(&self) -> Vec<ExperimentId> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl RecomputeTrigger for CapturingDispatcher {
+        async fn trigger(&self, experiment_id: ExperimentId) -> Result<(), String> {
+            self.calls.lock().unwrap().push(experiment_id);
+            if self.always_fail {
+                Err("forced".into())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// In-memory experiment repo containing a single Running experiment
+    /// referencing one metric key. All other methods panic (unused).
+    struct OneRunningExperimentRepo {
+        rows: Vec<Experiment>,
+    }
+
+    #[async_trait]
+    impl ExperimentRepository for OneRunningExperimentRepo {
+        async fn find_by_id(
+            &self,
+            _id: ExperimentId,
+        ) -> Result<Experiment, stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_by_environment(
+            &self,
+            env_id: EnvironmentId,
+            status_filter: Option<ExperimentStatus>,
+        ) -> Result<Vec<Experiment>, stitchd_db::RepositoryError> {
+            Ok(self
+                .rows
+                .iter()
+                .filter(|r| r.environment_id == env_id)
+                .filter(|r| status_filter.is_none_or(|s| r.status == s))
+                .cloned()
+                .collect())
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<Experiment>, u64), stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+        async fn create(
+            &self,
+            _experiment: &Experiment,
+        ) -> Result<(), stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+        async fn update(
+            &self,
+            _experiment: &Experiment,
+        ) -> Result<Experiment, stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_delete(
+            &self,
+            _id: ExperimentId,
+        ) -> Result<(), stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_iterations(
+            &self,
+            _experiment_id: ExperimentId,
+        ) -> Result<Vec<ExperimentIteration>, stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+        async fn apply_transition(
+            &self,
+            _id: ExperimentId,
+            _to: ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<Experiment, stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_all_running(
+            &self,
+        ) -> Result<Vec<Experiment>, stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+        async fn find_iteration_by_id(
+            &self,
+            _iteration_id: stitchd_db::ExperimentIterationId,
+        ) -> Result<ExperimentIteration, stitchd_db::RepositoryError> {
+            unimplemented!()
+        }
+    }
+
+    fn running_exp_with_metric(env: EnvironmentId, metric_key: &str) -> Experiment {
+        Experiment {
+            id: ExperimentId::new(),
+            environment_id: env,
+            flag_rule_id: RuleId::new(),
+            name: "exp".into(),
+            description: None,
+            hypothesis: None,
+            metric_keys: vec![metric_key.into()],
+            traffic_allocation: 100.0,
+            min_sample_size: None,
+            scheduled_start_at: None,
+            scheduled_end_at: None,
+            status: ExperimentStatus::Running,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        }
+    }
+
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn test_handler_update_metric_dispatches_recompute_async(pool: sqlx::PgPool) {
+        let (repo, env) = seed_env(&pool).await;
+        let created = handle_create_metric(&repo, agg_create_request(env, "to_dispatch"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let exp = running_exp_with_metric(env, "to_dispatch");
+        let exp_id = exp.id;
+        let exp_repo: Arc<dyn ExperimentRepository> = Arc::new(OneRunningExperimentRepo {
+            rows: vec![exp],
+        });
+        let dispatcher = Arc::new(CapturingDispatcher::default());
+        let dispatcher_arc: Arc<dyn RecomputeTrigger> = dispatcher.clone();
+
+        let req = Request::new(UpdateMetricRequest {
+            id: created.id.clone(),
+            expected_version: 1,
+            name: Some("renamed".into()),
+            description: None,
+            goal_direction: None,
+            kind: Some(update_metric_request::Kind::Aggregation(
+                ProtoAggregationConfig {
+                    event_key: "checkout_completed".into(),
+                    aggregator: "count".into(),
+                    on_field: None,
+                    where_clause_json: None,
+                },
+            )),
+        });
+        let updated =
+            handle_update_metric(&repo, Some(exp_repo), Some(dispatcher_arc), req)
+                .await
+                .unwrap()
+                .into_inner();
+        assert_eq!(updated.version, 2);
+
+        // Trigger is fire-and-forget — yield the scheduler so the
+        // spawned task gets a chance to run before we read calls.
+        for _ in 0..50 {
+            if !dispatcher.calls().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        let calls = dispatcher.calls();
+        assert_eq!(calls.len(), 1, "exactly one running experiment matched");
+        assert_eq!(calls[0], exp_id);
+    }
+
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn test_handler_recompute_failure_does_not_fail_update(pool: sqlx::PgPool) {
+        let (repo, env) = seed_env(&pool).await;
+        let created =
+            handle_create_metric(&repo, agg_create_request(env, "still_succeeds"))
+                .await
+                .unwrap()
+                .into_inner();
+
+        let exp = running_exp_with_metric(env, "still_succeeds");
+        let exp_repo: Arc<dyn ExperimentRepository> = Arc::new(OneRunningExperimentRepo {
+            rows: vec![exp],
+        });
+        // Dispatcher whose trigger() always returns Err — must NOT
+        // surface to caller.
+        let dispatcher = Arc::new(CapturingDispatcher {
+            calls: Mutex::new(Vec::new()),
+            always_fail: true,
+        });
+        let dispatcher_arc: Arc<dyn RecomputeTrigger> = dispatcher.clone();
+
+        let req = Request::new(UpdateMetricRequest {
+            id: created.id.clone(),
+            expected_version: 1,
+            name: Some("renamed".into()),
+            description: None,
+            goal_direction: None,
+            kind: Some(update_metric_request::Kind::Aggregation(
+                ProtoAggregationConfig {
+                    event_key: "checkout_completed".into(),
+                    aggregator: "count".into(),
+                    on_field: None,
+                    where_clause_json: None,
+                },
+            )),
+        });
+        let resp =
+            handle_update_metric(&repo, Some(exp_repo), Some(dispatcher_arc), req).await;
+        // PATCH still succeeds despite the dispatcher's forced Err.
+        let updated = resp.expect("update should succeed").into_inner();
+        assert_eq!(updated.version, 2);
+
+        // Verify the dispatch was attempted (and failed) — confirms
+        // the side effect ran and the error path was exercised.
+        for _ in 0..50 {
+            if !dispatcher.calls().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            dispatcher.calls().len(),
+            1,
+            "dispatcher must have been invoked (and failed) without aborting the update"
+        );
     }
 }
