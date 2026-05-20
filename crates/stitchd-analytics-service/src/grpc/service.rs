@@ -2,9 +2,10 @@ use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 use stitchd_db::{
-    ContextRegistryRepository, EventDefinitionRepository, SdkKeyRepository,
+    ContextRegistryRepository, EventDefinitionRepository, ExperimentRepository, SdkKeyRepository,
     repository::pg::PgMetricRepository,
 };
+use stitchd_stats_service::recompute_trigger::RecomputeTrigger;
 use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
     CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse, ExperimentResult,
@@ -46,6 +47,14 @@ pub struct ServiceState {
     pub experiment_results_repo: Arc<dyn ExperimentResultsRepository>,
     /// Postgres-backed metric definitions repository (Phase 3+).
     pub metric_repo: Arc<PgMetricRepository>,
+    /// Postgres-backed experiment repository — used by
+    /// `update_metric` to find running experiments referencing the
+    /// changed metric so we can fire a recompute trigger.
+    pub experiment_repo: Option<Arc<dyn ExperimentRepository>>,
+    /// gRPC dispatcher for `TriggerRecompute` calls. `None` disables
+    /// the event-driven recompute side effect (useful in tests or in
+    /// deployments where stats-service is unreachable at boot).
+    pub recompute_dispatcher: Option<Arc<dyn RecomputeTrigger>>,
     /// 60-second in-process cache for event-definition validation lookups
     /// — backs the `TrackEvents` RPC hot path.
     pub event_def_cache: EventDefinitionCache,
@@ -182,7 +191,13 @@ impl AnalyticsService for AnalyticsServiceImpl {
         &self,
         request: Request<UpdateMetricRequest>,
     ) -> Result<Response<MetricDefinition>, Status> {
-        handle_update_metric(&self.state.metric_repo, request).await
+        handle_update_metric(
+            &self.state.metric_repo,
+            self.state.experiment_repo.clone(),
+            self.state.recompute_dispatcher.clone(),
+            request,
+        )
+        .await
     }
 
     async fn delete_metric(
