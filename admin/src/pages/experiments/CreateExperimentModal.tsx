@@ -1,6 +1,6 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Formik, Form, useFormikContext } from 'formik'
+import { Formik, Form, useFormikContext, useField } from 'formik'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
 import { FormField } from '../../components/form/FormField'
@@ -12,8 +12,14 @@ import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { slugify } from '../../lib/utils'
 import { extractErrorMessage } from '../../lib/errors'
-import { experimentSchema } from '../../lib/validation/experimentSchema'
+import { experimentSchema, MAX_METRIC_IDS } from '../../lib/validation/experimentSchema'
 import type { ExperimentFormValues } from '../../lib/validation/experimentSchema'
+import {
+  buildExperimentCreateBody,
+  filterMetricOptions,
+  metricKindChipStyle,
+  type MetricPickerOption,
+} from './CreateExperimentModal.helpers'
 
 const MODEL_OPTIONS = [
   { value: 'bayesian', label: 'Bayesian' },
@@ -44,6 +50,279 @@ function AutoSlugKey() {
   }, [values.name, setFieldValue])
 
   return null
+}
+
+// ── Metric picker ─────────────────────────────────────────────────────────────
+
+interface MetricsListResponse {
+  items: { id: string; key: string; name: string; kind: 'aggregation' | 'ratio' | 'funnel' }[]
+  total: number
+}
+
+/**
+ * Multi-select metric picker.
+ *
+ * Backed by `GET /v1/metrics?env_id=...&limit=200` — fetched once on mount.
+ * Renders a search input + searchable dropdown of name+kind+key rows; selected
+ * picks display as removable chips above the input.
+ */
+function MetricPicker({ envId }: { envId: string }) {
+  const [{ value: selectedIds }, meta, helpers] = useField<string[]>('metric_ids')
+
+  const [allOptions, setAllOptions] = useState<MetricPickerOption[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Fetch metric list once (scoped to current env).
+  useEffect(() => {
+    if (!envId) return
+    setLoading(true)
+    setLoadError(null)
+    const ctrl = new AbortController()
+    api
+      .get<MetricsListResponse>(
+        `/v1/metrics?env_id=${encodeURIComponent(envId)}&limit=200`,
+        { signal: ctrl.signal },
+      )
+      .then(({ data }) => {
+        setAllOptions(
+          (data.items ?? []).map((m) => ({
+            id: m.id,
+            key: m.key,
+            name: m.name,
+            kind: m.kind,
+          })),
+        )
+      })
+      .catch((err: unknown) => {
+        if ((err as { code?: string }).code === 'ERR_CANCELED') return
+        setLoadError(extractErrorMessage(err))
+      })
+      .finally(() => setLoading(false))
+    return () => ctrl.abort()
+  }, [envId])
+
+  // Click-outside to close the dropdown.
+  useEffect(() => {
+    if (!open) return
+    function onMouseDown(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    return () => document.removeEventListener('mousedown', onMouseDown)
+  }, [open])
+
+  const selectedSet = new Set(selectedIds)
+  const selectedOptions = allOptions.filter((o) => selectedSet.has(o.id))
+  const visibleOptions = filterMetricOptions(allOptions, query, selectedSet)
+  const atMax = selectedIds.length >= MAX_METRIC_IDS
+
+  function addMetric(id: string) {
+    if (selectedIds.includes(id) || atMax) return
+    void helpers.setValue([...selectedIds, id])
+    setQuery('')
+    setOpen(false)
+  }
+
+  function removeMetric(id: string) {
+    void helpers.setValue(selectedIds.filter((s) => s !== id))
+  }
+
+  const isError = meta.touched && Boolean(meta.error)
+  const errorMessage = isError ? (Array.isArray(meta.error) ? meta.error[0] : meta.error) : undefined
+
+  return (
+    <div ref={containerRef}>
+      <label className="label" style={{ display: 'block', marginBottom: 4 }}>
+        Metrics
+      </label>
+
+      {/* Selected metric chips */}
+      {selectedOptions.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
+          {selectedOptions.map((opt) => {
+            const chip = metricKindChipStyle(opt.kind)
+            return (
+              <span
+                key={opt.id}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  background: 'var(--bg-sunken)',
+                  border: '1px solid var(--border)',
+                  fontSize: 12,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 600,
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.3,
+                    ...chip,
+                  }}
+                >
+                  {opt.kind}
+                </span>
+                <span style={{ fontWeight: 600 }}>{opt.name}</span>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label={`Remove ${opt.name}`}
+                  onClick={() => removeMetric(opt.id)}
+                  style={{ padding: 0 }}
+                >
+                  <I.x size={10} />
+                </button>
+              </span>
+            )
+          })}
+        </div>
+      )}
+
+      {/* Search input */}
+      <div style={{ position: 'relative' }}>
+        <input
+          className="input"
+          type="text"
+          placeholder={
+            atMax
+              ? `Maximum ${MAX_METRIC_IDS} metrics selected`
+              : loading
+                ? 'Loading metrics…'
+                : 'Search metrics by name or key…'
+          }
+          value={query}
+          disabled={atMax || loading || Boolean(loadError)}
+          onChange={(e) => {
+            setQuery(e.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          aria-invalid={isError}
+          style={{
+            width: '100%',
+            borderColor: isError ? 'var(--danger)' : undefined,
+          }}
+        />
+        {open && !atMax && !loading && !loadError && (
+          <ul
+            role="listbox"
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              right: 0,
+              zIndex: 100,
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 6,
+              boxShadow: 'var(--shadow-md)',
+              listStyle: 'none',
+              margin: '4px 0 0',
+              padding: '4px 0',
+              maxHeight: 240,
+              overflowY: 'auto',
+            }}
+          >
+            {visibleOptions.length === 0 && (
+              <li
+                style={{
+                  padding: '8px 12px',
+                  fontSize: 12,
+                  color: 'var(--fg-muted)',
+                  fontStyle: 'italic',
+                }}
+              >
+                {query ? 'No matching metrics' : 'No metrics defined yet'}
+              </li>
+            )}
+            {visibleOptions.map((opt) => {
+              const chip = metricKindChipStyle(opt.kind)
+              return (
+                <li
+                  key={opt.id}
+                  role="option"
+                  aria-selected={false}
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    addMetric(opt.id)
+                  }}
+                  style={{
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontSize: 13,
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'var(--bg-sunken)'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'transparent'
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      padding: '1px 5px',
+                      borderRadius: 3,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.3,
+                      flexShrink: 0,
+                      ...chip,
+                    }}
+                  >
+                    {opt.kind}
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600 }}>{opt.name}</div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: 'var(--fg-muted)',
+                        fontFamily: 'var(--font-mono)',
+                      }}
+                    >
+                      {opt.key}
+                    </div>
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </div>
+
+      {loadError && (
+        <div role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>
+          Failed to load metrics: {loadError}
+        </div>
+      )}
+      {errorMessage && !loadError && (
+        <div role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>
+          {errorMessage}
+        </div>
+      )}
+      {!errorMessage && !loadError && (
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+          Select 1–{MAX_METRIC_IDS} metrics. Lift is computed for each.
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── Variant allocation editor ─────────────────────────────────────────────────
@@ -140,7 +419,7 @@ export function CreateExperimentModal({ onClose }: Props) {
     flag_key: '',
     description: '',
     model: 'bayesian',
-    primary_metric: '',
+    metric_ids: [],
     duration_days: 14,
     variants: [
       { key: 'control', allocation: 50 },
@@ -153,17 +432,7 @@ export function CreateExperimentModal({ onClose }: Props) {
     { setStatus }: { setStatus: (s: unknown) => void },
   ) {
     try {
-      const body = {
-        key: values.key.trim(),
-        name: values.name.trim(),
-        description: values.description?.trim(),
-        flag_key: values.flag_key.trim(),
-        model: values.model,
-        primary_metric: values.primary_metric.trim(),
-        duration_days: Number(values.duration_days),
-        environment_id: envId,
-        variants: values.variants.map((v) => ({ key: v.key.trim(), allocation: v.allocation / 100 })),
-      }
+      const body = buildExperimentCreateBody(values, envId ?? '')
       const { data } = await api.post<{ key: string }>(`/v1/environments/${envId}/experiments`, body)
       onClose()
       navigate(`/org/${orgId}/experiments/${data.key}`)
@@ -214,7 +483,7 @@ export function CreateExperimentModal({ onClose }: Props) {
           />
           <FormTextarea name="description" label="Description" placeholder="Optional" style={{ minHeight: 56 }} />
           <FormSelect name="model" label="Statistical model" options={MODEL_OPTIONS} />
-          <FormField name="primary_metric" label="Primary metric" placeholder="e.g. checkout_completed" hint="Event key used to compute lift." />
+          {envId && <MetricPicker envId={envId} />}
           <FormField name="duration_days" label="Duration (days)" type="number" placeholder="14" />
           <VariantEditor />
         </Form>

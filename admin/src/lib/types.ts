@@ -70,7 +70,13 @@ export interface ExperimentResponse {
   flag_key: string
   status: string // "draft" | "running" | "stopped" | "completed"
   model: string // "frequentist" | "bayesian"
-  primary_metric: string
+  /**
+   * UUIDs referencing `metric_definitions` rows attached to this experiment.
+   * Phase 7 cutover replaced the legacy `primary_metric: string` (free-form
+   * event key). The first entry is conventionally treated as primary; the
+   * remainder as secondaries.
+   */
+  metric_ids: string[]
   variants: number
   started_at: string | null
   ended_at: string | null
