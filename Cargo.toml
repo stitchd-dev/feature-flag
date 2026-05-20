@@ -22,79 +22,83 @@ rust-version = "1.95"
 authors = ["Stitchd"]
 license = "MIT"
 
+# All [workspace.dependencies] entries use `major.minor` only — no patch, no
+# bare-major. Latest minor within each crate's chosen major as of 2026-05-20.
 [workspace.dependencies]
 # Async runtime
-tokio = { version = "1", features = ["full", "test-util"] }
+tokio = { version = "1.52", features = ["full", "test-util"] }
 
 # Test utilities
-serial_test = { version = "3" }
+serial_test = { version = "3.4" }
 
 # Web / gRPC
 axum = { version = "0.8", features = ["macros"] }
-tonic = { version = "0.13" }
-tonic-build = { version = "0.13" }
-tonic-health = { version = "0.13" }
-prost = { version = "0.13" }
-prost-build = { version = "0.13" }
-protoc-bin-vendored = { version = "3" }
+tonic = { version = "0.14" }
+tonic-build = { version = "0.14" }
+tonic-health = { version = "0.14" }
+tonic-prost = { version = "0.14" }
+tonic-prost-build = { version = "0.14" }
+prost = { version = "0.14" }
+prost-build = { version = "0.14" }
+protoc-bin-vendored = { version = "3.2" }
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0" }
 
 # OpenAPI
-utoipa = { version = "5", features = ["uuid", "chrono"] }
+utoipa = { version = "5.5", features = ["uuid", "chrono"] }
 utoipa-axum = { version = "0.2" }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
-clickhouse = { version = "0.13", features = ["uuid", "time", "chrono", "lz4"] }
-scylla = { version = "1", features = ["metrics"] }
+clickhouse = { version = "0.15", features = ["uuid", "time", "chrono", "lz4"] }
+scylla = { version = "1.6", features = ["metrics"] }
 
 # Observability
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tracing-opentelemetry = { version = "0.29" }
-opentelemetry = { version = "0.28" }
-opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.28", features = ["tonic"] }
-opentelemetry-semantic-conventions = { version = "0.28" }
+tracing-opentelemetry = { version = "0.33" }
+opentelemetry = { version = "0.32" }
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.32", features = ["tonic"] }
+opentelemetry-semantic-conventions = { version = "0.32" }
 metrics = { version = "0.24" }
-metrics-exporter-prometheus = { version = "0.16" }
+metrics-exporter-prometheus = { version = "0.18" }
 
 # Error handling
-thiserror = { version = "2" }
-anyhow = { version = "1" }
+thiserror = { version = "2.0" }
+anyhow = { version = "1.0" }
 
 # Utilities
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1.23", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-semver = { version = "1", features = ["serde"] }
+semver = { version = "1.0", features = ["serde"] }
 secrecy = { version = "0.10", features = ["serde"] }
-smallvec = { version = "1" }
-bytes = { version = "1" }
+smallvec = { version = "1.15" }
+bytes = { version = "1.11" }
 async-trait = { version = "0.1" }
-siphasher = { version = "1" }
+siphasher = { version = "1.0" }
 murmur3 = { version = "0.5" }
-sha2 = { version = "0.10" }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+sha2 = { version = "0.11" }
+reqwest = { version = "0.13", features = ["json", "rustls", "form", "http2"], default-features = false }
 tokio-util = { version = "0.7", features = ["rt"] }
-arc-swap = { version = "1" }
-openidconnect = { version = "3", features = ["reqwest"] }
-url = { version = "2" }
+arc-swap = { version = "1.9" }
+openidconnect = { version = "4.0", features = ["reqwest"] }
+url = { version = "2.5" }
 aes-gcm = "0.10"
 argon2 = "0.5"
-rand = "0.8"
+rand = "0.10"
 hex = "0.4"
 base64 = "0.22"
-jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
-totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
-quick-xml = { version = "0.36", features = ["serialize"] }
-flate2 = "1"
+jsonwebtoken = { version = "10.4", default-features = false, features = ["use_pem", "rust_crypto"] }
+totp-rs = { version = "5.7", features = ["gen_secret", "otpauth"] }
+quick-xml = { version = "0.40", features = ["serialize"] }
+flate2 = "1.1"
 lettre = { version = "0.11", features = ["tokio1-native-tls", "smtp-transport", "builder"], default-features = false }
 governor = { version = "0.10", features = ["std", "dashmap"] }
 tower_governor = { version = "0.8", default-features = false, features = ["axum"] }
-dashmap = { version = "6" }
+dashmap = { version = "6.2" }
 moka = { version = "0.12", features = ["future"] }
 wiremock = { version = "0.6" }
 futures = { version = "0.3" }

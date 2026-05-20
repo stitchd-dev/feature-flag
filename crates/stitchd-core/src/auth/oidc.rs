@@ -7,8 +7,9 @@
 //! - Code exchange and email extraction
 
 use openidconnect::{
-    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, JsonWebKeySetUrl,
-    Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, ResponseTypes, Scope, TokenUrl,
+    AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointMaybeSet,
+    EndpointNotSet, EndpointSet, IssuerUrl, JsonWebKeySetUrl, Nonce, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, ResponseTypes, Scope, TokenUrl,
     core::{
         CoreAuthenticationFlow, CoreClient, CoreJwsSigningAlgorithm, CoreProviderMetadata,
         CoreResponseType, CoreSubjectIdentifierType,
@@ -16,6 +17,19 @@ use openidconnect::{
 };
 use serde::Deserialize;
 use url::Url;
+
+/// Shape of a `CoreClient` after `from_provider_metadata` — the authorization
+/// endpoint is statically known (`EndpointSet`), while the token + userinfo
+/// endpoints are conditionally available (`EndpointMaybeSet`) depending on
+/// what the discovered metadata included.
+type OidcDiscoveredClient = CoreClient<
+    EndpointSet,      // HasAuthUrl
+    EndpointNotSet,   // HasDeviceAuthUrl
+    EndpointNotSet,   // HasIntrospectionUrl
+    EndpointNotSet,   // HasRevocationUrl
+    EndpointMaybeSet, // HasTokenUrl
+    EndpointMaybeSet, // HasUserInfoUrl
+>;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -56,7 +70,7 @@ pub enum OidcError {
 
 enum ProviderInner {
     /// Standard OIDC provider backed by openidconnect crate.
-    Oidc(Box<CoreClient>),
+    Oidc(Box<OidcDiscoveredClient>),
     /// GitHub OAuth2 provider (no OIDC discovery).
     GitHub {
         client_id: String,
@@ -73,6 +87,22 @@ pub struct OidcProvider {
     inner: ProviderInner,
 }
 
+/// Build the shared async reqwest client used for OIDC discovery and token
+/// exchange. Redirects are disabled per the openidconnect README — following
+/// them opens us up to SSRF on the discovery endpoint.
+///
+/// Note: `openidconnect 4` re-exports `reqwest 0.12` (via `oauth2 5`), while
+/// the workspace also pulls in `reqwest 0.13` for the GitHub OAuth path.
+/// Their `reqwest::Error` types are distinct, so failures here are converted
+/// to a string and surfaced via [`OidcError::Discovery`] rather than
+/// [`OidcError::Http`] (which is bound to the workspace 0.13 type).
+fn build_http_client() -> Result<openidconnect::reqwest::Client, OidcError> {
+    openidconnect::reqwest::Client::builder()
+        .redirect(openidconnect::reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| OidcError::Discovery(format!("failed to build HTTP client: {e}")))
+}
+
 impl OidcProvider {
     /// Discover provider config from OIDC discovery URL.
     ///
@@ -86,10 +116,11 @@ impl OidcProvider {
         let issuer = IssuerUrl::new(issuer_url.to_string())
             .map_err(|e| OidcError::InvalidIssuerUrl(e.to_string()))?;
 
-        let metadata =
-            CoreProviderMetadata::discover_async(issuer, openidconnect::reqwest::async_http_client)
-                .await
-                .map_err(|e| OidcError::Discovery(e.to_string()))?;
+        let http_client = build_http_client()?;
+
+        let metadata = CoreProviderMetadata::discover_async(issuer, &http_client)
+            .await
+            .map_err(|e| OidcError::Discovery(e.to_string()))?;
 
         let client = CoreClient::from_provider_metadata(
             metadata,
@@ -116,7 +147,7 @@ impl OidcProvider {
             ProviderInner::Oidc(client) => {
                 let redirect = RedirectUrl::new(redirect_uri.to_string())
                     .map_err(|e| OidcError::InvalidRedirectUri(e.to_string()))?;
-                let client = client.clone().set_redirect_uri(redirect);
+                let client = (**client).clone().set_redirect_uri(redirect);
 
                 let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
@@ -170,12 +201,15 @@ impl OidcProvider {
             ProviderInner::Oidc(client) => {
                 let redirect = RedirectUrl::new(redirect_uri.to_string())
                     .map_err(|e| OidcError::InvalidRedirectUri(e.to_string()))?;
-                let client = client.clone().set_redirect_uri(redirect);
+                let client = (**client).clone().set_redirect_uri(redirect);
+
+                let http_client = build_http_client()?;
 
                 let token_response = client
                     .exchange_code(AuthorizationCode::new(code.to_string()))
+                    .map_err(|e| OidcError::TokenExchange(e.to_string()))?
                     .set_pkce_verifier(PkceCodeVerifier::new(pkce_verifier.to_string()))
-                    .request_async(openidconnect::reqwest::async_http_client)
+                    .request_async(&http_client)
                     .await
                     .map_err(|e| OidcError::TokenExchange(e.to_string()))?;
 
@@ -294,11 +328,10 @@ impl OidcProvider {
     }
 }
 
-/// Build a stub `CoreClient` for Google using well-known static metadata.
-///
-/// Avoids a network call at construction time. Suitable for generating
-/// authorization URLs; token exchange requires a live provider.
-fn build_google_client_stub(client_id: &str, client_secret: &str) -> CoreClient {
+/// Build a stub `OidcDiscoveredClient` for Google using well-known static
+/// metadata. Avoids a network call at construction time. Suitable for
+/// generating authorization URLs; token exchange requires a live provider.
+fn build_google_client_stub(client_id: &str, client_secret: &str) -> OidcDiscoveredClient {
     let metadata = CoreProviderMetadata::new(
         IssuerUrl::new("https://accounts.google.com".to_string()).expect("valid"),
         AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).expect("valid"),

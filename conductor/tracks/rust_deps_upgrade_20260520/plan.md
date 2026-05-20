@@ -26,7 +26,7 @@ Before starting any phase, install the discovery tooling once:
       `cargo test --workspace --lib` still pass with no dep changes yet.
       Result: 1479 unit tests across 12 crates, 0 failures, with
       `DATABASE_URL=$STITCHD_DATABASE_URL` exported (per patterns.md gotcha).
-- [ ] Task: Conductor - User Manual Verification 'Toolchain pin (MSRV only)' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Toolchain pin (MSRV only)' (Protocol in workflow.md) — autonomous mode
 
 ## Phase 2: Compatible (within-semver) refresh
 

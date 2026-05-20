@@ -54,7 +54,7 @@ pub async fn insert_eval_log_rows(
     if rows.is_empty() {
         return Ok(());
     }
-    let mut insert = client.insert("flag_evaluation_log")?;
+    let mut insert = client.insert::<EvalLogRow>("flag_evaluation_log").await?;
     for row in rows {
         insert.write(row).await?;
     }

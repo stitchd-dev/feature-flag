@@ -694,7 +694,7 @@ mod tests {
         });
         OidcLoginServiceImpl::new(
             Arc::new(exchanger),
-            Arc::new(OidcStateStore::new(Duration::from_secs(300))),
+            Arc::new(OidcStateStore::new(Duration::from_mins(5))),
             Arc::new(MockAuthUserRepo { existing_user }),
             Arc::new(MockOrgMembershipRepo { membership }),
             Arc::new(MockRefreshTokenRepo),

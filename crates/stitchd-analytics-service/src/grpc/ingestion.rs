@@ -360,7 +360,8 @@ async fn write_rows_to_clickhouse(
     }
 
     let mut insert = ch_client
-        .insert("events_v2")
+        .insert::<EventV2Row>("events_v2")
+        .await
         .map_err(|e| Status::internal(format!("clickhouse insert init failed: {e}")))?;
     for row in rows {
         insert

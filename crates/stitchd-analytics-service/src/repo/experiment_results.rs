@@ -213,7 +213,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
         if rows.is_empty() {
             return Ok(());
         }
-        let mut insert = self.client.insert(TABLE)?;
+        let mut insert = self.client.insert::<ExperimentResultRow>(TABLE).await?;
         for row in rows {
             let ch_row = Self::to_ch_row(row)?;
             insert.write(&ch_row).await?;

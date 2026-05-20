@@ -109,15 +109,15 @@ impl TotpEngine {
     /// Panics if the Argon2id hasher fails (should never happen with valid inputs).
     #[must_use]
     pub fn generate_recovery_codes(n: usize) -> Vec<(String, String)> {
-        use rand::Rng as _;
+        use rand::RngExt as _;
         const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         (0..n)
             .map(|_| {
                 let code: String = (0..8)
                     .map(|_| {
-                        let idx = rng.gen_range(0..CHARSET.len());
+                        let idx = rng.random_range(0..CHARSET.len());
                         CHARSET[idx] as char
                     })
                     .collect();

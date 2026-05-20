@@ -151,7 +151,7 @@ async fn sweeper_deletes_old_orphaned_generations() {
     let id = seg();
     store.add_orphan(id, "user", 42, old(25)); // 25h old, window = 24h → should sweep
 
-    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_secs(24 * 3600));
+    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_hours(24));
     sweeper.sweep().await.expect("sweep should succeed");
 
     assert_eq!(store.deleted(), vec![(id, "user".to_string(), 42)]);
@@ -165,7 +165,7 @@ async fn sweeper_skips_recent_orphaned_generations() {
     let id = seg();
     store.add_orphan(id, "user", 99, recent(30)); // 30 min old, window = 24h → skip
 
-    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_secs(24 * 3600));
+    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_hours(24));
     sweeper.sweep().await.expect("sweep should succeed");
 
     assert!(
@@ -185,7 +185,7 @@ async fn sweeper_handles_multiple_segments() {
     store.add_orphan(id2, "org", 2, old(36));
     store.add_orphan(id1, "user", 3, recent(10)); // too recent
 
-    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_secs(24 * 3600));
+    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_hours(24));
     sweeper.sweep().await.expect("sweep should succeed");
 
     let deleted = store.deleted();
@@ -200,7 +200,7 @@ async fn sweeper_handles_multiple_segments() {
 #[tokio::test]
 async fn sweeper_no_ops_on_empty_store() {
     let store = MockSweeperStore::new();
-    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_secs(3600));
+    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_hours(1));
     sweeper.sweep().await.expect("sweep should succeed");
 
     assert!(store.deleted().is_empty());
@@ -217,7 +217,7 @@ async fn sweeper_run_fires_on_first_tick() {
     let id = seg();
     store.add_orphan(id, "user", 1, old(48));
 
-    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_secs(24 * 3600));
+    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_hours(24));
     let interval = Duration::from_secs(1);
 
     // Spawn the infinite `run()` loop in the background.
@@ -245,7 +245,7 @@ async fn sweeper_run_fires_on_first_tick() {
 /// Uses the failing store so the error branch in `run()` is exercised.
 #[tokio::test(start_paused = true)]
 async fn sweeper_run_logs_error_and_continues() {
-    let sweeper = GenerationSweeper::new(FailingSweeperStore, Duration::from_secs(3600));
+    let sweeper = GenerationSweeper::new(FailingSweeperStore, Duration::from_hours(1));
     let interval = Duration::from_secs(1);
 
     let handle = tokio::spawn(async move {
@@ -267,7 +267,7 @@ async fn sweeper_marks_swept_only_after_delete_succeeds() {
     let id = seg();
     store.add_orphan(id, "user", 7, old(48));
 
-    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_secs(3600));
+    let sweeper = GenerationSweeper::new(store.clone(), Duration::from_hours(1));
     sweeper.sweep().await.unwrap();
 
     // deleted before swept

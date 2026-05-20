@@ -232,12 +232,12 @@ impl RoleRepository for PgRoleRepository {
         .execute(&self.pool)
         .await
         .map_err(|e| {
-            if let sqlx::Error::Database(ref dbe) = e {
-                if let Some(constraint) = dbe.constraint() {
-                    return RepositoryError::UniqueViolation {
-                        field: constraint.to_string(),
-                    };
-                }
+            if let sqlx::Error::Database(ref dbe) = e
+                && let Some(constraint) = dbe.constraint()
+            {
+                return RepositoryError::UniqueViolation {
+                    field: constraint.to_string(),
+                };
             }
             RepositoryError::Database(e)
         })?;

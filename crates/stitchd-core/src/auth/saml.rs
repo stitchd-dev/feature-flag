@@ -289,10 +289,9 @@ fn extract_email_from_response_xml(xml: &str) -> Result<String, SamlError> {
     // Try NameID first (most common for email-format NameID)
     if let Some(email) = extract_text_between(xml, "<saml:NameID", "</saml:NameID>")
         .or_else(|| extract_text_between(xml, "<NameID", "</NameID>"))
+        && email.contains('@')
     {
-        if email.contains('@') {
-            return Ok(email);
-        }
+        return Ok(email);
     }
 
     // Try Attribute values for email
@@ -303,10 +302,10 @@ fn extract_email_from_response_xml(xml: &str) -> Result<String, SamlError> {
         "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress",
         "urn:oid:1.2.840.113549.1.9.1",
     ] {
-        if let Some(email) = find_attribute_value(xml, attr_name) {
-            if email.contains('@') {
-                return Ok(email);
-            }
+        if let Some(email) = find_attribute_value(xml, attr_name)
+            && email.contains('@')
+        {
+            return Ok(email);
         }
     }
 

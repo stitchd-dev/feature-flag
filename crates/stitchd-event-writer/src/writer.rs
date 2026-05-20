@@ -91,7 +91,7 @@ impl EventWriter {
     #[instrument(skip(self, payload), fields(metric_key = %payload.metric_key))]
     pub async fn write(&self, env_id: Uuid, payload: &EventPayload) -> Result<(), WriteError> {
         let row = EventRow::from_payload(env_id, payload);
-        let mut insert = self.client.insert("events")?;
+        let mut insert = self.client.insert::<EventRow>("events").await?;
         insert.write(&row).await?;
         insert.end().await?;
         Ok(())
@@ -111,7 +111,7 @@ impl EventWriter {
         env_id: Uuid,
         batch: &BatchEventPayload,
     ) -> Result<(), WriteError> {
-        let mut insert = self.client.insert("events")?;
+        let mut insert = self.client.insert::<EventRow>("events").await?;
         for payload in &batch.events {
             let row = EventRow::from_payload(env_id, payload);
             insert.write(&row).await?;
@@ -133,7 +133,7 @@ impl EventWriter {
     /// Returns [`WriteError`] if the ClickHouse insert fails.
     #[instrument(skip(self, rows), fields(count = rows.len()))]
     pub async fn write_rows(&self, rows: Vec<EventRow>) -> Result<(), WriteError> {
-        let mut insert = self.client.insert("events")?;
+        let mut insert = self.client.insert::<EventRow>("events").await?;
         for row in &rows {
             insert.write(row).await?;
         }

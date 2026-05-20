@@ -264,15 +264,15 @@ pub async fn handle_update_event_definition(
         let t = desc.trim().to_string();
         next.description = if t.is_empty() { None } else { Some(t) };
     }
-    if let Some(vt) = r.value_type {
-        if !vt.is_empty() {
-            next.value_type = parse_value_type(&vt)?;
-        }
+    if let Some(vt) = r.value_type
+        && !vt.is_empty()
+    {
+        next.value_type = parse_value_type(&vt)?;
     }
-    if let Some(mt) = r.metric_type {
-        if !mt.is_empty() {
-            next.metric_type = parse_metric_type(&mt)?;
-        }
+    if let Some(mt) = r.metric_type
+        && !mt.is_empty()
+    {
+        next.metric_type = parse_metric_type(&mt)?;
     }
     if let Some(schema_json) = r.schema_json {
         next.schema = schema_json_to_value(&schema_json)?;

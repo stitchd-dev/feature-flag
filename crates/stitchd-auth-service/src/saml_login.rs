@@ -711,7 +711,7 @@ mod tests {
         });
         SamlLoginServiceImpl::new(
             Arc::new(exchanger),
-            Arc::new(SamlRelayStore::new(Duration::from_secs(600))),
+            Arc::new(SamlRelayStore::new(Duration::from_mins(10))),
             Arc::new(MockAuthUserRepo { existing_user }),
             Arc::new(MockOrgMembershipRepo { membership }),
             Arc::new(MockRefreshTokenRepo),

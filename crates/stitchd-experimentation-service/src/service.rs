@@ -138,21 +138,22 @@ impl ExperimentationService for ExperimentationServiceImpl {
         let target_status = proto_status_to_core(proto_exp.status)?;
 
         // Flag-lock: when activating (ACTIVE/Running), verify the flag exists.
-        if target_status == ExperimentStatus::Running && !proto_exp.flag_key.is_empty() {
-            if let Some(fc) = &self.flag_client {
-                fc.verify_flag_exists(&proto_exp.environment_id, &proto_exp.flag_key)
-                    .await
-                    .map_err(|status| {
-                        if status.code() == tonic::Code::NotFound {
-                            Status::failed_precondition(format!(
-                                "flag '{}' not found in Flag Service",
-                                proto_exp.flag_key
-                            ))
-                        } else {
-                            status
-                        }
-                    })?;
-            }
+        if target_status == ExperimentStatus::Running
+            && !proto_exp.flag_key.is_empty()
+            && let Some(fc) = &self.flag_client
+        {
+            fc.verify_flag_exists(&proto_exp.environment_id, &proto_exp.flag_key)
+                .await
+                .map_err(|status| {
+                    if status.code() == tonic::Code::NotFound {
+                        Status::failed_precondition(format!(
+                            "flag '{}' not found in Flag Service",
+                            proto_exp.flag_key
+                        ))
+                    } else {
+                        status
+                    }
+                })?;
         }
 
         // Parse IDs.
@@ -431,13 +432,12 @@ impl ExperimentationService for ExperimentationServiceImpl {
                             });
 
                     // Extract p_value from frequentist_result JSON string if present.
-                    if let Some(freq_str) = &result.frequentist_result {
-                        if let Ok(freq_json) = serde_json::from_str::<serde_json::Value>(freq_str) {
-                            if let Some(p_val) = freq_json.get("p_value").and_then(|v| v.as_f64()) {
-                                entry.p_value = p_val;
-                                entry.p_value_present = true;
-                            }
-                        }
+                    if let Some(freq_str) = &result.frequentist_result
+                        && let Ok(freq_json) = serde_json::from_str::<serde_json::Value>(freq_str)
+                        && let Some(p_val) = freq_json.get("p_value").and_then(|v| v.as_f64())
+                    {
+                        entry.p_value = p_val;
+                        entry.p_value_present = true;
                     }
 
                     // Record participant_count as metric value.

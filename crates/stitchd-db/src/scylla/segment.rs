@@ -79,12 +79,11 @@ impl ScyllaSegmentStore {
             .await
             .map_err(|e| ScyllaError::Query(e.to_string()))?;
 
-        if let Ok(result) = rows.into_rows_result() {
-            if let Ok(mut iter) = result.rows::<(i64,)>() {
-                if let Some(Ok((active_gen,))) = iter.next() {
-                    return Ok(active_gen);
-                }
-            }
+        if let Ok(result) = rows.into_rows_result()
+            && let Ok(mut iter) = result.rows::<(i64,)>()
+            && let Some(Ok((active_gen,))) = iter.next()
+        {
+            return Ok(active_gen);
         }
         Ok(0)
     }
@@ -407,31 +406,31 @@ impl ScyllaSegmentStore {
 
         let mut summary = ListSegmentSummary::default();
 
-        if let Ok(result) = ctx_rows.into_rows_result() {
-            if let Ok(iter) = result.rows::<(String, i64)>() {
-                for row in iter {
-                    let (context_type, active_gen) =
-                        row.map_err(|e| ScyllaError::Query(format!("row error: {e}")))?;
+        if let Ok(result) = ctx_rows.into_rows_result()
+            && let Ok(iter) = result.rows::<(String, i64)>()
+        {
+            for row in iter {
+                let (context_type, active_gen) =
+                    row.map_err(|e| ScyllaError::Query(format!("row error: {e}")))?;
 
-                    if active_gen == 0 {
-                        continue;
-                    }
-
-                    let inc = self
-                        .count_entries_for_type(ks, seg_uuid, &context_type, active_gen, "include")
-                        .await?;
-                    let exc = self
-                        .count_entries_for_type(ks, seg_uuid, &context_type, active_gen, "exclude")
-                        .await?;
-
-                    summary.counts.insert(
-                        context_type,
-                        ListContextCounts {
-                            include_count: inc,
-                            exclude_count: exc,
-                        },
-                    );
+                if active_gen == 0 {
+                    continue;
                 }
+
+                let inc = self
+                    .count_entries_for_type(ks, seg_uuid, &context_type, active_gen, "include")
+                    .await?;
+                let exc = self
+                    .count_entries_for_type(ks, seg_uuid, &context_type, active_gen, "exclude")
+                    .await?;
+
+                summary.counts.insert(
+                    context_type,
+                    ListContextCounts {
+                        include_count: inc,
+                        exclude_count: exc,
+                    },
+                );
             }
         }
 
@@ -623,12 +622,11 @@ impl ScyllaSegmentStore {
             .await
             .map_err(|e| ScyllaError::Query(format!("count_entries: {e}")))?;
 
-        if let Ok(result) = rows.into_rows_result() {
-            if let Ok(mut iter) = result.rows::<(i64,)>() {
-                if let Some(Ok((count,))) = iter.next() {
-                    return Ok(count);
-                }
-            }
+        if let Ok(result) = rows.into_rows_result()
+            && let Ok(mut iter) = result.rows::<(i64,)>()
+            && let Some(Ok((count,))) = iter.next()
+        {
+            return Ok(count);
         }
         Ok(0)
     }

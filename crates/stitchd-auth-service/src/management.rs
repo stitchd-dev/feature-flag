@@ -341,10 +341,10 @@ impl ManagementService for ManagementServiceImpl {
 
         // add_member has a unique constraint on (user_id, org_id) — treat a
         // duplicate as an idempotent success so callers can re-seed safely.
-        if let Err(e) = self.membership_repo.add_member(user.id, org_id, role).await {
-            if !matches!(e, RepositoryError::UniqueViolation { .. }) {
-                return Err(map_repo_err(e));
-            }
+        if let Err(e) = self.membership_repo.add_member(user.id, org_id, role).await
+            && !matches!(e, RepositoryError::UniqueViolation { .. })
+        {
+            return Err(map_repo_err(e));
         }
 
         Ok(Response::new(CreateUserResponse {

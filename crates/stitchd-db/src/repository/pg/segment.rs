@@ -226,12 +226,12 @@ impl SegmentRepository for PgSegmentRepository {
         .execute(&self.pool)
         .await
         .map_err(|e| {
-            if let sqlx::Error::Database(ref dbe) = e {
-                if let Some(constraint) = dbe.constraint() {
-                    return RepositoryError::UniqueViolation {
-                        field: constraint.to_string(),
-                    };
-                }
+            if let sqlx::Error::Database(ref dbe) = e
+                && let Some(constraint) = dbe.constraint()
+            {
+                return RepositoryError::UniqueViolation {
+                    field: constraint.to_string(),
+                };
             }
             RepositoryError::Database(e)
         })?;
@@ -410,17 +410,16 @@ impl SegmentRepository for PgSegmentRepository {
 
         // If no legacy segment_rules rows exist, fall back to the condition_expr column.
         // The UI condition builder stores a single ConditionExpr there instead of rows.
-        if rules.is_empty() {
-            if let Ok(Some(expr_json)) = self.get_condition_expr(id).await {
-                if let Ok(expr) = serde_json::from_value::<ConditionExpr>(expr_json) {
-                    rules.push(Rule {
-                        id: RuleId::new(),
-                        name: None,
-                        condition: expr,
-                        output: RuleOutput::Variant(VariantId::new()),
-                    });
-                }
-            }
+        if rules.is_empty()
+            && let Ok(Some(expr_json)) = self.get_condition_expr(id).await
+            && let Ok(expr) = serde_json::from_value::<ConditionExpr>(expr_json)
+        {
+            rules.push(Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: expr,
+                output: RuleOutput::Variant(VariantId::new()),
+            });
         }
 
         Ok(RuleBasedSegment { id, rules })

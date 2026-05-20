@@ -124,14 +124,14 @@ pub async fn event_quota_middleware(
     req: Request,
     next: Next,
 ) -> Response {
-    if let Some(ctx) = req.extensions().get::<SdkContext>() {
-        if limiter.check_key(&ctx.environment_id).is_err() {
-            tracing::debug!(
-                env_id = %ctx.environment_id,
-                "event quota exceeded — returning 429"
-            );
-            return too_many_requests();
-        }
+    if let Some(ctx) = req.extensions().get::<SdkContext>()
+        && limiter.check_key(&ctx.environment_id).is_err()
+    {
+        tracing::debug!(
+            env_id = %ctx.environment_id,
+            "event quota exceeded — returning 429"
+        );
+        return too_many_requests();
     }
     // No SdkContext (or quota has room) → forward to the next layer. We
     // intentionally do NOT return 401 here; that's `sdk_auth_middleware`'s

@@ -412,7 +412,10 @@ fn make_event_row(
 
 /// Insert a batch of `EventV2Row`s in one CH statement.
 async fn insert_events(client: &clickhouse::Client, rows: &[EventV2Row]) {
-    let mut insert = client.insert("events_v2").expect("insert init");
+    let mut insert = client
+        .insert::<EventV2Row>("events_v2")
+        .await
+        .expect("insert init");
     for row in rows {
         insert.write(row).await.expect("row write");
     }

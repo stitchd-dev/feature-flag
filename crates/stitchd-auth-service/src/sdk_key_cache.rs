@@ -12,7 +12,7 @@ use moka::future::Cache;
 use stitchd_core::tenant::SdkKey;
 use stitchd_db::RepositoryError;
 
-const TTL: Duration = Duration::from_secs(60);
+const TTL: Duration = Duration::from_mins(1);
 const MAX_CAPACITY: u64 = 4_096;
 
 /// Reconstruct a `RepositoryError` from an `Arc<RepositoryError>` returned by

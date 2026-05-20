@@ -94,6 +94,29 @@ From `conductor/patterns.md` — directly relevant to this track:
 
 ---
 
+## [2026-05-20 18:10] - Phase 2 Task 1: Outdated baseline
+
+`cargo outdated --workspace --depth 1` at track start (post-MSRV bump, pre-dep-bumps):
+
+| Crate (consumer)        | Dep            | Project | Latest |
+|-------------------------|----------------|---------|--------|
+| stitchd-db              | metrics        | 0.24.3  | 0.24.6 |
+| stitchd-stats-service   | metrics        | 0.24.3  | 0.24.6 |
+| stitchd-auth-service    | metrics        | 0.24.3  | 0.24.6 |
+| stitchd-flag-service    | metrics        | 0.24.3  | 0.24.6 |
+| stitchd-segmentation-service | metrics   | 0.24.3  | 0.24.6 |
+| stitchd-analytics-service | metrics      | 0.24.3  | 0.24.6 |
+| stitchd-experimentation-service | metrics | 0.24.3 | 0.24.6 |
+| stitchd-gateway         | metrics        | 0.24.3  | 0.24.6 |
+| stitchd-sdk-rust        | metrics        | 0.24.3  | 0.24.6 |
+| stitchd-sdk-rust        | metrics-util   | 0.19.1  | 0.20.4 |
+
+Note: within-semver compat shows `---` because cargo-outdated reports the in-range compatible *upgrade*, and the workspace req `metrics = "0.24"` already permits 0.24.6. `cargo update --workspace` should pick it up.
+
+The 16 incompatible (major) bumps land in Phase 3.
+
+---
+
 ## [2026-05-20 18:02] - Phase 1 Tasks 3 + 4: Baseline verify
 
 - **Implemented:**
