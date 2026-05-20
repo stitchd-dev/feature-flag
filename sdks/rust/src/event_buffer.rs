@@ -64,6 +64,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::metrics::{
+    record_buffer_size, record_buffered, record_dropped_permanent,
+    record_dropped_retry_exhausted, record_dropped_shutdown_timeout, record_flushed_accepted,
+    record_flushed_rejected,
+};
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -328,6 +334,9 @@ impl EventBuffer {
             buf.push_back(event);
             buf.len()
         };
+        // Phase 5 Task 5.4 — counter + gauge.
+        record_buffered();
+        record_buffer_size(len_after);
         if len_after >= self.inner.config.flush_at_size {
             let me = Arc::clone(self);
             tokio::spawn(async move {
@@ -374,6 +383,8 @@ impl EventBuffer {
                     timeout_ms = timeout.as_millis() as u64,
                     "EventBuffer shutdown timed out — dropping pending events"
                 );
+                record_dropped_shutdown_timeout(dropped.len() as u64);
+                record_buffer_size(0);
             }
         }
     }
@@ -405,6 +416,11 @@ impl EventBuffer {
         if batch.is_empty() {
             return Ok(FlushReport::default());
         }
+        // The buffer was just emptied — keep the gauge in sync. (We
+        // update again on any post-drop re-enqueue path; there isn't
+        // one today, but this keeps the gauge truthful even if a future
+        // refactor adds one.)
+        record_buffer_size(0);
         let dropped_count = batch.len() as u32;
 
         // Serialize once — retries replay the same bytes.
@@ -460,9 +476,14 @@ impl EventBuffer {
                                 rejected: vec![],
                             },
                         };
+                        let rejected_n = parsed.rejected.len() as u32;
+                        // Phase 5 Task 5.4 — split accepted/rejected
+                        // into the `result` label.
+                        record_flushed_accepted(u64::from(parsed.accepted_count));
+                        record_flushed_rejected(u64::from(rejected_n));
                         return Ok(FlushReport {
                             accepted: parsed.accepted_count,
-                            rejected: parsed.rejected.len() as u32,
+                            rejected: rejected_n,
                             retried: attempt,
                         });
                     }
@@ -477,6 +498,7 @@ impl EventBuffer {
                         count = dropped_count,
                         "EventBuffer flush rejected permanently — dropping batch"
                     );
+                    record_dropped_permanent(u64::from(dropped_count));
                     return Err(FlushError::Permanent {
                         status,
                         message: msg,
@@ -495,6 +517,7 @@ impl EventBuffer {
             dropped_count,
             self.inner.config.max_retries
         );
+        record_dropped_retry_exhausted(u64::from(dropped_count));
         Err(FlushError::Network {
             count: dropped_count,
             last_error: last_err,
@@ -1048,6 +1071,157 @@ mod tests {
         assert_eq!(ev0["value"], serde_json::json!({"int": 100}));
         assert_eq!(ev0["properties"]["currency"], "USD");
         assert_eq!(ev0["occurred_at"], "2026-05-19T12:00:00Z");
+        buffer.shutdown(Duration::from_millis(100)).await;
+    }
+
+    // ── 12-14. Prometheus counters / gauge (Phase 5 Task 5.4) ───────────────
+    //
+    // These tests install a `metrics_util::debugging::DebuggingRecorder` as
+    // the thread-local recorder for the duration of the test. `current_thread`
+    // runtime + `set_default_local_recorder` means all `tokio::spawn`ed work
+    // inside the test sees the same recorder. The recorder snapshot exposes
+    // the raw counter / gauge values we can assert against.
+
+    use crate::metrics::{
+        EVENTS_BUFFERED_TOTAL, EVENTS_FLUSHED_TOTAL, EVENT_BUFFER_SIZE,
+    };
+    use ::metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+    /// Sum every counter sample whose key matches `name`, across all
+    /// label combinations (so `events_flushed_total{result=accepted}` +
+    /// `{result=rejected}` collapse into one number).
+    fn snapshot_counter_total(snap: ::metrics_util::debugging::Snapshot, name: &str) -> u64 {
+        snap.into_vec()
+            .into_iter()
+            .filter(|(ck, _, _, _)| ck.key().name() == name)
+            .filter_map(|(_, _, _, v)| match v {
+                DebugValue::Counter(n) => Some(n),
+                _ => None,
+            })
+            .sum()
+    }
+
+    /// Pull the latest gauge sample for a given name.
+    fn snapshot_gauge(snap: ::metrics_util::debugging::Snapshot, name: &str) -> Option<f64> {
+        snap.into_vec()
+            .into_iter()
+            .find_map(|(ck, _, _, v)| match v {
+                DebugValue::Gauge(f) if ck.key().name() == name => Some(*f),
+                _ => None,
+            })
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_counter_events_buffered_total_increments_on_enqueue() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = ::metrics::set_default_local_recorder(&recorder);
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "accepted_count": 0,
+                "rejected": []
+            })))
+            .mount(&server)
+            .await;
+        let buffer = EventBuffer::new(EventBufferConfig {
+            flush_at_size: 1000, // never trips on size
+            ..config_for(&server)
+        });
+
+        let before = snapshot_counter_total(snapshotter.snapshot(), EVENTS_BUFFERED_TOTAL);
+        for _ in 0..7 {
+            buffer.enqueue(ev("k"));
+        }
+        let after = snapshot_counter_total(snapshotter.snapshot(), EVENTS_BUFFERED_TOTAL);
+        assert_eq!(
+            after - before,
+            7,
+            "expected exactly 7 buffered_total increments"
+        );
+
+        // Cleanup — drain to avoid wiremock unmount.
+        drop(buffer.drain_all_inner());
+        buffer.shutdown(Duration::from_millis(50)).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_counter_events_flushed_total_increments_on_flush() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = ::metrics::set_default_local_recorder(&recorder);
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "accepted_count": 4,
+                "rejected": [
+                    {"event_key": "kb", "reason": "value_type_mismatch"}
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let buffer = EventBuffer::new(config_for(&server));
+        for i in 0..5 {
+            buffer.enqueue(ev(&format!("k{i}")));
+        }
+
+        let before = snapshot_counter_total(snapshotter.snapshot(), EVENTS_FLUSHED_TOTAL);
+        let report = buffer.flush().await.expect("flush ok");
+        assert_eq!(report.accepted, 4);
+        assert_eq!(report.rejected, 1);
+        let after = snapshot_counter_total(snapshotter.snapshot(), EVENTS_FLUSHED_TOTAL);
+        // 4 accepted + 1 rejected → total counter sum increments by 5
+        // (split across the `result` label).
+        assert_eq!(
+            after - before,
+            5,
+            "expected flushed_total to increment by accepted+rejected"
+        );
+
+        buffer.shutdown(Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_gauge_event_buffer_size_reflects_buffer_len() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let _guard = ::metrics::set_default_local_recorder(&recorder);
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "accepted_count": 3,
+                "rejected": []
+            })))
+            .mount(&server)
+            .await;
+        let buffer = EventBuffer::new(EventBufferConfig {
+            flush_at_size: 1000,
+            ..config_for(&server)
+        });
+        for _ in 0..3 {
+            buffer.enqueue(ev("k"));
+        }
+        let mid = snapshot_gauge(snapshotter.snapshot(), EVENT_BUFFER_SIZE);
+        assert_eq!(
+            mid,
+            Some(3.0),
+            "gauge should reflect 3 buffered events; got {mid:?}"
+        );
+
+        buffer.flush().await.expect("flush ok");
+        let post = snapshot_gauge(snapshotter.snapshot(), EVENT_BUFFER_SIZE);
+        assert_eq!(
+            post,
+            Some(0.0),
+            "gauge should drop to 0 after flush; got {post:?}"
+        );
         buffer.shutdown(Duration::from_millis(100)).await;
     }
 }

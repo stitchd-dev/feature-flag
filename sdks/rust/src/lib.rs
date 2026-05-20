@@ -30,7 +30,7 @@
 //!         .evaluate(&[EvalRequest::flag("my-flag", ctx)])
 //!         .await;
 //!     println!("variant = {}", results[0].variant_key);
-//!     client.shutdown().await;
+//!     client.shutdown(std::time::Duration::from_secs(5)).await?;
 //!     Ok(())
 //! }
 //! ```
@@ -52,6 +52,7 @@ pub mod error;
 pub mod event_buffer;
 pub mod events;
 pub mod lru;
+pub(crate) mod metrics;
 pub mod polling;
 pub mod refresh;
 pub mod snapshot;

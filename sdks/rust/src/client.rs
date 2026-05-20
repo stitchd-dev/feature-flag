@@ -46,7 +46,9 @@ use stitchd_proto::sdk::v1::sdk_service_client::SdkServiceClient;
 
 use crate::config::SdkConfig;
 use crate::error::{SdkError, TrackError};
-use crate::event_buffer::{BufferedEvent, EventBuffer, EventBufferConfig, TypedValue};
+use crate::event_buffer::{
+    BufferedEvent, EventBuffer, EventBufferConfig, FlushReport, TypedValue,
+};
 use crate::events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, ParameterValue};
 use crate::lru::{ContextKey, MembershipCache, MembershipMap};
 use crate::polling::{DefinitionFetcher, PollTask};
@@ -664,13 +666,59 @@ impl SdkClient {
             .is_some()
     }
 
-    // ── shutdown (Task 9) ────────────────────────────────────────────────────
+    // ── flush + shutdown (Phase 5 Task 5.3) ──────────────────────────────────
+
+    /// Force the client-side track-event buffer to drain immediately.
+    ///
+    /// Returns a [`FlushReport`] describing how many events the gateway
+    /// accepted / rejected and how many retries the underlying POST
+    /// needed. Calling `flush()` on a buffer-less client (the
+    /// `test-util` construction path) returns an empty report — there's
+    /// nothing to flush.
+    ///
+    /// # Errors
+    ///
+    /// - [`TrackError::Network`] — all retries exhausted; events were
+    ///   dropped.
+    /// - [`TrackError::Permanent`] — gateway returned a non-retryable
+    ///   4xx; events were dropped.
+    pub async fn flush(&self) -> Result<FlushReport, TrackError> {
+        let Some(buf) = &self.event_buffer else {
+            return Ok(FlushReport::default());
+        };
+        buf.flush().await.map_err(TrackError::from)
+    }
+
+    // ── shutdown (Task 9 + Phase 5 Task 5.3) ─────────────────────────────────
 
     /// Gracefully shut down the SDK client.
     ///
-    /// Stops the three background tasks and drains the event buffer before
-    /// returning. After this call the `SdkClient` should be dropped.
-    pub async fn shutdown(self: Arc<Self>) {
+    /// Steps performed, in order:
+    ///
+    /// 1. Stops the three background tasks (poll, LRU refresh,
+    ///    flag-evaluation flush). No more snapshot swaps and no more
+    ///    evaluation events after this point.
+    /// 2. Drains the client-side track-event buffer with one final
+    ///    flush bounded by `timeout`. Any events still pending after
+    ///    the timeout fires are dropped with a `tracing::warn!` and
+    ///    counted via the `stitchd_sdk_events_dropped_total{reason="shutdown_timeout"}`
+    ///    counter.
+    ///
+    /// After this call returns the `SdkClient` should be dropped — its
+    /// background tasks are gone and its buffer's interval flusher is
+    /// aborted.
+    ///
+    /// Returns the [`FlushReport`] from the final track-event flush.
+    /// Clients constructed without an event buffer (the `test-util`
+    /// path) yield an empty report.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::flush`].
+    pub async fn shutdown(
+        self: Arc<Self>,
+        timeout: std::time::Duration,
+    ) -> Result<FlushReport, TrackError> {
         // Stop poll task first (no more snapshot swaps after this).
         if let Some(task) = self.poll_task.lock().await.take() {
             task.shutdown().await;
@@ -679,10 +727,32 @@ impl SdkClient {
         if let Some(task) = self.refresh_task.lock().await.take() {
             task.shutdown().await;
         }
-        // Flush task last — drains the event buffer before exiting.
+        // Flag-evaluation flush task — drains its own queue before exit.
         if let Some(task) = self.flush_task.lock().await.take() {
             task.shutdown().await;
         }
+        // Track-event buffer: one final flush bounded by `timeout`.
+        // `EventBuffer::shutdown()` already aborts the interval flusher
+        // and drops overflow on timeout — we just attempt the final
+        // flush first so the caller gets a real `FlushReport`.
+        let Some(buf) = &self.event_buffer else {
+            return Ok(FlushReport::default());
+        };
+        let report = match tokio::time::timeout(timeout, buf.flush()).await {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => {
+                // Flush failed (retries exhausted / permanent 4xx) — still
+                // run buffer-shutdown so the interval task is stopped.
+                buf.shutdown(timeout).await;
+                return Err(TrackError::from(e));
+            }
+            Err(_) => {
+                // Final flush timed out — buf.shutdown will drop overflow.
+                FlushReport::default()
+            }
+        };
+        buf.shutdown(timeout).await;
+        Ok(report)
     }
 
     // ── Internal evaluation (Task 8) ─────────────────────────────────────────
@@ -1838,9 +1908,13 @@ mod tests {
         }
 
         // shutdown should complete without hanging.
-        tokio::time::timeout(Duration::from_secs(5), client.shutdown())
-            .await
-            .expect("shutdown must not hang");
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            client.shutdown(Duration::from_secs(1)),
+        )
+        .await
+        .expect("shutdown must not hang")
+        .expect("shutdown should succeed");
     }
 
     #[tokio::test]
@@ -1849,8 +1923,14 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
         // Double-shutdown should not panic.
         let client2 = Arc::clone(&client);
-        client.shutdown().await;
-        client2.shutdown().await;
+        client
+            .shutdown(Duration::from_millis(100))
+            .await
+            .expect("first shutdown ok");
+        client2
+            .shutdown(Duration::from_millis(100))
+            .await
+            .expect("second shutdown ok");
     }
 
     // ── events emitted on evaluate ────────────────────────────────────────────
@@ -2171,6 +2251,106 @@ mod tests {
         assert_eq!(ev0["properties"]["currency"], "USD");
         // occurred_at is SDK-stamped from `Utc::now()` — just confirm presence.
         assert!(ev0.get("occurred_at").is_some_and(|v| v.is_string()));
+    }
+
+    // ── Phase 5 Task 5.3: Client::flush() + Client::shutdown(timeout) ───────
+
+    #[tokio::test]
+    async fn test_client_flush_delegates_to_buffer() {
+        // Client::flush() must wire through to EventBuffer::flush() and
+        // surface the resulting FlushReport unchanged. We can confirm
+        // by enqueueing via track() then asserting accepted=1.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "accepted_count": 1,
+                "rejected": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let snap = snapshot_with_event_defs(vec![("checkout", EventValueType::Bool)]);
+        let client = sdk_client_with_track_buffer(snap, &server.uri());
+
+        let ctx = Context::new("user", "alice");
+        client
+            .track("checkout", &ctx, Some(TypedValue::Bool(true)), None)
+            .await
+            .expect("track ok");
+
+        let report = client.flush().await.expect("flush should succeed");
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.rejected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_client_flush_no_buffer_returns_empty_report() {
+        // `sdk_client_with_snapshot` constructs a client with
+        // event_buffer = None. flush() must short-circuit to an empty
+        // FlushReport — never panic, never error.
+        let snap = snapshot_with_event_defs(vec![]);
+        let client = sdk_client_with_snapshot(snap);
+        assert!(client.event_buffer.is_none());
+
+        let report = client.flush().await.expect("flush ok on bufferless client");
+        assert_eq!(report, FlushReport::default());
+    }
+
+    #[tokio::test]
+    async fn test_client_shutdown_drains_pending() {
+        // Enqueue several events through track() and confirm
+        // `client.shutdown(timeout)` triggers one final flush that
+        // empties the buffer.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "accepted_count": 5,
+                "rejected": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let snap = snapshot_with_event_defs(vec![("e", EventValueType::Int)]);
+        let client = sdk_client_with_track_buffer(snap, &server.uri());
+        let ctx = Context::new("user", "u");
+        for _ in 0..5 {
+            client
+                .track("e", &ctx, Some(TypedValue::Int(1)), None)
+                .await
+                .expect("track ok");
+        }
+        // Sanity: buffer non-empty before shutdown.
+        assert!(client.event_buffer.is_some());
+
+        let report = client
+            .shutdown(Duration::from_secs(5))
+            .await
+            .expect("shutdown should succeed");
+        assert_eq!(report.accepted, 5);
+        assert_eq!(report.rejected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_client_shutdown_without_buffer_returns_ok() {
+        // shutdown() on a bufferless client must still stop the
+        // background tasks and return an empty report.
+        let snap = snapshot_with_event_defs(vec![]);
+        let client = sdk_client_with_snapshot(snap);
+        let report = client
+            .shutdown(Duration::from_millis(100))
+            .await
+            .expect("shutdown ok on bufferless client");
+        assert_eq!(report, FlushReport::default());
     }
 }
 
