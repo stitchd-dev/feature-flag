@@ -1,6 +1,7 @@
 import { Formik, Form } from 'formik'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
+import { FormField } from '../../components/form/FormField'
 import { FormSelect } from '../../components/form/FormSelect'
 import { FormTextarea } from '../../components/form/FormTextarea'
 import { FormErrorBanner } from '../../components/form/FormErrorBanner'
@@ -28,6 +29,10 @@ export interface EventDefinition {
   /// Environment ID — wire-required for the `?env_id=` query param on
   /// PATCH/DELETE since the gateway needs to scope key→id resolution.
   environment_id?: string
+  /// Human-readable display name. Falls back to `event_key` when the
+  /// server returns an empty/missing value (older rows). The edit
+  /// modal allows overriding this without changing the immutable key.
+  name?: string
   metric_type: string
   description: string
   schema: string | null
@@ -55,6 +60,7 @@ interface Props {
  */
 export function EditEventModal({ event, onClose, onSaved }: Props) {
   const initialValues: EventDefinitionEditValues = {
+    name: event.name ?? '',
     metric_type: event.metric_type,
     description: event.description ?? '',
     schema: event.schema ?? '',
@@ -65,7 +71,11 @@ export function EditEventModal({ event, onClose, onSaved }: Props) {
     { setStatus }: { setStatus: (s: unknown) => void },
   ) {
     try {
+      const trimmedName = (values.name ?? '').trim()
       const body = {
+        // Same fallback as the create modal: blank → event_key, so a
+        // user clearing the field doesn't end up with an empty label.
+        name: trimmedName === '' ? event.event_key : trimmedName,
         metric_type: values.metric_type,
         description: values.description?.trim() || undefined,
         schema: values.schema?.trim() ? JSON.parse(values.schema.trim()) : null,
@@ -142,6 +152,13 @@ export function EditEventModal({ event, onClose, onSaved }: Props) {
               Immutable after registration.
             </div>
           </div>
+
+          <FormField
+            name="name"
+            label="Name (optional)"
+            placeholder="e.g. Checkout Completed"
+            hint="Human-readable label. Falls back to the event key when cleared."
+          />
 
           <FormSelect
             name="metric_type"

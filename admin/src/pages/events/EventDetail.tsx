@@ -621,6 +621,7 @@ export function EventDetail() {
           event={{
             event_key: event.event_key,
             environment_id: event.environment_id ?? envId ?? undefined,
+            name: event.name,
             metric_type: event.metric_type,
             description: event.description ?? '',
             schema: event.schema ?? null,
@@ -635,6 +636,7 @@ export function EventDetail() {
             // header / stat panel / next-edit `version` all reflect the save.
             setEvent({
               ...event,
+              name: updated.name ?? event.event_key,
               metric_type: updated.metric_type,
               description: updated.description ?? '',
               schema: typeof updated.schema === 'string'

@@ -27,6 +27,13 @@ export const eventDefinitionSchema = Yup.object({
     )
     .required('Event key is required'),
 
+  /** Human-readable display name. Optional in the form — the create
+   *  modal falls back to `key` when blank, so existing flows that
+   *  registered events without specifying a separate name keep
+   *  working. The server treats name as required so the modal
+   *  always sends a non-empty string. */
+  name: Yup.string().trim().max(160, 'Name must be 160 characters or fewer'),
+
   metric_type: Yup.string()
     .oneOf(METRIC_TYPES as unknown as string[], 'Invalid metric type')
     .required('Metric type is required'),
@@ -53,6 +60,8 @@ export type EventDefinitionFormValues = Yup.InferType<typeof eventDefinitionSche
  * only validates the editable subset.
  */
 export const eventDefinitionEditSchema = Yup.object({
+  name: Yup.string().trim().max(160, 'Name must be 160 characters or fewer'),
+
   metric_type: Yup.string()
     .oneOf(METRIC_TYPES as unknown as string[], 'Invalid metric type')
     .required('Metric type is required'),

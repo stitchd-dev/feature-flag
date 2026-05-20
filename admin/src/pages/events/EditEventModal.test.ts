@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest'
 
 export interface EventDefinition {
   event_key: string
+  name?: string
   metric_type: string
   description: string
   schema: string | null
@@ -19,6 +20,7 @@ export interface EventDefinition {
 }
 
 export interface EditFormValues {
+  name: string
   metric_type: string
   description: string
   schema: string
@@ -29,17 +31,23 @@ export interface EditFormValues {
 /**
  * Build the PATCH request body. Mirrors the inline construction in
  * `EditEventModal.handleSubmit`.
+ *
+ * `name` falls back to `event.event_key` when the form leaves it blank
+ * so a user clearing the field doesn't end up with an empty label.
  */
 export function buildEditBody(
   values: EditFormValues,
   event: EventDefinition,
 ): {
+  name: string
   metric_type: string
   description?: string
   schema: unknown
   expected_version: number
 } {
+  const trimmedName = (values.name ?? '').trim()
   return {
+    name: trimmedName === '' ? event.event_key : trimmedName,
     metric_type: values.metric_type,
     description: values.description?.trim() || undefined,
     schema: values.schema?.trim() ? JSON.parse(values.schema.trim()) : null,
@@ -58,6 +66,7 @@ export function buildEditUrl(eventKey: string): string {
 /** Initial-values derivation from a server-returned event. */
 export function initialValuesFromEvent(event: EventDefinition): EditFormValues {
   return {
+    name: event.name ?? '',
     metric_type: event.metric_type,
     description: event.description ?? '',
     schema: event.schema ?? '',
@@ -79,7 +88,7 @@ const baseEvent: EventDefinition = {
 describe('EditEventModal — buildEditBody', () => {
   it('forwards metric_type unchanged', () => {
     const body = buildEditBody(
-      { metric_type: 'revenue', description: '', schema: '' },
+      { name: '', metric_type: 'revenue', description: '', schema: '' },
       baseEvent,
     )
     expect(body.metric_type).toBe('revenue')
@@ -87,13 +96,13 @@ describe('EditEventModal — buildEditBody', () => {
 
   it('trims description and omits it when empty', () => {
     const trimmed = buildEditBody(
-      { metric_type: 'count', description: '  Updated  ', schema: '' },
+      { name: '', metric_type: 'count', description: '  Updated  ', schema: '' },
       baseEvent,
     )
     expect(trimmed.description).toBe('Updated')
 
     const empty = buildEditBody(
-      { metric_type: 'count', description: '   ', schema: '' },
+      { name: '', metric_type: 'count', description: '   ', schema: '' },
       baseEvent,
     )
     expect(empty.description).toBeUndefined()
@@ -102,6 +111,7 @@ describe('EditEventModal — buildEditBody', () => {
   it('parses schema as JSON when non-empty; null otherwise', () => {
     const withSchema = buildEditBody(
       {
+        name: '',
         metric_type: 'count',
         description: '',
         schema: '{"type":"object"}',
@@ -111,7 +121,7 @@ describe('EditEventModal — buildEditBody', () => {
     expect(withSchema.schema).toEqual({ type: 'object' })
 
     const noSchema = buildEditBody(
-      { metric_type: 'count', description: '', schema: '' },
+      { name: '', metric_type: 'count', description: '', schema: '' },
       baseEvent,
     )
     expect(noSchema.schema).toBeNull()
@@ -119,7 +129,7 @@ describe('EditEventModal — buildEditBody', () => {
 
   it('echoes back the event version for optimistic locking', () => {
     const body = buildEditBody(
-      { metric_type: 'count', description: '', schema: '' },
+      { name: '', metric_type: 'count', description: '', schema: '' },
       { ...baseEvent, version: 42 },
     )
     expect(body.expected_version).toBe(42)
@@ -127,11 +137,33 @@ describe('EditEventModal — buildEditBody', () => {
 
   it('does NOT carry event_key (key is immutable)', () => {
     const body = buildEditBody(
-      { metric_type: 'count', description: '', schema: '' },
+      { name: '', metric_type: 'count', description: '', schema: '' },
       baseEvent,
     )
     expect(body).not.toHaveProperty('event_key')
     expect(body).not.toHaveProperty('key')
+  })
+
+  it('falls back to event_key when name is blank', () => {
+    const blank = buildEditBody(
+      { name: '', metric_type: 'count', description: '', schema: '' },
+      baseEvent,
+    )
+    expect(blank.name).toBe('checkout.completed')
+
+    const whitespace = buildEditBody(
+      { name: '   ', metric_type: 'count', description: '', schema: '' },
+      baseEvent,
+    )
+    expect(whitespace.name).toBe('checkout.completed')
+  })
+
+  it('trims and forwards the user-supplied name', () => {
+    const body = buildEditBody(
+      { name: '  Checkout Completed  ', metric_type: 'count', description: '', schema: '' },
+      baseEvent,
+    )
+    expect(body.name).toBe('Checkout Completed')
   })
 })
 
@@ -149,10 +181,16 @@ describe('EditEventModal — buildEditUrl', () => {
 describe('EditEventModal — initialValuesFromEvent', () => {
   it('maps server fields to form fields', () => {
     expect(initialValuesFromEvent(baseEvent)).toEqual({
+      name: '',
       metric_type: 'count',
       description: 'Order placed',
       schema: '',
     })
+  })
+
+  it('seeds the name field from the server event', () => {
+    const withName = { ...baseEvent, name: 'Checkout Completed' }
+    expect(initialValuesFromEvent(withName).name).toBe('Checkout Completed')
   })
 
   it('coerces null schema to empty string', () => {

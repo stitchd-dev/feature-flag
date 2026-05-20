@@ -35,6 +35,7 @@ export function CreateEventModal({ onClose, onCreated }: Props) {
 
   const initialValues: EventDefinitionFormValues = {
     key: '',
+    name: '',
     metric_type: 'count',
     description: '',
     schema: '',
@@ -49,12 +50,19 @@ export function CreateEventModal({ onClose, onCreated }: Props) {
         setStatus({ error: 'No environment selected — pick one in the sidebar first.' })
         return
       }
+      const trimmedKey = values.key.trim()
+      const trimmedName = (values.name ?? '').trim()
+      // Name is optional in the form (server treats it as required) —
+      // fall back to the key so events registered with the simpler
+      // "just type a key" flow still work the way they used to. Users
+      // can override the auto-derived label by typing in the Name field.
+      const effectiveName = trimmedName === '' ? trimmedKey : trimmedName
       // Gateway expects `environment_id` in the body for `/v1/events` (admin
       // JWTs are org-scoped, not env-scoped — sourced from the EnvSwitcher).
       const body = {
         environment_id: envId,
-        event_key: values.key.trim(),
-        name: values.key.trim(),
+        event_key: trimmedKey,
+        name: effectiveName,
         metric_type: values.metric_type,
         description: values.description?.trim() || undefined,
         schema: values.schema?.trim() ? JSON.parse(values.schema.trim()) : null,
@@ -97,6 +105,13 @@ export function CreateEventModal({ onClose, onCreated }: Props) {
             hint="Used in SDK tracking calls. Immutable after registration."
             style={{ fontFamily: 'var(--font-mono)' }}
             autoFocus
+          />
+
+          <FormField
+            name="name"
+            label="Name (optional)"
+            placeholder="e.g. Checkout Completed"
+            hint="Human-readable label shown in lists and experiment configs. Defaults to the event key if left blank."
           />
 
           <FormSelect
