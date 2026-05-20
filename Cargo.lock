@@ -3856,6 +3856,8 @@ dependencies = [
  "sha2",
  "sqlx",
  "stitchd-core",
+ "stitchd-event-writer",
+ "stitchd-stats-service",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

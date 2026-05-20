@@ -27,3 +27,8 @@ metrics = { workspace = true }
 [dev-dependencies]
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
+# E2E tests under tests/event_metric_e2e.rs need the metric dispatcher
+# (stats-service) and the embedded CH migration runner (event-writer).
+# Both are workspace siblings, so dev-only paths are cheap.
+stitchd-stats-service = { path = "../stitchd-stats-service" }
+stitchd-event-writer = { path = "../stitchd-event-writer" }
