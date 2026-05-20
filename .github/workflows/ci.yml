@@ -170,21 +170,32 @@ jobs:
             --output-path coverage/cobertura.xml
 
       - name: Upload coverage to Codecov
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        run: |
-          curl -Os https://uploader.codecov.io/latest/linux/codecov
-          chmod +x codecov
-          xml="coverage/cobertura.xml"
-          if [ ! -f "$xml" ]; then
-            echo "No coverage report generated — skipping upload"
-            exit 0
-          fi
-          ./codecov \
-            --token="$CODECOV_TOKEN" \
-            --slug="$GITHUB_REPOSITORY" \
-            --file="$xml" \
-            --fail-on-error
+        # Use the official `codecov/codecov-action` instead of the
+        # legacy uploader-bash flow. The action:
+        #   - Handles 404 "Repository not found" with a clear warning
+        #     (the previous bash uploader hit this because the repo
+        #     isn't onboarded on codecov.io yet; the upload silently
+        #     swallowed the response and exited 0).
+        #   - Skips silently when the token is missing (no error in
+        #     forks / untrusted PRs).
+        #   - Auto-discovers cobertura reports via the `files:` glob.
+        # `fail_ci_if_error: false` keeps a Codecov-side outage from
+        # turning a green test pass into a red build. Flip to true once
+        # the repo is onboarded if you want strict coverage gating.
+        #
+        # **One-time setup required outside this repo:**
+        # Sign in to https://codecov.io with the GitHub org admin,
+        # add the `stitchd-dev/feature-flag` repo, copy the upload
+        # token, and set it as the `CODECOV_TOKEN` secret on this repo.
+        # Until that's done these uploads land at /upload/v4 and get
+        # `Repository not found` from Codecov.
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: ${{ github.repository }}
+          files: coverage/cobertura.xml
+          flags: backend
+          fail_ci_if_error: false
 
       - name: Upload coverage reports as artifact
         uses: actions/upload-artifact@v4
@@ -232,28 +243,28 @@ jobs:
         run: npm run lint
 
       - name: Test + coverage
-        # Emits coverage/cobertura.xml under admin/ (provider = v8).
+        # Vitest's v8 coverage with `reporter: ['cobertura', ...]`
+        # emits `admin/coverage/cobertura-coverage.xml` — note the
+        # `-coverage` suffix, NOT plain `cobertura.xml`. The Codecov
+        # upload below points at the correct filename.
         run: npm run test:coverage
 
-      - name: Upload coverage to Codecov
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-        run: |
-          xml="coverage/cobertura.xml"
-          if [ ! -f "$xml" ]; then
-            echo "No coverage report generated — skipping upload"
-            exit 0
-          fi
-          curl -Os https://uploader.codecov.io/latest/linux/codecov
-          chmod +x codecov
-          # `--flag admin` segments the admin coverage from the Rust
-          # workspace report on Codecov so % trends are separable.
-          ./codecov \
-            --token="$CODECOV_TOKEN" \
-            --slug="$GITHUB_REPOSITORY" \
-            --file="$xml" \
-            --flag="admin" \
-            --fail-on-error
+      - name: Upload admin coverage to Codecov
+        # Switched from legacy uploader-bash to the official
+        # `codecov/codecov-action` for cleaner error handling and
+        # automatic skip when the token is empty (forks / untrusted
+        # PRs). Tagged with `flags: admin` so the React surface stays
+        # separable from the Rust workspace report on Codecov.
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: ${{ github.repository }}
+          # `working-directory: admin` applies to `run:` steps via the
+          # job defaults, but `uses:` actions run from the repo root —
+          # the full repo-relative path is required here.
+          files: admin/coverage/cobertura-coverage.xml
+          flags: admin
+          fail_ci_if_error: false
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
