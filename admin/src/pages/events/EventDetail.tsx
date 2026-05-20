@@ -35,6 +35,7 @@ import { EmptyState } from '../../components/EmptyState'
 import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { extractErrorMessage } from '../../lib/errors'
+import { TestEventWidget } from './TestEventWidget'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -144,6 +145,9 @@ export function EventDetail() {
   // Firings — pending bug feature-flag-uz3
   const [firings, setFirings] = useState<EventFiring[] | null>(null)
   const [firingsLoading, setFiringsLoading] = useState(false)
+  // Bumped by the TestEventWidget on successful submit so the firings effect
+  // re-runs and the log refreshes.
+  const [firingsRefreshTick, setFiringsRefreshTick] = useState(0)
 
   // Sparkline stats — pending bug feature-flag-uz3
   const [stats, setStats] = useState<EventStats | null>(null)
@@ -189,7 +193,7 @@ export function EventDetail() {
         if (!ac.signal.aborted) setFiringsLoading(false)
       })
     return () => ac.abort()
-  }, [eventKey])
+  }, [eventKey, firingsRefreshTick])
 
   // ── Load stats (best-effort, same backend gap) ─────────────────────────────
   useEffect(() => {
@@ -381,6 +385,15 @@ export function EventDetail() {
             )}
           </div>
         </div>
+
+        {/* Test-event widget — fire a synthetic event for SDK debugging.
+            Per feature-flag-7an.6.4. Slotted between firings + experiments so
+            the firings log is right above for visual confirmation. */}
+        <TestEventWidget
+          eventKey={event.event_key}
+          metricType={event.metric_type}
+          onSubmitted={() => setFiringsRefreshTick((t) => t + 1)}
+        />
 
         {/* Experiments depending on this event */}
         <div className="card">
