@@ -587,8 +587,10 @@ pub async fn delete_metric(
 
 /// `POST /v1/metrics/{id}/preview` — preview metric over last N days.
 ///
-/// Phase 3 returns an empty `buckets` array with a `warning` field telling
-/// the caller the ClickHouse pipeline is pending (Phase 4 wires it).
+/// Runs the kind-specific ClickHouse query against `events_v2` and
+/// returns one bucket per day in the window (zero-filled where the
+/// query returned no row). See
+/// `stitchd_stats_service::queries::preview` for the SQL builders.
 #[utoipa::path(
     post,
     path = "/v1/metrics/{id}/preview",
@@ -638,16 +640,11 @@ pub async fn preview_metric(
             value: b.value,
         })
         .collect();
-    let warning = if buckets.is_empty() {
-        Some(
-            "preview ClickHouse pipeline wires in Phase 4; \
-             buckets are empty for now"
-                .to_string(),
-        )
-    } else {
-        None
-    };
-    Ok(Json(PreviewMetricResponseJson { buckets, warning }))
+    // The Phase 4 ClickHouse pipeline now drives this response — an empty
+    // bucket list legitimately means "no events in the window", not "the
+    // backend isn't implemented yet". `warning` stays in the response
+    // shape (proto compat) but is always None.
+    Ok(Json(PreviewMetricResponseJson { buckets, warning: None }))
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -1264,10 +1261,14 @@ mod tests {
         assert_eq!(captured.id, id.to_string());
     }
 
-    // ── test_preview_metric_returns_empty_buckets_for_now ────────────────────
+    // ── test_preview_metric_empty_buckets_have_null_warning ──────────────────
+    //
+    // Post-feature-flag-pjw: an empty `buckets` list means "no events in
+    // the window", not "Phase 4 isn't implemented". The `warning` field
+    // stays on the wire (utoipa schema compat) but is always `null`.
 
     #[tokio::test]
-    async fn test_preview_metric_returns_empty_buckets_for_now() {
+    async fn test_preview_metric_empty_buckets_have_null_warning() {
         let (state, mock) = make_state_with_mock().await;
         *mock.preview.lock().await = Some(PreviewMetricResponse {
             buckets: Vec::<PreviewBucket>::new(),
@@ -1292,8 +1293,8 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(parsed["buckets"].as_array().unwrap().len(), 0);
         assert!(
-            parsed["warning"].is_string(),
-            "Phase 3 preview must include a warning explaining the empty result"
+            parsed["warning"].is_null(),
+            "Phase 4: warning is null even on empty buckets; empty means 'no events'"
         );
 
         let captured = mock.captured.preview.lock().await.clone().unwrap();

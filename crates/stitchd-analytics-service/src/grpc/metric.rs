@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use tonic::{Request, Response, Status};
-use tracing::{instrument, warn};
+use tracing::instrument;
 use uuid::Uuid;
 
 use stitchd_core::{
@@ -39,8 +39,10 @@ use stitchd_db::{
     ExperimentRepository, MetricRepository as _, RepositoryError,
     repository::pg::PgMetricRepository,
 };
-use stitchd_stats_service::recompute_trigger::{
-    RecomputeTrigger, trigger_recompute_for_metric,
+use stitchd_stats_service::{
+    dispatch::{DispatchError, dispatch_preview_query},
+    queries::{QueryBind, QueryBuildError},
+    recompute_trigger::{RecomputeTrigger, trigger_recompute_for_metric},
 };
 use stitchd_proto::analytics::v1::{
     AggregationConfig as ProtoAggregationConfig, CreateMetricRequest,
@@ -552,45 +554,174 @@ pub async fn handle_delete_metric(
     Ok(Response::new(DeleteMetricResponse {}))
 }
 
-/// Handle `PreviewMetric` — returns an empty `buckets` array for now.
+/// Default and maximum windows for `PreviewMetric.days`. Mirrors the
+/// firings/stats endpoints (`event_query::resolve_days`) so the three
+/// time-series surfaces on EventDetail agree.
+const PREVIEW_DEFAULT_DAYS: u32 = 7;
+const PREVIEW_MAX_DAYS: u32 = 90;
+
+/// Row shape returned by every preview SQL — `(day_ts, value)` where
+/// `value` is nullable because `nullIf(...)` in the ratio/funnel
+/// builders can produce SQL NULLs that ClickHouse materialises as
+/// `Option<f64>` over the RowBinary wire.
+#[derive(clickhouse::Row, serde::Deserialize)]
+struct PreviewRow {
+    day_ts: u32,
+    value: Option<f64>,
+}
+
+/// Handle `PreviewMetric` — run the day-bucketed ClickHouse query and
+/// return a zero-filled time-series.
 ///
-/// The actual ClickHouse query (last N-day time-series) is wired in
-/// Phase 4 by the stats-service. This stub validates that the target
-/// reference (id OR inline draft) is well-formed and logs a warn so
-/// callers know the data path is pending.
+/// Pipeline:
+///   1. Resolve target → fetch the [`MetricDefinition`] from PG.
+///   2. Clamp `days` to `[1, PREVIEW_MAX_DAYS]`; default to
+///      `PREVIEW_DEFAULT_DAYS` when zero.
+///   3. Dispatch into [`dispatch_preview_query`], which routes by
+///      `MetricKind` and (for ratios) resolves the numerator /
+///      denominator via the repo.
+///   4. Rewrite `{p0..}` placeholders → `?` and bind each
+///      [`QueryBind`] in order against the CH client.
+///   5. Fetch `(day_ts, value)` rows, zero-fill missing days so the
+///      UI sparkline stays continuous, and convert each `day_ts` to
+///      RFC3339.
+///
+/// `BuildInline` targets are rejected with `Unimplemented` — the
+/// admin UI never invokes that path, and supporting it requires the
+/// caller to also supply an `env_id` (the proto doesn't carry one).
 #[allow(clippy::result_large_err)]
-#[instrument(skip(_repo, request), name = "analytics.preview_metric")]
+#[instrument(skip(repo, ch_client, request), name = "analytics.preview_metric")]
 pub async fn handle_preview_metric(
-    _repo: &PgMetricRepository,
+    repo: &PgMetricRepository,
+    ch_client: &Arc<clickhouse::Client>,
     request: Request<PreviewMetricRequest>,
 ) -> Result<Response<PreviewMetricResponse>, Status> {
     let req = request.into_inner();
 
-    // Validate `target` is present so callers get a clear error early.
-    match req.target {
+    // 1. Resolve target → metric definition.
+    let metric = match req.target {
         None => {
             return Err(Status::invalid_argument(
                 "preview_metric requires `id` or `build_inline`",
             ));
         }
         Some(preview_metric_request::Target::Id(s)) => {
-            // Validate id parses; we don't fetch the row in this phase.
-            let _ = parse_metric_id(&s, "id")?;
+            let id = parse_metric_id(&s, "id")?;
+            repo.find_by_id(id)
+                .await
+                .map_err(|e| repo_err_to_status(e, "preview_metric"))?
         }
-        Some(preview_metric_request::Target::BuildInline(_inline)) => {
-            // For inline drafts the caller has the definition in hand;
-            // we accept it as-is (validation happens at the stats layer
-            // when the query is built).
+        Some(preview_metric_request::Target::BuildInline(_)) => {
+            return Err(Status::unimplemented(
+                "preview_metric does not yet support `build_inline` targets",
+            ));
         }
+    };
+
+    // 2. Clamp days.
+    let days = match req.days {
+        0 => PREVIEW_DEFAULT_DAYS,
+        n => n.min(PREVIEW_MAX_DAYS),
+    };
+
+    // 3. Dispatch to the kind-specific preview builder.
+    let env_id_str = metric.environment_id.as_uuid().to_string();
+    let built = dispatch_preview_query(&metric, repo, &env_id_str, days)
+        .await
+        .map_err(dispatch_err_to_status)?;
+
+    // 4. Rewrite placeholders + bind values + execute.
+    let sql = stitchd_stats_service::dispatch::rewrite_placeholders_to_clickhouse(built.sql);
+    let mut query = ch_client.query(&sql);
+    for bind in &built.binds {
+        query = match bind {
+            QueryBind::Str(s) => query.bind(s),
+            QueryBind::I64(n) => query.bind(*n),
+            QueryBind::F64(f) => query.bind(*f),
+        };
+    }
+    let rows: Vec<PreviewRow> = query
+        .fetch_all::<PreviewRow>()
+        .await
+        .map_err(|e| Status::internal(format!("ClickHouse error: {e}")))?;
+
+    // 5. Zero-fill missing days. The CH query only returns days that saw
+    //    activity; the sparkline UI wants `days` contiguous buckets so
+    //    gaps render as zeros, not as omissions.
+    let buckets = zero_fill_buckets(&rows, days);
+
+    Ok(Response::new(PreviewMetricResponse { buckets }))
+}
+
+/// Map a [`DispatchError`] to the appropriate `tonic::Status`.
+///
+/// Kind-invariant errors (`InvalidRatioMetric`) map to
+/// `failed_precondition` — the metric definition isn't a valid preview
+/// target. JsonLogic / config errors map to `invalid_argument`. Not-
+/// found gets `not_found`. Repository errors propagate through
+/// `repo_err_to_status` so the underlying mapping stays consistent.
+#[allow(clippy::result_large_err)]
+fn dispatch_err_to_status(e: DispatchError) -> Status {
+    let msg = e.to_string();
+    match e {
+        DispatchError::InvalidRatioMetric { .. } => Status::failed_precondition(msg),
+        DispatchError::MetricNotFound(_) => Status::not_found(msg),
+        DispatchError::QueryBuild(qbe) => match qbe {
+            QueryBuildError::UnsupportedJsonLogic(_)
+            | QueryBuildError::InvalidJsonLogic(_)
+            | QueryBuildError::InvalidConfig(_) => Status::invalid_argument(msg),
+        },
+        DispatchError::Repository(re) => repo_err_to_status(re, "preview_metric"),
+    }
+}
+
+/// Compute the `days` daily-aligned UTC timestamps ending today, then
+/// merge the CH result set into them — emitting `0.0` for any day the
+/// query didn't return. Result is sorted oldest → newest, matching the
+/// SQL's `ORDER BY day_ts ASC`.
+fn zero_fill_buckets(rows: &[PreviewRow], days: u32) -> Vec<PreviewBucket> {
+    use std::collections::BTreeMap;
+
+    // BTreeMap so iteration order matches the SQL's `ASC`. Insert the
+    // returned rows; missing days will be filled by the loop below.
+    let mut by_day: BTreeMap<u32, f64> = BTreeMap::new();
+    for row in rows {
+        // `nullIf` divides-by-zero land here as Option::None → 0.0.
+        by_day.insert(row.day_ts, row.value.unwrap_or(0.0));
     }
 
-    warn!(
-        "PreviewMetric not yet implemented — Phase 4 wires the ClickHouse query \
-         (days={})",
-        req.days
-    );
+    let now = Utc::now();
+    let today_start_utc = now
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .map(|naive| naive.and_utc().timestamp())
+        .unwrap_or(0);
+    let day_secs: i64 = 24 * 60 * 60;
 
-    Ok(Response::new(PreviewMetricResponse { buckets: Vec::<PreviewBucket>::new() }))
+    let mut out = Vec::with_capacity(days as usize);
+    for i in (0..i64::from(days)).rev() {
+        let ts = today_start_utc - i * day_secs;
+        // Clamp to u32 — CH `toUnixTimestamp` returns u32. Pre-1970
+        // would underflow but is impossible in practice.
+        let ts_u32 = u32::try_from(ts).unwrap_or(0);
+        let value = by_day.get(&ts_u32).copied().unwrap_or(0.0);
+        out.push(PreviewBucket {
+            day: day_ts_to_rfc3339(ts_u32),
+            value,
+        });
+    }
+    out
+}
+
+/// Convert a CH `toUnixTimestamp(toStartOfDay(...))` integer to an
+/// RFC3339 day-start string. Lifted from the same helper in
+/// `event_query::day_ts_to_rfc3339` (kept here to avoid a cross-file
+/// dependency just for 6 lines).
+fn day_ts_to_rfc3339(secs: u32) -> String {
+    chrono::DateTime::<Utc>::from_timestamp(i64::from(secs), 0)
+        .unwrap_or_default()
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -1200,39 +1331,258 @@ mod handler_tests {
         assert_eq!(err.code(), tonic::Code::NotFound);
     }
 
-    #[sqlx::test(migrations = "../stitchd-db/migrations")]
-    async fn test_preview_metric_returns_empty_buckets_with_warning_for_now(
-        pool: sqlx::PgPool,
-    ) {
-        let (repo, env) = seed_env(&pool).await;
-        let created = handle_create_metric(&repo, agg_create_request(env, "preview_me"))
-            .await
-            .unwrap()
-            .into_inner();
+    /// Build a ClickHouse client pointed at the dev cluster. Mirrors the
+    /// helper in `event_query.rs` — same URL / credentials. Tests that
+    /// don't actually run a query still need an `Arc<Client>` argument
+    /// for the handler signature; the client doesn't connect lazily until
+    /// `query()` is called, so passing it for validation-only paths is
+    /// cheap.
+    fn make_ch_client() -> std::sync::Arc<clickhouse::Client> {
+        std::sync::Arc::new(
+            clickhouse::Client::default()
+                .with_url("http://localhost:8123")
+                .with_user("stitchd")
+                .with_password("stitchd")
+                .with_database("stitchd"),
+        )
+    }
 
-        let req = Request::new(PreviewMetricRequest {
-            target: Some(preview_metric_request::Target::Id(created.id.clone())),
-            days: 7,
-        });
-        let resp = handle_preview_metric(&repo, req)
+    async fn ensure_ch_migrations() {
+        stitchd_event_writer::migrations::run(&make_ch_client())
             .await
-            .unwrap()
-            .into_inner();
-        assert!(
-            resp.buckets.is_empty(),
-            "Phase 3 preview returns empty buckets; Phase 4 wires the ClickHouse query"
-        );
+            .expect("CH migrations must apply");
+    }
+
+    /// Insert one event_v2 row for the preview integration tests.
+    /// `timestamp_ms` controls both `timestamp` and `occurred_at` —
+    /// preview groups by `toStartOfDay(timestamp)`, so spacing inserts
+    /// across days uses different `timestamp_ms` values.
+    async fn insert_preview_event(
+        client: &clickhouse::Client,
+        env_uuid: uuid::Uuid,
+        event_key: &str,
+        context_key: &str,
+        timestamp_ms: i64,
+        value_double: Option<f64>,
+    ) {
+        use clickhouse::Row;
+        use serde::Serialize;
+        #[derive(Serialize, Row)]
+        struct InsertRow<'a> {
+            #[serde(with = "clickhouse::serde::uuid")]
+            env_id: uuid::Uuid,
+            contexts: Vec<(String, String)>,
+            metric_key: &'a str,
+            value_bool: Option<bool>,
+            value_int: Option<i64>,
+            value_double: Option<f64>,
+            timestamp: i64,
+            properties: Vec<(String, String)>,
+            occurred_at: i64,
+        }
+        let mut insert = client.insert("events_v2").expect("insert init");
+        insert
+            .write(&InsertRow {
+                env_id: env_uuid,
+                contexts: vec![("user".to_string(), context_key.to_string())],
+                metric_key: event_key,
+                value_bool: None,
+                value_int: None,
+                value_double,
+                timestamp: timestamp_ms,
+                properties: vec![],
+                occurred_at: timestamp_ms,
+            })
+            .await
+            .expect("row write");
+        insert.end().await.expect("insert end");
+    }
+
+    async fn wait_for_merge(client: &clickhouse::Client) {
+        let _ = client.query("OPTIMIZE TABLE events_v2 FINAL").execute().await;
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]
     async fn test_preview_metric_rejects_missing_target(pool: sqlx::PgPool) {
         let (repo, _env) = seed_env(&pool).await;
+        let ch = make_ch_client();
         let req = Request::new(PreviewMetricRequest {
             target: None,
             days: 7,
         });
-        let err = handle_preview_metric(&repo, req).await.unwrap_err();
+        let err = handle_preview_metric(&repo, &ch, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn test_preview_metric_rejects_build_inline(pool: sqlx::PgPool) {
+        // `build_inline` is reserved for a follow-up; the proto carries
+        // no env_id for inline drafts so we'd need a wider contract.
+        // Until then, fail loud rather than silently treat the draft as
+        // a no-op.
+        let (repo, _env) = seed_env(&pool).await;
+        let ch = make_ch_client();
+        let req = Request::new(PreviewMetricRequest {
+            target: Some(preview_metric_request::Target::BuildInline(
+                stitchd_proto::analytics::v1::MetricDefinition::default(),
+            )),
+            days: 7,
+        });
+        let err = handle_preview_metric(&repo, &ch, req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn test_preview_metric_not_found_returns_not_found(pool: sqlx::PgPool) {
+        let (repo, _env) = seed_env(&pool).await;
+        let ch = make_ch_client();
+        let req = Request::new(PreviewMetricRequest {
+            target: Some(preview_metric_request::Target::Id(MetricId::new().to_string())),
+            days: 7,
+        });
+        let err = handle_preview_metric(&repo, &ch, req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn test_preview_metric_aggregation_count_zero_fills_days(pool: sqlx::PgPool) {
+        // Real CH round-trip: insert N events on the current day, request
+        // a 7-day preview, expect 7 buckets back with `value=N` on today
+        // and `value=0` on the prior 6 days.
+        ensure_ch_migrations().await;
+        let ch = make_ch_client();
+        let (repo, env) = seed_env(&pool).await;
+        let created = handle_create_metric(&repo, agg_create_request(env, "preview_zero_fill"))
+            .await
+            .unwrap()
+            .into_inner();
+
+        // Insert 3 events under the same event_key the metric counts.
+        let env_uuid = env.as_uuid();
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let event_key = "checkout_completed";
+        for u in &["u-1", "u-2", "u-3"] {
+            insert_preview_event(&ch, env_uuid, event_key, u, now_ms, None).await;
+        }
+        wait_for_merge(&ch).await;
+
+        let req = Request::new(PreviewMetricRequest {
+            target: Some(preview_metric_request::Target::Id(created.id.clone())),
+            days: 7,
+        });
+        let resp = handle_preview_metric(&repo, &ch, req)
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.buckets.len(), 7, "expected 7 daily buckets");
+        // The last bucket is today; the rest are zero-filled.
+        let today_count = resp.buckets.last().unwrap().value;
+        let earlier_total: f64 = resp.buckets.iter().take(6).map(|b| b.value).sum();
+        assert!(
+            today_count >= 3.0,
+            "today bucket should include the 3 inserted events (got {today_count})"
+        );
+        assert_eq!(
+            earlier_total, 0.0,
+            "prior 6 days are zero-filled (got {earlier_total})"
+        );
+    }
+
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn test_preview_metric_clamps_days_to_max(pool: sqlx::PgPool) {
+        // days=9999 should clamp to PREVIEW_MAX_DAYS (90); we get 90
+        // buckets back, not 9999.
+        ensure_ch_migrations().await;
+        let ch = make_ch_client();
+        let (repo, env) = seed_env(&pool).await;
+        let created = handle_create_metric(&repo, agg_create_request(env, "preview_clamp"))
+            .await
+            .unwrap()
+            .into_inner();
+        let req = Request::new(PreviewMetricRequest {
+            target: Some(preview_metric_request::Target::Id(created.id.clone())),
+            days: 9999,
+        });
+        let resp = handle_preview_metric(&repo, &ch, req).await.unwrap().into_inner();
+        assert_eq!(resp.buckets.len(), PREVIEW_MAX_DAYS as usize);
+    }
+
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn test_preview_metric_days_zero_uses_default(pool: sqlx::PgPool) {
+        // days=0 → default to PREVIEW_DEFAULT_DAYS (7).
+        ensure_ch_migrations().await;
+        let ch = make_ch_client();
+        let (repo, env) = seed_env(&pool).await;
+        let created = handle_create_metric(&repo, agg_create_request(env, "preview_default_days"))
+            .await
+            .unwrap()
+            .into_inner();
+        let req = Request::new(PreviewMetricRequest {
+            target: Some(preview_metric_request::Target::Id(created.id.clone())),
+            days: 0,
+        });
+        let resp = handle_preview_metric(&repo, &ch, req).await.unwrap().into_inner();
+        assert_eq!(resp.buckets.len(), PREVIEW_DEFAULT_DAYS as usize);
+    }
+
+    // -----------------------------------------------------------------------
+    // zero_fill_buckets — pure-function coverage so the day-math doesn't
+    // need a CH round-trip to verify.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn zero_fill_buckets_returns_exactly_days_entries() {
+        let buckets = zero_fill_buckets(&[], 14);
+        assert_eq!(buckets.len(), 14);
+        for b in buckets {
+            assert_eq!(b.value, 0.0);
+        }
+    }
+
+    #[test]
+    fn zero_fill_buckets_keeps_present_days_intact() {
+        // Build a row at "today_start" and check it survives into the
+        // last position of the output.
+        let now = chrono::Utc::now();
+        let today_start = now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let rows = vec![PreviewRow {
+            day_ts: u32::try_from(today_start).unwrap(),
+            value: Some(42.0),
+        }];
+        let buckets = zero_fill_buckets(&rows, 7);
+        assert_eq!(buckets.len(), 7);
+        assert_eq!(buckets.last().unwrap().value, 42.0);
+        // Earlier buckets stay at zero.
+        for b in &buckets[..6] {
+            assert_eq!(b.value, 0.0);
+        }
+    }
+
+    #[test]
+    fn zero_fill_buckets_treats_sql_null_as_zero() {
+        let now = chrono::Utc::now();
+        let today_start = now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        // `nullIf` divide-by-zero shows up as Option::None on the RowBinary
+        // wire. The handler maps that to 0.0 so the UI sparkline never has
+        // a `NaN` to render.
+        let rows = vec![PreviewRow {
+            day_ts: u32::try_from(today_start).unwrap(),
+            value: None,
+        }];
+        let buckets = zero_fill_buckets(&rows, 1);
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0].value, 0.0);
     }
 
     // -----------------------------------------------------------------------

@@ -22,6 +22,7 @@
 
 pub mod aggregation;
 pub mod funnel;
+pub mod preview;
 pub mod ratio;
 
 use thiserror::Error;

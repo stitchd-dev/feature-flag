@@ -221,7 +221,7 @@ impl AnalyticsService for AnalyticsServiceImpl {
         &self,
         request: Request<PreviewMetricRequest>,
     ) -> Result<Response<PreviewMetricResponse>, Status> {
-        handle_preview_metric(&self.state.metric_repo, request).await
+        handle_preview_metric(&self.state.metric_repo, &self.state.ch_client, request).await
     }
 
     // ── Event firings + stats (EventDetail page) ────────────────────────────

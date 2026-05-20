@@ -31,7 +31,11 @@ use thiserror::Error;
 
 use crate::queries::{
     BuiltQuery, QueryBuildError, aggregation::build_aggregation_query,
-    funnel::build_funnel_query, ratio::build_ratio_query,
+    funnel::build_funnel_query,
+    preview::{
+        build_preview_aggregation_query, build_preview_funnel_query, build_preview_ratio_query,
+    },
+    ratio::build_ratio_query,
 };
 
 // ── DispatchError ────────────────────────────────────────────────────────────
@@ -155,6 +159,62 @@ pub async fn dispatch_metric_query(
                 iteration_id,
                 env_id,
                 variant_keys,
+            )?)
+        }
+    }
+}
+
+// ── dispatch_preview_query ───────────────────────────────────────────────────
+
+/// Route a metric definition to its preview (day-bucketed) query
+/// builder. Mirrors [`dispatch_metric_query`] but for the
+/// `POST /v1/metrics/{id}/preview` path — no experiment / iteration /
+/// variant scoping; the result is a single time-series per day over the
+/// requested window.
+///
+/// `env_id` is normally `metric.environment_id.to_string()` — the
+/// caller passes it explicitly so the analytics-service handler can
+/// double-check authorisation against the JWT-resolved env before
+/// dispatching.
+///
+/// # Errors
+/// Same taxonomy as [`dispatch_metric_query`]: `InvalidRatioMetric`,
+/// `MetricNotFound`, `QueryBuild`, `Repository`.
+pub async fn dispatch_preview_query(
+    metric: &MetricDefinition,
+    metric_repo: &dyn MetricRepository,
+    env_id: &str,
+    days: u32,
+) -> Result<BuiltQuery, DispatchError> {
+    match &metric.kind {
+        MetricKind::Aggregation(cfg) => {
+            Ok(build_preview_aggregation_query(cfg, env_id, days)?)
+        }
+        MetricKind::Funnel(cfg) => Ok(build_preview_funnel_query(cfg, env_id, days)?),
+        MetricKind::Ratio(cfg) => {
+            // Same batch-resolve trick as the experiment-scoped dispatcher.
+            let resolved = metric_repo
+                .find_batch_by_ids(&[cfg.numerator_metric_id, cfg.denominator_metric_id])
+                .await?;
+            let numerator_def = resolved
+                .iter()
+                .find(|m| m.id == cfg.numerator_metric_id)
+                .ok_or_else(|| DispatchError::MetricNotFound(cfg.numerator_metric_id.to_string()))?;
+            let denominator_def = resolved
+                .iter()
+                .find(|m| m.id == cfg.denominator_metric_id)
+                .ok_or_else(|| {
+                    DispatchError::MetricNotFound(cfg.denominator_metric_id.to_string())
+                })?;
+            let numerator_cfg = extract_aggregation_config(numerator_def, &metric.id.to_string())?;
+            let denominator_cfg =
+                extract_aggregation_config(denominator_def, &metric.id.to_string())?;
+            Ok(build_preview_ratio_query(
+                cfg,
+                numerator_cfg,
+                denominator_cfg,
+                env_id,
+                days,
             )?)
         }
     }

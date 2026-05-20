@@ -111,7 +111,10 @@ pub fn build_aggregation_query(
 /// `conductor/patterns.md` — *AggregatingMergeTree insert/read combiners*).
 /// `Uniq` runs on the raw field expression because cardinality counting
 /// over strings is the common case.
-fn render_aggregator(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
+// `pub(super)` so the sibling `preview` module can reuse the exact same
+// aggregator-to-CH-expression mapping rather than duplicating it. Keeping
+// it private to `queries/` means it isn't part of the crate's public API.
+pub(super) fn render_aggregator(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
     Ok(match cfg.aggregator {
         AggregationOperator::Count => "count()".to_owned(),
         AggregationOperator::Sum => {
