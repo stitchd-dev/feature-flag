@@ -24,6 +24,8 @@ const ORG_ADMIN_PERMISSIONS: &[&str] = &[
     "flag:write",
     "segment:read",
     "segment:write",
+    "event:read",
+    "event:write",
     "metric:read",
     "metric:write",
 ];
@@ -32,6 +34,7 @@ const ORG_MEMBER_PERMISSIONS: &[&str] = &[
     "environment:read",
     "flag:read",
     "segment:read",
+    "event:read",
     "metric:read",
 ];
 

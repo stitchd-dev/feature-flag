@@ -82,6 +82,9 @@ export interface TrackEvent {
 
 interface TrackEventsBody {
   events: TrackEvent[]
+  /** Sent so the admin-auth handler can resolve env_id when the JWT is
+   *  org-scoped (the common case — admin JWTs don't carry an env scope). */
+  environment_id?: string
 }
 
 interface Props {
@@ -89,6 +92,9 @@ interface Props {
   eventKey: string
   /** Event's `metric_type` — constrains the `value` field's input shape. */
   metricType: string
+  /** Currently-selected env from `OrgContext` — wired into the request body
+   *  so the admin-auth handler can fire to the right environment. */
+  environmentId?: string
   /** Optional refresh-firings-log hook. Called after a 2xx response. */
   onSubmitted?: () => void
 }
@@ -165,6 +171,7 @@ export function buildTrackBody(
   values: TestEventFormValues,
   eventKey: string,
   metricType: string,
+  environmentId?: string,
 ): TrackEventsBody {
   const event: TrackEvent = {
     event_key: eventKey,
@@ -187,7 +194,7 @@ export function buildTrackBody(
     }
   }
 
-  return { events: [event] }
+  return environmentId ? { events: [event], environment_id: environmentId } : { events: [event] }
 }
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -233,7 +240,7 @@ interface FormStatus {
   success?: string
 }
 
-export function TestEventWidget({ eventKey, metricType, onSubmitted }: Props) {
+export function TestEventWidget({ eventKey, metricType, environmentId, onSubmitted }: Props) {
   const [collapsed, setCollapsed] = useState(true)
 
   const initialValues: TestEventFormValues = {
@@ -267,10 +274,12 @@ export function TestEventWidget({ eventKey, metricType, onSubmitted }: Props) {
     { setStatus, resetForm }: FormikHelpers<TestEventFormValues>,
   ) {
     try {
-      const body = buildTrackBody(values, eventKey, metricType)
+      const body = buildTrackBody(values, eventKey, metricType, environmentId)
       // Admin-auth path — accepts the browser session's bearer JWT, resolves
-      // env_id from RbacContext, and stamps `_test=true` on every event so
-      // analytics-service rows are filterable. See feature-flag-gda.
+      // env_id from RbacContext when env-scoped, falls back to body's
+      // `environment_id` for org-scoped JWTs (the common case for the test
+      // widget). Stamps `_test=true` on every event so analytics-service
+      // rows are filterable. See feature-flag-gda.
       await api.post('/v1/admin/events/track', body)
       setStatus({ success: 'Event fired — see firings log above for confirmation.' })
       // Reset only the value/properties fields, keep the context so the admin

@@ -334,6 +334,13 @@ pub struct TrackEvent {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct TrackEventsRequest {
     pub events: Vec<TrackEvent>,
+    /// Environment UUID — only honoured by the admin-auth path
+    /// (`POST /v1/admin/events/track`) when the JWT's `RbacContext`
+    /// has no environment scope (the common case for org-scoped admin
+    /// JWTs). Ignored by the SDK-auth path, which derives `env_id`
+    /// from the SDK key.
+    #[serde(default)]
+    pub environment_id: Option<String>,
 }
 
 /// One rejected event in a `TrackEventsResponse`. The `reason` discriminator
@@ -719,11 +726,12 @@ pub async fn track_events_admin(
 ) -> Result<axum::response::Response, GatewayError> {
     require_permission(&req, "event:write")?;
 
-    // Lift env_id from the resolved RbacContext — set by auth_middleware
-    // from the JWT's currently-scoped environment. Empty means the caller's
-    // token isn't bound to an env (likely an org-level token) — return 400
-    // so the admin UI can prompt them to pick an env first.
-    let env_id = req
+    // Lift env_id from RbacContext (env-scoped JWT) — falls back to the
+    // request body's `environment_id` for org-scoped JWTs, which is the
+    // common case for the test-event widget where admins are logged into
+    // an org but want to fire events to a specific env they've picked in
+    // the UI's EnvSwitcher.
+    let jwt_env_id = req
         .extensions()
         .get::<stitchd_proto::auth::v1::RbacContext>()
         .map(|ctx| ctx.environment_id.clone())
@@ -737,19 +745,27 @@ pub async fn track_events_admin(
             )
         })?;
 
-    if env_id.is_empty() {
-        return Err(GatewayError::BadRequest(
-            "JWT has no environment scope — switch to an environment context first"
-                .to_string(),
-        ));
-    }
-
     let (_parts, body) = req.into_parts();
     let bytes = axum::body::to_bytes(body, TRACK_EVENTS_BODY_LIMIT_BYTES)
         .await
         .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
     let body: TrackEventsRequest = serde_json::from_slice(&bytes)
         .map_err(|e| GatewayError::BadRequest(format!("invalid JSON body: {e}")))?;
+
+    // Resolve env_id: JWT scope wins; otherwise fall back to body. We
+    // return 400 only when BOTH sources are empty.
+    let env_id = if !jwt_env_id.is_empty() {
+        jwt_env_id
+    } else {
+        body.environment_id.clone().unwrap_or_default()
+    };
+    if env_id.is_empty() {
+        return Err(GatewayError::BadRequest(
+            "missing environment_id — either use an env-scoped JWT or include \
+             `environment_id` in the request body"
+                .to_string(),
+        ));
+    }
 
     forward_to_analytics(&state, &env_id, body, true).await
 }

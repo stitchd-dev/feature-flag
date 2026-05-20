@@ -135,7 +135,7 @@ const FIRINGS_LIMIT = 50
 
 export function EventDetail() {
   const navigate = useNavigate()
-  const { orgId } = useOrgContext()
+  const { orgId, envId } = useOrgContext()
   const { eventKey } = useParams<{ eventKey: string }>()
 
   const [event, setEvent] = useState<EventDefinitionDetail | null>(null)
@@ -392,6 +392,7 @@ export function EventDetail() {
         <TestEventWidget
           eventKey={event.event_key}
           metricType={event.metric_type}
+          environmentId={envId ?? undefined}
           onSubmitted={() => setFiringsRefreshTick((t) => t + 1)}
         />
 
