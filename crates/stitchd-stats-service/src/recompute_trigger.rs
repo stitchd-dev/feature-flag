@@ -7,9 +7,9 @@
 //!
 //! [`trigger_recompute_for_metric`] is a pure async function that:
 //! 1. Lists all running experiments in the environment.
-//! 2. Filters those whose `metric_keys` contains the given key.
-//!    (Phase 7 cuts experiments over to `metric_ids`; this is the
-//!    interim shape — see follow-up note in feature-flag-7an.)
+//! 2. Filters those whose `metric_ids` contains the given metric ID.
+//!    (Phase 7 cutover replaced the previous `metric_keys` filter — we
+//!    now match on UUIDs end-to-end.)
 //! 3. Fires a `TriggerRecompute` request per experiment via the
 //!    supplied [`RecomputeTrigger`] implementation.
 //!
@@ -30,7 +30,7 @@
 
 use async_trait::async_trait;
 use stitchd_core::experimentation::{Experiment, ExperimentStatus};
-use stitchd_core::id::{EnvironmentId, ExperimentId};
+use stitchd_core::id::{EnvironmentId, ExperimentId, MetricId};
 use stitchd_db::{ExperimentRepository, RepositoryError};
 
 /// Error type for the recompute trigger flow.
@@ -59,22 +59,15 @@ pub trait RecomputeTrigger: Send + Sync {
     async fn trigger(&self, experiment_id: ExperimentId) -> Result<(), String>;
 }
 
-/// Find all running experiments in `env_id` that reference `metric_key`
+/// Find all running experiments in `env_id` that reference `metric_id`
 /// and fire a `TriggerRecompute` RPC for each.
 ///
 /// Returns the number of triggers that **succeeded**. Failures are
 /// logged via `tracing::warn!` but do not stop the loop.
-///
-/// # Caveat — `metric_keys: Vec<String>`
-/// Experiments still reference metrics by *key* (`metric_keys`), not
-/// `metric_id`. The cutover to `metric_ids: Vec<MetricId>` lands in
-/// Phase 7 of `events_metrics_20260519`. Until then we filter by key;
-/// the caller is responsible for resolving `metric_id → metric.key`
-/// before invoking this function.
 pub async fn trigger_recompute_for_metric(
     trigger: &dyn RecomputeTrigger,
     experiment_repo: &dyn ExperimentRepository,
-    metric_key: &str,
+    metric_id: MetricId,
     env_id: EnvironmentId,
 ) -> Result<usize, RecomputeError> {
     let experiments = experiment_repo
@@ -82,13 +75,13 @@ pub async fn trigger_recompute_for_metric(
         .await?;
 
     let mut fired = 0usize;
-    for exp in experiments.iter().filter(|e| references_metric(e, metric_key)) {
+    for exp in experiments.iter().filter(|e| references_metric(e, metric_id)) {
         match trigger.trigger(exp.id).await {
             Ok(()) => fired += 1,
             Err(e) => {
                 tracing::warn!(
                     experiment_id = %exp.id,
-                    metric_key,
+                    metric_id = %metric_id,
                     "trigger_recompute_for_metric: TriggerRecompute RPC failed: {e}",
                 );
             }
@@ -98,8 +91,8 @@ pub async fn trigger_recompute_for_metric(
     Ok(fired)
 }
 
-fn references_metric(exp: &Experiment, metric_key: &str) -> bool {
-    exp.metric_keys.iter().any(|k| k == metric_key)
+fn references_metric(exp: &Experiment, metric_id: MetricId) -> bool {
+    exp.metric_ids.contains(&metric_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -152,7 +145,7 @@ mod tests {
     use chrono::Utc;
     use std::sync::Mutex;
     use stitchd_core::experimentation::{Experiment, ExperimentIteration, ExperimentStatus};
-    use stitchd_core::id::{EnvironmentId, ExperimentId, RuleId};
+    use stitchd_core::id::{EnvironmentId, ExperimentId, MetricId, RuleId};
     use stitchd_db::{ExperimentRepository, RepositoryError};
 
     // ---------------------------------------------------------------
@@ -281,7 +274,7 @@ mod tests {
     fn mk_exp(
         env_id: EnvironmentId,
         status: ExperimentStatus,
-        metric_keys: Vec<&str>,
+        metric_ids: Vec<MetricId>,
     ) -> Experiment {
         Experiment {
             id: ExperimentId::new(),
@@ -290,7 +283,7 @@ mod tests {
             name: "exp".into(),
             description: None,
             hypothesis: None,
-            metric_keys: metric_keys.into_iter().map(String::from).collect(),
+            metric_ids,
             traffic_allocation: 100.0,
             min_sample_size: None,
             scheduled_start_at: None,
@@ -308,19 +301,20 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_trigger_recompute_finds_experiments_by_metric_key() {
+    async fn test_trigger_recompute_finds_experiments_by_metric_id() {
         let env = EnvironmentId::new();
-        let exp1 = mk_exp(env, ExperimentStatus::Running, vec!["checkout_rate"]);
-        let exp2 =
-            mk_exp(env, ExperimentStatus::Running, vec!["checkout_rate", "signup"]);
-        let exp3 = mk_exp(env, ExperimentStatus::Running, vec!["unrelated_metric"]);
+        let target = MetricId::new();
+        let signup = MetricId::new();
+        let unrelated = MetricId::new();
+        let exp1 = mk_exp(env, ExperimentStatus::Running, vec![target]);
+        let exp2 = mk_exp(env, ExperimentStatus::Running, vec![target, signup]);
+        let exp3 = mk_exp(env, ExperimentStatus::Running, vec![unrelated]);
         let repo = InMemoryExperimentRepo::new(vec![exp1.clone(), exp2.clone(), exp3]);
         let trigger = CapturedTrigger::default();
 
-        let n =
-            trigger_recompute_for_metric(&trigger, &repo, "checkout_rate", env)
-                .await
-                .unwrap();
+        let n = trigger_recompute_for_metric(&trigger, &repo, target, env)
+            .await
+            .unwrap();
         assert_eq!(n, 2);
 
         let got = trigger.calls();
@@ -331,15 +325,17 @@ mod tests {
     #[tokio::test]
     async fn test_trigger_recompute_skips_completed_experiments() {
         let env = EnvironmentId::new();
-        let live = mk_exp(env, ExperimentStatus::Running, vec!["rev"]);
-        let paused = mk_exp(env, ExperimentStatus::Paused, vec!["rev"]);
-        let stopped = mk_exp(env, ExperimentStatus::Stopped, vec!["rev"]);
-        let draft = mk_exp(env, ExperimentStatus::Draft, vec!["rev"]);
+        let rev = MetricId::new();
+        let live = mk_exp(env, ExperimentStatus::Running, vec![rev]);
+        let paused = mk_exp(env, ExperimentStatus::Paused, vec![rev]);
+        let stopped = mk_exp(env, ExperimentStatus::Stopped, vec![rev]);
+        let draft = mk_exp(env, ExperimentStatus::Draft, vec![rev]);
         let repo = InMemoryExperimentRepo::new(vec![live.clone(), paused, stopped, draft]);
         let trigger = CapturedTrigger::default();
 
-        let n =
-            trigger_recompute_for_metric(&trigger, &repo, "rev", env).await.unwrap();
+        let n = trigger_recompute_for_metric(&trigger, &repo, rev, env)
+            .await
+            .unwrap();
         assert_eq!(n, 1, "only Running experiments should trigger");
         assert_eq!(trigger.calls(), vec![live.id]);
     }
@@ -348,13 +344,16 @@ mod tests {
     async fn test_trigger_recompute_no_matching_experiments_returns_zero() {
         let env = EnvironmentId::new();
         let other_env = EnvironmentId::new();
-        let unrelated = mk_exp(env, ExperimentStatus::Running, vec!["foo"]);
-        let wrong_env = mk_exp(other_env, ExperimentStatus::Running, vec!["bar"]);
+        let foo = MetricId::new();
+        let bar = MetricId::new();
+        let unrelated = mk_exp(env, ExperimentStatus::Running, vec![foo]);
+        let wrong_env = mk_exp(other_env, ExperimentStatus::Running, vec![bar]);
         let repo = InMemoryExperimentRepo::new(vec![unrelated, wrong_env]);
         let trigger = CapturedTrigger::default();
 
-        let n =
-            trigger_recompute_for_metric(&trigger, &repo, "bar", env).await.unwrap();
+        let n = trigger_recompute_for_metric(&trigger, &repo, bar, env)
+            .await
+            .unwrap();
         assert_eq!(n, 0);
         assert!(trigger.calls().is_empty());
     }
@@ -365,16 +364,18 @@ mod tests {
         // function still attempts the rest. Failed ones don't count
         // toward the success total.
         let env = EnvironmentId::new();
-        let exp1 = mk_exp(env, ExperimentStatus::Running, vec!["m"]);
-        let exp2 = mk_exp(env, ExperimentStatus::Running, vec!["m"]);
+        let m = MetricId::new();
+        let exp1 = mk_exp(env, ExperimentStatus::Running, vec![m]);
+        let exp2 = mk_exp(env, ExperimentStatus::Running, vec![m]);
         let repo = InMemoryExperimentRepo::new(vec![exp1.clone(), exp2.clone()]);
         let trigger = CapturedTrigger {
             calls: Mutex::new(Vec::new()),
             force_error: Some("simulated transport error".into()),
         };
 
-        let n =
-            trigger_recompute_for_metric(&trigger, &repo, "m", env).await.unwrap();
+        let n = trigger_recompute_for_metric(&trigger, &repo, m, env)
+            .await
+            .unwrap();
         assert_eq!(n, 0, "all triggers failed → success count is 0");
         // But both were attempted — proves we don't short-circuit.
         assert_eq!(trigger.calls().len(), 2);
@@ -390,18 +391,20 @@ mod tests {
         repo.fail_with = Some(RepositoryError::Unexpected(anyhow::anyhow!("db gone")));
         let trigger = CapturedTrigger::default();
 
-        let err =
-            trigger_recompute_for_metric(&trigger, &repo, "x", env).await.unwrap_err();
+        let err = trigger_recompute_for_metric(&trigger, &repo, MetricId::new(), env)
+            .await
+            .unwrap_err();
         assert!(matches!(err, RecomputeError::Repository(_)));
     }
 
     #[tokio::test]
-    async fn test_references_metric_matches_exact_key_only() {
+    async fn test_references_metric_matches_exact_id_only() {
         let env = EnvironmentId::new();
-        let exp = mk_exp(env, ExperimentStatus::Running, vec!["checkout"]);
-        assert!(references_metric(&exp, "checkout"));
-        assert!(!references_metric(&exp, "checkout_rate"));
-        assert!(!references_metric(&exp, "check"));
+        let target = MetricId::new();
+        let other = MetricId::new();
+        let exp = mk_exp(env, ExperimentStatus::Running, vec![target]);
+        assert!(references_metric(&exp, target));
+        assert!(!references_metric(&exp, other));
     }
 
     /// `mk_exp` should construct a valid Experiment used by the suite — a
@@ -409,9 +412,11 @@ mod tests {
     #[test]
     fn test_mk_exp_helper_constructs_running_experiment() {
         let env = EnvironmentId::new();
-        let e = mk_exp(env, ExperimentStatus::Running, vec!["a", "b"]);
+        let a = MetricId::new();
+        let b = MetricId::new();
+        let e = mk_exp(env, ExperimentStatus::Running, vec![a, b]);
         assert_eq!(e.status, ExperimentStatus::Running);
-        assert_eq!(e.metric_keys, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(e.metric_ids, vec![a, b]);
         assert_eq!(e.environment_id, env);
     }
 }

@@ -5,7 +5,8 @@ use stitchd_core::{
     experimentation::{Experiment, ExperimentStatus},
     flag::{FlagRecord, FlagRule, FlagValueType},
     id::{
-        EnvironmentId, ExperimentId, FlagId, FlagKey, OrganisationId, ProjectId, RuleId, VariantId,
+        EnvironmentId, ExperimentId, FlagId, FlagKey, MetricId, OrganisationId, ProjectId, RuleId,
+        VariantId,
     },
     rule_engine::types::{ConditionExpr, Rule, RuleOutput},
     tenant::{Environment, Organisation, Project},
@@ -116,7 +117,7 @@ fn make_experiment(env_id: EnvironmentId, flag_rule_id: RuleId) -> Experiment {
         name: "Test Experiment".into(),
         description: Some("A test".into()),
         hypothesis: None,
-        metric_keys: vec!["checkout_completed".into()],
+        metric_ids: vec![MetricId::new()],
         traffic_allocation: 100.0,
         min_sample_size: None,
         scheduled_start_at: None,
@@ -147,7 +148,7 @@ async fn test_create_and_find(pool: sqlx::PgPool) {
     assert_eq!(found.id, exp.id);
     assert_eq!(found.name, "Test Experiment");
     assert_eq!(found.status, ExperimentStatus::Draft);
-    assert_eq!(found.metric_keys, vec!["checkout_completed"]);
+    assert_eq!(found.metric_ids, exp.metric_ids);
     assert_eq!(found.version, 1);
     assert!(found.deleted_at.is_none());
 }
@@ -307,7 +308,7 @@ async fn test_transition_draft_to_running_creates_iteration(pool: sqlx::PgPool) 
         iterations[0].ended_at.is_none(),
         "iteration should still be active"
     );
-    assert_eq!(iterations[0].metric_keys, exp.metric_keys);
+    assert_eq!(iterations[0].metric_ids, exp.metric_ids);
 
     // Flag rule must be frozen
     let frozen: bool = sqlx::query_scalar!(

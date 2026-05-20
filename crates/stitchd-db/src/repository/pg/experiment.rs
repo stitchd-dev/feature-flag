@@ -7,7 +7,7 @@ use sqlx::PgPool;
 
 use stitchd_core::{
     experimentation::{Experiment, ExperimentIteration, ExperimentStatus, validate_transition},
-    id::{EnvironmentId, ExperimentId, ExperimentIterationId, RuleId, UserId},
+    id::{EnvironmentId, ExperimentId, ExperimentIterationId, MetricId, RuleId, UserId},
 };
 
 use crate::{
@@ -42,7 +42,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 description,
                 hypothesis,
                 status              AS "status: ExperimentStatus",
-                metric_keys,
+                metric_ids          AS "metric_ids: Vec<MetricId>",
                 traffic_allocation  AS "traffic_allocation: f64",
                 min_sample_size     AS "min_sample_size: i64",
                 scheduled_start_at,
@@ -83,7 +83,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 description,
                 hypothesis,
                 status              AS "status: ExperimentStatus",
-                metric_keys,
+                metric_ids          AS "metric_ids: Vec<MetricId>",
                 traffic_allocation  AS "traffic_allocation: f64",
                 min_sample_size     AS "min_sample_size: i64",
                 scheduled_start_at,
@@ -121,7 +121,7 @@ impl ExperimentRepository for PgExperimentRepository {
             r"
             SELECT
                 id, env_id, flag_rule_id, name, description, hypothesis, status,
-                metric_keys, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
+                metric_ids, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
                 scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at,
                 COUNT(*) OVER() AS total_count
             FROM experiments
@@ -163,6 +163,9 @@ impl ExperimentRepository for PgExperimentRepository {
                     "stopped" => ExperimentStatus::Stopped,
                     _ => ExperimentStatus::Draft,
                 };
+                let metric_uuids: Vec<uuid::Uuid> = r.get("metric_ids");
+                let metric_ids: Vec<MetricId> =
+                    metric_uuids.into_iter().map(MetricId::from_uuid).collect();
                 Ok(Experiment {
                     id: ExperimentId::from_uuid(r.get("id")),
                     environment_id: EnvironmentId::from_uuid(r.get("env_id")),
@@ -171,7 +174,7 @@ impl ExperimentRepository for PgExperimentRepository {
                     description: r.get("description"),
                     hypothesis: r.get("hypothesis"),
                     status,
-                    metric_keys: r.get("metric_keys"),
+                    metric_ids,
                     traffic_allocation: {
                         let v: f64 = r.get("traffic_allocation");
                         v
@@ -191,11 +194,15 @@ impl ExperimentRepository for PgExperimentRepository {
     }
 
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError> {
+        // sqlx can't infer `Vec<MetricId>` for a `UUID[]` bind through the
+        // query!() macro, so we project to `Vec<Uuid>` at the bind site.
+        let metric_uuids: Vec<uuid::Uuid> =
+            experiment.metric_ids.iter().map(MetricId::as_uuid).collect();
         sqlx::query!(
             r#"
             INSERT INTO experiments
                 (id, env_id, flag_rule_id, name, description, hypothesis, status,
-                 metric_keys, traffic_allocation, min_sample_size,
+                 metric_ids, traffic_allocation, min_sample_size,
                  scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7::text, $8, $9::float8::numeric, $10, $11, $12, $13, $14, $15, $16)
             "#,
@@ -206,7 +213,7 @@ impl ExperimentRepository for PgExperimentRepository {
             experiment.description,
             experiment.hypothesis,
             experiment.status as ExperimentStatus,
-            &experiment.metric_keys,
+            &metric_uuids,
             experiment.traffic_allocation,
             experiment.min_sample_size,
             experiment.scheduled_start_at,
@@ -273,6 +280,8 @@ impl ExperimentRepository for PgExperimentRepository {
         }
 
         let new_version = experiment.version + 1;
+        let metric_uuids: Vec<uuid::Uuid> =
+            experiment.metric_ids.iter().map(MetricId::as_uuid).collect();
         let result = sqlx::query_as!(
             Experiment,
             r#"
@@ -281,7 +290,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 description = $2,
                 hypothesis = $3,
                 status = $4::text,
-                metric_keys = $5,
+                metric_ids = $5,
                 traffic_allocation = $6::float8::numeric,
                 min_sample_size = $7,
                 scheduled_start_at = $8,
@@ -297,7 +306,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 description,
                 hypothesis,
                 status              AS "status: ExperimentStatus",
-                metric_keys,
+                metric_ids          AS "metric_ids: Vec<MetricId>",
                 traffic_allocation  AS "traffic_allocation: f64",
                 min_sample_size     AS "min_sample_size: i64",
                 scheduled_start_at,
@@ -311,7 +320,7 @@ impl ExperimentRepository for PgExperimentRepository {
             experiment.description,
             experiment.hypothesis,
             experiment.status as ExperimentStatus,
-            &experiment.metric_keys,
+            &metric_uuids,
             experiment.traffic_allocation as f64,
             experiment.min_sample_size,
             experiment.scheduled_start_at,
@@ -427,7 +436,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 iteration_number,
                 started_at,
                 ended_at,
-                metric_keys,
+                metric_ids          AS "metric_ids: Vec<MetricId>",
                 traffic_allocation  AS "traffic_allocation: f64",
                 min_sample_size     AS "min_sample_size: i64"
             FROM experiment_iterations
@@ -505,7 +514,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 description,
                 hypothesis,
                 status              AS "status: ExperimentStatus",
-                metric_keys,
+                metric_ids          AS "metric_ids: Vec<MetricId>",
                 traffic_allocation  AS "traffic_allocation: f64",
                 min_sample_size     AS "min_sample_size: i64",
                 scheduled_start_at,
@@ -559,18 +568,20 @@ impl ExperimentRepository for PgExperimentRepository {
 
             let next_iteration = max_iter.unwrap_or(0) + 1;
             let iteration_id = ExperimentIterationId::new();
+            let metric_uuids: Vec<uuid::Uuid> =
+                current.metric_ids.iter().map(MetricId::as_uuid).collect();
 
             sqlx::query!(
                 r#"
                 INSERT INTO experiment_iterations
-                    (id, experiment_id, iteration_number, started_at, metric_keys,
+                    (id, experiment_id, iteration_number, started_at, metric_ids,
                      traffic_allocation, min_sample_size)
                 VALUES ($1, $2, $3, NOW(), $4, $5::float8::numeric, $6)
                 "#,
                 iteration_id as ExperimentIterationId,
                 id as ExperimentId,
                 next_iteration,
-                &current.metric_keys,
+                &metric_uuids,
                 current.traffic_allocation as f64,
                 current.min_sample_size,
             )
@@ -644,7 +655,7 @@ impl ExperimentRepository for PgExperimentRepository {
             r"
             SELECT
                 id, env_id, flag_rule_id, name, description, hypothesis, status,
-                metric_keys, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
+                metric_ids, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
                 scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at
             FROM experiments
             WHERE status = 'running' AND deleted_at IS NULL
@@ -664,6 +675,9 @@ impl ExperimentRepository for PgExperimentRepository {
                     "stopped" => ExperimentStatus::Stopped,
                     _ => ExperimentStatus::Draft,
                 };
+                let metric_uuids: Vec<uuid::Uuid> = r.get("metric_ids");
+                let metric_ids: Vec<MetricId> =
+                    metric_uuids.into_iter().map(MetricId::from_uuid).collect();
                 Ok(Experiment {
                     id: ExperimentId::from_uuid(r.get("id")),
                     environment_id: EnvironmentId::from_uuid(r.get("env_id")),
@@ -672,7 +686,7 @@ impl ExperimentRepository for PgExperimentRepository {
                     description: r.get("description"),
                     hypothesis: r.get("hypothesis"),
                     status,
-                    metric_keys: r.get("metric_keys"),
+                    metric_ids,
                     traffic_allocation: {
                         let v: f64 = r.get("traffic_allocation");
                         v
@@ -698,7 +712,7 @@ impl ExperimentRepository for PgExperimentRepository {
             r"
             SELECT
                 id, experiment_id, iteration_number, started_at, ended_at,
-                metric_keys, traffic_allocation::float8 AS traffic_allocation, min_sample_size
+                metric_ids, traffic_allocation::float8 AS traffic_allocation, min_sample_size
             FROM experiment_iterations
             WHERE id = $1
             ",
@@ -712,13 +726,16 @@ impl ExperimentRepository for PgExperimentRepository {
             id: iteration_id.to_string(),
         })?;
 
+        let metric_uuids: Vec<uuid::Uuid> = row.get("metric_ids");
+        let metric_ids: Vec<MetricId> =
+            metric_uuids.into_iter().map(MetricId::from_uuid).collect();
         Ok(ExperimentIteration {
             id: ExperimentIterationId::from_uuid(row.get("id")),
             experiment_id: ExperimentId::from_uuid(row.get("experiment_id")),
             iteration_number: row.get("iteration_number"),
             started_at: row.get("started_at"),
             ended_at: row.get("ended_at"),
-            metric_keys: row.get("metric_keys"),
+            metric_ids,
             traffic_allocation: {
                 let v: f64 = row.get("traffic_allocation");
                 v
