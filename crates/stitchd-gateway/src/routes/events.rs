@@ -22,6 +22,8 @@ use crate::middleware::sdk_auth::SdkContext;
 use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
+use super::require_permission;
+
 /// Header used to forward the trusted `env_id` to backend gRPC services.
 const ENV_ID_METADATA_KEY: &str = "x-env-id";
 
@@ -435,23 +437,46 @@ pub async fn track_events(
     let body: TrackEventsRequest = serde_json::from_slice(&bytes)
         .map_err(|e| GatewayError::BadRequest(format!("invalid JSON body: {e}")))?;
 
-    let proto_events: Vec<ProtoTrackEvent> = body.events.into_iter().map(json_event_to_proto).collect();
+    forward_to_analytics(&state, &sdk_ctx.environment_id, body, false).await
+}
+
+/// Forward a parsed `TrackEventsRequest` to analytics-service.
+///
+/// Shared by both `track_events` (SDK-auth tier, `mark_test=false`) and
+/// `track_events_admin` (JWT-auth tier, `mark_test=true`). The `mark_test`
+/// flag, when set, stamps `properties["_test"] = "true"` on every event in
+/// the batch — analytics-service propagates the property verbatim onto the
+/// resulting `events_v2` rows so the admin UI can filter test firings out
+/// of production aggregates.
+///
+/// Returns a `202 Accepted` JSON response on success, or a `GatewayError`
+/// when env_id validation or the gRPC call fails.
+async fn forward_to_analytics(
+    state: &Arc<GatewayState>,
+    env_id: &str,
+    body: TrackEventsRequest,
+    mark_test: bool,
+) -> Result<axum::response::Response, GatewayError> {
+    use axum::response::IntoResponse;
+
+    let mut proto_events: Vec<ProtoTrackEvent> =
+        body.events.into_iter().map(json_event_to_proto).collect();
+
+    if mark_test {
+        for ev in &mut proto_events {
+            ev.properties.insert("_test".to_string(), "true".to_string());
+        }
+    }
 
     // env_id resolution is metadata-first on the analytics side, but we also
     // mirror it into the body so direct callers (tests) can drive the RPC.
     let mut tonic_req = TonicRequest::new(ProtoTrackEventsRequest {
-        env_id: sdk_ctx.environment_id.clone(),
+        env_id: env_id.to_string(),
         events: proto_events,
     });
-    let env_id_value = sdk_ctx
-        .environment_id
-        .parse()
-        .map_err(|_| {
-            GatewayError::Upstream(format!(
-                "env_id is not valid gRPC metadata: {:?}",
-                sdk_ctx.environment_id
-            ))
-        })?;
+    let env_id_value = env_id.parse().map_err(|_| {
+        GatewayError::Upstream(format!("env_id is not valid gRPC metadata: {env_id:?}"))
+    })?;
     tonic_req
         .metadata_mut()
         .insert(ENV_ID_METADATA_KEY, env_id_value);
@@ -637,6 +662,96 @@ pub async fn get_event_stats(
         })
         .collect();
     Ok(Json(EventStatsResponseJson { buckets }))
+}
+
+// ─── POST /v1/admin/events/track — JWT-auth admin event tracking ────────────
+//
+// Mirror of `POST /v1/events/track` for the admin UI (test-event widget on
+// `/org/:orgId/events/:eventKey` — feature-flag-7an Phase 6 Task 4). The SDK
+// path requires `x-sdk-key`, which the admin browser session does not have;
+// this path accepts the standard `Bearer` JWT instead, lifts the env_id from
+// the resolved `RbacContext`, and stamps every event with
+// `properties["_test"] = "true"` so production aggregates can filter the
+// admin-fired test events out.
+//
+// Auth: JWT-auth tier (`auth_middleware` → `RbacContext`), requires the
+// `event:write` permission. Does NOT participate in the per-env event-quota
+// (admin actions are rare; no rate-limit needed).
+
+/// `POST /v1/admin/events/track` — admin-auth batch event ingestion.
+///
+/// **Auth**: `Authorization: Bearer <jwt>`. Validated by
+/// [`auth_middleware`](crate::middleware::auth::auth_middleware), which
+/// injects [`RbacContext`](stitchd_proto::auth::v1::RbacContext). Requires
+/// the `event:write` permission.
+///
+/// **env_id source**: resolved from `RbacContext.environment_id` (set by the
+/// admin's currently-scoped environment) — NOT from any header or body
+/// field, so callers cannot impersonate another env.
+///
+/// **Test marker**: every event in the batch is stamped with
+/// `properties["_test"] = "true"` before forwarding. Analytics-service
+/// propagates the property verbatim onto `events_v2` rows; the admin UI can
+/// later filter test events out of production aggregates via
+/// `properties._test = 'true'`.
+///
+/// **Status codes**:
+/// - `202 Accepted` — batch processed (may include per-event rejections)
+/// - `400 Bad Request` — malformed JSON, or missing env scope on the JWT
+/// - `401 Unauthorized` — missing JWT or missing `event:write` permission
+/// - `502 Bad Gateway` — analytics-service unreachable / errored
+#[utoipa::path(
+    post,
+    path = "/v1/admin/events/track",
+    tag = "events",
+    request_body = TrackEventsRequest,
+    responses(
+        (status = 202, description = "Batch accepted (may include per-event rejections)", body = TrackEventsResponse),
+        (status = 400, description = "Malformed request body or missing env scope"),
+        (status = 401, description = "Missing JWT or missing event:write permission"),
+        (status = 502, description = "Analytics service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn track_events_admin(
+    State(state): State<Arc<GatewayState>>,
+    req: axum::extract::Request,
+) -> Result<axum::response::Response, GatewayError> {
+    require_permission(&req, "event:write")?;
+
+    // Lift env_id from the resolved RbacContext — set by auth_middleware
+    // from the JWT's currently-scoped environment. Empty means the caller's
+    // token isn't bound to an env (likely an org-level token) — return 400
+    // so the admin UI can prompt them to pick an env first.
+    let env_id = req
+        .extensions()
+        .get::<stitchd_proto::auth::v1::RbacContext>()
+        .map(|ctx| ctx.environment_id.clone())
+        .ok_or_else(|| {
+            // Should be unreachable — require_permission already verified
+            // the extension is present.
+            GatewayError::Upstream(
+                "RbacContext extension missing — route misconfigured \
+                 (auth_middleware not applied)"
+                    .to_string(),
+            )
+        })?;
+
+    if env_id.is_empty() {
+        return Err(GatewayError::BadRequest(
+            "JWT has no environment scope — switch to an environment context first"
+                .to_string(),
+        ));
+    }
+
+    let (_parts, body) = req.into_parts();
+    let bytes = axum::body::to_bytes(body, TRACK_EVENTS_BODY_LIMIT_BYTES)
+        .await
+        .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
+    let body: TrackEventsRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| GatewayError::BadRequest(format!("invalid JSON body: {e}")))?;
+
+    forward_to_analytics(&state, &env_id, body, true).await
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -1762,5 +1877,245 @@ mod tests {
         assert_eq!(calls.len(), 1);
         // Gateway forwards `0` → analytics-service resolves the default (50).
         assert_eq!(calls[0].2, 0);
+    }
+    // ─── POST /v1/admin/events/track ──────────────────────────────────────────
+    //
+    // Admin-auth mirror of /v1/events/track. Uses RbacContext (JWT) instead of
+    // SdkContext (x-sdk-key) and stamps every event with `_test=true` in
+    // properties before forwarding to analytics-service.
+
+    use stitchd_proto::auth::v1::RbacContext;
+
+    /// Build a router that wires `track_events_admin` with an `RbacContext`
+    /// extension injected via a middleware shim — same pattern as
+    /// `track_events_router_with_ctx` but for the JWT-auth path.
+    fn admin_track_router_with_ctx(
+        state: Arc<GatewayState>,
+        rbac_ctx: RbacContext,
+    ) -> axum::Router {
+        use axum::extract::Request as ExtractRequest;
+        use axum::middleware::{Next, from_fn};
+        use axum::routing::post;
+
+        let layer = from_fn(move |mut req: ExtractRequest, next: Next| {
+            let ctx = rbac_ctx.clone();
+            async move {
+                req.extensions_mut().insert(ctx);
+                next.run(req).await
+            }
+        });
+
+        axum::Router::new()
+            .route(
+                "/v1/admin/events/track",
+                post(track_events_admin).layer(axum::extract::DefaultBodyLimit::max(
+                    TRACK_EVENTS_BODY_LIMIT_BYTES,
+                )),
+            )
+            .with_state(state)
+            .layer(layer)
+    }
+
+    fn rbac_with(env_id: &str, perms: &[&str]) -> RbacContext {
+        RbacContext {
+            tenant_id: "org-1".to_string(),
+            environment_id: env_id.to_string(),
+            roles: vec!["org_member".to_string()],
+            permissions: perms.iter().map(|s| s.to_string()).collect(),
+            subject: "user-1".to_string(),
+            is_system: false,
+        }
+    }
+
+    // ── 1. Valid JWT + event:write → 202 ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_admin_track_returns_202_with_jwt() {
+        let (client, _captured) = spawn_analytics_mock(ProtoTrackEventsResponse {
+            accepted_count: 1,
+            rejected: vec![],
+        })
+        .await;
+        let state = state_with_analytics(client);
+        let env_id = "00000000-0000-0000-0000-000000000001";
+        let app = admin_track_router_with_ctx(state, rbac_with(env_id, &["event:write"]));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["click"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["accepted_count"], 1);
+    }
+
+    // ── 2. No JWT (no RbacContext) → 401 from full router ────────────────────
+
+    #[tokio::test]
+    async fn test_admin_track_returns_401_without_jwt() {
+        // Use the FULL router so auth_middleware actually runs and rejects.
+        use crate::router::build_router;
+        use metrics_exporter_prometheus::PrometheusBuilder;
+
+        let handle = PrometheusBuilder::new().build_recorder().handle();
+        let app = build_router(make_stub_state(), handle);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["click"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ── 3. JWT without event:write → 401 ─────────────────────────────────────
+    //
+    // Codebase convention (see `require_permission` + `test_metric_routes_
+    // require_metric_write_permission`): missing-permission yields 401, NOT
+    // 403. The test name spec mentioned 403 but we follow the existing
+    // gateway convention to keep error responses uniform across admin routes.
+
+    #[tokio::test]
+    async fn test_admin_track_returns_401_without_event_write_permission() {
+        let state = make_stub_state();
+        let env_id = "00000000-0000-0000-0000-000000000001";
+        // RbacContext present but missing `event:write` — has only `event:read`.
+        let app = admin_track_router_with_ctx(state, rbac_with(env_id, &["event:read"]));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["click"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ── 4. Test-mark: every event gets properties["_test"] = "true" ─────────
+
+    #[tokio::test]
+    async fn test_admin_track_marks_events_as_test() {
+        let (client, captured) = spawn_analytics_mock(ProtoTrackEventsResponse {
+            accepted_count: 2,
+            rejected: vec![],
+        })
+        .await;
+        let state = state_with_analytics(client);
+        let env_id = "00000000-0000-0000-0000-000000000001";
+        let app = admin_track_router_with_ctx(state, rbac_with(env_id, &["event:write"]));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["click", "purchase"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let (_env_meta, body) = &captured[0];
+        assert_eq!(body.events.len(), 2);
+        for ev in &body.events {
+            assert_eq!(
+                ev.properties.get("_test").map(String::as_str),
+                Some("true"),
+                "admin-fired events must carry _test=true marker"
+            );
+        }
+    }
+
+    // ── 5. env_id resolved from JWT (NOT body / SDK key) ─────────────────────
+
+    #[tokio::test]
+    async fn test_admin_track_forwards_env_id_from_jwt_not_sdk_key() {
+        let (client, captured) = spawn_analytics_mock(ProtoTrackEventsResponse {
+            accepted_count: 1,
+            rejected: vec![],
+        })
+        .await;
+        let state = state_with_analytics(client);
+        // RbacContext env_id (the trusted one)
+        let jwt_env = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let app = admin_track_router_with_ctx(state, rbac_with(jwt_env, &["event:write"]));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["signup"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let (env_meta, body) = &captured[0];
+        // The trusted env_id reaches analytics-service exactly once via the
+        // x-env-id metadata + the mirrored request body field — sourced from
+        // the JWT's RbacContext, NOT any header / body / SDK key.
+        assert_eq!(
+            env_meta.as_deref(),
+            Some(jwt_env),
+            "x-env-id metadata must equal RbacContext.environment_id"
+        );
+        assert_eq!(body.env_id, jwt_env);
+    }
+
+    // ── 6. Empty env scope on JWT → 400 ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_admin_track_returns_400_when_jwt_has_no_env_scope() {
+        let state = make_stub_state();
+        // event:write present, but environment_id empty (org-level token).
+        let app = admin_track_router_with_ctx(state, rbac_with("", &["event:write"]));
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/admin/events/track")
+                    .header("content-type", "application/json")
+                    .body(Body::from(track_events_body_json(&["click"])))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 }

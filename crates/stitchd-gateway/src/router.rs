@@ -250,6 +250,18 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/events/{event_key}/stats",
             get(events::get_event_stats),
         )
+        // Admin-auth path for /v1/events/track — used by the test-event widget
+        // on EventDetail. env_id is lifted from RbacContext; analytics-service
+        // is told the events are admin-fired via `properties["_test"] = "true"`.
+        // Lives on the JWT tier (NOT SDK-auth) so the admin browser session can
+        // call it without an x-sdk-key. Skips the per-env event-quota — admin
+        // actions are rare and don't need rate-limiting.
+        .route(
+            "/v1/admin/events/track",
+            post(events::track_events_admin).layer(DefaultBodyLimit::max(
+                events::TRACK_EVENTS_BODY_LIMIT_BYTES,
+            )),
+        )
         // Metrics (admin CRUD + preview) — env_id is a query param on list;
         // path params identify a specific metric.
         .route(

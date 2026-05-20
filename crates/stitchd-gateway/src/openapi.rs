@@ -62,6 +62,8 @@ use utoipa::{
         crate::routes::events::delete_event_definition,
         // Event tracking (SDK key)
         crate::routes::events::track_events,
+        // Event tracking (admin JWT — test-event widget)
+        crate::routes::events::track_events_admin,
         // EventDetail page (JWT)
         crate::routes::events::get_event_firings,
         crate::routes::events::get_event_stats,
