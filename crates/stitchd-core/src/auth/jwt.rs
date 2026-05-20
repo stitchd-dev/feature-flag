@@ -91,12 +91,10 @@ impl JwtEngine {
     /// # Errors
     /// Returns [`JwtError::Decode`] if the token is structurally invalid.
     pub fn decode_unverified(token: &str) -> Result<AccessTokenClaims, JwtError> {
-        let mut validation = Validation::default();
-        validation.insecure_disable_signature_validation();
-        validation.validate_exp = false;
-        // We still need a key object even for unverified decode
-        let key = DecodingKey::from_secret(b"placeholder");
-        decode::<AccessTokenClaims>(token, &key, &validation)
+        // jsonwebtoken 10 deprecated `Validation::insecure_disable_signature_validation`
+        // in favour of `dangerous::insecure_decode`, which doesn't need a
+        // DecodingKey or a Validation at all — same semantic, cleaner API.
+        jsonwebtoken::dangerous::insecure_decode::<AccessTokenClaims>(token)
             .map(|data| data.claims)
             .map_err(|e| JwtError::Decode(e.to_string()))
     }
