@@ -27,14 +27,14 @@ Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous m
 
 | Layer | Technology |
 |---|---|
-| Language | Rust 2024 |
+| Language | Rust 2024 — workspace MSRV = 1.95 (`workspace.package.rust-version`); both `rust-toolchain.toml` and CI's `dtolnay/rust-toolchain@stable` lines stay on `stable` so toolchain releases pick up automatically |
 | REST API | Axum 0.8 (in `stitchd-gateway`) |
-| Internal RPC | gRPC (tonic 0.13 + prost 0.13) |
+| Internal RPC | gRPC (tonic 0.14 + tonic-prost 0.14 + prost 0.14 — codec split since 0.14; `tonic_prost_build::configure()` in build scripts) |
 | Config / Flag Store | PostgreSQL 16+ (sqlx 0.8) — offline cache (`.sqlx/`) for compile-time safety in CI |
 | DB Extensions | pg_partman (for segment list partitioning) |
-| List-Entry Store | ScyllaDB 6+ (scylla 1.5, Cassandra-compatible CQL) — wide-row tables per segment; LWT-based generation swap; keyspace renamed `stitchd_segments` (was `stitchd`) |
-| Events / Experiments Store | ClickHouse 24+ (owns `experiment_results` table; PG version retired) |
-| Human Auth | JWT (jsonwebtoken 9) + OAuth2/OIDC (openidconnect 3) + SAML 2.0 (quick-xml 0.36 + flate2) |
+| List-Entry Store | ScyllaDB 6+ (scylla 1.6, Cassandra-compatible CQL) — wide-row tables per segment; LWT-based generation swap; keyspace renamed `stitchd_segments` (was `stitchd`) |
+| Events / Experiments Store | ClickHouse 24+ via `clickhouse 0.15` driver (insert API is async + generic over `<Row>`) |
+| Human Auth | JWT (jsonwebtoken 10) + OAuth2/OIDC (openidconnect 4 — endpoint type-state) + SAML 2.0 (quick-xml 0.40 + flate2) |
 | SDK Auth | SDK Key — scoped to project + environment; min 1 active enforced; Project Admin manages create/revoke |
 | MFA | TOTP via totp-rs 5 (secrets AES-256-GCM encrypted with aes-gcm 0.10) |
 | Password Hashing | Argon2id (argon2 0.5) |
@@ -98,7 +98,7 @@ Routes in `stitchd-gateway/src/routes/context_intel.rs`:
 |---|---|
 | Initial SDK | Rust (server-side, in-process evaluation) |
 | Definition Sync | gRPC (tonic + prost) — periodic polling via gateway passthrough |
-| List Membership | REST (reqwest 0.12) — per-call fallback; optional LFU in-memory cache |
+| List Membership | REST (reqwest 0.13) — per-call fallback; optional LFU in-memory cache |
 | Auth | SDK Key per environment (`x-sdk-key` on both gRPC metadata and REST header) |
 
 ## Serialization
@@ -111,21 +111,23 @@ Routes in `stitchd-gateway/src/routes/context_intel.rs`:
 | Crate | Version | Purpose |
 |---|---|---|
 | `axum` | 0.8 | REST framework |
-| `tonic` / `prost` | 0.13 | gRPC |
+| `tonic` / `tonic-prost` / `prost` | 0.14 | gRPC — codec split (since tonic 0.14: `tonic-prost` is the prost codec, `tonic-prost-build` is the build helper) |
 | `sqlx` | 0.8 | PostgreSQL async driver (offline-mode compile checks) |
-| `clickhouse` | 0.13 | ClickHouse driver (`uuid`, `time`, `lz4` features; no `derive` feature) |
-| `jsonwebtoken` | 9 | JWT issuance + verification |
-| `openidconnect` | 3 | OIDC discovery + PKCE auth flow |
-| `totp-rs` | 5 | TOTP secret generation + verification |
+| `clickhouse` | 0.15 | ClickHouse driver (`uuid`, `time`, `chrono`, `lz4` features; insert API is `async` + generic over `<Row>`) |
+| `jsonwebtoken` | 10.4 | JWT issuance + verification |
+| `openidconnect` | 4.0 | OIDC discovery + PKCE auth flow (endpoint type-state; reqwest::Client passed by reference) |
+| `totp-rs` | 5.7 | TOTP secret generation + verification |
 | `aes-gcm` | 0.10 | AES-256-GCM encryption (TOTP secrets, provider configs) |
 | `argon2` | 0.5 | Argon2id password + recovery-code hashing |
 | `lettre` | 0.11 | SMTP email delivery |
-| `quick-xml` + `flate2` | 0.36 / 1 | SAML 2.0 XML processing |
+| `quick-xml` + `flate2` | 0.40 / 1.1 | SAML 2.0 XML processing |
 | `governor` + `tower_governor` | 0.10 / 0.8 | Auth endpoint rate limiting |
 | `secrecy` | 0.10 | Zero-on-drop secret wrapping |
-| `siphasher` + `murmur3` + `sha2` | 1 / 0.5 / 0.10 | Consistent hashing (flag evaluation) |
-| `scylla` | 1.5 | ScyllaDB async CQL driver (`metrics` feature enabled) |
-| `utoipa` + `utoipa-axum` | 5 / 0.2 | OpenAPI 3.1 spec generation |
+| `siphasher` + `murmur3` + `sha2` | 1.0 / 0.5 / 0.11 | Consistent hashing (flag evaluation) |
+| `scylla` | 1.6 | ScyllaDB async CQL driver (`metrics` feature enabled) |
+| `utoipa` + `utoipa-axum` | 5.5 / 0.2 | OpenAPI 3.1 spec generation |
+| `rand` / `reqwest` | 0.10 / 0.13 | RNG (`rand::rng()` + `RngExt::random_range`) / HTTP client (`rustls` + `form` + `http2` features; `default-features = false`) |
+| Observability | `tracing-opentelemetry 0.33`, `opentelemetry* 0.32`, `metrics-exporter-prometheus 0.18` |
 
 ## Build Tools
 

@@ -55,8 +55,8 @@ This file tracks all major tracks for the project.
 - events_metrics_20260519 (Events + Metrics composable primitives — admin UI CRUD + tester, REST batch ingestion + multi-context flat-map shape, Rust SDK track() + buffer, composable metric_definitions (aggregation/ratio/funnel) with property-based filters + JsonLogic where_clause, ClickHouse-backed metric preview, experiment cutover to metric_ids)
 -->
 
----
 
-## [x] Track: Upgrade Rust Toolchain to 1.95 + Bring Workspace Deps to Latest Cross-Compatible
-*Link: [./conductor/tracks/rust_deps_upgrade_20260520/](./conductor/tracks/rust_deps_upgrade_20260520/)*
+<!-- Archived (continued):
+- rust_deps_upgrade_20260520 (Upgrade Rust MSRV to 1.95 + bring every workspace dep to latest cross-compatible major.minor — tonic 0.14 with tonic-prost split, clickhouse 0.15 async insert, openidconnect 4 endpoint type-state migration, rand 0.10, reqwest 0.13, OTel 0.32, sha2 0.11, plus inline let-chain + Duration::from_mins fixes for Rust 1.95 clippy)
+-->
 
