@@ -19,11 +19,13 @@ Before starting any phase, install the discovery tooling once:
 - [x] Task 2: Confirm `.github/workflows/ci.yml` stays on
       `dtolnay/rust-toolchain@stable` (5 occurrences). No edit; rationale
       logged in `revisions.md` + saved feedback memory.
-- [ ] Task 3: Confirm `rust-toolchain.toml` stays on `channel = "stable"`
+- [x] Task 3: Confirm `rust-toolchain.toml` stays on `channel = "stable"`
       (per saved feedback memory). No edit needed; document the rationale in
       `learnings.md`.
-- [ ] Task 4: Baseline verify — `cargo check --workspace --all-targets` +
+- [x] Task 4: Baseline verify — `cargo check --workspace --all-targets` +
       `cargo test --workspace --lib` still pass with no dep changes yet.
+      Result: 1479 unit tests across 12 crates, 0 failures, with
+      `DATABASE_URL=$STITCHD_DATABASE_URL` exported (per patterns.md gotcha).
 - [ ] Task: Conductor - User Manual Verification 'Toolchain pin (MSRV only)' (Protocol in workflow.md)
 
 ## Phase 2: Compatible (within-semver) refresh

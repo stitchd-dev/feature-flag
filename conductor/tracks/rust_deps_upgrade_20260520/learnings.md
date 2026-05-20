@@ -47,11 +47,74 @@ From `conductor/patterns.md` — directly relevant to this track:
   audit. (from: auth_20260421)
 
 ### Toolchain convention
-- `rust-toolchain.toml` stays on `channel = "stable"`. Bump MSRV in
-  `workspace.package.rust-version` instead. (from: this track's
-  predecessor wisp on 2026-05-20 — saved as user-level feedback memory
-  `feedback_rust_toolchain_channel.md`.)
+- **Both** `rust-toolchain.toml` (`channel = "stable"`) and CI's
+  `dtolnay/rust-toolchain@stable` references stay on `stable` — never
+  pin to a specific version. The declarative MSRV in
+  `[workspace.package].rust-version` is the sole "Rust X.Y" enforcement
+  point. (from: this track's predecessor wisp + Revision 1 of this track —
+  saved as user-level feedback memory `feedback_rust_toolchain_channel.md`.)
 
 ---
 
 <!-- Learnings from implementation will be appended below -->
+
+## [2026-05-20 17:55] - Phase 1 Task 1: Bump MSRV to 1.95
+
+- **Implemented:** `[workspace.package].rust-version = "1.95"` in root
+  `Cargo.toml`.
+- **Files changed:** `Cargo.toml` (1 line)
+- **Commit:** `de7579f`
+- **Learnings:**
+  - Patterns: All crates inherit MSRV via `rust-version.workspace = true` —
+    no per-crate edits required.
+  - Gotchas: This is a *declarative* compatibility floor only; the actual
+    toolchain choice lives in `rust-toolchain.toml` (channel = "stable")
+    and in CI's `dtolnay/rust-toolchain@stable`. Three separate concerns.
+  - Context: Running stable on macOS aarch64 already reports `rustc 1.95.0`
+    so `cargo check --workspace --all-targets` passed without any rustup
+    install.
+
+---
+
+## [2026-05-20 17:58] - Phase 1 Task 2: Confirm CI stays on @stable (revised)
+
+- **Implemented:** Decision-only — no edit. Confirmed all 5
+  `dtolnay/rust-toolchain@stable` references in `.github/workflows/ci.yml`
+  remain unchanged.
+- **Files changed:** none (revert + revision; see commit `2540f5e` for
+  spec/plan/revisions update).
+- **Commit:** `2540f5e` (revision); reverted earlier pin attempt `448bc3b`.
+- **Learnings:**
+  - Patterns: For "bump Rust to X.Y" requests in this repo, edit
+    `workspace.package.rust-version` only. Leave both `rust-toolchain.toml`
+    and CI references on `stable`.
+  - Gotchas: Original spec called for pinning CI; user rolled it back.
+    Feedback memory expanded to cover the CI case explicitly.
+  - Context: See `revisions.md` Revision 1 for full rationale.
+
+---
+
+## [2026-05-20 18:02] - Phase 1 Tasks 3 + 4: Baseline verify
+
+- **Implemented:**
+  - Task 3 (decision-only): confirmed `rust-toolchain.toml` stays on
+    `channel = "stable"` — no edit.
+  - Task 4: `cargo check --workspace --all-targets` + `cargo test
+    --workspace --lib` ran at the new MSRV with `DATABASE_URL` aliased
+    from `STITCHD_DATABASE_URL`. **1479 unit tests across 12 crates, 0
+    failures.**
+- **Files changed:** none (verify-only).
+- **Commit:** none yet — bundled with phase-close commit below.
+- **Learnings:**
+  - Patterns: `cargo test --workspace --lib` covers `#[sqlx::test]` cases
+    that require Postgres up + `DATABASE_URL` set. Without those, ~24
+    tests in `stitchd-analytics-service` panic at `EnvVar(NotPresent)`.
+    Always run `source .env.local && export DATABASE_URL="$STITCHD_DATABASE_URL"`
+    before invoking `cargo test`.
+  - Gotchas: Tests are FAST when Postgres is already up (under 20s for
+    full --lib sweep), so the alias is the only friction.
+  - Context: Postgres, ClickHouse, ScyllaDB containers had been running
+    36h on this machine; `docker ps` showed them all healthy. No
+    `docker compose up` needed.
+
+---
