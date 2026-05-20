@@ -128,6 +128,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       STITCHD_DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
+      # `#[sqlx::test]` reads the plain `DATABASE_URL` env var, not the
+      # canonical `STITCHD_DATABASE_URL`. Mirror the value here so any
+      # sqlx-annotated tests (e.g. analytics-service metric handler
+      # integration tests added in events_metrics_20260519) can spin up
+      # their per-test isolated DBs. See conductor/patterns.md gotcha
+      # "`STITCHD_DATABASE_URL` vs `DATABASE_URL`".
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
     steps:
       - uses: actions/checkout@v4
 
