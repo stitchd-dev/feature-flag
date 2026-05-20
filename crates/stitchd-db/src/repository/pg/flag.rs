@@ -22,22 +22,22 @@ use crate::{
 /// Map a sqlx database error to a typed [`RepositoryError`], distinguishing
 /// unique violations (23505) from foreign-key violations (23503).
 fn map_db_err(e: sqlx::Error) -> RepositoryError {
-    if let sqlx::Error::Database(ref dbe) = e {
-        if let Some(constraint) = dbe.constraint() {
-            let code = dbe
-                .code()
-                .map(std::borrow::Cow::into_owned)
-                .unwrap_or_default();
-            return match code.as_str() {
-                "23505" => RepositoryError::UniqueViolation {
-                    field: constraint.to_string(),
-                },
-                "23503" => RepositoryError::ForeignKeyViolation {
-                    constraint: constraint.to_string(),
-                },
-                _ => RepositoryError::Database(e),
-            };
-        }
+    if let sqlx::Error::Database(ref dbe) = e
+        && let Some(constraint) = dbe.constraint()
+    {
+        let code = dbe
+            .code()
+            .map(std::borrow::Cow::into_owned)
+            .unwrap_or_default();
+        return match code.as_str() {
+            "23505" => RepositoryError::UniqueViolation {
+                field: constraint.to_string(),
+            },
+            "23503" => RepositoryError::ForeignKeyViolation {
+                constraint: constraint.to_string(),
+            },
+            _ => RepositoryError::Database(e),
+        };
     }
     RepositoryError::Database(e)
 }

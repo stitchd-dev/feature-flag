@@ -50,7 +50,7 @@ impl From<SdkKeyValidationError> for Status {
 #[must_use]
 pub fn hash_sdk_key(raw: &str) -> String {
     let digest = Sha256::digest(raw.as_bytes());
-    format!("{digest:x}")
+    hex::encode(digest)
 }
 
 /// Validate a raw SDK key, using `cache` to avoid DB round-trips on repeated

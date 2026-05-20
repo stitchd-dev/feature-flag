@@ -72,10 +72,10 @@ impl<T: Clone + Send + Sync + 'static> ProviderCache<T> {
         Fut: Future<Output = Result<T, E>>,
     {
         // Check cache hit first
-        if let Some(entry) = self.store.get(&id) {
-            if !entry.is_expired() {
-                return Ok(entry.value.clone());
-            }
+        if let Some(entry) = self.store.get(&id)
+            && !entry.is_expired()
+        {
+            return Ok(entry.value.clone());
         }
 
         // Cache miss or expired — build the provider
@@ -124,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_hit_factory_not_called_again() {
-        let cache: ProviderCache<String> = ProviderCache::new(Duration::from_secs(60));
+        let cache: ProviderCache<String> = ProviderCache::new(Duration::from_mins(1));
         let id = AuthProviderId::new();
         let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -190,7 +190,7 @@ mod tests {
 
     #[tokio::test]
     async fn evict_removes_entry_immediately() {
-        let cache: ProviderCache<String> = ProviderCache::new(Duration::from_secs(60));
+        let cache: ProviderCache<String> = ProviderCache::new(Duration::from_mins(1));
         let id = AuthProviderId::new();
         let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -226,7 +226,7 @@ mod tests {
         // This test verifies that concurrent access doesn't panic or produce
         // incorrect values. Multiple tasks may call factory (last-write-wins
         // is acceptable for a cache — correctness over perfect dedup).
-        let cache = Arc::new(ProviderCache::<String>::new(Duration::from_secs(60)));
+        let cache = Arc::new(ProviderCache::<String>::new(Duration::from_mins(1)));
         let id = AuthProviderId::new();
         let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -258,7 +258,7 @@ mod tests {
     async fn from_env_defaults_to_3600_secs() {
         // STITCHD_PROVIDER_CACHE_TTL_SECS not set → default 3600 s TTL
         let cache: ProviderCache<String> = ProviderCache::from_env();
-        assert_eq!(cache.ttl, Duration::from_secs(3600));
+        assert_eq!(cache.ttl, Duration::from_hours(1));
     }
 
     #[tokio::test]
@@ -268,6 +268,6 @@ mod tests {
         unsafe { std::env::set_var("STITCHD_PROVIDER_CACHE_TTL_SECS", "120") };
         let cache: ProviderCache<String> = ProviderCache::from_env();
         unsafe { std::env::remove_var("STITCHD_PROVIDER_CACHE_TTL_SECS") };
-        assert_eq!(cache.ttl, Duration::from_secs(120));
+        assert_eq!(cache.ttl, Duration::from_mins(2));
     }
 }

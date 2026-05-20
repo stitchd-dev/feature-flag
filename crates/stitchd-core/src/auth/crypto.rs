@@ -6,16 +6,13 @@
 //! - [`generate_opaque_token`]: 32-byte random token with SHA-256 hash
 //! - [`generate_otp`]: 6-digit OTP with Argon2id hash
 
-use aes_gcm::{
-    Aes256Gcm, Key, Nonce,
-    aead::{Aead, KeyInit, OsRng as AeadOsRng},
-};
+use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use rand::RngCore;
+use rand::{Rng as _, RngExt as _};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -92,15 +89,15 @@ impl CryptoKey {
     /// # Errors
     /// Returns [`CryptoError::EncryptionFailed`] on AES-GCM failure.
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let key = Key::<Aes256Gcm>::from_slice(&self.0);
-        let cipher = Aes256Gcm::new(key);
+        let cipher = Aes256Gcm::new_from_slice(&self.0)
+            .map_err(|_| CryptoError::InvalidKey("aes256gcm key length".to_string()))?;
 
         let mut nonce_bytes = [0u8; 12];
-        AeadOsRng.fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        rand::rng().fill_bytes(&mut nonce_bytes);
+        let nonce: aes_gcm::Nonce<aes_gcm::aes::cipher::consts::U12> = nonce_bytes.into();
 
         let ciphertext = cipher
-            .encrypt(nonce, plaintext)
+            .encrypt(&nonce, plaintext)
             .map_err(|_| CryptoError::EncryptionFailed)?;
 
         let mut out = Vec::with_capacity(12 + ciphertext.len());
@@ -120,12 +117,15 @@ impl CryptoKey {
             return Err(CryptoError::CiphertextTooShort);
         }
         let (nonce_bytes, body) = ciphertext.split_at(12);
-        let key = Key::<Aes256Gcm>::from_slice(&self.0);
-        let cipher = Aes256Gcm::new(key);
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let cipher = Aes256Gcm::new_from_slice(&self.0)
+            .map_err(|_| CryptoError::InvalidKey("aes256gcm key length".to_string()))?;
+        let nonce_arr: [u8; 12] = nonce_bytes
+            .try_into()
+            .map_err(|_| CryptoError::DecryptionFailed)?;
+        let nonce: aes_gcm::Nonce<aes_gcm::aes::cipher::consts::U12> = nonce_arr.into();
 
         cipher
-            .decrypt(nonce, body)
+            .decrypt(&nonce, body)
             .map_err(|_| CryptoError::DecryptionFailed)
     }
 }
@@ -162,7 +162,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, CryptoError> 
 #[must_use]
 pub fn generate_opaque_token() -> (String, String) {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     let raw_hex = hex::encode(bytes);
     let hash_bytes = Sha256::digest(bytes);
     let hash_hex = hex::encode(hash_bytes);
@@ -179,8 +179,7 @@ pub fn generate_opaque_token() -> (String, String) {
 /// Panics if the Argon2 hasher fails (should never happen with valid inputs).
 #[must_use]
 pub fn generate_otp() -> (String, String) {
-    use rand::Rng as _;
-    let code: u32 = rand::thread_rng().gen_range(0..1_000_000);
+    let code: u32 = rand::rng().random_range(0..1_000_000);
     let otp = format!("{code:06}");
     let hash = hash_password(&otp).expect("argon2 OTP hashing should not fail");
     (otp, hash)

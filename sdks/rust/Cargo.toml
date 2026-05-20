@@ -71,4 +71,4 @@ async-trait         = { workspace = true }
 uuid                = { workspace = true }
 tracing-subscriber  = { workspace = true }
 # In-process debugging recorder for metric assertions (Phase 5 Task 5.4).
-metrics-util        = "0.19"
+metrics-util        = "0.20"

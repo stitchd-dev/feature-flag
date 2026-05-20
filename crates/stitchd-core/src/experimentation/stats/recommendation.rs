@@ -39,23 +39,22 @@ pub struct RecommendationInput {
 /// 3. **Bayesian** rule when `analysis_type == Bayesian`.
 pub fn recommend(input: &RecommendationInput) -> Recommendation {
     // 1. NeedsMoreData guard (must be checked FIRST)
-    if let Some(min) = input.min_sample_size {
-        if input.sample_size < min {
-            return Recommendation::NeedsMoreData;
-        }
+    if let Some(min) = input.min_sample_size
+        && input.sample_size < min
+    {
+        return Recommendation::NeedsMoreData;
     }
 
     match input.analysis_type {
         AnalysisType::Frequentist => {
-            if let Some(freq) = &input.frequentist {
-                if freq.significant {
-                    // CI encodes (variant - control). Lower > 0 ⟹ variant wins.
-                    if freq.confidence_interval.lower > 0.0 {
-                        return Recommendation::VariantWins(input.variant_key.clone());
-                    } else {
-                        return Recommendation::ControlWins;
-                    }
+            if let Some(freq) = &input.frequentist
+                && freq.significant
+            {
+                // CI encodes (variant - control). Lower > 0 ⟹ variant wins.
+                if freq.confidence_interval.lower > 0.0 {
+                    return Recommendation::VariantWins(input.variant_key.clone());
                 }
+                return Recommendation::ControlWins;
             }
             Recommendation::Inconclusive
         }

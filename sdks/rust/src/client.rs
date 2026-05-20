@@ -941,10 +941,10 @@ impl SdkClient {
                     let membership = maps.remove(0);
                     // Populate resolved set from fetched memberships.
                     for id_str in &list_ids_to_fetch {
-                        if *membership.get(id_str).unwrap_or(&false) {
-                            if let Ok(uuid) = Uuid::parse_str(id_str) {
-                                resolved.insert(SegmentId::from_uuid(uuid));
-                            }
+                        if *membership.get(id_str).unwrap_or(&false)
+                            && let Ok(uuid) = Uuid::parse_str(id_str)
+                        {
+                            resolved.insert(SegmentId::from_uuid(uuid));
                         }
                     }
                     // Insert into LRU for future evaluations.

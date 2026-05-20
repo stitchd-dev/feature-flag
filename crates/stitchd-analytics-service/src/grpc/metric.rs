@@ -1375,7 +1375,10 @@ mod handler_tests {
             properties: Vec<(String, String)>,
             occurred_at: i64,
         }
-        let mut insert = client.insert("events_v2").expect("insert init");
+        let mut insert = client
+            .insert::<InsertRow>("events_v2")
+            .await
+            .expect("insert init");
         insert
             .write(&InsertRow {
                 env_id: env_uuid,

@@ -1,4 +1,4 @@
-msrv = "1.85"
+msrv = "1.95"
 
 # Cognitive complexity threshold — lower than default to keep functions focused
 cognitive-complexity-threshold = 15
