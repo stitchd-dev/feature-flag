@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .evaluate(&[EvalRequest::flag("my-flag", ctx)])
         .await;
     println!("variant = {}", results[0].variant_key);
-    client.shutdown().await;
+    client.shutdown(std::time::Duration::from_secs(5)).await?;
     Ok(())
 }
 ```

@@ -47,7 +47,7 @@ a registry of known context types, their properties, and observed value ranges/e
 Exposed as an API for the Admin UI (coming later) to power dropdown/autocomplete 
 behaviour (e.g. when building segment rules or flag targeting conditions).
 
-## Implementation Status (as of 2026-05-18)
+## Implementation Status (as of 2026-05-20)
 
 | Module | Status |
 |---|---|
@@ -67,6 +67,8 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 | Database & Query Optimizations (PG indexes, N+1 elimination, SDK key cache, ClickHouse MVs, offset pagination) | ✅ Complete |
 | ScyllaDB list-segment storage (generation swap, sweeper, metrics, OTel spans) | ✅ Complete |
 | Boundary Hardening Refactor (boundaries_20260518) | ✅ Complete |
+| Events Module — full admin UI + SDK ingestion + per-env quota | ✅ Complete |
+| Metrics Layer — composable definitions (aggregation/ratio/funnel) + experiment cutover | ✅ Complete |
 
 ## Modules
 
