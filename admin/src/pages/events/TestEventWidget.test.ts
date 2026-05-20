@@ -2,7 +2,7 @@
  * TestEventWidget — logic tests (pure, no DOM).
  *
  * Tests the pure builders that the widget uses to construct
- * `POST /v1/events/track` payloads. Follows the same pattern as
+ * `POST /v1/admin/events/track` payloads. Follows the same pattern as
  * `EventDetail.test.ts` / `EditEventModal.test.ts`: helpers exported from the
  * component module are exercised here, while React rendering is left to the
  * Formik / Modal primitives (already covered).

@@ -14,23 +14,23 @@
  * exported for the Vitest suite in `TestEventWidget.test.ts` to exercise
  * directly — mirrors the pattern used by `EditEventModal` / `EventDetail`.
  *
+ * ## Admin-auth path
+ *
+ * Posts to `POST /v1/admin/events/track` (JWT-auth tier), NOT the SDK-auth
+ * `/v1/events/track` route. The admin path resolves env_id from the JWT's
+ * `RbacContext` and stamps every event with `properties._test = "true"` so
+ * production aggregates can filter the test firings out. Backend landed in
+ * beads `feature-flag-gda`.
+ *
  * ## Known gaps
  *
- * 1. **Admin-auth path for /v1/events/track**: The gateway endpoint is
- *    currently behind the SDK-auth middleware (`x-sdk-key`). Calling it with
- *    the admin JWT will return `401 Unauthorized` until the gateway grows a
- *    parallel admin-token path (or an `x-test-event=true` bypass). Tracked
- *    in beads bug `feature-flag-gda` (filed by Phase 6 Task 4). The widget
- *    surfaces the upstream error verbatim in the meantime — so when the
- *    backend lands the UX upgrades transparently.
- *
- * 2. **Live-preview from ClickHouse**: The "did my event land?" round-trip is
+ * 1. **Live-preview from ClickHouse**: The "did my event land?" round-trip is
  *    blocked on the `/v1/events/{key}/firings` endpoint (beads bug
  *    `feature-flag-uz3`). Until it lands, the success banner just says
  *    "Event fired — see firings log above for confirmation".
  *
  * @see feature-flag-7an.6.4 — this task
- * @see feature-flag-gda     — backend gap: admin-auth path for /v1/events/track
+ * @see feature-flag-gda     — backend: admin-auth path for /v1/events/track (landed)
  * @see feature-flag-uz3     — backend gap: firings + stats endpoints
  */
 import { useState } from 'react'
@@ -268,7 +268,10 @@ export function TestEventWidget({ eventKey, metricType, onSubmitted }: Props) {
   ) {
     try {
       const body = buildTrackBody(values, eventKey, metricType)
-      await api.post('/v1/events/track', body)
+      // Admin-auth path — accepts the browser session's bearer JWT, resolves
+      // env_id from RbacContext, and stamps `_test=true` on every event so
+      // analytics-service rows are filterable. See feature-flag-gda.
+      await api.post('/v1/admin/events/track', body)
       setStatus({ success: 'Event fired — see firings log above for confirmation.' })
       // Reset only the value/properties fields, keep the context so the admin
       // can fire a second event quickly.
