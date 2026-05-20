@@ -36,11 +36,16 @@ import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { extractErrorMessage } from '../../lib/errors'
 import { TestEventWidget } from './TestEventWidget'
+import { EditEventModal } from './EditEventModal'
+import { ArchiveEventModal } from './ArchiveEventModal'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface EventDefinitionDetail {
   event_key: string
+  /** Set by the gateway response; needed by EditEventModal/Archive to scope
+   *  the PATCH/DELETE URL (`?env_id=…`) for org-scoped JWTs. */
+  environment_id?: string
   name?: string
   metric_type: string
   description?: string
@@ -48,6 +53,10 @@ interface EventDefinitionDetail {
   archived: boolean
   deleted_at?: string | null
   created_at: string
+  updated_at?: string
+  /** Optimistic-locking version echoed back to the PATCH so the gateway can
+   *  return HTTP 409 on a stale edit. */
+  version: number
 }
 
 interface EventFiring {
@@ -156,6 +165,10 @@ export function EventDetail() {
   // Experiments depending on this event
   const [dependents, setDependents] = useState<ExperimentDependent[]>([])
   const [dependentsLoading, setDependentsLoading] = useState(false)
+
+  // Edit / Archive modals — wired off the actions panel below.
+  const [showEdit, setShowEdit] = useState(false)
+  const [showArchive, setShowArchive] = useState(false)
 
   // ── Load the event itself ─────────────────────────────────────────────────
   useEffect(() => {
@@ -279,9 +292,21 @@ export function EventDetail() {
           </>
         }
         actions={
-          <button className="btn" onClick={() => { void navigator.clipboard.writeText(event.event_key) }}>
-            <I.copy size={13} /> Copy key
-          </button>
+          <>
+            <button className="btn" onClick={() => { void navigator.clipboard.writeText(event.event_key) }}>
+              <I.copy size={13} /> Copy key
+            </button>
+            {!isArchived(event) && (
+              <>
+                <button className="btn" onClick={() => setShowEdit(true)} data-testid="edit-event-btn">
+                  <I.pencil size={13} /> Edit
+                </button>
+                <button className="btn" onClick={() => setShowArchive(true)} data-testid="archive-event-btn">
+                  <I.trash size={13} /> Archive
+                </button>
+              </>
+            )}
+          </>
         }
       />
       <div className="page-body">
@@ -450,6 +475,48 @@ export function EventDetail() {
           </div>
         </div>
       </div>
+
+      {showEdit && (
+        <EditEventModal
+          event={{
+            event_key: event.event_key,
+            environment_id: event.environment_id ?? envId ?? undefined,
+            metric_type: event.metric_type,
+            description: event.description ?? '',
+            schema: event.schema ?? null,
+            version: event.version,
+            created_at: event.created_at,
+            updated_at: event.updated_at,
+          }}
+          onClose={() => setShowEdit(false)}
+          onSaved={(updated) => {
+            setShowEdit(false)
+            // Merge the patched fields back into the page-level event so the
+            // header / stat panel / next-edit `version` all reflect the save.
+            setEvent({
+              ...event,
+              metric_type: updated.metric_type,
+              description: updated.description ?? '',
+              schema: typeof updated.schema === 'string'
+                ? updated.schema
+                : (updated.schema == null ? null : JSON.stringify(updated.schema)),
+              version: updated.version,
+              updated_at: updated.updated_at,
+            })
+          }}
+        />
+      )}
+
+      {showArchive && (
+        <ArchiveEventModal
+          eventKey={event.event_key}
+          onClose={() => setShowArchive(false)}
+          onArchived={() => {
+            setShowArchive(false)
+            navigate(`/org/${orgId}/events`)
+          }}
+        />
+      )}
     </>
   )
 }
