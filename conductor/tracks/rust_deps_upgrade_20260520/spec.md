@@ -1,13 +1,17 @@
 # Spec: Upgrade Rust Toolchain to 1.95 + Bring Workspace Deps to Latest Cross-Compatible
 
+> **Last Revised 2026-05-20:** CI pin requirement removed (see
+> [revisions.md](./revisions.md) Revision 1).
+
 ## Overview
 
 Bring the workspace to the current Rust ecosystem baseline:
 
-1. **Rust toolchain**: enforce **1.95.0** as the MSRV (`workspace.package.rust-version`)
-   and pin CI installations to that version. `rust-toolchain.toml` continues
-   to track `channel = "stable"` (per project convention — local developers
-   pick up new stable releases automatically).
+1. **Rust toolchain**: declare **1.95** as the MSRV in
+   `workspace.package.rust-version`. Both `rust-toolchain.toml` and the
+   `dtolnay/rust-toolchain@stable` references in CI continue to track
+   `stable` — local developers and CI runners pick up new stable releases
+   automatically. The MSRV bump is the sole "Rust 1.95" enforcement point.
 2. **Workspace dependencies**: bump every dep in `[workspace.dependencies]` (plus
    `metrics-util` dev-dep in `sdks/rust`) to the latest published version,
    accepting major-version bumps, using `cargo-outdated` for discovery and
@@ -21,9 +25,9 @@ client signature). That migration is in scope.
 ## Functional Requirements
 
 - `workspace.package.rust-version` set to `"1.95"`.
-- All `.github/workflows/*.yml` jobs that currently use
-  `dtolnay/rust-toolchain@stable` pin to `dtolnay/rust-toolchain@1.95.0`
-  (5 occurrences in `ci.yml`).
+- `.github/workflows/ci.yml` `dtolnay/rust-toolchain@stable` references (5
+  occurrences) stay on `@stable` — no pin. CI tracks the same stable
+  channel as local developers.
 - `Cargo.toml` `[workspace.dependencies]` bumped to latest:
   - **Build / RPC**: `tonic 0.14`, `tonic-build 0.14`, `tonic-health 0.14`,
     `tonic-prost 0.14` (new), `tonic-prost-build 0.14` (new), `prost 0.14`,
@@ -62,7 +66,8 @@ client signature). That migration is in scope.
 
 ## Acceptance Criteria
 
-1. `rustc --version` reports `1.95.0` when honoured by the CI pin.
+1. `workspace.package.rust-version` declares `"1.95"`; `rustc --version`
+   on the user's `stable`-channel toolchain (and CI's) resolves to ≥ 1.95.
 2. `cargo check --workspace --all-targets` succeeds.
 3. `cargo clippy --workspace --all-targets --features stitchd-sdk-rust/test-util -- -D warnings`
    succeeds.

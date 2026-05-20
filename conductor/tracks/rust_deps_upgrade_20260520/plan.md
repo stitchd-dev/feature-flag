@@ -7,17 +7,24 @@ the next. No `<!-- execution: parallel -->` annotations.
 Before starting any phase, install the discovery tooling once:
 `cargo install cargo-edit cargo-outdated --locked`.
 
-## Phase 1: Toolchain pin (MSRV + CI)
+## Phase 1: Toolchain pin (MSRV only)
 
-- [ ] Task 1: Bump `workspace.package.rust-version = "1.95"` in root `Cargo.toml`.
-- [ ] Task 2: Pin all 5 `dtolnay/rust-toolchain@stable` uses in
-      `.github/workflows/ci.yml` to `dtolnay/rust-toolchain@1.95.0`.
+> **Revised 2026-05-20:** the original spec called for pinning the 5
+> `dtolnay/rust-toolchain@stable` lines in CI to `@1.95.0`. User feedback
+> ("i am ok with stable tag in ci") reverted that. CI continues to track
+> stable; only the declarative MSRV in `Cargo.toml` is bumped. See
+> [revisions.md](./revisions.md).
+
+- [x] Task 1: Bump `workspace.package.rust-version = "1.95"` in root `Cargo.toml`.
+- [x] Task 2: Confirm `.github/workflows/ci.yml` stays on
+      `dtolnay/rust-toolchain@stable` (5 occurrences). No edit; rationale
+      logged in `revisions.md` + saved feedback memory.
 - [ ] Task 3: Confirm `rust-toolchain.toml` stays on `channel = "stable"`
       (per saved feedback memory). No edit needed; document the rationale in
       `learnings.md`.
 - [ ] Task 4: Baseline verify — `cargo check --workspace --all-targets` +
       `cargo test --workspace --lib` still pass with no dep changes yet.
-- [ ] Task: Conductor - User Manual Verification 'Toolchain pin (MSRV + CI)' (Protocol in workflow.md)
+- [ ] Task: Conductor - User Manual Verification 'Toolchain pin (MSRV only)' (Protocol in workflow.md)
 
 ## Phase 2: Compatible (within-semver) refresh
 
