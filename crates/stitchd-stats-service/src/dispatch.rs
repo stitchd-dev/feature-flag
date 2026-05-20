@@ -318,6 +318,14 @@ mod tests {
             unimplemented!("dispatcher tests do not exercise list_by_environment_paginated")
         }
 
+        async fn list_referencing_event(
+            &self,
+            _environment_id: EnvironmentId,
+            _event_key: &str,
+        ) -> Result<Vec<MetricDefinition>, RepositoryError> {
+            unimplemented!("dispatcher tests do not exercise list_referencing_event")
+        }
+
         async fn create(&self, _metric: &MetricDefinition) -> Result<(), RepositoryError> {
             unimplemented!("dispatcher tests do not exercise create")
         }

@@ -392,12 +392,38 @@ pub async fn handle_list_metrics(
         n => n.min(MAX_LIST_LIMIT),
     };
 
+    let kind_filter = req.kind.as_deref().filter(|s| !s.is_empty());
+    let event_key_filter = req.event_key.as_deref().filter(|s| !s.is_empty());
+
+    // Fast path: when caller supplies `event_key`, bypass pagination and
+    // serve the bounded result set from the dedicated repo method. The
+    // EventDetail back-link UI surfaces ALL referencing metrics in one
+    // section and never paginates them. `kind` filter still applies on
+    // top of the result in case a caller combines both.
+    if let Some(ek) = event_key_filter {
+        let rows = repo
+            .list_referencing_event(env_id, ek)
+            .await
+            .map_err(|e| repo_err_to_status(e, "list_metrics"))?;
+        let items: Vec<ProtoMetric> = rows
+            .into_iter()
+            .filter(|m| kind_filter.is_none_or(|k| m.kind.tag() == k))
+            .map(|m| domain_to_proto(&m))
+            .collect();
+        let total = items.len() as u64;
+        return Ok(Response::new(ListMetricsResponse {
+            items,
+            total,
+            offset: 0,
+            limit: total,
+        }));
+    }
+
     let (rows, total) = repo
         .list_by_environment_paginated(env_id, offset, limit)
         .await
         .map_err(|e| repo_err_to_status(e, "list_metrics"))?;
 
-    let kind_filter = req.kind.as_deref().filter(|s| !s.is_empty());
     let items: Vec<ProtoMetric> = rows
         .into_iter()
         .filter(|m| kind_filter.is_none_or(|k| m.kind.tag() == k))
@@ -967,6 +993,7 @@ mod handler_tests {
             offset: Some(0),
             limit: Some(2),
             kind: None,
+            event_key: None,
         });
         let resp = handle_list_metrics(&repo, req).await.unwrap().into_inner();
         assert_eq!(resp.items.len(), 2);
@@ -986,6 +1013,7 @@ mod handler_tests {
             offset: None,
             limit: None,
             kind: None,
+            event_key: None,
         });
         let resp = handle_list_metrics(&repo, req).await.unwrap().into_inner();
         assert_eq!(resp.limit, DEFAULT_LIST_LIMIT);
@@ -1008,6 +1036,7 @@ mod handler_tests {
             offset: Some(0),
             limit: Some(50),
             kind: Some("ratio".into()),
+            event_key: None,
         });
         let resp = handle_list_metrics(&repo, req).await.unwrap().into_inner();
         assert!(resp.items.is_empty());

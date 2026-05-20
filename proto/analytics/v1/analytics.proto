@@ -396,6 +396,14 @@ message ListMetricsRequest {
   optional uint64 limit     = 3;
   // Optional kind filter ("aggregation" | "ratio" | "funnel").
   optional string kind      = 4;
+  // Optional event-key filter — restricts results to metrics that
+  // *directly* reference this event key. Matches:
+  //   - aggregation: config.event_key == :key
+  //   - funnel:      any steps[i].event_key == :key
+  // Ratio metrics are NOT matched here (their event references are
+  // transitive through their numerator/denominator); the UI displays
+  // those by following the numerator/denominator into their own list.
+  optional string event_key = 5;
 }
 
 message ListMetricsResponse {

@@ -64,6 +64,11 @@ pub struct ListMetricsQuery {
     pub limit: Option<u64>,
     /// Optional kind filter (`aggregation` | `ratio` | `funnel`).
     pub kind: Option<String>,
+    /// Optional event-key filter — restricts results to metrics that
+    /// directly reference this event (aggregation `event_key` or any
+    /// funnel `steps[].event_key`). Used by the EventDetail page's
+    /// "Metrics referencing this event" back-link.
+    pub event_key: Option<String>,
 }
 
 /// Wire-format aggregation config — matches the proto `AggregationConfig`
@@ -432,6 +437,8 @@ pub async fn create_metric(
         ("limit" = Option<u64>, Query, description = "Page size (default 50, max 200)"),
         ("kind" = Option<String>, Query,
             description = "Filter by kind: aggregation | ratio | funnel"),
+        ("event_key" = Option<String>, Query,
+            description = "Filter to metrics directly referencing this event key"),
     ),
     responses(
         (status = 200, description = "Paginated metrics", body = ListMetricsResponseJson),
@@ -454,6 +461,7 @@ pub async fn list_metrics(
         offset: query.offset,
         limit: query.limit,
         kind: query.kind,
+        event_key: query.event_key,
     });
     let mut client = state.analytics_client.lock().await;
     let resp = client.list_metrics(rpc).await.map_err(status_to_gw_err)?;

@@ -1,14 +1,39 @@
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import { useFormikContext, FieldArray } from 'formik'
 import { I } from '../../components/icons'
 import { FormField } from '../../components/form/FormField'
 import { FormSelect } from '../../components/form/FormSelect'
 import { FormTextarea } from '../../components/form/FormTextarea'
 import { FormCheckbox } from '../../components/form/FormCheckbox'
+import { EventKeyField } from '../../components/form/EventKeyField'
 import { api } from '../../lib/api'
 import { AGGREGATORS, aggregatorRequiresField } from '../../lib/validation/metricSchema'
 import type { MetricFormValues } from '../../lib/validation/metricSchema'
 import type { MetricResponse } from './MetricsList'
+
+/** Shape of a row in the GET /v1/events list response — only the keys we
+ *  need from the typeahead. Defined inline (rather than imported) so this
+ *  module stays decoupled from the EventsList page module. */
+interface EventListItem { event_key: string }
+interface ListEventsResponse {
+  items: EventListItem[]
+  total?: number
+}
+
+/** In-modal cache of the env's registered event keys, populated once on
+ *  mount and consumed by both AggregationFields and FunnelFields. Empty
+ *  array (loaded=true) means "fetched, env has no events" — distinct from
+ *  loaded=false ("still fetching"). */
+interface EventKeysCtx {
+  keys: string[]
+  loading: boolean
+  loadError: string | null
+}
+const EventKeysContext = createContext<EventKeysCtx>({
+  keys: [],
+  loading: true,
+  loadError: null,
+})
 
 interface MetricFormFieldsProps {
   envId: string
@@ -69,8 +94,43 @@ export function MetricFormFields({ envId, keyReadOnly = false, excludeMetricId }
   const { values, setFieldValue } = useFormikContext<MetricFormValues>()
   const kind = values.kind
 
+  // Load event-key catalog once per envId so aggregation + funnel pickers
+  // both consume the same list. per_page=200 matches the gateway cap; the
+  // realistic upper bound for events-per-env is well below this.
+  const [eventKeys, setEventKeys] = useState<string[]>([])
+  const [eventsLoading, setEventsLoading] = useState(true)
+  const [eventsLoadError, setEventsLoadError] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setEventsLoading(true)
+    setEventsLoadError(null)
+    api
+      .get<ListEventsResponse>(`/v1/events?env_id=${envId}&page=1&per_page=200`)
+      .then(({ data }) => {
+        if (cancelled) return
+        const keys = (data.items ?? [])
+          .map((e) => e.event_key)
+          .filter((k): k is string => typeof k === 'string' && k.length > 0)
+        setEventKeys(keys)
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setEventsLoadError(
+          err instanceof Error ? err.message : 'Failed to load registered events',
+        )
+      })
+      .finally(() => {
+        if (!cancelled) setEventsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [envId])
+
   return (
-    <>
+    <EventKeysContext.Provider
+      value={{ keys: eventKeys, loading: eventsLoading, loadError: eventsLoadError }}
+    >
       {/* Kind selector — shown for create mode; on edit the kind is
           locked because the server treats it as immutable. */}
       {!keyReadOnly && (
@@ -175,7 +235,7 @@ export function MetricFormFields({ envId, keyReadOnly = false, excludeMetricId }
           {kind === 'funnel' && <FunnelFields />}
         </>
       )}
-    </>
+    </EventKeysContext.Provider>
   )
 }
 
@@ -184,6 +244,7 @@ export function MetricFormFields({ envId, keyReadOnly = false, excludeMetricId }
 function AggregationFields() {
   const { values } = useFormikContext<MetricFormValues>()
   const needsField = aggregatorRequiresField(values.aggregator)
+  const { keys: eventKeys, loading: eventsLoading, loadError } = useContext(EventKeysContext)
 
   return (
     <div
@@ -196,7 +257,30 @@ function AggregationFields() {
         gap: 12,
       }}
     >
-      <FormField name="event_key" label="Event key" placeholder="e.g. checkout_completed" />
+      {loadError && (
+        <div
+          role="alert"
+          style={{ fontSize: 11, color: 'var(--danger)' }}
+          data-testid="event-keys-load-error"
+        >
+          {loadError}
+        </div>
+      )}
+      <EventKeyField
+        name="event_key"
+        label="Event key"
+        placeholder={
+          eventsLoading
+            ? 'Loading registered events…'
+            : eventKeys.length === 0
+              ? 'No events registered yet — register one first'
+              : 'Start typing to filter…'
+        }
+        eventKeys={eventKeys}
+        hint="Must be a pre-registered event in this environment."
+        disabled={eventsLoading}
+        testId="event-key-agg"
+      />
       <FormSelect name="aggregator" label="Aggregator" options={AGGREGATOR_OPTIONS} />
       <FormField
         name="on_field"
@@ -314,6 +398,7 @@ function RatioFields({ envId, excludeMetricId }: { envId: string; excludeMetricI
 
 function FunnelFields() {
   const { values } = useFormikContext<MetricFormValues>()
+  const { keys: eventKeys, loading: eventsLoading } = useContext(EventKeysContext)
   return (
     <div
       style={{
@@ -375,10 +460,19 @@ function FunnelFields() {
                     </button>
                   )}
                 </div>
-                <FormField
+                <EventKeyField
                   name={`steps.${idx}.event_key`}
                   label="Event key"
-                  placeholder="e.g. checkout_started"
+                  placeholder={
+                    eventsLoading
+                      ? 'Loading…'
+                      : eventKeys.length === 0
+                        ? 'No events registered yet'
+                        : 'Start typing to filter…'
+                  }
+                  eventKeys={eventKeys}
+                  disabled={eventsLoading}
+                  testId={`event-key-step-${idx}`}
                 />
                 <FormTextarea
                   name={`steps.${idx}.where_clause`}

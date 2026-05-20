@@ -83,6 +83,17 @@ interface ExperimentDependent {
   status: string
 }
 
+/** A metric that directly references this event (aggregation event_key or
+ *  any funnel step). Ratio metrics are surfaced indirectly via the
+ *  aggregations they reference and not included here. */
+interface ReferencingMetric {
+  id: string
+  key: string
+  name: string
+  kind: string
+  goal_direction?: string
+}
+
 // ── Helpers (mirrored in EventDetail.test.ts) ────────────────────────────────
 
 function isArchived(event: EventDefinitionDetail): boolean {
@@ -166,6 +177,12 @@ export function EventDetail() {
   const [dependents, setDependents] = useState<ExperimentDependent[]>([])
   const [dependentsLoading, setDependentsLoading] = useState(false)
 
+  // Metrics that directly reference this event (back-link from EventDetail
+  // to the metrics layer). Powered by GET /v1/metrics?env_id=…&event_key=…
+  // which hits MetricRepository::list_referencing_event server-side.
+  const [refMetrics, setRefMetrics] = useState<ReferencingMetric[]>([])
+  const [refMetricsLoading, setRefMetricsLoading] = useState(false)
+
   // Edit / Archive modals — wired off the actions panel below.
   const [showEdit, setShowEdit] = useState(false)
   const [showArchive, setShowArchive] = useState(false)
@@ -226,6 +243,28 @@ export function EventDetail() {
       })
     return () => ac.abort()
   }, [eventKey])
+
+  // ── Load metrics that reference this event ────────────────────────────────
+  useEffect(() => {
+    if (!eventKey || !envId) return
+    const ac = new AbortController()
+    setRefMetricsLoading(true)
+    api
+      .get<{ items: ReferencingMetric[] }>(
+        `/v1/metrics?env_id=${envId}&event_key=${encodeURIComponent(eventKey)}&limit=200`,
+        { signal: ac.signal },
+      )
+      .then(({ data }) => {
+        if (!ac.signal.aborted) setRefMetrics(data.items ?? [])
+      })
+      .catch(() => {
+        if (!ac.signal.aborted) setRefMetrics([])
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setRefMetricsLoading(false)
+      })
+    return () => ac.abort()
+  }, [eventKey, envId])
 
   // ── Load dependent experiments ─────────────────────────────────────────────
   useEffect(() => {
@@ -420,6 +459,74 @@ export function EventDetail() {
           environmentId={envId ?? undefined}
           onSubmitted={() => setFiringsRefreshTick((t) => t + 1)}
         />
+
+        {/* Metrics referencing this event — symmetric with the
+            CreateMetricModal's event-key picker. A metric appears here
+            if it aggregates on this event_key, or if it's a funnel with
+            this event in any step. Ratio metrics are not surfaced
+            directly because their event references are transitive. */}
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="card-header">
+            <div className="card-title"><I.metric size={14} /> Metrics referencing this event</div>
+            <div style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+              {refMetrics.length === 0
+                ? 'No metrics reference this event'
+                : `${refMetrics.length} metric${refMetrics.length === 1 ? '' : 's'}`}
+            </div>
+          </div>
+          <div style={{ padding: 0 }}>
+            {refMetricsLoading && refMetrics.length === 0 && (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--fg-muted)', fontSize: 13 }}>
+                Loading…
+              </div>
+            )}
+
+            {!refMetricsLoading && refMetrics.length === 0 && (
+              <EmptyState
+                icon={<I.metric size={20} />}
+                title="No metrics yet"
+                desc="Create a metric that aggregates this event (or includes it in a funnel) and it will appear here."
+              />
+            )}
+
+            {refMetrics.length > 0 && (
+              <div className="table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Key</th>
+                      <th>Name</th>
+                      <th>Kind</th>
+                      <th>Goal</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {refMetrics.map((m) => (
+                      <tr
+                        key={m.id}
+                        className="row-clickable"
+                        onClick={() => navigate(`/org/${orgId}/metrics/${m.key}`)}
+                        data-testid={`ref-metric-${m.key}`}
+                      >
+                        <td><span className="mono-key">{m.key}</span></td>
+                        <td><span style={{ fontSize: 13 }}>{m.name}</span></td>
+                        <td><span className={`type-pill ${m.kind}`}>{m.kind}</span></td>
+                        <td style={{ fontSize: 13 }}>
+                          {m.goal_direction === 'increase' && '↑'}
+                          {m.goal_direction === 'decrease' && '↓'}
+                          {m.goal_direction === 'neutral' && '→'}
+                          {!m.goal_direction && '—'}
+                        </td>
+                        <td><I.chevronRight size={14} stroke="var(--fg-subtle)" /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Experiments depending on this event */}
         <div className="card">

@@ -780,6 +780,21 @@ pub trait MetricRepository: Send + Sync {
         limit: u64,
     ) -> Result<(Vec<stitchd_core::metric::MetricDefinition>, u64), RepositoryError>;
 
+    /// List non-deleted metrics in an environment that **directly**
+    /// reference the given event key — i.e. aggregation metrics whose
+    /// `config.event_key` matches, or funnel metrics with at least one
+    /// step matching. Ratio metrics are not matched (their event
+    /// references are transitive — caller resolves at a higher layer).
+    ///
+    /// Result is bounded by what fits in one env's metric set; no
+    /// pagination is offered because the back-link UI on EventDetail
+    /// surfaces them all in one go.
+    async fn list_referencing_event(
+        &self,
+        environment_id: EnvironmentId,
+        event_key: &str,
+    ) -> Result<Vec<stitchd_core::metric::MetricDefinition>, RepositoryError>;
+
     /// Persist a new metric. Caller is responsible for calling
     /// `metric.validate()` first.
     async fn create(

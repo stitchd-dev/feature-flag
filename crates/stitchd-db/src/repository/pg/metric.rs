@@ -276,6 +276,49 @@ impl MetricRepository for PgMetricRepository {
         Ok((metrics, u64::try_from(total).unwrap_or(0)))
     }
 
+    async fn list_referencing_event(
+        &self,
+        environment_id: EnvironmentId,
+        event_key: &str,
+    ) -> Result<Vec<MetricDefinition>, RepositoryError> {
+        // Aggregation: top-level `config.event_key` matches.
+        // Funnel: any element of `config.steps[]` has matching `event_key`.
+        // We rely on JSONB indexing for `config->>'event_key'` to be cheap;
+        // the funnel branch is an EXISTS over `jsonb_array_elements` which
+        // does a row-local scan but is fine for the small step counts
+        // metrics actually carry (usually 2-5).
+        let rows = sqlx::query(
+            r"
+            SELECT id, environment_id, key, name, description,
+                   kind, config, goal_direction,
+                   version, created_at, updated_at, deleted_at
+            FROM metric_definitions
+            WHERE environment_id = $1
+              AND deleted_at IS NULL
+              AND (
+                (kind = 'aggregation' AND config->>'event_key' = $2)
+                OR (kind = 'funnel' AND EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(config->'steps') AS s
+                    WHERE s->>'event_key' = $2
+                ))
+              )
+            ORDER BY key
+            ",
+        )
+        .bind(environment_id.as_uuid())
+        .bind(event_key)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let mut metrics = Vec::with_capacity(rows.len());
+        for row in rows {
+            metrics.push(row_to_metric(&row)?);
+        }
+        Ok(metrics)
+    }
+
     async fn create(&self, metric: &MetricDefinition) -> Result<(), RepositoryError> {
         let (kind_str, config) = split_kind(&metric.kind)?;
 

@@ -336,3 +336,134 @@ async fn find_batch_by_ids_empty_input_returns_empty(pool: sqlx::PgPool) {
     let fetched = repo.find_batch_by_ids(&[]).await.unwrap();
     assert!(fetched.is_empty());
 }
+
+// ── list_referencing_event ──────────────────────────────────────────────────
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_referencing_event_matches_aggregation_event_key(pool: sqlx::PgPool) {
+    let (repo, env) = seed_env(&pool).await;
+    // `make_aggregation` uses event_key="checkout_completed"
+    let m = make_aggregation(env, "agg_on_checkout");
+    repo.create(&m).await.unwrap();
+
+    let hits = repo
+        .list_referencing_event(env, "checkout_completed")
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, m.id);
+
+    let none = repo
+        .list_referencing_event(env, "does_not_exist")
+        .await
+        .unwrap();
+    assert!(none.is_empty());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_referencing_event_matches_funnel_step_event_key(pool: sqlx::PgPool) {
+    let (repo, env) = seed_env(&pool).await;
+    let funnel = MetricDefinition {
+        id: MetricId::new(),
+        environment_id: env,
+        key: "purchase_funnel".into(),
+        name: "Purchase Funnel".into(),
+        description: None,
+        kind: MetricKind::Funnel(FunnelConfig {
+            steps: vec![
+                FunnelStep { event_key: "view_item".into(), where_clause: None },
+                FunnelStep { event_key: "add_to_cart".into(), where_clause: None },
+                FunnelStep { event_key: "checkout_completed".into(), where_clause: None },
+            ],
+            window_seconds: 3600,
+            count_repeats: false,
+        }),
+        goal_direction: GoalDirection::Increase,
+        version: 1,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+    };
+    repo.create(&funnel).await.unwrap();
+
+    // Matches via any step's event_key (mid-funnel).
+    let hits = repo.list_referencing_event(env, "add_to_cart").await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].id, funnel.id);
+
+    // Last-step event matches too.
+    let last = repo
+        .list_referencing_event(env, "checkout_completed")
+        .await
+        .unwrap();
+    assert_eq!(last.len(), 1);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_referencing_event_skips_soft_deleted(pool: sqlx::PgPool) {
+    let (repo, env) = seed_env(&pool).await;
+    let m = make_aggregation(env, "to_be_deleted");
+    repo.create(&m).await.unwrap();
+    // Before delete: 1 hit.
+    let before = repo
+        .list_referencing_event(env, "checkout_completed")
+        .await
+        .unwrap();
+    assert_eq!(before.len(), 1);
+
+    repo.soft_delete(m.id).await.unwrap();
+
+    // After delete: deleted_at IS NOT NULL filter excludes it.
+    let after = repo
+        .list_referencing_event(env, "checkout_completed")
+        .await
+        .unwrap();
+    assert!(after.is_empty());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_referencing_event_excludes_ratio_metrics(pool: sqlx::PgPool) {
+    // Ratio metrics have no direct event_key — they reference other metrics.
+    // The repo intentionally skips them (caller does transitive resolution).
+    let (repo, env) = seed_env(&pool).await;
+    let num = make_aggregation(env, "num_metric");
+    let denom_evt_key = "denom_event"; // use a different event_key for denom
+    let mut denom = make_aggregation(env, "denom_metric");
+    denom.kind = MetricKind::Aggregation(AggregationConfig {
+        event_key: denom_evt_key.into(),
+        aggregator: AggregationOperator::Count,
+        on_field: None,
+        where_clause: None,
+    });
+    repo.create(&num).await.unwrap();
+    repo.create(&denom).await.unwrap();
+
+    let ratio = MetricDefinition {
+        id: MetricId::new(),
+        environment_id: env,
+        key: "checkout_rate".into(),
+        name: "Checkout Rate".into(),
+        description: None,
+        kind: MetricKind::Ratio(RatioConfig {
+            numerator_metric_id: num.id,
+            denominator_metric_id: denom.id,
+            min_denominator: 30,
+        }),
+        goal_direction: GoalDirection::Increase,
+        version: 1,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: None,
+    };
+    repo.create(&ratio).await.unwrap();
+
+    // Searching for the numerator's event_key returns ONLY the underlying
+    // aggregation, not the ratio that wraps it.
+    let hits = repo
+        .list_referencing_event(env, "checkout_completed")
+        .await
+        .unwrap();
+    let ids: Vec<_> = hits.iter().map(|m| m.id).collect();
+    assert!(ids.contains(&num.id));
+    assert!(!ids.contains(&ratio.id));
+}
