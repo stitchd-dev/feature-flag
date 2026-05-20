@@ -375,6 +375,66 @@ message PreviewMetricResponse {
   repeated PreviewBucket buckets = 1;
 }
 
+// ─── Event Firings / Stats (admin UI EventDetail page) ────────────────────────
+//
+// Per-event drill-down endpoints powering the admin UI's EventDetail page and
+// TestEventWidget. Both query the ClickHouse `events_v2` table directly,
+// scoped by `env_id` (trusted, JWT-derived) and `event_key`.
+
+message GetEventFiringsRequest {
+  // Tenant scope — must match the JWT-resolved environment of the caller.
+  string env_id    = 1;
+  // Pre-registered event_definitions.key to query firings for.
+  string event_key = 2;
+  // Page size. Default 50 when 0; server caps at 200.
+  uint32 limit     = 3;
+}
+
+// One recent event-firing row. JSON fields are serialised strings so the
+// proto contract stays stable across schema evolutions of `properties` /
+// `value`.
+message EventFiring {
+  // Context-pair: `contexts[1]` in the CH row.
+  string context_type    = 1;
+  string context_key     = 2;
+  // Serialised JSON of the typed `value` oneof — one of `true` / `42` /
+  // `1.5`. Empty string when no value (occurrence-only event).
+  string value_json      = 3;
+  // Serialised JSON object of the `properties` map. `{}` when the row had
+  // no properties.
+  string properties_json = 4;
+  // Client-side wall-clock time (RFC 3339 UTC).
+  string occurred_at     = 5;
+  // Server-side ingestion time (RFC 3339 UTC).
+  string ingested_at     = 6;
+}
+
+message GetEventFiringsResponse {
+  repeated EventFiring firings = 1;
+}
+
+message GetEventStatsRequest {
+  // Tenant scope — must match the JWT-resolved environment of the caller.
+  string env_id    = 1;
+  // Pre-registered event_definitions.key to bucket.
+  string event_key = 2;
+  // Number of days of history to bucket. Default 14 when 0; server caps at 90.
+  uint32 days      = 3;
+}
+
+message EventStatsBucket {
+  // Day-start (00:00 UTC) — RFC 3339 string.
+  string day                  = 1;
+  // Total firings in this day-bucket.
+  uint64 count                = 2;
+  // Unique context_keys (dimension-1 deduped) in this bucket.
+  uint64 unique_context_keys  = 3;
+}
+
+message GetEventStatsResponse {
+  repeated EventStatsBucket buckets = 1;
+}
+
 // ─── Analytics Service ────────────────────────────────────────────────────────
 
 // AnalyticsService consolidates all analytics and context-registry operations.
@@ -434,4 +494,13 @@ service AnalyticsService {
   // Compute a preview time-series for a metric over the last N days.
   // Accepts either a saved metric id or an inline draft.
   rpc PreviewMetric(PreviewMetricRequest) returns (PreviewMetricResponse);
+
+  // ── Event firings + stats (admin UI EventDetail page) ──────────────────────
+
+  // Recent firings for `event_key` within `env_id`, newest first.
+  rpc GetEventFirings(GetEventFiringsRequest) returns (GetEventFiringsResponse);
+
+  // Daily firing counts + unique context keys for `event_key` over the last
+  // `days` days within `env_id`.
+  rpc GetEventStats(GetEventStatsRequest) returns (GetEventStatsResponse);
 }

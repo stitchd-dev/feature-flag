@@ -13,8 +13,8 @@ use tonic::Request as TonicRequest;
 use utoipa::ToSchema;
 
 use stitchd_proto::analytics::v1::{
-    IngestEventRequest, MetricEvent, MetricValue, TrackEvent as ProtoTrackEvent,
-    TrackEventsRequest as ProtoTrackEventsRequest, metric_value,
+    GetEventFiringsRequest, GetEventStatsRequest, IngestEventRequest, MetricEvent, MetricValue,
+    TrackEvent as ProtoTrackEvent, TrackEventsRequest as ProtoTrackEventsRequest, metric_value,
 };
 
 use crate::error::GatewayError;
@@ -478,6 +478,167 @@ pub async fn track_events(
     Ok((StatusCode::ACCEPTED, Json(body)).into_response())
 }
 
+// ─── GET /v1/events/{key}/firings & /stats — admin EventDetail page ─────────
+//
+// Both routes live on the JWT-auth tier. They forward to analytics-service
+// after resolving `env_id` from the `env_id` query parameter (matching the
+// existing pattern in `/v1/metrics?env_id=...`). The gateway returns 400 on
+// a missing/invalid env_id rather than the 401 the SDK-tier routes use,
+// since the caller is already JWT-authenticated.
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct FiringsQuery {
+    /// Environment UUID — required (JWT-tier convention).
+    pub env_id: String,
+    /// Page size. Default 50; server caps at 200.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct StatsQuery {
+    /// Environment UUID — required (JWT-tier convention).
+    pub env_id: String,
+    /// Day-window. Default 14; server caps at 90.
+    #[serde(default)]
+    pub days: Option<u32>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EventFiringJson {
+    pub context_type: String,
+    pub context_key: String,
+    /// Serialised JSON scalar (`true`/`42`/`1.5`); empty when occurrence-only.
+    pub value_json: String,
+    /// Serialised JSON object (always `{}` when empty).
+    pub properties_json: String,
+    pub occurred_at: String,
+    pub ingested_at: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EventFiringsResponseJson {
+    pub firings: Vec<EventFiringJson>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EventStatsBucketJson {
+    pub day: String,
+    pub count: u64,
+    pub unique_context_keys: u64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EventStatsResponseJson {
+    pub buckets: Vec<EventStatsBucketJson>,
+}
+
+/// `GET /v1/events/{event_key}/firings?env_id=<uuid>&limit=<n>`
+///
+/// Returns the most recent firings of `event_key` within `env_id`. Powers
+/// the admin UI's EventDetail recent-firings table (Phase 6 Task 6.2 of
+/// `events_metrics_20260519`).
+#[utoipa::path(
+    get,
+    path = "/v1/events/{event_key}/firings",
+    tag = "events",
+    params(
+        ("event_key" = String, Path, description = "Pre-registered event key"),
+        ("env_id" = String, Query, description = "Environment UUID"),
+        ("limit" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
+    ),
+    responses(
+        (status = 200, description = "Recent firings", body = EventFiringsResponseJson),
+        (status = 400, description = "Invalid env_id or event_key"),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Analytics service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_event_firings(
+    State(state): State<Arc<GatewayState>>,
+    Path(event_key): Path<String>,
+    Query(query): Query<FiringsQuery>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let rpc = tonic::Request::new(GetEventFiringsRequest {
+        env_id: query.env_id,
+        event_key,
+        limit: query.limit.unwrap_or(0),
+    });
+
+    let resp = {
+        let mut client = state.analytics_client.lock().await;
+        client.get_event_firings(rpc).await
+    }
+    .map_err(GatewayError::from)?;
+
+    let inner = resp.into_inner();
+    let firings: Vec<EventFiringJson> = inner
+        .firings
+        .into_iter()
+        .map(|f| EventFiringJson {
+            context_type: f.context_type,
+            context_key: f.context_key,
+            value_json: f.value_json,
+            properties_json: f.properties_json,
+            occurred_at: f.occurred_at,
+            ingested_at: f.ingested_at,
+        })
+        .collect();
+    Ok(Json(EventFiringsResponseJson { firings }))
+}
+
+/// `GET /v1/events/{event_key}/stats?env_id=<uuid>&days=<n>`
+///
+/// Returns daily firing counts + unique-context-key counts for the last
+/// `days` days. Powers the admin UI's EventDetail sparkline.
+#[utoipa::path(
+    get,
+    path = "/v1/events/{event_key}/stats",
+    tag = "events",
+    params(
+        ("event_key" = String, Path, description = "Pre-registered event key"),
+        ("env_id" = String, Query, description = "Environment UUID"),
+        ("days" = Option<u32>, Query, description = "Day-window (default 14, max 90)"),
+    ),
+    responses(
+        (status = 200, description = "Daily firing counts", body = EventStatsResponseJson),
+        (status = 400, description = "Invalid env_id or event_key"),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Analytics service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_event_stats(
+    State(state): State<Arc<GatewayState>>,
+    Path(event_key): Path<String>,
+    Query(query): Query<StatsQuery>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let rpc = tonic::Request::new(GetEventStatsRequest {
+        env_id: query.env_id,
+        event_key,
+        days: query.days.unwrap_or(0),
+    });
+
+    let resp = {
+        let mut client = state.analytics_client.lock().await;
+        client.get_event_stats(rpc).await
+    }
+    .map_err(GatewayError::from)?;
+
+    let inner = resp.into_inner();
+    let buckets: Vec<EventStatsBucketJson> = inner
+        .buckets
+        .into_iter()
+        .map(|b| EventStatsBucketJson {
+            day: b.day,
+            count: b.count,
+            unique_context_keys: b.unique_context_keys,
+        })
+        .collect();
+    Ok(Json(EventStatsResponseJson { buckets }))
+}
+
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -691,11 +852,13 @@ mod tests {
 
     use stitchd_proto::analytics::v1::{
         ExperimentResult, GetContextIntelligenceRequest, GetContextIntelligenceResponse,
-        GetEvalStatsRequest, GetEvalStatsResponse, GetExperimentResultRequest, GetMetricRequest,
-        ListContextParamsRequest, ListContextParamsResponse, ListContextTypesRequest,
-        ListContextTypesResponse, ListExperimentResultsRequest, ListMetricsRequest,
-        ListMetricsResponse, MetricDefinition, PreviewMetricRequest, PreviewMetricResponse,
-        RegisterContextRequest, RegisterContextResponse, RejectedEvent as ProtoRejectedEvent,
+        GetEvalStatsRequest, GetEvalStatsResponse, GetEventFiringsRequest,
+        GetEventFiringsResponse, GetEventStatsRequest, GetEventStatsResponse,
+        GetExperimentResultRequest, GetMetricRequest, ListContextParamsRequest,
+        ListContextParamsResponse, ListContextTypesRequest, ListContextTypesResponse,
+        ListExperimentResultsRequest, ListMetricsRequest, ListMetricsResponse, MetricDefinition,
+        PreviewMetricRequest, PreviewMetricResponse, RegisterContextRequest,
+        RegisterContextResponse, RejectedEvent as ProtoRejectedEvent,
         TrackEventsResponse as ProtoTrackEventsResponse,
         analytics_service_client::AnalyticsServiceClient,
         analytics_service_server::{AnalyticsService, AnalyticsServiceServer},
@@ -830,6 +993,18 @@ mod tests {
             &self,
             _req: ServerReq<PreviewMetricRequest>,
         ) -> Result<ServerResp<PreviewMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_event_firings(
+            &self,
+            _req: ServerReq<GetEventFiringsRequest>,
+        ) -> Result<ServerResp<GetEventFiringsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_event_stats(
+            &self,
+            _req: ServerReq<GetEventStatsRequest>,
+        ) -> Result<ServerResp<GetEventStatsResponse>, Status> {
             Err(Status::unimplemented("not used in tests"))
         }
     }
@@ -1254,5 +1429,338 @@ mod tests {
             msg.contains("invalid JSON body") || msg.contains("BadRequest"),
             "got {msg}"
         );
+    }
+
+    // ── GET /v1/events/{key}/firings + /stats ─────────────────────────────────
+    //
+    // EventDetail page routes — JWT-tier admin endpoints. Three required test
+    // cases (per worker_25_firings task brief):
+    //  - 401 without JWT (full router boot, exercises auth middleware)
+    //  - firings forwards env_id/event_key/limit to analytics-service
+    //  - stats forwards env_id/event_key/days
+    //
+    // A dedicated mock that captures both RPCs is used; the existing
+    // `MockAnalyticsService` above only handles `track_events`. This keeps
+    // the diff scoped — no behavioural change to existing test mocks.
+
+    /// `(env_key, event_key, limit, days)` capture for firings/stats RPCs.
+    type FiringsCapture = (String, String, u32);
+    type StatsCapture = (String, String, u32);
+
+    struct EventQueryMockService {
+        firings: Arc<Mutex<Vec<FiringsCapture>>>,
+        stats: Arc<Mutex<Vec<StatsCapture>>>,
+    }
+
+    #[async_trait]
+    impl AnalyticsService for EventQueryMockService {
+        type ListExperimentResultsStream =
+            Pin<Box<dyn Stream<Item = Result<ExperimentResult, Status>> + Send + 'static>>;
+
+        async fn get_event_firings(
+            &self,
+            request: ServerReq<GetEventFiringsRequest>,
+        ) -> Result<ServerResp<GetEventFiringsResponse>, Status> {
+            let inner = request.into_inner();
+            self.firings
+                .lock()
+                .unwrap()
+                .push((inner.env_id.clone(), inner.event_key.clone(), inner.limit));
+            // Canned response — one firing row so the JSON-shape mapping is exercised.
+            Ok(ServerResp::new(GetEventFiringsResponse {
+                firings: vec![stitchd_proto::analytics::v1::EventFiring {
+                    context_type: "user".into(),
+                    context_key: "u1".into(),
+                    value_json: "42".into(),
+                    properties_json: "{}".into(),
+                    occurred_at: "2026-05-19T12:00:00.000Z".into(),
+                    ingested_at: "2026-05-19T12:00:01.000Z".into(),
+                }],
+            }))
+        }
+
+        async fn get_event_stats(
+            &self,
+            request: ServerReq<GetEventStatsRequest>,
+        ) -> Result<ServerResp<GetEventStatsResponse>, Status> {
+            let inner = request.into_inner();
+            self.stats
+                .lock()
+                .unwrap()
+                .push((inner.env_id.clone(), inner.event_key.clone(), inner.days));
+            Ok(ServerResp::new(GetEventStatsResponse {
+                buckets: vec![stitchd_proto::analytics::v1::EventStatsBucket {
+                    day: "2026-05-19T00:00:00Z".into(),
+                    count: 3,
+                    unique_context_keys: 2,
+                }],
+            }))
+        }
+
+        // ── Unimplemented stubs (mirrors `MockAnalyticsService`) ───────────────
+        async fn ingest_event(
+            &self,
+            _req: ServerReq<IngestEventRequest>,
+        ) -> Result<ServerResp<IngestEventResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn track_events(
+            &self,
+            _req: ServerReq<ProtoTrackEventsRequest>,
+        ) -> Result<ServerResp<ProtoTrackEventsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn register_context(
+            &self,
+            _req: ServerReq<RegisterContextRequest>,
+        ) -> Result<ServerResp<RegisterContextResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_context_types(
+            &self,
+            _req: ServerReq<ListContextTypesRequest>,
+        ) -> Result<ServerResp<ListContextTypesResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_context_params(
+            &self,
+            _req: ServerReq<ListContextParamsRequest>,
+        ) -> Result<ServerResp<ListContextParamsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_eval_stats(
+            &self,
+            _req: ServerReq<GetEvalStatsRequest>,
+        ) -> Result<ServerResp<GetEvalStatsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_context_intelligence(
+            &self,
+            _req: ServerReq<GetContextIntelligenceRequest>,
+        ) -> Result<ServerResp<GetContextIntelligenceResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn write_experiment_results(
+            &self,
+            _req: ServerReq<WriteExperimentResultsRequest>,
+        ) -> Result<ServerResp<WriteExperimentResultsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_experiment_results(
+            &self,
+            _req: ServerReq<ListExperimentResultsRequest>,
+        ) -> Result<ServerResp<Self::ListExperimentResultsStream>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_experiment_result(
+            &self,
+            _req: ServerReq<GetExperimentResultRequest>,
+        ) -> Result<ServerResp<ExperimentResult>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn create_metric(
+            &self,
+            _req: ServerReq<CreateMetricRequest>,
+        ) -> Result<ServerResp<MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_metric(
+            &self,
+            _req: ServerReq<GetMetricRequest>,
+        ) -> Result<ServerResp<MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_metrics(
+            &self,
+            _req: ServerReq<ListMetricsRequest>,
+        ) -> Result<ServerResp<ListMetricsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn update_metric(
+            &self,
+            _req: ServerReq<UpdateMetricRequest>,
+        ) -> Result<ServerResp<MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn delete_metric(
+            &self,
+            _req: ServerReq<DeleteMetricRequest>,
+        ) -> Result<ServerResp<DeleteMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn preview_metric(
+            &self,
+            _req: ServerReq<PreviewMetricRequest>,
+        ) -> Result<ServerResp<PreviewMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+    }
+
+    /// Spin up an in-process mock that captures firings + stats calls,
+    /// returning an `AnalyticsServiceClient` plus both capture handles.
+    async fn spawn_event_query_mock() -> (
+        AnalyticsServiceClient<TonicChannel>,
+        Arc<Mutex<Vec<FiringsCapture>>>,
+        Arc<Mutex<Vec<StatsCapture>>>,
+    ) {
+        let firings: Arc<Mutex<Vec<FiringsCapture>>> = Arc::new(Mutex::new(Vec::new()));
+        let stats: Arc<Mutex<Vec<StatsCapture>>> = Arc::new(Mutex::new(Vec::new()));
+        let svc = EventQueryMockService {
+            firings: Arc::clone(&firings),
+            stats: Arc::clone(&stats),
+        };
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            TonicServer::builder()
+                .add_service(AnalyticsServiceServer::new(svc))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+
+        let client = AnalyticsServiceClient::connect(format!("http://{addr}"))
+            .await
+            .expect("mock analytics-service should accept connection");
+        (client, firings, stats)
+    }
+
+    /// Router exposing only the firings + stats routes with NO auth middleware,
+    /// for proxy-shape tests. The 401-without-JWT case uses the full `build_router`.
+    fn firings_router(state: Arc<GatewayState>) -> axum::Router {
+        use axum::routing::get as get_route;
+        axum::Router::new()
+            .route("/v1/events/{event_key}/firings", get_route(get_event_firings))
+            .route("/v1/events/{event_key}/stats", get_route(get_event_stats))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn test_firings_returns_401_without_jwt() {
+        // Full router boot ensures the auth middleware actually runs and the
+        // route is registered. With no `Authorization` header, the JWT tier
+        // must short-circuit to 401.
+        use crate::router::build_router;
+        use metrics_exporter_prometheus::PrometheusBuilder;
+
+        let handle = PrometheusBuilder::new().build_recorder().handle();
+        let app = build_router(make_stub_state(), handle);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/events/click/firings?env_id=00000000-0000-0000-0000-000000000001")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_firings_proxies_to_analytics_with_env_id() {
+        let (client, firings, _stats) = spawn_event_query_mock().await;
+        let state = state_with_analytics(client);
+        let app = firings_router(state);
+
+        let env_id = "11111111-2222-3333-4444-555555555555";
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/events/checkout/firings?env_id={env_id}&limit=25"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // Verify the analytics-service received the expected RPC arguments.
+        // Scope the MutexGuard so it drops before the await on `to_bytes`
+        // below — clippy::await_holding_lock would fire otherwise.
+        {
+            let calls = firings.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, env_id);
+            assert_eq!(calls[0].1, "checkout");
+            assert_eq!(calls[0].2, 25);
+        }
+
+        // Response shape is the JSON projection of the proto type.
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let firings_arr = body["firings"].as_array().unwrap();
+        assert_eq!(firings_arr.len(), 1);
+        assert_eq!(firings_arr[0]["context_type"], "user");
+        assert_eq!(firings_arr[0]["context_key"], "u1");
+        assert_eq!(firings_arr[0]["value_json"], "42");
+        assert_eq!(firings_arr[0]["properties_json"], "{}");
+    }
+
+    #[tokio::test]
+    async fn test_stats_proxies_to_analytics() {
+        let (client, _firings, stats) = spawn_event_query_mock().await;
+        let state = state_with_analytics(client);
+        let app = firings_router(state);
+
+        let env_id = "22222222-3333-4444-5555-666666666666";
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/events/signup/stats?env_id={env_id}&days=7"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        {
+            let calls = stats.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, env_id);
+            assert_eq!(calls[0].1, "signup");
+            assert_eq!(calls[0].2, 7);
+        }
+
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let buckets = body["buckets"].as_array().unwrap();
+        assert_eq!(buckets.len(), 1);
+        assert_eq!(buckets[0]["day"], "2026-05-19T00:00:00Z");
+        assert_eq!(buckets[0]["count"], 3);
+        assert_eq!(buckets[0]["unique_context_keys"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_firings_uses_default_limit_when_omitted() {
+        let (client, firings, _stats) = spawn_event_query_mock().await;
+        let state = state_with_analytics(client);
+        let app = firings_router(state);
+
+        let env_id = "33333333-4444-5555-6666-777777777777";
+        let _ = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/events/x/firings?env_id={env_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let calls = firings.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        // Gateway forwards `0` → analytics-service resolves the default (50).
+        assert_eq!(calls[0].2, 0);
     }
 }
