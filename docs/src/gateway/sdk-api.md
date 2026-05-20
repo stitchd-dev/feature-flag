@@ -123,6 +123,55 @@ POST /v1/sdk/events:batch
 Batch flag evaluation event ingestion (202 Accepted). Part of the new clean SDK surface
 under `/v1/sdk/`, separated from the legacy routes.
 
+---
+
+### Track Admin-Defined Events (`events_metrics_20260519`)
+
+```
+POST /v1/events/track
+```
+
+Batch ingestion of admin-defined events emitted by the SDK `Client::track()` API.
+Each event is validated against its `EventDefinition` (key, typed value, archived
+flag) by `stitchd-analytics-service`; per-event failures populate `rejected[]`
+without failing the whole batch.
+
+**Request body** (5 MiB max; larger requests get `413 Payload Too Large`):
+
+```json
+{
+  "events": [
+    {
+      "event_key": "checkout_completed",
+      "context_type": "user",
+      "context_key": "user-123",
+      "value": { "kind": "float", "value": 49.99 },
+      "properties": { "currency": "USD" },
+      "occurred_at": "2026-05-20T08:30:00Z"
+    }
+  ]
+}
+```
+
+- `value` — typed metric value; optional when the event definition's value type
+  is `Unit`. Discriminator `kind` is one of `unit`, `bool`, `int`, `float`, `string`.
+- `properties` — flat `string -> string` map used for downstream metric filters.
+- `occurred_at` — RFC 3339 client wall-clock; defaults to ingestion time.
+
+**Response (`202 Accepted`):**
+
+```json
+{
+  "accepted_count": 1,
+  "rejected": []
+}
+```
+
+Each `rejected[]` entry carries `event_key` and a `reason` discriminator:
+`unknown_event_key`, `archived_event_key`, `value_type_mismatch`, `missing_value`,
+or `invalid_occurred_at`. Per-second batch quota is governed by
+`STITCHD_EVENT_QUOTA_PER_SEC` (default `1000`).
+
 ## Error Envelope
 
 Errors follow the standard gateway envelope:
