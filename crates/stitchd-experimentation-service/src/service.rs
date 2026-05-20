@@ -60,7 +60,7 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         iteration_number: i.iteration_number,
         started_at_ms: i.started_at.timestamp_millis(),
         ended_at_ms: i.ended_at.map_or(0, |t| t.timestamp_millis()),
-        metric_keys: i.metric_keys.clone(),
+        metric_ids: i.metric_ids.iter().map(ToString::to_string).collect(),
         traffic_allocation: i.traffic_allocation,
     }
 }
@@ -173,7 +173,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
                 Some(proto_exp.description.clone())
             },
             hypothesis: None,
-            metric_keys: vec![],
+            metric_ids: vec![],
             traffic_allocation: 100.0,
             min_sample_size: None,
             scheduled_start_at: None,
@@ -532,7 +532,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
                     environment_id: exp.environment_id.to_string(),
                     iteration_id: iter.id.to_string(),
                     variant_keys: vec![], // variants live on the flag; not denormalised here
-                    metric_keys: iter.metric_keys.clone(),
+                    metric_ids: iter.metric_ids.iter().map(ToString::to_string).collect(),
                     started_at_ms: iter.started_at.timestamp_millis(),
                     status: "running".to_string(),
                 }));
@@ -623,7 +623,7 @@ mod tests {
     use std::sync::Arc;
     use stitchd_core::{
         experimentation::{Experiment, ExperimentIteration, ExperimentStatus},
-        id::{EnvironmentId, ExperimentId, RuleId},
+        id::{EnvironmentId, ExperimentId, MetricId, RuleId},
     };
     use stitchd_db::stats_schedule::{StatsScheduleRow, UpsertStatsSchedule};
     use stitchd_db::{ComputationStatus, RepositoryError, StatsScheduleRepository};
@@ -719,7 +719,7 @@ mod tests {
             name: "Test Experiment".to_string(),
             description: Some("A description".to_string()),
             hypothesis: None,
-            metric_keys: vec!["checkout".to_string()],
+            metric_ids: vec![MetricId::new()],
             traffic_allocation: 100.0,
             min_sample_size: None,
             scheduled_start_at: None,
@@ -809,7 +809,7 @@ mod tests {
                 iteration_number: 1,
                 started_at: Utc::now(),
                 ended_at: None,
-                metric_keys: vec!["checkout".to_string()],
+                metric_ids: vec![MetricId::new()],
                 traffic_allocation: 100.0,
                 min_sample_size: None,
             })
@@ -1670,7 +1670,7 @@ mod tests {
                 iteration_number: 1,
                 started_at: Utc::now(),
                 ended_at: None, // still active
-                metric_keys: vec!["checkout".to_string()],
+                metric_ids: vec![MetricId::new()],
                 traffic_allocation: 100.0,
                 min_sample_size: None,
             }])
@@ -1704,7 +1704,7 @@ mod tests {
                 iteration_number: 1,
                 started_at: Utc::now(),
                 ended_at: None,
-                metric_keys: vec!["checkout".to_string()],
+                metric_ids: vec![MetricId::new()],
                 traffic_allocation: 100.0,
                 min_sample_size: None,
             })
@@ -1732,7 +1732,11 @@ mod tests {
         assert_eq!(running.status, "running");
         assert!(!running.experiment_id.is_empty());
         assert!(!running.iteration_id.is_empty());
-        assert_eq!(running.metric_keys, vec!["checkout"]);
+        assert_eq!(
+            running.metric_ids.len(),
+            1,
+            "iteration snapshot exposes a single metric id"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1754,7 +1758,11 @@ mod tests {
         let proto = result.unwrap().into_inner();
         assert_eq!(proto.id, iter_id.to_string());
         assert_eq!(proto.iteration_number, 1);
-        assert_eq!(proto.metric_keys, vec!["checkout"]);
+        assert_eq!(
+            proto.metric_ids.len(),
+            1,
+            "iteration snapshot exposes a single metric id"
+        );
     }
 
     /// Invalid UUID returns InvalidArgument.

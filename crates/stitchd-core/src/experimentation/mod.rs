@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::id::{EnvironmentId, ExperimentId, ExperimentIterationId, RuleId};
+use crate::id::{EnvironmentId, ExperimentId, ExperimentIterationId, MetricId, RuleId};
 
 /// Errors that can occur during experiment operations.
 #[derive(Debug, Error, PartialEq)]
@@ -121,8 +121,10 @@ pub struct Experiment {
     pub description: Option<String>,
     /// Optional hypothesis statement.
     pub hypothesis: Option<String>,
-    /// Pre-registered event definition keys used as metrics (at least one required).
-    pub metric_keys: Vec<String>,
+    /// References to `metric_definitions` rows used as this experiment's metrics
+    /// (at least one required). Phase 7 cutover replaced raw `metric_keys`
+    /// (event-key strings) with metric-definition UUIDs.
+    pub metric_ids: Vec<MetricId>,
     /// Percentage of rule-matched contexts to enrol (0.1% granularity, default 100%).
     pub traffic_allocation: f64,
     /// Optional informational minimum sample size guardrail.
@@ -160,8 +162,8 @@ pub struct ExperimentIteration {
     pub started_at: DateTime<Utc>,
     /// When this iteration ended; `None` while the experiment is still running.
     pub ended_at: Option<DateTime<Utc>>,
-    /// Snapshot of metric keys at the moment this iteration started.
-    pub metric_keys: Vec<String>,
+    /// Snapshot of metric definition IDs at the moment this iteration started.
+    pub metric_ids: Vec<MetricId>,
     /// Snapshot of traffic allocation at the moment this iteration started.
     pub traffic_allocation: f64,
     /// Snapshot of minimum sample size at the moment this iteration started.
@@ -380,7 +382,7 @@ mod tests {
             name: "My Experiment".to_string(),
             description: Some("A/B test of checkout flow".to_string()),
             hypothesis: Some("Variant B increases conversion".to_string()),
-            metric_keys: vec!["checkout_completed".to_string()],
+            metric_ids: vec![MetricId::new()],
             traffic_allocation: 100.0,
             min_sample_size: Some(1000),
             scheduled_start_at: None,
@@ -392,7 +394,7 @@ mod tests {
             version: 1,
         };
         assert_eq!(exp.status, ExperimentStatus::Draft);
-        assert_eq!(exp.metric_keys.len(), 1);
+        assert_eq!(exp.metric_ids.len(), 1);
     }
 
     #[test]
@@ -403,7 +405,7 @@ mod tests {
             iteration_number: 1,
             started_at: Utc::now(),
             ended_at: None,
-            metric_keys: vec!["checkout_completed".to_string()],
+            metric_ids: vec![MetricId::new()],
             traffic_allocation: 50.0,
             min_sample_size: None,
         };

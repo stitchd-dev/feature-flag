@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            UPDATE experiments\n            SET name = $1,\n                description = $2,\n                hypothesis = $3,\n                status = $4::text,\n                metric_keys = $5,\n                traffic_allocation = $6::float8::numeric,\n                min_sample_size = $7,\n                scheduled_start_at = $8,\n                scheduled_end_at = $9,\n                updated_at = NOW(),\n                version = $10\n            WHERE id = $11 AND version = $12 AND deleted_at IS NULL\n            RETURNING\n                id                  AS \"id: ExperimentId\",\n                env_id              AS \"environment_id: EnvironmentId\",\n                flag_rule_id        AS \"flag_rule_id: RuleId\",\n                name,\n                description,\n                hypothesis,\n                status              AS \"status: ExperimentStatus\",\n                metric_keys,\n                traffic_allocation  AS \"traffic_allocation: f64\",\n                min_sample_size     AS \"min_sample_size: i64\",\n                scheduled_start_at,\n                scheduled_end_at,\n                version             AS \"version: i64\",\n                created_at,\n                updated_at,\n                deleted_at\n            ",
+  "query": "\n            SELECT\n                id                  AS \"id: ExperimentId\",\n                env_id              AS \"environment_id: EnvironmentId\",\n                flag_rule_id        AS \"flag_rule_id: RuleId\",\n                name,\n                description,\n                hypothesis,\n                status              AS \"status: ExperimentStatus\",\n                metric_ids          AS \"metric_ids: Vec<MetricId>\",\n                traffic_allocation  AS \"traffic_allocation: f64\",\n                min_sample_size     AS \"min_sample_size: i64\",\n                scheduled_start_at,\n                scheduled_end_at,\n                version             AS \"version: i64\",\n                created_at,\n                updated_at,\n                deleted_at\n            FROM experiments\n            WHERE id = $1 AND deleted_at IS NULL\n            ",
   "describe": {
     "columns": [
       {
@@ -40,8 +40,8 @@
       },
       {
         "ordinal": 7,
-        "name": "metric_keys",
-        "type_info": "TextArray"
+        "name": "metric_ids: Vec<MetricId>",
+        "type_info": "UuidArray"
       },
       {
         "ordinal": 8,
@@ -86,18 +86,7 @@
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Text",
-        "Text",
-        "Text",
-        "TextArray",
-        "Float8",
-        "Int8",
-        "Timestamptz",
-        "Timestamptz",
-        "Int8",
-        "Uuid",
-        "Int8"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -119,5 +108,5 @@
       true
     ]
   },
-  "hash": "3f9649252c23cc9bf0241608c6449ab233caa112680616c1398e8a8583f23833"
+  "hash": "91bf51c959ebc6393505d89ed250549256634c4e42810f49e7aefc8c0c832e34"
 }

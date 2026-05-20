@@ -476,20 +476,20 @@ pub async fn handle_update_metric(
     // reference this metric. Failure here MUST NOT surface to the
     // caller — log + drop.
     if let (Some(exp_repo), Some(dispatch)) = (experiment_repo, recompute_dispatcher) {
-        let metric_key = updated.key.clone();
+        let metric_id = updated.id;
         let env_id = updated.environment_id;
         tokio::spawn(async move {
             match trigger_recompute_for_metric(
                 dispatch.as_ref(),
                 exp_repo.as_ref(),
-                &metric_key,
+                metric_id,
                 env_id,
             )
             .await
             {
                 Ok(n) => {
                     tracing::info!(
-                        metric_key = %metric_key,
+                        metric_id = %metric_id,
                         environment_id = %env_id,
                         triggers_fired = n,
                         "update_metric: recompute triggers dispatched",
@@ -497,7 +497,7 @@ pub async fn handle_update_metric(
                 }
                 Err(e) => {
                     tracing::warn!(
-                        metric_key = %metric_key,
+                        metric_id = %metric_id,
                         environment_id = %env_id,
                         "update_metric: recompute dispatch failed: {e}",
                     );
@@ -1325,7 +1325,7 @@ mod handler_tests {
         }
     }
 
-    fn running_exp_with_metric(env: EnvironmentId, metric_key: &str) -> Experiment {
+    fn running_exp_with_metric(env: EnvironmentId, metric_id: MetricId) -> Experiment {
         Experiment {
             id: ExperimentId::new(),
             environment_id: env,
@@ -1333,7 +1333,7 @@ mod handler_tests {
             name: "exp".into(),
             description: None,
             hypothesis: None,
-            metric_keys: vec![metric_key.into()],
+            metric_ids: vec![metric_id],
             traffic_allocation: 100.0,
             min_sample_size: None,
             scheduled_start_at: None,
@@ -1353,8 +1353,9 @@ mod handler_tests {
             .await
             .unwrap()
             .into_inner();
+        let created_metric_id = MetricId::from_uuid(uuid::Uuid::parse_str(&created.id).unwrap());
 
-        let exp = running_exp_with_metric(env, "to_dispatch");
+        let exp = running_exp_with_metric(env, created_metric_id);
         let exp_id = exp.id;
         let exp_repo: Arc<dyn ExperimentRepository> = Arc::new(OneRunningExperimentRepo {
             rows: vec![exp],
@@ -1405,8 +1406,9 @@ mod handler_tests {
                 .await
                 .unwrap()
                 .into_inner();
+        let created_metric_id = MetricId::from_uuid(uuid::Uuid::parse_str(&created.id).unwrap());
 
-        let exp = running_exp_with_metric(env, "still_succeeds");
+        let exp = running_exp_with_metric(env, created_metric_id);
         let exp_repo: Arc<dyn ExperimentRepository> = Arc::new(OneRunningExperimentRepo {
             rows: vec![exp],
         });

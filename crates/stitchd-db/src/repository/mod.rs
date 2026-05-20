@@ -601,7 +601,7 @@ pub trait ExperimentRepository: Send + Sync {
     /// Apply a status transition to an experiment.
     ///
     /// On transition into `running`:
-    /// - Creates a new `experiment_iterations` row (snapshot of current `metric_keys`,
+    /// - Creates a new `experiment_iterations` row (snapshot of current `metric_ids`,
     ///   `traffic_allocation`, `min_sample_size`)
     /// - Sets `feature_flag_rules.frozen = true` for the experiment's `flag_rule_id`
     ///
