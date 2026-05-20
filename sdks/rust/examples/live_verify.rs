@@ -204,7 +204,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Shutdown ─────────────────────────────────────────────────────────────
     println!("Shutting down…");
-    client.shutdown().await;
+    // Phase 5 Task 5.3 — `shutdown` takes the final track-event flush
+    // timeout. 5s is generous for the live test.
+    if let Err(e) = client.shutdown(Duration::from_secs(5)).await {
+        eprintln!("  shutdown returned error: {e}");
+    }
 
     println!();
     println!("=== All 6 live verification tests PASSED ===");

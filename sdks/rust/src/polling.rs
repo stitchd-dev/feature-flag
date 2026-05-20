@@ -179,6 +179,7 @@ mod tests {
             list_segments: vec![],
             server_timestamp_ms: 0,
             environment_id: "env".into(),
+            event_definitions: vec![],
         })
     }
 

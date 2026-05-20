@@ -15,13 +15,15 @@ use chrono::{DateTime, Utc};
 use clickhouse::Client as ChClient;
 use tonic::{Request, Response, Status};
 
+use stitchd_core::event::EventValueType;
 use stitchd_core::id::EnvironmentId;
 use stitchd_core::segment::SegmentType;
 use stitchd_db::clickhouse::{EvalLogRow, insert_eval_log_rows};
-use stitchd_db::{FlagRepository, SegmentRepository, VariantRepository};
+use stitchd_db::{EventDefinitionRepository, FlagRepository, SegmentRepository, VariantRepository};
 use stitchd_proto::sdk::v1::{
-    FlagEvaluationEvent, IngestSdkEvalLogRequest, IngestSdkEvalLogResponse, SyncDefinitionsRequest,
-    SyncDefinitionsResponse, flag_sdk_backend_service_server::FlagSdkBackendService,
+    EventDefinitionMeta, FlagEvaluationEvent, IngestSdkEvalLogRequest, IngestSdkEvalLogResponse,
+    SyncDefinitionsRequest, SyncDefinitionsResponse,
+    flag_sdk_backend_service_server::FlagSdkBackendService,
 };
 
 use crate::mapping;
@@ -35,6 +37,11 @@ pub struct FlagSdkBackendServiceImpl {
     flag_repo: Arc<dyn FlagRepository>,
     variant_repo: Arc<dyn VariantRepository>,
     segment_repo: Arc<dyn SegmentRepository>,
+    /// Optional event-definition repo for populating
+    /// `SyncDefinitionsResponse.event_definitions`. When `None`, the
+    /// response carries an empty list — old deployments without event
+    /// definitions still serve flags normally.
+    event_definition_repo: Option<Arc<dyn EventDefinitionRepository>>,
     /// Optional ClickHouse client for `IngestSdkEvalLog`. When `None`, events
     /// are accepted (200 OK) but discarded — useful for local dev without CH.
     ch_client: Option<Arc<ChClient>>,
@@ -44,7 +51,9 @@ impl FlagSdkBackendServiceImpl {
     /// Construct a new service backed by the given repositories.
     ///
     /// `IngestSdkEvalLog` is functional but discards events until
-    /// [`with_clickhouse`] is called.
+    /// [`with_clickhouse`] is called. The `SyncDefinitions` response will
+    /// carry an empty `event_definitions` list until
+    /// [`with_event_definition_repo`] is called.
     #[must_use]
     pub fn new(
         flag_repo: Arc<dyn FlagRepository>,
@@ -55,6 +64,7 @@ impl FlagSdkBackendServiceImpl {
             flag_repo,
             variant_repo,
             segment_repo,
+            event_definition_repo: None,
             ch_client: None,
         }
     }
@@ -64,6 +74,18 @@ impl FlagSdkBackendServiceImpl {
     #[must_use]
     pub fn with_clickhouse(mut self, client: Arc<ChClient>) -> Self {
         self.ch_client = Some(client);
+        self
+    }
+
+    /// Attach an `EventDefinitionRepository` so `SyncDefinitions` includes
+    /// the per-environment event definitions used by the SDK for
+    /// `Client::track()` validation.
+    #[must_use]
+    pub fn with_event_definition_repo(
+        mut self,
+        repo: Arc<dyn EventDefinitionRepository>,
+    ) -> Self {
+        self.event_definition_repo = Some(repo);
         self
     }
 }
@@ -179,6 +201,32 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
             });
         }
 
+        // 7. Event definitions — used by SDK Client::track() to validate
+        //    event_key + value_type before enqueueing. The repo filters out
+        //    soft-deleted rows in list_by_environment, so the iterator here
+        //    is "all live event defs". When no repo is wired (legacy
+        //    deployments / unit tests), ship an empty list.
+        let event_definitions = if let Some(repo) = self.event_definition_repo.as_ref() {
+            let defs = repo.list_by_environment(env_id).await.map_err(|e| {
+                Status::internal(format!(
+                    "event_definition_repo.list_by_environment failed: {e}"
+                ))
+            })?;
+            defs.into_iter()
+                .filter(|d| d.deleted_at.is_none())
+                .map(|d| EventDefinitionMeta {
+                    event_key: d.key,
+                    value_type: match d.value_type {
+                        EventValueType::Bool => "bool".to_string(),
+                        EventValueType::Int => "int".to_string(),
+                        EventValueType::Double => "double".to_string(),
+                    },
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         let server_timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -190,6 +238,7 @@ impl FlagSdkBackendService for FlagSdkBackendServiceImpl {
             list_segments,
             server_timestamp_ms,
             environment_id: env_id.to_string(),
+            event_definitions,
         }))
     }
 
@@ -328,8 +377,9 @@ mod tests {
     use std::sync::Mutex;
 
     use stitchd_core::context::Context;
+    use stitchd_core::event::EventDefinition;
     use stitchd_core::flag::{FlagRecord, FlagRule, FlagValueType, Variant};
-    use stitchd_core::id::{FlagId, FlagKey, ProjectId, SegmentId, VariantId};
+    use stitchd_core::id::{EventDefinitionId, FlagId, FlagKey, ProjectId, SegmentId, VariantId};
     use stitchd_core::segment::{RuleBasedSegment, Segment, SegmentType};
     use stitchd_db::{ContextMembership, RepositoryError};
 
@@ -641,6 +691,82 @@ mod tests {
         }
     }
 
+    // ── Stub EventDefinitionRepository ─────────────────────────────────────
+
+    #[derive(Default)]
+    struct StubEventDefinitionRepo {
+        defs_by_env: Mutex<HashMap<EnvironmentId, Vec<EventDefinition>>>,
+    }
+
+    impl StubEventDefinitionRepo {
+        fn arc() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+        fn with_def(self: &Arc<Self>, env_id: EnvironmentId, def: EventDefinition) {
+            self.defs_by_env
+                .lock()
+                .unwrap()
+                .entry(env_id)
+                .or_default()
+                .push(def);
+        }
+    }
+
+    #[async_trait]
+    impl EventDefinitionRepository for StubEventDefinitionRepo {
+        async fn find_by_id(
+            &self,
+            _id: EventDefinitionId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn find_by_key(
+            &self,
+            _key: &str,
+            _env_id: EnvironmentId,
+        ) -> Result<EventDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_by_environment(
+            &self,
+            environment_id: EnvironmentId,
+        ) -> Result<Vec<EventDefinition>, RepositoryError> {
+            // Mirror the PG repo semantics: list_by_environment returns only
+            // non-deleted records.
+            Ok(self
+                .defs_by_env
+                .lock()
+                .unwrap()
+                .get(&environment_id)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| d.deleted_at.is_none())
+                .collect())
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+            _include_archived: bool,
+        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+            unimplemented!()
+        }
+        async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+        async fn update(
+            &self,
+            _def: &EventDefinition,
+        ) -> Result<EventDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_delete(&self, _id: EventDefinitionId) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     fn make_request_with_env(env_id: EnvironmentId) -> Request<SyncDefinitionsRequest> {
@@ -690,6 +816,36 @@ mod tests {
         segment_repo: Arc<StubSegmentRepo>,
     ) -> FlagSdkBackendServiceImpl {
         FlagSdkBackendServiceImpl::new(flag_repo, Arc::new(StubVariantRepo), segment_repo)
+    }
+
+    fn make_service_with_event_defs(
+        flag_repo: Arc<StubFlagRepo>,
+        segment_repo: Arc<StubSegmentRepo>,
+        event_def_repo: Arc<StubEventDefinitionRepo>,
+    ) -> FlagSdkBackendServiceImpl {
+        FlagSdkBackendServiceImpl::new(flag_repo, Arc::new(StubVariantRepo), segment_repo)
+            .with_event_definition_repo(event_def_repo)
+    }
+
+    fn make_event_def(
+        env_id: EnvironmentId,
+        key: &str,
+        value_type: EventValueType,
+    ) -> EventDefinition {
+        EventDefinition {
+            id: EventDefinitionId::new(),
+            environment_id: env_id,
+            key: key.to_string(),
+            name: key.to_string(),
+            description: None,
+            value_type,
+            metric_type: stitchd_core::event::MetricType::Count,
+            schema: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+        }
     }
 
     // ── Tests ───────────────────────────────────────────────────────────────
@@ -801,6 +957,114 @@ mod tests {
             .unwrap()
             .into_inner();
         assert_eq!(resp_b.flags.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn sync_definitions_omits_event_definitions_when_repo_not_wired() {
+        // Legacy / unit-test path: no event_definition_repo attached →
+        // response carries empty event_definitions but otherwise works.
+        let env_id = EnvironmentId::new();
+        let svc = make_service(StubFlagRepo::arc(), StubSegmentRepo::arc());
+        let resp = svc
+            .sync_definitions(make_request_with_env(env_id))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(resp.event_definitions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sync_definitions_includes_event_definitions() {
+        let env_id = EnvironmentId::new();
+        let event_repo = StubEventDefinitionRepo::arc();
+        event_repo.with_def(
+            env_id,
+            make_event_def(env_id, "checkout_completed", EventValueType::Bool),
+        );
+        event_repo.with_def(
+            env_id,
+            make_event_def(env_id, "revenue", EventValueType::Double),
+        );
+
+        let svc = make_service_with_event_defs(
+            StubFlagRepo::arc(),
+            StubSegmentRepo::arc(),
+            event_repo,
+        );
+        let resp = svc
+            .sync_definitions(make_request_with_env(env_id))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.event_definitions.len(), 2);
+        // Compare as a key→value_type map to avoid ordering assumptions.
+        let by_key: std::collections::HashMap<_, _> = resp
+            .event_definitions
+            .iter()
+            .map(|d| (d.event_key.as_str(), d.value_type.as_str()))
+            .collect();
+        assert_eq!(by_key.get("checkout_completed"), Some(&"bool"));
+        assert_eq!(by_key.get("revenue"), Some(&"double"));
+    }
+
+    #[tokio::test]
+    async fn sync_definitions_excludes_archived_event_definitions() {
+        // Soft-deleted event definitions must NOT appear in the response —
+        // SDK callers should treat them as "unregistered" so future track()
+        // calls warn-skip.
+        let env_id = EnvironmentId::new();
+        let event_repo = StubEventDefinitionRepo::arc();
+
+        let live_def = make_event_def(env_id, "live_event", EventValueType::Int);
+        let mut archived_def = make_event_def(env_id, "archived_event", EventValueType::Bool);
+        archived_def.deleted_at = Some(Utc::now());
+
+        event_repo.with_def(env_id, live_def);
+        event_repo.with_def(env_id, archived_def);
+
+        let svc = make_service_with_event_defs(
+            StubFlagRepo::arc(),
+            StubSegmentRepo::arc(),
+            event_repo,
+        );
+        let resp = svc
+            .sync_definitions(make_request_with_env(env_id))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(resp.event_definitions.len(), 1);
+        assert_eq!(resp.event_definitions[0].event_key, "live_event");
+        assert_eq!(resp.event_definitions[0].value_type, "int");
+    }
+
+    #[tokio::test]
+    async fn sync_definitions_isolates_event_definitions_by_environment() {
+        let env_a = EnvironmentId::new();
+        let env_b = EnvironmentId::new();
+        let event_repo = StubEventDefinitionRepo::arc();
+        event_repo.with_def(env_a, make_event_def(env_a, "env_a_event", EventValueType::Bool));
+
+        let svc = make_service_with_event_defs(
+            StubFlagRepo::arc(),
+            StubSegmentRepo::arc(),
+            event_repo,
+        );
+
+        let resp_a = svc
+            .sync_definitions(make_request_with_env(env_a))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp_a.event_definitions.len(), 1);
+
+        let resp_b = svc
+            .sync_definitions(make_request_with_env(env_b))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(resp_b.event_definitions.is_empty());
     }
 
     #[tokio::test]

@@ -1,16 +1,26 @@
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
-use stitchd_db::{ContextRegistryRepository, EventDefinitionRepository, SdkKeyRepository};
+use stitchd_db::{
+    ContextRegistryRepository, EventDefinitionRepository, ExperimentRepository, SdkKeyRepository,
+    repository::pg::PgMetricRepository,
+};
+use stitchd_stats_service::recompute_trigger::RecomputeTrigger;
 use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{
-    ExperimentResult, GetContextIntelligenceRequest, GetContextIntelligenceResponse,
-    GetEvalStatsRequest, GetEvalStatsResponse, GetExperimentResultRequest,
-    IngestEventRequest, IngestEventResponse, ListContextParamsRequest,
-    ListContextParamsResponse, ListContextTypesRequest, ListContextTypesResponse,
-    ListExperimentResultsRequest, RegisterContextRequest, RegisterContextResponse,
-    WriteExperimentResultsRequest, WriteExperimentResultsResponse,
-    analytics_service_server::AnalyticsService,
+    CreateEventDefinitionRequest, CreateMetricRequest, DeleteEventDefinitionRequest,
+    DeleteEventDefinitionResponse, DeleteMetricRequest, DeleteMetricResponse,
+    EventDefinitionMsg, ExperimentResult, GetContextIntelligenceRequest,
+    GetContextIntelligenceResponse, GetEvalStatsRequest, GetEvalStatsResponse,
+    GetEventDefinitionRequest, GetEventFiringsRequest, GetEventFiringsResponse,
+    GetEventStatsRequest, GetEventStatsResponse, GetExperimentResultRequest, GetMetricRequest,
+    IngestEventRequest, IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
+    ListContextTypesRequest, ListContextTypesResponse, ListEventDefinitionsRequest,
+    ListEventDefinitionsResponse, ListExperimentResultsRequest, ListMetricsRequest,
+    ListMetricsResponse, MetricDefinition, PreviewMetricRequest, PreviewMetricResponse,
+    RegisterContextRequest, RegisterContextResponse, TrackEventsRequest, TrackEventsResponse,
+    UpdateEventDefinitionRequest, UpdateMetricRequest, WriteExperimentResultsRequest,
+    WriteExperimentResultsResponse, analytics_service_server::AnalyticsService,
 };
 
 use super::context_intel::handle_get_context_intelligence;
@@ -18,10 +28,21 @@ use super::context_registry::{
     handle_list_context_params, handle_list_context_types, handle_register_context,
 };
 use super::eval_stats::handle_get_eval_stats;
+use super::event_definition::{
+    handle_create_event_definition, handle_delete_event_definition,
+    handle_get_event_definition, handle_list_event_definitions,
+    handle_update_event_definition,
+};
 use super::event_ingestion::{EventIngestionState, handle_ingest_event};
+use super::event_query::{handle_get_event_firings, handle_get_event_stats};
 use super::experiment_results::{
     ResultStream, handle_get_experiment_result, handle_list_experiment_results,
     handle_write_experiment_results,
+};
+use super::ingestion::{EventDefinitionCache, TrackEventsState, handle_track_events};
+use super::metric::{
+    handle_create_metric, handle_delete_metric, handle_get_metric, handle_list_metrics,
+    handle_preview_metric, handle_update_metric,
 };
 use crate::repo::experiment_results::ExperimentResultsRepository;
 
@@ -34,6 +55,19 @@ pub struct ServiceState {
     pub context_registry: Arc<dyn ContextRegistryRepository>,
     /// ClickHouse-backed repository for computed experiment results.
     pub experiment_results_repo: Arc<dyn ExperimentResultsRepository>,
+    /// Postgres-backed metric definitions repository (Phase 3+).
+    pub metric_repo: Arc<PgMetricRepository>,
+    /// Postgres-backed experiment repository — used by
+    /// `update_metric` to find running experiments referencing the
+    /// changed metric so we can fire a recompute trigger.
+    pub experiment_repo: Option<Arc<dyn ExperimentRepository>>,
+    /// gRPC dispatcher for `TriggerRecompute` calls. `None` disables
+    /// the event-driven recompute side effect (useful in tests or in
+    /// deployments where stats-service is unreachable at boot).
+    pub recompute_dispatcher: Option<Arc<dyn RecomputeTrigger>>,
+    /// 60-second in-process cache for event-definition validation lookups
+    /// — backs the `TrackEvents` RPC hot path.
+    pub event_def_cache: EventDefinitionCache,
 }
 
 pub struct AnalyticsServiceImpl {
@@ -60,6 +94,18 @@ impl AnalyticsService for AnalyticsServiceImpl {
             event_writer: self.state.event_writer.clone(),
         };
         handle_ingest_event(&ingestion_state, request).await
+    }
+
+    async fn track_events(
+        &self,
+        request: Request<TrackEventsRequest>,
+    ) -> Result<Response<TrackEventsResponse>, Status> {
+        let track_state = TrackEventsState {
+            event_def_repo: Arc::clone(&self.state.event_def_repo),
+            event_def_cache: self.state.event_def_cache.clone(),
+            ch_client: Arc::clone(&self.state.ch_client),
+        };
+        handle_track_events(&track_state, request).await
     }
 
     async fn register_context(
@@ -122,5 +168,115 @@ impl AnalyticsService for AnalyticsServiceImpl {
         request: Request<GetExperimentResultRequest>,
     ) -> Result<Response<ExperimentResult>, Status> {
         handle_get_experiment_result(&self.state.experiment_results_repo, request).await
+    }
+
+    // ── Metric definitions CRUD ─────────────────────────────────────────────
+    //
+    // Wired in Phase 3 (`events_metrics_20260519`). Handlers live in
+    // `crates/stitchd-analytics-service/src/grpc/metric.rs` and operate
+    // on the Postgres-backed `PgMetricRepository`.
+
+    async fn create_metric(
+        &self,
+        request: Request<CreateMetricRequest>,
+    ) -> Result<Response<MetricDefinition>, Status> {
+        handle_create_metric(&self.state.metric_repo, request).await
+    }
+
+    async fn get_metric(
+        &self,
+        request: Request<GetMetricRequest>,
+    ) -> Result<Response<MetricDefinition>, Status> {
+        handle_get_metric(&self.state.metric_repo, request).await
+    }
+
+    async fn list_metrics(
+        &self,
+        request: Request<ListMetricsRequest>,
+    ) -> Result<Response<ListMetricsResponse>, Status> {
+        handle_list_metrics(&self.state.metric_repo, request).await
+    }
+
+    async fn update_metric(
+        &self,
+        request: Request<UpdateMetricRequest>,
+    ) -> Result<Response<MetricDefinition>, Status> {
+        handle_update_metric(
+            &self.state.metric_repo,
+            self.state.experiment_repo.clone(),
+            self.state.recompute_dispatcher.clone(),
+            request,
+        )
+        .await
+    }
+
+    async fn delete_metric(
+        &self,
+        request: Request<DeleteMetricRequest>,
+    ) -> Result<Response<DeleteMetricResponse>, Status> {
+        handle_delete_metric(&self.state.metric_repo, request).await
+    }
+
+    async fn preview_metric(
+        &self,
+        request: Request<PreviewMetricRequest>,
+    ) -> Result<Response<PreviewMetricResponse>, Status> {
+        handle_preview_metric(&self.state.metric_repo, &self.state.ch_client, request).await
+    }
+
+    // ── Event firings + stats (EventDetail page) ────────────────────────────
+
+    async fn get_event_firings(
+        &self,
+        request: Request<GetEventFiringsRequest>,
+    ) -> Result<Response<GetEventFiringsResponse>, Status> {
+        handle_get_event_firings(&self.state.ch_client, request).await
+    }
+
+    async fn get_event_stats(
+        &self,
+        request: Request<GetEventStatsRequest>,
+    ) -> Result<Response<GetEventStatsResponse>, Status> {
+        handle_get_event_stats(&self.state.ch_client, request).await
+    }
+
+    // ── Event definitions CRUD (admin UI) ────────────────────────────────────
+    //
+    // Closes `feature-flag-wr4`. Delegates to the existing
+    // `PgEventDefinitionRepository` already on `ServiceState`.
+
+    async fn create_event_definition(
+        &self,
+        request: Request<CreateEventDefinitionRequest>,
+    ) -> Result<Response<EventDefinitionMsg>, Status> {
+        handle_create_event_definition(&self.state.event_def_repo, request).await
+    }
+
+    async fn get_event_definition(
+        &self,
+        request: Request<GetEventDefinitionRequest>,
+    ) -> Result<Response<EventDefinitionMsg>, Status> {
+        handle_get_event_definition(&self.state.event_def_repo, request).await
+    }
+
+    async fn list_event_definitions(
+        &self,
+        request: Request<ListEventDefinitionsRequest>,
+    ) -> Result<Response<ListEventDefinitionsResponse>, Status> {
+        handle_list_event_definitions(&self.state.event_def_repo, request).await
+    }
+
+    async fn update_event_definition(
+        &self,
+        request: Request<UpdateEventDefinitionRequest>,
+    ) -> Result<Response<EventDefinitionMsg>, Status> {
+        handle_update_event_definition(&self.state.event_def_repo, request).await
+    }
+
+    async fn delete_event_definition(
+        &self,
+        request: Request<DeleteEventDefinitionRequest>,
+    ) -> Result<Response<DeleteEventDefinitionResponse>, Status> {
+        handle_delete_event_definition(&self.state.event_def_repo, request).await
     }
 }

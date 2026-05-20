@@ -29,6 +29,70 @@ message IngestEventResponse {
   repeated string rejected_keys  = 2;
 }
 
+// ─── Track Events (SDK batch ingestion) ──────────────────────────────────────
+//
+// `TrackEvents` is the foundational event-ingestion RPC the gateway proxies
+// SDK `POST /v1/events/track` requests to. Unlike `IngestEvent`, the analytics
+// service trusts the gateway's `x-env-id` metadata (the gateway is the sole
+// SDK-trust boundary) and additionally carries `properties` + `occurred_at`
+// fields to support metric filters and offline replay.
+
+message TrackEvent {
+  // Pre-registered event_definitions.key. Unknown / archived keys are
+  // rejected (added to TrackEventsResponse.rejected) rather than failing
+  // the whole batch.
+  string                 event_key    = 1;
+  // Typed metric value; must match the registered event's value_type.
+  // Optional because some event_definitions are pure occurrence markers
+  // (count-only) where value carries no information.
+  MetricValue            value        = 4;
+  // Arbitrary per-event metadata. Used by metric filters / on-field
+  // aggregations downstream. Empty map is fine.
+  map<string, string>    properties   = 5;
+  // RFC 3339 client-side wall-clock timestamp. Optional — when absent,
+  // analytics-service uses ingestion (server) time. Lets SDKs replay
+  // buffered offline events with their original firing time.
+  optional string        occurred_at  = 6;
+  // Multi-dimensional attribution as a flat type→key map. One event
+  // can carry attribution to multiple dimensions at once (e.g.
+  // `{user: alice, account: acme, session: s99}`) and the underlying
+  // ClickHouse row stores them all in `Array(Tuple(String, String))`.
+  // Server requires at least one entry per event.
+  map<string, string>    contexts     = 7;
+
+  // Field tags 2 and 3 used to carry the legacy `context_type` /
+  // `context_key` singular pair. Removed in favour of the `contexts`
+  // map; reserved so a future field never repurposes those tags
+  // (proto wire-compat hygiene).
+  reserved 2, 3;
+  reserved "context_type", "context_key";
+}
+
+message TrackEventsRequest {
+  // Trusted gateway-supplied env_id (UUID). Mirrors the `x-env-id` metadata
+  // header for callers that want it in the body (e.g. test harnesses).
+  // Effective env_id resolution: metadata header takes precedence when both
+  // are present.
+  string              env_id = 1;
+  repeated TrackEvent events = 2;
+}
+
+// One rejected event with a machine-readable reason discriminant.
+message RejectedEvent {
+  string event_key = 1;
+  // One of: "unknown_event_key", "archived_event_key", "value_type_mismatch",
+  // "missing_value", "invalid_occurred_at".
+  string reason    = 2;
+}
+
+message TrackEventsResponse {
+  // Number of events accepted and written to ClickHouse.
+  uint32                 accepted_count = 1;
+  // Per-event rejection detail. Index does NOT correspond to request index —
+  // duplicates may appear if the same key was rejected multiple times.
+  repeated RejectedEvent rejected       = 2;
+}
+
 // ─── Context Registry ─────────────────────────────────────────────────────────
 
 // Upsert a context type and its parameters observed during an evaluation.
@@ -184,6 +248,292 @@ message GetExperimentResultRequest {
   optional string iteration_id = 5;
 }
 
+// ─── Event Definitions (admin CRUD) ───────────────────────────────────────────
+//
+// Pre-registered event definitions scoped per environment. Resolves the
+// pre-existing gap where the admin UI assumed CRUD endpoints existed but
+// the gateway had only stub handlers. See `feature-flag-wr4`.
+
+message EventDefinitionMsg {
+  string          id             = 1;
+  string          environment_id = 2;
+  string          key            = 3;
+  string          name           = 4;
+  optional string description    = 5;
+  // "bool" | "int" | "double"
+  string          value_type     = 6;
+  // "count" | "conversion" | "revenue" | "duration" | "numeric" | "custom"
+  string          metric_type    = 7;
+  // Optional JSON Schema for payload validation, serialised as a JSON
+  // string. Empty string = no schema.
+  string          schema_json    = 8;
+  int64           version        = 9;
+  string          created_at     = 10;
+  string          updated_at     = 11;
+  optional string deleted_at     = 12;
+}
+
+message CreateEventDefinitionRequest {
+  string          environment_id = 1;
+  string          key            = 2;
+  string          name           = 3;
+  optional string description    = 4;
+  // Optional — defaults derived from metric_type at server side.
+  optional string value_type     = 5;
+  string          metric_type    = 6;
+  optional string schema_json    = 7;
+}
+
+message GetEventDefinitionRequest {
+  // Either provide id OR (environment_id + key) — server resolves whichever
+  // is non-empty.
+  optional string id             = 1;
+  optional string environment_id = 2;
+  optional string key            = 3;
+}
+
+message ListEventDefinitionsRequest {
+  string          environment_id    = 1;
+  optional uint64 offset            = 2;
+  optional uint64 limit             = 3;
+  optional bool   include_archived  = 4;
+}
+
+message ListEventDefinitionsResponse {
+  repeated EventDefinitionMsg items  = 1;
+  uint64                      total  = 2;
+  uint64                      offset = 3;
+  uint64                      limit  = 4;
+}
+
+message UpdateEventDefinitionRequest {
+  string          id               = 1;
+  int64           expected_version = 2;
+  optional string name             = 3;
+  optional string description      = 4;
+  optional string value_type       = 5;
+  optional string metric_type      = 6;
+  optional string schema_json      = 7;
+}
+
+message DeleteEventDefinitionRequest {
+  string id = 1;
+}
+
+message DeleteEventDefinitionResponse {}
+
+// ─── Metric Definitions ───────────────────────────────────────────────────────
+//
+// Composable metric definitions that experiments reference instead of raw
+// event keys. The `config` is a `oneof` whose variant tags
+// (`aggregation`/`ratio`/`funnel`) match the serde `kind` discriminator
+// of `stitchd-core::metric::MetricKind`.
+
+message AggregationConfig {
+  string          event_key         = 1;
+  // "count" | "sum" | "avg" | "p50" | "p90" | "p99" | "uniq"
+  string          aggregator        = 2;
+  optional string on_field          = 3;
+  // Serialised JsonLogic (e.g. `{"==":[{"var":"currency"},"USD"]}`).
+  // Empty/absent means no where-clause filter.
+  optional string where_clause_json = 4;
+}
+
+message RatioConfig {
+  string numerator_metric_id   = 1;
+  string denominator_metric_id = 2;
+  int64  min_denominator       = 3;
+}
+
+message FunnelStep {
+  string          event_key         = 1;
+  optional string where_clause_json = 2;
+}
+
+message FunnelConfig {
+  repeated FunnelStep steps          = 1;
+  int64               window_seconds = 2;
+  bool                count_repeats  = 3;
+}
+
+message MetricDefinition {
+  string          id             = 1;
+  string          environment_id = 2;
+  string          key            = 3;
+  string          name           = 4;
+  optional string description    = 5;
+  oneof kind {
+    AggregationConfig aggregation = 6;
+    RatioConfig       ratio       = 7;
+    FunnelConfig      funnel      = 8;
+  }
+  // "increase" | "decrease" | "neutral"
+  string          goal_direction = 9;
+  int64           version        = 10;
+  string          created_at     = 11;
+  string          updated_at     = 12;
+  optional string deleted_at     = 13;
+}
+
+message CreateMetricRequest {
+  // Without id/version/timestamps — server fills those in.
+  string          environment_id = 1;
+  string          key            = 2;
+  string          name           = 3;
+  optional string description    = 4;
+  oneof kind {
+    AggregationConfig aggregation = 5;
+    RatioConfig       ratio       = 6;
+    FunnelConfig      funnel      = 7;
+  }
+  string goal_direction = 8;
+}
+
+message GetMetricRequest {
+  // Either provide id, OR (environment_id + key) — server resolves
+  // whichever is non-empty.
+  optional string id             = 1;
+  optional string environment_id = 2;
+  optional string key            = 3;
+}
+
+message ListMetricsRequest {
+  string environment_id     = 1;
+  // 0-based offset; defaults to 0 when unset.
+  optional uint64 offset    = 2;
+  // Page size; defaults to 50 when unset, capped at 200.
+  optional uint64 limit     = 3;
+  // Optional kind filter ("aggregation" | "ratio" | "funnel").
+  optional string kind      = 4;
+  // Optional event-key filter — restricts results to metrics that
+  // *directly* reference this event key. Matches:
+  //   - aggregation: config.event_key == :key
+  //   - funnel:      any steps[i].event_key == :key
+  // Ratio metrics are NOT matched here (their event references are
+  // transitive through their numerator/denominator); the UI displays
+  // those by following the numerator/denominator into their own list.
+  optional string event_key = 5;
+}
+
+message ListMetricsResponse {
+  repeated MetricDefinition items    = 1;
+  uint64                    total    = 2;
+  uint64                    offset   = 3;
+  uint64                    limit    = 4;
+}
+
+message UpdateMetricRequest {
+  string          id             = 1;
+  // Caller-known version for optimistic locking.
+  int64           expected_version = 2;
+  optional string name           = 3;
+  optional string description    = 4;
+  oneof kind {
+    AggregationConfig aggregation = 5;
+    RatioConfig       ratio       = 6;
+    FunnelConfig      funnel      = 7;
+  }
+  optional string goal_direction = 8;
+}
+
+message DeleteMetricRequest {
+  string id = 1;
+}
+
+message DeleteMetricResponse {}
+
+// Inline preview of a metric's value over the last N days. Used by the
+// admin UI's metric builder for instant feedback.
+message PreviewMetricRequest {
+  // Existing metric (look up by id), OR an inline draft (build_inline).
+  oneof target {
+    string                  id           = 1;
+    MetricDefinition        build_inline = 2;
+  }
+  // Days of history to query. Defaults to 7 when unset/zero.
+  uint32 days = 3;
+}
+
+message PreviewBucket {
+  // RFC 3339 UTC day-start.
+  string day        = 1;
+  // Single scalar value — aggregations/ratios produce one float; funnels
+  // produce the step-N conversion rate (configured via `step_index`).
+  double value      = 2;
+}
+
+message PreviewMetricResponse {
+  repeated PreviewBucket buckets = 1;
+}
+
+// ─── Event Firings / Stats (admin UI EventDetail page) ────────────────────────
+//
+// Per-event drill-down endpoints powering the admin UI's EventDetail page and
+// TestEventWidget. Both query the ClickHouse `events_v2` table directly,
+// scoped by `env_id` (trusted, JWT-derived) and `event_key`.
+
+message GetEventFiringsRequest {
+  // Tenant scope — must match the JWT-resolved environment of the caller.
+  string env_id    = 1;
+  // Pre-registered event_definitions.key to query firings for.
+  string event_key = 2;
+  // Page size. Default 50 when 0; server caps at 200.
+  uint32 limit     = 3;
+}
+
+// One recent event-firing row. JSON fields are serialised strings so the
+// proto contract stays stable across schema evolutions of `properties` /
+// `value`.
+message EventFiring {
+  // Serialised JSON of the typed `value` oneof — one of `true` / `42` /
+  // `1.5`. Empty string when no value (occurrence-only event).
+  string value_json      = 3;
+  // Serialised JSON object of the `properties` map. `{}` when the row had
+  // no properties.
+  string properties_json = 4;
+  // Client-side wall-clock time (RFC 3339 UTC).
+  string occurred_at     = 5;
+  // Server-side ingestion time (RFC 3339 UTC).
+  string ingested_at     = 6;
+  // Full multi-context attribution for this firing as a flat
+  // type→key map. Mirrors the `TrackEvent.contexts` shape on the
+  // write side. Always populated (server fails events with no
+  // contexts at ingestion).
+  map<string, string> contexts = 7;
+
+  // Field tags 1 and 2 used to carry the legacy `context_type` /
+  // `context_key` singular pair (always equal to `contexts[0]`).
+  // Removed; reserved so a future field never repurposes those tags.
+  reserved 1, 2;
+  reserved "context_type", "context_key";
+}
+
+message GetEventFiringsResponse {
+  repeated EventFiring firings = 1;
+}
+
+message GetEventStatsRequest {
+  // Tenant scope — must match the JWT-resolved environment of the caller.
+  string env_id    = 1;
+  // Pre-registered event_definitions.key to bucket.
+  string event_key = 2;
+  // Number of days of history to bucket. Default 14 when 0; server caps at 90.
+  uint32 days      = 3;
+}
+
+message EventStatsBucket {
+  // Day-start (00:00 UTC) — RFC 3339 string.
+  string day                  = 1;
+  // Total firings in this day-bucket.
+  uint64 count                = 2;
+  // Unique context_keys (dimension-1 deduped) in this bucket.
+  uint64 unique_context_keys  = 3;
+}
+
+message GetEventStatsResponse {
+  repeated EventStatsBucket buckets = 1;
+}
+
 // ─── Analytics Service ────────────────────────────────────────────────────────
 
 // AnalyticsService consolidates all analytics and context-registry operations.
@@ -192,6 +542,12 @@ message GetExperimentResultRequest {
 service AnalyticsService {
   // Ingest a batch of metric events into ClickHouse.
   rpc IngestEvent(IngestEventRequest) returns (IngestEventResponse);
+
+  // SDK-facing batch event ingestion. Validates against PG event_definitions
+  // (60s in-process cache), writes accepted rows to ClickHouse `events_v2`.
+  // Reads the trusted env_id from the `x-env-id` metadata header (gateway
+  // is the sole SDK trust boundary), falling back to `TrackEventsRequest.env_id`.
+  rpc TrackEvents(TrackEventsRequest) returns (TrackEventsResponse);
 
   // Upsert context type and parameters observed during flag evaluation.
   rpc RegisterContext(RegisterContextRequest) returns (RegisterContextResponse);
@@ -216,4 +572,45 @@ service AnalyticsService {
 
   // Fetch a single result for a specific metric key within an iteration.
   rpc GetExperimentResult(GetExperimentResultRequest) returns (ExperimentResult);
+
+  // ── Metric definitions CRUD ────────────────────────────────────────────────
+
+  // Create a new metric definition (validates kind-specific config).
+  rpc CreateMetric(CreateMetricRequest) returns (MetricDefinition);
+
+  // Fetch a metric by id OR by (environment_id, key).
+  rpc GetMetric(GetMetricRequest) returns (MetricDefinition);
+
+  // List metrics in an environment, optionally filtered by kind.
+  rpc ListMetrics(ListMetricsRequest) returns (ListMetricsResponse);
+
+  // Update a metric (optimistic-locking via expected_version).
+  rpc UpdateMetric(UpdateMetricRequest) returns (MetricDefinition);
+
+  // Soft-delete a metric.
+  rpc DeleteMetric(DeleteMetricRequest) returns (DeleteMetricResponse);
+
+  // Compute a preview time-series for a metric over the last N days.
+  // Accepts either a saved metric id or an inline draft.
+  rpc PreviewMetric(PreviewMetricRequest) returns (PreviewMetricResponse);
+
+  // ── Event firings + stats (admin UI EventDetail page) ──────────────────────
+
+  // Recent firings for `event_key` within `env_id`, newest first.
+  rpc GetEventFirings(GetEventFiringsRequest) returns (GetEventFiringsResponse);
+
+  // Daily firing counts + unique context keys for `event_key` over the last
+  // `days` days within `env_id`.
+  rpc GetEventStats(GetEventStatsRequest) returns (GetEventStatsResponse);
+
+  // ── Event definitions CRUD (admin UI) ──────────────────────────────────────
+  //
+  // Closes the pre-existing gap (`feature-flag-wr4`) where the admin UI
+  // assumed `/v1/events*` endpoints existed but the gateway had only stub
+  // handlers.
+  rpc CreateEventDefinition(CreateEventDefinitionRequest) returns (EventDefinitionMsg);
+  rpc GetEventDefinition(GetEventDefinitionRequest) returns (EventDefinitionMsg);
+  rpc ListEventDefinitions(ListEventDefinitionsRequest) returns (ListEventDefinitionsResponse);
+  rpc UpdateEventDefinition(UpdateEventDefinitionRequest) returns (EventDefinitionMsg);
+  rpc DeleteEventDefinition(DeleteEventDefinitionRequest) returns (DeleteEventDefinitionResponse);
 }

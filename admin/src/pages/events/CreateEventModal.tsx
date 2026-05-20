@@ -6,6 +6,7 @@ import { FormSelect } from '../../components/form/FormSelect'
 import { FormTextarea } from '../../components/form/FormTextarea'
 import { FormErrorBanner } from '../../components/form/FormErrorBanner'
 import { FormSubmit } from '../../components/form/FormSubmit'
+import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { extractErrorMessage } from '../../lib/errors'
 import { eventDefinitionSchema, METRIC_TYPES } from '../../lib/validation/eventDefinitionSchema'
@@ -30,6 +31,8 @@ interface Props {
 }
 
 export function CreateEventModal({ onClose, onCreated }: Props) {
+  const { envId } = useOrgContext()
+
   const initialValues: EventDefinitionFormValues = {
     key: '',
     metric_type: 'count',
@@ -42,8 +45,16 @@ export function CreateEventModal({ onClose, onCreated }: Props) {
     { setStatus }: { setStatus: (s: unknown) => void },
   ) {
     try {
+      if (!envId) {
+        setStatus({ error: 'No environment selected — pick one in the sidebar first.' })
+        return
+      }
+      // Gateway expects `environment_id` in the body for `/v1/events` (admin
+      // JWTs are org-scoped, not env-scoped — sourced from the EnvSwitcher).
       const body = {
+        environment_id: envId,
         event_key: values.key.trim(),
+        name: values.key.trim(),
         metric_type: values.metric_type,
         description: values.description?.trim() || undefined,
         schema: values.schema?.trim() ? JSON.parse(values.schema.trim()) : null,

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     middleware,
     response::IntoResponse,
@@ -21,14 +21,19 @@ use axum::{
 use metrics_exporter_prometheus::PrometheusHandle;
 
 use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
+use crate::middleware::event_quota::{build_limiter_from_env, event_quota_middleware};
 use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
-    admin, auth, auth_providers, context_intel, eval_stats, events, experiments, flags, management,
-    oidc, saml, sdk_backend, segments, stats,
+    admin, auth, auth_providers, context_intel, eval_stats, event_admin, events, experiments,
+    flags, management, metrics, oidc, saml, sdk_backend, segments, stats,
 };
 use crate::state::GatewayState;
 
-/// Handler for `GET /v1/metrics` — renders Prometheus exposition format.
+/// Handler for `GET /metrics` — renders Prometheus exposition format.
+///
+/// Lives at the conventional Prometheus path (no `/v1/` version prefix) to
+/// keep the versioned admin REST surface — including `GET /v1/metrics` for
+/// metric-definitions CRUD — free of operational endpoints.
 async fn metrics_handler(State(handle): State<PrometheusHandle>) -> impl IntoResponse {
     (
         [(
@@ -134,12 +139,33 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
     // for the clean-implementation SDK (sdks/rust/). They use the dedicated
     // sdk_auth_middleware (which injects SdkContext) rather than the generic
     // auth_middleware (which only injects RbacContext).
+    //
+    // POST /v1/events/track has:
+    //  - a 5 MiB body limit (per spec F3.4) applied as a per-route
+    //    `DefaultBodyLimit` layer so the rest of the SDK tier continues to
+    //    use axum's small default (2 MiB) without surprise.
+    //  - a per-env event-quota layer that 429s when a single env exceeds
+    //    `STITCHD_EVENT_QUOTA_PER_SEC` events/sec (default 1000). This is
+    //    applied ONLY to the track route, not to the other SDK endpoints,
+    //    so segment/eval-log batches are not affected.
+    let event_quota_limiter = build_limiter_from_env();
     let sdk_backend_routes = Router::new()
         .route(
             "/v1/sdk/segments/list:batch",
             post(sdk_backend::segments_list_batch),
         )
         .route("/v1/sdk/events:batch", post(sdk_backend::events_batch))
+        .route(
+            "/v1/events/track",
+            post(events::track_events)
+                .route_layer(middleware::from_fn_with_state(
+                    Arc::clone(&event_quota_limiter),
+                    event_quota_middleware,
+                ))
+                .layer(DefaultBodyLimit::max(
+                    events::TRACK_EVENTS_BODY_LIMIT_BYTES,
+                )),
+        )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&auth_client),
@@ -214,6 +240,56 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             get(events::get_event_definition)
                 .put(events::update_event_definition)
                 .delete(events::delete_event_definition),
+        )
+        // EventDetail page — recent firings + daily-count sparkline.
+        .route(
+            "/v1/events/{event_key}/firings",
+            get(events::get_event_firings),
+        )
+        .route(
+            "/v1/events/{event_key}/stats",
+            get(events::get_event_stats),
+        )
+        // Admin event-definition CRUD — closed feature-flag-wr4. The admin UI's
+        // EventsList/CreateEventModal/EditEventModal/ArchiveEventModal use these.
+        // env_id flows as a query param (matches the /v1/metrics pattern).
+        .route(
+            "/v1/events",
+            get(event_admin::list_events).post(event_admin::create_event),
+        )
+        .route(
+            "/v1/events/{event_key}",
+            get(event_admin::get_event)
+                .patch(event_admin::update_event)
+                .delete(event_admin::delete_event),
+        )
+        // Admin-auth path for /v1/events/track — used by the test-event widget
+        // on EventDetail. env_id is lifted from RbacContext; analytics-service
+        // is told the events are admin-fired via `properties["_test"] = "true"`.
+        // Lives on the JWT tier (NOT SDK-auth) so the admin browser session can
+        // call it without an x-sdk-key. Skips the per-env event-quota — admin
+        // actions are rare and don't need rate-limiting.
+        .route(
+            "/v1/admin/events/track",
+            post(events::track_events_admin).layer(DefaultBodyLimit::max(
+                events::TRACK_EVENTS_BODY_LIMIT_BYTES,
+            )),
+        )
+        // Metrics (admin CRUD + preview) — env_id is a query param on list;
+        // path params identify a specific metric.
+        .route(
+            "/v1/metrics",
+            get(metrics::list_metrics).post(metrics::create_metric),
+        )
+        .route(
+            "/v1/metrics/{id}",
+            get(metrics::get_metric)
+                .patch(metrics::update_metric)
+                .delete(metrics::delete_metric),
+        )
+        .route(
+            "/v1/metrics/{id}/preview",
+            post(metrics::preview_metric),
         )
         // Experiments
         .route(
@@ -293,8 +369,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         ));
 
     // ── Prometheus metrics — own state (PrometheusHandle), no auth ──────────
+    // Lives at the conventional Prometheus path (`/metrics`) to free
+    // `/v1/metrics` for the admin metric-definitions CRUD surface.
     let metrics_routes = Router::new()
-        .route("/v1/metrics", get(metrics_handler))
+        .route("/metrics", get(metrics_handler))
         .with_state(metrics_handle);
 
     Router::new()
@@ -453,7 +531,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/v1/metrics")
+                    .uri("/metrics")
                     .body(Body::empty())
                     .unwrap(),
             )

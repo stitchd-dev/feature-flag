@@ -15,6 +15,7 @@ stitchd-core = { path = "../stitchd-core" }
 stitchd-db = { path = "../stitchd-db" }
 stitchd-event-writer = { path = "../stitchd-event-writer" }
 stitchd-proto = { path = "../stitchd-proto" }
+stitchd-stats-service = { path = "../stitchd-stats-service" }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
@@ -35,6 +36,7 @@ async-trait = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 tokio-stream = "0.1"
+moka = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -601,7 +601,7 @@ pub trait ExperimentRepository: Send + Sync {
     /// Apply a status transition to an experiment.
     ///
     /// On transition into `running`:
-    /// - Creates a new `experiment_iterations` row (snapshot of current `metric_keys`,
+    /// - Creates a new `experiment_iterations` row (snapshot of current `metric_ids`,
     ///   `traffic_allocation`, `min_sample_size`)
     /// - Sets `feature_flag_rules.frozen = true` for the experiment's `flag_rule_id`
     ///
@@ -710,6 +710,17 @@ pub trait EventDefinitionRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<EventDefinition>, RepositoryError>;
 
+    /// List definitions for an environment with offset pagination.
+    /// Returns `(page_items, total_count)`. `include_archived = true`
+    /// includes soft-deleted rows in both the page and the total.
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+        include_archived: bool,
+    ) -> Result<(Vec<EventDefinition>, u64), RepositoryError>;
+
     /// Persist a new definition.
     async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError>;
 
@@ -718,4 +729,89 @@ pub trait EventDefinitionRepository: Send + Sync {
 
     /// Soft-delete a definition by setting `deleted_at`.
     async fn soft_delete(&self, id: EventDefinitionId) -> Result<(), RepositoryError>;
+}
+
+// ---------------------------------------------------------------------------
+// MetricDefinition
+// ---------------------------------------------------------------------------
+
+/// Operations for [`stitchd_core::metric::MetricDefinition`] persistence.
+///
+/// Metrics are environment-scoped and uniquely keyed by `(environment_id,
+/// key)` among non-deleted rows. Updates use optimistic locking via
+/// `version`. Ratios reference other metric IDs at the application layer
+/// (no FK), so the stats-service is responsible for resolving them at
+/// compute time.
+#[async_trait]
+pub trait MetricRepository: Send + Sync {
+    /// Fetch a metric by ID. Returns `NotFound` for deleted/missing rows.
+    async fn find_by_id(
+        &self,
+        id: stitchd_core::id::MetricId,
+    ) -> Result<stitchd_core::metric::MetricDefinition, RepositoryError>;
+
+    /// Fetch a metric by its string key within an environment.
+    async fn find_by_key(
+        &self,
+        key: &str,
+        environment_id: EnvironmentId,
+    ) -> Result<stitchd_core::metric::MetricDefinition, RepositoryError>;
+
+    /// Fetch multiple metrics by IDs in a single query. Useful for the
+    /// stats-service resolving the numerator/denominator of a ratio
+    /// metric. Soft-deleted rows are omitted from the result.
+    async fn find_batch_by_ids(
+        &self,
+        ids: &[stitchd_core::id::MetricId],
+    ) -> Result<Vec<stitchd_core::metric::MetricDefinition>, RepositoryError>;
+
+    /// List all non-deleted metrics for an environment.
+    async fn list_by_environment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Vec<stitchd_core::metric::MetricDefinition>, RepositoryError>;
+
+    /// List non-deleted metrics for an environment with offset
+    /// pagination. Returns `(page_items, total_count)`.
+    async fn list_by_environment_paginated(
+        &self,
+        environment_id: EnvironmentId,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<stitchd_core::metric::MetricDefinition>, u64), RepositoryError>;
+
+    /// List non-deleted metrics in an environment that **directly**
+    /// reference the given event key — i.e. aggregation metrics whose
+    /// `config.event_key` matches, or funnel metrics with at least one
+    /// step matching. Ratio metrics are not matched (their event
+    /// references are transitive — caller resolves at a higher layer).
+    ///
+    /// Result is bounded by what fits in one env's metric set; no
+    /// pagination is offered because the back-link UI on EventDetail
+    /// surfaces them all in one go.
+    async fn list_referencing_event(
+        &self,
+        environment_id: EnvironmentId,
+        event_key: &str,
+    ) -> Result<Vec<stitchd_core::metric::MetricDefinition>, RepositoryError>;
+
+    /// Persist a new metric. Caller is responsible for calling
+    /// `metric.validate()` first.
+    async fn create(
+        &self,
+        metric: &stitchd_core::metric::MetricDefinition,
+    ) -> Result<(), RepositoryError>;
+
+    /// Update an existing metric. Optimistic locking via `version` —
+    /// returns `VersionConflict` on stale update.
+    async fn update(
+        &self,
+        metric: &stitchd_core::metric::MetricDefinition,
+    ) -> Result<stitchd_core::metric::MetricDefinition, RepositoryError>;
+
+    /// Soft-delete a metric by setting `deleted_at`.
+    async fn soft_delete(
+        &self,
+        id: stitchd_core::id::MetricId,
+    ) -> Result<(), RepositoryError>;
 }

@@ -276,8 +276,12 @@ mod tests {
                 .map(|(key, value_type)| EventDefinition {
                     id: EventDefinitionId::new(),
                     environment_id: env_id,
+                    name: key.clone(),
                     key,
+                    description: None,
                     value_type,
+                    metric_type: stitchd_core::event::MetricType::Count,
+                    schema: None,
                     created_at: now,
                     updated_at: now,
                     deleted_at: None,
@@ -324,6 +328,16 @@ mod tests {
                 .get(&environment_id.as_uuid().to_string())
                 .cloned()
                 .unwrap_or_default())
+        }
+
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+            _include_archived: bool,
+        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+            unimplemented!("not used in these tests")
         }
 
         async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError> {
@@ -635,6 +649,16 @@ mod tests {
             &self,
             _environment_id: EnvironmentId,
         ) -> Result<Vec<EventDefinition>, RepositoryError> {
+            Err(RepositoryError::Unexpected(anyhow::anyhow!("db unavailable")))
+        }
+
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+            _include_archived: bool,
+        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
             Err(RepositoryError::Unexpected(anyhow::anyhow!("db unavailable")))
         }
 

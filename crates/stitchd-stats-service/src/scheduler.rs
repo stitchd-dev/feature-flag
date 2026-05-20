@@ -17,7 +17,9 @@ pub struct RunningExperiment {
     pub experiment_id: Uuid,
     pub env_id: Uuid,
     pub iteration_id: Uuid,
-    pub metric_keys: Vec<String>,
+    /// Metric definition UUIDs (post Phase 7 cutover); were previously
+    /// raw event-key strings on the `metric_keys` proto field.
+    pub metric_ids: Vec<Uuid>,
     pub variant_keys: Vec<String>,
     pub started_at: DateTime<Utc>,
 }
@@ -50,11 +52,19 @@ pub async fn fetch_running_experiments(
                     .single()
                     .unwrap_or_else(Utc::now);
 
+                let metric_ids = proto
+                    .metric_ids
+                    .iter()
+                    .map(|s| {
+                        Uuid::parse_str(s)
+                            .map_err(|e| anyhow::anyhow!("invalid metric_id UUID {s}: {e}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
                 results.push(RunningExperiment {
                     experiment_id,
                     env_id,
                     iteration_id,
-                    metric_keys: proto.metric_keys,
+                    metric_ids,
                     variant_keys: proto.variant_keys,
                     started_at,
                 });
@@ -218,13 +228,14 @@ mod tests {
         let exp_id = Uuid::new_v4();
         let env_id = Uuid::new_v4();
         let iter_id = Uuid::new_v4();
+        let metric_id = Uuid::new_v4();
 
         let proto = ProtoRunningExperiment {
             experiment_id: exp_id.to_string(),
             environment_id: env_id.to_string(),
             iteration_id: iter_id.to_string(),
             variant_keys: vec!["control".into(), "treatment".into()],
-            metric_keys: vec!["clicks".into()],
+            metric_ids: vec![metric_id.to_string()],
             started_at_ms: 1_700_000_000_000,
             status: "running".into(),
         };
@@ -236,7 +247,7 @@ mod tests {
         assert_eq!(results[0].experiment_id, exp_id);
         assert_eq!(results[0].env_id, env_id);
         assert_eq!(results[0].iteration_id, iter_id);
-        assert_eq!(results[0].metric_keys, vec!["clicks"]);
+        assert_eq!(results[0].metric_ids, vec![metric_id]);
         assert_eq!(results[0].variant_keys, vec!["control", "treatment"]);
     }
 
@@ -248,7 +259,7 @@ mod tests {
                 environment_id: Uuid::new_v4().to_string(),
                 iteration_id: Uuid::new_v4().to_string(),
                 variant_keys: vec!["control".into()],
-                metric_keys: vec!["revenue".into()],
+                metric_ids: vec![Uuid::new_v4().to_string()],
                 started_at_ms: 0,
                 status: "running".into(),
             })

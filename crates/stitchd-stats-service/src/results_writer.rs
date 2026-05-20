@@ -110,6 +110,12 @@ mod tests {
         ) -> Result<Response<IngestEventResponse>, Status> {
             Err(Status::unimplemented("not used in tests"))
         }
+        async fn track_events(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::TrackEventsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::TrackEventsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
         async fn register_context(
             &self,
             _req: Request<stitchd_proto::analytics::v1::RegisterContextRequest>,
@@ -159,6 +165,89 @@ mod tests {
         ) -> Result<Response<WriteExperimentResultsResponse>, Status> {
             self.received.lock().await.push(req.into_inner());
             Ok(Response::new(WriteExperimentResultsResponse {}))
+        }
+
+        // ── Metric definitions CRUD — not exercised by stats-service tests ──
+        async fn create_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::CreateMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_metrics(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::ListMetricsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::ListMetricsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn update_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::UpdateMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::MetricDefinition>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn delete_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::DeleteMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::DeleteMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn preview_metric(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::PreviewMetricRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::PreviewMetricResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_event_firings(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetEventFiringsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::GetEventFiringsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_event_stats(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetEventStatsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::GetEventStatsResponse>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        // Event-definitions CRUD — closed in feature-flag-wr4.
+        async fn create_event_definition(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::CreateEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_event_definition(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::GetEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_event_definitions(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::ListEventDefinitionsRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::ListEventDefinitionsResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn update_event_definition(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::UpdateEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::EventDefinitionMsg>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn delete_event_definition(
+            &self,
+            _req: Request<stitchd_proto::analytics::v1::DeleteEventDefinitionRequest>,
+        ) -> Result<Response<stitchd_proto::analytics::v1::DeleteEventDefinitionResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
         }
     }
 

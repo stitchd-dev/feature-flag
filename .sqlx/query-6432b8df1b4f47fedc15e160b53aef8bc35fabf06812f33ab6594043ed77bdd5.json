@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO experiment_iterations\n                    (id, experiment_id, iteration_number, started_at, metric_ids,\n                     traffic_allocation, min_sample_size)\n                VALUES ($1, $2, $3, NOW(), $4, $5::float8::numeric, $6)\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "UuidArray",
+        "Float8",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6432b8df1b4f47fedc15e160b53aef8bc35fabf06812f33ab6594043ed77bdd5"
+}

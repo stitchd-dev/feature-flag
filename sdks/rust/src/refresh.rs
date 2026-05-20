@@ -182,6 +182,7 @@ mod tests {
             list_segments: ids.iter().map(|id| list_seg(id, "seg")).collect(),
             server_timestamp_ms: 0,
             environment_id: "env".into(),
+            event_definitions: vec![],
         })
     }
 

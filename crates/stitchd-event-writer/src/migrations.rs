@@ -52,6 +52,10 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "20260516000007_events_v2",
         include_str!("../migrations/20260516000007_events_v2.sql"),
     ),
+    (
+        "20260520000001_events_v2_properties",
+        include_str!("../migrations/20260520000001_events_v2_properties.sql"),
+    ),
 ];
 
 /// Apply all pending ClickHouse migrations.

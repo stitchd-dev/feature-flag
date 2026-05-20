@@ -18,12 +18,27 @@ interface ExperimentResponse {
   flag_key: string
   status: string
   model: string
-  primary_metric: string
+  /**
+   * UUID list of `metric_definitions` rows attached to this experiment.
+   * Phase 7 cutover replaced the legacy `primary_metric: string` (event-key)
+   * field — see `experiments.metric_ids UUID[]` in Postgres.
+   */
+  metric_ids: string[]
   variants: number
   started_at: string | null
   ended_at: string | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * Minimal projection of a `metric_definitions` row used by ExperimentDetail
+ * to resolve display names from the IDs referenced by an experiment.
+ */
+interface MetricNameRow {
+  id: string
+  name: string
+  kind: 'aggregation' | 'ratio' | 'funnel'
 }
 
 interface ExperimentResults {
@@ -336,12 +351,23 @@ function MultiVariantMatrix({ useBayesian }: { useBayesian: boolean }) {
 
 // ─── Config tab ──────────────────────────────────────────────────────────────
 
-function ExpConfig({ exp }: { exp: Experiment }) {
+function ExpConfig({ exp, metricNames }: { exp: Experiment; metricNames: string[] }) {
+  // Phase 7 cutover: display the resolved metric names (from
+  // `metric_definitions.name`) instead of the legacy free-form `primary_metric`
+  // event key. Falls back to the mock-data `exp.primary` until the experiment
+  // API surfaces `metric_ids`.
+  const primaryLabel = metricNames[0] ?? exp.primary
+  const secondary = metricNames.slice(1)
   const rows: [string, React.ReactNode][] = [
     ['Bound flag', <span className="mono-key">{exp.flag}</span>],
     ['Statistical model', <span className="badge">{exp.model}</span>],
-    ['Primary metric', <span className="mono-key">{exp.primary}</span>],
-    ['Secondary metrics', <span style={{ fontSize: 12 }}>cart_value (sum) · session_minutes (avg)</span>],
+    ['Primary metric', <span style={{ fontWeight: 600 }}>{primaryLabel}</span>],
+    [
+      'Secondary metrics',
+      secondary.length > 0
+        ? <span style={{ fontSize: 12 }}>{secondary.join(' · ')}</span>
+        : <span style={{ fontSize: 12 }}>cart_value (sum) · session_minutes (avg)</span>,
+    ],
     ['Allocation', <span style={{ fontFamily: 'var(--font-mono)' }}>50 / 50</span>],
     ['Targeting', <span style={{ fontSize: 12 }}>segment <span className="mono-key">beta-customers</span> AND country in [US, CA]</span>],
     ['Duration', <span>14 days (started {exp.started})</span>],
@@ -399,6 +425,7 @@ export function ExperimentDetail() {
   const [apiResults, setApiResults] = useState<ExperimentResults | null>(null)
   const [apiLoading, setApiLoading] = useState(false)
   const [apiError, setApiError] = useState<string | null>(null)
+  const [metricNames, setMetricNames] = useState<string[]>([])
 
   useEffect(() => {
     if (!envId || !key) return
@@ -414,6 +441,31 @@ export function ExperimentDetail() {
       .catch((err) => setApiError(extractErrorMessage(err)))
       .finally(() => setApiLoading(false))
   }, [envId, key])
+
+  // Phase 7: resolve metric IDs → names by fetching the metric list once.
+  // The IDs are returned alongside the experiment by the gateway; the list
+  // call is scoped to the active environment and capped at 200 metrics.
+  useEffect(() => {
+    const ids = apiExp?.metric_ids
+    if (!envId || !ids || ids.length === 0) {
+      setMetricNames([])
+      return
+    }
+    const ctrl = new AbortController()
+    api
+      .get<{ items: MetricNameRow[] }>(
+        `/v1/metrics?env_id=${encodeURIComponent(envId)}&limit=200`,
+        { signal: ctrl.signal },
+      )
+      .then(({ data }) => {
+        const byId = new Map((data.items ?? []).map((m) => [m.id, m.name]))
+        setMetricNames(ids.map((id) => byId.get(id) ?? id))
+      })
+      .catch(() => {
+        // Best-effort — config tab falls back to mock data.
+      })
+    return () => ctrl.abort()
+  }, [envId, apiExp])
 
   // Fall back to mock data while API data loads
   const exp = EXPERIMENTS.find((e) => e.key === key) ?? EXPERIMENTS[0]
@@ -514,7 +566,7 @@ export function ExperimentDetail() {
           </>
         )}
 
-        {tab === 'config' && <ExpConfig exp={exp} />}
+        {tab === 'config' && <ExpConfig exp={exp} metricNames={metricNames} />}
 
         {tab === 'metrics' && (
           <div className="card">

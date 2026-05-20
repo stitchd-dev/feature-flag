@@ -70,6 +70,23 @@ message SyncDefinitionsResponse {
   // SDK key. The SDK uses this only for log correlation; it does NOT include
   // it in subsequent SDK->gateway requests (auth flows from `x-sdk-key`).
   string environment_id = 5;
+
+  // Pre-registered event definitions for the resolved environment.
+  // The SDK uses these to validate `Client::track()` calls client-side
+  // (unknown event_keys and value-type mismatches are warn-skipped).
+  repeated EventDefinitionMeta event_definitions = 6;
+}
+
+// Lightweight event-definition descriptor shipped to the SDK via
+// `SyncDefinitions`. Only the fields needed for client-side validation
+// (`Client::track()`) — no env/version/timestamps.
+message EventDefinitionMeta {
+  // The event key, unique within the environment.
+  string event_key = 1;
+  // The registered metric value type. One of: "bool", "int", "double".
+  // Snake-case matches `stitchd_core::event::EventValueType`'s serde form
+  // and the SDK's `snapshot::EventValueType` wire shape.
+  string value_type = 2;
 }
 
 // ============================================================================

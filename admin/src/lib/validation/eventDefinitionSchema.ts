@@ -1,6 +1,18 @@
 import * as Yup from 'yup'
 
-export const METRIC_TYPES = ['count', 'conversion', 'revenue', 'duration', 'custom'] as const
+// Mirrors the `MetricType` enum in `stitchd_core::event` — all six
+// variants must be selectable here. `numeric` was previously omitted,
+// blocking the UI from registering integer-valued non-money/duration
+// events (e.g. cart_item_count, search_results, csat_score) even
+// though the gateway accepted them.
+export const METRIC_TYPES = [
+  'count',
+  'conversion',
+  'revenue',
+  'duration',
+  'numeric',
+  'custom',
+] as const
 export type MetricType = typeof METRIC_TYPES[number]
 
 /** Event definition create / edit. */
@@ -34,3 +46,28 @@ export const eventDefinitionSchema = Yup.object({
 })
 
 export type EventDefinitionFormValues = Yup.InferType<typeof eventDefinitionSchema>
+
+/**
+ * Edit-mode schema — same as create but `key` is immutable, so it's omitted.
+ * The form still surfaces the key as a read-only display field; this schema
+ * only validates the editable subset.
+ */
+export const eventDefinitionEditSchema = Yup.object({
+  metric_type: Yup.string()
+    .oneOf(METRIC_TYPES as unknown as string[], 'Invalid metric type')
+    .required('Metric type is required'),
+
+  description: Yup.string().max(500, 'Description must be 500 characters or fewer'),
+
+  schema: Yup.string().test('valid-json-or-empty', 'Schema must be valid JSON', (value) => {
+    if (!value || value.trim() === '') return true
+    try {
+      JSON.parse(value)
+      return true
+    } catch {
+      return false
+    }
+  }),
+})
+
+export type EventDefinitionEditValues = Yup.InferType<typeof eventDefinitionEditSchema>

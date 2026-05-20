@@ -27,15 +27,15 @@ pub use error::RepositoryError;
 pub use stitchd_core::id::ExperimentIterationId;
 pub use repository::{
     AuditLogger, ContextRegistryRepository, EnvironmentRepository, EventDefinitionRepository,
-    ExperimentRepository, FlagRepository, ListContextCounts, ListSegmentSummary,
+    ExperimentRepository, FlagRepository, ListContextCounts, ListSegmentSummary, MetricRepository,
     OrganisationRepository, ProjectRepository, RoleRepository, SdkKeyRepository, SegmentRepository,
     UserRepository, VariantRepository,
     composite::CompositeSegmentRepository,
     pg::{
         PgAuditLogger, PgContextRegistryRepository, PgEnvironmentRepository,
         PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository,
-        PgOrganisationRepository, PgProjectRepository, PgRoleRepository, PgSdkKeyRepository,
-        PgSegmentRepository, PgUserRepository, PgVariantRepository,
+        PgMetricRepository, PgOrganisationRepository, PgProjectRepository, PgRoleRepository,
+        PgSdkKeyRepository, PgSegmentRepository, PgUserRepository, PgVariantRepository,
     },
 };
 pub use stats_jobs::{

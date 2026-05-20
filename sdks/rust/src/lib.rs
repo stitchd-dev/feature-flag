@@ -30,26 +30,29 @@
 //!         .evaluate(&[EvalRequest::flag("my-flag", ctx)])
 //!         .await;
 //!     println!("variant = {}", results[0].variant_key);
-//!     client.shutdown().await;
+//!     client.shutdown(std::time::Duration::from_secs(5)).await?;
 //!     Ok(())
 //! }
 //! ```
 //!
 //! # Modules
 //!
-//! - [`config`]   — [`SdkConfig`] and defaults
-//! - [`client`]   — [`SdkClient`], [`EvalRequest`], [`EvalResult`]
-//! - [`error`]    — [`SdkError`] taxonomy
-//! - [`events`]   — fire-and-forget event queue and flush task
-//! - [`lru`]      — bounded list-segment membership cache
-//! - [`polling`]  — gRPC definition sync loop
-//! - [`snapshot`] — immutable [`DefinitionSnapshot`] and [`DefinitionStore`]
+//! - [`config`]       — [`SdkConfig`] and defaults
+//! - [`client`]       — [`SdkClient`], [`EvalRequest`], [`EvalResult`]
+//! - [`error`]        — [`SdkError`] taxonomy
+//! - [`event_buffer`] — client-side track-event buffer + flush (Phase 5)
+//! - [`events`]       — fire-and-forget flag-evaluation event queue
+//! - [`lru`]          — bounded list-segment membership cache
+//! - [`polling`]      — gRPC definition sync loop
+//! - [`snapshot`]     — immutable [`DefinitionSnapshot`] and [`DefinitionStore`]
 
 pub mod client;
 pub mod config;
 pub mod error;
+pub mod event_buffer;
 pub mod events;
 pub mod lru;
+pub(crate) mod metrics;
 pub mod polling;
 pub mod refresh;
 pub mod snapshot;
@@ -58,9 +61,12 @@ pub use client::{
     EvalOutcome, EvalRequest, EvalResult, EvalResultWithReasoning, ReasoningTrace, SdkClient,
 };
 pub use config::SdkConfig;
-pub use error::SdkError;
+pub use error::{SdkError, TrackError};
+pub use event_buffer::{
+    BufferedEvent, EventBuffer, EventBufferConfig, FlushError, FlushReport, TypedValue,
+};
 pub use events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, ParameterValue};
 pub use lru::{ContextKey, MembershipCache, MembershipMap};
 pub use polling::{DefinitionFetcher, PollTask};
 pub use refresh::{MembershipBatchFetcher, RefreshTask};
-pub use snapshot::{DefinitionSnapshot, DefinitionStore};
+pub use snapshot::{DefinitionSnapshot, DefinitionStore, EventValueType};

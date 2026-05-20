@@ -36,7 +36,9 @@ message ExperimentIteration {
   int64           started_at_ms    = 4;
   // Zero when the iteration is still running.
   int64           ended_at_ms      = 5;
-  repeated string metric_keys      = 6;
+  // Stringified UUIDs referencing `metric_definitions` rows; Phase 7
+  // cutover replaced the previous `metric_keys` (event-key strings).
+  repeated string metric_ids       = 6;
   double          traffic_allocation = 7;
 }
 
@@ -122,7 +124,8 @@ message RunningExperiment {
   string          environment_id = 2;
   string          iteration_id  = 3;
   repeated string variant_keys  = 4;
-  repeated string metric_keys   = 5;
+  // Stringified UUIDs referencing `metric_definitions` rows.
+  repeated string metric_ids    = 5;
   int64           started_at_ms = 6;
   // Always "running" for results returned by this RPC.
   string          status        = 7;
