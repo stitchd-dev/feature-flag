@@ -34,7 +34,7 @@
  * @see feature-flag-uz3     — backend gap: firings + stats endpoints
  */
 import { useState } from 'react'
-import { Formik, Form, type FormikHelpers } from 'formik'
+import { Formik, Form, FieldArray, type FormikHelpers } from 'formik'
 import { I } from '../../components/icons'
 import { FormField } from '../../components/form/FormField'
 import { FormSelect } from '../../components/form/FormSelect'
@@ -46,9 +46,21 @@ import { extractErrorMessage } from '../../lib/errors'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-export interface TestEventFormValues {
+/** One context-dimension row in the form. Maps 1:1 to the wire-format
+ *  `EventContextBody` on `POST /v1/admin/events/track`. */
+export interface TestEventContextRow {
   context_type: string
   context_key: string
+}
+
+export interface TestEventFormValues {
+  /**
+   * One or more attribution dimensions for this firing. Defaults to a
+   * single row for the common case; the "Add context" button appends
+   * more so a single event can be attributed to e.g. user + account +
+   * session simultaneously (see `feature-flag-5wr`).
+   */
+  contexts: TestEventContextRow[]
   /** Free-text form input; shape interpreted via `metric_type` at submit time. */
   value: string
   /** Optional JSON object literal. Empty string = "no properties". */
@@ -74,8 +86,10 @@ type WireValue =
 
 export interface TrackEvent {
   event_key: string
-  context_type: string
-  context_key: string
+  /** Multi-dimensional attribution. The gateway prefers this over the
+   *  deprecated singular fields and the analytics-service forwards the
+   *  full list into the ClickHouse `Array(Tuple(String, String))` column. */
+  contexts: TestEventContextRow[]
   value?: WireValue
   properties?: Record<string, unknown>
 }
@@ -166,6 +180,11 @@ export function validProperties(rawJson: string): boolean {
 /**
  * Build the `POST /v1/events/track` body from form values + the page-level
  * `event_key` + `metric_type`. Pure — no IO.
+ *
+ * Each context row gets trimmed; rows that are entirely blank are dropped
+ * so an empty "Add context" placeholder doesn't sneak onto the wire. The
+ * caller is responsible for validating that at least one row remains
+ * (see the `validate` function in the component).
  */
 export function buildTrackBody(
   values: TestEventFormValues,
@@ -173,10 +192,16 @@ export function buildTrackBody(
   metricType: string,
   environmentId?: string,
 ): TrackEventsBody {
+  const contexts = values.contexts
+    .map((c) => ({
+      context_type: c.context_type.trim(),
+      context_key: c.context_key.trim(),
+    }))
+    .filter((c) => c.context_type !== '' && c.context_key !== '')
+
   const event: TrackEvent = {
     event_key: eventKey,
-    context_type: values.context_type.trim(),
-    context_key: values.context_key.trim(),
+    contexts,
   }
 
   const typed = parseTypedValue(values.value, metricType)
@@ -244,16 +269,24 @@ export function TestEventWidget({ eventKey, metricType, environmentId, onSubmitt
   const [collapsed, setCollapsed] = useState(true)
 
   const initialValues: TestEventFormValues = {
-    context_type: 'user',
-    context_key: '',
+    contexts: [{ context_type: 'user', context_key: '' }],
     value: metricType === 'conversion' ? 'true' : '',
     properties: '',
   }
 
-  function validate(values: TestEventFormValues): Partial<Record<keyof TestEventFormValues, string>> {
+  function validate(
+    values: TestEventFormValues,
+  ): Partial<Record<keyof TestEventFormValues, string>> {
     const errors: Partial<Record<keyof TestEventFormValues, string>> = {}
-    if (!values.context_type.trim()) errors.context_type = 'Context type is required'
-    if (!values.context_key.trim()) errors.context_key = 'Context key is required'
+
+    // At least one valid context — `buildTrackBody` drops blank rows, so
+    // we require >=1 non-blank pair.
+    const nonBlank = values.contexts.filter(
+      (c) => c.context_type.trim() !== '' && c.context_key.trim() !== '',
+    )
+    if (nonBlank.length === 0) {
+      errors.contexts = 'At least one context (type + key) is required'
+    }
 
     if (metricType !== 'count') {
       const parsed = parseTypedValue(values.value, metricType)
@@ -354,21 +387,71 @@ export function TestEventWidget({ eventKey, metricType, environmentId, onSubmitt
                     </div>
                   )}
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                    <FormField
-                      name="context_type"
-                      label="Context type"
-                      placeholder="user"
-                      hint="Dimension type (e.g. user, session, org)."
-                    />
-                    <FormField
-                      name="context_key"
-                      label="Context key"
-                      placeholder="u-42"
-                      hint="Dimension value (e.g. user-id, session-id)."
-                      style={{ fontFamily: 'var(--font-mono)' }}
-                    />
-                  </div>
+                  {/* Multi-context attribution — feature-flag-5wr. The
+                      common case is one row; click "Add context" to
+                      attribute a single firing to multiple dimensions
+                      (e.g. user + account + session) without inflating
+                      count metrics. */}
+                  <FieldArray name="contexts">
+                    {({ push, remove, form }) => {
+                      const rows = (form.values as TestEventFormValues).contexts
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <label className="label">
+                              Contexts <span style={{ color: 'var(--fg-muted)', fontWeight: 400 }}>(at least 1)</span>
+                            </label>
+                            <button
+                              type="button"
+                              className="btn sm"
+                              onClick={() => push({ context_type: '', context_key: '' })}
+                              data-testid="add-context"
+                            >
+                              <I.plus size={12} /> Add context
+                            </button>
+                          </div>
+                          {rows.map((_, idx) => (
+                            <div
+                              key={idx}
+                              data-testid={`context-row-${idx}`}
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: '1fr 1fr auto',
+                                gap: 10,
+                                alignItems: 'flex-end',
+                              }}
+                            >
+                              <FormField
+                                name={`contexts.${idx}.context_type`}
+                                label={idx === 0 ? 'Context type' : ''}
+                                placeholder="user"
+                                hint={idx === 0 ? 'Dimension type (e.g. user, session, org).' : undefined}
+                              />
+                              <FormField
+                                name={`contexts.${idx}.context_key`}
+                                label={idx === 0 ? 'Context key' : ''}
+                                placeholder="u-42"
+                                hint={idx === 0 ? 'Dimension value (e.g. user-id, session-id).' : undefined}
+                                style={{ fontFamily: 'var(--font-mono)' }}
+                              />
+                              {rows.length > 1 && (
+                                <button
+                                  type="button"
+                                  className="icon-btn"
+                                  onClick={() => remove(idx)}
+                                  title="Remove context"
+                                  style={{ color: 'var(--danger)', marginBottom: 12 }}
+                                  data-testid={`remove-context-${idx}`}
+                                >
+                                  <I.trash size={12} />
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )
+                    }}
+                  </FieldArray>
 
                   {metricType === 'count' ? (
                     <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>

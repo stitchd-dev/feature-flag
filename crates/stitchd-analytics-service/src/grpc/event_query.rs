@@ -20,7 +20,7 @@ use serde::Deserialize;
 use tonic::{Request, Response, Status};
 
 use stitchd_proto::analytics::v1::{
-    EventFiring, EventStatsBucket, GetEventFiringsRequest, GetEventFiringsResponse,
+    EventContext, EventFiring, EventStatsBucket, GetEventFiringsRequest, GetEventFiringsResponse,
     GetEventStatsRequest, GetEventStatsResponse,
 };
 
@@ -66,10 +66,15 @@ pub fn resolve_days(requested: u32) -> u32 {
 /// 3. `limit` — u32
 #[must_use]
 pub fn build_firings_sql() -> &'static str {
+    // Selects the full `contexts` array plus a denormalised view of the
+    // first element for legacy callers. `contexts` ships as
+    // `Vec<(String, String)>` over the wire and gets mapped to the
+    // `repeated EventContext` field on the proto response.
     r"
     SELECT
         contexts[1].1                                            AS context_type,
         contexts[1].2                                            AS context_key,
+        contexts                                                 AS contexts,
         value_bool,
         value_int,
         value_double,
@@ -110,6 +115,10 @@ pub fn build_stats_sql() -> &'static str {
 struct FiringRow {
     context_type: String,
     context_key: String,
+    /// Full multi-context attribution. `Array(Tuple(String, String))` in
+    /// CH → `Vec<(String, String)>` over the RowBinary wire. The first
+    /// element (if any) mirrors the legacy singular fields above.
+    contexts: Vec<(String, String)>,
     value_bool: Option<bool>,
     value_int: Option<i64>,
     value_double: Option<f64>,
@@ -198,6 +207,10 @@ pub async fn handle_get_event_firings(
         .await
         .map_err(|e| Status::internal(format!("ClickHouse error: {e}")))?;
 
+    // The proto's singular fields are #[deprecated]; populating them is
+    // intentional for the SDK compat window. Allow is scoped to the
+    // smallest surface that actually touches the deprecated fields.
+    #[allow(deprecated)]
     let firings: Vec<EventFiring> = rows
         .into_iter()
         .map(|r| EventFiring {
@@ -207,6 +220,13 @@ pub async fn handle_get_event_firings(
             properties_json: render_properties_json(&r.properties),
             occurred_at: ms_to_rfc3339(r.occurred_at_ms),
             ingested_at: ms_to_rfc3339(r.ingested_at_ms),
+            // Full multi-context list — proto's `repeated EventContext`.
+            // Element 0 mirrors the legacy singular fields above.
+            contexts: r
+                .contexts
+                .into_iter()
+                .map(|(t, k)| EventContext { context_type: t, context_key: k })
+                .collect(),
         })
         .collect();
 
@@ -258,6 +278,11 @@ pub async fn handle_get_event_stats(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+// Tests assert on the proto's deprecated singular fields (which still
+// ship for SDK compat). Crate-wide `#[deny(warnings)]` would otherwise
+// trip — module-scoped allow keeps the lint enforcement intact for new
+// production code.
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use serde_json::Value as JsonValue;

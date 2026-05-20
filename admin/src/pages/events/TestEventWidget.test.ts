@@ -22,8 +22,7 @@ import {
 
 function baseValues(overrides: Partial<TestEventFormValues> = {}): TestEventFormValues {
   return {
-    context_type: 'user',
-    context_key: 'u-42',
+    contexts: [{ context_type: 'user', context_key: 'u-42' }],
     value: '',
     properties: '',
     ...overrides,
@@ -38,8 +37,7 @@ describe('TestEventWidget — buildTrackBody', () => {
     expect(body.events).toHaveLength(1)
     const ev = body.events[0]
     expect(ev.event_key).toBe('checkout.completed')
-    expect(ev.context_type).toBe('user')
-    expect(ev.context_key).toBe('u-42')
+    expect(ev.contexts).toEqual([{ context_type: 'user', context_key: 'u-42' }])
     expect(ev.value).toBeUndefined()
   })
 
@@ -88,6 +86,63 @@ describe('TestEventWidget — buildTrackBody', () => {
   it('buildTrackBody_omits_properties_when_whitespace_only', () => {
     const body = buildTrackBody(baseValues({ properties: '   ' }), 'login', 'count')
     expect(body.events[0].properties).toBeUndefined()
+  })
+
+  it('buildTrackBody_forwards_multiple_contexts', () => {
+    // The whole point of feature-flag-5wr: a single firing attributable
+    // to multiple dimensions reaches the server as one event with N
+    // contexts (instead of N events that would inflate count metrics).
+    const body = buildTrackBody(
+      baseValues({
+        contexts: [
+          { context_type: 'user', context_key: 'u-42' },
+          { context_type: 'account', context_key: 'acme' },
+          { context_type: 'session', context_key: 's-99' },
+        ],
+      }),
+      'purchase',
+      'count',
+    )
+    expect(body.events[0].contexts).toHaveLength(3)
+    expect(body.events[0].contexts).toEqual([
+      { context_type: 'user', context_key: 'u-42' },
+      { context_type: 'account', context_key: 'acme' },
+      { context_type: 'session', context_key: 's-99' },
+    ])
+  })
+
+  it('buildTrackBody_drops_blank_context_rows', () => {
+    // Empty rows added via "Add context" then left blank must not reach
+    // the wire — they'd otherwise become "::" entries in ClickHouse.
+    const body = buildTrackBody(
+      baseValues({
+        contexts: [
+          { context_type: 'user', context_key: 'u-1' },
+          { context_type: '', context_key: '' },
+          { context_type: 'session', context_key: '   ' }, // partial → drop
+          { context_type: 'org', context_key: 'org-9' },
+        ],
+      }),
+      'page_viewed',
+      'count',
+    )
+    expect(body.events[0].contexts).toEqual([
+      { context_type: 'user', context_key: 'u-1' },
+      { context_type: 'org', context_key: 'org-9' },
+    ])
+  })
+
+  it('buildTrackBody_trims_whitespace_in_context_pairs', () => {
+    const body = buildTrackBody(
+      baseValues({
+        contexts: [{ context_type: '  user  ', context_key: '  u-42  ' }],
+      }),
+      'click',
+      'count',
+    )
+    expect(body.events[0].contexts).toEqual([
+      { context_type: 'user', context_key: 'u-42' },
+    ])
   })
 })
 

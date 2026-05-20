@@ -13,8 +13,9 @@ use tonic::Request as TonicRequest;
 use utoipa::ToSchema;
 
 use stitchd_proto::analytics::v1::{
-    GetEventFiringsRequest, GetEventStatsRequest, IngestEventRequest, MetricEvent, MetricValue,
-    TrackEvent as ProtoTrackEvent, TrackEventsRequest as ProtoTrackEventsRequest, metric_value,
+    EventContext as ProtoEventContext, GetEventFiringsRequest, GetEventStatsRequest,
+    IngestEventRequest, MetricEvent, MetricValue, TrackEvent as ProtoTrackEvent,
+    TrackEventsRequest as ProtoTrackEventsRequest, metric_value,
 };
 
 use crate::error::GatewayError;
@@ -315,10 +316,26 @@ pub struct TrackEvent {
     /// Pre-registered `event_definitions.key`. Unknown / archived keys are
     /// rejected (added to `rejected[]`) rather than failing the whole batch.
     pub event_key: String,
-    /// Dimension type (e.g. "user", "session").
+    /// **DEPRECATED**: prefer `contexts` below. Kept for SDK compat — when
+    /// `contexts` is absent or empty, the server wraps these two fields
+    /// into a 1-element list. Required only when `contexts` is empty.
+    #[serde(default)]
     pub context_type: String,
-    /// Dimension value (e.g. "u-42").
+    /// See `context_type`. **DEPRECATED**.
+    #[serde(default)]
     pub context_key: String,
+    /// Multi-dimensional attribution. When non-empty, takes precedence
+    /// over the deprecated singular fields above (`feature-flag-5wr`).
+    /// Example: a `purchase_completed` attributable to both a user and
+    /// the account it belongs to:
+    /// ```json
+    /// "contexts": [
+    ///   {"context_type": "user",    "context_key": "u-42"},
+    ///   {"context_type": "account", "context_key": "acme_corp"}
+    /// ]
+    /// ```
+    #[serde(default)]
+    pub contexts: Vec<EventContextBody>,
     /// Typed metric value. Optional for pure occurrence events where the
     /// registered `event_definitions.value_type` is `Unit`.
     pub value: Option<TypedValue>,
@@ -328,6 +345,15 @@ pub struct TrackEvent {
     /// RFC 3339 client-side wall-clock timestamp. When absent,
     /// analytics-service uses ingestion (server) time.
     pub occurred_at: Option<String>,
+}
+
+/// One context-dimension pair attached to an event. Matches the proto
+/// `EventContext` shape — kept as a separate gateway DTO so the JSON wire
+/// format stays decoupled from prost-generated code.
+#[derive(Debug, Deserialize, Serialize, ToSchema, PartialEq, Eq, Clone)]
+pub struct EventContextBody {
+    pub context_type: String,
+    pub context_key: String,
 }
 
 /// Request body of `POST /v1/events/track`.
@@ -363,6 +389,11 @@ pub struct TrackEventsResponse {
     pub rejected: Vec<RejectedEvent>,
 }
 
+// Forwarding the deprecated singular fields is intentional during the
+// SDK compat window — until every client emits `contexts`, the
+// analytics-service still needs the fallback pair to wrap. Suppressed
+// only on this function, not crate-wide.
+#[allow(deprecated)]
 fn json_event_to_proto(e: TrackEvent) -> ProtoTrackEvent {
     ProtoTrackEvent {
         event_key: e.event_key,
@@ -371,6 +402,14 @@ fn json_event_to_proto(e: TrackEvent) -> ProtoTrackEvent {
         value: e.value.as_ref().map(TypedValue::to_proto),
         properties: e.properties.unwrap_or_default(),
         occurred_at: e.occurred_at,
+        contexts: e
+            .contexts
+            .into_iter()
+            .map(|c| ProtoEventContext {
+                context_type: c.context_type,
+                context_key: c.context_key,
+            })
+            .collect(),
     }
 }
 
@@ -538,8 +577,16 @@ pub struct StatsQuery {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct EventFiringJson {
+    /// **DEPRECATED**: always equals `contexts[0].context_type`. Use
+    /// `contexts` instead for new consumers. Kept on the wire so existing
+    /// EventDetail UI keeps rendering during the transition.
     pub context_type: String,
+    /// **DEPRECATED**: see `context_type`.
     pub context_key: String,
+    /// Full multi-context attribution recorded with this firing. The
+    /// first element mirrors the legacy singular fields above. Always
+    /// non-empty for rows ingested via the new path.
+    pub contexts: Vec<EventContextBody>,
     /// Serialised JSON scalar (`true`/`42`/`1.5`); empty when occurrence-only.
     pub value_json: String,
     /// Serialised JSON object (always `{}` when empty).
@@ -605,18 +652,31 @@ pub async fn get_event_firings(
     .map_err(GatewayError::from)?;
 
     let inner = resp.into_inner();
-    let firings: Vec<EventFiringJson> = inner
-        .firings
-        .into_iter()
-        .map(|f| EventFiringJson {
+    // The proto's singular fields are #[deprecated] but we forward them
+    // verbatim during the SDK compat window. Lifted to a helper so the
+    // allow attribute is tight and visible at the boundary.
+    #[allow(deprecated)]
+    fn proto_firing_to_json(
+        f: stitchd_proto::analytics::v1::EventFiring,
+    ) -> EventFiringJson {
+        EventFiringJson {
             context_type: f.context_type,
             context_key: f.context_key,
+            contexts: f
+                .contexts
+                .into_iter()
+                .map(|c| EventContextBody {
+                    context_type: c.context_type,
+                    context_key: c.context_key,
+                })
+                .collect(),
             value_json: f.value_json,
             properties_json: f.properties_json,
             occurred_at: f.occurred_at,
             ingested_at: f.ingested_at,
-        })
-        .collect();
+        }
+    }
+    let firings: Vec<EventFiringJson> = inner.firings.into_iter().map(proto_firing_to_json).collect();
     Ok(Json(EventFiringsResponseJson { firings }))
 }
 
@@ -793,6 +853,10 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
 }
 
 #[cfg(test)]
+// Tests construct and assert on the proto's deprecated singular
+// `context_type`/`context_key` fields (kept for SDK compat). Allow
+// scoped to the module so the production-code deny stays intact.
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use axum::{
@@ -1526,6 +1590,7 @@ mod tests {
             event_key: "purchase".into(),
             context_type: "user".into(),
             context_key: "u42".into(),
+            contexts: vec![],
             value: Some(TypedValue::Int(100)),
             properties: Some(props),
             occurred_at: Some("2026-05-19T12:00:00Z".into()),
@@ -1550,6 +1615,7 @@ mod tests {
             event_key: "ping".into(),
             context_type: "user".into(),
             context_key: "u1".into(),
+            contexts: vec![],
             value: None,
             properties: None,
             occurred_at: None,
@@ -1558,6 +1624,32 @@ mod tests {
         assert!(p.value.is_none());
         assert!(p.properties.is_empty());
         assert!(p.occurred_at.is_none());
+    }
+
+    #[test]
+    fn json_event_to_proto_forwards_multi_contexts() {
+        // Demonstrates the new wire shape: when `contexts` is non-empty,
+        // every dimension reaches the proto. Combined with the ingestion
+        // handler's prefer-contexts[] branch, this is the path multi-
+        // dimensional attribution callers will use.
+        let e = TrackEvent {
+            event_key: "purchase".into(),
+            context_type: String::new(),
+            context_key: String::new(),
+            contexts: vec![
+                EventContextBody { context_type: "user".into(), context_key: "u-42".into() },
+                EventContextBody { context_type: "account".into(), context_key: "acme".into() },
+            ],
+            value: None,
+            properties: None,
+            occurred_at: None,
+        };
+        let p = json_event_to_proto(e);
+        assert_eq!(p.contexts.len(), 2);
+        assert_eq!(p.contexts[0].context_type, "user");
+        assert_eq!(p.contexts[0].context_key, "u-42");
+        assert_eq!(p.contexts[1].context_type, "account");
+        assert_eq!(p.contexts[1].context_key, "acme");
     }
 
     #[tokio::test]
@@ -1635,6 +1727,10 @@ mod tests {
                 firings: vec![stitchd_proto::analytics::v1::EventFiring {
                     context_type: "user".into(),
                     context_key: "u1".into(),
+                    contexts: vec![stitchd_proto::analytics::v1::EventContext {
+                        context_type: "user".into(),
+                        context_key: "u1".into(),
+                    }],
                     value_json: "42".into(),
                     properties_json: "{}".into(),
                     occurred_at: "2026-05-19T12:00:00.000Z".into(),

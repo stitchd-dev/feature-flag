@@ -37,15 +37,29 @@ message IngestEventResponse {
 // SDK-trust boundary) and additionally carries `properties` + `occurred_at`
 // fields to support metric filters and offline replay.
 
+// A single context dimension attached to an event. ClickHouse stores
+// the full set as `Array(Tuple(String, String))` per row, so a single
+// event can carry attribution to multiple dimensions simultaneously
+// (e.g. `user:alice` + `account:acme_corp` + `session:s99`). See
+// `feature-flag-5wr` — earlier wire format only allowed one pair,
+// forcing callers to either split into N events (inflating count
+// metrics by N) or drop dimensions.
+message EventContext {
+  string context_type = 1;
+  string context_key  = 2;
+}
+
 message TrackEvent {
   // Pre-registered event_definitions.key. Unknown / archived keys are
   // rejected (added to TrackEventsResponse.rejected) rather than failing
   // the whole batch.
   string                 event_key    = 1;
-  // Dimension type (e.g. "user", "session").
-  string                 context_type = 2;
-  // Dimension value (e.g. "u-42").
-  string                 context_key  = 3;
+  // DEPRECATED in favour of `contexts` below. Kept for backwards
+  // compatibility with SDKs that emit a single dimension; the server
+  // wraps {context_type, context_key} into a one-element list when
+  // `contexts` is empty. Will be removed once all SDK clients migrate.
+  string                 context_type = 2 [deprecated = true];
+  string                 context_key  = 3 [deprecated = true];
   // Typed metric value; must match the registered event's value_type.
   // Optional because some event_definitions are pure occurrence markers
   // (count-only) where value carries no information.
@@ -57,6 +71,11 @@ message TrackEvent {
   // analytics-service uses ingestion (server) time. Lets SDKs replay
   // buffered offline events with their original firing time.
   optional string        occurred_at  = 6;
+  // Multi-dimensional attribution. When non-empty, takes precedence over
+  // the deprecated singular fields above. Server requires at least one
+  // entry per event (effective context list = `contexts` OR the wrapped
+  // singular pair).
+  repeated EventContext  contexts     = 7;
 }
 
 message TrackEventsRequest {
@@ -476,9 +495,11 @@ message GetEventFiringsRequest {
 // proto contract stays stable across schema evolutions of `properties` /
 // `value`.
 message EventFiring {
-  // Context-pair: `contexts[1]` in the CH row.
-  string context_type    = 1;
-  string context_key     = 2;
+  // DEPRECATED — always equals `contexts[0]` when present. Kept on the
+  // wire for callers that only need the first dimension. New consumers
+  // should iterate `contexts` (see `feature-flag-5wr`).
+  string context_type    = 1 [deprecated = true];
+  string context_key     = 2 [deprecated = true];
   // Serialised JSON of the typed `value` oneof — one of `true` / `42` /
   // `1.5`. Empty string when no value (occurrence-only event).
   string value_json      = 3;
@@ -489,6 +510,9 @@ message EventFiring {
   string occurred_at     = 5;
   // Server-side ingestion time (RFC 3339 UTC).
   string ingested_at     = 6;
+  // Full multi-context attribution for this firing. Always populated;
+  // contexts[0] mirrors the legacy singular fields above.
+  repeated EventContext contexts = 7;
 }
 
 message GetEventFiringsResponse {

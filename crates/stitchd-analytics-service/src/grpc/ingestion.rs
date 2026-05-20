@@ -306,9 +306,35 @@ fn validate_event(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
+    // Multi-context attribution (feature-flag-5wr). The ClickHouse row
+    // schema has always supported N contexts per event — this is the
+    // ingress point that now respects it.
+    //
+    // Priority order:
+    //   1. `event.contexts` (non-empty)  → use directly
+    //   2. legacy singular pair          → wrap into 1-element list
+    //
+    // We don't merge the two — when contexts[] is set, the deprecated
+    // singular fields are ignored so SDKs that migrate don't get
+    // accidental duplication.
+    let contexts: Vec<(String, String)> = if event.contexts.is_empty() {
+        // Reading the deprecated singular fields is intentional: this is
+        // the compat fallback for SDK clients that haven't migrated yet.
+        #[allow(deprecated)]
+        {
+            vec![(event.context_type.clone(), event.context_key.clone())]
+        }
+    } else {
+        event
+            .contexts
+            .iter()
+            .map(|c| (c.context_type.clone(), c.context_key.clone()))
+            .collect()
+    };
+
     Ok(EventV2Row {
         env_id: env_id.as_uuid(),
-        contexts: vec![(event.context_type.clone(), event.context_key.clone())],
+        contexts,
         metric_key: event.event_key.clone(),
         value_bool,
         value_int,
@@ -429,6 +455,10 @@ pub async fn handle_track_events(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+// Tests construct `TrackEvent` with the deprecated singular fields on
+// purpose — exercising the SDK compat fallback path is the whole point.
+// New tests added for `contexts: vec![...]` live alongside these.
+#[allow(deprecated)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -438,7 +468,7 @@ mod tests {
     use tonic::metadata::MetadataValue;
 
     use stitchd_core::{
-        event::{EventDefinition, EventValueType},
+        event::{EventDefinition, EventValueType, MetricType},
         id::{EnvironmentId, EventDefinitionId},
     };
     use stitchd_db::{EventDefinitionRepository, RepositoryError};
@@ -596,6 +626,7 @@ mod tests {
             }),
             properties: HashMap::new(),
             occurred_at: None,
+            contexts: vec![],
         }
     }
 
@@ -609,6 +640,7 @@ mod tests {
             }),
             properties: HashMap::new(),
             occurred_at: None,
+            contexts: vec![],
         }
     }
 
@@ -622,6 +654,7 @@ mod tests {
             }),
             properties: HashMap::new(),
             occurred_at: None,
+            contexts: vec![],
         }
     }
 
@@ -810,6 +843,7 @@ mod tests {
                 value: None,
                 properties: HashMap::new(),
                 occurred_at: None,
+                contexts: vec![],
             },
         ];
         let req = make_request(env_id, events);
@@ -859,6 +893,102 @@ mod tests {
 
         assert_eq!(resp.accepted_count, 1);
         assert!(resp.rejected.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Multi-context (`feature-flag-5wr`) — the SDK wire format now lets one
+    // event carry N attribution dimensions. Storage and the rest of the
+    // pipeline already supported it; these two tests pin the ingestion
+    // boundary's behaviour so the wrap-fallback can't regress.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn validate_event_uses_contexts_when_set() {
+        let env_id = EnvironmentId::new();
+        let def = EventDefinition {
+            id: EventDefinitionId::new(),
+            environment_id: env_id,
+            key: "purchase".into(),
+            name: "Purchase".into(),
+            description: None,
+            value_type: EventValueType::Int,
+            metric_type: MetricType::Count,
+            schema: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+        let event = TrackEvent {
+            event_key: "purchase".into(),
+            // Singular fields intentionally LEFT POPULATED to confirm the
+            // wrap-fallback is *not* taken when `contexts` is non-empty —
+            // the ingestion handler must prefer the new field.
+            context_type: "should_be_ignored".into(),
+            context_key: "should_be_ignored".into(),
+            contexts: vec![
+                stitchd_proto::analytics::v1::EventContext {
+                    context_type: "user".into(),
+                    context_key: "u-42".into(),
+                },
+                stitchd_proto::analytics::v1::EventContext {
+                    context_type: "account".into(),
+                    context_key: "acme".into(),
+                },
+                stitchd_proto::analytics::v1::EventContext {
+                    context_type: "session".into(),
+                    context_key: "s-99".into(),
+                },
+            ],
+            value: Some(MetricValue {
+                value: Some(metric_value::Value::IntValue(1)),
+            }),
+            properties: HashMap::new(),
+            occurred_at: None,
+        };
+        let row = validate_event(&event, &def, env_id, 0).expect("event should validate");
+        assert_eq!(row.contexts.len(), 3, "all 3 contexts must reach the CH row");
+        assert_eq!(row.contexts[0], ("user".into(), "u-42".into()));
+        assert_eq!(row.contexts[1], ("account".into(), "acme".into()));
+        assert_eq!(row.contexts[2], ("session".into(), "s-99".into()));
+        // The singular fields on the proto must NOT have leaked through —
+        // they're ignored when contexts[] is set.
+        assert!(!row.contexts.iter().any(|(t, _)| t == "should_be_ignored"));
+    }
+
+    #[test]
+    fn validate_event_wraps_legacy_singular_when_contexts_empty() {
+        // Old-SDK compat path: caller sets only the deprecated singular
+        // fields and leaves `contexts` empty. The handler wraps them into
+        // a 1-element list so the CH schema stays uniform.
+        let env_id = EnvironmentId::new();
+        let def = EventDefinition {
+            id: EventDefinitionId::new(),
+            environment_id: env_id,
+            key: "click".into(),
+            name: "Click".into(),
+            description: None,
+            value_type: EventValueType::Int,
+            metric_type: MetricType::Count,
+            schema: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+        let event = TrackEvent {
+            event_key: "click".into(),
+            context_type: "user".into(),
+            context_key: "u-7".into(),
+            contexts: vec![],
+            value: Some(MetricValue {
+                value: Some(metric_value::Value::IntValue(1)),
+            }),
+            properties: HashMap::new(),
+            occurred_at: None,
+        };
+        let row = validate_event(&event, &def, env_id, 0).expect("legacy path must work");
+        assert_eq!(row.contexts, vec![("user".into(), "u-7".into())]);
     }
 
     // -----------------------------------------------------------------------
