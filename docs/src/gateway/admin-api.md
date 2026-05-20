@@ -108,6 +108,26 @@ Flags are scoped to a **project** (not environment) in the canonical URL space.
 
 ---
 
+## Metric Management
+
+Metrics live at the **environment scope** (passed via `?env_id=<uuid>` for list).
+Available since the `events_metrics_20260519` track.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/metrics?env_id=<uuid>&offset=&limit=&kind=` | List metric definitions |
+| `POST` | `/v1/metrics` | Create a metric definition |
+| `GET` | `/v1/metrics/{id}` | Get a metric definition |
+| `PATCH` | `/v1/metrics/{id}` | Update a metric (optimistic locking via `expected_version`) |
+| `DELETE` | `/v1/metrics/{id}` | Soft-delete a metric |
+| `POST` | `/v1/metrics/{id}/preview` | Preview metric time-series buckets over last N days |
+
+> **Note:** Prior to `events_metrics_20260519`, `/v1/metrics` served the Prometheus
+> scrape exposition. The Prometheus endpoint has moved to `/metrics` (no auth) to
+> free the `/v1/metrics` namespace for metric-definition CRUD.
+
+---
+
 ## Experiment Management
 
 | Method | Path | Description |

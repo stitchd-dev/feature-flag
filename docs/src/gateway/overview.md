@@ -25,8 +25,10 @@ Incoming requests are dispatched by path prefix:
 | `/v1/environments/{environment_id}/experiments/**` | Bearer JWT | `stitchd-experimentation-service` |
 | `/v1/environments/{environment_id}/event-definitions/**` | Bearer JWT | `stitchd-analytics-service` |
 | `/v1/sdk/**` | `x-sdk-key` | `stitchd-segmentation-service` / `stitchd-analytics-service` |
+| `/v1/events/track` | `x-sdk-key` | `stitchd-analytics-service` |
+| `/v1/metrics/**` | Bearer JWT | gateway (metric-definition CRUD + preview) |
 | `/v1/health` | none | gateway |
-| `/v1/metrics` | none | gateway (Prometheus exposition) |
+| `/metrics` | none | gateway (Prometheus exposition) |
 
 ## Auth Header Matrix
 
@@ -68,7 +70,9 @@ The gateway adds the following endpoints that did not exist in `stitchd-server`:
 | Endpoint | Description |
 |----------|-------------|
 | `POST /v1/environments/{environment_id}/events/batch` | Bulk event ingestion in a single request |
+| `POST /v1/events/track` | SDK-key authenticated batch event ingestion (admin-defined events) |
 | `POST /v1/environments/{id}/segments/batch-list-check` | Bulk segment membership check |
 | `GET/POST/PUT/DELETE /v1/environments/{id}/experiments/**` | Full experimentation CRUD |
 | `GET/POST/PUT/DELETE /v1/environments/{id}/event-definitions/**` | Event definition management |
+| `GET/POST/PATCH/DELETE /v1/metrics/**` | Metric-definition CRUD + preview (`events_metrics_20260519`) |
 | `PUT /v1/environments/{id}/flags/{key}/hashing` | Per-flag hashing configuration |
