@@ -1,17 +1,36 @@
 {
-  "current_phase": "Phase 2 + 4/5/6",
-  "current_phase_index": 1,
-  "current_task_index": 2,
-  "completed_phases": ["Phase 1: DB & Schema Foundations", "Phase 3: Metric CRUD API & Service"],
+  "current_phase": "Phase 4/5/6 mid-flight",
+  "completed_phases": [
+    "Phase 1: DB & Schema Foundations",
+    "Phase 2: Backend Ingestion Path",
+    "Phase 3: Metric CRUD API & Service"
+  ],
   "completed_tasks": [
     "phase1_task1", "phase1_task2", "phase1_task3", "phase1_task4", "phase1_task5", "phase1_task6",
-    "phase2_task1", "phase2_task2",
-    "phase3_task1", "phase3_task2", "phase3_task3", "phase3_task4"
+    "phase2_task1", "phase2_task2", "phase2_task3", "phase2_task4",
+    "phase3_task1", "phase3_task2", "phase3_task3", "phase3_task4",
+    "phase4_task1",
+    "phase5_task1", "phase5_task2",
+    "phase6_task1", "phase6_task2", "phase6_task3", "phase6_task5"
   ],
-  "in_progress_workers": [
-    {"worker_id": "worker_6_quota", "beads_task": "feature-flag-7an.2.3", "branch": "track_events_metrics_20260519_w6_quota"}
+  "pending_tasks": [
+    "phase4_task2 (compute_experiment dispatch — worker_11 stalled, deferred)",
+    "phase4_task3 (TriggerRecompute on metric change)",
+    "phase4_task4 (Phase 4 verification)",
+    "phase5_task3 (Client::flush + shutdown)",
+    "phase5_task4 (SDK Prometheus counters)",
+    "phase5_task5 (Phase 5 verification)",
+    "phase6_task4 (Test-event widget — depends on detail page firings endpoint = feature-flag-uz3)",
+    "phase6_task6 (Metric preview component — depends on Phase 4 ClickHouse impl)",
+    "phase6_task7 (Phase 6 verification)",
+    "phase7_task1 + 2 + 3 + 4 (Experiment cutover migration)",
+    "phase8_task1 + 2 + 3 + 4 (E2E + docs)"
   ],
-  "last_updated": "2026-05-19T11:00:00Z",
-  "status": "in_progress",
-  "note": "Phase 3 fully done. Phase 2 — task 3 (quota middleware) running as worker_6, then 2.4 verification. After that: Phase 4/5/6 parallel wave."
+  "blocked_or_filed": [
+    "feature-flag-uz3 (P2): GET /v1/events/{key}/firings + /stats analytics-service RPCs + gateway routes — blocks Phase 6 Task 4",
+    "feature-flag-7an.5.6 (P2): extend SDK polling to fetch event_definitions in DefinitionSnapshot — depends on adding event_definitions to SyncDefinitions proto"
+  ],
+  "last_updated": "2026-05-20T11:40:00Z",
+  "status": "checkpoint",
+  "note": "21 of ~38 implementation tasks complete. ~30 commits on track. Workers 11 and 14 stalled in Wave 4 (600s no-progress watchdog); worker_14 (Task 6.3) was completed inline. Worker 11 (Task 4.2: compute_experiment dispatch) deferred to next session — fresh sub-agent should attempt with clean context. The Phase 4 query builders are merged so the foundation is solid; Task 4.2 is the wiring layer that ran out of steam."
 }

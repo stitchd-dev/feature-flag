@@ -88,7 +88,7 @@ CRUD + preview endpoint.
 Rewrite stats-service `compute_experiment` to dispatch on `metric.kind`
 and generate the right ClickHouse query per kind.
 
-- [ ] Task 4.1: ClickHouse query builders per MetricKind
+- [x] Task 4.1: ClickHouse query builders per MetricKind [2ce65de]
   <!-- files: crates/stitchd-stats-service/src/queries/aggregation.rs, crates/stitchd-stats-service/src/queries/ratio.rs, crates/stitchd-stats-service/src/queries/funnel.rs, crates/stitchd-stats-service/src/queries/mod.rs -->
   - TDD: golden-query snapshots for each kind across known fixture configs
   - Funnel uses `windowFunnel` ClickHouse function with `mode='strict_order'`
@@ -108,15 +108,15 @@ and generate the right ClickHouse query per kind.
 `Client::track()` + `EventBuffer` + flush triggers + client-side
 validation against cached `event_definitions`.
 
-- [ ] Task 5.1: `EventBuffer` struct + flush logic
-  <!-- files: crates/stitchd-sdk-rust/src/event_buffer.rs, crates/stitchd-sdk-rust/src/lib.rs -->
+- [x] Task 5.1: `EventBuffer` struct + flush logic [5a29f95]
+  <!-- files: sdks/rust/src/event_buffer.rs, sdks/rust/src/lib.rs (note: actual SDK path is sdks/rust/ not crates/) -->
   - TDD: size-trigger, interval-trigger, explicit flush, shutdown drain (5s deadline)
   - Backoff on POST failure: 3 retries with exp backoff, then drop + warn
-- [ ] Task 5.2: `Client::track()` + validation + Buffer wiring
-  <!-- files: crates/stitchd-sdk-rust/src/client.rs, crates/stitchd-sdk-rust/src/lib.rs -->
+- [x] Task 5.2: `Client::track()` + validation + Buffer wiring [d58967f]
+  <!-- files: sdks/rust/src/client.rs, sdks/rust/src/lib.rs, sdks/rust/src/snapshot.rs (+event_definitions cache), sdks/rust/src/error.rs (+TrackError) -->
   <!-- depends: task1 -->
   - TDD: enqueues valid events, rejects unknown event_key, rejects mismatched value type, `is_event_registered` works
-  - Event-definitions cache populated by the existing definition-sync poll
+  - Event-definitions cache populated by the existing definition-sync poll (NOTE: SyncDefinitions proto does not yet carry event_definitions — followup feature-flag-7an.5.6 tracks polling-layer extension)
 - [ ] Task 5.3: `Client::flush()` + `Client::shutdown()` public API
   <!-- files: crates/stitchd-sdk-rust/src/client.rs, crates/stitchd-sdk-rust/src/lib.rs -->
   <!-- depends: task1, task2 -->
@@ -133,16 +133,16 @@ validation against cached `event_definitions`.
 Full events CRUD + tester + metrics CRUD + preview. Each task owns
 distinct UI page files, so they can run in parallel.
 
-- [ ] Task 6.1: Events list page + filters + pagination
+- [x] Task 6.1: Events list page + filters + pagination [62d3cdb]
   <!-- files: admin/src/pages/events/EventsList.tsx, admin/src/pages/events/EventsList.test.ts, admin/src/App.tsx, admin/src/components/icons.tsx -->
   - TDD (Vitest): list rendering, pagination URL sync, filter handlers
   - Reuse pagination primitive + table primitive
-- [ ] Task 6.2: Event detail page (firings log + sparkline + experiments-depending-on)
+- [x] Task 6.2: Event detail page (firings log + sparkline + experiments-depending-on) [7ffc27a]
   <!-- files: admin/src/pages/events/EventDetail.tsx, admin/src/pages/events/EventDetail.test.ts, admin/src/lib/api.ts -->
   <!-- depends: task1 -->
-  - Calls `GET /v1/events/{key}/firings?limit=50` (new analytics-service endpoint added in this task)
-  - Sparkline: 14d daily counts via existing `eval_stats` analog (new `event_stats` endpoint)
-- [ ] Task 6.3: Event edit modal + archive flow
+  - Calls `GET /v1/events/{key}/firings?limit=50` (stubbed — backend tracked in feature-flag-uz3)
+  - Sparkline: 14d daily counts via existing `eval_stats` analog (stubbed — same beads bug)
+- [x] Task 6.3: Event edit modal + archive flow [(commit)]
   <!-- files: admin/src/pages/events/EditEventModal.tsx, admin/src/pages/events/ArchiveEventModal.tsx, admin/src/lib/validation/eventDefinitionSchema.ts -->
   <!-- depends: task1 -->
   - Reuse existing CreateEventModal Formik+Yup pattern
@@ -152,7 +152,7 @@ distinct UI page files, so they can run in parallel.
   - Form for context_type, context_key, value, properties
   - POSTs to `/v1/events/track` from the admin UI session (admin token, not SDK key); analytics-service marks rows with `test=true` flag
   - Shows resulting ClickHouse row from latest firings poll
-- [ ] Task 6.5: Metrics list page + create/edit modal
+- [x] Task 6.5: Metrics list page + create/edit modal [a10870a]
   <!-- files: admin/src/pages/metrics/MetricsList.tsx, admin/src/pages/metrics/MetricsList.test.ts, admin/src/pages/metrics/CreateMetricModal.tsx, admin/src/pages/metrics/EditMetricModal.tsx, admin/src/lib/validation/metricSchema.ts, admin/src/App.tsx -->
   - TDD: list rendering, kind-switching form fields, Yup schema per kind
   - Discriminated-union form: aggregation (event_key + aggregator + on_field), ratio (numerator/denominator metric picker), funnel (steps list with event_key + window_seconds)
