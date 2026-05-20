@@ -63,20 +63,15 @@ interface EventDefinitionDetail {
  *  ships value + properties as pre-serialised JSON strings (so the proto
  *  contract stays stable across schema evolution) plus the canonical
  *  timestamp pair (`occurred_at` = client wall-clock, `ingested_at` =
- *  server). Multi-context attribution is in `contexts`; the singular
- *  `context_type` / `context_key` fields mirror `contexts[0]` for
- *  backwards compat (see feature-flag-5wr). */
+ *  server). Multi-context attribution is a flat type→key map matching
+ *  the write-side `TrackEvent.contexts` shape. */
 interface EventFiring {
   /** Client-side wall-clock timestamp (RFC3339 UTC). */
   occurred_at: string
   /** Server-side ingestion timestamp (RFC3339 UTC). */
   ingested_at: string
-  /** Multi-dimensional context list. */
-  contexts: { context_type: string; context_key: string }[]
-  /** Deprecated mirror of `contexts[0].context_type` — kept for the
-   *  current row template which renders only the first dimension. */
-  context_type: string
-  context_key: string
+  /** Multi-dimensional attribution as type→key. */
+  contexts: Record<string, string>
   /** Pre-serialised JSON scalar (`"42"`, `"true"`, `"1.5"`); empty
    *  string for occurrence-only events. */
   value_json: string
@@ -141,6 +136,18 @@ function formatFiringTs(iso: string | null | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso)
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
+}
+
+/** Render the contexts map as `type=key, type=key, …`. Sorts by type
+ *  for stable output. Empty map renders as `—`. */
+function formatContexts(ctx: Record<string, string> | null | undefined): string {
+  if (!ctx) return '—'
+  const entries = Object.entries(ctx)
+  if (entries.length === 0) return '—'
+  return entries
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([t, k]) => `${t}=${k}`)
+    .join(', ')
 }
 
 function sparklineData(stats: EventStats | null, days: number): number[] {
@@ -444,20 +451,20 @@ export function EventDetail() {
                   <thead>
                     <tr>
                       <th>Timestamp</th>
-                      <th>Context type</th>
-                      <th>Context key</th>
+                      <th>Contexts</th>
                       <th>Value</th>
                       <th>Properties</th>
                     </tr>
                   </thead>
                   <tbody>
                     {firings.map((f, i) => (
-                      <tr key={`${f.occurred_at}-${f.context_key}-${i}`}>
+                      <tr key={`${f.occurred_at}-${i}`}>
                         <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
                           {formatFiringTs(f.occurred_at)}
                         </td>
-                        <td>{f.context_type}</td>
-                        <td><span className="mono-key">{f.context_key}</span></td>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+                          {formatContexts(f.contexts)}
+                        </td>
                         <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                           {formatFiringValue(f.value_json)}
                         </td>

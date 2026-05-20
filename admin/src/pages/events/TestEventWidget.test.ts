@@ -37,7 +37,7 @@ describe('TestEventWidget — buildTrackBody', () => {
     expect(body.events).toHaveLength(1)
     const ev = body.events[0]
     expect(ev.event_key).toBe('checkout.completed')
-    expect(ev.contexts).toEqual([{ context_type: 'user', context_key: 'u-42' }])
+    expect(ev.contexts).toEqual({ user: 'u-42' })
     expect(ev.value).toBeUndefined()
   })
 
@@ -89,9 +89,9 @@ describe('TestEventWidget — buildTrackBody', () => {
   })
 
   it('buildTrackBody_forwards_multiple_contexts', () => {
-    // The whole point of feature-flag-5wr: a single firing attributable
-    // to multiple dimensions reaches the server as one event with N
-    // contexts (instead of N events that would inflate count metrics).
+    // A single firing attributable to multiple dimensions reaches the
+    // server as ONE event with N entries in `contexts` (the flat type→key
+    // map) — instead of N events that would inflate count metrics.
     const body = buildTrackBody(
       baseValues({
         contexts: [
@@ -103,17 +103,17 @@ describe('TestEventWidget — buildTrackBody', () => {
       'purchase',
       'count',
     )
-    expect(body.events[0].contexts).toHaveLength(3)
-    expect(body.events[0].contexts).toEqual([
-      { context_type: 'user', context_key: 'u-42' },
-      { context_type: 'account', context_key: 'acme' },
-      { context_type: 'session', context_key: 's-99' },
-    ])
+    expect(Object.keys(body.events[0].contexts)).toHaveLength(3)
+    expect(body.events[0].contexts).toEqual({
+      user: 'u-42',
+      account: 'acme',
+      session: 's-99',
+    })
   })
 
   it('buildTrackBody_drops_blank_context_rows', () => {
     // Empty rows added via "Add context" then left blank must not reach
-    // the wire — they'd otherwise become "::" entries in ClickHouse.
+    // the wire — they'd otherwise become `"": ""` entries in CH.
     const body = buildTrackBody(
       baseValues({
         contexts: [
@@ -126,10 +126,7 @@ describe('TestEventWidget — buildTrackBody', () => {
       'page_viewed',
       'count',
     )
-    expect(body.events[0].contexts).toEqual([
-      { context_type: 'user', context_key: 'u-1' },
-      { context_type: 'org', context_key: 'org-9' },
-    ])
+    expect(body.events[0].contexts).toEqual({ user: 'u-1', org: 'org-9' })
   })
 
   it('buildTrackBody_trims_whitespace_in_context_pairs', () => {
@@ -140,9 +137,24 @@ describe('TestEventWidget — buildTrackBody', () => {
       'click',
       'count',
     )
-    expect(body.events[0].contexts).toEqual([
-      { context_type: 'user', context_key: 'u-42' },
-    ])
+    expect(body.events[0].contexts).toEqual({ user: 'u-42' })
+  })
+
+  it('buildTrackBody_duplicate_types_last_one_wins', () => {
+    // Two rows with the same `context_type` — the second overrides the
+    // first in the map. Matches the server-side HashMap semantic so the
+    // UI and server agree on which value wins.
+    const body = buildTrackBody(
+      baseValues({
+        contexts: [
+          { context_type: 'user', context_key: 'first' },
+          { context_type: 'user', context_key: 'second' },
+        ],
+      }),
+      'click',
+      'count',
+    )
+    expect(body.events[0].contexts).toEqual({ user: 'second' })
   })
 })
 

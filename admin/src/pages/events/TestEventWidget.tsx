@@ -86,10 +86,10 @@ type WireValue =
 
 export interface TrackEvent {
   event_key: string
-  /** Multi-dimensional attribution. The gateway prefers this over the
-   *  deprecated singular fields and the analytics-service forwards the
-   *  full list into the ClickHouse `Array(Tuple(String, String))` column. */
-  contexts: TestEventContextRow[]
+  /** Multi-dimensional attribution as a flat type→key map. The
+   *  analytics-service flattens it into the CH
+   *  `Array(Tuple(String, String))` column for storage. */
+  contexts: Record<string, string>
   value?: WireValue
   properties?: Record<string, unknown>
 }
@@ -185,6 +185,11 @@ export function validProperties(rawJson: string): boolean {
  * so an empty "Add context" placeholder doesn't sneak onto the wire. The
  * caller is responsible for validating that at least one row remains
  * (see the `validate` function in the component).
+ *
+ * If two rows share a `context_type`, last-one-wins (HashMap semantics
+ * on the server side). The form's validate() doesn't currently flag
+ * duplicates; that's deferred until duplicate-type events become a real
+ * use case.
  */
 export function buildTrackBody(
   values: TestEventFormValues,
@@ -192,12 +197,14 @@ export function buildTrackBody(
   metricType: string,
   environmentId?: string,
 ): TrackEventsBody {
-  const contexts = values.contexts
-    .map((c) => ({
-      context_type: c.context_type.trim(),
-      context_key: c.context_key.trim(),
-    }))
-    .filter((c) => c.context_type !== '' && c.context_key !== '')
+  const contexts: Record<string, string> = {}
+  for (const c of values.contexts) {
+    const t = c.context_type.trim()
+    const k = c.context_key.trim()
+    if (t !== '' && k !== '') {
+      contexts[t] = k
+    }
+  }
 
   const event: TrackEvent = {
     event_key: eventKey,

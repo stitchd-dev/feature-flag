@@ -20,7 +20,7 @@ use serde::Deserialize;
 use tonic::{Request, Response, Status};
 
 use stitchd_proto::analytics::v1::{
-    EventContext, EventFiring, EventStatsBucket, GetEventFiringsRequest, GetEventFiringsResponse,
+    EventFiring, EventStatsBucket, GetEventFiringsRequest, GetEventFiringsResponse,
     GetEventStatsRequest, GetEventStatsResponse,
 };
 
@@ -66,14 +66,12 @@ pub fn resolve_days(requested: u32) -> u32 {
 /// 3. `limit` — u32
 #[must_use]
 pub fn build_firings_sql() -> &'static str {
-    // Selects the full `contexts` array plus a denormalised view of the
-    // first element for legacy callers. `contexts` ships as
-    // `Vec<(String, String)>` over the wire and gets mapped to the
-    // `repeated EventContext` field on the proto response.
+    // `contexts` ships as `Array(Tuple(String, String))` over the
+    // RowBinary wire (deserialised into `Vec<(String, String)>` on the
+    // Rust side, then flattened into the proto's `map<string, string>`
+    // by the handler).
     r"
     SELECT
-        contexts[1].1                                            AS context_type,
-        contexts[1].2                                            AS context_key,
         contexts                                                 AS contexts,
         value_bool,
         value_int,
@@ -113,11 +111,9 @@ pub fn build_stats_sql() -> &'static str {
 
 #[derive(clickhouse::Row, Deserialize)]
 struct FiringRow {
-    context_type: String,
-    context_key: String,
-    /// Full multi-context attribution. `Array(Tuple(String, String))` in
-    /// CH → `Vec<(String, String)>` over the RowBinary wire. The first
-    /// element (if any) mirrors the legacy singular fields above.
+    /// Full multi-context attribution. `Array(Tuple(String, String))`
+    /// in CH → `Vec<(String, String)>` over the RowBinary wire; the
+    /// handler flattens into the proto's `map<string, string>`.
     contexts: Vec<(String, String)>,
     value_bool: Option<bool>,
     value_int: Option<i64>,
@@ -207,26 +203,20 @@ pub async fn handle_get_event_firings(
         .await
         .map_err(|e| Status::internal(format!("ClickHouse error: {e}")))?;
 
-    // The proto's singular fields are #[deprecated]; populating them is
-    // intentional for the SDK compat window. Allow is scoped to the
-    // smallest surface that actually touches the deprecated fields.
-    #[allow(deprecated)]
+    // Flatten the CH `Vec<(type, key)>` into the proto's
+    // `map<string, string>`. If a single event had multiple firings
+    // with the same context_type (e.g. two different users), the map
+    // collapses to one — but the SDK contract enforces a single
+    // dimension per type per event, so this is by design. Last-write-
+    // wins on conflict (HashMap::insert semantic).
     let firings: Vec<EventFiring> = rows
         .into_iter()
         .map(|r| EventFiring {
-            context_type: r.context_type,
-            context_key: r.context_key,
             value_json: render_value_json(r.value_bool, r.value_int, r.value_double),
             properties_json: render_properties_json(&r.properties),
             occurred_at: ms_to_rfc3339(r.occurred_at_ms),
             ingested_at: ms_to_rfc3339(r.ingested_at_ms),
-            // Full multi-context list — proto's `repeated EventContext`.
-            // Element 0 mirrors the legacy singular fields above.
-            contexts: r
-                .contexts
-                .into_iter()
-                .map(|(t, k)| EventContext { context_type: t, context_key: k })
-                .collect(),
+            contexts: r.contexts.into_iter().collect(),
         })
         .collect();
 
@@ -278,11 +268,6 @@ pub async fn handle_get_event_stats(
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-// Tests assert on the proto's deprecated singular fields (which still
-// ship for SDK compat). Crate-wide `#[deny(warnings)]` would otherwise
-// trip — module-scoped allow keeps the lint enforcement intact for new
-// production code.
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use serde_json::Value as JsonValue;
@@ -552,11 +537,16 @@ mod tests {
             .into_inner();
 
         assert_eq!(resp.firings.len(), 5);
-        // Newest first: context_key "u4" then "u3" ... "u0".
-        assert_eq!(resp.firings[0].context_key, "u4");
-        assert_eq!(resp.firings[4].context_key, "u0");
+        // Newest first: user "u4" then "u3" ... "u0".
+        assert_eq!(
+            resp.firings[0].contexts.get("user").map(String::as_str),
+            Some("u4")
+        );
+        assert_eq!(
+            resp.firings[4].contexts.get("user").map(String::as_str),
+            Some("u0")
+        );
         // Spot-check schema mapping.
-        assert_eq!(resp.firings[0].context_type, "user");
         assert_eq!(resp.firings[0].value_json, "4");
         assert_eq!(resp.firings[0].properties_json, "{}");
         assert!(resp.firings[0].occurred_at.ends_with('Z'));
