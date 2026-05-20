@@ -60,7 +60,7 @@ pub use client::{
     EvalOutcome, EvalRequest, EvalResult, EvalResultWithReasoning, ReasoningTrace, SdkClient,
 };
 pub use config::SdkConfig;
-pub use error::SdkError;
+pub use error::{SdkError, TrackError};
 pub use event_buffer::{
     BufferedEvent, EventBuffer, EventBufferConfig, FlushError, FlushReport, TypedValue,
 };
@@ -68,4 +68,4 @@ pub use events::{EventQueue, EventSink, FlagEvaluationEvent, FlushTask, Paramete
 pub use lru::{ContextKey, MembershipCache, MembershipMap};
 pub use polling::{DefinitionFetcher, PollTask};
 pub use refresh::{MembershipBatchFetcher, RefreshTask};
-pub use snapshot::{DefinitionSnapshot, DefinitionStore};
+pub use snapshot::{DefinitionSnapshot, DefinitionStore, EventValueType};
