@@ -57,6 +57,6 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Upgrade Rust Toolchain to 1.95 + Bring Workspace Deps to Latest Cross-Compatible
+## [x] Track: Upgrade Rust Toolchain to 1.95 + Bring Workspace Deps to Latest Cross-Compatible
 *Link: [./conductor/tracks/rust_deps_upgrade_20260520/](./conductor/tracks/rust_deps_upgrade_20260520/)*
 
