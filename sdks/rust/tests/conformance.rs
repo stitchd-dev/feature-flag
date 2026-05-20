@@ -529,6 +529,7 @@ fn load_scenario(dir: &Path) -> Scenario {
         list_segments: proto_list_segs,
         server_timestamp_ms: 0,
         environment_id: "00000000-0000-0000-0000-000000000001".to_string(),
+        event_definitions: vec![],
     });
 
     // Convert eval requests.

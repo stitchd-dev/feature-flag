@@ -1450,6 +1450,7 @@ mod tests {
             list_segments: vec![],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
@@ -1474,6 +1475,7 @@ mod tests {
             list_segments: vec![],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
@@ -1515,6 +1517,7 @@ mod tests {
             list_segments: vec![],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
         let client = sdk_client_with_snapshot(snap);
 
@@ -1591,6 +1594,7 @@ mod tests {
             list_segments: vec![],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
         let client = sdk_client_with_snapshot(snap);
 
@@ -1649,6 +1653,7 @@ mod tests {
             list_segments: vec![list_seg],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
 
         let recording_fetcher = RecordingMembershipFetcher::new(HashMap::new());
@@ -1712,6 +1717,7 @@ mod tests {
             list_segments: vec![list_seg],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
 
         // Fetcher returns: alice IS a member of seg_id
@@ -1782,6 +1788,7 @@ mod tests {
             list_segments: vec![list_seg],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
 
         let memberships: HashMap<String, bool> =
@@ -1847,6 +1854,7 @@ mod tests {
             list_segments: vec![],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
         let client = sdk_client_with_snapshot(snap);
         let ctx =
@@ -1944,6 +1952,7 @@ mod tests {
             list_segments: vec![],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         });
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
@@ -1976,6 +1985,7 @@ mod tests {
             list_segments: vec![],
             server_timestamp_ms: 0,
             environment_id: "env-1".into(),
+            event_definitions: vec![],
         })
         .with_event_definitions(map)
     }
@@ -2110,6 +2120,64 @@ mod tests {
         let buffer = client.event_buffer.as_ref().unwrap();
         let report = buffer.flush().await.expect("empty flush is ok");
         assert_eq!(report.accepted, 0);
+        assert_eq!(report.rejected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_client_track_with_polled_event_def_succeeds() {
+        // End-to-end: simulate a `SyncDefinitions` poll response that carries
+        // event_definitions, build a DefinitionSnapshot via `from_proto`
+        // (NOT via `with_event_definitions`), and verify that
+        // `Client::track()` enqueues without warn-skipping.
+        use stitchd_proto::sdk::v1::EventDefinitionMeta;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/track"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(serde_json::json!({
+                "accepted_count": 1,
+                "rejected": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Build a snapshot ONLY through the proto path — this is what the
+        // polling layer does in production.
+        let proto_resp = SyncDefinitionsResponse {
+            flags: vec![],
+            rule_segments: vec![],
+            list_segments: vec![],
+            server_timestamp_ms: 0,
+            environment_id: "env-1".into(),
+            event_definitions: vec![EventDefinitionMeta {
+                event_key: "checkout_completed".into(),
+                value_type: "bool".into(),
+            }],
+        };
+        let snap = DefinitionSnapshot::from_proto(proto_resp);
+        // Sanity: the polled snapshot should now have the registered event.
+        assert!(snap.event_definition("checkout_completed").is_some());
+
+        let client = sdk_client_with_track_buffer(snap, &server.uri());
+
+        let ctx = Context::new("user", "alice");
+        client
+            .track(
+                "checkout_completed",
+                &ctx,
+                Some(TypedValue::Bool(true)),
+                None,
+            )
+            .await
+            .expect("track must succeed for polled event definition");
+
+        // Force flush so the wiremock expectation can be checked.
+        let buffer = client.event_buffer.as_ref().unwrap();
+        let report = buffer.flush().await.expect("flush must succeed");
+        assert_eq!(report.accepted, 1);
         assert_eq!(report.rejected, 0);
     }
 
