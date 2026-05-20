@@ -53,3 +53,5 @@
 - [Evaluation Flow](./architecture/evaluation-flow.md)
 - [Multi-Tenancy](./architecture/multi-tenancy.md)
 - [Data Stores](./architecture/data-stores.md)
+- [Events](./architecture/events.md)
+- [Metrics](./architecture/metrics.md)
