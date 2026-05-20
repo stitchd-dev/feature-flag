@@ -117,14 +117,8 @@ pub fn build_aggregation_query(
 pub(super) fn render_aggregator(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
     Ok(match cfg.aggregator {
         AggregationOperator::Count => "count()".to_owned(),
-        AggregationOperator::Sum => {
-            let field = on_field_expr(cfg)?;
-            format!("sum(ifNull(toFloat64OrNull({field}), 0.0))")
-        }
-        AggregationOperator::Avg => {
-            let field = on_field_expr(cfg)?;
-            format!("avg(ifNull(toFloat64OrNull({field}), 0.0))")
-        }
+        AggregationOperator::Sum => format!("sum({})", numeric_value_expr(cfg)?),
+        AggregationOperator::Avg => format!("avg({})", numeric_value_expr(cfg)?),
         AggregationOperator::P50 => percentile(cfg, "0.5")?,
         AggregationOperator::P90 => percentile(cfg, "0.9")?,
         AggregationOperator::P99 => percentile(cfg, "0.99")?,
@@ -135,13 +129,50 @@ pub(super) fn render_aggregator(cfg: &AggregationConfig) -> Result<String, Query
     })
 }
 
-/// Render a `quantile(<q>)(...)` expression with the same `ifNull +
-/// toFloat64OrNull` coercion used by `Sum` / `Avg`.
+/// Render a `quantile(<q>)(...)` expression over a coerced-to-Float64
+/// value expression. Uses the same numeric coercion as `Sum` / `Avg`
+/// (i.e. preserves the canonical numeric column type when on_field
+/// is "value", and applies `toFloat64OrNull` only to property-string
+/// references).
 fn percentile(cfg: &AggregationConfig, q: &str) -> Result<String, QueryBuildError> {
-    let field = on_field_expr(cfg)?;
     Ok(format!(
-        "quantile({q})(ifNull(toFloat64OrNull({field}), 0.0))"
+        "quantile({q})({})",
+        numeric_value_expr(cfg)?
     ))
+}
+
+/// Build a `Float64`-valued expression for a numeric aggregator's
+/// operand. Branches on whether `on_field` references the canonical
+/// numeric columns (`value` → already typed) or a `properties[...]`
+/// string (needs `toFloat64OrNull`):
+///
+/// - `on_field == "value"`:
+///   `ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))), 0.0)`
+///   — both source columns are already numeric, so we skip
+///   `toFloat64OrNull` (which only accepts `String` and rejects
+///   `Float64` at the SQL layer with
+///   `ILLEGAL_TYPE_OF_ARGUMENT`).
+///
+/// - `on_field == "<property>"`:
+///   `ifNull(toFloat64OrNull(properties['<name>']), 0.0)`
+///   — `properties` is `Map(String, String)`, so `toFloat64OrNull`
+///   is the right coercion.
+fn numeric_value_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
+    let field = cfg.on_field.as_ref().ok_or_else(|| {
+        QueryBuildError::InvalidConfig(format!(
+            "aggregator `{:?}` requires an on_field",
+            cfg.aggregator
+        ))
+    })?;
+    Ok(if field == "value" {
+        // Canonical numeric columns are already Float64-coercible;
+        // `coalesce(...)` returns Nullable(Float64). Just wrap in ifNull
+        // so the aggregator sees a non-null float.
+        "ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))), 0.0)".to_owned()
+    } else {
+        // properties[<name>] is String — toFloat64OrNull is correct.
+        format!("ifNull(toFloat64OrNull(properties['{field}']), 0.0)")
+    })
 }
 
 /// Resolve the `on_field` reference to a ClickHouse expression.
@@ -242,7 +273,9 @@ mod tests {
     #[test]
     fn aggregation_avg_on_value_column_uses_native_columns() {
         // on_field == "value" routes to the canonical numeric columns
-        // (value_double / value_int) rather than properties.
+        // (value_double / value_int) and skips `toFloat64OrNull` — the
+        // coalesce already returns Nullable(Float64) and ClickHouse
+        // rejects toFloat64OrNull(Float64) with ILLEGAL_TYPE_OF_ARGUMENT.
         let cfg = AggregationConfig {
             event_key: "latency".into(),
             aggregator: AggregationOperator::Avg,
@@ -252,11 +285,15 @@ mod tests {
         let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
         assert!(
             q.sql.contains(
-                "avg(ifNull(toFloat64OrNull(\
-                 coalesce(value_double, CAST(value_int AS Nullable(Float64)))), 0.0))"
+                "avg(ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))), 0.0))"
             ),
-            "avg over 'value' should route to coalesce(value_double, …), got:\n{}",
+            "avg over 'value' should coalesce native numeric columns directly, got:\n{}",
             q.sql
+        );
+        assert!(
+            !q.sql.contains("toFloat64OrNull(coalesce"),
+            "toFloat64OrNull must NOT wrap the coalesce(value_*) expression: {}",
+            q.sql,
         );
     }
 

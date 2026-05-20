@@ -59,12 +59,29 @@ interface EventDefinitionDetail {
   version: number
 }
 
+/** Wire shape returned by `GET /v1/events/{key}/firings`. The gateway
+ *  ships value + properties as pre-serialised JSON strings (so the proto
+ *  contract stays stable across schema evolution) plus the canonical
+ *  timestamp pair (`occurred_at` = client wall-clock, `ingested_at` =
+ *  server). Multi-context attribution is in `contexts`; the singular
+ *  `context_type` / `context_key` fields mirror `contexts[0]` for
+ *  backwards compat (see feature-flag-5wr). */
 interface EventFiring {
-  ts: string
+  /** Client-side wall-clock timestamp (RFC3339 UTC). */
+  occurred_at: string
+  /** Server-side ingestion timestamp (RFC3339 UTC). */
+  ingested_at: string
+  /** Multi-dimensional context list. */
+  contexts: { context_type: string; context_key: string }[]
+  /** Deprecated mirror of `contexts[0].context_type` — kept for the
+   *  current row template which renders only the first dimension. */
   context_type: string
   context_key: string
-  value?: number | null
-  properties?: Record<string, unknown> | null
+  /** Pre-serialised JSON scalar (`"42"`, `"true"`, `"1.5"`); empty
+   *  string for occurrence-only events. */
+  value_json: string
+  /** Pre-serialised JSON object ("{}" when empty). */
+  properties_json: string
 }
 
 interface EventStatsBucket {
@@ -104,20 +121,26 @@ function displayName(event: EventDefinitionDetail): string {
   return event.name && event.name.trim() ? event.name : event.event_key
 }
 
-function formatFiringProperties(props: Record<string, unknown> | null | undefined): string {
-  if (props === null || props === undefined) return '—'
-  const keys = Object.keys(props)
-  if (keys.length === 0) return '{}'
-  return JSON.stringify(props)
+/** The gateway ships properties as `"{...}"` (a JSON-encoded object
+ *  string, or `"{}"` when empty). Render it raw — admin users want to
+ *  read the exact wire payload, not a re-formatted view. */
+function formatFiringProperties(rawJson: string | null | undefined): string {
+  if (!rawJson || rawJson === '{}' || rawJson.trim() === '') return '—'
+  return rawJson
 }
 
-function formatFiringValue(v: number | null | undefined): string {
-  if (v === null || v === undefined) return '—'
-  return String(v)
+/** value_json is `""` for occurrence-only events; otherwise a JSON
+ *  scalar like `"42"`, `"true"`, or `"1.5"`. Display as-is so the user
+ *  sees the actual wire shape. */
+function formatFiringValue(rawJson: string | null | undefined): string {
+  if (!rawJson || rawJson.trim() === '') return '—'
+  return rawJson
 }
 
-function formatFiringTs(iso: string): string {
-  return new Date(iso).toLocaleString()
+function formatFiringTs(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
 }
 
 function sparklineData(stats: EventStats | null, days: number): number[] {
@@ -162,14 +185,14 @@ export function EventDetail() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Firings — pending bug feature-flag-uz3
+  // Firings — backed by the firings endpoint (feature-flag-uz3, landed).
   const [firings, setFirings] = useState<EventFiring[] | null>(null)
   const [firingsLoading, setFiringsLoading] = useState(false)
   // Bumped by the TestEventWidget on successful submit so the firings effect
   // re-runs and the log refreshes.
   const [firingsRefreshTick, setFiringsRefreshTick] = useState(0)
 
-  // Sparkline stats — pending bug feature-flag-uz3
+  // 14-day daily-count sparkline — backed by the stats endpoint.
   const [stats, setStats] = useState<EventStats | null>(null)
   const [statsLoading, setStatsLoading] = useState(false)
 
@@ -203,35 +226,38 @@ export function EventDetail() {
         if (!ac.signal.aborted) setLoading(false)
       })
     return () => ac.abort()
-  }, [eventKey])
+  }, [eventKey, envId])
 
-  // ── Load firings (best-effort: endpoint may 404 until feature-flag-uz3) ──
+  // ── Load firings — `feature-flag-uz3` landed; data path is real now.
+  // The `env_id=` query param is required by the gateway (`/v1/events/.../firings`
+  // mirrors the `/v1/metrics` pattern); without it the gateway returns
+  // 400 and the UI falls through to the empty state.
   useEffect(() => {
-    if (!eventKey) return
+    if (!eventKey || !envId) return
     const ac = new AbortController()
     setFiringsLoading(true)
     api.get<{ firings: EventFiring[] }>(
-      `/v1/events/${encodeURIComponent(eventKey)}/firings?limit=${FIRINGS_LIMIT}`,
+      `/v1/events/${encodeURIComponent(eventKey)}/firings?env_id=${envId}&limit=${FIRINGS_LIMIT}`,
       { signal: ac.signal },
     )
       .then(({ data }) => setFirings(data.firings ?? []))
       .catch(() => {
-        // Endpoint not yet implemented (bug feature-flag-uz3) — leave null.
         if (!ac.signal.aborted) setFirings(null)
       })
       .finally(() => {
         if (!ac.signal.aborted) setFiringsLoading(false)
       })
     return () => ac.abort()
-  }, [eventKey, firingsRefreshTick])
+  }, [eventKey, envId, firingsRefreshTick])
 
-  // ── Load stats (best-effort, same backend gap) ─────────────────────────────
+  // ── Load stats — same endpoint pair as firings, lands on the 14-day
+  // sparkline. Also gated on a non-null envId.
   useEffect(() => {
-    if (!eventKey) return
+    if (!eventKey || !envId) return
     const ac = new AbortController()
     setStatsLoading(true)
     api.get<EventStats>(
-      `/v1/events/${encodeURIComponent(eventKey)}/stats?days=${SPARKLINE_DAYS}`,
+      `/v1/events/${encodeURIComponent(eventKey)}/stats?env_id=${envId}&days=${SPARKLINE_DAYS}`,
       { signal: ac.signal },
     )
       .then(({ data }) => setStats(data))
@@ -242,7 +268,7 @@ export function EventDetail() {
         if (!ac.signal.aborted) setStatsLoading(false)
       })
     return () => ac.abort()
-  }, [eventKey])
+  }, [eventKey, envId])
 
   // ── Load metrics that reference this event ────────────────────────────────
   useEffect(() => {
@@ -398,9 +424,9 @@ export function EventDetail() {
 
             {!firingsLoading && firings === null && (
               <EmptyState
-                icon={<I.info size={20} />}
-                title="Firings endpoint pending"
-                desc="The /v1/events/{key}/firings endpoint is tracked in feature-flag-uz3 — firings will appear here once it lands."
+                icon={<I.alert size={20} />}
+                title="Could not load firings"
+                desc="The firings request failed. Check the analytics service logs or try again."
               />
             )}
 
@@ -426,20 +452,20 @@ export function EventDetail() {
                   </thead>
                   <tbody>
                     {firings.map((f, i) => (
-                      <tr key={`${f.ts}-${f.context_key}-${i}`}>
+                      <tr key={`${f.occurred_at}-${f.context_key}-${i}`}>
                         <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
-                          {formatFiringTs(f.ts)}
+                          {formatFiringTs(f.occurred_at)}
                         </td>
                         <td>{f.context_type}</td>
                         <td><span className="mono-key">{f.context_key}</span></td>
                         <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
-                          {formatFiringValue(f.value)}
+                          {formatFiringValue(f.value_json)}
                         </td>
                         <td style={{
                           fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)',
                           maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         }}>
-                          {formatFiringProperties(f.properties)}
+                          {formatFiringProperties(f.properties_json)}
                         </td>
                       </tr>
                     ))}

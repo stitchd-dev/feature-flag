@@ -222,23 +222,39 @@ pub fn build_preview_funnel_query(
         )));
     }
 
+    // clickhouse-rs binds `?` placeholders by SQL position, not by
+    // bind-vector index. The rewriter (`rewrite_placeholders_to_clickhouse`)
+    // converts `{pN}` → `?` but does NOT reorder the binds vec. So the
+    // bind push order must match the order placeholders appear in the
+    // final SQL string. The funnel SQL has placeholders in this order:
+    //
+    //   1. windowFunnel step predicates  (in SELECT) — N step event_keys
+    //   2. env_id                        (in WHERE)
+    //   3. days                          (in WHERE)
+    //   4. metric_key filter             (in WHERE) — same N event_keys
+    //
+    // We push them in that exact order; each step's event_key is bound
+    // twice (once for the predicates, once for the filter) because
+    // clickhouse-rs needs one bind per `?` regardless of duplicate
+    // logical values.
     let mut binds = Vec::new();
 
+    let mut predicate_phs = Vec::with_capacity(cfg.steps.len());
+    for step in &cfg.steps {
+        predicate_phs.push(push_bind(&mut binds, QueryBind::Str(step.event_key.clone())));
+    }
     let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
     let days_ph = push_bind(&mut binds, QueryBind::I64(i64::from(days)));
-
-    // One bind per step's event_key, used both in the metric_key OR
-    // filter and in the windowFunnel step predicates.
-    let mut step_event_phs = Vec::with_capacity(cfg.steps.len());
+    let mut filter_phs = Vec::with_capacity(cfg.steps.len());
     for step in &cfg.steps {
-        step_event_phs.push(push_bind(&mut binds, QueryBind::Str(step.event_key.clone())));
+        filter_phs.push(push_bind(&mut binds, QueryBind::Str(step.event_key.clone())));
     }
-    let metric_key_filter = step_event_phs
+    let metric_key_filter = filter_phs
         .iter()
         .map(|ph| format!("metric_key = {ph}"))
         .collect::<Vec<_>>()
         .join(" OR ");
-    let step_predicates = step_event_phs
+    let step_predicates = predicate_phs
         .iter()
         .map(|ph| format!("metric_key = {ph}"))
         .collect::<Vec<_>>()
@@ -374,7 +390,13 @@ mod tests {
     }
 
     #[test]
-    fn aggregation_sum_on_value_field_uses_coalesce() {
+    fn aggregation_sum_on_value_field_uses_coalesce_without_to_float() {
+        // on_field=="value" must skip toFloat64OrNull — the coalesce of
+        // the native numeric columns already returns Nullable(Float64),
+        // and `toFloat64OrNull(Float64)` is rejected by ClickHouse at
+        // runtime (ILLEGAL_TYPE_OF_ARGUMENT). Property-based on_field
+        // takes the toFloat64OrNull path (covered by
+        // `aggregation_p90_on_property_field` below).
         let cfg = AggregationConfig {
             event_key: "purchase".into(),
             aggregator: AggregationOperator::Sum,
@@ -382,13 +404,16 @@ mod tests {
             where_clause: None,
         };
         let q = build_preview_aggregation_query(&cfg, ENV_ID, 30).unwrap();
-        // `value` shorthand resolves to the coalesce(value_double, …) expr.
         assert!(
             q.sql.contains("coalesce(value_double"),
             "sum(value) should coalesce, got: {}",
             q.sql
         );
-        assert!(q.sql.contains("toFloat64OrNull"));
+        assert!(
+            !q.sql.contains("toFloat64OrNull"),
+            "sum(value) must NOT wrap coalesce in toFloat64OrNull, got: {}",
+            q.sql
+        );
     }
 
     #[test]

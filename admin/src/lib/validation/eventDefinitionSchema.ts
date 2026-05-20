@@ -1,6 +1,18 @@
 import * as Yup from 'yup'
 
-export const METRIC_TYPES = ['count', 'conversion', 'revenue', 'duration', 'custom'] as const
+// Mirrors the `MetricType` enum in `stitchd_core::event` — all six
+// variants must be selectable here. `numeric` was previously omitted,
+// blocking the UI from registering integer-valued non-money/duration
+// events (e.g. cart_item_count, search_results, csat_score) even
+// though the gateway accepted them.
+export const METRIC_TYPES = [
+  'count',
+  'conversion',
+  'revenue',
+  'duration',
+  'numeric',
+  'custom',
+] as const
 export type MetricType = typeof METRIC_TYPES[number]
 
 /** Event definition create / edit. */

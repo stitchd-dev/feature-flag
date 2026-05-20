@@ -260,7 +260,16 @@ fn validate_event(
     now_millis: i64,
 ) -> Result<EventV2Row, RejectedEvent> {
     // ── value-type match ──────────────────────────────────────────────────
+    //
+    // `count` metric_type is a pure occurrence marker — every fire counts
+    // as 1, regardless of the registered `value_type`. SDK clients
+    // typically omit the `value` field for count events (the admin UI's
+    // TestEventWidget does this in `parseTypedValue`), and the count()
+    // aggregator in CH ignores the value column. So we accept absent
+    // values for count events instead of rejecting them as
+    // `missing_value`.
     let value = event.value.as_ref().and_then(|v| v.value.as_ref());
+    let is_count_event = matches!(def.metric_type, stitchd_core::event::MetricType::Count);
 
     let (value_bool, value_int, value_double) = match (def.value_type, value) {
         (EventValueType::Bool, Some(metric_value::Value::BoolValue(b))) => (Some(*b), None, None),
@@ -268,6 +277,8 @@ fn validate_event(
         (EventValueType::Double, Some(metric_value::Value::DoubleValue(d))) => {
             (None, None, Some(*d))
         }
+        // Count events without a value are valid (occurrence marker).
+        (_, None) if is_count_event => (None, None, None),
         (_, None) => {
             return Err(RejectedEvent {
                 event_key: event.event_key.clone(),
@@ -836,7 +847,11 @@ mod tests {
             int_event("unknown_key", 1),                     // reject: unknown
             int_event("conversion", 7),                      // reject: type_mismatch
             TrackEvent {
-                // reject: missing_value
+                // Count metric_type — value optional. `make_state_with_ch`
+                // registers every fixture as `MetricType::Count`, so this
+                // event is accepted as an occurrence marker (was previously
+                // rejected with `missing_value`; the new behaviour matches
+                // the UI's TestEventWidget which omits `value` for counts).
                 event_key: "clicks".into(),
                 context_type: "user".into(),
                 context_key: "u9".into(),
@@ -849,18 +864,19 @@ mod tests {
         let req = make_request(env_id, events);
         let resp = handle_track_events(&state, req).await.unwrap().into_inner();
 
-        assert_eq!(resp.accepted_count, 2);
-        assert_eq!(resp.rejected.len(), 3);
+        assert_eq!(resp.accepted_count, 3);
+        assert_eq!(resp.rejected.len(), 2);
 
         let reasons: Vec<&str> = resp.rejected.iter().map(|r| r.reason.as_str()).collect();
         assert!(reasons.contains(&"unknown_event_key"));
         assert!(reasons.contains(&"value_type_mismatch"));
-        assert!(reasons.contains(&"missing_value"));
 
-        // Only the 2 valid rows should land in CH for this env.
+        // 3 valid rows land in CH: the two original events + the
+        // count-no-value event that's now accepted as an occurrence
+        // marker (see feature-flag-jam exploration).
         let client = make_ch_client();
         let count = count_events_for_env(&client, env_id).await;
-        assert_eq!(count, 2, "expected exactly 2 valid rows in events_v2");
+        assert_eq!(count, 3, "expected 3 valid rows in events_v2 (count-no-value is now accepted)");
     }
 
     // -----------------------------------------------------------------------
@@ -954,6 +970,80 @@ mod tests {
         // The singular fields on the proto must NOT have leaked through —
         // they're ignored when contexts[] is set.
         assert!(!row.contexts.iter().any(|(t, _)| t == "should_be_ignored"));
+    }
+
+    #[test]
+    fn validate_event_count_metric_accepts_missing_value() {
+        // Count events are occurrence markers — every fire is "1",
+        // regardless of the registered `value_type`. The admin UI's
+        // TestEventWidget omits `value` for counts, and the count()
+        // aggregator in CH ignores the value column, so the ingestion
+        // path must accept absent values for count events instead of
+        // rejecting them with `missing_value`. (feature-flag-jam)
+        let env_id = EnvironmentId::new();
+        let def = EventDefinition {
+            id: EventDefinitionId::new(),
+            environment_id: env_id,
+            key: "pageview".into(),
+            name: "Pageview".into(),
+            description: None,
+            // value_type=Int is the count default; value-less events
+            // still need to be accepted.
+            value_type: EventValueType::Int,
+            metric_type: MetricType::Count,
+            schema: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+        let event = TrackEvent {
+            event_key: "pageview".into(),
+            context_type: "user".into(),
+            context_key: "u-7".into(),
+            contexts: vec![],
+            value: None, // absent — must NOT be rejected
+            properties: HashMap::new(),
+            occurred_at: None,
+        };
+        let row = validate_event(&event, &def, env_id, 0).expect("count event must accept missing value");
+        // All three value columns stay None — CH `count()` ignores them.
+        assert!(row.value_bool.is_none());
+        assert!(row.value_int.is_none());
+        assert!(row.value_double.is_none());
+    }
+
+    #[test]
+    fn validate_event_non_count_metric_still_rejects_missing_value() {
+        // Conversion / Revenue / Duration / Numeric / Custom retain the
+        // strict semantic — value is required.
+        let env_id = EnvironmentId::new();
+        let def = EventDefinition {
+            id: EventDefinitionId::new(),
+            environment_id: env_id,
+            key: "purchase".into(),
+            name: "Purchase".into(),
+            description: None,
+            value_type: EventValueType::Double,
+            metric_type: MetricType::Revenue,
+            schema: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+        let event = TrackEvent {
+            event_key: "purchase".into(),
+            context_type: "user".into(),
+            context_key: "u-7".into(),
+            contexts: vec![],
+            value: None,
+            properties: HashMap::new(),
+            occurred_at: None,
+        };
+        let err = validate_event(&event, &def, env_id, 0)
+            .expect_err("revenue event without value must reject");
+        assert_eq!(err.reason, "missing_value");
     }
 
     #[test]
