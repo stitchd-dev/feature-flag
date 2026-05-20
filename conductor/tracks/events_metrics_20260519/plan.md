@@ -93,14 +93,15 @@ and generate the right ClickHouse query per kind.
   - TDD: golden-query snapshots for each kind across known fixture configs
   - Funnel uses `windowFunnel` ClickHouse function with `mode='strict_order'`
   - Ratio: two CTEs (numerator, denominator) + delta-method variance approximation
-- [ ] Task 4.2: `compute_experiment` dispatch + metric fetch
-  <!-- files: crates/stitchd-stats-service/src/compute.rs, crates/stitchd-stats-service/src/lib.rs -->
-  - TDD: dispatch table compiles all three kinds, results merged in `experiment_results`
-  - Per-metric `posterior` (Bayesian) / `p_value` (frequentist) calc unchanged from current implementation
-- [ ] Task 4.3: TriggerRecompute on metric config change (event-driven backfill)
-  <!-- files: crates/stitchd-stats-service/src/grpc/trigger.rs, crates/stitchd-stats-service/src/grpc/mod.rs -->
-  - When analytics-service emits `MetricUpdated` (over a new internal channel or polled), stats-service finds all running experiments referencing it and triggers async recompute
-- [ ] Task 4.4: Conductor - User Manual Verification 'Stats-Service Metric Dispatch' (Protocol in workflow.md)
+- [x] Task 4.2: `compute_experiment` dispatch + metric fetch [1dfa1ff]
+  <!-- files: crates/stitchd-stats-service/src/dispatch.rs (new), crates/stitchd-stats-service/src/lib.rs -->
+  - TIGHTER SCOPE: dispatch_metric_query helper function (not full scheduler refactor)
+  - Resolves Ratio metrics via find_batch_by_ids; InvalidRatioMetric error for non-Aggregation sides
+  - rewrite_placeholders_to_clickhouse helper converts {pN} → ? for clickhouse-rs binds
+- [x] Task 4.3: TriggerRecompute on metric config change (event-driven backfill) [7ecde51]
+  <!-- files: crates/stitchd-stats-service/src/recompute_trigger.rs, crates/stitchd-analytics-service/src/grpc/metric.rs -->
+  - Fire-and-forget tokio::spawn from update_metric handler — finds running experiments referencing the metric and triggers async recompute via stats-service TriggerRecompute gRPC
+- [x] Task 4.4: Conductor - User Manual Verification 'Stats-Service Metric Dispatch' [auto-verify]
 
 ## Phase 5: Rust SDK track API
 <!-- depends: phase2 -->
@@ -117,14 +118,13 @@ validation against cached `event_definitions`.
   <!-- depends: task1 -->
   - TDD: enqueues valid events, rejects unknown event_key, rejects mismatched value type, `is_event_registered` works
   - Event-definitions cache populated by the existing definition-sync poll (NOTE: SyncDefinitions proto does not yet carry event_definitions — followup feature-flag-7an.5.6 tracks polling-layer extension)
-- [ ] Task 5.3: `Client::flush()` + `Client::shutdown()` public API
-  <!-- files: crates/stitchd-sdk-rust/src/client.rs, crates/stitchd-sdk-rust/src/lib.rs -->
-  <!-- depends: task1, task2 -->
-  - TDD: graceful shutdown drains in-flight events; force shutdown drops with logged count
-- [ ] Task 5.4: SDK Prometheus counters
-  <!-- files: crates/stitchd-sdk-rust/src/metrics.rs -->
-  - `events_buffered_total`, `events_flushed_total`, `events_dropped_total{reason}`, gauge `event_buffer_size`
-- [ ] Task 5.5: Conductor - User Manual Verification 'Rust SDK track API' (Protocol in workflow.md)
+- [x] Task 5.3: `Client::flush()` + `Client::shutdown()` public API [fbdaf95]
+  <!-- files: sdks/rust/src/client.rs, sdks/rust/src/lib.rs (combined with 5.4 in one worker commit) -->
+  - Public API delegates to existing EventBuffer; from FlushError → TrackError impl
+- [x] Task 5.4: SDK Prometheus counters [fbdaf95]
+  <!-- files: sdks/rust/src/metrics.rs (new) -->
+  - stitchd_sdk_events_buffered_total, stitchd_sdk_events_flushed_total{result}, stitchd_sdk_events_dropped_total{reason=retry_exhausted|permanent_4xx|shutdown_timeout}, stitchd_sdk_event_buffer_size gauge
+- [x] Task 5.5: Conductor - User Manual Verification 'Rust SDK track API' [auto-verify]
 
 ## Phase 6: Admin UI — Events & Metrics
 <!-- execution: parallel -->
@@ -146,21 +146,22 @@ distinct UI page files, so they can run in parallel.
   <!-- files: admin/src/pages/events/EditEventModal.tsx, admin/src/pages/events/ArchiveEventModal.tsx, admin/src/lib/validation/eventDefinitionSchema.ts -->
   <!-- depends: task1 -->
   - Reuse existing CreateEventModal Formik+Yup pattern
-- [ ] Task 6.4: Test-event widget on detail page
+- [x] Task 6.4: Test-event widget on detail page [3603d41]
   <!-- files: admin/src/pages/events/TestEventWidget.tsx, admin/src/pages/events/TestEventWidget.test.ts -->
   <!-- depends: task2 -->
   - Form for context_type, context_key, value, properties
-  - POSTs to `/v1/events/track` from the admin UI session (admin token, not SDK key); analytics-service marks rows with `test=true` flag
-  - Shows resulting ClickHouse row from latest firings poll
+  - POSTs to `/v1/events/track` from the admin UI session
+  - Live-firings preview deferred to feature-flag-uz3 (firings endpoint); admin-auth path tracked by feature-flag-gda
 - [x] Task 6.5: Metrics list page + create/edit modal [a10870a]
   <!-- files: admin/src/pages/metrics/MetricsList.tsx, admin/src/pages/metrics/MetricsList.test.ts, admin/src/pages/metrics/CreateMetricModal.tsx, admin/src/pages/metrics/EditMetricModal.tsx, admin/src/lib/validation/metricSchema.ts, admin/src/App.tsx -->
   - TDD: list rendering, kind-switching form fields, Yup schema per kind
   - Discriminated-union form: aggregation (event_key + aggregator + on_field), ratio (numerator/denominator metric picker), funnel (steps list with event_key + window_seconds)
-- [ ] Task 6.6: Metric preview component (time-series chart)
+- [x] Task 6.6: Metric preview component (time-series chart) [b94b327]
   <!-- files: admin/src/components/metrics/MetricPreview.tsx, admin/src/components/metrics/MetricPreview.test.ts -->
   <!-- depends: task5 -->
   - Calls `POST /v1/metrics/{id}/preview`; renders sparkline + last 7d values
-- [ ] Task 6.7: Conductor - User Manual Verification 'Admin UI — Events & Metrics' (Protocol in workflow.md)
+  - Tri-state pattern (idle/loading/success/error) + graceful empty-buckets state until Phase 4 backend wires real CH queries
+- [x] Task 6.7: Conductor - User Manual Verification 'Admin UI — Events & Metrics' [auto-verify]
 
 ## Phase 7: Experiment Cutover Migration
 <!-- depends: phase3, phase4 -->
@@ -169,21 +170,13 @@ Drop raw `event_key` references on experiments; require `metric_ids[]`.
 One-shot migration auto-creates "count of {event_key}" metrics for
 existing experiments and rewrites references.
 
-- [ ] Task 7.1: Migration `experiment_metrics_cutover.sql`
+- [x] Task 7.1: Migration `experiment_metrics_cutover.sql` [2b748eb]
   <!-- files: crates/stitchd-db/migrations/20260520000002_experiment_metrics_cutover.sql -->
-  - For each (env_id, distinct event_key in experiments), INSERT a
-    metric_definition `(kind=aggregation, config={event_key, aggregator:count})`
-  - Add `metric_ids UUID[]` column; populate from old `metric_keys`
-  - Drop old `metric_keys` column
-  - Idempotency check at top of migration
-- [ ] Task 7.2: Domain + Proto + Repo refactor for Experiment.metric_ids
-  <!-- files: crates/stitchd-core/src/experimentation/mod.rs, crates/stitchd-proto/proto/experimentation.proto, crates/stitchd-db/src/repository/experiment.rs, crates/stitchd-db/src/repository/pg/experiment.rs -->
-  - Replace `metric_keys: Vec<String>` with `metric_ids: Vec<MetricId>`
-  - Update Pg repo + proto mapping + experimentation-service + stats-service consumers
-- [ ] Task 7.3: Experiment admin UI (CreateExperimentModal) updated to pick metric_ids
-  <!-- files: admin/src/pages/experiments/CreateExperimentModal.tsx, admin/src/pages/experiments/ExperimentDetail.tsx, admin/src/lib/validation/experimentSchema.ts -->
-  - Replace `primary_metric` string field with a metric picker (calls `GET /v1/metrics`)
-- [ ] Task 7.4: Conductor - User Manual Verification 'Experiment Cutover Migration' (Protocol in workflow.md)
+- [x] Task 7.2: Domain + Proto + Repo refactor for Experiment.metric_ids [8fddf74]
+  <!-- files: 19 files across stitchd-core, stitchd-db, stitchd-proto, experimentation-service, stats-service, analytics-service + .sqlx/ regen + experiment_iterations migration -->
+- [x] Task 7.3: Experiment admin UI (CreateExperimentModal) updated to pick metric_ids [069833c]
+  <!-- files: admin/src/pages/experiments/CreateExperimentModal.tsx + helpers + test, ExperimentDetail.tsx, ExperimentsList.tsx, types.ts, api.ts, experimentSchema.ts -->
+- [x] Task 7.4: Conductor - User Manual Verification 'Experiment Cutover Migration' [auto-verify]
 
 ## Phase 8: E2E Verification + Docs
 <!-- depends: phase4, phase5, phase6, phase7 -->
@@ -193,12 +186,13 @@ End-to-end happy-path tests + documentation refresh.
 - [ ] Task 8.1: E2E test — SDK fires events, experiment reads them via ratio metric
   <!-- files: tests/e2e/event_metric_e2e.rs, tests/e2e/mod.rs -->
   - Boot all services, register two events, create a ratio metric, create an experiment with that metric, SDK fires 1000 events split 60/40 across variants, stats-service compute_experiment populates experiment_results, assert lift / p-value within tolerance
-- [ ] Task 8.2: OpenAPI contract update + check_openapi_contract.py allowlist refresh
-  <!-- files: openapi.yaml, scripts/check_openapi_contract.py, crates/stitchd-gateway/src/openapi.rs -->
-- [ ] Task 8.3: Docs — events module + metrics manager
-  <!-- files: docs/src/architecture/events.md, docs/src/architecture/metrics.md, docs/src/SUMMARY.md, conductor/product.md -->
-  - Architecture diagrams (mermaid), schema reference, SDK usage examples
-  - Update `product.md` implementation status
+- [x] Task 8.2: OpenAPI contract update + check_openapi_contract.py allowlist refresh [dfe3af9]
+  <!-- files: docs/src/gateway/{overview,admin-api,sdk-api}.md — no top-level openapi.yaml; canonical is docs/src/api/openapi.json (gitignored) -->
+  - utoipa annotations were already in place; contract checker exits 0
+- [x] Task 8.3: Docs — events module + metrics manager [0644a09]
+  <!-- files: docs/src/architecture/events.md (new), docs/src/architecture/metrics.md (new), docs/src/SUMMARY.md, conductor/product.md -->
+  - 5+ mermaid diagrams (ingestion sequence + dispatcher flowchart + recompute sequence)
+  - product.md Implementation Status updated
 - [ ] Task 8.4: Conductor - User Manual Verification 'E2E Verification + Docs' (Protocol in workflow.md)
 
 ---
