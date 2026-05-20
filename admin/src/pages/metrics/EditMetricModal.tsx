@@ -14,6 +14,7 @@ import {
 } from '../../lib/validation/metricSchema'
 import type { MetricFormValues } from '../../lib/validation/metricSchema'
 import { MetricFormFields } from './MetricFormFields'
+import { MetricPreview } from '../../components/metrics/MetricPreview'
 import type { MetricResponse } from './MetricsList'
 
 interface Props {
@@ -287,26 +288,8 @@ export function EditMetricModal({ metric, onClose, onSaved, onDeleted }: Props) 
                 excludeMetricId={resolvedMetric.id}
               />
 
-              {/* Slot for the metric preview component (filled by Task 6.6).
-                  Renders a placeholder card until then so list ordering and
-                  modal height stay stable. */}
-              <div
-                style={{
-                  padding: '12px 14px',
-                  background: 'var(--bg-sunken)',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: 'var(--fg-muted)',
-                  display: 'flex',
-                  gap: 8,
-                  alignItems: 'flex-start',
-                }}
-              >
-                <I.info size={13} style={{ marginTop: 1, flexShrink: 0 }} />
-                <span>
-                  Preview chart will appear here once the metric preview component lands (Task 6.6).
-                </span>
-              </div>
+              {/* Metric preview — POST /v1/metrics/{id}/preview (Task 6.6). */}
+              <MetricPreview metricId={resolvedMetric.id} days={7} />
 
               <div
                 style={{
