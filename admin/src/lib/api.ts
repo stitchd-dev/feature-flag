@@ -562,7 +562,11 @@ export interface ExperimentSummary {
   flag_key: string
   status: string
   model: string
-  primary_metric: string
+  /**
+   * UUIDs referencing `metric_definitions` rows. Phase 7 cutover replaced
+   * the legacy `primary_metric: string` (free-form event key).
+   */
+  metric_ids: string[]
   variants: number
   started_at: string | null
   ended_at: string | null

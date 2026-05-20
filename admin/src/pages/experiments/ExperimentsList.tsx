@@ -146,7 +146,7 @@ export function ExperimentsList() {
                       <th>Flag</th>
                       <th>Model</th>
                       <th>Status</th>
-                      <th>Primary metric</th>
+                      <th>Metrics</th>
                       <th>Variants</th>
                       <th>Updated</th>
                       <th></th>
@@ -167,7 +167,9 @@ export function ExperimentsList() {
                             {e.status}
                           </span>
                         </td>
-                        <td><span className="mono-key" style={{ fontSize: 11 }}>{e.primary_metric}</span></td>
+                        <td style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--fg-muted)' }}>
+                          {e.metric_ids?.length ?? 0} metric{(e.metric_ids?.length ?? 0) === 1 ? '' : 's'}
+                        </td>
                         <td style={{ fontFamily: 'var(--font-mono)' }}>{e.variants}</td>
                         <td style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>{new Date(e.updated_at).toLocaleDateString()}</td>
                         <td><I.chevronRight size={14} stroke="var(--fg-subtle)" /></td>
