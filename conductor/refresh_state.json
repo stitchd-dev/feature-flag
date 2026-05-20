@@ -1,29 +1,30 @@
 {
-  "last_refreshed": "2026-05-19T00:00:00Z",
+  "last_refreshed": "2026-05-20T20:30:00Z",
   "scope": "all",
   "changes": {
     "product.md": [
-      "Verified clean post-Phase-7 state — no stale crate names or route names found; no edits required beyond confirming accuracy"
+      "Renumbered modules — old §3 Experimentation split into §3 Events / §4 Metrics / §5 Experimentation (was conflated as one section); §4 Rule Engine → §6",
+      "Events: documented multi-context flat-map shape ({type: key}), metric_type classifier (6 variants — count/conversion/revenue/duration/numeric/custom), optional JSON schema validation on definitions, archive (soft-delete) semantics with HTTP 410 on archived",
+      "Metrics: new section documenting the composable primitives (Aggregation/Ratio/Funnel) with JsonLogic where_clause filters, ClickHouse-backed preview pipeline (days clamped [1,90], default 7), bidirectional UI back-link (event ↔ metric), goal_direction semantics",
+      "Experimentation: cutover from raw event_key → metric_ids columns on experiments + experiment_iterations; TriggerRecompute event-driven recompute",
+      "Admin UI: split out Events and Metrics into their own bullets (were buried in the catch-all 'Experiments / Events / Environments...' bullet) — documented full surface including event-key autocomplete in metric form, EventDetail back-link, TestEventWidget admin path"
     ],
     "tech-stack.md": [
-      "Verified clean post-Phase-7 state — crate renames (stitchd-event-writer, stitchd-sdk-rust), STITCHD_ prefix, Formik+Yup, ScyllaDB keyspace stitchd_segments all correct; no edits required"
+      "analytics-service row: added metric-definition CRUD + ClickHouse-backed preview (dispatch_preview_query) responsibilities",
+      "experimentation-service row: noted experiments now reference metric_ids (cutover migration 20260520000002)",
+      "stats-service row: noted new queries::preview builder module + shared jsonlogic_to_sql translator",
+      "PG migration table: added 5 events_metrics migrations (drop_experiment_results, metric_definitions, experiment_metrics_cutover, experiment_iterations_metric_ids, event_definitions_admin_fields)",
+      "ClickHouse schema table: annotated events_v2 row with full column shape (contexts Array(Tuple(String,String)), nullable typed value columns, properties Map, timestamp + occurred_at)",
+      "Bumped 'as of' date from 2026-05-19 to 2026-05-20"
     ],
     "workflow.md": [
-      "Bumped refresh date from 2026-05-11 to 2026-05-19",
-      "Updated Setup: added ScyllaDB to docker compose startup command; added DATABASE_URL alias note for sqlx-cli",
-      "Added 'Parallel Sub-Agent Workflow' section: worker-wave model, bd close --no-auto discipline, worktree isolation, fix-gaps-as-discovered principle, parallel trait reconciliation pattern"
+      "Bumped refresh date from 2026-05-19 to 2026-05-20 — no process changes (standard worker-wave + worktree workflow held across 8 phases / 73 commits without amendments)"
     ],
     "patterns.md": [
-      "Bumped refresh date from 2026-05-16 to 2026-05-19",
-      "Fixed Gateway gotcha: corrected actix-web body-limit entry to Axum + DefaultBodyLimit::max(bytes)",
-      "ScyllaDB: added 2 entries (gen reserved keyword; ScyllaDB direct dep containment)",
-      "Gateway: added 3 entries (proto JSON-string deserialization; tonic Channel Clone; tonic client submodule path)",
-      "Gotchas: added 5 entries (STITCHD_DATABASE_URL alias; --no-ff -D; git checkout --ours; discovered-work pattern; E2E infra-dependent test #[ignore])",
-      "Testing: added 7 entries (in-process tonic mock; per-crate cargo test; --features test-util for sdk; .sqlx/ cache check on deletion; Scylla perf #[ignore]; clippy --fix batch; #[allow(result_large_err)] for tonic)",
-      "Frontend: added 8 entries (Formik+Yup canonical pattern; validateOnChange=false; FormCheckbox spread; enableReinitialize; key={mode}; admin UI modal primitives)"
+      "Already updated 2026-05-20 during /conductor-archive run — 6 patterns elevated from events_metrics_20260519 learnings (serde discriminator + protobuf oneof alignment; tonic-trait-RPCs-break-impl; toFloat64OrNull only accepts String; clickhouse-rs positional binds; proto field deprecation `reserved`; Count metric_type as occurrence marker)"
     ],
     "refresh_state.json": [
-      "Bumped last_refreshed to 2026-05-19T00:00:00Z; updated changes map to reflect this refresh"
+      "Bumped last_refreshed to 2026-05-20T20:30:00Z; updated changes map for this refresh"
     ]
   }
 }

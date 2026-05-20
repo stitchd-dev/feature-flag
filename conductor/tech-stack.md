@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-05-19 -->
+<!-- Last refreshed: 2026-05-20 (post events_metrics_20260519 merge) -->
 
 ## Architecture
 
@@ -11,9 +11,9 @@ The system is decomposed into seven Cargo workspace crates, each a standalone gR
 | `stitchd-auth-service` | JWT / SDK-key credential validation; RBAC context assembly | Binary |
 | `stitchd-flag-service` | Flag + variant CRUD; server-streaming definition sync for SDK | Binary |
 | `stitchd-segmentation-service` | Segment CRUD; rule-based + list-based membership evaluation; ScyllaDB-backed list entry storage | Binary |
-| `stitchd-analytics-service` | Event definition registry; ClickHouse ingestion gRPC (owns `experiment_results` in ClickHouse) | Binary |
-| `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from ClickHouse `experiment_results` table | Binary |
-| `stitchd-stats-service` | Scheduled stats computation (60-min interval); gRPC-only consumer; writes pre-aggregated results to ClickHouse `experiment_results` table (PG table dropped in `20260519000001_drop_experiment_results.sql`) | Binary |
+| `stitchd-analytics-service` | Event-definition CRUD + ingestion gRPC (multi-context `Array(Tuple(String, String))` rows in ClickHouse `events_v2`); metric-definition CRUD + ClickHouse-backed preview (`POST /v1/metrics/{id}/preview` via `dispatch_preview_query`); owns `experiment_results` in ClickHouse | Binary |
+| `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from ClickHouse `experiment_results` table; experiments now reference `metric_ids` (cutover migration `20260520000002`) | Binary |
+| `stitchd-stats-service` | Scheduled stats computation (60-min interval); gRPC-only consumer; writes pre-aggregated results to ClickHouse `experiment_results`. Exposes pure query builders under `queries::{aggregation, ratio, funnel, preview}` (experiment-scoped vs day-bucketed preview); shared `jsonlogic_to_sql` translator for metric `where_clause` filters | Binary |
 | `stitchd-event-writer` | ClickHouse event ingestion and migration helpers (library; replaces retired `stitchd-events` crate name) | Library |
 | `stitchd-sdk-rust` | Server-side Rust SDK — in-process flag evaluation (library; naming convention: `stitchd-sdk-{lang}`) | Library |
 | `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types | Library |
@@ -176,14 +176,24 @@ Added in `db_optim_20260516` (`crates/stitchd-db/migrations/2026051600000{1-4}_*
 
 Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a transaction.
 
+### Events + Metrics migrations (`events_metrics_20260519`)
+
+| Migration | Change | Purpose |
+|---|---|---|
+| `20260519000001_drop_experiment_results.sql` | Drop PostgreSQL `experiment_results` table | Source of truth moved to ClickHouse |
+| `20260520000001_metric_definitions.sql` | Create `metric_definitions(id, environment_id, key, name, description, kind TEXT, config JSONB, goal_direction TEXT, version BIGINT, created_at, updated_at, deleted_at)` | Composable metric primitives table |
+| `20260520000002_experiment_metrics_cutover.sql` | Add `metric_ids UUID[]` column to `experiments`; backfill from prior raw `event_key` references | Experiments → metric_ids cutover |
+| `20260520000003_experiment_iterations_metric_ids.sql` | Add `metric_ids UUID[]` to `experiment_iterations` | Per-iteration metric pinning |
+| `20260520000004_event_definitions_admin_fields.sql` | Add `name`, `description`, `metric_type TEXT` CHECK-constrained, `schema JSONB` columns to `event_definitions`; partial index on metric_type | Admin UI surface for event registration + JSON-schema validation |
+
 ## ClickHouse Schema
 
-**Tables and materialized views as of 2026-05-19 (post-`boundaries_20260518`):**
+**Tables and materialized views as of 2026-05-20 (post-`events_metrics_20260519`):**
 
 | Table | Engine | Notes |
 |---|---|---|
-| `events` | MergeTree, monthly partitions | Primary ingestion table |
-| `events_v2` | MergeTree, weekly `toMonday()` partitions | Optimized partition granularity (migration 000007) |
+| `events` | MergeTree, monthly partitions | Legacy ingestion table |
+| `events_v2` | MergeTree, weekly `toMonday()` partitions | Optimized partition granularity (migration 000007). `contexts Array(Tuple(String, String))` carries multi-context attribution per firing; `metric_key LowCardinality(String)`, three nullable typed value columns (`value_bool / value_int / value_double`); `properties Map(String, String)`; `timestamp DateTime64(3, 'UTC')` + `occurred_at DateTime64(3, 'UTC')` |
 | `flag_evaluation_log_v2` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log (migration `0004_flag_evaluation_log_v2.sql`) |
 | `events_experiment_daily` | AggregatingMergeTree | Pre-aggregated experiment stats by `(env_id, experiment_id, variant_key, metric_key, day)` |
 | `events_experiment_daily_mv` | Materialized View | Auto-populates `events_experiment_daily` on `events` insert using `*State` combiners |

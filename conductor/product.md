@@ -1,6 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
-<!-- Last refreshed: 2026-05-19 -->
+<!-- Last refreshed: 2026-05-20 (post events_metrics_20260519 merge) -->
 
 # Product Guide
 
@@ -88,16 +88,36 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
   the evaluated variant plus a full rule trace (which rule matched, why), rollout debug info,
   and OR/AND missing-context resolution details — used by the Admin UI "Test" panel
 
-### 3. Experimentation
-- Events: pre-registered only; each event has a known key and typed metric value 
-  (bool/int/double) — unknown events are rejected at ingestion
-- Event payload: `{_type, key}` context + metric key + typed value + timestamp
-- Experiments: bound to a flag rule, duration-locked (flag frozen while active)
-- Models: Frequentist or Bayesian (with/without CUPED)
-- Metrics: event count, numeric aggregation (sum/avg/percentile), funnel/conversion
-- Future: warehouse-backed event ingestion
+### 3. Events
 
-### 4. Rule Engine
+- **Pre-registered only.** Each event has a unique `event_key` per environment and a `metric_type` classifier — one of:
+  - `count` (occurrence marker, no value required),
+  - `conversion` (bool),
+  - `revenue` / `duration` / `numeric` (numeric value),
+  - `custom` (free-form, optional JSON-schema validation on payload).
+- **Optional JSON Schema** on the definition validates event payloads at ingestion (e.g. require `currency` ∈ `{USD, EUR, GBP}` for purchase events).
+- **Multi-context attribution:** every firing carries a flat `contexts: {type: key, ...}` map so a single event can be attributed to multiple dimensions simultaneously (e.g. `{user: alice, account: acme, session: s99}`) without inflating count metrics. Stored in ClickHouse as `Array(Tuple(String, String))`.
+- **Soft-delete (archive)** rather than hard delete; archived events reject new firings with HTTP 410 while ClickHouse history remains queryable.
+- Backed by a `verify_track_event` admin-auth path (`POST /v1/admin/events/track`) for SDK debugging from the UI.
+
+### 4. Metrics
+
+- **Composable primitives** — three kinds, persisted in PostgreSQL `metric_definitions`:
+  - **Aggregation** — `count / sum / avg / p50 / p90 / p99 / uniq` over one event stream, optionally filtered by a JsonLogic `where_clause` on `properties[...]`. The `on_field` references either the canonical numeric column (`value`) or a property key.
+  - **Ratio** — `numerator / denominator` where both are existing aggregation metrics; below `min_denominator` the bucket emits null (insufficient-data semantics).
+  - **Funnel** — ordered list of event-key steps with a `window_seconds` conversion deadline; ClickHouse `windowFunnel` evaluates per `(day, dedup_key)` and the final-step rate is reported as the bucket value.
+- **Preview pipeline (Phase 4):** `POST /v1/metrics/{id}/preview` runs the kind-specific ClickHouse query against `events_v2` and returns a zero-filled daily time-series (days clamped to [1, 90]; default 7). Sparkline-ready.
+- **Bidirectional UI back-link:** EventDetail page lists every metric that references the event (aggregation by `config.event_key` + funnel step matches; ratio metrics surface transitively through the aggregations they wrap).
+- **Goal direction** (`increase` / `decrease` / `neutral`) drives experiment winning-variant logic and the up/down arrow shown in the metric list.
+
+### 5. Experimentation
+- Experiments reference **metric_ids** (cutover from raw event_key in migration `20260520000002_experiment_metrics_cutover.sql`); the per-iteration `metric_ids` column lives in `experiment_iterations`.
+- Bound to a flag rule, duration-locked (flag frozen while active).
+- Models: Frequentist or Bayesian (with/without CUPED).
+- Recompute is scheduled (60-min via `stitchd-stats-service`) plus event-driven via the `TriggerRecompute` gRPC RPC when a metric is updated.
+- Future: warehouse-backed event ingestion.
+
+### 6. Rule Engine
 - Core: ordered rule list (first true = exit); AND combinator; per-rule NOT
 - Segmentation rules: inherit core
 - Feature flag rules: inherit core + "Is in Segment" + "Flag evaluated with variant X"
@@ -108,9 +128,11 @@ The admin console (`admin/`) is a React 19 + Vite SPA with full feature parity:
 
 - **Flags:** Create/edit/archive flags; variant management; rule builder (AND/OR/NOT condition trees, segment picker, percentage rollout); Evaluate-Preview "Test" panel with rule trace output
 - **Segments:** Rule-based (condition expression builder) + list-based (context-typed include/exclude key lists); full CRUD; segment picker in flag rule builder
+- **Events:** Full CRUD (`/v1/events*`) — register key + name + metric_type + optional JSON schema; archive (soft-delete); EditEventModal exposes name/metric_type/description/schema (event_key is immutable). EventDetail page surfaces recent firings, 14-day sparkline, the TestEventWidget (admin-auth `POST /v1/admin/events/track`), the back-link "Metrics referencing this event", and "Experiments depending on this event".
+- **Metrics:** Full CRUD (`/v1/metrics*`) — kind picker (Aggregation/Ratio/Funnel), event-key autocomplete bound to registered events (strict — unknown keys flagged inline), aggregator + on_field + JsonLogic where_clause for aggregations, numerator/denominator dropdowns for ratios, FieldArray steps for funnels. Detail page calls `POST /v1/metrics/{id}/preview` for the ClickHouse-backed sparkline.
 - **Context Explorer:** Browse observed context types and their parameter registry (autocomplete source for rule builder)
 - **Eval Analytics:** Evaluation stats per flag via ClickHouse `eval_stats` route; sparklines in flag list
-- **Experiments / Events / Environments / SDK Keys / Org Users / Audit Log:** Full management UI
+- **Experiments / Environments / SDK Keys / Org Users / Audit Log:** Full management UI
 - **Pagination:** All list views use URL-driven offset pagination (`?page=N`) — `PaginationParams` + `PaginatedResponse<T>` backed by `COUNT(*) OVER()` window queries
 
 ## Server-Side SDK (Rust — initial)

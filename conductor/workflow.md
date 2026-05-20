@@ -1,5 +1,5 @@
 # Project Workflow
-<!-- Last refreshed: 2026-05-19 -->
+<!-- Last refreshed: 2026-05-20 (post events_metrics_20260519 merge — no process changes; the standard worker-wave + worktree workflow held up cleanly across 8 phases / 73 commits) -->
 
 ## Guiding Principles
 
