@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use chrono::Timelike;
 use stitchd_core::{
     id::{EnvironmentId, MetricId, OrganisationId, ProjectId},
     metric::{
@@ -27,6 +28,26 @@ use stitchd_db::{
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 
+/// Current UTC timestamp truncated to microsecond precision.
+///
+/// PostgreSQL `TIMESTAMP WITH TIME ZONE` columns store at most
+/// microsecond resolution (6 fractional digits), but `chrono::Utc::now()`
+/// returns nanoseconds. Without this truncation, a round-trip through
+/// `INSERT … RETURNING *` (or insert → fetch) loses the sub-microsecond
+/// digits and `assert_eq!(fetched, original)` panics with a confusing
+/// "left == right" diff that only differs in the last 3 ns digits. CI
+/// (Linux) reliably trips on this; macOS local runs sometimes don't
+/// because chrono's nanosecond source has lower entropy there. Using
+/// this helper everywhere in the fixture bodies makes the tests
+/// deterministic across platforms.
+fn now_micros() -> chrono::DateTime<chrono::Utc> {
+    let now = chrono::Utc::now();
+    let nanos = now.timestamp_subsec_nanos();
+    let micros_only = (nanos / 1_000) * 1_000;
+    now.with_nanosecond(micros_only)
+        .expect("micros derived from nanos is always in range")
+}
+
 async fn seed_env(pool: &sqlx::PgPool) -> (PgMetricRepository, EnvironmentId) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
@@ -37,8 +58,8 @@ async fn seed_env(pool: &sqlx::PgPool) -> (PgMetricRepository, EnvironmentId) {
     let org = Organisation {
         id: OrganisationId::new(),
         name: "Org".into(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now_micros(),
+        updated_at: now_micros(),
         deleted_at: None,
         version: 1,
         is_system: false,
@@ -48,8 +69,8 @@ async fn seed_env(pool: &sqlx::PgPool) -> (PgMetricRepository, EnvironmentId) {
         id: ProjectId::new(),
         organisation_id: org.id,
         name: "Proj".into(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now_micros(),
+        updated_at: now_micros(),
         deleted_at: None,
         version: 1,
     };
@@ -58,8 +79,8 @@ async fn seed_env(pool: &sqlx::PgPool) -> (PgMetricRepository, EnvironmentId) {
         id: EnvironmentId::new(),
         project_id: project.id,
         name: "Env".into(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now_micros(),
+        updated_at: now_micros(),
         deleted_at: None,
         version: 1,
     };
@@ -82,8 +103,8 @@ fn make_aggregation(env_id: EnvironmentId, key: &str) -> MetricDefinition {
         }),
         goal_direction: GoalDirection::Increase,
         version: 1,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now_micros(),
+        updated_at: now_micros(),
         deleted_at: None,
     }
 }
@@ -269,8 +290,8 @@ async fn ratio_metric_round_trips(pool: sqlx::PgPool) {
         }),
         goal_direction: GoalDirection::Increase,
         version: 1,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now_micros(),
+        updated_at: now_micros(),
         deleted_at: None,
     };
     repo.create(&ratio).await.unwrap();
@@ -307,8 +328,8 @@ async fn funnel_metric_round_trips_with_steps(pool: sqlx::PgPool) {
         }),
         goal_direction: GoalDirection::Increase,
         version: 1,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now_micros(),
+        updated_at: now_micros(),
         deleted_at: None,
     };
     repo.create(&funnel).await.unwrap();
@@ -403,8 +424,8 @@ async fn list_referencing_event_matches_funnel_step_event_key(pool: sqlx::PgPool
         }),
         goal_direction: GoalDirection::Increase,
         version: 1,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now_micros(),
+        updated_at: now_micros(),
         deleted_at: None,
     };
     repo.create(&funnel).await.unwrap();
@@ -477,8 +498,8 @@ async fn list_referencing_event_excludes_ratio_metrics(pool: sqlx::PgPool) {
         }),
         goal_direction: GoalDirection::Increase,
         version: 1,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
+        created_at: now_micros(),
+        updated_at: now_micros(),
         deleted_at: None,
     };
     repo.create(&ratio).await.unwrap();
