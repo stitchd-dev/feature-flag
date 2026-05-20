@@ -1,0 +1,13 @@
+{
+  "track_id": "rust_deps_upgrade_20260520",
+  "type": "chore",
+  "status": "new",
+  "priority": "medium",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-20T17:34:05Z",
+  "updated_at": "2026-05-20T17:34:05Z",
+  "description": "Bring workspace to Rust 1.95 MSRV (with CI toolchain pin) and bump every workspace dep to latest, including the invasive openidconnect 3 → 4 migration. Discovery via cargo-outdated; manifest edits via cargo-edit.",
+  "git_branch": "track/rust_deps_upgrade_20260520",
+  "worktree_path": ".worktrees/rust_deps_upgrade_20260520"
+}

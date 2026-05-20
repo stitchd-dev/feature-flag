@@ -55,3 +55,8 @@ This file tracks all major tracks for the project.
 - events_metrics_20260519 (Events + Metrics composable primitives — admin UI CRUD + tester, REST batch ingestion + multi-context flat-map shape, Rust SDK track() + buffer, composable metric_definitions (aggregation/ratio/funnel) with property-based filters + JsonLogic where_clause, ClickHouse-backed metric preview, experiment cutover to metric_ids)
 -->
 
+---
+
+## [ ] Track: Upgrade Rust Toolchain to 1.95 + Bring Workspace Deps to Latest Cross-Compatible
+*Link: [./conductor/tracks/rust_deps_upgrade_20260520/](./conductor/tracks/rust_deps_upgrade_20260520/)*
+
