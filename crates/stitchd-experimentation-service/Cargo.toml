@@ -37,3 +37,8 @@ futures-core = { version = "0.3" }
 [dev-dependencies]
 tokio = { workspace = true }
 futures = { workspace = true }
+# Phase 11 Task 11.2: experiment_lifecycle_e2e.rs drives PG + CH directly to
+# exercise the eval-log -> experiment_assignments_mv -> stats pipeline.
+# stitchd-db re-exports clickhouse::EvalLogRow + insert_eval_log_rows used by
+# the test; stitchd-event-writer is the embedded CH migration runner.
+stitchd-event-writer = { path = "../stitchd-event-writer" }

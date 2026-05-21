@@ -4088,6 +4088,7 @@ dependencies = [
  "sqlx",
  "stitchd-core",
  "stitchd-db",
+ "stitchd-event-writer",
  "stitchd-proto",
  "thiserror 2.0.18",
  "tokio",
