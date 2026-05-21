@@ -207,6 +207,9 @@ message ExperimentResult {
   string computed_at     = 11;
   // RFC 3339 UTC timestamp the row was first inserted.
   string created_at      = 12;
+  // The attribution unit's context type (e.g. "user", "account").
+  // Defaults to "user" for rows written before the Phase 5 cutover.
+  string context_type    = 13;
 }
 
 // Write (upsert) one experiment result.
@@ -223,6 +226,10 @@ message WriteExperimentResultsRequest {
   string recommendation         = 10;
   // RFC 3339 UTC.  Defaults to server time when omitted.
   string computed_at            = 11;
+  // The attribution unit's context type (e.g. "user", "account"). Empty
+  // string maps to the default `'user'` on the CH side for back-compat
+  // with pre-Phase-5 callers that don't supply it.
+  string context_type           = 12;
 }
 
 // Empty response — Worker 3's write returns () so no result is echoed back.

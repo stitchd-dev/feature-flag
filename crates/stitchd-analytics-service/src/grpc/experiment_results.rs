@@ -63,6 +63,7 @@ fn row_to_proto(row: ExperimentResultRow) -> ExperimentResult {
         recommendation: row.recommendation,
         computed_at: ms_to_rfc3339(row.computed_at),
         created_at: ms_to_rfc3339(row.created_at),
+        context_type: row.context_type,
     }
 }
 
@@ -151,6 +152,7 @@ pub async fn handle_write_experiment_results(
         bayesian_result,
         recommendation: req.recommendation,
         computed_at,
+        context_type: req.context_type,
     };
 
     repo.write(vec![row])
@@ -327,6 +329,7 @@ mod tests {
                     recommendation: r.recommendation,
                     computed_at: r.computed_at.timestamp_millis(),
                     created_at: chrono::Utc::now().timestamp_millis(),
+                    context_type: r.context_type,
                 });
             }
             Ok(())
@@ -402,6 +405,7 @@ mod tests {
             recommendation: "ship_treatment".to_string(),
             computed_at: 1_746_057_600_000, // 2026-05-01T00:00:00Z
             created_at: 1_746_057_600_000,
+            context_type: "user".to_string(),
         }
     }
 
@@ -418,6 +422,7 @@ mod tests {
             bayesian_result: None,
             recommendation: "ship_treatment".to_string(),
             computed_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
         })
     }
 

@@ -1,8 +1,19 @@
 //! Writes computed per-metric statistics via the analytics-service gRPC client.
 //!
 //! No direct PostgreSQL access to `experiment_results`.
+//!
+//! ## Per-context-type rows (Phase 5)
+//!
+//! Each [`MetricSummary`] carries a `context_type` (e.g. `"user"`,
+//! `"account"`). The stats query builders ([`crate::queries::aggregation`]
+//! etc.) emit one (context_type, variant_key) row per assignment scope,
+//! and the result builder produces one `MetricSummary` per
+//! `(metric_key, context_type)`. Each summary becomes one
+//! `WriteExperimentResultsRequest` — analytics-service is responsible
+//! for the upsert into the `experiment_results` CH table.
 
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 use tonic::transport::Channel;
 use uuid::Uuid;
 
@@ -10,25 +21,105 @@ use stitchd_proto::analytics::v1::{
     WriteExperimentResultsRequest, analytics_service_client::AnalyticsServiceClient,
 };
 
-/// A summarized metric result for one (variant_group, metric_key) pair,
+/// A summarized metric result for one (context_type, metric_key) pair,
 /// ready to be forwarded to analytics-service.
+///
+/// The `variant_stats` JSON encodes the per-variant breakdown WITHIN the
+/// `context_type`; analyses (frequentist + bayesian) are scoped per
+/// context_type per spec §3.
 #[derive(Debug, Clone)]
 pub struct MetricSummary {
+    /// The attribution unit's context type (e.g. `"user"`, `"account"`).
+    /// Required since the Phase 5 cutover — every result row is per
+    /// context type.
+    pub context_type: String,
+    /// The metric being summarised.
     pub metric_key: String,
-    /// JSON object mapping variant_key → event count.
+    /// JSON object mapping `variant_key` → per-variant statistics
+    /// (count / sum / quantiles / …) within the `context_type`.
     pub variant_stats: serde_json::Value,
     /// Optional frequentist analysis result (JSON).
     pub frequentist_result: Option<serde_json::Value>,
     /// Optional bayesian analysis result (JSON).
     pub bayesian_result: Option<serde_json::Value>,
+    /// Human-readable recommendation string.
     pub recommendation: String,
+}
+
+/// A single per-(context_type, variant_key) data point returned by the
+/// query builders.
+///
+/// The result builder groups these into `MetricSummary`s keyed by
+/// `(metric_key, context_type)` — see [`build_metric_summaries`].
+#[derive(Debug, Clone)]
+pub struct VariantPoint {
+    /// The attribution unit's context type.
+    pub context_type: String,
+    /// The variant the contexts in this point landed in.
+    pub variant_key: String,
+    /// The aggregator value for the bucket (count / mean / etc).
+    pub metric_value: f64,
+}
+
+/// Group `(context_type, variant_key, metric_value)` data points by
+/// `(metric_key, context_type)` into a list of `MetricSummary`s.
+///
+/// One summary is emitted per `(metric_key, context_type)` pair; the
+/// `variant_stats` JSON inside the summary maps `variant_key → metric_value`
+/// for the variants observed within that context type.
+///
+/// Frequentist / bayesian results are passed through unchanged — callers
+/// can pre-compute them per (metric_key, context_type) and look them up
+/// in the `results` maps. `None` for a pair means "no analysis available
+/// — surface as empty in the proto".
+#[must_use]
+pub fn build_metric_summaries(
+    points_per_metric: &HashMap<String, Vec<VariantPoint>>,
+    frequentist_per_pair: &HashMap<(String, String), serde_json::Value>,
+    bayesian_per_pair: &HashMap<(String, String), serde_json::Value>,
+    recommendations_per_pair: &HashMap<(String, String), String>,
+) -> Vec<MetricSummary> {
+    let mut summaries = Vec::new();
+    for (metric_key, points) in points_per_metric {
+        // Bucket the points by context_type → { variant_key: metric_value }.
+        let mut per_ctx: HashMap<String, serde_json::Map<String, serde_json::Value>> =
+            HashMap::new();
+        for p in points {
+            let entry = per_ctx.entry(p.context_type.clone()).or_default();
+            entry.insert(
+                p.variant_key.clone(),
+                serde_json::Value::from(p.metric_value),
+            );
+        }
+        for (context_type, variant_stats_map) in per_ctx {
+            let key = (metric_key.clone(), context_type.clone());
+            summaries.push(MetricSummary {
+                context_type: context_type.clone(),
+                metric_key: metric_key.clone(),
+                variant_stats: serde_json::Value::Object(variant_stats_map),
+                frequentist_result: frequentist_per_pair.get(&key).cloned(),
+                bayesian_result: bayesian_per_pair.get(&key).cloned(),
+                recommendation: recommendations_per_pair
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_default(),
+            });
+        }
+    }
+    // Stable ordering for deterministic test assertions: (metric_key,
+    // context_type) ascending.
+    summaries.sort_by(|a, b| {
+        (a.metric_key.as_str(), a.context_type.as_str())
+            .cmp(&(b.metric_key.as_str(), b.context_type.as_str()))
+    });
+    summaries
 }
 
 /// Forward computed metric summaries to `analytics-service.WriteExperimentResults`.
 ///
 /// Each `MetricSummary` becomes one `WriteExperimentResultsRequest` call keyed
-/// on `(experiment_id, iteration_id, metric_key)`.  The analytics service is
-/// responsible for the actual upsert.
+/// on `(experiment_id, iteration_id, context_type, metric_key)`.  The
+/// analytics service is responsible for the actual upsert.
 ///
 /// `env_id` is the environment UUID that scopes the result rows.
 pub async fn write_results(
@@ -54,6 +145,7 @@ pub async fn write_results(
             bayesian_result: summary.bayesian_result.as_ref().map(|v| v.to_string()),
             recommendation: summary.recommendation.clone(),
             computed_at: computed_at_rfc.clone(),
+            context_type: summary.context_type.clone(),
         };
 
         client.write_experiment_results(req).await?;
@@ -303,6 +395,7 @@ mod tests {
         let env_id = Uuid::new_v4();
 
         let summaries = vec![MetricSummary {
+            context_type: "user".into(),
             metric_key: "clicks".into(),
             variant_stats: serde_json::json!({ "control": 50, "treatment": 70 }),
             frequentist_result: Some(serde_json::json!({ "p_value": 0.04 })),
@@ -329,6 +422,7 @@ mod tests {
         let (mut client, captured) = make_client().await;
         let summaries = vec![
             MetricSummary {
+                context_type: "user".into(),
                 metric_key: "clicks".into(),
                 variant_stats: serde_json::json!({}),
                 frequentist_result: None,
@@ -336,6 +430,7 @@ mod tests {
                 recommendation: "wait".into(),
             },
             MetricSummary {
+                context_type: "user".into(),
                 metric_key: "revenue".into(),
                 variant_stats: serde_json::json!({}),
                 frequentist_result: None,
@@ -367,5 +462,109 @@ mod tests {
         {
         }
         assert_no_pg_pool_arg(|_client| {});
+    }
+
+    // ── Per-context-type result builder (Phase 5 Task 5.5) ────────────────
+
+    #[tokio::test]
+    async fn write_results_forwards_context_type_per_row() {
+        let (mut client, captured) = make_client().await;
+        let summaries = vec![
+            MetricSummary {
+                context_type: "user".into(),
+                metric_key: "clicks".into(),
+                variant_stats: serde_json::json!({ "control": 10, "treatment": 14 }),
+                frequentist_result: None,
+                bayesian_result: None,
+                recommendation: "wait".into(),
+            },
+            MetricSummary {
+                context_type: "account".into(),
+                metric_key: "clicks".into(),
+                variant_stats: serde_json::json!({ "control": 3, "treatment": 5 }),
+                frequentist_result: None,
+                bayesian_result: None,
+                recommendation: "wait".into(),
+            },
+        ];
+
+        write_results(
+            &mut client,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Utc::now(),
+            &summaries,
+        )
+        .await
+        .expect("write_results should succeed");
+
+        let reqs = captured.lock().await;
+        assert_eq!(reqs.len(), 2);
+        let by_ctx: std::collections::HashSet<&str> =
+            reqs.iter().map(|r| r.context_type.as_str()).collect();
+        assert!(by_ctx.contains("user"));
+        assert!(by_ctx.contains("account"));
+    }
+
+    #[test]
+    fn build_metric_summaries_groups_by_metric_and_context_type() {
+        use std::collections::HashMap;
+
+        let mut points_per_metric: HashMap<String, Vec<VariantPoint>> = HashMap::new();
+        points_per_metric.insert(
+            "clicks".into(),
+            vec![
+                VariantPoint {
+                    context_type: "user".into(),
+                    variant_key: "control".into(),
+                    metric_value: 10.0,
+                },
+                VariantPoint {
+                    context_type: "user".into(),
+                    variant_key: "treatment".into(),
+                    metric_value: 14.0,
+                },
+                VariantPoint {
+                    context_type: "account".into(),
+                    variant_key: "control".into(),
+                    metric_value: 3.0,
+                },
+                VariantPoint {
+                    context_type: "account".into(),
+                    variant_key: "treatment".into(),
+                    metric_value: 5.0,
+                },
+            ],
+        );
+
+        let mut freq: HashMap<(String, String), serde_json::Value> = HashMap::new();
+        freq.insert(
+            ("clicks".into(), "user".into()),
+            serde_json::json!({"p_value": 0.04}),
+        );
+
+        let summaries = build_metric_summaries(
+            &points_per_metric,
+            &freq,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+
+        // Stable ordering by (metric_key, context_type).
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].metric_key, "clicks");
+        assert_eq!(summaries[0].context_type, "account");
+        assert_eq!(summaries[1].metric_key, "clicks");
+        assert_eq!(summaries[1].context_type, "user");
+
+        // Per-context-type variant_stats encoding.
+        let user_stats = summaries[1].variant_stats.as_object().unwrap();
+        assert_eq!(user_stats["control"], serde_json::json!(10.0));
+        assert_eq!(user_stats["treatment"], serde_json::json!(14.0));
+
+        // Frequentist result attached only to the matching pair.
+        assert!(summaries[1].frequentist_result.is_some());
+        assert!(summaries[0].frequentist_result.is_none());
     }
 }
