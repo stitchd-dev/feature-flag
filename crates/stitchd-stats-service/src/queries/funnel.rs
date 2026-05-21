@@ -134,10 +134,7 @@ pub fn build_funnel_query(
     let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
     let exp_ph = push_bind(&mut binds, QueryBind::Str(experiment_id.to_owned()));
     let iter_ph = push_bind(&mut binds, QueryBind::Str(iteration_id.to_owned()));
-    let iter_end_ph = push_bind(
-        &mut binds,
-        QueryBind::I64(iteration_end.timestamp_millis()),
-    );
+    let iter_end_ph = push_bind(&mut binds, QueryBind::I64(iteration_end.timestamp_millis()));
 
     // 3) metric_key filter — N binds (one per step, in step order), each
     //    bound to its event_key. ClickHouse needs one bind per `?`
@@ -302,7 +299,11 @@ mod tests {
         //   p10 = variant ctrl
         //   p11 = variant treat
         let cfg = FunnelConfig {
-            steps: vec![step("view"), step("add_to_cart"), step("checkout_completed")],
+            steps: vec![
+                step("view"),
+                step("add_to_cart"),
+                step("checkout_completed"),
+            ],
             window_seconds: 3600,
             count_repeats: false,
         };
@@ -338,9 +339,7 @@ mod tests {
                 cursor = after_p;
                 continue;
             }
-            let n: i64 = q.sql[after_p..after_p + digit_end]
-                .parse()
-                .expect("digits");
+            let n: i64 = q.sql[after_p..after_p + digit_end].parse().expect("digits");
             assert!(
                 n > last_idx,
                 "placeholder {{p{n}}} appears after {{p{last_idx}}} in SQL but earlier in bind vec — \

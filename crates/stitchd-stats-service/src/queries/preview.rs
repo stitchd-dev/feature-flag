@@ -376,10 +376,7 @@ pub fn build_experiment_preview_aggregation_query(
     let exp_ph = push_bind(&mut binds, QueryBind::Str(experiment_id.to_owned()));
     let iter_ph = push_bind(&mut binds, QueryBind::Str(iteration_id.to_owned()));
     let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
-    let iter_end_ph = push_bind(
-        &mut binds,
-        QueryBind::I64(iteration_end.timestamp_millis()),
-    );
+    let iter_end_ph = push_bind(&mut binds, QueryBind::I64(iteration_end.timestamp_millis()));
 
     let extra_where = match cfg.where_clause.as_ref() {
         Some(expr) => {
@@ -733,14 +730,9 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let q = build_experiment_preview_aggregation_query(
-            &cfg,
-            EXP_ID,
-            ITER_ID,
-            ENV_ID,
-            iter_end(),
-        )
-        .unwrap();
+        let q =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap();
         assert!(
             q.sql.contains("INNER JOIN experiment_assignments AS a"),
             "JOIN must be present, got:\n{}",
@@ -762,7 +754,8 @@ mod tests {
             "must surface variant_key"
         );
         assert!(
-            q.sql.contains("GROUP BY day_ts, a.context_type, a.variant_key"),
+            q.sql
+                .contains("GROUP BY day_ts, a.context_type, a.variant_key"),
             "must group per-day per-context-type per-variant, got:\n{}",
             q.sql
         );
@@ -788,16 +781,14 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let q = build_experiment_preview_aggregation_query(
-            &cfg,
-            EXP_ID,
-            ITER_ID,
-            ENV_ID,
-            iter_end(),
-        )
-        .unwrap();
+        let q =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap();
         assert!(q.sql.contains("e.occurred_at >= a.assigned_at"));
-        assert!(q.sql.contains("e.occurred_at < fromUnixTimestamp64Milli({p4})"));
+        assert!(
+            q.sql
+                .contains("e.occurred_at < fromUnixTimestamp64Milli({p4})")
+        );
     }
 
     #[test]
@@ -808,14 +799,9 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let q = build_experiment_preview_aggregation_query(
-            &cfg,
-            EXP_ID,
-            ITER_ID,
-            ENV_ID,
-            iter_end(),
-        )
-        .unwrap();
+        let q =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap();
         assert!(!q.sql.contains("arrayExists(t -> t.1 = 'experiment'"));
         assert!(!q.sql.contains("t.1 = 'iteration'"));
         assert!(!q.sql.contains("t.1 = 'variant'"));
@@ -829,14 +815,9 @@ mod tests {
             on_field: None,
             where_clause: Some(serde_json::json!({"==": [{"var": "country"}, "US"]})),
         };
-        let q = build_experiment_preview_aggregation_query(
-            &cfg,
-            EXP_ID,
-            ITER_ID,
-            ENV_ID,
-            iter_end(),
-        )
-        .unwrap();
+        let q =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap();
         assert_eq!(q.binds.last(), Some(&QueryBind::Str("US".into())));
         assert!(q.sql.contains("AND (properties['country'] = {p5})"));
     }
@@ -849,14 +830,9 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let err = build_experiment_preview_aggregation_query(
-            &cfg,
-            EXP_ID,
-            ITER_ID,
-            ENV_ID,
-            iter_end(),
-        )
-        .unwrap_err();
+        let err =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 

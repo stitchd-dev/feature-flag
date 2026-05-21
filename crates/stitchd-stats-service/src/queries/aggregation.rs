@@ -110,10 +110,7 @@ pub fn build_aggregation_query(
     let exp_ph = push_bind(&mut binds, QueryBind::Str(experiment_id.to_owned()));
     let iter_ph = push_bind(&mut binds, QueryBind::Str(iteration_id.to_owned()));
     let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
-    let iter_end_ph = push_bind(
-        &mut binds,
-        QueryBind::I64(iteration_end.timestamp_millis()),
-    );
+    let iter_end_ph = push_bind(&mut binds, QueryBind::I64(iteration_end.timestamp_millis()));
 
     let mut variant_phs = Vec::with_capacity(variant_keys.len());
     for vk in variant_keys {
@@ -316,7 +313,8 @@ mod tests {
             q.sql
         );
         assert!(
-            q.sql.contains("e.occurred_at < fromUnixTimestamp64Milli({p4})"),
+            q.sql
+                .contains("e.occurred_at < fromUnixTimestamp64Milli({p4})"),
             "iteration upper bound bind missing, got:\n{}",
             q.sql
         );

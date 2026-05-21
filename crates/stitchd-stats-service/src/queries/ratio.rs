@@ -38,6 +38,13 @@ use super::{
 /// Propagates any [`QueryBuildError`] from the two underlying aggregation
 /// builds, plus a fresh [`QueryBuildError::InvalidConfig`] when
 /// `min_denominator` is negative.
+// `clippy::too_many_arguments`: the ratio builder genuinely needs every
+// argument — three configs (the ratio + numerator + denominator) plus
+// the four experiment-scope parameters (experiment/iteration/env/variants)
+// plus iteration_end. Folding any of these into a struct would create a
+// builder pattern with one consumer; the long arg list is the simpler
+// shape.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ratio_query(
     ratio_cfg: &RatioConfig,
     numerator_cfg: &AggregationConfig,

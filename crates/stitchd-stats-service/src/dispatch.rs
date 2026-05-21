@@ -525,9 +525,17 @@ mod tests {
             .with(denominator);
         let vks = variant_keys();
 
-        let q = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks, Utc::now())
-            .await
-            .expect("ratio dispatch should succeed");
+        let q = dispatch_metric_query(
+            &ratio_metric,
+            &repo,
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            &vks,
+            Utc::now(),
+        )
+        .await
+        .expect("ratio dispatch should succeed");
 
         // Both event keys should be bound in the final query.
         let str_binds: Vec<&str> = q.binds.iter().filter_map(|b| b.as_str()).collect();
@@ -579,9 +587,17 @@ mod tests {
             .with(denominator);
         let vks = variant_keys();
 
-        let err = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks, Utc::now())
-            .await
-            .expect_err("should reject non-aggregation numerator");
+        let err = dispatch_metric_query(
+            &ratio_metric,
+            &repo,
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            &vks,
+            Utc::now(),
+        )
+        .await
+        .expect_err("should reject non-aggregation numerator");
 
         match err {
             DispatchError::InvalidRatioMetric {
@@ -616,9 +632,17 @@ mod tests {
         let repo = MockMetricRepository::new();
         let vks = variant_keys();
 
-        let err = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks, Utc::now())
-            .await
-            .expect_err("should report missing numerator");
+        let err = dispatch_metric_query(
+            &ratio_metric,
+            &repo,
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            &vks,
+            Utc::now(),
+        )
+        .await
+        .expect_err("should report missing numerator");
 
         match err {
             DispatchError::MetricNotFound(id) => {

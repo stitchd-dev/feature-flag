@@ -544,12 +544,8 @@ mod tests {
             serde_json::json!({"p_value": 0.04}),
         );
 
-        let summaries = build_metric_summaries(
-            &points_per_metric,
-            &freq,
-            &HashMap::new(),
-            &HashMap::new(),
-        );
+        let summaries =
+            build_metric_summaries(&points_per_metric, &freq, &HashMap::new(), &HashMap::new());
 
         // Stable ordering by (metric_key, context_type).
         assert_eq!(summaries.len(), 2);

@@ -76,8 +76,8 @@ fn make_client() -> Client {
         .unwrap_or_else(|_| "http://localhost:8123".to_string());
     let db = std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
     let user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "stitchd".to_string());
-    let password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD")
-        .unwrap_or_else(|_| "stitchd".to_string());
+    let password =
+        std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_else(|_| "stitchd".to_string());
     Client::default()
         .with_url(url)
         .with_database(db)
@@ -91,10 +91,7 @@ async fn insert_assignments(ch: &Client, rows: &[AssignmentRow]) {
         .await
         .expect("prepare assignments insert");
     for row in rows {
-        insert
-            .write(row)
-            .await
-            .expect("write assignment row to CH");
+        insert.write(row).await.expect("write assignment row to CH");
     }
     insert.end().await.expect("finalize assignments insert");
 }
@@ -577,23 +574,21 @@ async fn aggregation_multi_context_type_groups_independently() {
     let t = assigned_at + Duration::hours(1);
     insert_events(
         &ch,
-        &[
-            EventRow {
-                env_id,
-                contexts: vec![
-                    ("user".into(), "u_alice".into()),
-                    ("account".into(), "acct_42".into()),
-                ],
-                metric_key: "view".into(),
-                value_bool: None,
-                value_int: None,
-                value_double: None,
-                timestamp: t,
-                ingested_at: t,
-                properties: vec![],
-                occurred_at: t,
-            },
-        ],
+        &[EventRow {
+            env_id,
+            contexts: vec![
+                ("user".into(), "u_alice".into()),
+                ("account".into(), "acct_42".into()),
+            ],
+            metric_key: "view".into(),
+            value_bool: None,
+            value_int: None,
+            value_double: None,
+            timestamp: t,
+            ingested_at: t,
+            properties: vec![],
+            occurred_at: t,
+        }],
     )
     .await;
 

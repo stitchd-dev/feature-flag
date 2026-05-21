@@ -67,8 +67,8 @@ fn make_client() -> Client {
         .unwrap_or_else(|_| "http://localhost:8123".to_string());
     let db = std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
     let user = std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "stitchd".to_string());
-    let password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD")
-        .unwrap_or_else(|_| "stitchd".to_string());
+    let password =
+        std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_else(|_| "stitchd".to_string());
     Client::default()
         .with_url(url)
         .with_database(db)
@@ -82,10 +82,7 @@ async fn insert_assignments(ch: &Client, rows: &[AssignmentRow]) {
         .await
         .expect("prepare assignments insert");
     for row in rows {
-        insert
-            .write(row)
-            .await
-            .expect("write assignment row to CH");
+        insert.write(row).await.expect("write assignment row to CH");
     }
     insert.end().await.expect("finalize assignments insert");
 }
@@ -240,7 +237,11 @@ async fn preview_per_day_per_context_type_per_variant() {
 
     // Expect 3 rows: (day1, user, treatment) = 2, (day1, user, control) = 1,
     // (day2, user, treatment) = 1.
-    assert_eq!(rows.len(), 3, "expected 3 (day, ctx, variant) rows: {rows:?}");
+    assert_eq!(
+        rows.len(),
+        3,
+        "expected 3 (day, ctx, variant) rows: {rows:?}"
+    );
 
     let day1_ts = day1
         .date_naive()
