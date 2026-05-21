@@ -4,6 +4,11 @@ import { useTweaks } from '../../hooks/useTweaks'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
 import { useOrgContext } from '../../context/OrgContext'
+import {
+  ContextTypeProvider,
+  useActiveContextType,
+} from '../../context/ContextTypeContext'
+import { ContextTypeTabs } from '../../components/ContextTypeTabs'
 import { getExperiment, getExperimentResults, api } from '../../lib/api'
 import type { ExperimentSummary } from '../../lib/api'
 import type { ExperimentResults } from '../../lib/types'
@@ -409,23 +414,12 @@ function ExpConfig({ display, metricNames }: { display: ExperimentDisplay; metri
 
 export function ExperimentDetail() {
   const { key } = useParams<{ key: string }>()
-  const navigate = useNavigate()
-  const { tweaks } = useTweaks()
-  const { envId, orgId } = useOrgContext()
+  const { envId } = useOrgContext()
   const [apiExp, setApiExp] = useState<ExperimentSummary | null>(null)
   const [apiResults, setApiResults] = useState<ExperimentResults | null>(null)
   const [apiLoading, setApiLoading] = useState(false)
   const [apiError, setApiError] = useState<string | null>(null)
   const [metricNames, setMetricNames] = useState<string[]>([])
-
-  // Active context type — defaults from localStorage, then first key in
-  // results_by_context_type, falling back to 'user' if results haven't
-  // loaded yet. Task 8.3 will lift this into a provider.
-  const storageKey = key ? `experiment_${key}_ctx` : null
-  const [activeContextType, setActiveContextType] = useState<string | null>(() => {
-    if (typeof window === 'undefined' || !storageKey) return null
-    return localStorage.getItem(storageKey)
-  })
 
   useEffect(() => {
     if (!envId || !key) return
@@ -455,23 +449,6 @@ export function ExperimentDetail() {
     return () => ctrl.abort()
   }, [envId, key])
 
-  // Persist active context type when it changes.
-  useEffect(() => {
-    if (storageKey && activeContextType) {
-      localStorage.setItem(storageKey, activeContextType)
-    }
-  }, [storageKey, activeContextType])
-
-  // Once results load, ensure the active context type points at a real key.
-  useEffect(() => {
-    if (!apiResults) return
-    const types = listContextTypes(apiResults)
-    if (types.length === 0) return
-    if (!activeContextType || !types.includes(activeContextType)) {
-      setActiveContextType(types[0])
-    }
-  }, [apiResults, activeContextType])
-
   // Phase 7: resolve metric IDs → names by fetching the metric list once.
   useEffect(() => {
     const ids = apiExp?.metric_ids
@@ -495,30 +472,6 @@ export function ExperimentDetail() {
     return () => ctrl.abort()
   }, [envId, apiExp])
 
-  const [tab, setTab] = useState<Tab>('results')
-  const [vizOverride, setVizOverride] = useState<'auto' | 'frequentist' | 'bayesian'>(tweaks.expViz)
-
-  // The viz toggle picks Bayesian when:
-  //   • explicit override is bayesian, OR
-  //   • auto + experiment is bayesian, OR
-  //   • global tweak is bayesian and no explicit override
-  const useBayesian =
-    vizOverride === 'bayesian' ||
-    (vizOverride === 'auto' && apiExp?.model === 'bayesian') ||
-    (vizOverride !== 'frequentist' && tweaks.expViz === 'bayesian')
-
-  // Build the display model from real API responses — Phase 9 will replace
-  // the remaining placeholder "—" / 0 fields with iteration-aware values.
-  const display = buildExperimentDisplay(apiExp, apiResults, activeContextType, useBayesian)
-  const adapter: VizAdapter = {
-    variants: display.variants,
-    confidence: display.confidence,
-  }
-
-  // Picked block — used to drive samples accurately when results are present.
-  const picked = pickContextTypeResult(apiResults, activeContextType)
-  const sampleCount = picked?.block.variants.reduce((a, v) => a + (v.sample_size ?? 0), 0) ?? 0
-
   if (apiLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
@@ -538,9 +491,69 @@ export function ExperimentDetail() {
     )
   }
 
+  // Context types come from the results envelope when present, otherwise fall
+  // back to ['user'] so the provider has at least one valid value.
+  const contextTypes = listContextTypes(apiResults)
+  const resolvedContextTypes = contextTypes.length > 0 ? contextTypes : ['user']
+
+  return (
+    <ContextTypeProvider
+      contextTypes={resolvedContextTypes}
+      experimentId={apiExp.key}
+    >
+      <ExperimentDetailBody
+        apiExp={apiExp}
+        apiResults={apiResults}
+        metricNames={metricNames}
+      />
+    </ContextTypeProvider>
+  )
+}
+
+interface BodyProps {
+  apiExp: ExperimentSummary
+  apiResults: ExperimentResults | null
+  metricNames: string[]
+}
+
+function ExperimentDetailBody({ apiExp, apiResults, metricNames }: BodyProps) {
+  const navigate = useNavigate()
+  const { tweaks } = useTweaks()
+  const { orgId } = useOrgContext()
+  const { contextTypes, activeContextType, setActiveContextType } =
+    useActiveContextType()
+
+  const [tab, setTab] = useState<Tab>('results')
+  const [vizOverride, setVizOverride] = useState<'auto' | 'frequentist' | 'bayesian'>(tweaks.expViz)
+
+  // The viz toggle picks Bayesian when:
+  //   • explicit override is bayesian, OR
+  //   • auto + experiment is bayesian, OR
+  //   • global tweak is bayesian and no explicit override
+  const useBayesian =
+    vizOverride === 'bayesian' ||
+    (vizOverride === 'auto' && apiExp.model === 'bayesian') ||
+    (vizOverride !== 'frequentist' && tweaks.expViz === 'bayesian')
+
+  // Build the display model from real API responses — Phase 9 will replace
+  // the remaining placeholder "—" / 0 fields with iteration-aware values.
+  const display = buildExperimentDisplay(apiExp, apiResults, activeContextType, useBayesian)
+  const adapter: VizAdapter = {
+    variants: display.variants,
+    confidence: display.confidence,
+  }
+
+  // Picked block — used to drive samples accurately when results are present.
+  const picked = pickContextTypeResult(apiResults, activeContextType)
+  const sampleCount = picked?.block.variants.reduce((a, v) => a + (v.sample_size ?? 0), 0) ?? 0
+
   const displayName = apiExp.name
   const displayKey = apiExp.key
   const displayStatus = apiExp.status
+
+  // Show the context-type switcher only when results actually carry more than
+  // one context type — otherwise the picker would have a single static option.
+  const showCtxSwitcher = contextTypes.length > 1
 
   return (
     <>
@@ -564,6 +577,26 @@ export function ExperimentDetail() {
         }
       />
       <div className="page-body">
+        {showCtxSwitcher && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              marginBottom: 14,
+              fontSize: 12,
+              color: 'var(--fg-muted)',
+            }}
+          >
+            <span>Context type</span>
+            <ContextTypeTabs
+              contextTypes={contextTypes}
+              activeContextType={activeContextType}
+              onChange={setActiveContextType}
+            />
+          </div>
+        )}
+
         <div className="tabs">
           <button className={`tab ${tab === 'results' ? 'active' : ''}`} onClick={() => setTab('results')}>Results</button>
           <button className={`tab ${tab === 'config' ? 'active' : ''}`} onClick={() => setTab('config')}>Configuration</button>

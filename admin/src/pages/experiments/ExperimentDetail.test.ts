@@ -14,17 +14,18 @@
  *      `getExperimentResults` (Phase 8.1 contracts).
  *   3. The page imports `buildExperimentDisplay` from the helper module so
  *      derivations run through the unit-tested folder.
+ *   4. (Task 8.3) The page wraps its body with `ContextTypeProvider` and
+ *      renders the `ContextTypeTabs` primitive — verified by import shape.
  *
  * Phase 9 will add interaction tests when (and if) jsdom + Testing Library
  * are introduced — until then, the helper layer is the testable seam and
  * `ExperimentDetail.helpers.test.ts` already covers every derivation branch.
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
-
-const SOURCE_PATH = resolve(__dirname, 'ExperimentDetail.tsx')
-const SOURCE = readFileSync(SOURCE_PATH, 'utf8')
+// Vite raw-import: pulls the source file in as a literal string at build
+// time. Avoids pulling in node:fs/path types from `@types/node` (which is
+// not in `tsconfig.app.json`'s `types` array).
+import SOURCE from './ExperimentDetail.tsx?raw'
 
 describe('ExperimentDetail (page module)', () => {
   it('does not import the EXPERIMENTS mock', () => {
@@ -45,13 +46,16 @@ describe('ExperimentDetail (page module)', () => {
     expect(SOURCE).toMatch(/from\s+['"]\.\/ExperimentDetail\.helpers['"]/)
   })
 
-  it('reads context-type from localStorage with the documented key shape', () => {
-    // Active-context-type is persisted under experiment_${key}_ctx (matches
-    // the spec for Task 8.3, which lifts this into a provider).
-    expect(SOURCE).toMatch(/experiment_.*_ctx/)
-  })
-
   it('uses Promise.all to load the experiment + results concurrently', () => {
     expect(SOURCE).toMatch(/Promise\.all/)
+  })
+
+  it('wraps the body with ContextTypeProvider (Task 8.3)', () => {
+    expect(SOURCE).toMatch(/ContextTypeProvider/)
+    expect(SOURCE).toMatch(/useActiveContextType/)
+  })
+
+  it('renders the ContextTypeTabs primitive (Task 8.3)', () => {
+    expect(SOURCE).toMatch(/ContextTypeTabs/)
   })
 })
