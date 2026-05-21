@@ -87,6 +87,7 @@ use utoipa::{
         // Stats recompute
         crate::routes::stats::trigger_recompute,
         crate::routes::stats::get_job_status,
+        crate::routes::stats::get_timeseries,
     ),
     components(
         schemas(
@@ -173,6 +174,9 @@ use utoipa::{
             // Stats
             crate::routes::stats::RecomputeJobJson,
             crate::routes::stats::JobStatusJson,
+            crate::routes::stats::GetTimeseriesQuery,
+            crate::routes::stats::TimeseriesBucketJson,
+            crate::routes::stats::GetTimeseriesResponseJson,
         )
     ),
     modifiers(&SecurityAddon)

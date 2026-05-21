@@ -2,15 +2,17 @@
 
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
-use stitchd_proto::stats::v1::{GetJobStatusRequest, TriggerRecomputeRequest};
+use stitchd_proto::stats::v1::{
+    GetExperimentTimeseriesRequest, GetJobStatusRequest, TriggerRecomputeRequest,
+};
 
 use crate::error::GatewayError;
 use crate::state::GatewayState;
@@ -103,4 +105,180 @@ pub async fn get_job_status(
         completed_at_ms: resp.completed_at_ms,
         error: resp.error,
     }))
+}
+
+// ─── Timeseries (Phase 7 Task 3) ──────────────────────────────────────────────
+
+/// Query parameters for `GET /timeseries`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct GetTimeseriesQuery {
+    /// REQUIRED — UUID of the saved metric_definitions row.
+    pub metric_id: Option<String>,
+    /// REQUIRED — one of the experiment's `unit_context_types`.
+    pub context_type: Option<String>,
+    /// Days of history to query; default 7, clamped to [1, 90].
+    pub days: Option<u32>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct TimeseriesBucketJson {
+    pub day: String,
+    pub variant_key: String,
+    pub value: f64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct GetTimeseriesResponseJson {
+    pub buckets: Vec<TimeseriesBucketJson>,
+}
+
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/timeseries`
+///
+/// Per-variant daily series for one metric scoped to a context type.
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/timeseries",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+        ("metric_id" = String, Query, description = "REQUIRED. Metric definition UUID."),
+        ("context_type" = String, Query, description = "REQUIRED. Attribution unit."),
+        ("days" = Option<u32>, Query, description = "Window in days (default 7, clamped to [1, 90])"),
+    ),
+    responses(
+        (status = 200, description = "Daily per-variant series", body = GetTimeseriesResponseJson),
+        (status = 400, description = "Missing required query parameter"),
+        (status = 404, description = "Metric not found"),
+        (status = 502, description = "Stats service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_timeseries(
+    State(state): State<Arc<GatewayState>>,
+    Path((_environment_id, experiment_id)): Path<(String, String)>,
+    Query(query): Query<GetTimeseriesQuery>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let context_type = query.context_type.unwrap_or_default();
+    if context_type.is_empty() {
+        return Err(GatewayError::MissingContextType);
+    }
+    let metric_id = query.metric_id.unwrap_or_default();
+    if metric_id.is_empty() {
+        return Err(GatewayError::MissingMetricId);
+    }
+    let days = query.days.unwrap_or(7);
+
+    let req = GetExperimentTimeseriesRequest {
+        experiment_id,
+        metric_id,
+        context_type,
+        days,
+    };
+    let mut client = state.stats_client.lock().await;
+    let resp = client
+        .get_experiment_timeseries(req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+
+    let buckets: Vec<TimeseriesBucketJson> = resp
+        .buckets
+        .into_iter()
+        .map(|b| TimeseriesBucketJson {
+            day: b.day,
+            variant_key: b.variant_key,
+            value: b.value,
+        })
+        .collect();
+
+    Ok(Json(GetTimeseriesResponseJson { buckets }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::helpers::make_stub_state;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use tower::ServiceExt as _;
+
+    fn timeseries_router() -> axum::Router {
+        let state = make_stub_state();
+        axum::Router::new()
+            .route(
+                "/v1/environments/{environment_id}/experiments/{experiment_id}/timeseries",
+                get(get_timeseries),
+            )
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn timeseries_missing_metric_id_returns_400() {
+        let app = timeseries_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/v1/environments/env-1/experiments/exp-1/timeseries?context_type=user",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["error"], "missing_metric_id");
+    }
+
+    #[tokio::test]
+    async fn timeseries_missing_context_type_returns_400() {
+        let app = timeseries_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/v1/environments/env-1/experiments/exp-1/timeseries?metric_id=m1",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["error"], "missing_context_type");
+    }
+
+    #[tokio::test]
+    async fn timeseries_with_required_params_proxies_to_grpc() {
+        // grpc connection is lazy and fails fast → 502 expected.
+        let app = timeseries_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/v1/environments/env-1/experiments/exp-1/timeseries?metric_id=m1&context_type=user&days=14",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK
+                || resp.status() == StatusCode::BAD_GATEWAY
+                || resp.status() == StatusCode::INTERNAL_SERVER_ERROR,
+            "got {}",
+            resp.status()
+        );
+    }
 }

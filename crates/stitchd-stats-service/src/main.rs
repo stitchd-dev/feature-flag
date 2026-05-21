@@ -97,9 +97,10 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Context registry refresh loop (15-min cadence) ────────────────────────
     let registry_pool = pg_pool.clone();
+    let registry_ch_client = ch_client.clone();
     tokio::spawn(async move {
         let refresher = ContextRegistryRefresher::new(
-            Arc::new(ClickHouseEvalLogSource::new(ch_client)),
+            Arc::new(ClickHouseEvalLogSource::new(registry_ch_client)),
             Arc::new(PgContextRegistryRepository::new(registry_pool)),
         );
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(900)); // 15 min
@@ -178,7 +179,24 @@ async fn main() -> anyhow::Result<()> {
         .set_serving::<StatsServiceServer<StatsServiceImpl>>()
         .await;
 
-    let stats_svc = StatsServiceImpl::new(pg_pool.clone());
+    // ── Timeseries reader (Phase 7 Task 3) ────────────────────────────────────
+    use stitchd_db::{PgExperimentRepository, PgMetricRepository};
+    use stitchd_stats_service::timeseries_reader::ClickHouseTimeseriesReader;
+    let audit: Arc<dyn stitchd_db::AuditLogger> =
+        Arc::new(stitchd_db::PgAuditLogger::new(pg_pool.clone()));
+    let metric_repo: Arc<dyn stitchd_db::MetricRepository> = Arc::new(
+        PgMetricRepository::new(pg_pool.clone(), audit.clone()),
+    );
+    let experiment_repo: Arc<dyn stitchd_db::ExperimentRepository> =
+        Arc::new(PgExperimentRepository::new(pg_pool.clone(), audit));
+    let timeseries_reader = Arc::new(ClickHouseTimeseriesReader::new(
+        Arc::new(ch_client.clone()),
+        metric_repo,
+        experiment_repo,
+    ));
+
+    let stats_svc =
+        StatsServiceImpl::new(pg_pool.clone()).with_timeseries_reader(timeseries_reader);
 
     tokio::spawn(
         Server::builder()
