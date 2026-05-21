@@ -4109,6 +4109,7 @@ dependencies = [
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
+ "moka",
  "prost",
  "semver",
  "serde",

@@ -674,6 +674,31 @@ impl ExperimentRepository for PgExperimentRepository {
         Ok(rows.iter().map(row_to_experiment).collect())
     }
 
+    async fn find_active_experiment_for_flag(
+        &self,
+        flag_id: FlagId,
+    ) -> Result<Option<ExperimentId>, RepositoryError> {
+        use sqlx::Row as _;
+        // Per-flag uniqueness (idx_experiments_one_active_per_flag) guarantees
+        // at most one row here; we still LIMIT 1 defensively.
+        let row = sqlx::query(
+            r"
+            SELECT id
+            FROM experiments
+            WHERE flag_id = $1
+              AND status IN ('running', 'paused')
+              AND deleted_at IS NULL
+            LIMIT 1
+            ",
+        )
+        .bind(flag_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        Ok(row.map(|r| ExperimentId::from_uuid(r.get("id"))))
+    }
+
     async fn find_iteration_by_id(
         &self,
         iteration_id: ExperimentIterationId,

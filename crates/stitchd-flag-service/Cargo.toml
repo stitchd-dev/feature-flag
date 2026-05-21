@@ -34,6 +34,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 chrono = { workspace = true }
 clickhouse = { workspace = true }
+moka = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

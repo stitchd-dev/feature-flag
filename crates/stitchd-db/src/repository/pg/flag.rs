@@ -411,6 +411,10 @@ impl FlagRepository for PgFlagRepository {
         Ok(())
     }
 
+    // SQL + result-mapping + version-conflict probe + audit-log call exceed the
+    // 80-line clippy threshold; the function is still a single linear step
+    // sequence and splitting it hurts readability more than it helps.
+    #[allow(clippy::too_many_lines)]
     async fn update(&self, flag: &FlagRecord) -> Result<FlagRecord, RepositoryError> {
         let new_version = flag.version + 1;
         let value_type = flag_value_type_to_str(flag.value_type);

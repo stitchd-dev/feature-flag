@@ -21,8 +21,8 @@ use anyhow::Context as _;
 use clickhouse::Client as ChClient;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use stitchd_db::{
-    CompositeSegmentRepository, PgEventDefinitionRepository, PgFlagRepository, PgSdkKeyRepository,
-    PgSegmentRepository, PgVariantRepository,
+    CompositeSegmentRepository, PgEventDefinitionRepository, PgExperimentRepository,
+    PgFlagRepository, PgSdkKeyRepository, PgSegmentRepository, PgVariantRepository,
     scylla::{ScyllaConfig, segment::ScyllaSegmentStore},
 };
 use stitchd_flag_service::sdk_backend::FlagSdkBackendServiceImpl;
@@ -69,6 +69,9 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PgVariantRepository::new(pool.clone(), audit_raw.clone()));
     let sdk_key_repo: Arc<dyn stitchd_db::SdkKeyRepository> =
         Arc::new(PgSdkKeyRepository::new(pool.clone(), audit_raw.clone()));
+    // Experiment repo backs the whole-flag lock helper (`is_flag_locked`).
+    let experiment_repo: Arc<dyn stitchd_db::ExperimentRepository> =
+        Arc::new(PgExperimentRepository::new(pool.clone(), audit_raw.clone()));
     // ── ScyllaDB (list-segment membership reads) ──────────────────────────────
     let scylla_config = ScyllaConfig::from_env();
     tracing::info!(
@@ -119,7 +122,8 @@ async fn main() -> anyhow::Result<()> {
         sdk_key_repo,
         Arc::clone(&segment_repo),
     )
-    .with_clickhouse(Arc::clone(&ch_client));
+    .with_clickhouse(Arc::clone(&ch_client))
+    .with_experiment_repo(Arc::clone(&experiment_repo));
 
     let sdk_backend_svc = FlagSdkBackendServiceImpl::new(
         Arc::clone(&flag_repo),

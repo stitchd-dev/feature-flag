@@ -8,7 +8,15 @@ use axum::{
 use serde_json::json;
 use thiserror::Error;
 
-/// Top-level gateway error.
+/// Sentinel prefix used by the flag-service to encode the locking
+/// experiment ID into a `tonic::Status::failed_precondition` message so
+/// this gateway can rebuild the structured 409 body.
+const FLAG_LOCKED_STATUS_PREFIX: &str = "flag_locked_by_experiment:";
+
+/// Structured error variants returned by gateway handlers. The
+/// `*StructuredCode` variants surface a stable `error` discriminator in
+/// the JSON body so the admin UI / SDK can branch without parsing the
+/// human-readable message.
 #[derive(Debug, Error)]
 pub enum GatewayError {
     /// Authentication failed — invalid or missing credentials.
@@ -27,6 +35,29 @@ pub enum GatewayError {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    /// The targeted flag is locked because a running/paused experiment is
+    /// bound to it. Surfaced as HTTP 409 with body
+    /// `{ "error": "flag_locked_by_experiment", "experiment_id": "<uuid>", "message": "..." }`.
+    ///
+    /// The downstream flag-service produces this via the
+    /// `flag_locked_by_experiment:<uuid>` sentinel prefix on its
+    /// `tonic::Status::failed_precondition` message; see
+    /// `stitchd_flag_service::error::FLAG_LOCKED_STATUS_PREFIX`.
+    #[error("flag locked by experiment {experiment_id}")]
+    FlagLockedByExperiment { experiment_id: String },
+
+    /// One of the experiment-binding invariants was violated at create /
+    /// update time. Mapped to HTTP 422 with body
+    /// `{ "error": "<structured_code>", "message": "..." }`.
+    ///
+    /// `code` is one of:
+    /// - `invalid_rule_kind`
+    /// - `invalid_default_rule_kind`
+    /// - `empty_unit_context_types`
+    /// - `unknown_context_type`
+    #[error("experiment binding invariant violated: {code}")]
+    ExperimentBindingInvalid { code: &'static str, message: String },
+
     /// A gRPC transport or internal error.
     #[error("upstream error: {0}")]
     Upstream(String),
@@ -38,6 +69,15 @@ pub enum GatewayError {
 
 impl From<tonic::Status> for GatewayError {
     fn from(s: tonic::Status) -> Self {
+        // Decode the flag-lock sentinel before the generic
+        // FailedPrecondition → Conflict mapping kicks in.
+        if s.code() == tonic::Code::FailedPrecondition
+            && let Some(rest) = s.message().strip_prefix(FLAG_LOCKED_STATUS_PREFIX)
+        {
+            return GatewayError::FlagLockedByExperiment {
+                experiment_id: rest.trim().to_string(),
+            };
+        }
         match s.code() {
             tonic::Code::Unauthenticated => GatewayError::Unauthorized(s.message().to_string()),
             tonic::Code::PermissionDenied => GatewayError::Unauthorized(s.message().to_string()),
@@ -51,16 +91,39 @@ impl From<tonic::Status> for GatewayError {
 
 impl IntoResponse for GatewayError {
     fn into_response(self) -> Response {
-        let (status, msg) = match &self {
-            GatewayError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
-            GatewayError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
-            GatewayError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
-            GatewayError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
-            GatewayError::Upstream(m) => (StatusCode::BAD_GATEWAY, m.clone()),
-            GatewayError::InvalidBody(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
-        };
-        let body = Json(json!({ "error": msg }));
-        (status, body).into_response()
+        match self {
+            GatewayError::FlagLockedByExperiment { experiment_id } => {
+                let body = Json(json!({
+                    "error": "flag_locked_by_experiment",
+                    "message": format!(
+                        "This flag is locked by experiment {experiment_id} (running or paused). Stop the experiment to modify the flag."
+                    ),
+                    "experiment_id": experiment_id,
+                }));
+                (StatusCode::CONFLICT, body).into_response()
+            }
+            GatewayError::ExperimentBindingInvalid { code, message } => {
+                let body = Json(json!({
+                    "error": code,
+                    "message": message,
+                }));
+                (StatusCode::UNPROCESSABLE_ENTITY, body).into_response()
+            }
+            other => {
+                let (status, msg) = match &other {
+                    GatewayError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
+                    GatewayError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
+                    GatewayError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+                    GatewayError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
+                    GatewayError::Upstream(m) => (StatusCode::BAD_GATEWAY, m.clone()),
+                    GatewayError::InvalidBody(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
+                    GatewayError::FlagLockedByExperiment { .. }
+                    | GatewayError::ExperimentBindingInvalid { .. } => unreachable!(),
+                };
+                let body = Json(json!({ "error": msg }));
+                (status, body).into_response()
+            }
+        }
     }
 }
 
@@ -131,5 +194,47 @@ mod tests {
         let s = tonic::Status::internal("server exploded");
         let err = GatewayError::from(s);
         assert!(matches!(err, GatewayError::Upstream(_)));
+    }
+
+    #[test]
+    fn flag_locked_status_decodes_to_structured_variant() {
+        let s = tonic::Status::failed_precondition(format!(
+            "{FLAG_LOCKED_STATUS_PREFIX}11111111-1111-1111-1111-111111111111"
+        ));
+        let err = GatewayError::from(s);
+        match err {
+            GatewayError::FlagLockedByExperiment { experiment_id } => {
+                assert_eq!(experiment_id, "11111111-1111-1111-1111-111111111111");
+            }
+            other => panic!("expected FlagLockedByExperiment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flag_locked_response_is_409_with_structured_body() {
+        let err = GatewayError::FlagLockedByExperiment {
+            experiment_id: "exp-123".to_string(),
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn experiment_binding_response_is_422() {
+        let err = GatewayError::ExperimentBindingInvalid {
+            code: "invalid_rule_kind",
+            message: "rule must be percentage rollout".to_string(),
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn plain_failed_precondition_still_maps_to_conflict() {
+        // A FailedPrecondition without the flag-lock prefix should keep the
+        // generic Conflict (409) mapping for back-compat.
+        let s = tonic::Status::failed_precondition("revoke last active sdk key");
+        let err = GatewayError::from(s);
+        assert!(matches!(err, GatewayError::Conflict(_)));
     }
 }
