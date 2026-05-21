@@ -6,7 +6,38 @@
 //! - **Percentile** — Bootstrap posterior approximation
 //! - **Funnel** — Beta-Binomial on final-step conversion rate
 
+use serde::{Deserialize, Serialize};
+
 use super::{BayesianResult, ConfidenceInterval, VariantStats};
+
+// ── Per-variant Bayesian result (spec §3) ─────────────────────────────────────
+
+/// Spec-aligned per-variant Bayesian result, as surfaced in the experiment
+/// results JSON. One row per variant in the experiment — including the
+/// control, for which `probability_to_beat_control = 0.5` and
+/// `expected_lift = 0.0` (it's compared against itself).
+///
+/// Distinct from the legacy [`BayesianResult`] (in `stats::mod`) which is a
+/// single aggregate per-metric struct; this is one entry per variant, matching
+/// the shape the UI consumes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BayesianVariantResult {
+    /// Variant identifier.
+    pub variant_key: String,
+    /// Mean of the posterior over this variant's metric value (rate for
+    /// Beta-Binomial, mean for Normal-Normal).
+    pub posterior_mean: f64,
+    /// 95 % credible-interval lower bound on the posterior.
+    pub posterior_ci_lower: f64,
+    /// 95 % credible-interval upper bound on the posterior.
+    pub posterior_ci_upper: f64,
+    /// Probability that this variant beats the control on its metric.
+    /// For the control row itself, by convention 0.5.
+    pub probability_to_beat_control: f64,
+    /// Expected `treatment − control` lift. For the control row, 0.0.
+    pub expected_lift: f64,
+}
 
 // ── Simple LCG RNG ───────────────────────────────────────────────────────────
 
@@ -364,6 +395,200 @@ fn beta_binomial_mc(
         credible_interval: ConfidenceInterval { lower, upper },
         expected_loss,
     }
+}
+
+// ── Per-variant input shapes ─────────────────────────────────────────────────
+
+/// One Beta-Binomial datapoint for [`beta_binomial`].
+#[derive(Debug, Clone)]
+pub struct BetaBinomialInput {
+    /// Variant identifier.
+    pub variant_key: String,
+    /// Number of successes / conversions.
+    pub successes: u64,
+    /// Total number of trials / exposed contexts.
+    pub trials: u64,
+}
+
+/// One Normal-Normal datapoint for [`normal_normal`].
+#[derive(Debug, Clone)]
+pub struct NormalNormalInput {
+    /// Variant identifier.
+    pub variant_key: String,
+    /// Sample mean of the metric.
+    pub mean: f64,
+    /// Sample variance of the metric (not standard deviation).
+    pub variance: f64,
+    /// Sample size.
+    pub n: u64,
+}
+
+// ── Spec-aligned public API ──────────────────────────────────────────────────
+
+/// Number of Monte Carlo samples used when estimating
+/// `probability_to_beat_control` and `expected_lift` against a control
+/// posterior. 10,000 samples are sufficient for the per-variant outputs we
+/// surface (~1 % stderr).
+const MC_SAMPLES: usize = 10_000;
+
+/// RNG seed used for reproducibility across calls. Tests pin against this
+/// seed; production callers see deterministic outputs for a fixed input.
+const MC_SEED: u64 = 0x00C0_FFEE_5EED;
+
+/// Bayesian inference for a proportion metric (conversion, retention, …)
+/// using a Beta-Binomial conjugate posterior.
+///
+/// Prior: Beta(1, 1) (uniform). Posterior: Beta(1 + successes, 1 + trials -
+/// successes). The first entry in `inputs` is treated as the control; one
+/// row is returned per input in the order supplied.
+///
+/// Probability-to-beat-control and expected lift are estimated via
+/// `MC_SAMPLES` Monte Carlo draws against the control posterior. The control
+/// row gets `probability_to_beat_control = 0.5` and `expected_lift = 0.0` by
+/// convention.
+///
+/// Returns an empty `Vec` if `inputs` is empty.
+pub fn beta_binomial(inputs: &[BetaBinomialInput]) -> Vec<BayesianVariantResult> {
+    if inputs.is_empty() {
+        return vec![];
+    }
+    let mut rng = Lcg::new(MC_SEED);
+
+    // Pre-sample control posterior to compute per-variant probabilities + lifts.
+    let control = &inputs[0];
+    let (alpha_c, beta_c) = beta_posterior(control.successes, control.trials);
+    let control_samples: Vec<f64> = (0..MC_SAMPLES)
+        .map(|_| sample_beta(alpha_c, beta_c, &mut rng))
+        .collect();
+
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(idx, input)| {
+            let (alpha, beta) = beta_posterior(input.successes, input.trials);
+
+            // Posterior mean = α / (α + β).
+            let posterior_mean = alpha / (alpha + beta);
+
+            // 95 % credible interval via MC quantiles on the posterior itself.
+            let mut samples: Vec<f64> = (0..MC_SAMPLES)
+                .map(|_| sample_beta(alpha, beta, &mut rng))
+                .collect();
+            samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let lower = percentile_sorted(&samples, 2.5);
+            let upper = percentile_sorted(&samples, 97.5);
+
+            let (probability_to_beat_control, expected_lift) = if idx == 0 {
+                (0.5, 0.0)
+            } else {
+                // Reuse control's pre-drawn samples; pair each control draw with
+                // a fresh variant draw to estimate P(variant > control) and
+                // E[variant - control].
+                let mut wins = 0_usize;
+                let mut sum_lift = 0.0_f64;
+                for &c in &control_samples {
+                    let v = sample_beta(alpha, beta, &mut rng);
+                    if v > c {
+                        wins += 1;
+                    }
+                    sum_lift += v - c;
+                }
+                let ptb = wins as f64 / control_samples.len() as f64;
+                let lift = sum_lift / control_samples.len() as f64;
+                (ptb, lift)
+            };
+
+            BayesianVariantResult {
+                variant_key: input.variant_key.clone(),
+                posterior_mean,
+                posterior_ci_lower: lower,
+                posterior_ci_upper: upper,
+                probability_to_beat_control,
+                expected_lift,
+            }
+        })
+        .collect()
+}
+
+/// Bayesian inference for a continuous metric using a Normal-Normal
+/// approximation.
+///
+/// Uses a weak (effectively flat) prior so the posterior is dominated by the
+/// data: `post_mean = sample_mean`, `post_var = sample_var / n`. The
+/// difference distribution `treatment − control` is then
+/// `N(mean_t − mean_c, post_var_t + post_var_c)`, from which we derive the
+/// probability-to-beat and 95 % credible interval analytically.
+///
+/// The first entry in `inputs` is the control. The control row gets
+/// `probability_to_beat_control = 0.5` and `expected_lift = 0.0`.
+///
+/// Returns an empty `Vec` if `inputs` is empty.
+pub fn normal_normal(inputs: &[NormalNormalInput]) -> Vec<BayesianVariantResult> {
+    if inputs.is_empty() {
+        return vec![];
+    }
+    const Z95: f64 = 1.959_964; // Φ⁻¹(0.975)
+    let control = &inputs[0];
+    let control_post_var = posterior_variance(control.variance, control.n);
+
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(idx, input)| {
+            let posterior_mean = input.mean;
+            let post_var = posterior_variance(input.variance, input.n);
+            let se = post_var.sqrt();
+            let lower = posterior_mean - Z95 * se;
+            let upper = posterior_mean + Z95 * se;
+
+            let (probability_to_beat_control, expected_lift) = if idx == 0 {
+                (0.5, 0.0)
+            } else {
+                let diff = input.mean - control.mean;
+                let diff_var = post_var + control_post_var;
+                let diff_se = diff_var.sqrt();
+                let ptb = if diff_se == 0.0 {
+                    if diff > 0.0 {
+                        1.0
+                    } else if diff < 0.0 {
+                        0.0
+                    } else {
+                        0.5
+                    }
+                } else {
+                    1.0 - normal_cdf(-diff / diff_se)
+                };
+                (ptb, diff)
+            };
+
+            BayesianVariantResult {
+                variant_key: input.variant_key.clone(),
+                posterior_mean,
+                posterior_ci_lower: lower,
+                posterior_ci_upper: upper,
+                probability_to_beat_control,
+                expected_lift,
+            }
+        })
+        .collect()
+}
+
+/// Posterior parameters for Beta(1+successes, 1+trials-successes) — clamped
+/// so a zero-trials input still produces a defined Beta(1, 1).
+fn beta_posterior(successes: u64, trials: u64) -> (f64, f64) {
+    let s = successes as f64;
+    let n = trials as f64;
+    let alpha = 1.0 + s;
+    let beta = 1.0 + (n - s).max(0.0);
+    (alpha, beta)
+}
+
+/// Posterior variance for the Normal-Normal weak-prior approximation:
+/// `var / n`. `n = 0` is treated as `n = 1` to avoid division-by-zero (the
+/// posterior is then equal to the sample variance).
+fn posterior_variance(variance: f64, n: u64) -> f64 {
+    let n = (n as f64).max(1.0);
+    variance.max(0.0) / n
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -747,6 +972,202 @@ mod tests {
             (mean - 0.5).abs() < 0.05,
             "Gamma(0.5) mean ≈ 0.5, got {mean}"
         );
+    }
+
+    // ── beta_binomial spec-aligned API ────────────────────────────────────────
+
+    #[test]
+    fn beta_binomial_empty_returns_empty() {
+        let r = beta_binomial(&[]);
+        assert!(r.is_empty());
+    }
+
+    /// 100/1000 vs 110/1000 — treatment likely wins but not certain.
+    /// PtB should land in [0.7, 0.9].
+    #[test]
+    fn beta_binomial_modest_lift_ptb_in_range() {
+        let inputs = vec![
+            BetaBinomialInput {
+                variant_key: "control".into(),
+                successes: 100,
+                trials: 1000,
+            },
+            BetaBinomialInput {
+                variant_key: "treatment".into(),
+                successes: 110,
+                trials: 1000,
+            },
+        ];
+        let r = beta_binomial(&inputs);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0].variant_key, "control");
+        assert_eq!(r[0].probability_to_beat_control, 0.5);
+        assert_eq!(r[0].expected_lift, 0.0);
+        assert!(
+            r[1].probability_to_beat_control > 0.7 && r[1].probability_to_beat_control < 0.9,
+            "PtB should be in (0.7, 0.9), got {}",
+            r[1].probability_to_beat_control
+        );
+        // Posterior mean ≈ (1 + successes) / (2 + trials) = 111/1002 ≈ 0.1108
+        assert!((r[1].posterior_mean - 0.1108).abs() < 0.001);
+        // CI bounded and ordered.
+        assert!(r[1].posterior_ci_lower < r[1].posterior_ci_upper);
+        // Expected lift positive (~0.01).
+        assert!(r[1].expected_lift > 0.0 && r[1].expected_lift < 0.05);
+    }
+
+    /// 100/1000 vs 200/1000 — huge effect, PtB virtually 1.
+    #[test]
+    fn beta_binomial_huge_lift_ptb_near_one() {
+        let inputs = vec![
+            BetaBinomialInput {
+                variant_key: "control".into(),
+                successes: 100,
+                trials: 1000,
+            },
+            BetaBinomialInput {
+                variant_key: "treatment".into(),
+                successes: 200,
+                trials: 1000,
+            },
+        ];
+        let r = beta_binomial(&inputs);
+        assert!(
+            r[1].probability_to_beat_control > 0.999,
+            "PtB should be > 0.999, got {}",
+            r[1].probability_to_beat_control
+        );
+        assert!(r[1].expected_lift > 0.08 && r[1].expected_lift < 0.12);
+    }
+
+    /// Three-variant Beta-Binomial: control + 2 treatments. Both rows
+    /// returned, both compared to control.
+    #[test]
+    fn beta_binomial_multi_variant() {
+        let inputs = vec![
+            BetaBinomialInput {
+                variant_key: "control".into(),
+                successes: 100,
+                trials: 1000,
+            },
+            BetaBinomialInput {
+                variant_key: "treat_a".into(),
+                successes: 150,
+                trials: 1000,
+            },
+            BetaBinomialInput {
+                variant_key: "treat_b".into(),
+                successes: 130,
+                trials: 1000,
+            },
+        ];
+        let r = beta_binomial(&inputs);
+        assert_eq!(r.len(), 3);
+        assert!(r[1].probability_to_beat_control > r[2].probability_to_beat_control);
+        assert!(r[1].expected_lift > r[2].expected_lift);
+    }
+
+    // ── normal_normal spec-aligned API ────────────────────────────────────────
+
+    #[test]
+    fn normal_normal_empty_returns_empty() {
+        assert!(normal_normal(&[]).is_empty());
+    }
+
+    /// Equal means → PtB ≈ 0.5.
+    #[test]
+    fn normal_normal_equal_means_ptb_near_half() {
+        let inputs = vec![
+            NormalNormalInput {
+                variant_key: "control".into(),
+                mean: 50.0,
+                variance: 100.0,
+                n: 1000,
+            },
+            NormalNormalInput {
+                variant_key: "treatment".into(),
+                mean: 50.0,
+                variance: 100.0,
+                n: 1000,
+            },
+        ];
+        let r = normal_normal(&inputs);
+        assert!(
+            (r[1].probability_to_beat_control - 0.5).abs() < 1e-6,
+            "expected PtB ≈ 0.5, got {}",
+            r[1].probability_to_beat_control
+        );
+        assert_eq!(r[1].expected_lift, 0.0);
+    }
+
+    /// Treatment is +1σ above control where σ is the difference-distribution
+    /// stderr — PtB should be ≈ 0.84 (Φ(1)).
+    #[test]
+    fn normal_normal_one_sigma_lift_ptb_near_84() {
+        // post_var_c = 100 / 1000 = 0.1; post_var_t = 100 / 1000 = 0.1
+        // diff_var = 0.2; diff_se = sqrt(0.2) ≈ 0.4472
+        // Set mean_t - mean_c = diff_se → PtB = Φ(1) ≈ 0.8413.
+        let diff_se = (0.2_f64).sqrt();
+        let inputs = vec![
+            NormalNormalInput {
+                variant_key: "control".into(),
+                mean: 50.0,
+                variance: 100.0,
+                n: 1000,
+            },
+            NormalNormalInput {
+                variant_key: "treatment".into(),
+                mean: 50.0 + diff_se,
+                variance: 100.0,
+                n: 1000,
+            },
+        ];
+        let r = normal_normal(&inputs);
+        assert!(
+            (r[1].probability_to_beat_control - 0.8413).abs() < 0.005,
+            "expected PtB ≈ 0.8413, got {}",
+            r[1].probability_to_beat_control
+        );
+    }
+
+    /// Control row has PtB = 0.5, expected_lift = 0; posterior_mean = sample_mean.
+    #[test]
+    fn normal_normal_control_row_has_fixed_zero_lift() {
+        let inputs = vec![NormalNormalInput {
+            variant_key: "control".into(),
+            mean: 42.0,
+            variance: 16.0,
+            n: 100,
+        }];
+        let r = normal_normal(&inputs);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].probability_to_beat_control, 0.5);
+        assert_eq!(r[0].expected_lift, 0.0);
+        assert_eq!(r[0].posterior_mean, 42.0);
+        // CI: post_se = sqrt(16 / 100) = 0.4 → ± 1.96 * 0.4 = ± 0.784
+        assert!((r[0].posterior_ci_lower - 41.216).abs() < 0.01);
+        assert!((r[0].posterior_ci_upper - 42.784).abs() < 0.01);
+    }
+
+    /// BayesianVariantResult round-trips through serde JSON with snake_case
+    /// keys matching the spec.
+    #[test]
+    fn bayesian_variant_result_serializes_to_snake_case() {
+        let r = BayesianVariantResult {
+            variant_key: "treatment".into(),
+            posterior_mean: 0.12,
+            posterior_ci_lower: 0.08,
+            posterior_ci_upper: 0.16,
+            probability_to_beat_control: 0.82,
+            expected_lift: 0.02,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert!(v.get("variant_key").is_some());
+        assert!(v.get("posterior_mean").is_some());
+        assert!(v.get("posterior_ci_lower").is_some());
+        assert!(v.get("posterior_ci_upper").is_some());
+        assert!(v.get("probability_to_beat_control").is_some());
+        assert!(v.get("expected_lift").is_some());
     }
 
     // ── analyze_funnel with no conversions and no conversion_rate ────────────
