@@ -88,6 +88,8 @@ use utoipa::{
         crate::routes::stats::trigger_recompute,
         crate::routes::stats::get_job_status,
         crate::routes::stats::get_timeseries,
+        crate::routes::stats::trigger_recompute_env_scoped,
+        crate::routes::stats::get_recompute_job_status,
     ),
     components(
         schemas(

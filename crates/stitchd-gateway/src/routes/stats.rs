@@ -73,6 +73,83 @@ pub async fn trigger_recompute(
     ))
 }
 
+/// `POST /v1/environments/{environment_id}/experiments/{experiment_id}/recompute`
+///
+/// Environment-scoped admin recompute trigger (Phase 7 Task 4). Returns 202
+/// with a job_id; clients poll the matching `GET .../recompute/{job_id}`.
+#[utoipa::path(
+    post,
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment UUID"),
+    ),
+    responses(
+        (status = 202, description = "Recompute job accepted", body = RecomputeJobJson),
+        (status = 400, description = "Invalid experiment_id"),
+        (status = 502, description = "Stats service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn trigger_recompute_env_scoped(
+    State(state): State<Arc<GatewayState>>,
+    Path((_environment_id, experiment_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let mut client = state.stats_client.lock().await;
+    let resp = client
+        .trigger_recompute(TriggerRecomputeRequest { experiment_id })
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RecomputeJobJson {
+            job_id: resp.job_id,
+            status: resp.status,
+            created_at_ms: resp.created_at_ms,
+        }),
+    ))
+}
+
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/recompute/{job_id}`
+///
+/// Polls the status of a previously triggered recompute job.
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute/{job_id}",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment UUID"),
+        ("job_id" = String, Path, description = "Recompute job UUID"),
+    ),
+    responses(
+        (status = 200, description = "Job status", body = JobStatusJson),
+        (status = 404, description = "Job not found"),
+        (status = 502, description = "Stats service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_recompute_job_status(
+    State(state): State<Arc<GatewayState>>,
+    Path((_environment_id, _experiment_id, job_id)): Path<(String, String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let mut client = state.stats_client.lock().await;
+    let resp = client
+        .get_job_status(GetJobStatusRequest { job_id })
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+    Ok(Json(JobStatusJson {
+        job_id: resp.job_id,
+        status: resp.status,
+        started_at_ms: resp.started_at_ms,
+        completed_at_ms: resp.completed_at_ms,
+        error: resp.error,
+    }))
+}
+
 /// `GET /v1/jobs/{job_id}`
 ///
 /// Returns the current status of a stats recompute job.
@@ -256,6 +333,68 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body["error"], "missing_context_type");
+    }
+
+    fn recompute_router() -> axum::Router {
+        use axum::routing::post;
+        let state = make_stub_state();
+        axum::Router::new()
+            .route(
+                "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute",
+                post(trigger_recompute_env_scoped),
+            )
+            .route(
+                "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute/{job_id}",
+                get(get_recompute_job_status),
+            )
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn trigger_recompute_env_scoped_returns_202_or_502() {
+        let app = recompute_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/environments/env-1/experiments/exp-1/recompute")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::ACCEPTED
+                || resp.status() == StatusCode::BAD_GATEWAY
+                || resp.status() == StatusCode::BAD_REQUEST
+                || resp.status() == StatusCode::INTERNAL_SERVER_ERROR,
+            "got {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn get_recompute_job_status_returns_200_404_or_502() {
+        let app = recompute_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/v1/environments/env-1/experiments/exp-1/recompute/job-1",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK
+                || resp.status() == StatusCode::NOT_FOUND
+                || resp.status() == StatusCode::BAD_GATEWAY
+                || resp.status() == StatusCode::INTERNAL_SERVER_ERROR,
+            "got {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]

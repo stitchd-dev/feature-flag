@@ -320,6 +320,14 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/environments/{environment_id}/experiments/{experiment_id}/timeseries",
             get(stats::get_timeseries),
         )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute",
+            post(stats::trigger_recompute_env_scoped),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute/{job_id}",
+            get(stats::get_recompute_job_status),
+        )
         // Context intelligence
         .route(
             "/v1/environments/{environment_id}/context-types",
