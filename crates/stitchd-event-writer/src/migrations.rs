@@ -64,6 +64,10 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "20260521000002_experiment_iterations_active_dict",
         include_str!("../migrations/20260521000002_experiment_iterations_active_dict.sql"),
     ),
+    (
+        "20260521000003_experiment_assignments_mv",
+        include_str!("../migrations/20260521000003_experiment_assignments_mv.sql"),
+    ),
 ];
 
 /// Apply all pending ClickHouse migrations.
