@@ -83,6 +83,7 @@ use utoipa::{
         crate::routes::experiments::transition_experiment,
         crate::routes::experiments::list_iterations,
         crate::routes::experiments::get_results,
+        crate::routes::experiments::list_exposures,
         // Stats recompute
         crate::routes::stats::trigger_recompute,
         crate::routes::stats::get_job_status,
@@ -167,6 +168,8 @@ use utoipa::{
             crate::routes::experiments::ContextTypeResultsJson,
             crate::routes::experiments::BoundTargetJson,
             crate::routes::experiments::ExperimentResultsJson,
+            crate::routes::experiments::ExposureRowJson,
+            crate::routes::experiments::ListExposuresQuery,
             // Stats
             crate::routes::stats::RecomputeJobJson,
             crate::routes::stats::JobStatusJson,

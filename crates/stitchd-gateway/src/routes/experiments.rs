@@ -13,8 +13,9 @@ use utoipa::ToSchema;
 use stitchd_proto::experiments::v1::{
     BoundTarget, ContextTypeResults, CreateExperimentRequest, DeleteExperimentRequest, Experiment,
     ExperimentIteration, ExperimentStatus, GetExperimentRequest, GetResultsRequest,
-    ListExperimentsRequest, ListIterationsRequest, SrmResult as ProtoSrmResult,
-    TransitionExperimentRequest, UpdateExperimentRequest, VariantResult,
+    ListExperimentsRequest, ListExposuresRequest, ListIterationsRequest,
+    SrmResult as ProtoSrmResult, TransitionExperimentRequest, UpdateExperimentRequest,
+    VariantResult,
 };
 
 use crate::error::GatewayError;
@@ -860,6 +861,106 @@ pub async fn get_results(
     Ok(Json(results))
 }
 
+// ─── GET /exposures (Phase 7 Task 2) ─────────────────────────────────────────
+
+/// Query parameters for `GET /exposures`. `context_type` is required —
+/// omitting it returns HTTP 400 `missing_context_type`.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListExposuresQuery {
+    /// REQUIRED. One of the experiment's `unit_context_types`.
+    pub context_type: Option<String>,
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
+}
+
+/// One row from `experiment_assignments` for the gateway JSON response.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExposureRowJson {
+    pub context_type: String,
+    pub context_key: String,
+    pub variant_key: String,
+    /// RFC 3339 UTC timestamp of first exposure.
+    pub assigned_at: String,
+    /// `None` (omitted) for default-rule experiments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_rule_id: Option<String>,
+}
+
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/exposures`
+///
+/// Paginated list of first-exposure assignments for an experiment scoped to a
+/// single `context_type`. The `context_type` query parameter is required;
+/// missing it returns HTTP 400 with `{ "error": "missing_context_type" }`.
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+        ("context_type" = String, Query, description = "REQUIRED. Attribution unit (e.g. 'user', 'account')."),
+        ("page" = Option<u32>, Query, description = "1-based page number"),
+        ("per_page" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
+    ),
+    responses(
+        (status = 200, description = "Paginated exposures"),
+        (status = 400, description = "Missing required `context_type` query parameter"),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn list_exposures(
+    State(state): State<Arc<GatewayState>>,
+    Path((_environment_id, experiment_id)): Path<(String, String)>,
+    Query(query): Query<ListExposuresQuery>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let context_type = query.context_type.unwrap_or_default();
+    if context_type.is_empty() {
+        // The spec mandates a structured 400 body the admin UI can branch on.
+        return Err(GatewayError::MissingContextType);
+    }
+
+    let page = query.pagination.effective_page();
+    let per_page = query.pagination.effective_per_page();
+    let offset = u64::from(page.saturating_sub(1)) * u64::from(per_page);
+    let limit = u64::from(per_page);
+
+    let req = tonic::Request::new(ListExposuresRequest {
+        experiment_id,
+        context_type,
+        offset,
+        limit,
+    });
+
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .list_exposures(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let exposures: Vec<ExposureRowJson> = inner
+        .exposures
+        .into_iter()
+        .map(|r| ExposureRowJson {
+            context_type: r.context_type,
+            context_key: r.context_key,
+            variant_key: r.variant_key,
+            assigned_at: r.assigned_at,
+            matched_rule_id: if r.matched_rule_id.is_empty() {
+                None
+            } else {
+                Some(r.matched_rule_id)
+            },
+        })
+        .collect();
+    Ok(Json(PaginatedResponse::new(
+        exposures,
+        inner.total,
+        &query.pagination,
+    )))
+}
+
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
@@ -886,6 +987,10 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
             get(list_iterations),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
+            get(list_exposures),
         )
         .with_state(state)
 }
@@ -1214,6 +1319,74 @@ mod tests {
         assert_eq!(j.iteration_number, 2);
         assert_eq!(j.started_at_ms, 1000);
         assert_eq!(j.ended_at_ms, 2000);
+    }
+
+    #[tokio::test]
+    async fn list_exposures_missing_context_type_returns_400() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/experiments/exp-1/exposures")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::BAD_REQUEST,
+            "expected 400 when context_type is missing; got {}",
+            resp.status()
+        );
+        // Body should be the structured error.
+        let body_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["error"], "missing_context_type");
+    }
+
+    #[tokio::test]
+    async fn list_exposures_empty_context_type_returns_400() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/experiments/exp-1/exposures?context_type=")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn list_exposures_with_context_type_proxies_to_grpc() {
+        // With the stub state the grpc connection fails fast (lazy channel),
+        // so the handler returns 502. The key behavior under test is that we
+        // got past the missing-context-type guard.
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/experiments/exp-1/exposures?context_type=user")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK
+                || resp.status() == StatusCode::BAD_GATEWAY
+                || resp.status() == StatusCode::INTERNAL_SERVER_ERROR,
+            "got {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]

@@ -20,7 +20,10 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use stitchd_db::{PgAuditLogger, PgExperimentRepository, PgStatsScheduleRepository};
 use stitchd_experimentation_service::{
-    analytics_client::AnalyticsClient, flag_client::FlagClient, service::ExperimentationServiceImpl,
+    analytics_client::AnalyticsClient,
+    exposure_reader::ClickHouseExposureReader,
+    flag_client::FlagClient,
+    service::ExperimentationServiceImpl,
 };
 use stitchd_proto::experiments::v1::experimentation_service_server::ExperimentationServiceServer;
 
@@ -93,12 +96,30 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
     tracing::info!(addr = %addr, "Experimentation Service listening");
 
+    // ── ClickHouse client (for exposure reads) ───────────────────────────────
+    let ch_url = std::env::var("STITCHD_CLICKHOUSE_URL")
+        .unwrap_or_else(|_| "http://localhost:8123".to_string());
+    let ch_db = std::env::var("STITCHD_CLICKHOUSE_DB").unwrap_or_else(|_| "stitchd".to_string());
+    let ch_user =
+        std::env::var("STITCHD_CLICKHOUSE_USER").unwrap_or_else(|_| "default".to_string());
+    let ch_password = std::env::var("STITCHD_CLICKHOUSE_PASSWORD").unwrap_or_default();
+    let ch_client = Arc::new(
+        clickhouse::Client::default()
+            .with_url(&ch_url)
+            .with_database(&ch_db)
+            .with_user(ch_user)
+            .with_password(ch_password),
+    );
+    let exposure_reader = Arc::new(ClickHouseExposureReader::new(ch_client));
+    tracing::info!(url = %ch_url, db = %ch_db, "ClickHouse exposure reader configured");
+
     let svc = ExperimentationServiceImpl::new(
         experiment_repo,
         Arc::new(analytics_client),
         schedule_repo,
         flag_client,
-    );
+    )
+    .with_exposure_reader(exposure_reader);
 
     let (health_reporter, health_service) = health_reporter();
     health_reporter

@@ -44,6 +44,8 @@ use stitchd_gateway::state::GatewayState;
 #[derive(Default, Clone)]
 struct MockExpService {
     results: ExperimentResults,
+    exposures: Vec<stitchd_proto::experiments::v1::ExposureRow>,
+    exposure_total: u64,
 }
 
 #[tonic::async_trait]
@@ -127,6 +129,18 @@ impl ExperimentationService for MockExpService {
     ) -> Result<Response<UpdateIterationLastComputedResponse>, Status> {
         Err(Status::unimplemented("not used"))
     }
+
+    async fn list_exposures(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListExposuresRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExposuresResponse>, Status> {
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::ListExposuresResponse {
+                exposures: self.exposures.clone(),
+                total: self.exposure_total,
+            },
+        ))
+    }
 }
 
 async fn spawn_mock_exp_service(svc: MockExpService) -> ExperimentationServiceClient<Channel> {
@@ -172,6 +186,10 @@ fn build_router(state: Arc<GatewayState>) -> axum::Router {
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/results",
             get(exp_routes::get_results),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
+            get(exp_routes::list_exposures),
         )
         .with_state(state)
 }
@@ -266,6 +284,7 @@ async fn get_results_returns_per_context_type_shape_with_srm_and_guardrails() {
             }),
             pre_period_days: 14,
         },
+        ..Default::default()
     };
     let exp_client = spawn_mock_exp_service(svc).await;
     let state = make_state(exp_client);
@@ -343,6 +362,84 @@ async fn get_results_returns_per_context_type_shape_with_srm_and_guardrails() {
 }
 
 #[tokio::test]
+async fn list_exposures_proxies_to_grpc_and_returns_paginated_rows() {
+    let exp_id = "44444444-4444-4444-4444-444444444444";
+    let rule_id = "55555555-5555-5555-5555-555555555555";
+
+    let svc = MockExpService {
+        results: ExperimentResults::default(),
+        exposures: vec![
+            stitchd_proto::experiments::v1::ExposureRow {
+                context_type: "user".to_string(),
+                context_key: "alice".to_string(),
+                variant_key: "treatment".to_string(),
+                assigned_at: "2026-05-21T10:00:00Z".to_string(),
+                matched_rule_id: rule_id.to_string(),
+            },
+            stitchd_proto::experiments::v1::ExposureRow {
+                context_type: "user".to_string(),
+                context_key: "bob".to_string(),
+                variant_key: "control".to_string(),
+                assigned_at: "2026-05-21T09:30:00Z".to_string(),
+                matched_rule_id: String::new(),
+            },
+        ],
+        exposure_total: 1234,
+    };
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let state = make_state(exp_client);
+    let app = build_router(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/environments/env-1/experiments/{exp_id}/exposures?context_type=user&page=1&per_page=50"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    let items = body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["context_key"], "alice");
+    assert_eq!(items[0]["matched_rule_id"], rule_id);
+    // default-rule exposure omits matched_rule_id.
+    assert!(items[1].get("matched_rule_id").is_none());
+    assert_eq!(body["total"], 1234);
+}
+
+#[tokio::test]
+async fn list_exposures_rejects_missing_context_type_with_400() {
+    let exp_id = "66666666-6666-6666-6666-666666666666";
+    let svc = MockExpService::default();
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let state = make_state(exp_client);
+    let app = build_router(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/environments/env-1/experiments/{exp_id}/exposures"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["error"], "missing_context_type");
+}
+
+#[tokio::test]
 async fn get_results_falls_back_to_flat_variant_results_when_per_context_type_empty() {
     // Legacy iterations (or stats-service rows pre-Phase-7) may only populate
     // the flat `variant_results` list. The gateway synthesises a single
@@ -366,6 +463,7 @@ async fn get_results_falls_back_to_flat_variant_results_when_per_context_type_em
             bound_target: None,
             pre_period_days: 0,
         },
+        ..Default::default()
     };
     let exp_client = spawn_mock_exp_service(svc).await;
     let state = make_state(exp_client);

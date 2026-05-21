@@ -166,6 +166,9 @@ pub struct ExperimentationServiceImpl {
     /// `None` skips the refresh (the dictionary's LIFETIME caps staleness at
     /// 60s in that case).
     dictionary_refresher: Option<Arc<dyn DictionaryRefresher>>,
+    /// Optional ClickHouse-backed reader for paginated `experiment_assignments`
+    /// reads (`ListExposures` RPC). `None` makes the RPC return `Unimplemented`.
+    exposure_reader: Option<Arc<dyn crate::exposure_reader::ExposureReader>>,
 }
 
 impl ExperimentationServiceImpl {
@@ -183,6 +186,7 @@ impl ExperimentationServiceImpl {
             schedule_repo,
             flag_client,
             dictionary_refresher: None,
+            exposure_reader: None,
         }
     }
 
@@ -193,6 +197,18 @@ impl ExperimentationServiceImpl {
     #[must_use]
     pub fn with_dictionary_refresher(mut self, refresher: Arc<dyn DictionaryRefresher>) -> Self {
         self.dictionary_refresher = Some(refresher);
+        self
+    }
+
+    /// Attach an [`crate::exposure_reader::ExposureReader`] for the
+    /// `ListExposures` RPC. Without one, calls to `ListExposures` return
+    /// `Status::unimplemented`.
+    #[must_use]
+    pub fn with_exposure_reader(
+        mut self,
+        reader: Arc<dyn crate::exposure_reader::ExposureReader>,
+    ) -> Self {
+        self.exposure_reader = Some(reader);
         self
     }
 }
@@ -832,6 +848,59 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
         metrics::counter!("experimentation_service.update_iteration_last_computed.ok").increment(1);
         Ok(Response::new(UpdateIterationLastComputedResponse {}))
+    }
+
+    // ── Phase 7 — admin reads ────────────────────────────────────────────────
+
+    /// Paginated read against the ClickHouse `experiment_assignments` table.
+    ///
+    /// Returns one page of (context_type, context_key, variant, assigned_at,
+    /// matched_rule_id) rows for the given `(experiment_id, context_type)`.
+    /// Returns `INVALID_ARGUMENT` for malformed UUIDs or empty `context_type`,
+    /// `UNIMPLEMENTED` when no `exposure_reader` is attached.
+    #[instrument(skip(self))]
+    async fn list_exposures(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::ListExposuresRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExposuresResponse>, Status> {
+        let req = request.into_inner();
+        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+        if req.context_type.is_empty() {
+            return Err(Status::invalid_argument(
+                "context_type is required and must be non-empty",
+            ));
+        }
+
+        let reader = self.exposure_reader.as_ref().ok_or_else(|| {
+            Status::unimplemented("exposure_reader not configured on this service instance")
+        })?;
+
+        let (rows, total) = reader
+            .list_exposures(exp_uuid, &req.context_type, req.offset, req.limit)
+            .await
+            .map_err(|e| Status::internal(format!("clickhouse error: {e}")))?;
+
+        let exposures = rows
+            .into_iter()
+            .map(
+                |r| stitchd_proto::experiments::v1::ExposureRow {
+                    context_type: r.context_type,
+                    context_key: r.context_key,
+                    variant_key: r.variant_key,
+                    assigned_at: r.assigned_at.to_rfc3339(),
+                    matched_rule_id: r
+                        .matched_rule_id
+                        .map(|u| u.to_string())
+                        .unwrap_or_default(),
+                },
+            )
+            .collect();
+
+        metrics::counter!("experimentation_service.list_exposures.ok").increment(1);
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::ListExposuresResponse { exposures, total },
+        ))
     }
 }
 
@@ -2238,6 +2307,136 @@ mod tests {
         });
         svc.transition_experiment(req).await.expect("ok");
         await_count(&count, 4).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // ListExposures handler tests (Phase 7 Task 2)
+    // -----------------------------------------------------------------------
+
+    use crate::exposure_reader::{ExposureReader, ExposureRow as CoreExposureRow};
+
+    /// Test reader returning canned rows.
+    struct CannedExposureReader {
+        rows: Vec<CoreExposureRow>,
+        total: u64,
+    }
+
+    #[async_trait]
+    impl ExposureReader for CannedExposureReader {
+        async fn list_exposures(
+            &self,
+            _experiment_id: uuid::Uuid,
+            _context_type: &str,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<CoreExposureRow>, u64), clickhouse::error::Error> {
+            Ok((self.rows.clone(), self.total))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_returns_unimplemented_without_reader() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: uuid::Uuid::new_v4().to_string(),
+            context_type: "user".to_string(),
+            offset: 0,
+            limit: 50,
+        });
+        let err = svc.list_exposures(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_invalid_uuid_returns_invalid_argument() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id).with_exposure_reader(Arc::new(CannedExposureReader {
+            rows: vec![],
+            total: 0,
+        }));
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: "not-a-uuid".to_string(),
+            context_type: "user".to_string(),
+            offset: 0,
+            limit: 50,
+        });
+        let err = svc.list_exposures(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_empty_context_type_returns_invalid_argument() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id).with_exposure_reader(Arc::new(CannedExposureReader {
+            rows: vec![],
+            total: 0,
+        }));
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: uuid::Uuid::new_v4().to_string(),
+            context_type: String::new(),
+            offset: 0,
+            limit: 50,
+        });
+        let err = svc.list_exposures(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_round_trips_rows_and_total() {
+        let (env_id, _) = env_uuid();
+        let rule_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let row = CoreExposureRow {
+            context_type: "user".to_string(),
+            context_key: "alice".to_string(),
+            variant_key: "treatment".to_string(),
+            assigned_at: now,
+            matched_rule_id: Some(rule_id),
+        };
+        let svc = make_service(env_id).with_exposure_reader(Arc::new(CannedExposureReader {
+            rows: vec![row],
+            total: 7,
+        }));
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: uuid::Uuid::new_v4().to_string(),
+            context_type: "user".to_string(),
+            offset: 0,
+            limit: 10,
+        });
+        let resp = svc.list_exposures(req).await.unwrap().into_inner();
+        assert_eq!(resp.total, 7);
+        assert_eq!(resp.exposures.len(), 1);
+        let proto_row = &resp.exposures[0];
+        assert_eq!(proto_row.context_key, "alice");
+        assert_eq!(proto_row.variant_key, "treatment");
+        assert_eq!(proto_row.matched_rule_id, rule_id.to_string());
+        assert!(!proto_row.assigned_at.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_default_rule_emits_empty_matched_rule_id() {
+        let (env_id, _) = env_uuid();
+        let row = CoreExposureRow {
+            context_type: "user".to_string(),
+            context_key: "bob".to_string(),
+            variant_key: "control".to_string(),
+            assigned_at: chrono::Utc::now(),
+            matched_rule_id: None,
+        };
+        let svc = make_service(env_id).with_exposure_reader(Arc::new(CannedExposureReader {
+            rows: vec![row],
+            total: 1,
+        }));
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: uuid::Uuid::new_v4().to_string(),
+            context_type: "user".to_string(),
+            offset: 0,
+            limit: 10,
+        });
+        let resp = svc.list_exposures(req).await.unwrap().into_inner();
+        assert_eq!(resp.exposures.len(), 1);
+        assert_eq!(resp.exposures[0].matched_rule_id, "");
     }
 
     /// When no refresher is attached, transitions still succeed.

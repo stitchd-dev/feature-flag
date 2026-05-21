@@ -312,6 +312,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
             get(experiments::list_iterations),
         )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
+            get(experiments::list_exposures),
+        )
         // Context intelligence
         .route(
             "/v1/environments/{environment_id}/context-types",

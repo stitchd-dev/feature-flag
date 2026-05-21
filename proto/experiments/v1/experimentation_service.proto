@@ -200,6 +200,37 @@ message UpdateIterationLastComputedRequest {
 
 message UpdateIterationLastComputedResponse {}
 
+// ─── Exposures (Phase 7) ──────────────────────────────────────────────────────
+//
+// Paginated read against the ClickHouse `experiment_assignments` table for a
+// single experiment + context_type. One row per assigned context.
+
+message ListExposuresRequest {
+  string experiment_id = 1;
+  // Required — at least one entry of the experiment's `unit_context_types`.
+  string context_type  = 2;
+  // 0-based offset; defaults to 0.
+  uint64 offset        = 3;
+  // Page size; capped server-side at 200.
+  uint64 limit         = 4;
+}
+
+message ExposureRow {
+  string context_type   = 1;
+  string context_key    = 2;
+  string variant_key    = 3;
+  // RFC 3339 UTC timestamp of first exposure.
+  string assigned_at    = 4;
+  // Stringified UUID of the matched rule (empty for default-rule
+  // experiments).
+  string matched_rule_id = 5;
+}
+
+message ListExposuresResponse {
+  repeated ExposureRow exposures = 1;
+  uint64               total     = 2;
+}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
@@ -223,4 +254,9 @@ service ExperimentationService {
   // Update the last_computed_at timestamp for a given iteration's stats_schedule row.
   rpc UpdateIterationLastComputed(UpdateIterationLastComputedRequest)
       returns (UpdateIterationLastComputedResponse);
+
+  // ── Phase 7 admin reads ────────────────────────────────────────────────────
+  // Paginated read against ClickHouse `experiment_assignments` for one
+  // experiment + context_type. Powers the admin UI's "Exposures" panel.
+  rpc ListExposures(ListExposuresRequest) returns (ListExposuresResponse);
 }

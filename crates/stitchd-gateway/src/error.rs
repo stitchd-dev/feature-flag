@@ -65,6 +65,25 @@ pub enum GatewayError {
     /// Request body could not be deserialized.
     #[error("invalid body: {0}")]
     InvalidBody(String),
+
+    /// The required `context_type` query parameter was missing or empty.
+    /// Surfaced by Phase 7 endpoints (`/exposures`, `/timeseries`) per spec §5.
+    /// Mapped to HTTP 400 with body
+    /// `{ "error": "missing_context_type", "message": "..." }`.
+    #[error("missing required `context_type` query parameter")]
+    MissingContextType,
+
+    /// The required `metric_id` query parameter was missing or empty.
+    /// Surfaced by Phase 7 `/timeseries`. Mapped to HTTP 400 with body
+    /// `{ "error": "missing_metric_id", "message": "..." }`.
+    #[error("missing required `metric_id` query parameter")]
+    MissingMetricId,
+
+    /// A `RolloutDistribution` body failed validation.
+    /// Mapped to HTTP 422 with body
+    /// `{ "error": "invalid_distribution", "message": "..." }`.
+    #[error("invalid rollout distribution: {0}")]
+    InvalidDistribution(String),
 }
 
 impl From<tonic::Status> for GatewayError {
@@ -109,6 +128,27 @@ impl IntoResponse for GatewayError {
                 }));
                 (StatusCode::UNPROCESSABLE_ENTITY, body).into_response()
             }
+            GatewayError::MissingContextType => {
+                let body = Json(json!({
+                    "error": "missing_context_type",
+                    "message": "the `context_type` query parameter is required and must be one of the experiment's unit_context_types",
+                }));
+                (StatusCode::BAD_REQUEST, body).into_response()
+            }
+            GatewayError::MissingMetricId => {
+                let body = Json(json!({
+                    "error": "missing_metric_id",
+                    "message": "the `metric_id` query parameter is required",
+                }));
+                (StatusCode::BAD_REQUEST, body).into_response()
+            }
+            GatewayError::InvalidDistribution(msg) => {
+                let body = Json(json!({
+                    "error": "invalid_distribution",
+                    "message": msg,
+                }));
+                (StatusCode::UNPROCESSABLE_ENTITY, body).into_response()
+            }
             other => {
                 let (status, msg) = match &other {
                     GatewayError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
@@ -118,7 +158,10 @@ impl IntoResponse for GatewayError {
                     GatewayError::Upstream(m) => (StatusCode::BAD_GATEWAY, m.clone()),
                     GatewayError::InvalidBody(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
                     GatewayError::FlagLockedByExperiment { .. }
-                    | GatewayError::ExperimentBindingInvalid { .. } => unreachable!(),
+                    | GatewayError::ExperimentBindingInvalid { .. }
+                    | GatewayError::MissingContextType
+                    | GatewayError::MissingMetricId
+                    | GatewayError::InvalidDistribution(_) => unreachable!(),
                 };
                 let body = Json(json!({ "error": msg }));
                 (status, body).into_response()
