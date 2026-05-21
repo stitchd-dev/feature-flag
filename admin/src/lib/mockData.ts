@@ -34,21 +34,6 @@ export interface Segment {
   usedBy: number
 }
 
-export interface Experiment {
-  key: string
-  name: string
-  flag: string
-  model: 'Bayesian' | 'Frequentist'
-  state: 'running' | 'draft' | 'stopped' | 'completed'
-  started: string
-  remaining: string
-  primary: string
-  samples: string
-  lift: string
-  confidence: number
-  variants: number
-}
-
 export interface Event {
   key: string
   type: string
@@ -122,14 +107,11 @@ export const SEGMENTS: Segment[] = [
   { key: 'search-test-cohort', name: 'Search Test Cohort', type: 'list', rules: 0, members: 5000, contextType: 'user', updated: 'yesterday', usedBy: 1 },
 ]
 
-export const EXPERIMENTS: Experiment[] = [
-  { key: 'checkout-v2-conv', name: 'Checkout V2 — Conversion Lift', flag: 'checkout-v2', model: 'Bayesian', state: 'running', started: '8d ago', remaining: '6 days', primary: 'checkout_completed', samples: '412K', lift: '+4.7%', confidence: 96, variants: 2 },
-  { key: 'ml-ranker-ctr', name: 'ML Ranker — CTR', flag: 'ml-ranker-v3', model: 'Frequentist', state: 'running', started: '21d ago', remaining: 'ready', primary: 'search_click', samples: '5.4M', lift: '+12.3%', confidence: 99, variants: 2 },
-  { key: 'onboarding-3way', name: 'Onboarding — Walkthrough A/B/C', flag: 'onboarding-walkthrough', model: 'Bayesian', state: 'running', started: '14d ago', remaining: 'ready', primary: 'first_session_complete', samples: '120K', lift: '+2.1%', confidence: 71, variants: 3 },
-  { key: 'dashboard-redesign-eng', name: 'Dashboard Redesign — Engagement', flag: 'dashboard-redesign-2026', model: 'Frequentist', state: 'draft', started: '—', remaining: '—', primary: 'dau_minutes', samples: '0', lift: '—', confidence: 0, variants: 2 },
-  { key: 'fraud-strict-disputes', name: 'Fraud Strict — Dispute Rate', flag: 'payments-fraud-shield', model: 'Frequentist', state: 'stopped', started: '32d ago', remaining: '—', primary: 'dispute_filed', samples: '890K', lift: '−1.2%', confidence: 88, variants: 3 },
-  { key: 'support-ai-csat', name: 'Support AI — CSAT', flag: 'support-ai-summarize', model: 'Bayesian', state: 'completed', started: '60d ago', remaining: '—', primary: 'csat_score', samples: '44K', lift: '+0.4', confidence: 99, variants: 2 },
-]
+// experimentation_full_20260521 Phase 11 cleanup: the EXPERIMENTS mock array
+// + Experiment interface were removed. The real Experiments admin page reads
+// from the gateway API (/v1/environments/{env}/experiments). The Dashboard's
+// recent-experiments widget renders an empty-state placeholder until a future
+// track wires that endpoint into Dashboard.tsx.
 
 export const EVENTS: Event[] = [
   { key: 'checkout_completed', type: 'bool', described: 'User completed checkout flow', env: 'production', volume30d: '1.2M', lastSeen: '2s ago', schema: '{ user_id, cart_value, currency }' },

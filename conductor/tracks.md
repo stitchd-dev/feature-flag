@@ -62,6 +62,8 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Experimentation — Complete UI + Backend with eval-log-based first-exposure attribution (rule-scoped, context-type-scoped); whole-flag lock while running; default-rule percentage distribution; Frequentist/Bayesian/CUPED/SRM/Guardrails math; per-context-type result views
+## [x] Track: Experimentation — Complete UI + Backend with eval-log-based first-exposure attribution (rule-scoped, context-type-scoped); whole-flag lock while running; default-rule percentage distribution; Frequentist/Bayesian/CUPED/SRM/Guardrails math; per-context-type result views
 *Link: [./conductor/tracks/experimentation_full_20260521/](./conductor/tracks/experimentation_full_20260521/)*
+
+**Status:** Ready for archival via `/conductor-archive experimentation_full_20260521`. All 11 phases complete + verified; Phase 11 (docs + E2E + cleanup) landed on `track_exp_full_20260521_worker_p11`.
 

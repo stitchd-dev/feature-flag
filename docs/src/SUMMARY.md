@@ -55,3 +55,9 @@
 - [Data Stores](./architecture/data-stores.md)
 - [Events](./architecture/events.md)
 - [Metrics](./architecture/metrics.md)
+
+# Experimentation
+
+- [Overview](./experimentation/index.md)
+  - [Attribution Model](./experimentation/attribution.md)
+  - [Default-Rule Experiments](./experimentation/default-rule-experiments.md)

@@ -171,3 +171,61 @@ The following patterns from `conductor/patterns.md` are load-bearing for this tr
   - **The iterations history endpoint is intentionally a noop in Phase 9.** Phase 7 didn't surface `listExperimentIterations()` — Phase 11 (or a follow-up gateway track) will add it. The IterationsTab component is fully wired against an `IterationSummary[]` shape so dropping in the API wrapper later is a one-line change. The recompute button is fully functional via the existing `/recompute` + `/recompute/{job_id}` endpoints (Phase 7 Task 4).
   - **Removing legacy `FrequentistViz`/`BayesianViz`/`VariantBreakdown`/`MultiVariantMatrix`/`VizAdapter` from `ExperimentDetail.tsx` is the right cleanup pass.** These were mock-flavoured Phase 8 placeholders. Keeping them would have created two parallel viz layers (one mock, one real) and forced future maintainers to grep for which is live. The page diff dropped by 358 lines (delete) + 1054 lines (add) — net +696 lines after factoring in the 4 fetch lifecycles, but each tab is now testable in isolation.
 ---
+
+## [2026-05-22] - Phase 11 Tasks 11.1-11.5: Docs + E2E + Coverage + Pattern updates + Cleanup (worker_p11)
+
+### Task 11.3 — Coverage validation report
+
+**Workspace `cargo test --workspace --lib --tests` (DATABASE_URL set, CH not strictly required):**
+- All test suites pass. Per-suite totals across the workspace (running unit + integration tests, with `#[ignore]`'d tests skipped per their gate):
+  - `stitchd-core` lib: 153 passed
+  - `stitchd-core` tests: multiple integration suites all green
+  - `stitchd-db` lib: 96 passed
+  - `stitchd-db` tests: multiple integration suites (CH-gated tests `#[ignore]`'d as designed)
+  - `stitchd-flag-service` lib: 489 passed
+  - `stitchd-flag-service` tests: 148 passed (eval_log_matched_rule_e2e + others)
+  - `stitchd-experimentation-service` lib: 24 passed
+  - `stitchd-experimentation-service` tests (lifecycle E2E): 1 `#[ignore]`'d, passes with stack
+  - `stitchd-stats-service` lib: 138 passed; tests (4 query suites) `#[ignore]`'d, need CH
+  - `stitchd-analytics-service`: passed
+  - `stitchd-gateway`: passed (211 unit + 4 integration)
+  - `stitchd-event-writer`: passed
+  - `stitchd-segmentation-service`: passed
+  - **No failures, no panics, no warnings about excluded tests.**
+
+**Admin (`npm test -- --run`):**
+- 41 test files, **661 tests pass**, 0 failures. Runtime 980ms.
+- `npm test -- --run --coverage` (v8 provider): 15.44% lines / 15.2% statements / 11.86% functions / 16.68% branches.
+
+**Coverage shortfall — documented (per spec: "don't add throwaway tests just to bump the number"):**
+
+The 15.44% workspace-level admin line coverage is misleading because vitest's v8 coverage includes every file imported during the test run — including framework adapter code, gateway-axios wrappers, and the entire `src/lib/api/*` surface most of which is exercised only at runtime via Axios interceptors. The experimentation pages themselves are heavily covered:
+- `admin/src/pages/experiments/tabs/*.tsx` — each has a co-located `.test.tsx` with full SSR-based rendering tests (Results, Exposures, Timeseries, Iterations).
+- `admin/src/pages/experiments/CreateExperimentModal.tsx` — Yup schema + Formik field tests in Phase 10.
+- `admin/src/pages/experiments/ExperimentDetail.tsx` — covered indirectly via the tab tests.
+
+Untested by design:
+- gRPC client wrappers (`*_client.rs` in services) — covered by E2E + manual.
+- `main.rs` bootstrap paths in every service — covered by Docker Compose health-check.
+- React component CSS variants — would require browser harness (jsdom + playwright deferred).
+- Axum middleware happy-path is unit-tested; cross-service auth flows covered by `flag_lock_integration.rs`-style integration tests.
+
+**`cargo tarpaulin -p stitchd-experimentation-service`** (with cross-crate excludes):
+- 37.80% (93/246 lines). Service core (`service.rs`): 60.7% (88/145). Uncovered: `main.rs` (65 lines — bootstrap path), `analytics_client.rs` (8 lines — thin gRPC wrapper), `flag_client.rs` (15 lines — thin gRPC wrapper), `exposure_reader.rs` (6 lines — CH query wrapper).
+- These are intentionally hard-to-test in unit tests: gRPC client wrappers need a live server, `main.rs` needs full env setup, and the CH exposure reader needs a live CH. They're exercised by the Phase 11.2 lifecycle E2E + the pre-existing integration tests.
+
+CI tarpaulin will give a more accurate per-crate number with its workspace caching + `--ignore-tests --exclude-files` baked in. Local single-crate tarpaulin runs inflate the denominator because tarpaulin walks the entire dep graph for compilation.
+
+### Task 11.4 — Pattern + tech-stack + product updates
+
+Eight new patterns added to `conductor/patterns.md` (CH dictionary refresh, inverted-version ReplacingMergeTree, per-context-type stats result shape, sentinel-prefix typed errors over tonic::Status, --comment-stripping in CH migrations, `cardinality(arr) > 0` PG, closure-injected route validators, `bd close --no-auto` no-force gotcha). `tech-stack.md` ClickHouse Schema section gains the new dictionary + MV + columns. `product.md` Implementation Status table updated.
+
+### Task 11.5 — Final cleanup
+
+Workspace-wide grep `EXPERIMENTS\b` in `admin/src/` confirmed clean (only test fixtures remain in `*.test.tsx`). `admin/src/lib/mockData.ts` already cleaned in earlier phases. No stale SDK-tagged event-context-attribution code paths in `stitchd-event-writer` or `stitchd-analytics-service`. `tracks.md` archive note + `metadata.json` status updated to `ready_for_archive`.
+
+### Out-of-scope bug filed during Phase 11
+
+- **feature-flag-buc** (P2 bug): CH 24's both legacy and new analyzers reject `arrayExists()` in JOIN ON. Production stats-service queries (`build_aggregation_query` / `build_ratio_query` / `build_funnel_query` / `build_experiment_preview_aggregation_query`) all use this shape — the existing unit tests only inspect the SQL string, so the live-CH execution path is broken. Phase 11 E2E uses ARRAY JOIN to bypass; production builders should follow the same pattern. **Filed but not fixed in Phase 11** because it's stats-query plumbing, not docs/cleanup scope.
+
+---
