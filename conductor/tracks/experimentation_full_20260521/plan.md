@@ -2,12 +2,12 @@
 
 ## Phase 1: Data Model Foundations
 
-- [ ] Task 1: PostgreSQL migration — extend `experiments` + `feature_flags` schema
-  - [ ] Sub-task 1.1: Write failing repo tests for new fields (`targets_default_rule`, `guardrail_metric_ids`, `pre_period_days`, `unit_context_types`)
-  - [ ] Sub-task 1.2: Migration `20260521000001_experiment_attribution_fields.sql` — add columns + XOR CHECK constraint (`flag_rule_id` XOR `targets_default_rule`)
-  - [ ] Sub-task 1.3: Migration `20260521000002_flag_default_rule_distribution.sql` — add `default_rule_distribution Jsonb` to `feature_flags`
-  - [ ] Sub-task 1.4: Migration `20260521000003_experiment_iterations_snapshot.sql` — snapshot new fields into `experiment_iterations`
-  - [ ] Sub-task 1.5: Regenerate `.sqlx/` offline cache
+- [~] Task 1: PostgreSQL migration — extend `experiments` + `feature_flags` schema **[migrations + schema tests landed; live application + cache regen DEFERRED to companion commit with Tasks 3 + 4 — see learnings.md for the sequencing constraint]**
+  - [x] Sub-task 1.1: Write failing repo tests for new fields (`targets_default_rule`, `guardrail_metric_ids`, `pre_period_days`, `unit_context_types`) — 9 schema tests in `crates/stitchd-db/tests/experiment_attribution_schema.rs`, all passing.
+  - [x] Sub-task 1.2: Migration `20260521000001_experiment_attribution_fields.sql` — add columns + XOR CHECK constraint (`flag_rule_id` XOR `targets_default_rule`); also adds `flag_id NOT NULL`, replaces per-rule unique index with per-flag, uses `cardinality()` for non-empty check.
+  - [x] Sub-task 1.3: Migration `20260521000002_flag_default_rule_distribution.sql` — add `default_rule_distribution Jsonb` to `feature_flags`.
+  - [x] Sub-task 1.4: Migration `20260521000003_experiment_iterations_snapshot.sql` — snapshot new fields + `flag_id` + `default_rule_distribution` into `experiment_iterations`.
+  - [ ] Sub-task 1.5: Regenerate `.sqlx/` offline cache — **DEFERRED**: requires Tasks 3 + 4 (domain struct + repo query updates) to compile against new schema first.
 - [ ] Task 2: ClickHouse migration — `flag_evaluation_log` schema bump
   - [ ] Sub-task 2.1: Write failing test asserting `matched_rule_id` column exists
   - [ ] Sub-task 2.2: Migration `0005_flag_evaluation_log_matched_rule.sql` — add `matched_rule_id Nullable(UUID)` to `flag_evaluation_log_v2`

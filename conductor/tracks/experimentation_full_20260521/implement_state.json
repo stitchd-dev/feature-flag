@@ -1,0 +1,9 @@
+{
+  "current_phase": "Data Model Foundations",
+  "current_phase_index": 0,
+  "current_task_index": 0,
+  "completed_phases": [],
+  "last_updated": "2026-05-21T10:35:00Z",
+  "status": "in_progress",
+  "notes": "Phase 1 Task 1 partial — migrations + schema tests landed. Sub-task 1.5 (cache regen) DEFERRED to atomic commit with Tasks 3 + 4 (domain struct + repo query updates) due to sqlx::query_as! compile-time live-DB coupling. Live DB rolled back to pristine state. Next session: do Phase 1 Tasks 2-5 in one commit, apply migrations, regenerate cache."
+}

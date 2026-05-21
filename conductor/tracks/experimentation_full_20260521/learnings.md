@@ -62,3 +62,17 @@ The following patterns from `conductor/patterns.md` are load-bearing for this tr
 ---
 
 <!-- Learnings from implementation will be appended below -->
+
+## [2026-05-21] - Phase 1 Task 1: PG schema migrations for experiment attribution
+
+- **Implemented:** Three PG migrations (`20260521000001_experiment_attribution_fields`, `20260521000002_flag_default_rule_distribution`, `20260521000003_experiment_iterations_snapshot`) + a 9-test sqlx schema-level test suite (`crates/stitchd-db/tests/experiment_attribution_schema.rs`).
+- **Files created:** 3 migrations + 1 test file.
+- **Learnings:**
+  - **Gotcha — `array_length(arr, 1)` returns NULL for empty arrays in PostgreSQL, not 0.** A `CHECK (array_length(...) >= 1)` therefore evaluates to NULL on `{}` input, and CHECK treats NULL as passing. **Use `cardinality(arr) > 0`** for non-empty enforcement.
+  - **Sequencing constraint:** `sqlx::query_as!` macros in `crates/stitchd-db/src/repository/pg/experiment.rs` query the live DB schema at compile time. Making `flag_rule_id` nullable in the DB (without also updating the `Experiment` struct to `Option<RuleId>`) breaks workspace compilation. → Phase 1 Tasks 1, 3, 4 must land as one atomic commit. The current commit lands the migration FILES + schema tests only; the live DB has been rolled back and the migrations remain unapplied until Tasks 3 + 4 land.
+  - **Pattern:** Use raw `sqlx::query(r"...")` strings (not the macro) in tests targeting new schema (per `boundaries_20260518` pattern).
+- **Schema design decisions:**
+  - Added `flag_id UUID NOT NULL` on `experiments` to support whole-flag uniqueness without rule joins on the hot path.
+  - Replaced `idx_experiments_one_active_per_rule` with `idx_experiments_one_active_per_flag` — matches whole-flag-lock semantics.
+  - Used `targets_default_rule BOOLEAN` + XOR CHECK rather than a sentinel `flag_rule_id` UUID.
+---
