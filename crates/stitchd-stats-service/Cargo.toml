@@ -38,3 +38,8 @@ tokio = { workspace = true }
 sqlx = { workspace = true }
 serial_test = { workspace = true }
 tokio-stream = { version = "0.1", features = ["net"] }
+stitchd-event-writer = { path = "../stitchd-event-writer" }
+chrono = { workspace = true }
+clickhouse = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }

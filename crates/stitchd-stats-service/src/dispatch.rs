@@ -25,6 +25,7 @@
 //! [`MetricDefinition`]: stitchd_core::metric::MetricDefinition
 //! [`MetricRepository::find_batch_by_ids`]: stitchd_db::repository::MetricRepository::find_batch_by_ids
 
+use chrono::{DateTime, Utc};
 use stitchd_core::metric::{AggregationConfig, MetricDefinition, MetricKind};
 use stitchd_db::{RepositoryError, repository::MetricRepository};
 use thiserror::Error;
@@ -109,6 +110,7 @@ pub async fn dispatch_metric_query(
     iteration_id: &str,
     env_id: &str,
     variant_keys: &[&str],
+    iteration_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, DispatchError> {
     match &metric.kind {
         MetricKind::Aggregation(cfg) => Ok(build_aggregation_query(
@@ -117,6 +119,7 @@ pub async fn dispatch_metric_query(
             iteration_id,
             env_id,
             variant_keys,
+            iteration_end,
         )?),
         MetricKind::Funnel(cfg) => Ok(build_funnel_query(
             cfg,
@@ -124,6 +127,7 @@ pub async fn dispatch_metric_query(
             iteration_id,
             env_id,
             variant_keys,
+            iteration_end,
         )?),
         MetricKind::Ratio(cfg) => {
             // Resolve both referenced metrics in a single batch so the
@@ -162,6 +166,7 @@ pub async fn dispatch_metric_query(
                 iteration_id,
                 env_id,
                 variant_keys,
+                iteration_end,
             )?)
         }
     }
@@ -445,7 +450,7 @@ mod tests {
         let repo = MockMetricRepository::new();
         let vks = variant_keys();
 
-        let q = dispatch_metric_query(&metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks)
+        let q = dispatch_metric_query(&metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks, Utc::now())
             .await
             .expect("aggregation dispatch should succeed");
 
@@ -481,7 +486,7 @@ mod tests {
         let repo = MockMetricRepository::new();
         let vks = variant_keys();
 
-        let q = dispatch_metric_query(&metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks)
+        let q = dispatch_metric_query(&metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks, Utc::now())
             .await
             .expect("funnel dispatch should succeed");
 
@@ -520,7 +525,7 @@ mod tests {
             .with(denominator);
         let vks = variant_keys();
 
-        let q = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks)
+        let q = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks, Utc::now())
             .await
             .expect("ratio dispatch should succeed");
 
@@ -574,7 +579,7 @@ mod tests {
             .with(denominator);
         let vks = variant_keys();
 
-        let err = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks)
+        let err = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks, Utc::now())
             .await
             .expect_err("should reject non-aggregation numerator");
 
@@ -611,7 +616,7 @@ mod tests {
         let repo = MockMetricRepository::new();
         let vks = variant_keys();
 
-        let err = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks)
+        let err = dispatch_metric_query(&ratio_metric, &repo, EXP_ID, ITER_ID, ENV_ID, &vks, Utc::now())
             .await
             .expect_err("should report missing numerator");
 

@@ -98,14 +98,21 @@ pub fn build_preview_aggregation_query(
     // RowBinary deserialiser hits "tag for enum is not valid" because the
     // null-marker byte expected by `Option<f64>` isn't present for
     // non-nullable columns.
+    // Alias events_v2 as `e` so the shared `render_aggregator` (which
+    // emits `e.value_double` / `e.properties[...]` to disambiguate from
+    // the experiment-scoped JOIN against `experiment_assignments AS a`
+    // in `queries::aggregation`) resolves correctly here too. The alias
+    // is purely cosmetic for preview — there is no JOIN — but keeping
+    // the column references uniform avoids forking the aggregator
+    // expression mapping.
     let sql = format!(
         "SELECT\n    \
-            toUnixTimestamp(toStartOfDay(timestamp, 'UTC')) AS day_ts,\n    \
+            toUnixTimestamp(toStartOfDay(e.timestamp, 'UTC')) AS day_ts,\n    \
             CAST({agg_expr} AS Nullable(Float64)) AS value\n\
-        FROM events_v2\n\
-        WHERE env_id = toUUID({env_ph})\n  \
-          AND metric_key = {event_ph}\n  \
-          AND timestamp >= now() - toIntervalDay({days_ph}){extra_where}\n\
+        FROM events_v2 AS e\n\
+        WHERE e.env_id = toUUID({env_ph})\n  \
+          AND e.metric_key = {event_ph}\n  \
+          AND e.timestamp >= now() - toIntervalDay({days_ph}){extra_where}\n\
         GROUP BY day_ts\n\
         ORDER BY day_ts ASC"
     );
@@ -384,7 +391,7 @@ mod tests {
             "got: {}",
             q.sql
         );
-        assert!(q.sql.contains("toStartOfDay(timestamp, 'UTC')"));
+        assert!(q.sql.contains("toStartOfDay(e.timestamp, 'UTC')"));
         assert!(q.sql.contains("toIntervalDay({p2})"));
         // 3 binds: env_id, event_key, days
         assert_eq!(q.binds.len(), 3);
@@ -409,7 +416,7 @@ mod tests {
         };
         let q = build_preview_aggregation_query(&cfg, ENV_ID, 30).unwrap();
         assert!(
-            q.sql.contains("coalesce(value_double"),
+            q.sql.contains("coalesce(e.value_double"),
             "sum(value) should coalesce, got: {}",
             q.sql
         );

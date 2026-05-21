@@ -13,6 +13,7 @@
 //!
 //! [`MetricDefinition`]: stitchd_core::metric::MetricDefinition
 
+use chrono::{DateTime, Utc};
 use stitchd_core::metric::{AggregationConfig, RatioConfig};
 
 use super::{
@@ -37,6 +38,7 @@ pub fn build_ratio_query(
     iteration_id: &str,
     env_id: &str,
     variant_keys: &[&str],
+    iteration_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, QueryBuildError> {
     if ratio_cfg.min_denominator < 0 {
         return Err(QueryBuildError::InvalidConfig(format!(
@@ -54,6 +56,7 @@ pub fn build_ratio_query(
         iteration_id,
         env_id,
         variant_keys,
+        iteration_end,
     )?;
     let den_q = build_aggregation_query(
         denominator_cfg,
@@ -61,6 +64,7 @@ pub fn build_ratio_query(
         iteration_id,
         env_id,
         variant_keys,
+        iteration_end,
     )?;
 
     // Numerator binds keep indices [0, num_count); denominator starts at
@@ -97,6 +101,7 @@ pub fn build_ratio_query(
         iteration_id,
         env_id,
         variant_keys,
+        iteration_end,
     )?;
     let den_count_offset = offset + den_q.binds.len();
     let den_count_sql_shifted = shift_placeholders(&den_count_q.sql, den_count_offset);
@@ -174,6 +179,7 @@ fn indent_lines(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
     use serde_json::json;
     use stitchd_core::id::MetricId;
     use stitchd_core::metric::{AggregationConfig, AggregationOperator};
@@ -203,6 +209,10 @@ mod tests {
         }
     }
 
+    fn iter_end() -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap()
+    }
+
     #[test]
     fn ratio_two_aggregations_emits_three_ctes() {
         let q = build_ratio_query(
@@ -213,6 +223,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
         assert!(q.sql.contains("WITH numerator AS"));
@@ -232,6 +243,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
         assert!(
@@ -253,6 +265,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
 
@@ -284,6 +297,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
 
@@ -309,22 +323,23 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
 
-        // Numerator emits binds 0..=5 → env, exp, iter, event_a, ctrl, treat
-        // Denominator emits binds 6..=11 → env, exp, iter, event_b, ctrl, treat
-        // Denominator_count reuses the same Count config → binds 12..=17
-        // min_denominator → bind 18
-        assert_eq!(q.binds.len(), 19);
+        // Numerator emits binds 0..=6 → env, exp, iter, event_a, iter_end, ctrl, treat
+        // Denominator emits binds 7..=13 → env, exp, iter, event_b, iter_end, ctrl, treat
+        // Denominator_count reuses the same Count config → binds 14..=20
+        // min_denominator → bind 21
+        assert_eq!(q.binds.len(), 22);
 
-        // Spot-check: the denominator CTE must reference {p6} (the env_id
+        // Spot-check: the denominator CTE must reference {p7} (the env_id
         // of the denominator leg, since each leg starts with env_id).
         let den_cte_start = q.sql.find("), denominator AS (").unwrap();
         let den_cte_end = q.sql.find("), denominator_count AS (").unwrap();
         let den_cte = &q.sql[den_cte_start..den_cte_end];
         assert!(
-            den_cte.contains("{p6}"),
+            den_cte.contains("{p7}"),
             "denominator CTE must use shifted placeholders, got:\n{den_cte}"
         );
     }
@@ -339,6 +354,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
@@ -360,6 +376,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap_err();
         assert_eq!(err, QueryBuildError::UnsupportedJsonLogic("%".into()));

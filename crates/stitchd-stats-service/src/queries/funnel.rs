@@ -36,6 +36,7 @@
 //! least step 0). The mode `strict_order` is enabled by default — set
 //! `count_repeats: true` on the config to disable it.
 
+use chrono::{DateTime, Utc};
 use stitchd_core::metric::FunnelConfig;
 
 use super::{BuiltQuery, QueryBind, QueryBuildError, push_bind};
@@ -51,7 +52,11 @@ pub fn build_funnel_query(
     iteration_id: &str,
     env_id: &str,
     variant_keys: &[&str],
+    _iteration_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, QueryBuildError> {
+    // Phase 5 Task 5.3 (subsequent commit) cuts this body over to the
+    // `experiment_assignments` JOIN model + uses `_iteration_end`. The
+    // signature lands first so the dispatcher and ratio builder compile.
     if cfg.steps.len() < 2 {
         return Err(QueryBuildError::InvalidConfig(format!(
             "funnel must have at least 2 steps (got {})",
@@ -199,6 +204,7 @@ fn escape_sql_literal(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use stitchd_core::metric::{FunnelConfig, FunnelStep};
 
     const ENV_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -223,7 +229,7 @@ mod tests {
             window_seconds: 3600,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
 
         // windowFunnel call includes the window and strict_order mode.
         assert!(
@@ -259,7 +265,7 @@ mod tests {
             window_seconds: 7200,
             count_repeats: true,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
 
         // count_repeats: true → no strict_order mode argument.
         assert!(
@@ -280,7 +286,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
 
         // Step 0: conversion_rate is 1.0 (everyone in the funnel reached
         // step 0 by definition).
@@ -312,7 +318,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
         // 4 steps → 3 UNION ALL separators.
         let unions = q.sql.matches("UNION ALL").count();
         assert_eq!(
@@ -329,7 +335,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
         // Each step's outer SELECT must emit its index as a literal.
         assert!(q.sql.contains("CAST(0 AS UInt32) AS step_index"));
         assert!(q.sql.contains("CAST(1 AS UInt32) AS step_index"));
@@ -343,7 +349,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
+        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
@@ -354,7 +360,7 @@ mod tests {
             window_seconds: 0,
             count_repeats: false,
         };
-        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
+        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
@@ -365,7 +371,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &[]).unwrap_err();
+        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &[], Utc::now()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
@@ -376,7 +382,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
         assert!(q.sql.contains("FROM events_v2"));
     }
 
@@ -387,7 +393,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
         // The inner CTE groups per (context, variant) so windowFunnel runs
         // over each context's timeline; the outer SELECT then aggregates
         // across contexts per variant.
@@ -403,7 +409,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
         assert!(q.sql.contains("'page_view' AS event_key"));
         assert!(q.sql.contains("'checkout_completed' AS event_key"));
     }
@@ -415,7 +421,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), Utc::now()).unwrap();
         assert!(q.sql.contains("t.1 = 'iteration'"));
     }
 
