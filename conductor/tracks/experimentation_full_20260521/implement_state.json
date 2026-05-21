@@ -1,9 +1,9 @@
 {
-  "current_phase": "Data Model Foundations",
-  "current_phase_index": 0,
+  "current_phase": "Flag Service — Eval Log Enhancement",
+  "current_phase_index": 1,
   "current_task_index": 4,
-  "completed_phases": [],
-  "last_updated": "2026-05-21T18:30:00Z",
+  "completed_phases": ["Data Model Foundations"],
+  "last_updated": "2026-05-21T22:00:00Z",
   "status": "in_progress",
-  "notes": "Phase 1 Tasks 1-4 + 1.5 complete (commits 4d043ac + 0e50929). 141 tests pass. Next: Phase 1 Task 5 (Conductor manual verification gate), then start Phase 2 + 3 in parallel (both depend only on Phase 1)."
+  "notes": "Phase 2 Tasks 1-3 complete (commits 0f0516c + 9d02142 + 9313c75). 443 core lib + 77 flag-service lib + 1 e2e tests pass. cargo fmt + cargo clippy --workspace --all-targets clean. CH inspection confirms (targeting_on, matched_rule_id) row shape. Next: Phase 2 checkpoint commit + Phase 3."
 }

@@ -32,7 +32,8 @@ use stitchd_db::{
 };
 use stitchd_flag_service::sdk_backend::FlagSdkBackendServiceImpl;
 use stitchd_proto::sdk::v1::{
-    FlagEvaluationEvent, IngestSdkEvalLogRequest, flag_sdk_backend_service_server::FlagSdkBackendService,
+    FlagEvaluationEvent, IngestSdkEvalLogRequest,
+    flag_sdk_backend_service_server::FlagSdkBackendService,
 };
 
 // ── ClickHouse client + skip-gate helper ────────────────────────────────────
@@ -198,11 +199,7 @@ impl SegmentRepository for StubSegmentRepo {
     async fn update(&self, _s: &Segment) -> Result<Segment, RepositoryError> {
         unimplemented!()
     }
-    async fn upsert_rules(
-        &self,
-        _id: SegmentId,
-        _rules: &[Rule],
-    ) -> Result<(), RepositoryError> {
+    async fn upsert_rules(&self, _id: SegmentId, _rules: &[Rule]) -> Result<(), RepositoryError> {
         unimplemented!()
     }
     async fn set_list_entries(
@@ -247,10 +244,7 @@ impl SegmentRepository for StubSegmentRepo {
     ) -> Result<Vec<ContextMembership>, RepositoryError> {
         unimplemented!()
     }
-    async fn find_batch_by_ids(
-        &self,
-        _ids: &[SegmentId],
-    ) -> Result<Vec<Segment>, RepositoryError> {
+    async fn find_batch_by_ids(&self, _ids: &[SegmentId]) -> Result<Vec<Segment>, RepositoryError> {
         unimplemented!()
     }
     async fn find_rules_batch(
@@ -298,10 +292,7 @@ struct StubEventDefRepo;
 
 #[async_trait]
 impl EventDefinitionRepository for StubEventDefRepo {
-    async fn find_by_id(
-        &self,
-        _id: EventDefinitionId,
-    ) -> Result<EventDefinition, RepositoryError> {
+    async fn find_by_id(&self, _id: EventDefinitionId) -> Result<EventDefinition, RepositoryError> {
         unimplemented!()
     }
     async fn find_by_key(
@@ -413,14 +404,7 @@ async fn eval_log_matched_rule_three_scenarios_end_to_end() {
         // Scenario 2: targeting on, no custom rule matched (default-rule path).
         make_event(flag_id, &flag_key, "control", "default_rule", "", "bob"),
         // Scenario 3: disabled flag.
-        make_event(
-            flag_id,
-            &flag_key,
-            "__disabled__",
-            "disabled",
-            "",
-            "carol",
-        ),
+        make_event(flag_id, &flag_key, "__disabled__", "disabled", "", "carol"),
     ];
 
     let svc = make_service(Arc::clone(&ch));
@@ -460,7 +444,10 @@ async fn eval_log_matched_rule_three_scenarios_end_to_end() {
     let carol = rows.iter().find(|r| r.context_key == "carol").unwrap();
 
     // Scenario 1: rule matched
-    assert!(alice.targeting_on, "alice (matched) must have targeting_on=true");
+    assert!(
+        alice.targeting_on,
+        "alice (matched) must have targeting_on=true"
+    );
     assert_eq!(
         alice.matched_rule_id,
         Some(rule_id),
@@ -468,7 +455,10 @@ async fn eval_log_matched_rule_three_scenarios_end_to_end() {
     );
 
     // Scenario 2: default-rule fall-through
-    assert!(bob.targeting_on, "bob (default_rule) must have targeting_on=true");
+    assert!(
+        bob.targeting_on,
+        "bob (default_rule) must have targeting_on=true"
+    );
     assert!(
         bob.matched_rule_id.is_none(),
         "bob's matched_rule_id must be NULL for default-rule fall-through"
@@ -484,7 +474,5 @@ async fn eval_log_matched_rule_three_scenarios_end_to_end() {
         "carol's matched_rule_id must be NULL for disabled flag"
     );
 
-    println!(
-        "OK: 3 scenarios verified — alice=matched, bob=default_rule, carol=disabled"
-    );
+    println!("OK: 3 scenarios verified — alice=matched, bob=default_rule, carol=disabled");
 }
