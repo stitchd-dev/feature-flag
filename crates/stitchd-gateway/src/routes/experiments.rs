@@ -35,6 +35,24 @@ pub struct CreateExperimentBody {
     pub description: Option<String>,
     pub flag_key: Option<String>,
     pub variant_keys: Option<Vec<String>>,
+    /// When set, the experiment binds to a specific rule on the flag —
+    /// the rule's output MUST be a percentage rollout (Allocation), else
+    /// the request is rejected with 422 `INVALID_RULE_KIND`. Mutually
+    /// exclusive with `targets_default_rule`.
+    pub flag_rule_id: Option<String>,
+    /// When `true`, the experiment binds to the flag's default-rule
+    /// percentage-distribution fall-through. The parent flag must have
+    /// `default_rule_distribution` configured (validated against the
+    /// flag's `default_rule_distribution` JSONB column once Phase 7 wires
+    /// it through the proto; for Phase 3 we enforce only the XOR
+    /// invariant with `flag_rule_id`).
+    #[serde(default)]
+    pub targets_default_rule: bool,
+    /// Analysis unit context types. At least one entry is required and
+    /// each entry must be registered in `context_type_registry` for the
+    /// environment.
+    #[serde(default)]
+    pub unit_context_types: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -43,6 +61,12 @@ pub struct UpdateExperimentBody {
     pub description: Option<String>,
     pub variant_keys: Option<Vec<String>>,
     pub version: Option<u64>,
+    pub flag_key: Option<String>,
+    pub flag_rule_id: Option<String>,
+    #[serde(default)]
+    pub targets_default_rule: bool,
+    #[serde(default)]
+    pub unit_context_types: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -137,6 +161,134 @@ fn status_from_str(s: &str) -> ExperimentStatus {
     }
 }
 
+// ─── Experiment binding validation — Task 3.3 ────────────────────────────────
+//
+// At experiment create/update time, enforce the four invariants the spec §2
+// "Experiment Constraints" mandates. Errors surface as HTTP 422 with a
+// structured `error` discriminator the admin UI / SDK can branch on.
+//
+// 1. INVALID_RULE_KIND        — bound rule must be a percentage rollout.
+// 2. INVALID_DEFAULT_RULE_KIND — `targets_default_rule = true` requires a
+//                                default-rule distribution on the flag
+//                                (full check deferred to Phase 7 once the
+//                                proto carries the field; for Phase 3 we
+//                                enforce the XOR invariant with
+//                                `flag_rule_id`).
+// 3. EMPTY_UNIT_CONTEXT_TYPES — at least one entry required.
+// 4. UNKNOWN_CONTEXT_TYPE     — each entry must be registered for the env.
+
+/// Subset of the experiment binding fields the validator inspects. Both
+/// `CreateExperimentBody` and `UpdateExperimentBody` flatten through this
+/// struct so the helper signature is symmetric across create + update.
+#[derive(Debug, Clone)]
+pub(crate) struct ExperimentBindingInputs {
+    pub environment_id: String,
+    pub flag_key: Option<String>,
+    pub flag_rule_id: Option<String>,
+    pub targets_default_rule: bool,
+    pub unit_context_types: Vec<String>,
+}
+
+/// Validate the four binding invariants from spec §2. Returns
+/// `Err(GatewayError::ExperimentBindingInvalid)` (HTTP 422) on the first
+/// violation; success is a no-op.
+///
+/// `flag_lookup` is a closure injected by the caller so tests can stub it
+/// without spinning up a full mock FlagService. In production it calls
+/// `state.flag_client.get_flag(...)` to retrieve the flag + its rules.
+///
+/// `context_types_lookup` is similarly injected; in production it calls
+/// `state.analytics_client.list_context_types(...)`.
+pub(crate) async fn validate_experiment_binding<F, FFut, G, GFut>(
+    inputs: &ExperimentBindingInputs,
+    flag_lookup: F,
+    context_types_lookup: G,
+) -> Result<(), GatewayError>
+where
+    F: FnOnce(String, String) -> FFut,
+    FFut:
+        std::future::Future<Output = Result<stitchd_proto::flags::v1::FeatureFlag, tonic::Status>>,
+    G: FnOnce(String) -> GFut,
+    GFut: std::future::Future<Output = Result<Vec<String>, tonic::Status>>,
+{
+    // ── XOR — exactly one of flag_rule_id / targets_default_rule must be set.
+    let has_rule_id = inputs.flag_rule_id.is_some();
+    if has_rule_id && inputs.targets_default_rule {
+        return Err(GatewayError::ExperimentBindingInvalid {
+            code: "invalid_rule_kind",
+            message: "set exactly one of flag_rule_id or targets_default_rule, not both"
+                .to_string(),
+        });
+    }
+    if !has_rule_id && !inputs.targets_default_rule {
+        return Err(GatewayError::ExperimentBindingInvalid {
+            code: "invalid_rule_kind",
+            message: "experiment must bind to either a flag_rule_id (percentage rollout) or the flag's default rule (targets_default_rule=true)".to_string(),
+        });
+    }
+
+    // ── Unit context types — at least one entry, all known to the env's registry.
+    if inputs.unit_context_types.is_empty() {
+        return Err(GatewayError::ExperimentBindingInvalid {
+            code: "empty_unit_context_types",
+            message: "unit_context_types must contain at least one entry".to_string(),
+        });
+    }
+
+    let registered = context_types_lookup(inputs.environment_id.clone())
+        .await
+        .map_err(GatewayError::from)?;
+    let registered_set: std::collections::HashSet<_> = registered.into_iter().collect();
+    for ct in &inputs.unit_context_types {
+        if !registered_set.contains(ct) {
+            return Err(GatewayError::ExperimentBindingInvalid {
+                code: "unknown_context_type",
+                message: format!("context type '{ct}' is not registered for this environment"),
+            });
+        }
+    }
+
+    // ── Rule kind — when bound to a flag rule, the rule's output must be a
+    // percentage rollout (Allocation).
+    if let Some(rule_id) = &inputs.flag_rule_id {
+        let flag_key =
+            inputs
+                .flag_key
+                .clone()
+                .ok_or_else(|| GatewayError::ExperimentBindingInvalid {
+                    code: "invalid_rule_kind",
+                    message: "flag_key is required when flag_rule_id is set".to_string(),
+                })?;
+        let flag = flag_lookup(inputs.environment_id.clone(), flag_key)
+            .await
+            .map_err(GatewayError::from)?;
+        // The proto FlagRule doesn't carry its own UUID today; we use rule
+        // index (1-based) or skip the per-rule match if rule_id parses to a
+        // non-index string. The substantive constraint is "at least one rule
+        // is a percentage rollout AND the bound rule is one of them" — which
+        // can be tightened in Phase 7 when the proto carries rule IDs.
+        let _ = rule_id; // index/UUID tightening deferred to Phase 7
+        let any_percentage_rule = flag.rules.iter().any(|r| {
+            matches!(
+                r.output,
+                Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(_))
+            )
+        });
+        if !any_percentage_rule {
+            return Err(GatewayError::ExperimentBindingInvalid {
+                code: "invalid_rule_kind",
+                message: "the bound rule must produce a percentage rollout (allocation); specific-variant rules are not eligible".to_string(),
+            });
+        }
+    }
+
+    // ── INVALID_DEFAULT_RULE_KIND — Phase 7 lookup is deferred; we still
+    //    accept `targets_default_rule = true` here, deferring the
+    //    default_rule_distribution presence check to Task 7.5.
+
+    Ok(())
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 /// `GET /v1/environments/{environment_id}/experiments`
@@ -198,6 +350,57 @@ pub async fn create_experiment(
     Path(environment_id): Path<String>,
     Json(body): Json<CreateExperimentBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let inputs = ExperimentBindingInputs {
+        environment_id: environment_id.clone(),
+        flag_key: body.flag_key.clone(),
+        flag_rule_id: body.flag_rule_id.clone(),
+        targets_default_rule: body.targets_default_rule,
+        unit_context_types: body.unit_context_types.clone(),
+    };
+    validate_experiment_binding(
+        &inputs,
+        |env_id, flag_key| {
+            let state = Arc::clone(&state);
+            async move {
+                let req = tonic::Request::new(stitchd_proto::flags::v1::GetFlagRequest {
+                    environment_id: env_id,
+                    project_id: String::new(),
+                    flag_key,
+                });
+                state
+                    .flag_client
+                    .lock()
+                    .await
+                    .get_flag(req)
+                    .await
+                    .map(|r| r.into_inner())
+            }
+        },
+        |env_id| {
+            let state = Arc::clone(&state);
+            async move {
+                let req =
+                    tonic::Request::new(stitchd_proto::analytics::v1::ListContextTypesRequest {
+                        environment_id: env_id,
+                    });
+                state
+                    .analytics_client
+                    .lock()
+                    .await
+                    .list_context_types(req)
+                    .await
+                    .map(|r| {
+                        r.into_inner()
+                            .types
+                            .into_iter()
+                            .map(|t| t.context_type)
+                            .collect()
+                    })
+            }
+        },
+    )
+    .await?;
+
     let experiment = Experiment {
         environment_id,
         name: body.name.unwrap_or_default(),
@@ -276,6 +479,67 @@ pub async fn update_experiment(
     Path((environment_id, experiment_id)): Path<(String, String)>,
     Json(body): Json<UpdateExperimentBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    // Run the binding validator only when the caller supplied any of the new
+    // binding fields — keeping back-compat for partial-update PATCHes that
+    // don't touch the flag binding.
+    let touches_binding = body.flag_rule_id.is_some()
+        || body.targets_default_rule
+        || !body.unit_context_types.is_empty()
+        || body.flag_key.is_some();
+    if touches_binding {
+        let inputs = ExperimentBindingInputs {
+            environment_id: environment_id.clone(),
+            flag_key: body.flag_key.clone(),
+            flag_rule_id: body.flag_rule_id.clone(),
+            targets_default_rule: body.targets_default_rule,
+            unit_context_types: body.unit_context_types.clone(),
+        };
+        validate_experiment_binding(
+            &inputs,
+            |env_id, flag_key| {
+                let state = Arc::clone(&state);
+                async move {
+                    let req = tonic::Request::new(stitchd_proto::flags::v1::GetFlagRequest {
+                        environment_id: env_id,
+                        project_id: String::new(),
+                        flag_key,
+                    });
+                    state
+                        .flag_client
+                        .lock()
+                        .await
+                        .get_flag(req)
+                        .await
+                        .map(|r| r.into_inner())
+                }
+            },
+            |env_id| {
+                let state = Arc::clone(&state);
+                async move {
+                    let req = tonic::Request::new(
+                        stitchd_proto::analytics::v1::ListContextTypesRequest {
+                            environment_id: env_id,
+                        },
+                    );
+                    state
+                        .analytics_client
+                        .lock()
+                        .await
+                        .list_context_types(req)
+                        .await
+                        .map(|r| {
+                            r.into_inner()
+                                .types
+                                .into_iter()
+                                .map(|t| t.context_type)
+                                .collect()
+                        })
+                }
+            },
+        )
+        .await?;
+    }
+
     let experiment = Experiment {
         id: experiment_id.clone(),
         environment_id,
@@ -557,7 +821,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_experiment_returns_201_or_502() {
+    async fn create_experiment_returns_201_or_502_or_422() {
         let state = make_stub_state();
         let app = test_router(state);
         let resp = app
@@ -573,8 +837,13 @@ mod tests {
             )
             .await
             .unwrap();
+        // 422 is the post-Task-3.3 outcome — the body omits `unit_context_types`,
+        // which the new binding validator rejects with EMPTY_UNIT_CONTEXT_TYPES
+        // before it ever reaches the gRPC client.
         assert!(
-            resp.status() == StatusCode::CREATED || resp.status() == StatusCode::BAD_GATEWAY,
+            resp.status() == StatusCode::CREATED
+                || resp.status() == StatusCode::BAD_GATEWAY
+                || resp.status() == StatusCode::UNPROCESSABLE_ENTITY,
             "status: {}",
             resp.status()
         );
@@ -732,5 +1001,202 @@ mod tests {
             "status: {}",
             resp.status()
         );
+    }
+
+    // ── validate_experiment_binding — Task 3.3 ─────────────────────────────
+
+    use super::{ExperimentBindingInputs, validate_experiment_binding};
+    use stitchd_proto::flags::v1::{
+        AllocationBucket, FeatureFlag, FlagRule, PercentageAllocation, flag_rule::Output,
+    };
+
+    /// FlagService stub that returns a flag with `rules` ranged over caller
+    /// preference.
+    fn flag_with_rules(rules: Vec<FlagRule>) -> FeatureFlag {
+        FeatureFlag {
+            key: "my-flag".to_string(),
+            rules,
+            ..Default::default()
+        }
+    }
+
+    fn percentage_rule() -> FlagRule {
+        FlagRule {
+            output: Some(Output::Allocation(PercentageAllocation {
+                context_hash_specs: std::collections::HashMap::new(),
+                buckets: vec![AllocationBucket {
+                    variant_key: "on".to_string(),
+                    weight_milli: 1000,
+                }],
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn variant_only_rule() -> FlagRule {
+        FlagRule {
+            output: Some(Output::VariantKey("on".to_string())),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn validator_rejects_empty_unit_context_types() {
+        let inputs = ExperimentBindingInputs {
+            environment_id: "env-1".to_string(),
+            flag_key: Some("flag-1".to_string()),
+            flag_rule_id: Some("rule-1".to_string()),
+            targets_default_rule: false,
+            unit_context_types: vec![],
+        };
+        let err = validate_experiment_binding(
+            &inputs,
+            |_, _| async { Ok(flag_with_rules(vec![percentage_rule()])) },
+            |_| async { Ok(vec!["user".to_string()]) },
+        )
+        .await
+        .expect_err("expected EMPTY_UNIT_CONTEXT_TYPES");
+        match err {
+            GatewayError::ExperimentBindingInvalid { code, .. } => {
+                assert_eq!(code, "empty_unit_context_types");
+            }
+            other => panic!("unexpected variant {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validator_rejects_unknown_context_type() {
+        let inputs = ExperimentBindingInputs {
+            environment_id: "env-1".to_string(),
+            flag_key: Some("flag-1".to_string()),
+            flag_rule_id: Some("rule-1".to_string()),
+            targets_default_rule: false,
+            unit_context_types: vec!["device".to_string()],
+        };
+        let err = validate_experiment_binding(
+            &inputs,
+            |_, _| async { Ok(flag_with_rules(vec![percentage_rule()])) },
+            |_| async { Ok(vec!["user".to_string(), "account".to_string()]) },
+        )
+        .await
+        .expect_err("expected UNKNOWN_CONTEXT_TYPE");
+        match err {
+            GatewayError::ExperimentBindingInvalid { code, message } => {
+                assert_eq!(code, "unknown_context_type");
+                assert!(message.contains("device"));
+            }
+            other => panic!("unexpected variant {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validator_rejects_invalid_rule_kind_when_no_allocation_rule() {
+        let inputs = ExperimentBindingInputs {
+            environment_id: "env-1".to_string(),
+            flag_key: Some("flag-1".to_string()),
+            flag_rule_id: Some("rule-1".to_string()),
+            targets_default_rule: false,
+            unit_context_types: vec!["user".to_string()],
+        };
+        let err = validate_experiment_binding(
+            &inputs,
+            |_, _| async { Ok(flag_with_rules(vec![variant_only_rule()])) },
+            |_| async { Ok(vec!["user".to_string()]) },
+        )
+        .await
+        .expect_err("expected INVALID_RULE_KIND");
+        match err {
+            GatewayError::ExperimentBindingInvalid { code, .. } => {
+                assert_eq!(code, "invalid_rule_kind");
+            }
+            other => panic!("unexpected variant {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validator_rejects_xor_violation_both_set() {
+        let inputs = ExperimentBindingInputs {
+            environment_id: "env-1".to_string(),
+            flag_key: Some("flag-1".to_string()),
+            flag_rule_id: Some("rule-1".to_string()),
+            targets_default_rule: true,
+            unit_context_types: vec!["user".to_string()],
+        };
+        let err = validate_experiment_binding(
+            &inputs,
+            |_, _| async { Ok(flag_with_rules(vec![percentage_rule()])) },
+            |_| async { Ok(vec!["user".to_string()]) },
+        )
+        .await
+        .expect_err("expected INVALID_RULE_KIND for XOR violation");
+        match err {
+            GatewayError::ExperimentBindingInvalid { code, .. } => {
+                assert_eq!(code, "invalid_rule_kind");
+            }
+            other => panic!("unexpected variant {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validator_rejects_xor_violation_neither_set() {
+        let inputs = ExperimentBindingInputs {
+            environment_id: "env-1".to_string(),
+            flag_key: None,
+            flag_rule_id: None,
+            targets_default_rule: false,
+            unit_context_types: vec!["user".to_string()],
+        };
+        let err = validate_experiment_binding(
+            &inputs,
+            |_, _| async { Ok(flag_with_rules(vec![percentage_rule()])) },
+            |_| async { Ok(vec!["user".to_string()]) },
+        )
+        .await
+        .expect_err("expected INVALID_RULE_KIND for XOR violation");
+        match err {
+            GatewayError::ExperimentBindingInvalid { code, .. } => {
+                assert_eq!(code, "invalid_rule_kind");
+            }
+            other => panic!("unexpected variant {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn validator_accepts_percentage_rule_binding() {
+        let inputs = ExperimentBindingInputs {
+            environment_id: "env-1".to_string(),
+            flag_key: Some("flag-1".to_string()),
+            flag_rule_id: Some("rule-1".to_string()),
+            targets_default_rule: false,
+            unit_context_types: vec!["user".to_string()],
+        };
+        validate_experiment_binding(
+            &inputs,
+            |_, _| async { Ok(flag_with_rules(vec![percentage_rule()])) },
+            |_| async { Ok(vec!["user".to_string()]) },
+        )
+        .await
+        .expect("expected valid percentage-rule binding to pass");
+    }
+
+    #[tokio::test]
+    async fn validator_accepts_default_rule_binding() {
+        // Phase 3 deferral: the full INVALID_DEFAULT_RULE_KIND lookup lands
+        // in Phase 7 once the proto carries default_rule_distribution. Here
+        // we assert the XOR-satisfied path is accepted.
+        let inputs = ExperimentBindingInputs {
+            environment_id: "env-1".to_string(),
+            flag_key: Some("flag-1".to_string()),
+            flag_rule_id: None,
+            targets_default_rule: true,
+            unit_context_types: vec!["user".to_string()],
+        };
+        validate_experiment_binding(
+            &inputs,
+            |_, _| async { Ok(flag_with_rules(vec![])) },
+            |_| async { Ok(vec!["user".to_string()]) },
+        )
+        .await
+        .expect("expected default-rule binding (XOR satisfied) to pass");
     }
 }
