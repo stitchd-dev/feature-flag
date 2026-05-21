@@ -117,7 +117,7 @@ impl StatsService for StatsServiceImpl {
 
         // Clamp days to [1, 90]; default 7.
         let days = if req.days == 0 { 7 } else { req.days };
-        let days = days.min(90).max(1);
+        let days = days.clamp(1, 90);
 
         let reader = self.timeseries_reader.as_ref().ok_or_else(|| {
             Status::unimplemented("timeseries_reader not configured on this service instance")
@@ -257,9 +257,8 @@ mod tests {
 
     #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
     async fn timeseries_invalid_experiment_id_returns_invalid_argument(pool: PgPool) {
-        let svc = StatsServiceImpl::new(pool).with_timeseries_reader(Arc::new(
-            StubTimeseriesReader::with_rows(vec![]),
-        ));
+        let svc = StatsServiceImpl::new(pool)
+            .with_timeseries_reader(Arc::new(StubTimeseriesReader::with_rows(vec![])));
         let req = Request::new(GetExperimentTimeseriesRequest {
             experiment_id: "not-a-uuid".to_string(),
             metric_id: Uuid::new_v4().to_string(),
@@ -272,9 +271,8 @@ mod tests {
 
     #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
     async fn timeseries_empty_context_type_returns_invalid_argument(pool: PgPool) {
-        let svc = StatsServiceImpl::new(pool).with_timeseries_reader(Arc::new(
-            StubTimeseriesReader::with_rows(vec![]),
-        ));
+        let svc = StatsServiceImpl::new(pool)
+            .with_timeseries_reader(Arc::new(StubTimeseriesReader::with_rows(vec![])));
         let req = Request::new(GetExperimentTimeseriesRequest {
             experiment_id: Uuid::new_v4().to_string(),
             metric_id: Uuid::new_v4().to_string(),
@@ -325,16 +323,19 @@ mod tests {
             variant_key: "treatment".to_string(),
             value: 12.5,
         };
-        let svc = StatsServiceImpl::new(pool).with_timeseries_reader(Arc::new(
-            StubTimeseriesReader::with_rows(vec![bucket]),
-        ));
+        let svc = StatsServiceImpl::new(pool)
+            .with_timeseries_reader(Arc::new(StubTimeseriesReader::with_rows(vec![bucket])));
         let req = Request::new(GetExperimentTimeseriesRequest {
             experiment_id: Uuid::new_v4().to_string(),
             metric_id: Uuid::new_v4().to_string(),
             context_type: "user".to_string(),
             days: 14,
         });
-        let resp = svc.get_experiment_timeseries(req).await.unwrap().into_inner();
+        let resp = svc
+            .get_experiment_timeseries(req)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(resp.buckets.len(), 1);
         assert_eq!(resp.buckets[0].variant_key, "treatment");
         assert!((resp.buckets[0].value - 12.5).abs() < 1e-9);

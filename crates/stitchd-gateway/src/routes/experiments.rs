@@ -169,8 +169,7 @@ pub struct ExperimentResultsJson {
     /// `"user"`, `"account"`). Each value carries variants + SRM +
     /// guardrails for that context type. Empty `{}` when no rows have
     /// been computed yet.
-    pub results_by_context_type:
-        std::collections::HashMap<String, ContextTypeResultsJson>,
+    pub results_by_context_type: std::collections::HashMap<String, ContextTypeResultsJson>,
     /// What the experiment is bound to (rule vs default-rule).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bound_target: Option<BoundTargetJson>,
@@ -837,13 +836,14 @@ pub async fn get_results(
             } else {
                 vr.context_type.clone()
             };
-            let bucket = results_by_context_type
-                .entry(ct)
-                .or_insert_with(|| ContextTypeResultsJson {
-                    variants: Vec::new(),
-                    srm: None,
-                    guardrails: Vec::new(),
-                });
+            let bucket =
+                results_by_context_type
+                    .entry(ct)
+                    .or_insert_with(|| ContextTypeResultsJson {
+                        variants: Vec::new(),
+                        srm: None,
+                        guardrails: Vec::new(),
+                    });
             bucket.variants.push(variant_result_to_json(vr));
         }
     }

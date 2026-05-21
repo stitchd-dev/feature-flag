@@ -12,8 +12,7 @@ use stitchd_proto::flags::v1::{
     EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
     GetFlagRequest, ListFlagsRequest, ListFlagsResponse, MutateFlagRequest, MutateFlagResponse,
     MutationKind, SetDefaultRuleDistributionRequest, SetDefaultRuleDistributionResponse,
-    UpdateFlagHashingRequest, UpdateFlagHashingResponse,
-    flag_service_server::FlagService,
+    UpdateFlagHashingRequest, UpdateFlagHashingResponse, flag_service_server::FlagService,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;

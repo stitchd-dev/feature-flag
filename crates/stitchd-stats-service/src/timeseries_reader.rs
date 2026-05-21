@@ -137,16 +137,16 @@ impl TimeseriesReader for ClickHouseTimeseriesReader {
 
         // Find the latest iteration of the experiment.
         let exp_id = stitchd_core::id::ExperimentId::from_uuid(experiment_id);
-        let iterations = self
-            .experiment_repo
-            .list_iterations(exp_id)
-            .await
-            .map_err(|e| match e {
-                stitchd_db::RepositoryError::NotFound { id } => {
-                    TimeseriesReaderError::IterationNotFound(id)
-                }
-                other => TimeseriesReaderError::Internal(other.to_string()),
-            })?;
+        let iterations =
+            self.experiment_repo
+                .list_iterations(exp_id)
+                .await
+                .map_err(|e| match e {
+                    stitchd_db::RepositoryError::NotFound { id } => {
+                        TimeseriesReaderError::IterationNotFound(id)
+                    }
+                    other => TimeseriesReaderError::Internal(other.to_string()),
+                })?;
         let latest = iterations
             .into_iter()
             .max_by_key(|i| i.started_at)
@@ -204,9 +204,12 @@ pub mod testing {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    /// `(experiment_id, metric_id, context_type, days)` captured per call.
+    pub type TimeseriesCall = (Uuid, Uuid, String, u32);
+
     /// Canned-response stub used in StatsService unit tests.
     pub struct StubTimeseriesReader {
-        pub calls: Arc<Mutex<Vec<(Uuid, Uuid, String, u32)>>>,
+        pub calls: Arc<Mutex<Vec<TimeseriesCall>>>,
         pub result: Result<Vec<TimeseriesBucket>, TimeseriesReaderError>,
     }
 

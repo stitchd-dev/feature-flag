@@ -1027,9 +1027,7 @@ pub async fn set_default_rule_distribution(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<SetDefaultRuleDistributionBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    use stitchd_proto::flags::v1::{
-        DefaultRuleAllocation, SetDefaultRuleDistributionRequest,
-    };
+    use stitchd_proto::flags::v1::{DefaultRuleAllocation, SetDefaultRuleDistributionRequest};
 
     let allocations: Vec<DefaultRuleAllocation> = body
         .distribution

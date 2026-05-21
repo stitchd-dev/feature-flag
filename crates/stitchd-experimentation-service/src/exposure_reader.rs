@@ -157,9 +157,12 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
+    /// `(experiment_id, context_type, offset, limit)` captured per call.
+    type StubCall = (Uuid, String, u64, u64);
+
     /// Test stub recording invocations and returning canned rows.
     pub struct StubReader {
-        pub calls: Arc<Mutex<Vec<(Uuid, String, u64, u64)>>>,
+        pub calls: Arc<Mutex<Vec<StubCall>>>,
         pub rows: Vec<ExposureRow>,
         pub total: u64,
     }
@@ -199,10 +202,7 @@ mod tests {
             rows: vec![row.clone()],
             total: 42,
         };
-        let (rows, total) = reader
-            .list_exposures(exp_id, "user", 0, 50)
-            .await
-            .unwrap();
+        let (rows, total) = reader.list_exposures(exp_id, "user", 0, 50).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].context_key, "alice");
         assert_eq!(total, 42);

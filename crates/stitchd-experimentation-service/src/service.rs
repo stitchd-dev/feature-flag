@@ -80,9 +80,7 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
 ///   "health": "green" | "yellow" | "red"
 /// }
 /// ```
-fn srm_json_to_proto(
-    val: &serde_json::Value,
-) -> Option<stitchd_proto::experiments::v1::SrmResult> {
+fn srm_json_to_proto(val: &serde_json::Value) -> Option<stitchd_proto::experiments::v1::SrmResult> {
     use stitchd_proto::experiments::v1::{SrmPerVariant, SrmResult};
     let obj = val.as_object()?;
     let per_variant = obj
@@ -545,11 +543,11 @@ impl ExperimentationService for ExperimentationServiceImpl {
         let mut latest_computed_at_ms: i64 = 0;
 
         // Fetch experiment to determine guardrail metric ids + bound_target + pre_period.
-        let experiment_record =
-            self.experiment_repo
-                .find_by_id(stitchd_core::id::ExperimentId::from_uuid(exp_id_uuid))
-                .await
-                .ok();
+        let experiment_record = self
+            .experiment_repo
+            .find_by_id(stitchd_core::id::ExperimentId::from_uuid(exp_id_uuid))
+            .await
+            .ok();
 
         let guardrail_metric_ids: std::collections::HashSet<String> = experiment_record
             .as_ref()
@@ -640,9 +638,8 @@ impl ExperimentationService for ExperimentationServiceImpl {
                             entry.p_value = p_val;
                             entry.p_value_present = true;
                         }
-                        if let Some(p_corr) = freq_json
-                            .get("p_value_corrected")
-                            .and_then(|v| v.as_f64())
+                        if let Some(p_corr) =
+                            freq_json.get("p_value_corrected").and_then(|v| v.as_f64())
                         {
                             entry.p_value_corrected = Some(p_corr);
                         }
@@ -671,9 +668,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
         let mut results_by_context_type: Vec<ContextTypeResults> = ctx_groups
             .into_iter()
             .map(|(context_type, (variants, guardrails))| {
-                let srm = srm_by_ctx
-                    .get(&context_type)
-                    .and_then(srm_json_to_proto);
+                let srm = srm_by_ctx.get(&context_type).and_then(srm_json_to_proto);
                 ContextTypeResults {
                     context_type,
                     variants,
@@ -883,18 +878,13 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
         let exposures = rows
             .into_iter()
-            .map(
-                |r| stitchd_proto::experiments::v1::ExposureRow {
-                    context_type: r.context_type,
-                    context_key: r.context_key,
-                    variant_key: r.variant_key,
-                    assigned_at: r.assigned_at.to_rfc3339(),
-                    matched_rule_id: r
-                        .matched_rule_id
-                        .map(|u| u.to_string())
-                        .unwrap_or_default(),
-                },
-            )
+            .map(|r| stitchd_proto::experiments::v1::ExposureRow {
+                context_type: r.context_type,
+                context_key: r.context_key,
+                variant_key: r.variant_key,
+                assigned_at: r.assigned_at.to_rfc3339(),
+                matched_rule_id: r.matched_rule_id.map(|u| u.to_string()).unwrap_or_default(),
+            })
             .collect();
 
         metrics::counter!("experimentation_service.list_exposures.ok").increment(1);

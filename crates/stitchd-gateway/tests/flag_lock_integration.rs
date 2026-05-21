@@ -146,10 +146,8 @@ impl FlagService for LockedFlagService {
     async fn set_default_rule_distribution(
         &self,
         _req: tonic::Request<stitchd_proto::flags::v1::SetDefaultRuleDistributionRequest>,
-    ) -> Result<
-        Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>,
-        Status,
-    > {
+    ) -> Result<Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>, Status>
+    {
         // Surface the locked sentinel — the integration test asserts the
         // 409 mapping for this RPC the same way it does for mutate_flag.
         Err(Status::failed_precondition(format!(
@@ -375,10 +373,8 @@ impl FlagService for UnlockedFlagService {
     async fn set_default_rule_distribution(
         &self,
         _req: tonic::Request<stitchd_proto::flags::v1::SetDefaultRuleDistributionRequest>,
-    ) -> Result<
-        Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>,
-        Status,
-    > {
+    ) -> Result<Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>, Status>
+    {
         Ok(Response::new(
             stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse {
                 flag: Some(FeatureFlag {
@@ -556,10 +552,8 @@ impl FlagService for InvalidDistFlagService {
     async fn set_default_rule_distribution(
         &self,
         _req: tonic::Request<stitchd_proto::flags::v1::SetDefaultRuleDistributionRequest>,
-    ) -> Result<
-        Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>,
-        Status,
-    > {
+    ) -> Result<Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>, Status>
+    {
         Err(Status::invalid_argument(
             "invalid_distribution: allocations must sum to 100",
         ))

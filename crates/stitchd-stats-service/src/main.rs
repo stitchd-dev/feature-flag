@@ -184,9 +184,8 @@ async fn main() -> anyhow::Result<()> {
     use stitchd_stats_service::timeseries_reader::ClickHouseTimeseriesReader;
     let audit: Arc<dyn stitchd_db::AuditLogger> =
         Arc::new(stitchd_db::PgAuditLogger::new(pg_pool.clone()));
-    let metric_repo: Arc<dyn stitchd_db::MetricRepository> = Arc::new(
-        PgMetricRepository::new(pg_pool.clone(), audit.clone()),
-    );
+    let metric_repo: Arc<dyn stitchd_db::MetricRepository> =
+        Arc::new(PgMetricRepository::new(pg_pool.clone(), audit.clone()));
     let experiment_repo: Arc<dyn stitchd_db::ExperimentRepository> =
         Arc::new(PgExperimentRepository::new(pg_pool.clone(), audit));
     let timeseries_reader = Arc::new(ClickHouseTimeseriesReader::new(

@@ -20,10 +20,8 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use stitchd_db::{PgAuditLogger, PgExperimentRepository, PgStatsScheduleRepository};
 use stitchd_experimentation_service::{
-    analytics_client::AnalyticsClient,
-    exposure_reader::ClickHouseExposureReader,
-    flag_client::FlagClient,
-    service::ExperimentationServiceImpl,
+    analytics_client::AnalyticsClient, exposure_reader::ClickHouseExposureReader,
+    flag_client::FlagClient, service::ExperimentationServiceImpl,
 };
 use stitchd_proto::experiments::v1::experimentation_service_server::ExperimentationServiceServer;
 

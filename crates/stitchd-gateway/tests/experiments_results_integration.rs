@@ -307,7 +307,10 @@ async fn get_results_returns_per_context_type_shape_with_srm_and_guardrails() {
 
     // ── results_by_context_type shape ───────────────────────────────────────
     let by_ct = &body["results_by_context_type"];
-    assert!(by_ct.is_object(), "results_by_context_type must be an object");
+    assert!(
+        by_ct.is_object(),
+        "results_by_context_type must be an object"
+    );
     let user_obj = &by_ct["user"];
     assert!(user_obj.is_object(), "user bucket must be an object");
     assert_eq!(user_obj["variants"].as_array().unwrap().len(), 2);

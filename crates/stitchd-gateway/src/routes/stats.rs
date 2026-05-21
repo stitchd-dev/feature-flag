@@ -297,9 +297,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri(
-                        "/v1/environments/env-1/experiments/exp-1/timeseries?context_type=user",
-                    )
+                    .uri("/v1/environments/env-1/experiments/exp-1/timeseries?context_type=user")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -319,9 +317,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri(
-                        "/v1/environments/env-1/experiments/exp-1/timeseries?metric_id=m1",
-                    )
+                    .uri("/v1/environments/env-1/experiments/exp-1/timeseries?metric_id=m1")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -379,9 +375,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri(
-                        "/v1/environments/env-1/experiments/exp-1/recompute/job-1",
-                    )
+                    .uri("/v1/environments/env-1/experiments/exp-1/recompute/job-1")
                     .body(Body::empty())
                     .unwrap(),
             )
