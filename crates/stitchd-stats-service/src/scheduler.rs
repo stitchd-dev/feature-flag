@@ -184,6 +184,14 @@ mod tests {
                 rx,
             )))
         }
+
+        async fn list_exposures(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::ListExposuresRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::ListExposuresResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
     }
 
     /// Spin up an in-process gRPC server and return a client connected to it.

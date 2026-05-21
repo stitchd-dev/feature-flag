@@ -11,8 +11,8 @@ use stitchd_db::{
 use stitchd_proto::flags::v1::{
     EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
     GetFlagRequest, ListFlagsRequest, ListFlagsResponse, MutateFlagRequest, MutateFlagResponse,
-    MutationKind, UpdateFlagHashingRequest, UpdateFlagHashingResponse,
-    flag_service_server::FlagService,
+    MutationKind, SetDefaultRuleDistributionRequest, SetDefaultRuleDistributionResponse,
+    UpdateFlagHashingRequest, UpdateFlagHashingResponse, flag_service_server::FlagService,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -917,6 +917,97 @@ impl FlagService for FlagServiceImpl {
         Ok(Response::new(EvaluatePreviewResponse {
             flag_enabled: flag.record.enabled,
             results_json,
+        }))
+    }
+
+    /// Set or clear the flag's default-rule percentage distribution.
+    ///
+    /// Subject to the whole-flag lock — when an experiment in
+    /// running/paused state owns the flag, the RPC fails with
+    /// `FAILED_PRECONDITION` carrying the `flag_locked_by_experiment:<uuid>`
+    /// sentinel (the gateway rewrites this into HTTP 409). Validates the
+    /// distribution shape via [`RolloutDistribution::validate`] before
+    /// touching the repository; invalid shapes return `INVALID_ARGUMENT`.
+    async fn set_default_rule_distribution(
+        &self,
+        request: Request<SetDefaultRuleDistributionRequest>,
+    ) -> Result<Response<SetDefaultRuleDistributionResponse>, Status> {
+        let req = request.into_inner();
+
+        let project_id = parse_project_id(&req.project_id)?
+            .ok_or_else(|| Status::invalid_argument("project_id is required"))?;
+        let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let mut record = self
+            .flag_repo
+            .find_by_key(&flag_key, project_id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        // Optimistic-lock check (mirrors mutate_flag).
+        if record.version != i64::try_from(req.version).unwrap_or(record.version) {
+            return Err(Status::aborted(format!(
+                "version conflict: expected {}, got {}",
+                record.version, req.version
+            )));
+        }
+
+        // Whole-flag lock: refuse mutation when an experiment is running/paused.
+        self.ensure_flag_unlocked(record.id)
+            .await
+            .map_err(Status::from)?;
+
+        // Empty `allocations` clears the distribution (reverts to single-default-variant
+        // behaviour). Populated → validate before persisting.
+        let new_dist = if req.allocations.is_empty() {
+            None
+        } else {
+            let dist = stitchd_core::rollout::RolloutDistribution {
+                allocations: req
+                    .allocations
+                    .iter()
+                    .map(|a| stitchd_core::rollout::RolloutAllocation {
+                        variant_key: a.variant_key.clone(),
+                        percentage: a.percentage,
+                    })
+                    .collect(),
+            };
+            dist.validate()
+                .map_err(|e| Status::invalid_argument(format!("invalid_distribution: {e}")))?;
+            Some(dist)
+        };
+
+        record.default_rule_distribution = new_dist;
+        // Update bumps version internally; PG repo returns the refreshed row.
+        let updated = self
+            .flag_repo
+            .update(&record)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let variants = self
+            .variant_repo
+            .find_by_flag(updated.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        let rules = self
+            .flag_repo
+            .find_rules(updated.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let new_version = u64::try_from(updated.version).unwrap_or(0);
+        let proto_flag = mapping::build_feature_flag_proto(&updated, variants, &rules);
+
+        metrics::counter!("flag_service.set_default_rule_distribution.ok").increment(1);
+        Ok(Response::new(SetDefaultRuleDistributionResponse {
+            flag: Some(proto_flag),
+            version: new_version,
         }))
     }
 }

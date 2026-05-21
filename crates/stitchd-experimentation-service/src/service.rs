@@ -13,12 +13,12 @@ use stitchd_core::{
 };
 use stitchd_db::{ExperimentRepository, StatsScheduleRepository};
 use stitchd_proto::experiments::v1::{
-    CreateExperimentRequest, DeleteExperimentRequest, ExperimentIteration as ProtoIteration,
-    ExperimentResults, GetExperimentIterationRequest, GetExperimentRequest, GetResultsRequest,
-    ListExperimentsRequest, ListExperimentsResponse, ListIterationsRequest, ListIterationsResponse,
-    ListRunningExperimentsRequest, RunningExperiment, TransitionExperimentRequest,
-    UpdateExperimentRequest, UpdateIterationLastComputedRequest,
-    UpdateIterationLastComputedResponse, VariantResult,
+    BoundTarget, ContextTypeResults, CreateExperimentRequest, DeleteExperimentRequest,
+    ExperimentIteration as ProtoIteration, ExperimentResults, GetExperimentIterationRequest,
+    GetExperimentRequest, GetResultsRequest, ListExperimentsRequest, ListExperimentsResponse,
+    ListIterationsRequest, ListIterationsResponse, ListRunningExperimentsRequest,
+    RunningExperiment, TransitionExperimentRequest, UpdateExperimentRequest,
+    UpdateIterationLastComputedRequest, UpdateIterationLastComputedResponse, VariantResult,
     experimentation_service_server::ExperimentationService,
 };
 
@@ -66,6 +66,68 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
     }
 }
 
+/// Map an SRM JSON payload (as written by stats-service) into the proto
+/// [`stitchd_proto::experiments::v1::SrmResult`] message.
+///
+/// Expected JSON shape (matches `stitchd_core::experimentation::stats::srm::SrmResult`):
+/// ```json
+/// {
+///   "per_variant": [
+///     { "variant_key": "control", "observed": 100, "expected": 100.0, "chi_sq_contribution": 0.0 }
+///   ],
+///   "overall_chi_sq": 0.0,
+///   "overall_chi_sq_p": 1.0,
+///   "health": "green" | "yellow" | "red"
+/// }
+/// ```
+fn srm_json_to_proto(val: &serde_json::Value) -> Option<stitchd_proto::experiments::v1::SrmResult> {
+    use stitchd_proto::experiments::v1::{SrmPerVariant, SrmResult};
+    let obj = val.as_object()?;
+    let per_variant = obj
+        .get("per_variant")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|row| SrmPerVariant {
+                    variant_key: row
+                        .get("variant_key")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    observed: row
+                        .get("observed")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0),
+                    expected: row
+                        .get("expected")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0),
+                    chi_sq_contribution: row
+                        .get("chi_sq_contribution")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(SrmResult {
+        per_variant,
+        overall_chi_sq: obj
+            .get("overall_chi_sq")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0),
+        overall_chi_sq_p: obj
+            .get("overall_chi_sq_p")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(1.0),
+        health: obj
+            .get("health")
+            .and_then(|s| s.as_str())
+            .unwrap_or("green")
+            .to_lowercase(),
+    })
+}
+
 /// Map a core [`Experiment`] to the proto [`stitchd_proto::experiments::v1::Experiment`] message.
 fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
     stitchd_proto::experiments::v1::Experiment {
@@ -102,6 +164,9 @@ pub struct ExperimentationServiceImpl {
     /// `None` skips the refresh (the dictionary's LIFETIME caps staleness at
     /// 60s in that case).
     dictionary_refresher: Option<Arc<dyn DictionaryRefresher>>,
+    /// Optional ClickHouse-backed reader for paginated `experiment_assignments`
+    /// reads (`ListExposures` RPC). `None` makes the RPC return `Unimplemented`.
+    exposure_reader: Option<Arc<dyn crate::exposure_reader::ExposureReader>>,
 }
 
 impl ExperimentationServiceImpl {
@@ -119,6 +184,7 @@ impl ExperimentationServiceImpl {
             schedule_repo,
             flag_client,
             dictionary_refresher: None,
+            exposure_reader: None,
         }
     }
 
@@ -129,6 +195,18 @@ impl ExperimentationServiceImpl {
     #[must_use]
     pub fn with_dictionary_refresher(mut self, refresher: Arc<dyn DictionaryRefresher>) -> Self {
         self.dictionary_refresher = Some(refresher);
+        self
+    }
+
+    /// Attach an [`crate::exposure_reader::ExposureReader`] for the
+    /// `ListExposures` RPC. Without one, calls to `ListExposures` return
+    /// `Status::unimplemented`.
+    #[must_use]
+    pub fn with_exposure_reader(
+        mut self,
+        reader: Arc<dyn crate::exposure_reader::ExposureReader>,
+    ) -> Self {
+        self.exposure_reader = Some(reader);
         self
     }
 }
@@ -438,12 +516,48 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .await
             .map_err(|e| Status::internal(format!("analytics-service error: {e}")))?;
 
-        // Aggregate streamed ExperimentResult protos into VariantResult messages.
-        // variant_stats is a JSON string: {"<variant_key>": <participant_count>, ...}
-        // We build one VariantResult per variant across all metric rows.
+        // Aggregate streamed ExperimentResult protos into VariantResult messages
+        // bucketed BY CONTEXT TYPE (Phase 7). `variant_stats` is a JSON string
+        // either `{"<variant_key>": <count_or_obj>, ...}` (back-compat) or
+        // `{"<variant_key>": { "count": N, "lift": L, ... }, ...}` (Phase 6).
+        //
+        // The legacy `variant_results` field is also populated (flat, across
+        // context types) for back-compat with callers that haven't switched to
+        // `results_by_context_type` yet.
+        //
+        // Guardrail rows are identified via the metric_id membership in the
+        // experiment's `guardrail_metric_ids`. They are written by stats-service
+        // with the same shape as primaries; we split them into the
+        // `guardrails` bucket here.
         use std::collections::HashMap;
-        let mut by_variant: HashMap<String, VariantResult> = HashMap::new();
+        // Map<(context_type, variant_key), VariantResult> for primaries.
+        let mut by_ctx_variant: HashMap<(String, String), VariantResult> = HashMap::new();
+        // Map<(context_type, variant_key), VariantResult> for guardrails.
+        let mut guardrails_by_ctx_variant: HashMap<(String, String), VariantResult> =
+            HashMap::new();
+        // SRM JSON snapshots per context_type (any metric row may carry it; we
+        // overwrite — they should agree across rows for a given context type).
+        let mut srm_by_ctx: HashMap<String, serde_json::Value> = HashMap::new();
+        // Track which metric_ids are guardrails so we route rows accordingly.
+        // Fetched once below from the experiment row.
         let mut latest_computed_at_ms: i64 = 0;
+
+        // Fetch experiment to determine guardrail metric ids + bound_target + pre_period.
+        let experiment_record = self
+            .experiment_repo
+            .find_by_id(stitchd_core::id::ExperimentId::from_uuid(exp_id_uuid))
+            .await
+            .ok();
+
+        let guardrail_metric_ids: std::collections::HashSet<String> = experiment_record
+            .as_ref()
+            .map(|e| {
+                e.guardrail_metric_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
 
         for result in &results {
             // Parse computed_at RFC 3339 → milliseconds.
@@ -456,34 +570,81 @@ impl ExperimentationService for ExperimentationServiceImpl {
                 latest_computed_at_ms = computed_ms;
             }
 
+            let context_type = if result.context_type.is_empty() {
+                "user".to_string()
+            } else {
+                result.context_type.clone()
+            };
+
+            let is_guardrail = guardrail_metric_ids.contains(&result.metric_key);
+            let target = if is_guardrail {
+                &mut guardrails_by_ctx_variant
+            } else {
+                &mut by_ctx_variant
+            };
+
             // variant_stats is a JSON object string.
             let variant_stats: serde_json::Value =
                 serde_json::from_str(&result.variant_stats).unwrap_or(serde_json::Value::Null);
 
-            if let Some(obj) = variant_stats.as_object() {
-                for (variant_key, count_val) in obj {
-                    let participant_count = count_val.as_u64().unwrap_or(0);
-                    let entry =
-                        by_variant
-                            .entry(variant_key.clone())
-                            .or_insert_with(|| VariantResult {
-                                variant_key: variant_key.clone(),
-                                participant_count,
-                                metric_values: HashMap::new(),
-                                p_value: 0.0,
-                                p_value_present: false,
-                            });
+            // SRM payload — stats-service may attach it under top-level "srm"
+            // of the variant_stats JSON (Phase 6) or in a `srm_result` key.
+            if let Some(srm_val) = variant_stats.get("srm") {
+                srm_by_ctx
+                    .entry(context_type.clone())
+                    .or_insert_with(|| srm_val.clone());
+            }
 
-                    // Extract p_value from frequentist_result JSON string if present.
+            if let Some(obj) = variant_stats.as_object() {
+                for (variant_key, val) in obj {
+                    if variant_key == "srm" {
+                        continue;
+                    }
+                    let (participant_count, lift) = match val {
+                        serde_json::Value::Number(n) => (n.as_u64().unwrap_or(0), 0.0_f64),
+                        serde_json::Value::Object(map) => {
+                            let count = map
+                                .get("count")
+                                .or_else(|| map.get("participant_count"))
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0);
+                            let lift = map
+                                .get("lift")
+                                .and_then(serde_json::Value::as_f64)
+                                .unwrap_or(0.0);
+                            (count, lift)
+                        }
+                        _ => (0, 0.0),
+                    };
+
+                    let key = (context_type.clone(), variant_key.clone());
+                    let entry = target.entry(key).or_insert_with(|| VariantResult {
+                        variant_key: variant_key.clone(),
+                        participant_count,
+                        metric_values: HashMap::new(),
+                        p_value: 0.0,
+                        p_value_present: false,
+                        p_value_corrected: None,
+                        context_type: context_type.clone(),
+                        direction_violation: false,
+                        lift,
+                    });
+
+                    // Pull p_value (+ corrected) from frequentist_result JSON.
                     if let Some(freq_str) = &result.frequentist_result
                         && let Ok(freq_json) = serde_json::from_str::<serde_json::Value>(freq_str)
-                        && let Some(p_val) = freq_json.get("p_value").and_then(|v| v.as_f64())
                     {
-                        entry.p_value = p_val;
-                        entry.p_value_present = true;
+                        if let Some(p_val) = freq_json.get("p_value").and_then(|v| v.as_f64()) {
+                            entry.p_value = p_val;
+                            entry.p_value_present = true;
+                        }
+                        if let Some(p_corr) =
+                            freq_json.get("p_value_corrected").and_then(|v| v.as_f64())
+                        {
+                            entry.p_value_corrected = Some(p_corr);
+                        }
                     }
 
-                    // Record participant_count as metric value.
                     entry
                         .metric_values
                         .insert(result.metric_key.clone(), participant_count as f64);
@@ -491,7 +652,65 @@ impl ExperimentationService for ExperimentationServiceImpl {
             }
         }
 
-        let variant_results: Vec<VariantResult> = by_variant.into_values().collect();
+        // Flat back-compat list (across context types + primaries only).
+        let variant_results: Vec<VariantResult> = by_ctx_variant.values().cloned().collect();
+
+        // Build per-context-type buckets.
+        let mut ctx_groups: HashMap<String, (Vec<VariantResult>, Vec<VariantResult>)> =
+            HashMap::new();
+        for ((ct, _), vr) in by_ctx_variant {
+            ctx_groups.entry(ct).or_default().0.push(vr);
+        }
+        for ((ct, _), vr) in guardrails_by_ctx_variant {
+            ctx_groups.entry(ct).or_default().1.push(vr);
+        }
+
+        let mut results_by_context_type: Vec<ContextTypeResults> = ctx_groups
+            .into_iter()
+            .map(|(context_type, (variants, guardrails))| {
+                let srm = srm_by_ctx.get(&context_type).and_then(srm_json_to_proto);
+                ContextTypeResults {
+                    context_type,
+                    variants,
+                    srm,
+                    guardrails,
+                }
+            })
+            .collect();
+        // Deterministic ordering for stable test snapshots.
+        results_by_context_type.sort_by(|a, b| a.context_type.cmp(&b.context_type));
+
+        // Bound-target + pre_period_days from the experiment row.
+        let (bound_target, pre_period_days) = match &experiment_record {
+            Some(e) => {
+                let kind = if e.targets_default_rule {
+                    "default_rule"
+                } else {
+                    "rule"
+                };
+                let rule_id = e
+                    .flag_rule_id
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
+                let label = if e.targets_default_rule {
+                    "Default rule (fallthrough)".to_string()
+                } else {
+                    // Rule names live on the flag service; the gateway enriches
+                    // when needed. Default to the rule_id string here.
+                    rule_id.clone()
+                };
+                (
+                    Some(BoundTarget {
+                        kind: kind.to_string(),
+                        rule_id,
+                        label,
+                    }),
+                    e.pre_period_days,
+                )
+            }
+            None => (None, 0u32),
+        };
 
         // Fetch schedule for staleness metadata.
         let schedule = self
@@ -525,6 +744,9 @@ impl ExperimentationService for ExperimentationServiceImpl {
             is_stale,
             next_run_at_ms,
             computation_status,
+            results_by_context_type,
+            bound_target,
+            pre_period_days,
         }))
     }
 
@@ -621,6 +843,54 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
         metrics::counter!("experimentation_service.update_iteration_last_computed.ok").increment(1);
         Ok(Response::new(UpdateIterationLastComputedResponse {}))
+    }
+
+    // ── Phase 7 — admin reads ────────────────────────────────────────────────
+
+    /// Paginated read against the ClickHouse `experiment_assignments` table.
+    ///
+    /// Returns one page of (context_type, context_key, variant, assigned_at,
+    /// matched_rule_id) rows for the given `(experiment_id, context_type)`.
+    /// Returns `INVALID_ARGUMENT` for malformed UUIDs or empty `context_type`,
+    /// `UNIMPLEMENTED` when no `exposure_reader` is attached.
+    #[instrument(skip(self))]
+    async fn list_exposures(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::ListExposuresRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExposuresResponse>, Status> {
+        let req = request.into_inner();
+        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+        if req.context_type.is_empty() {
+            return Err(Status::invalid_argument(
+                "context_type is required and must be non-empty",
+            ));
+        }
+
+        let reader = self.exposure_reader.as_ref().ok_or_else(|| {
+            Status::unimplemented("exposure_reader not configured on this service instance")
+        })?;
+
+        let (rows, total) = reader
+            .list_exposures(exp_uuid, &req.context_type, req.offset, req.limit)
+            .await
+            .map_err(|e| Status::internal(format!("clickhouse error: {e}")))?;
+
+        let exposures = rows
+            .into_iter()
+            .map(|r| stitchd_proto::experiments::v1::ExposureRow {
+                context_type: r.context_type,
+                context_key: r.context_key,
+                variant_key: r.variant_key,
+                assigned_at: r.assigned_at.to_rfc3339(),
+                matched_rule_id: r.matched_rule_id.map(|u| u.to_string()).unwrap_or_default(),
+            })
+            .collect();
+
+        metrics::counter!("experimentation_service.list_exposures.ok").increment(1);
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::ListExposuresResponse { exposures, total },
+        ))
     }
 }
 
@@ -2027,6 +2297,136 @@ mod tests {
         });
         svc.transition_experiment(req).await.expect("ok");
         await_count(&count, 4).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // ListExposures handler tests (Phase 7 Task 2)
+    // -----------------------------------------------------------------------
+
+    use crate::exposure_reader::{ExposureReader, ExposureRow as CoreExposureRow};
+
+    /// Test reader returning canned rows.
+    struct CannedExposureReader {
+        rows: Vec<CoreExposureRow>,
+        total: u64,
+    }
+
+    #[async_trait]
+    impl ExposureReader for CannedExposureReader {
+        async fn list_exposures(
+            &self,
+            _experiment_id: uuid::Uuid,
+            _context_type: &str,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<CoreExposureRow>, u64), clickhouse::error::Error> {
+            Ok((self.rows.clone(), self.total))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_returns_unimplemented_without_reader() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: uuid::Uuid::new_v4().to_string(),
+            context_type: "user".to_string(),
+            offset: 0,
+            limit: 50,
+        });
+        let err = svc.list_exposures(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_invalid_uuid_returns_invalid_argument() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id).with_exposure_reader(Arc::new(CannedExposureReader {
+            rows: vec![],
+            total: 0,
+        }));
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: "not-a-uuid".to_string(),
+            context_type: "user".to_string(),
+            offset: 0,
+            limit: 50,
+        });
+        let err = svc.list_exposures(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_empty_context_type_returns_invalid_argument() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id).with_exposure_reader(Arc::new(CannedExposureReader {
+            rows: vec![],
+            total: 0,
+        }));
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: uuid::Uuid::new_v4().to_string(),
+            context_type: String::new(),
+            offset: 0,
+            limit: 50,
+        });
+        let err = svc.list_exposures(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_round_trips_rows_and_total() {
+        let (env_id, _) = env_uuid();
+        let rule_id = uuid::Uuid::new_v4();
+        let now = chrono::Utc::now();
+        let row = CoreExposureRow {
+            context_type: "user".to_string(),
+            context_key: "alice".to_string(),
+            variant_key: "treatment".to_string(),
+            assigned_at: now,
+            matched_rule_id: Some(rule_id),
+        };
+        let svc = make_service(env_id).with_exposure_reader(Arc::new(CannedExposureReader {
+            rows: vec![row],
+            total: 7,
+        }));
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: uuid::Uuid::new_v4().to_string(),
+            context_type: "user".to_string(),
+            offset: 0,
+            limit: 10,
+        });
+        let resp = svc.list_exposures(req).await.unwrap().into_inner();
+        assert_eq!(resp.total, 7);
+        assert_eq!(resp.exposures.len(), 1);
+        let proto_row = &resp.exposures[0];
+        assert_eq!(proto_row.context_key, "alice");
+        assert_eq!(proto_row.variant_key, "treatment");
+        assert_eq!(proto_row.matched_rule_id, rule_id.to_string());
+        assert!(!proto_row.assigned_at.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_exposures_default_rule_emits_empty_matched_rule_id() {
+        let (env_id, _) = env_uuid();
+        let row = CoreExposureRow {
+            context_type: "user".to_string(),
+            context_key: "bob".to_string(),
+            variant_key: "control".to_string(),
+            assigned_at: chrono::Utc::now(),
+            matched_rule_id: None,
+        };
+        let svc = make_service(env_id).with_exposure_reader(Arc::new(CannedExposureReader {
+            rows: vec![row],
+            total: 1,
+        }));
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::ListExposuresRequest {
+            experiment_id: uuid::Uuid::new_v4().to_string(),
+            context_type: "user".to_string(),
+            offset: 0,
+            limit: 10,
+        });
+        let resp = svc.list_exposures(req).await.unwrap().into_inner();
+        assert_eq!(resp.exposures.len(), 1);
+        assert_eq!(resp.exposures[0].matched_rule_id, "");
     }
 
     /// When no refresher is attached, transitions still succeed.

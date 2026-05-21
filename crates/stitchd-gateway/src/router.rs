@@ -196,6 +196,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             put(flags::update_rules),
         )
         .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/default-rule-distribution",
+            post(flags::set_default_rule_distribution),
+        )
+        .route(
             "/v1/projects/{project_id}/flags/{flag_id}/hashing",
             put(flags::update_flag_hashing),
         )
@@ -311,6 +315,22 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
             get(experiments::list_iterations),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
+            get(experiments::list_exposures),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/timeseries",
+            get(stats::get_timeseries),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute",
+            post(stats::trigger_recompute_env_scoped),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute/{job_id}",
+            get(stats::get_recompute_job_status),
         )
         // Context intelligence
         .route(

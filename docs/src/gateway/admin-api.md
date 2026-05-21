@@ -139,7 +139,66 @@ Available since the `events_metrics_20260519` track.
 | `DELETE` | `/v1/environments/{environment_id}/experiments/{experiment_id}` | Delete an experiment |
 | `POST` | `/v1/environments/{environment_id}/experiments/{experiment_id}/transitions` | Transition experiment state |
 | `GET` | `/v1/environments/{environment_id}/experiments/{experiment_id}/iterations` | List iterations |
-| `GET` | `/v1/environments/{environment_id}/experiments/{experiment_id}/results` | Get statistical results |
+| `GET` | `/v1/environments/{environment_id}/experiments/{experiment_id}/results` | Get statistical results (per-context-type) |
+| `GET` | `/v1/environments/{environment_id}/experiments/{experiment_id}/exposures?context_type=<type>` | Paginated first-exposure assignments. `context_type` query param is required (400 `missing_context_type` when absent). |
+| `GET` | `/v1/environments/{environment_id}/experiments/{experiment_id}/timeseries?metric_id=<id>&context_type=<type>&days=N` | Daily per-variant series for one metric scoped to a context type. `metric_id` + `context_type` required; `days` defaults to 7, clamped to `[1, 90]`. |
+| `POST` | `/v1/environments/{environment_id}/experiments/{experiment_id}/recompute` | Trigger an out-of-band stats recompute; returns `202 Accepted` with `{job_id, status}`. |
+| `GET` | `/v1/environments/{environment_id}/experiments/{experiment_id}/recompute/{job_id}` | Poll the status of a previously triggered recompute job. |
+
+### `GET /results` response shape (Phase 7)
+
+The `GET /results` endpoint returns a per-context-type result bundle so the
+admin UI can render one Results tab per unit context type the experiment
+analyses (`user`, `account`, …):
+
+```json
+{
+  "results_by_context_type": {
+    "user":    { "variants": [...], "srm": {...}, "guardrails": [...] },
+    "account": { "variants": [...], "srm": {...}, "guardrails": [...] }
+  },
+  "bound_target": { "kind": "rule"|"default_rule", "rule_id": "<uuid|null>", "label": "..." },
+  "pre_period_days": 0,
+  "computed_at_ms": 0,
+  "is_stale": false,
+  "next_run_at_ms": 0,
+  "computation_status": "ready"
+}
+```
+
+Each per-variant row carries `p_value` (when computed), `p_value_corrected`
+(Bonferroni; only when multiple metrics ran), `lift`, and `direction_violation`
+(always `false` for primary rows; load-bearing for guardrail rows).
+
+---
+
+## Flag default-rule distribution (Phase 7)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/projects/{project_id}/flags/{flag_key}/default-rule-distribution` | Set or clear the flag's percentage distribution for the default-rule fall-through. |
+
+Body:
+
+```json
+{
+  "distribution": {
+    "allocations": [
+      { "variant_key": "control",   "percentage": 50.0 },
+      { "variant_key": "treatment", "percentage": 50.0 }
+    ]
+  },
+  "version": 1
+}
+```
+
+- `distribution: null` or empty `allocations` clears the distribution
+  (reverts the flag to single-default-variant behaviour).
+- Returns `409 flag_locked_by_experiment` while an experiment in
+  running/paused state owns the flag.
+- Returns `422 invalid_distribution` when the body fails validation
+  (allocations non-empty, each percentage in `(0, 100]`, no duplicate
+  variant keys, sum ≈ 100.0).
 
 ---
 
