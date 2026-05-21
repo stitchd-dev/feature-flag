@@ -60,6 +60,10 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "20260521000001_flag_eval_log_matched_rule",
         include_str!("../migrations/20260521000001_flag_eval_log_matched_rule.sql"),
     ),
+    (
+        "20260521000002_experiment_iterations_active_dict",
+        include_str!("../migrations/20260521000002_experiment_iterations_active_dict.sql"),
+    ),
 ];
 
 /// Apply all pending ClickHouse migrations.
