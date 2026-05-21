@@ -65,6 +65,10 @@ pub struct ExperimentResultRow {
     pub computed_at: i64,
     /// When this row was first inserted (Unix milliseconds UTC).
     pub created_at: i64,
+    /// The attribution unit's context type (e.g. `"user"`, `"account"`).
+    /// Added in Phase 5 cutover (`experimentation_full_20260521`); old
+    /// rows default to `"user"` via the CH column DEFAULT.
+    pub context_type: String,
 }
 
 /// Input type for [`ExperimentResultsRepository::write`].
@@ -95,6 +99,9 @@ pub struct WriteResultRow {
     pub recommendation: String,
     /// Timestamp the analysis was computed.
     pub computed_at: chrono::DateTime<chrono::Utc>,
+    /// The attribution unit's context type (e.g. `"user"`, `"account"`).
+    /// Empty string falls back to the CH column DEFAULT `'user'`.
+    pub context_type: String,
 }
 
 /// Filter for list / get queries.
@@ -203,6 +210,10 @@ impl ClickHouseExperimentResultsRepository {
             recommendation: row.recommendation,
             computed_at: row.computed_at.timestamp_millis(),
             created_at: chrono::Utc::now().timestamp_millis(),
+            // Empty string is fine — the CH column has DEFAULT 'user' so
+            // legacy callers that don't supply context_type still get
+            // back-compat semantics on read.
+            context_type: row.context_type,
         })
     }
 }
@@ -228,7 +239,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
-                     recommendation, computed_at, created_at \
+                     recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? AND iteration_id = ? \
                      ORDER BY experiment_id, iteration_id, variant_key, metric_key",
@@ -243,7 +254,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
-                     recommendation, computed_at, created_at \
+                     recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
                      ORDER BY experiment_id, iteration_id, variant_key, metric_key",
@@ -269,7 +280,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
-                     recommendation, computed_at, created_at \
+                     recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
                        AND variant_key = ? AND metric_key = ? \
@@ -289,7 +300,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
-                     recommendation, computed_at, created_at \
+                     recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
                        AND variant_key = ? AND metric_key = ? \
@@ -339,6 +350,7 @@ mod tests {
             bayesian_result: None,
             recommendation: "ship_treatment".to_string(),
             computed_at: Utc::now(),
+            context_type: "user".to_string(),
         }
     }
 
@@ -382,6 +394,7 @@ mod tests {
             bayesian_result: None,
             recommendation: "inconclusive".to_string(),
             computed_at: Utc::now(),
+            context_type: "user".to_string(),
         };
         let ch_row = ClickHouseExperimentResultsRepository::to_ch_row(row).unwrap();
         assert_eq!(ch_row.frequentist_result, "");
@@ -403,6 +416,7 @@ mod tests {
             bayesian_result: Some(serde_json::json!({ "posterior_prob": 0.95 })),
             recommendation: "ship".to_string(),
             computed_at: Utc::now(),
+            context_type: "account".to_string(),
         };
         let ch_row = ClickHouseExperimentResultsRepository::to_ch_row(row).unwrap();
         let fr: serde_json::Value = serde_json::from_str(&ch_row.frequentist_result).unwrap();

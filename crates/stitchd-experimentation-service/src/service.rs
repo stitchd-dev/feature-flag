@@ -740,6 +740,7 @@ mod tests {
             recommendation: "ship_treatment".to_string(),
             computed_at: "2026-05-01T00:00:00Z".to_string(),
             created_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
         }
     }
 

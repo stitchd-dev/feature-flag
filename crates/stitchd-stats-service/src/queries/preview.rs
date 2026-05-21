@@ -1,47 +1,62 @@
 //! Preview-mode query builders.
 //!
-//! These produce **day-bucketed time-series** queries against `events_v2`
-//! for the metric-preview UI (`POST /v1/metrics/{id}/preview`). They are
-//! a parallel family to the experiment-scoped builders in
-//! [`aggregation`](super::aggregation),
-//! [`ratio`](super::ratio), and [`funnel`](super::funnel) — same
-//! aggregator semantics, **no** experiment / iteration / variant scoping.
+//! Two families of **day-bucketed time-series** queries live in this
+//! module:
 //!
-//! ## Shape
+//! 1. **Standalone preview** (`build_preview_*_query`) — backs the
+//!    metric-preview UI (`POST /v1/metrics/{id}/preview`). Returns one
+//!    row per day for ALL events in the environment matching the
+//!    metric's `event_key`, irrespective of experiment membership.
 //!
-//! Every builder returns a query of the form:
+//! 2. **Experiment-scoped preview** (`build_experiment_preview_*_query`)
+//!    — backs the experiment Detail's "Daily time-series" tab. Same
+//!    day-bucketed shape, but each row is also keyed by
+//!    `(context_type, variant_key)` derived from `experiment_assignments`.
+//!    Returns one row per `(day, context_type, variant_key)` so the UI
+//!    can render per-variant sparklines per context type.
+//!
+//! ## Shape — standalone preview
 //!
 //! ```sql
-//! SELECT toUnixTimestamp(toStartOfDay(timestamp, 'UTC')) AS day_ts,
-//!        <kind-specific value expression>            AS value
-//! FROM events_v2
-//! WHERE env_id = toUUID({env_ph})
-//!   AND metric_key = {event_ph}              -- aggregation / funnel
-//!   AND timestamp >= now() - toIntervalDay({days_ph})
+//! SELECT toUnixTimestamp(toStartOfDay(e.timestamp, 'UTC')) AS day_ts,
+//!        <kind-specific value expression>                  AS value
+//! FROM events_v2 AS e
+//! WHERE e.env_id = toUUID({env_ph})
+//!   AND e.metric_key = {event_ph}              -- aggregation / funnel
+//!   AND e.timestamp >= now() - toIntervalDay({days_ph})
 //! GROUP BY day_ts
 //! ORDER BY day_ts ASC
 //! ```
 //!
-//! The dispatcher binds `env_id`, `metric_key`(s), and `days` in that
-//! order, plus any JsonLogic `where_clause` literals. The caller is
-//! responsible for zero-filling missing days in Rust (the SQL returns
-//! only days that actually saw events).
+//! ## Shape — experiment-scoped preview
 //!
-//! ## Why a separate module
+//! ```sql
+//! SELECT toUnixTimestamp(toStartOfDay(e.occurred_at, 'UTC')) AS day_ts,
+//!        a.context_type AS context_type,
+//!        a.variant_key  AS variant_key,
+//!        <kind-specific value expression> AS value
+//! FROM events_v2 AS e
+//! INNER JOIN experiment_assignments AS a
+//!     ON e.env_id = a.env_id
+//!    AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)
+//! WHERE a.env_id = toUUID(?)
+//!   AND a.experiment_id = toUUID(?)
+//!   AND a.iteration_id  = toUUID(?)
+//!   AND e.metric_key    = ?
+//!   AND e.occurred_at  >= a.assigned_at
+//!   AND e.occurred_at  <  fromUnixTimestamp64Milli(?)
+//! GROUP BY day_ts, a.context_type, a.variant_key
+//! ORDER BY day_ts ASC, a.context_type, a.variant_key
+//! ```
 //!
-//! The experiment-scoped builders hard-code:
-//!   - `arrayExists(t -> t.1 = 'experiment' AND t.2 = {exp_ph}, contexts)`
-//!   - `arrayExists(t -> t.1 = 'iteration'  AND t.2 = {iter_ph}, contexts)`
-//!   - `variant_key IN ({variant_in_list})` + `GROUP BY variant_key`
-//!
-//! and emit one row per (variant_key) instead of one row per day. None of
-//! that translates to preview — the user wants raw event activity over
-//! time, irrespective of experiment membership.
+//! The caller is responsible for zero-filling missing days in Rust (the
+//! SQL returns only days that actually saw events).
 //!
 //! Internal helpers (`render_aggregator`, `on_field_expr`) are
 //! `pub(super)`-shared from [`super::aggregation`] so the aggregator-to-CH
 //! mapping has a single source of truth.
 
+use chrono::{DateTime, Utc};
 use stitchd_core::metric::{AggregationConfig, FunnelConfig, RatioConfig};
 
 use super::{
@@ -98,14 +113,21 @@ pub fn build_preview_aggregation_query(
     // RowBinary deserialiser hits "tag for enum is not valid" because the
     // null-marker byte expected by `Option<f64>` isn't present for
     // non-nullable columns.
+    // Alias events_v2 as `e` so the shared `render_aggregator` (which
+    // emits `e.value_double` / `e.properties[...]` to disambiguate from
+    // the experiment-scoped JOIN against `experiment_assignments AS a`
+    // in `queries::aggregation`) resolves correctly here too. The alias
+    // is purely cosmetic for preview — there is no JOIN — but keeping
+    // the column references uniform avoids forking the aggregator
+    // expression mapping.
     let sql = format!(
         "SELECT\n    \
-            toUnixTimestamp(toStartOfDay(timestamp, 'UTC')) AS day_ts,\n    \
+            toUnixTimestamp(toStartOfDay(e.timestamp, 'UTC')) AS day_ts,\n    \
             CAST({agg_expr} AS Nullable(Float64)) AS value\n\
-        FROM events_v2\n\
-        WHERE env_id = toUUID({env_ph})\n  \
-          AND metric_key = {event_ph}\n  \
-          AND timestamp >= now() - toIntervalDay({days_ph}){extra_where}\n\
+        FROM events_v2 AS e\n\
+        WHERE e.env_id = toUUID({env_ph})\n  \
+          AND e.metric_key = {event_ph}\n  \
+          AND e.timestamp >= now() - toIntervalDay({days_ph}){extra_where}\n\
         GROUP BY day_ts\n\
         ORDER BY day_ts ASC"
     );
@@ -311,6 +333,87 @@ pub fn build_preview_funnel_query(
     Ok(BuiltQuery { sql, binds })
 }
 
+// ── Experiment-scoped Aggregation ────────────────────────────────────────────
+
+/// Build a day-bucketed preview query for an aggregation metric scoped
+/// to an experiment iteration, broken out by `(context_type, variant_key)`.
+///
+/// Mirrors [`build_preview_aggregation_query`] but joins against
+/// `experiment_assignments` so each row is attributed via the same
+/// first-exposure ITT model as the headline experiment stats query
+/// (`crate::queries::aggregation::build_aggregation_query`).
+///
+/// Bind push order (SQL-appearance):
+///   1. env_id
+///   2. experiment_id
+///   3. iteration_id
+///   4. event_key
+///   5. iteration_end_ms
+///   6. where_clause literals (last, emitted by `jsonlogic_to_sql`)
+///
+/// # Errors
+/// - `QueryBuildError::InvalidConfig` when the aggregator requires an
+///   `on_field` and none is set.
+/// - `QueryBuildError::UnsupportedJsonLogic` when the optional
+///   `where_clause` uses an operator outside the supported subset.
+pub fn build_experiment_preview_aggregation_query(
+    cfg: &AggregationConfig,
+    experiment_id: &str,
+    iteration_id: &str,
+    env_id: &str,
+    iteration_end: DateTime<Utc>,
+) -> Result<BuiltQuery, QueryBuildError> {
+    if cfg.aggregator.requires_field() && cfg.on_field.is_none() {
+        return Err(QueryBuildError::InvalidConfig(format!(
+            "aggregator `{:?}` requires an on_field",
+            cfg.aggregator
+        )));
+    }
+
+    let mut binds = Vec::new();
+
+    let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
+    let exp_ph = push_bind(&mut binds, QueryBind::Str(experiment_id.to_owned()));
+    let iter_ph = push_bind(&mut binds, QueryBind::Str(iteration_id.to_owned()));
+    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
+    let iter_end_ph = push_bind(&mut binds, QueryBind::I64(iteration_end.timestamp_millis()));
+
+    let extra_where = match cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n  AND ({frag})")
+        }
+        None => String::new(),
+    };
+
+    let agg_expr = render_aggregator(cfg)?;
+
+    // Coerce aggregator output to Nullable(Float64) so the wire shape
+    // matches the PreviewRow's `value: Option<f64>` (uniform with the
+    // standalone preview path).
+    let sql = format!(
+        "SELECT\n    \
+            toUnixTimestamp(toStartOfDay(e.occurred_at, 'UTC')) AS day_ts,\n    \
+            a.context_type AS context_type,\n    \
+            a.variant_key AS variant_key,\n    \
+            CAST({agg_expr} AS Nullable(Float64)) AS value\n\
+        FROM events_v2 AS e\n\
+        INNER JOIN experiment_assignments AS a\n    \
+            ON e.env_id = a.env_id\n   \
+            AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)\n\
+        WHERE a.env_id = toUUID({env_ph})\n  \
+          AND a.experiment_id = toUUID({exp_ph})\n  \
+          AND a.iteration_id = toUUID({iter_ph})\n  \
+          AND e.metric_key = {event_ph}\n  \
+          AND e.occurred_at >= a.assigned_at\n  \
+          AND e.occurred_at < fromUnixTimestamp64Milli({iter_end_ph}){extra_where}\n\
+        GROUP BY day_ts, a.context_type, a.variant_key\n\
+        ORDER BY day_ts ASC, a.context_type, a.variant_key"
+    );
+
+    Ok(BuiltQuery { sql, binds })
+}
+
 // ── Internal helpers (parallel to ratio.rs's local helpers) ──────────────────
 
 /// Rewrite every `{pN}` placeholder in `sql` by adding `offset` to `N`.
@@ -384,7 +487,7 @@ mod tests {
             "got: {}",
             q.sql
         );
-        assert!(q.sql.contains("toStartOfDay(timestamp, 'UTC')"));
+        assert!(q.sql.contains("toStartOfDay(e.timestamp, 'UTC')"));
         assert!(q.sql.contains("toIntervalDay({p2})"));
         // 3 binds: env_id, event_key, days
         assert_eq!(q.binds.len(), 3);
@@ -409,7 +512,7 @@ mod tests {
         };
         let q = build_preview_aggregation_query(&cfg, ENV_ID, 30).unwrap();
         assert!(
-            q.sql.contains("coalesce(value_double"),
+            q.sql.contains("coalesce(e.value_double"),
             "sum(value) should coalesce, got: {}",
             q.sql
         );
@@ -607,6 +710,129 @@ mod tests {
             count_repeats: false,
         };
         let err = build_preview_funnel_query(&cfg, ENV_ID, 14).unwrap_err();
+        assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
+    }
+
+    // ── Experiment-scoped aggregation preview ────────────────────────────────
+
+    fn iter_end() -> chrono::DateTime<Utc> {
+        chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 5, 21, 0, 0, 0).unwrap()
+    }
+
+    const EXP_ID: &str = "00000000-0000-0000-0000-000000000002";
+    const ITER_ID: &str = "00000000-0000-0000-0000-000000000003";
+
+    #[test]
+    fn experiment_preview_aggregation_joins_assignments_and_groups_by_day_ctx_variant() {
+        let cfg = AggregationConfig {
+            event_key: "click".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: None,
+        };
+        let q =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap();
+        assert!(
+            q.sql.contains("INNER JOIN experiment_assignments AS a"),
+            "JOIN must be present, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains(
+                "AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)"
+            ),
+            "join predicate via arrayExists missing, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("a.context_type AS context_type"),
+            "must surface context_type"
+        );
+        assert!(
+            q.sql.contains("a.variant_key AS variant_key"),
+            "must surface variant_key"
+        );
+        assert!(
+            q.sql
+                .contains("GROUP BY day_ts, a.context_type, a.variant_key"),
+            "must group per-day per-context-type per-variant, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("toStartOfDay(e.occurred_at, 'UTC')"),
+            "must bucket by occurred_at day, got:\n{}",
+            q.sql
+        );
+        // Binds in SQL-appearance order: env, exp, iter, event, iter_end.
+        assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[1], QueryBind::Str(EXP_ID.into()));
+        assert_eq!(q.binds[2], QueryBind::Str(ITER_ID.into()));
+        assert_eq!(q.binds[3], QueryBind::Str("click".into()));
+        assert_eq!(q.binds[4], QueryBind::I64(iter_end().timestamp_millis()));
+        assert_eq!(q.binds.len(), 5);
+    }
+
+    #[test]
+    fn experiment_preview_aggregation_excludes_pre_exposure_and_post_iteration() {
+        let cfg = AggregationConfig {
+            event_key: "x".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: None,
+        };
+        let q =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap();
+        assert!(q.sql.contains("e.occurred_at >= a.assigned_at"));
+        assert!(
+            q.sql
+                .contains("e.occurred_at < fromUnixTimestamp64Milli({p4})")
+        );
+    }
+
+    #[test]
+    fn experiment_preview_aggregation_no_event_side_experiment_tags() {
+        let cfg = AggregationConfig {
+            event_key: "x".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: None,
+        };
+        let q =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap();
+        assert!(!q.sql.contains("arrayExists(t -> t.1 = 'experiment'"));
+        assert!(!q.sql.contains("t.1 = 'iteration'"));
+        assert!(!q.sql.contains("t.1 = 'variant'"));
+    }
+
+    #[test]
+    fn experiment_preview_aggregation_with_where_clause_appends_literal_bind() {
+        let cfg = AggregationConfig {
+            event_key: "x".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: Some(serde_json::json!({"==": [{"var": "country"}, "US"]})),
+        };
+        let q =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap();
+        assert_eq!(q.binds.last(), Some(&QueryBind::Str("US".into())));
+        assert!(q.sql.contains("AND (properties['country'] = {p5})"));
+    }
+
+    #[test]
+    fn experiment_preview_aggregation_sum_requires_on_field() {
+        let cfg = AggregationConfig {
+            event_key: "x".into(),
+            aggregator: AggregationOperator::Sum,
+            on_field: None,
+            where_clause: None,
+        };
+        let err =
+            build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
+                .unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 

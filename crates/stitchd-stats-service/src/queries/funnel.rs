@@ -1,46 +1,87 @@
 //! Funnel query builder.
 //!
 //! Produces a ClickHouse query that evaluates a [`FunnelConfig`] via
-//! `windowFunnel(window_seconds[, mode='strict_order'])` and reports
-//! the per-step conversion rate as
-//! `countIf(level >= N) / countIf(level >= 1)`.
+//! `windowFunnel(window_seconds[, mode='strict_order'])` over events
+//! attributed to assigned contexts in `experiment_assignments`.
 //!
-//! The query shape is:
+//! ## Shape
 //!
 //! ```sql
 //! WITH levels AS (
 //!     SELECT
-//!         variant_key,
+//!         a.context_type,
+//!         a.context_key,
+//!         a.variant_key,
 //!         windowFunnel(<window>[, 'strict_order'])(
-//!             timestamp, metric_key = <step_0>, metric_key = <step_1>, …
+//!             toUInt32(toUnixTimestamp(e.occurred_at)),
+//!             e.metric_key = <step_0>, …, e.metric_key = <step_N-1>
 //!         ) AS level
-//!     FROM events_v2
-//!     WHERE …
-//!     GROUP BY context_key, variant_key
+//!     FROM events_v2 e
+//!     INNER JOIN experiment_assignments a
+//!         ON e.env_id = a.env_id
+//!        AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)
+//!     WHERE a.env_id = toUUID(?)
+//!       AND a.experiment_id = toUUID(?)
+//!       AND a.iteration_id  = toUUID(?)
+//!       AND e.occurred_at  >= a.assigned_at
+//!       AND e.occurred_at  <  fromUnixTimestamp64Milli(?)
+//!       AND (e.metric_key = ? OR e.metric_key = ? OR …)
+//!       AND a.variant_key IN (?, ?, …)
+//!     GROUP BY a.context_type, a.context_key, a.variant_key
+//!     HAVING a.variant_key != '' AND a.context_key != ''
 //! )
 //! SELECT
+//!     context_type,
 //!     variant_key,
-//!     <N> AS step_index,
+//!     <step_index> AS step_index,
 //!     '<step_event_key>' AS event_key,
-//!     countIf(level >= N) AS step_count,
-//!     countIf(level >= 1) AS step_total,
-//!     countIf(level >= N) / nullIf(countIf(level >= 1), 0) AS conversion_rate
+//!     countIf(level >= step_index+1)  AS step_count,
+//!     countIf(level >= 1)             AS step_total,
+//!     <conversion_rate_expr>          AS conversion_rate
 //! FROM levels
-//! GROUP BY variant_key
+//! GROUP BY context_type, variant_key
+//! HAVING variant_key != ''
+//! UNION ALL
+//! ... (one SELECT per step)
 //! ```
 //!
 //! The outer SELECT is repeated once per step via `UNION ALL` so the
-//! caller gets one row per `(variant_key, step_index)`. Step index 0 is
-//! always emitted with `step_count == step_total` and a `conversion_rate`
-//! of `1.0` (because every context that triggered the funnel reached at
-//! least step 0). The mode `strict_order` is enabled by default — set
-//! `count_repeats: true` on the config to disable it.
+//! caller gets one row per `(context_type, variant_key, step_index)`.
+//! Step index 0's `conversion_rate` is hard-coded to `1.0` because every
+//! context that triggered the funnel reached at least step 0.
+//! `strict_order` mode is enabled by default; setting `count_repeats:
+//! true` on the config disables it.
+//!
+//! ## Bind-order discipline
+//!
+//! `clickhouse-rs` binds `?` placeholders by SQL position, NOT by the
+//! parallel `Vec<QueryBind>` index. We push binds in left-to-right SQL
+//! appearance order:
+//!
+//!   1. windowFunnel step predicates (`e.metric_key = ?`, …) — N binds
+//!      in step order (these appear FIRST in the SELECT list of the CTE)
+//!   2. `env_id`         (`a.env_id = toUUID(?)`)
+//!   3. `experiment_id`  (`a.experiment_id = toUUID(?)`)
+//!   4. `iteration_id`   (`a.iteration_id = toUUID(?)`)
+//!   5. `iteration_end`  (`e.occurred_at < fromUnixTimestamp64Milli(?)`)
+//!   6. metric_key OR filter — N binds (one per step), same event_keys as
+//!      the predicates, used to prune events to the funnel's step set
+//!   7. variant_keys     (`a.variant_key IN (?, …)`)
+//!
+//! Critically: the step predicate binds appear in the SELECT list, which
+//! is rendered BEFORE the WHERE clause in the final SQL string — that's
+//! why they sit at the head of the bind vec.
 
+use chrono::{DateTime, Utc};
 use stitchd_core::metric::FunnelConfig;
 
 use super::{BuiltQuery, QueryBind, QueryBuildError, push_bind};
 
 /// Build a funnel query from the supplied config + iteration context.
+///
+/// `iteration_end` is the upper bound on `e.occurred_at` (caller passes
+/// `iteration.ended_at` or `Utc::now()` for in-progress iterations —
+/// ClickHouse can't JOIN to PG to resolve this itself).
 ///
 /// # Errors
 /// Returns [`QueryBuildError::InvalidConfig`] when `steps.len() < 2`,
@@ -51,6 +92,7 @@ pub fn build_funnel_query(
     iteration_id: &str,
     env_id: &str,
     variant_keys: &[&str],
+    iteration_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, QueryBuildError> {
     if cfg.steps.len() < 2 {
         return Err(QueryBuildError::InvalidConfig(format!(
@@ -72,84 +114,99 @@ pub fn build_funnel_query(
 
     let mut binds = Vec::new();
 
+    // ── Push binds in SQL-appearance order ──
+    // 1) windowFunnel step predicates first (they appear in the SELECT
+    //    list of the inner CTE, which is rendered before the WHERE clause).
+    let mut step_predicate_phs = Vec::with_capacity(cfg.steps.len());
+    for step in &cfg.steps {
+        step_predicate_phs.push(push_bind(
+            &mut binds,
+            QueryBind::Str(step.event_key.clone()),
+        ));
+    }
+    let step_predicates = step_predicate_phs
+        .iter()
+        .map(|ph| format!("e.metric_key = {ph}"))
+        .collect::<Vec<_>>()
+        .join(",\n            ");
+
+    // 2) env / exp / iter / iter_end (in the WHERE clause).
     let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
     let exp_ph = push_bind(&mut binds, QueryBind::Str(experiment_id.to_owned()));
     let iter_ph = push_bind(&mut binds, QueryBind::Str(iteration_id.to_owned()));
+    let iter_end_ph = push_bind(&mut binds, QueryBind::I64(iteration_end.timestamp_millis()));
 
+    // 3) metric_key filter — N binds (one per step, in step order), each
+    //    bound to its event_key. ClickHouse needs one bind per `?`
+    //    regardless of duplicate logical values, so we bind the same
+    //    event_keys twice (once for the predicates, once for the
+    //    metric_key OR filter).
+    let mut metric_key_filter_phs = Vec::with_capacity(cfg.steps.len());
+    for step in &cfg.steps {
+        metric_key_filter_phs.push(push_bind(
+            &mut binds,
+            QueryBind::Str(step.event_key.clone()),
+        ));
+    }
+    let metric_key_filter = metric_key_filter_phs
+        .iter()
+        .map(|ph| format!("e.metric_key = {ph}"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    // 4) variant_keys IN list.
     let mut variant_phs = Vec::with_capacity(variant_keys.len());
     for vk in variant_keys {
         variant_phs.push(push_bind(&mut binds, QueryBind::Str((*vk).to_owned())));
     }
     let variant_in_list = variant_phs.join(", ");
 
-    // One bind per step's event_key, then one bind per step's event_key for
-    // the metric_key IN (...) filter.
-    let mut step_event_phs = Vec::with_capacity(cfg.steps.len());
-    for step in &cfg.steps {
-        step_event_phs.push(push_bind(
-            &mut binds,
-            QueryBind::Str(step.event_key.clone()),
-        ));
-    }
-
-    // Build `metric_key = {p_step_0} OR metric_key = {p_step_1} OR ...` —
-    // we use OR rather than IN to keep parity with windowFunnel's per-step
-    // predicates (which use `=`).
-    let metric_key_filter = step_event_phs
-        .iter()
-        .map(|ph| format!("metric_key = {ph}"))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-
-    // windowFunnel call. Modes are passed as positional args after the
-    // window: `windowFunnel(window[, 'strict_order'])(...)`. Spec says
-    // strict_order is the default and `count_repeats: true` disables it.
+    // windowFunnel mode arg.
     let mode_arg = if cfg.count_repeats {
         String::new()
     } else {
         ", 'strict_order'".to_owned()
     };
 
-    let step_predicates = step_event_phs
-        .iter()
-        .map(|ph| format!("metric_key = {ph}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-
     let window = cfg.window_seconds;
 
-    // The CTE produces one (context_key, variant_key, level) row per
-    // distinct context that entered the funnel. We then group by
-    // variant_key in the outer SELECT to produce per-variant counts.
+    // The CTE produces one (context_type, context_key, variant_key, level)
+    // row per assigned context that entered the funnel within the iteration
+    // window. The dedup key is `(context_type, context_key)` — funnel
+    // completion is per-assigned-context.
     let levels_cte = format!(
         "WITH levels AS (\n    \
             SELECT\n        \
-                arrayFirst(t -> t.1 = 'variant', contexts).2 AS variant_key,\n        \
-                arrayFirst(t -> t.2 != '', contexts).2 AS context_key,\n        \
+                a.context_type AS context_type,\n        \
+                a.context_key AS context_key,\n        \
+                a.variant_key AS variant_key,\n        \
                 windowFunnel({window}{mode_arg})(\n            \
-                    toUInt32(toUnixTimestamp(timestamp)),\n            \
+                    toUInt32(toUnixTimestamp(e.occurred_at)),\n            \
                     {step_predicates}\n        \
                 ) AS level\n    \
-            FROM events_v2\n    \
-            WHERE env_id = toUUID({env_ph})\n      \
-                AND arrayExists(t -> t.1 = 'experiment' AND t.2 = {exp_ph}, contexts)\n      \
-                AND arrayExists(t -> t.1 = 'iteration'  AND t.2 = {iter_ph}, contexts)\n      \
-                AND ({metric_key_filter})\n      \
-                AND arrayFirst(t -> t.1 = 'variant', contexts).2 IN ({variant_in_list})\n    \
-            GROUP BY context_key, variant_key\n    \
-            HAVING variant_key != '' AND context_key != ''\n\
+            FROM events_v2 AS e\n    \
+            INNER JOIN experiment_assignments AS a\n        \
+                ON e.env_id = a.env_id\n       \
+                AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)\n    \
+            WHERE a.env_id = toUUID({env_ph})\n      \
+              AND a.experiment_id = toUUID({exp_ph})\n      \
+              AND a.iteration_id = toUUID({iter_ph})\n      \
+              AND e.occurred_at >= a.assigned_at\n      \
+              AND e.occurred_at < fromUnixTimestamp64Milli({iter_end_ph})\n      \
+              AND ({metric_key_filter})\n      \
+              AND a.variant_key IN ({variant_in_list})\n    \
+            GROUP BY a.context_type, a.context_key, a.variant_key\n    \
+            HAVING a.variant_key != '' AND a.context_key != ''\n\
         )"
     );
 
-    // Per-step outer SELECTs joined with UNION ALL.
+    // Per-step outer SELECTs joined with UNION ALL. Each step renders its
+    // index + event_key literal inline; only the inner CTE references
+    // bound placeholders. This keeps the bind contract simple (binds are
+    // ordered by their SINGLE appearance inside the CTE), and the
+    // per-step UNION just multiplies the row count.
     let mut step_selects = Vec::with_capacity(cfg.steps.len());
     for (idx, step) in cfg.steps.iter().enumerate() {
-        // step_index >= 0 — the step's lift over step 0 is
-        // countIf(level >= idx+1) / countIf(level >= 1).
-        //
-        // For idx == 0 we emit conversion_rate = 1.0 (every funnel entry
-        // reached step 0 by definition) so consumers don't need to special
-        // case it.
         let step_index = idx;
         let level_threshold = (idx as i64) + 1;
         let event_key_escaped = escape_sql_literal(&step.event_key);
@@ -168,6 +225,7 @@ pub fn build_funnel_query(
 
         step_selects.push(format!(
             "SELECT\n    \
+                context_type,\n    \
                 variant_key,\n    \
                 CAST({step_index} AS UInt32) AS step_index,\n    \
                 '{event_key_escaped}' AS event_key,\n    \
@@ -175,7 +233,7 @@ pub fn build_funnel_query(
                 countIf(level >= 1) AS step_total,\n    \
                 {conversion_rate_expr} AS conversion_rate\n\
             FROM levels\n\
-            GROUP BY variant_key\n\
+            GROUP BY context_type, variant_key\n\
             HAVING variant_key != ''"
         ));
     }
@@ -199,6 +257,7 @@ fn escape_sql_literal(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
     use stitchd_core::metric::{FunnelConfig, FunnelStep};
 
     const ENV_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -209,11 +268,88 @@ mod tests {
         vec!["control", "treatment"]
     }
 
+    fn iter_end() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap()
+    }
+
     fn step(key: &str) -> FunnelStep {
         FunnelStep {
             event_key: key.into(),
             where_clause: None,
         }
+    }
+
+    // ── Bind-order discipline — load-bearing for clickhouse-rs ────────────
+
+    #[test]
+    fn funnel_binds_are_in_sql_appearance_order_three_step() {
+        // Three-step funnel exercises the head-of-vec step predicates +
+        // mid-vec scoping binds + tail-of-vec metric_key filter + variants.
+        // The push order this test pins:
+        //   p0 = step1 predicate
+        //   p1 = step2 predicate
+        //   p2 = step3 predicate
+        //   p3 = env_id
+        //   p4 = experiment_id
+        //   p5 = iteration_id
+        //   p6 = iteration_end_ms
+        //   p7 = step1 metric_key filter
+        //   p8 = step2 metric_key filter
+        //   p9 = step3 metric_key filter
+        //   p10 = variant ctrl
+        //   p11 = variant treat
+        let cfg = FunnelConfig {
+            steps: vec![
+                step("view"),
+                step("add_to_cart"),
+                step("checkout_completed"),
+            ],
+            window_seconds: 3600,
+            count_repeats: false,
+        };
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
+        assert_eq!(q.binds[0], QueryBind::Str("view".into()));
+        assert_eq!(q.binds[1], QueryBind::Str("add_to_cart".into()));
+        assert_eq!(q.binds[2], QueryBind::Str("checkout_completed".into()));
+        assert_eq!(q.binds[3], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[4], QueryBind::Str(EXP_ID.into()));
+        assert_eq!(q.binds[5], QueryBind::Str(ITER_ID.into()));
+        assert_eq!(q.binds[6], QueryBind::I64(iter_end().timestamp_millis()));
+        assert_eq!(q.binds[7], QueryBind::Str("view".into()));
+        assert_eq!(q.binds[8], QueryBind::Str("add_to_cart".into()));
+        assert_eq!(q.binds[9], QueryBind::Str("checkout_completed".into()));
+        assert_eq!(q.binds[10], QueryBind::Str("control".into()));
+        assert_eq!(q.binds[11], QueryBind::Str("treatment".into()));
+        assert_eq!(q.binds.len(), 12);
+
+        // Cross-check: the SQL must reference the placeholders in the same
+        // numeric order they appear in the bind vec. The simplest invariant
+        // is that {p0} appears strictly before {p1}, {p1} before {p2}, …
+        // when scanned left-to-right.
+        let mut last_idx: i64 = -1;
+        let mut cursor = 0;
+        while let Some(open) = q.sql[cursor..].find("{p") {
+            let abs_open = cursor + open;
+            let after_p = abs_open + 2;
+            let digit_end = q.sql[after_p..]
+                .bytes()
+                .take_while(|b| b.is_ascii_digit())
+                .count();
+            if digit_end == 0 {
+                cursor = after_p;
+                continue;
+            }
+            let n: i64 = q.sql[after_p..after_p + digit_end].parse().expect("digits");
+            assert!(
+                n > last_idx,
+                "placeholder {{p{n}}} appears after {{p{last_idx}}} in SQL but earlier in bind vec — \
+                 clickhouse-rs would bind values to the wrong positions. SQL:\n{}",
+                q.sql,
+            );
+            last_idx = n;
+            cursor = after_p + digit_end + 1;
+        }
+        assert_eq!(last_idx, 11, "every bind must appear in SQL");
     }
 
     #[test]
@@ -223,29 +359,16 @@ mod tests {
             window_seconds: 3600,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
 
-        // windowFunnel call includes the window and strict_order mode.
         assert!(
             q.sql.contains("windowFunnel(3600, 'strict_order')"),
             "expected strict_order mode, got:\n{}",
             q.sql
         );
-        // Step predicates are bound as separate placeholders.
-        assert_eq!(
-            q.binds
-                .iter()
-                .filter(|b| matches!(b, QueryBind::Str(s) if s == "page_view"))
-                .count(),
-            1
-        );
-        assert_eq!(
-            q.binds
-                .iter()
-                .filter(|b| matches!(b, QueryBind::Str(s) if s == "checkout_completed"))
-                .count(),
-            1
-        );
+        // Step predicates appear as two separate binds in step order.
+        assert_eq!(q.binds[0], QueryBind::Str("page_view".into()));
+        assert_eq!(q.binds[1], QueryBind::Str("checkout_completed".into()));
     }
 
     #[test]
@@ -259,7 +382,7 @@ mod tests {
             window_seconds: 7200,
             count_repeats: true,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
 
         // count_repeats: true → no strict_order mode argument.
         assert!(
@@ -280,10 +403,9 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
 
-        // Step 0: conversion_rate is 1.0 (everyone in the funnel reached
-        // step 0 by definition).
+        // Step 0 emits its own event_key literal.
         assert!(
             q.sql.contains("'a' AS event_key"),
             "step 0 event_key literal missing, got:\n{}",
@@ -312,7 +434,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
         // 4 steps → 3 UNION ALL separators.
         let unions = q.sql.matches("UNION ALL").count();
         assert_eq!(
@@ -329,8 +451,7 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
-        // Each step's outer SELECT must emit its index as a literal.
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
         assert!(q.sql.contains("CAST(0 AS UInt32) AS step_index"));
         assert!(q.sql.contains("CAST(1 AS UInt32) AS step_index"));
         assert!(q.sql.contains("CAST(2 AS UInt32) AS step_index"));
@@ -343,7 +464,8 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
+        let err =
+            build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
@@ -354,7 +476,8 @@ mod tests {
             window_seconds: 0,
             count_repeats: false,
         };
-        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
+        let err =
+            build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
@@ -365,35 +488,62 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &[]).unwrap_err();
+        let err = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &[], iter_end()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
     #[test]
-    fn funnel_reads_from_events_v2() {
+    fn funnel_reads_from_events_v2_joined_against_assignments() {
         let cfg = FunnelConfig {
             steps: vec![step("a"), step("b")],
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
-        assert!(q.sql.contains("FROM events_v2"));
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
+        assert!(q.sql.contains("FROM events_v2 AS e"));
+        assert!(q.sql.contains("INNER JOIN experiment_assignments AS a"));
+        assert!(q.sql.contains(
+            "AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)"
+        ));
     }
 
     #[test]
-    fn funnel_groups_by_context_then_variant() {
+    fn funnel_groups_by_context_type_context_key_variant_key() {
         let cfg = FunnelConfig {
             steps: vec![step("a"), step("b")],
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
-        // The inner CTE groups per (context, variant) so windowFunnel runs
-        // over each context's timeline; the outer SELECT then aggregates
-        // across contexts per variant.
-        assert!(q.sql.contains("GROUP BY context_key, variant_key"));
-        // Outer SELECT groups by variant_key only.
-        assert!(q.sql.contains("GROUP BY variant_key"));
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
+        // Inner CTE dedupes per (context_type, context_key, variant_key).
+        assert!(
+            q.sql
+                .contains("GROUP BY a.context_type, a.context_key, a.variant_key")
+        );
+        // Outer SELECTs group per (context_type, variant_key).
+        assert!(q.sql.contains("GROUP BY context_type, variant_key"));
+    }
+
+    #[test]
+    fn funnel_no_event_side_experiment_context_tags() {
+        let cfg = FunnelConfig {
+            steps: vec![step("a"), step("b")],
+            window_seconds: 60,
+            count_repeats: false,
+        };
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
+        assert!(
+            !q.sql.contains("arrayExists(t -> t.1 = 'experiment'"),
+            "no event-side experiment tag filter"
+        );
+        assert!(
+            !q.sql.contains("t.1 = 'iteration'"),
+            "no event-side iteration tag filter"
+        );
+        assert!(
+            !q.sql.contains("t.1 = 'variant'"),
+            "no event-side variant tag filter"
+        );
     }
 
     #[test]
@@ -403,20 +553,24 @@ mod tests {
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
         assert!(q.sql.contains("'page_view' AS event_key"));
         assert!(q.sql.contains("'checkout_completed' AS event_key"));
     }
 
     #[test]
-    fn funnel_iteration_filter_present() {
+    fn funnel_iteration_filter_uses_assignments_alias() {
         let cfg = FunnelConfig {
             steps: vec![step("a"), step("b")],
             window_seconds: 60,
             count_repeats: false,
         };
-        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
-        assert!(q.sql.contains("t.1 = 'iteration'"));
+        let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
+        assert!(
+            q.sql.contains("a.iteration_id = toUUID("),
+            "iteration scoping must come from `a.iteration_id`, got:\n{}",
+            q.sql
+        );
     }
 
     // ── escape_sql_literal helper ─────────────────────────────────────────────

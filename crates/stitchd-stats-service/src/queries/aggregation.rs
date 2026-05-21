@@ -1,16 +1,47 @@
 //! Aggregation query builder.
 //!
-//! Produces a `SELECT variant_key, <agg>(...) FROM events_v2 ...` query
-//! that:
+//! Produces a `SELECT context_type, variant_key, <agg>(...) FROM events_v2
+//! JOIN experiment_assignments ...` query that:
 //!
-//! - Filters by `env_id`, `metric_key` (== `event_key`), iteration time
-//!   window, and the supplied `variant_keys` allow-list.
+//! - JOINs `events_v2 e` against `experiment_assignments a` on
+//!   `(env_id, context_type, context_key)` — the join key is implicit on
+//!   the event side via `arrayExists(t -> t.1 = a.context_type AND
+//!   t.2 = a.context_key, e.contexts)` since contexts is an array of
+//!   `(type, key)` tuples per event.
+//! - Filters by `experiment_id`, `iteration_id`, `env_id`, the iteration
+//!   time window (`a.assigned_at <= e.occurred_at < iteration_end`) and
+//!   the supplied `variant_keys` allow-list.
 //! - Applies the optional `where_clause` (JsonLogic) as an extra
-//!   predicate against the `properties Map(String, String)` column.
-//! - Reads from `events_v2` rather than `events_experiment_daily`
-//!   because the MV only stores generic count/sum/uniq states — it
-//!   cannot satisfy percentiles, custom `on_field` references, or
-//!   property-level filters.
+//!   predicate against `events_v2.properties Map(String, String)`.
+//! - Reads from raw `events_v2` (not the daily MV) so percentiles,
+//!   custom `on_field`, and property-level filters all stay queryable.
+//!
+//! ## Strict intent-to-treat (ITT)
+//!
+//! `e.occurred_at >= a.assigned_at` excludes pre-exposure events — only
+//! events fired AFTER the context's first matching evaluation count.
+//! `e.occurred_at < iteration_end` excludes post-iteration events.
+//!
+//! ## Per-context-type grouping
+//!
+//! `GROUP BY (a.context_type, a.variant_key)` returns one row per
+//! `(context_type, variant_key)` pair. The caller builds the per-context-type
+//! result tree from the row set (Task 5.5).
+//!
+//! ## Bind order
+//!
+//! `clickhouse-rs` binds `?` placeholders by SQL position, not by
+//! `Vec<QueryBind>` index. Every push MUST happen in left-to-right SQL
+//! appearance order. The order this file emits is:
+//!
+//!   1. `env_id`            (in `WHERE a.env_id = toUUID(?)` — but only
+//!      because `env_id` is the first predicate that references it)
+//!   2. `experiment_id`     (in `WHERE a.experiment_id = toUUID(?)`)
+//!   3. `iteration_id`      (in `WHERE a.iteration_id = toUUID(?)`)
+//!   4. `metric_key`        (in `WHERE e.metric_key = ?`)
+//!   5. `iteration_end`     (in `e.occurred_at < ?`)
+//!   6. variant_keys        (`a.variant_key IN (?, ?, …)`)
+//!   7. JsonLogic literals  (appended after the IN list)
 //!
 //! See the parent module ([`super`]) for the [`BuiltQuery`] /
 //! [`QueryBind`] / [`QueryBuildError`] types.
@@ -19,6 +50,7 @@
 //! [`QueryBind`]: super::QueryBind
 //! [`QueryBuildError`]: super::QueryBuildError
 
+use chrono::{DateTime, Utc};
 use stitchd_core::metric::{AggregationConfig, AggregationOperator};
 
 use super::{BuiltQuery, QueryBind, QueryBuildError, jsonlogic_to_sql, push_bind};
@@ -32,6 +64,11 @@ use super::{BuiltQuery, QueryBind, QueryBuildError, jsonlogic_to_sql, push_bind}
 /// layer so the downstream stats code never sees noise from out-of-scope
 /// variants (e.g. a previously-renamed variant still emitting events).
 ///
+/// `iteration_end` is the upper bound on `e.occurred_at`. Callers pass
+/// `iteration.ended_at` when the iteration has concluded, or `Utc::now()`
+/// for in-progress iterations. The builder cannot derive this from CH
+/// because the iteration table is in PostgreSQL.
+///
 /// # Errors
 /// Returns a [`QueryBuildError`] when the config fails a defensive shape
 /// check (e.g. `Sum` without `on_field`) or the `where_clause` JsonLogic
@@ -42,6 +79,7 @@ pub fn build_aggregation_query(
     iteration_id: &str,
     env_id: &str,
     variant_keys: &[&str],
+    iteration_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, QueryBuildError> {
     // Defensive: re-run the kind-specific validator.
     if cfg.aggregator.requires_field() && cfg.on_field.is_none() {
@@ -51,27 +89,37 @@ pub fn build_aggregation_query(
         )));
     }
 
-    let mut binds = Vec::new();
-
-    // env_id, experiment_id, iteration_id placeholders.
-    let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
-    let exp_ph = push_bind(&mut binds, QueryBind::Str(experiment_id.to_owned()));
-    let iter_ph = push_bind(&mut binds, QueryBind::Str(iteration_id.to_owned()));
-    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
-
-    // variant_keys IN (...) — at least one placeholder must be emitted.
     if variant_keys.is_empty() {
         return Err(QueryBuildError::InvalidConfig(
             "variant_keys must not be empty".into(),
         ));
     }
+
+    let mut binds = Vec::new();
+
+    // Push binds in SQL-appearance order. The final SQL emits placeholders
+    // in this exact sequence:
+    //   1. env_id      — `a.env_id = toUUID(?)`
+    //   2. experiment  — `a.experiment_id = toUUID(?)`
+    //   3. iteration   — `a.iteration_id = toUUID(?)`
+    //   4. metric_key  — `e.metric_key = ?`
+    //   5. iter_end    — `e.occurred_at < ?`
+    //   6. variants    — `a.variant_key IN (?, ?, …)`
+    //   7. where_clause literals (last; emitted by jsonlogic_to_sql)
+    let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
+    let exp_ph = push_bind(&mut binds, QueryBind::Str(experiment_id.to_owned()));
+    let iter_ph = push_bind(&mut binds, QueryBind::Str(iteration_id.to_owned()));
+    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
+    let iter_end_ph = push_bind(&mut binds, QueryBind::I64(iteration_end.timestamp_millis()));
+
     let mut variant_phs = Vec::with_capacity(variant_keys.len());
     for vk in variant_keys {
         variant_phs.push(push_bind(&mut binds, QueryBind::Str((*vk).to_owned())));
     }
     let variant_in_list = variant_phs.join(", ");
 
-    // Optional where_clause.
+    // Optional where_clause. JsonLogic literals must be the LAST binds
+    // pushed so the SQL-appearance order matches.
     let extra_where = match cfg.where_clause.as_ref() {
         Some(expr) => {
             let frag = jsonlogic_to_sql(expr, &mut binds)?;
@@ -85,16 +133,22 @@ pub fn build_aggregation_query(
 
     let sql = format!(
         "SELECT\n    \
-            arrayFirst(t -> t.1 = 'variant', contexts).2 AS variant_key,\n    \
+            a.context_type AS context_type,\n    \
+            a.variant_key AS variant_key,\n    \
             {agg_expr} AS metric_value\n\
-        FROM events_v2\n\
-        WHERE env_id = toUUID({env_ph})\n  \
-          AND arrayExists(t -> t.1 = 'experiment' AND t.2 = {exp_ph}, contexts)\n  \
-          AND arrayExists(t -> t.1 = 'iteration'  AND t.2 = {iter_ph}, contexts)\n  \
-          AND metric_key = {event_ph}\n  \
-          AND arrayFirst(t -> t.1 = 'variant', contexts).2 IN ({variant_in_list}){extra_where}\n\
-        GROUP BY variant_key\n\
-        HAVING variant_key != ''"
+        FROM events_v2 AS e\n\
+        INNER JOIN experiment_assignments AS a\n    \
+            ON e.env_id = a.env_id\n   \
+            AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)\n\
+        WHERE a.env_id = toUUID({env_ph})\n  \
+          AND a.experiment_id = toUUID({exp_ph})\n  \
+          AND a.iteration_id = toUUID({iter_ph})\n  \
+          AND e.metric_key = {event_ph}\n  \
+          AND e.occurred_at >= a.assigned_at\n  \
+          AND e.occurred_at < fromUnixTimestamp64Milli({iter_end_ph})\n  \
+          AND a.variant_key IN ({variant_in_list}){extra_where}\n\
+        GROUP BY a.context_type, a.variant_key\n\
+        HAVING a.variant_key != ''"
     );
 
     Ok(BuiltQuery { sql, binds })
@@ -111,6 +165,10 @@ pub fn build_aggregation_query(
 /// `conductor/patterns.md` — *AggregatingMergeTree insert/read combiners*).
 /// `Uniq` runs on the raw field expression because cardinality counting
 /// over strings is the common case.
+///
+/// All references to property / numeric columns are explicitly qualified
+/// with `e.` since the FROM clause aliases `events_v2` as `e` to disambiguate
+/// from the JOINed `experiment_assignments AS a`.
 // `pub(super)` so the sibling `preview` module can reuse the exact same
 // aggregator-to-CH-expression mapping rather than duplicating it. Keeping
 // it private to `queries/` means it isn't part of the crate's public API.
@@ -144,14 +202,14 @@ fn percentile(cfg: &AggregationConfig, q: &str) -> Result<String, QueryBuildErro
 /// string (needs `toFloat64OrNull`):
 ///
 /// - `on_field == "value"`:
-///   `ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))), 0.0)`
+///   `ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)`
 ///   — both source columns are already numeric, so we skip
 ///   `toFloat64OrNull` (which only accepts `String` and rejects
 ///   `Float64` at the SQL layer with
 ///   `ILLEGAL_TYPE_OF_ARGUMENT`).
 ///
 /// - `on_field == "<property>"`:
-///   `ifNull(toFloat64OrNull(properties['<name>']), 0.0)`
+///   `ifNull(toFloat64OrNull(e.properties['<name>']), 0.0)`
 ///   — `properties` is `Map(String, String)`, so `toFloat64OrNull`
 ///   is the right coercion.
 fn numeric_value_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
@@ -165,10 +223,10 @@ fn numeric_value_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError
         // Canonical numeric columns are already Float64-coercible;
         // `coalesce(...)` returns Nullable(Float64). Just wrap in ifNull
         // so the aggregator sees a non-null float.
-        "ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))), 0.0)".to_owned()
+        "ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)".to_owned()
     } else {
         // properties[<name>] is String — toFloat64OrNull is correct.
-        format!("ifNull(toFloat64OrNull(properties['{field}']), 0.0)")
+        format!("ifNull(toFloat64OrNull(e.properties['{field}']), 0.0)")
     })
 }
 
@@ -177,11 +235,11 @@ fn numeric_value_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError
 /// We support two shorthand cases:
 ///
 /// - `value` → reads from the canonical numeric column (one of
-///   `value_double` / `value_int`). We coalesce to `value_double` first
-///   then cast `value_int` to `Float64` when only the integer column is
-///   populated. This mirrors the MV definition.
+///   `e.value_double` / `e.value_int`). We coalesce to `value_double`
+///   first then cast `value_int` to `Float64` when only the integer
+///   column is populated. This mirrors the MV definition.
 /// - any other name → reads from the `properties Map(String, String)`
-///   column at `properties['<name>']`. Numeric coercion happens in the
+///   column at `e.properties['<name>']`. Numeric coercion happens in the
 ///   caller.
 fn on_field_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
     let field = cfg.on_field.as_ref().ok_or_else(|| {
@@ -191,9 +249,9 @@ fn on_field_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
         ))
     })?;
     if field == "value" {
-        Ok("coalesce(value_double, CAST(value_int AS Nullable(Float64)))".to_owned())
+        Ok("coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64)))".to_owned())
     } else {
-        Ok(format!("properties['{field}']"))
+        Ok(format!("e.properties['{field}']"))
     }
 }
 
@@ -202,6 +260,7 @@ fn on_field_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use serde_json::json;
 
     const ENV_ID: &str = "00000000-0000-0000-0000-000000000001";
@@ -212,7 +271,11 @@ mod tests {
         vec!["control", "treatment"]
     }
 
-    // ── Golden-SQL snapshots ─────────────────────────────────────────────────
+    fn iter_end() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap()
+    }
+
+    // ── Golden-SQL snapshot ──────────────────────────────────────────────────
 
     #[test]
     fn aggregation_count_simple() {
@@ -222,30 +285,85 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
 
-        let expected = "SELECT\n    \
-            arrayFirst(t -> t.1 = 'variant', contexts).2 AS variant_key,\n    \
-            count() AS metric_value\n\
-            FROM events_v2\n\
-            WHERE env_id = toUUID({p0})\n  \
-              AND arrayExists(t -> t.1 = 'experiment' AND t.2 = {p1}, contexts)\n  \
-              AND arrayExists(t -> t.1 = 'iteration'  AND t.2 = {p2}, contexts)\n  \
-              AND metric_key = {p3}\n  \
-              AND arrayFirst(t -> t.1 = 'variant', contexts).2 IN ({p4}, {p5})\n\
-            GROUP BY variant_key\n\
-            HAVING variant_key != ''";
-        assert_eq!(q.sql, expected);
-        assert_eq!(
-            q.binds,
-            vec![
-                QueryBind::Str(ENV_ID.into()),
-                QueryBind::Str(EXP_ID.into()),
-                QueryBind::Str(ITER_ID.into()),
-                QueryBind::Str("checkout_completed".into()),
-                QueryBind::Str("control".into()),
-                QueryBind::Str("treatment".into()),
-            ]
+        // Verify the JOIN structure is correct.
+        assert!(
+            q.sql.contains("FROM events_v2 AS e"),
+            "must read from events_v2 alias e, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("INNER JOIN experiment_assignments AS a"),
+            "must JOIN experiment_assignments alias a, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains(
+                "AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)"
+            ),
+            "join predicate must walk e.contexts vs a.(context_type, context_key), got:\n{}",
+            q.sql
+        );
+        // ITT bound + iteration upper bound.
+        assert!(
+            q.sql.contains("e.occurred_at >= a.assigned_at"),
+            "ITT lower bound missing, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql
+                .contains("e.occurred_at < fromUnixTimestamp64Milli({p4})"),
+            "iteration upper bound bind missing, got:\n{}",
+            q.sql
+        );
+        // Per-(context_type, variant_key) GROUP BY.
+        assert!(
+            q.sql.contains("GROUP BY a.context_type, a.variant_key"),
+            "must group by context_type + variant_key, got:\n{}",
+            q.sql
+        );
+
+        // Bind order check: env, exp, iter, event_key, iter_end_ms, variant_keys
+        assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[1], QueryBind::Str(EXP_ID.into()));
+        assert_eq!(q.binds[2], QueryBind::Str(ITER_ID.into()));
+        assert_eq!(q.binds[3], QueryBind::Str("checkout_completed".into()));
+        assert_eq!(q.binds[4], QueryBind::I64(iter_end().timestamp_millis()));
+        assert_eq!(q.binds[5], QueryBind::Str("control".into()));
+        assert_eq!(q.binds[6], QueryBind::Str("treatment".into()));
+        assert_eq!(q.binds.len(), 7);
+    }
+
+    #[test]
+    fn aggregation_no_event_side_experiment_context_tags() {
+        // The spec's headline cutover: no more arrayExists() filtering on
+        // contexts for 'experiment' / 'iteration' / 'variant' tags. The
+        // attribution comes from `experiment_assignments` instead.
+        let cfg = AggregationConfig {
+            event_key: "checkout_completed".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: None,
+        };
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
+
+        assert!(
+            !q.sql.contains("arrayExists(t -> t.1 = 'experiment'"),
+            "event-side experiment context filter must be removed, got:\n{}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains("t.1 = 'iteration'"),
+            "event-side iteration context filter must be removed, got:\n{}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains("t.1 = 'variant'"),
+            "event-side variant context filter must be removed, got:\n{}",
+            q.sql
         );
     }
 
@@ -257,12 +375,13 @@ mod tests {
             on_field: Some("revenue".into()),
             where_clause: None,
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
         assert!(
             q.sql.contains(
-                "sum(ifNull(toFloat64OrNull(properties['revenue']), 0.0)) AS metric_value"
+                "sum(ifNull(toFloat64OrNull(e.properties['revenue']), 0.0)) AS metric_value"
             ),
-            "sum aggregator should wrap properties['revenue'] in ifNull+toFloat64OrNull, got:\n{}",
+            "sum aggregator should wrap e.properties['revenue'] in ifNull+toFloat64OrNull, got:\n{}",
             q.sql
         );
     }
@@ -270,7 +389,7 @@ mod tests {
     #[test]
     fn aggregation_avg_on_value_column_uses_native_columns() {
         // on_field == "value" routes to the canonical numeric columns
-        // (value_double / value_int) and skips `toFloat64OrNull` — the
+        // (e.value_double / e.value_int) and skips `toFloat64OrNull` — the
         // coalesce already returns Nullable(Float64) and ClickHouse
         // rejects toFloat64OrNull(Float64) with ILLEGAL_TYPE_OF_ARGUMENT.
         let cfg = AggregationConfig {
@@ -279,10 +398,11 @@ mod tests {
             on_field: Some("value".into()),
             where_clause: None,
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
         assert!(
             q.sql.contains(
-                "avg(ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))), 0.0))"
+                "avg(ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0))"
             ),
             "avg over 'value' should coalesce native numeric columns directly, got:\n{}",
             q.sql
@@ -302,10 +422,12 @@ mod tests {
             on_field: Some("latency_ms".into()),
             where_clause: None,
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
         assert!(
-            q.sql
-                .contains("quantile(0.9)(ifNull(toFloat64OrNull(properties['latency_ms']), 0.0))"),
+            q.sql.contains(
+                "quantile(0.9)(ifNull(toFloat64OrNull(e.properties['latency_ms']), 0.0))"
+            ),
             "P90 should emit quantile(0.9)(...), got:\n{}",
             q.sql
         );
@@ -319,10 +441,11 @@ mod tests {
             on_field: Some("user_id".into()),
             where_clause: None,
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
         assert!(
             q.sql
-                .contains("uniq(properties['user_id']) AS metric_value"),
+                .contains("uniq(e.properties['user_id']) AS metric_value"),
             "uniq aggregator missing or wrong, got:\n{}",
             q.sql
         );
@@ -336,18 +459,19 @@ mod tests {
             on_field: None,
             where_clause: Some(json!({"==": [{"var": "country"}, "US"]})),
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
 
-        // Predicate is appended after the fixed WHERE clauses; bind value for
-        // the literal "US" lands at index 6 (after env / exp / iter / event /
-        // 2 variants).
+        // Predicate is appended after the IN list; bind value for the
+        // literal "US" lands at index 7 (after env / exp / iter / event /
+        // iter_end / 2 variants).
         assert!(
-            q.sql.contains("AND (properties['country'] = {p6})"),
+            q.sql.contains("AND (properties['country'] = {p7})"),
             "where_clause should be appended with parens, got:\n{}",
             q.sql
         );
         assert_eq!(q.binds.last(), Some(&QueryBind::Str("US".into())));
-        assert_eq!(q.binds.len(), 7);
+        assert_eq!(q.binds.len(), 8);
     }
 
     #[test]
@@ -366,16 +490,19 @@ mod tests {
                 ]
             })),
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
+        // Bind indices for where literals start at 7 (after env, exp, iter,
+        // event, iter_end, ctrl, treat).
         assert!(
             q.sql.contains(
-                "AND ((properties['country'] = {p6}) AND \
-                 ((properties['tier'] = {p7}) OR (properties['tier'] = {p8})))"
+                "AND ((properties['country'] = {p7}) AND \
+                 ((properties['tier'] = {p8}) OR (properties['tier'] = {p9})))"
             ),
             "nested and/or should render correctly, got:\n{}",
             q.sql
         );
-        assert_eq!(q.binds.len(), 9);
+        assert_eq!(q.binds.len(), 10);
     }
 
     #[test]
@@ -386,7 +513,8 @@ mod tests {
             on_field: None,
             where_clause: Some(json!({"%": [{"var": "a"}, 2]})),
         };
-        let err = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
+        let err = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap_err();
         assert_eq!(err, QueryBuildError::UnsupportedJsonLogic("%".into()));
     }
 
@@ -398,7 +526,8 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let err = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap_err();
+        let err = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
@@ -410,7 +539,8 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let err = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &[]).unwrap_err();
+        let err =
+            build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &[], iter_end()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
@@ -424,39 +554,43 @@ mod tests {
             on_field: None,
             where_clause: None,
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
         assert!(q.sql.contains("FROM events_v2"));
         assert!(!q.sql.contains("events_experiment_daily"));
     }
 
     #[test]
-    fn aggregation_iteration_filter_present() {
-        // We need to scope reads to a specific iteration — the iteration_id
-        // appears in a contexts array filter.
+    fn aggregation_iteration_filter_uses_assignments_join() {
+        // Iteration scoping is now derived from experiment_assignments —
+        // the iteration_id is bound against `a.iteration_id`, not
+        // hand-rolled into the event row's contexts array.
         let cfg = AggregationConfig {
             event_key: "x".into(),
             aggregator: AggregationOperator::Count,
             on_field: None,
             where_clause: None,
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
         assert!(
-            q.sql.contains("t.1 = 'iteration'"),
-            "iteration-scoping filter missing, got:\n{}",
+            q.sql.contains("a.iteration_id = toUUID({p2})"),
+            "iteration scoping must come from `a.iteration_id`, got:\n{}",
             q.sql
         );
     }
 
     #[test]
-    fn aggregation_groups_by_variant_key() {
+    fn aggregation_groups_by_context_type_and_variant_key() {
         let cfg = AggregationConfig {
             event_key: "x".into(),
             aggregator: AggregationOperator::Count,
             on_field: None,
             where_clause: None,
         };
-        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants()).unwrap();
-        assert!(q.sql.contains("GROUP BY variant_key"));
-        assert!(q.sql.contains("HAVING variant_key != ''"));
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
+        assert!(q.sql.contains("GROUP BY a.context_type, a.variant_key"));
+        assert!(q.sql.contains("HAVING a.variant_key != ''"));
     }
 }

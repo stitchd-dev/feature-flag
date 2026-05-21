@@ -535,6 +535,7 @@ async fn sdk_fires_events_experiment_reads_via_ratio_metric() {
         &iter_uuid.to_string(),
         &env_id.as_uuid().to_string(),
         &variant_keys,
+        chrono::Utc::now(),
     )
     .await
     .expect("dispatch_metric_query for ratio");
