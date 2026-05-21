@@ -196,6 +196,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             put(flags::update_rules),
         )
         .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/default-rule-distribution",
+            post(flags::set_default_rule_distribution),
+        )
+        .route(
             "/v1/projects/{project_id}/flags/{flag_id}/hashing",
             put(flags::update_flag_hashing),
         )

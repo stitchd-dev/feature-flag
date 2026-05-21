@@ -62,6 +62,10 @@ fn build_router(state: Arc<GatewayState>) -> axum::Router {
             "/v1/projects/{project_id}/flags/{flag_id}/archive",
             post(flag_routes::archive_flag),
         )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/default-rule-distribution",
+            post(flag_routes::set_default_rule_distribution),
+        )
         .with_state(state)
 }
 
@@ -137,6 +141,21 @@ impl FlagService for LockedFlagService {
         _req: tonic::Request<GetFlagDefinitionsRequest>,
     ) -> Result<Response<Self::GetFlagDefinitionsStream>, Status> {
         Err(Status::unimplemented("not used in flag-lock tests"))
+    }
+
+    async fn set_default_rule_distribution(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::SetDefaultRuleDistributionRequest>,
+    ) -> Result<
+        Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>,
+        Status,
+    > {
+        // Surface the locked sentinel — the integration test asserts the
+        // 409 mapping for this RPC the same way it does for mutate_flag.
+        Err(Status::failed_precondition(format!(
+            "flag_locked_by_experiment:{}",
+            self.locked_experiment_id
+        )))
     }
 }
 
@@ -353,6 +372,24 @@ impl FlagService for UnlockedFlagService {
     ) -> Result<Response<Self::GetFlagDefinitionsStream>, Status> {
         Err(Status::unimplemented("not exercised here"))
     }
+    async fn set_default_rule_distribution(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::SetDefaultRuleDistributionRequest>,
+    ) -> Result<
+        Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>,
+        Status,
+    > {
+        Ok(Response::new(
+            stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse {
+                flag: Some(FeatureFlag {
+                    key: "my-flag".to_string(),
+                    enabled: true,
+                    ..Default::default()
+                }),
+                version: 2,
+            },
+        ))
+    }
 }
 
 #[tokio::test]
@@ -393,4 +430,175 @@ async fn put_flag_succeeds_when_flag_not_locked() {
         "expected 200 when flag is not locked; got {}",
         resp.status()
     );
+}
+
+// ─── Default-rule distribution (Phase 7 Task 5) ──────────────────────────────
+
+#[tokio::test]
+async fn set_default_rule_distribution_returns_409_when_flag_locked() {
+    let exp_id = "44444444-4444-4444-4444-444444444444";
+    let svc = LockedFlagService {
+        locked_experiment_id: exp_id.to_string(),
+        flag: None,
+    };
+    let flag_client = spawn_mock_flag_service(svc).await;
+    let state = make_state(flag_client);
+    let app = build_router(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/projects/proj-1/flags/my-flag/default-rule-distribution")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"distribution":{"allocations":[{"variant_key":"on","percentage":100.0}]},"version":1}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["error"], "flag_locked_by_experiment");
+    assert_eq!(body["experiment_id"], exp_id);
+}
+
+#[tokio::test]
+async fn set_default_rule_distribution_succeeds_when_unlocked() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(FlagServiceServer::new(UnlockedFlagService))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let flag_client = FlagServiceClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap();
+    let state = make_state(flag_client);
+    let app = build_router(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/projects/proj-1/flags/my-flag/default-rule-distribution")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"distribution":{"allocations":[{"variant_key":"on","percentage":60.0},{"variant_key":"off","percentage":40.0}]},"version":1}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["version"], 2);
+}
+
+/// Mock that returns the `invalid_distribution:` sentinel so the gateway can
+/// rewrite it into a 422 with structured body.
+#[derive(Default, Clone)]
+struct InvalidDistFlagService;
+
+#[tonic::async_trait]
+impl FlagService for InvalidDistFlagService {
+    async fn get_flag(
+        &self,
+        _req: tonic::Request<GetFlagRequest>,
+    ) -> Result<Response<FeatureFlag>, Status> {
+        Ok(Response::new(FeatureFlag {
+            key: "my-flag".to_string(),
+            ..Default::default()
+        }))
+    }
+    async fn list_flags(
+        &self,
+        _req: tonic::Request<ListFlagsRequest>,
+    ) -> Result<Response<ListFlagsResponse>, Status> {
+        Ok(Response::new(ListFlagsResponse {
+            flags: vec![],
+            total: 0,
+        }))
+    }
+    async fn mutate_flag(
+        &self,
+        _req: tonic::Request<MutateFlagRequest>,
+    ) -> Result<Response<MutateFlagResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn update_flag_hashing(
+        &self,
+        _req: tonic::Request<UpdateFlagHashingRequest>,
+    ) -> Result<Response<UpdateFlagHashingResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn evaluate_preview(
+        &self,
+        _req: tonic::Request<EvaluatePreviewRequest>,
+    ) -> Result<Response<EvaluatePreviewResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    type GetFlagDefinitionsStream =
+        tokio_stream::wrappers::ReceiverStream<Result<FeatureFlag, Status>>;
+    async fn get_flag_definitions(
+        &self,
+        _req: tonic::Request<GetFlagDefinitionsRequest>,
+    ) -> Result<Response<Self::GetFlagDefinitionsStream>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn set_default_rule_distribution(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::SetDefaultRuleDistributionRequest>,
+    ) -> Result<
+        Response<stitchd_proto::flags::v1::SetDefaultRuleDistributionResponse>,
+        Status,
+    > {
+        Err(Status::invalid_argument(
+            "invalid_distribution: allocations must sum to 100",
+        ))
+    }
+}
+
+#[tokio::test]
+async fn set_default_rule_distribution_returns_422_for_invalid_payload() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(FlagServiceServer::new(InvalidDistFlagService))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    let flag_client = FlagServiceClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap();
+    let state = make_state(flag_client);
+    let app = build_router(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/projects/proj-1/flags/my-flag/default-rule-distribution")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"distribution":{"allocations":[{"variant_key":"on","percentage":33.0}]},"version":1}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["error"], "invalid_distribution");
 }

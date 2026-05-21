@@ -962,6 +962,129 @@ pub async fn update_flag_hashing(
     }))
 }
 
+// ─── Default-rule distribution (Phase 7 Task 5) ───────────────────────────────
+
+/// Single allocation entry in the default-rule distribution body.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct DefaultRuleAllocationBody {
+    pub variant_key: String,
+    pub percentage: f64,
+}
+
+/// Request body for `POST /v1/projects/{project_id}/flags/{flag_key}/default-rule-distribution`.
+///
+/// `None` / empty `distribution.allocations` clears the distribution (reverts
+/// the default-rule path to single-default-variant behaviour). When `Some`,
+/// the server validates the distribution via
+/// `RolloutDistribution::validate` (allocations non-empty, each percentage in
+/// `(0, 100]`, no duplicate variant keys, sum ≈ 100.0).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetDefaultRuleDistributionBody {
+    /// `None` or empty `allocations` clears the distribution.
+    #[serde(default)]
+    pub distribution: Option<DefaultRuleDistributionBody>,
+    /// Optimistic-locking version (matches the flag's current `version`).
+    pub version: u64,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DefaultRuleDistributionBody {
+    pub allocations: Vec<DefaultRuleAllocationBody>,
+}
+
+/// Response body — echoes the updated flag and its new version.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SetDefaultRuleDistributionResponseJson {
+    pub flag: AdminFlagJson,
+    pub version: u64,
+}
+
+/// `POST /v1/projects/{project_id}/flags/{flag_key}/default-rule-distribution`
+///
+/// Sets (or clears) the flag's percentage distribution for the default-rule
+/// fall-through. Returns 409 when the flag is locked by a running/paused
+/// experiment, 422 for invalid distributions.
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{project_id}/flags/{flag_key}/default-rule-distribution",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("flag_key" = String, Path, description = "Flag key"),
+    ),
+    request_body = SetDefaultRuleDistributionBody,
+    responses(
+        (status = 200, description = "Distribution updated", body = SetDefaultRuleDistributionResponseJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Flag locked by an experiment"),
+        (status = 422, description = "Invalid distribution"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn set_default_rule_distribution(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<SetDefaultRuleDistributionBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    use stitchd_proto::flags::v1::{
+        DefaultRuleAllocation, SetDefaultRuleDistributionRequest,
+    };
+
+    let allocations: Vec<DefaultRuleAllocation> = body
+        .distribution
+        .map(|d| {
+            d.allocations
+                .into_iter()
+                .map(|a| DefaultRuleAllocation {
+                    variant_key: a.variant_key,
+                    percentage: a.percentage,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let req = tonic::Request::new(SetDefaultRuleDistributionRequest {
+        project_id,
+        flag_key,
+        allocations,
+        version: body.version,
+    });
+
+    let mut client = state.flag_client.lock().await;
+    let resp = match client.set_default_rule_distribution(req).await {
+        Ok(r) => r,
+        Err(s) => {
+            // The flag-service returns `INVALID_ARGUMENT` with a message
+            // prefixed `invalid_distribution:` when the distribution fails
+            // validation. The gateway rewrites that into a structured 422
+            // body the admin UI can branch on. Lock-precondition errors
+            // are already handled by `GatewayError::from(tonic::Status)`.
+            if s.code() == tonic::Code::InvalidArgument
+                && s.message().starts_with("invalid_distribution:")
+            {
+                return Err(GatewayError::InvalidDistribution(
+                    s.message()
+                        .trim_start_matches("invalid_distribution:")
+                        .trim()
+                        .to_string(),
+                ));
+            }
+            return Err(GatewayError::from(s));
+        }
+    };
+    let inner = resp.into_inner();
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
+    Ok(Json(SetDefaultRuleDistributionResponseJson {
+        flag: flag_json,
+        version: inner.version,
+    }))
+}
+
 // ─── Evaluate preview ─────────────────────────────────────────────────────────
 
 /// Request body for `POST /v1/projects/{project_id}/flags/{flag_key}/evaluate-preview`.

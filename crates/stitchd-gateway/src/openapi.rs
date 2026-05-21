@@ -45,6 +45,7 @@ use utoipa::{
         crate::routes::flags::update_variants,
         crate::routes::flags::update_rules,
         crate::routes::flags::update_flag_hashing,
+        crate::routes::flags::set_default_rule_distribution,
         // Segments (JWT)
         crate::routes::segments::list_segments,
         crate::routes::segments::create_segment,
@@ -115,6 +116,10 @@ use utoipa::{
             crate::routes::flags::UpdateHashingBody,
             crate::routes::flags::HashingConfigJson,
             crate::routes::flags::UpdateHashingResponse,
+            crate::routes::flags::DefaultRuleAllocationBody,
+            crate::routes::flags::DefaultRuleDistributionBody,
+            crate::routes::flags::SetDefaultRuleDistributionBody,
+            crate::routes::flags::SetDefaultRuleDistributionResponseJson,
             // Segments
             crate::routes::segments::SegmentCreateRequest,
             crate::routes::segments::SegmentUpdateRequest,
