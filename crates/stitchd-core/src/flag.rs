@@ -106,6 +106,11 @@ impl Flag {
             .and_then(|id| self.get_variant(id))
     }
 
+    /// Returns the variant with the given `key`, if it belongs to this flag.
+    pub fn get_variant_by_key(&self, key: &str) -> Option<&Variant> {
+        self.variants.iter().find(|v| v.key == key)
+    }
+
     /// Returns all `SegmentId`s referenced in any of this flag's rules.
     pub fn referenced_segment_ids(&self) -> HashSet<SegmentId> {
         let mut ids = HashSet::new();

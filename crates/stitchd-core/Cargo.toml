@@ -36,3 +36,4 @@ url = { workspace = true }
 tokio = { workspace = true }
 quick-xml = { workspace = true }
 flate2 = { workspace = true }
+tracing = { workspace = true }

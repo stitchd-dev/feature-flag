@@ -288,6 +288,63 @@ fn evaluate_single(
         }
     }
 
+    // If no custom rule fired and the flag has a default-rule percentage
+    // distribution, hash the context into one of the listed allocations
+    // (Phase 2 of experimentation_full_20260521). Uses the same hashing
+    // convention as percentage rollout rules so cohort assignment is shared
+    // across the two code paths.
+    if fired_rule_index.is_none()
+        && let Some(dist) = flag.record.default_rule_distribution.as_ref()
+    {
+        let target_values: Vec<String> = ec.contexts.iter().map(|c| c.key.clone()).collect();
+        let flag_key = flag.record.key.as_str();
+        let env_str = env_id.to_string();
+        let percentage = calculate_allocation(flag_key, &env_str, &target_values);
+        let bucket = ((percentage * 10.0).floor() as u32).min(999);
+
+        // Build hash_input matching `calculate_allocation` for the
+        // rollout_debug surface.
+        let mut hash_input = format!("{flag_key}{env_str}");
+        for t in &target_values {
+            hash_input.push_str(t);
+        }
+
+        // Build per-variant ranges in bucket-coordinates (0..999) so the
+        // preview UI can render the same visualisation it uses for
+        // percentage rollout rules.
+        let mut variant_ranges: Vec<VariantRange> = Vec::new();
+        let mut cumulative_pct: f64 = 0.0;
+        for alloc in &dist.allocations {
+            let from = (cumulative_pct * 10.0).floor() as u32;
+            cumulative_pct += alloc.percentage;
+            let to = ((cumulative_pct * 10.0).floor() as u32).saturating_sub(1);
+            variant_ranges.push(VariantRange {
+                variant_key: alloc.variant_key.clone(),
+                from,
+                to,
+            });
+        }
+
+        if let Some(variant_key) = dist.assign_variant_key(percentage) {
+            if let Some(v) = flag.get_variant_by_key(variant_key) {
+                result_variant_key = v.key.clone();
+                result_variant_value = variant_value_to_json(&v.value);
+            } else {
+                tracing::warn!(
+                    flag_key,
+                    variant_key,
+                    "default_rule_distribution references unknown variant_key; falling back to default_variant_id"
+                );
+            }
+        }
+
+        rollout_debug = Some(RolloutDebug {
+            hash_input,
+            bucket,
+            variant_ranges,
+        });
+    }
+
     ContextPreviewResult {
         context_index,
         variant_key: result_variant_key,
@@ -1121,5 +1178,118 @@ mod tests {
             !beta_trace.result,
             "beta == true should be false for this context"
         );
+    }
+
+    // ── Phase 2 Task 2.2: default_rule_distribution in preview ──────────────
+
+    use crate::rollout::{RolloutAllocation, RolloutDistribution};
+
+    #[test]
+    fn default_rule_distribution_assigns_via_hashing_in_preview() {
+        // No rule on the flag → default-rule distribution fires.
+        let (mut flag, _, _) = make_bool_flag(true);
+        flag.record.default_rule_distribution = Some(RolloutDistribution {
+            allocations: vec![
+                RolloutAllocation {
+                    variant_key: "on".to_string(),
+                    percentage: 50.0,
+                },
+                RolloutAllocation {
+                    variant_key: "off".to_string(),
+                    percentage: 50.0,
+                },
+            ],
+        });
+
+        // 50/50 over 1000 distinct users should produce a balanced split.
+        let evaluation_contexts: Vec<EvaluationContext> = (0..1000)
+            .map(|i| {
+                EvaluationContext::new()
+                    .with_context(Context::new("user", format!("u{i}").as_str()))
+            })
+            .collect();
+        let results = evaluate_preview(&flag, &evaluation_contexts, &[], env_id(), &[]);
+        let on_count = results.iter().filter(|r| r.variant_key == "on").count();
+        assert!(
+            (450..=550).contains(&on_count),
+            "default-rule 50/50 distribution should produce ~500 ON; got {on_count}"
+        );
+
+        // Preview must emit rollout_debug for transparency.
+        assert!(
+            results[0].rollout_debug.is_some(),
+            "default-rule path must populate rollout_debug in preview"
+        );
+        // No rule fired.
+        assert_eq!(results[0].fired_rule_index, None);
+        assert!(results[0].fired_rule_id.is_none());
+    }
+
+    #[test]
+    fn default_rule_distribution_none_falls_to_default_variant_in_preview() {
+        let (flag, _, _) = make_bool_flag(true);
+        // default_rule_distribution is None (set by make_bool_flag).
+        let ec = EvaluationContext::new().with_context(Context::new("user", "alice"));
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
+        assert_eq!(results[0].variant_key, "off"); // default variant
+        assert!(results[0].rollout_debug.is_none());
+    }
+
+    #[test]
+    fn default_rule_distribution_unknown_variant_falls_back_in_preview() {
+        let (mut flag, _, _) = make_bool_flag(true);
+        flag.record.default_rule_distribution = Some(RolloutDistribution {
+            allocations: vec![RolloutAllocation {
+                variant_key: "nonexistent".to_string(),
+                percentage: 100.0,
+            }],
+        });
+
+        let ec = EvaluationContext::new().with_context(Context::new("user", "alice"));
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
+        // Falls back to default variant ("off") because variant_key isn't found.
+        assert_eq!(results[0].variant_key, "off");
+        // rollout_debug is still populated (the hash was computed, just the
+        // mapping fell through) so the UI can show what would have happened.
+        assert!(results[0].rollout_debug.is_some());
+    }
+
+    #[test]
+    fn matching_rule_short_circuits_default_rule_distribution_in_preview() {
+        let (mut flag, on_id, _) = make_bool_flag(true);
+        // Custom rule that matches → must win even when distribution is set.
+        flag.rules.push(beta_rule(on_id, flag.record.id));
+        // Set a distribution that would otherwise route everything to "off".
+        flag.record.default_rule_distribution = Some(RolloutDistribution {
+            allocations: vec![RolloutAllocation {
+                variant_key: "off".to_string(),
+                percentage: 100.0,
+            }],
+        });
+
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
+        assert_eq!(results[0].variant_key, "on");
+        assert_eq!(results[0].fired_rule_index, Some(0));
+    }
+
+    #[test]
+    fn disabled_flag_short_circuits_default_rule_distribution_in_preview() {
+        let (mut flag, _, _) = make_bool_flag(false);
+        flag.record.default_rule_distribution = Some(RolloutDistribution {
+            allocations: vec![RolloutAllocation {
+                variant_key: "on".to_string(),
+                percentage: 100.0,
+            }],
+        });
+        let ec = EvaluationContext::new().with_context(Context::new("user", "alice"));
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
+        // Even though the distribution would route all traffic to "on",
+        // the disabled-flag branch serves the default variant ("off") and
+        // never touches the distribution.
+        assert_eq!(results[0].variant_key, "off");
+        assert!(results[0].rollout_debug.is_none());
     }
 }
