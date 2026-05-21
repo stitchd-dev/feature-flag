@@ -23,7 +23,7 @@ pub fn spawn_eval_log_write(
     env_id: Uuid,
     flag_id: Uuid,
     flag_key: String,
-    is_disabled: bool,
+    targeting_on: bool,
     evaluated_at: DateTime<Utc>,
     contexts_with_variants: Vec<(EvaluationContext, String)>,
 ) {
@@ -31,7 +31,7 @@ pub fn spawn_eval_log_write(
         env_id,
         flag_id,
         &flag_key,
-        is_disabled,
+        targeting_on,
         evaluated_at,
         &contexts_with_variants,
     );
@@ -49,11 +49,18 @@ pub fn spawn_eval_log_write(
 ///
 /// One row per `Context` in each `EvaluationContext`. Private parameter values
 /// are replaced with `"********"`; keys are preserved.
+///
+/// `matched_rule_id` defaults to `None` here; Phase 2 of the
+/// `experimentation_full_20260521` track will wire the real value from the
+/// rule-evaluation result so the Phase 4 experiment_assignments MV can scope
+/// exposures to the experiment's bound rule (or default-rule when `None`).
+/// When `targeting_on = false`, `matched_rule_id` is always `None` (no rule
+/// evaluation runs).
 pub fn build_eval_log_rows(
     env_id: Uuid,
     flag_id: Uuid,
     flag_key: &str,
-    is_disabled: bool,
+    targeting_on: bool,
     evaluated_at: DateTime<Utc>,
     contexts_with_variants: &[(EvaluationContext, String)],
 ) -> Vec<EvalLogRow> {
@@ -66,11 +73,12 @@ pub fn build_eval_log_rows(
                 flag_id,
                 flag_key: flag_key.to_string(),
                 variant_key: variant_key.clone(),
-                is_disabled,
+                targeting_on,
                 evaluated_at,
                 context_type: ctx.context_type.clone(),
                 context_key: ctx.key.clone(),
                 params_json,
+                matched_rule_id: None,
             });
         }
     }
@@ -131,7 +139,7 @@ mod tests {
             env_id,
             flag_id,
             "my-flag",
-            false,
+            true,
             Utc::now(),
             &[(ec, "on".to_string())],
         );
@@ -151,7 +159,7 @@ mod tests {
             env_id,
             flag_id,
             "flag",
-            false,
+            true,
             Utc::now(),
             &[(ec1, "on".to_string()), (ec2, "off".to_string())],
         );
@@ -171,7 +179,7 @@ mod tests {
             env_id,
             flag_id,
             "flag",
-            false,
+            true,
             Utc::now(),
             &[(eval_ctx(vec![ctx]), "on".to_string())],
         );
@@ -198,7 +206,7 @@ mod tests {
             env_id,
             flag_id,
             "flag",
-            false,
+            true,
             Utc::now(),
             &[(eval_ctx(vec![ctx]), "on".to_string())],
         );
@@ -213,7 +221,7 @@ mod tests {
     #[test]
     fn empty_contexts_produces_no_rows() {
         let (env_id, flag_id) = nil_ids();
-        let rows = build_eval_log_rows(env_id, flag_id, "flag", false, Utc::now(), &[]);
+        let rows = build_eval_log_rows(env_id, flag_id, "flag", true, Utc::now(), &[]);
         assert!(rows.is_empty());
     }
 
@@ -221,16 +229,21 @@ mod tests {
     fn disabled_flag_recorded_correctly() {
         let (env_id, flag_id) = nil_ids();
         let ctx = Context::new("user", "alice");
+        // targeting_on=false ⇔ flag was disabled (targeting toggle OFF).
         let rows = build_eval_log_rows(
             env_id,
             flag_id,
             "flag",
-            true,
+            false,
             Utc::now(),
             &[(eval_ctx(vec![ctx]), "__disabled__".to_string())],
         );
         assert_eq!(rows.len(), 1);
-        assert!(rows[0].is_disabled);
+        assert!(!rows[0].targeting_on);
+        assert!(
+            rows[0].matched_rule_id.is_none(),
+            "no rule evaluation runs when targeting is off, so matched_rule_id MUST be None"
+        );
         assert_eq!(rows[0].variant_key, "__disabled__");
     }
 }

@@ -56,6 +56,10 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "20260520000001_events_v2_properties",
         include_str!("../migrations/20260520000001_events_v2_properties.sql"),
     ),
+    (
+        "20260521000001_flag_eval_log_matched_rule",
+        include_str!("../migrations/20260521000001_flag_eval_log_matched_rule.sql"),
+    ),
 ];
 
 /// Apply all pending ClickHouse migrations.

@@ -130,6 +130,7 @@ mod tests {
             value_type: FlagValueType::Bool,
             enabled: true,
             default_variant_id: Some(v2_id),
+            default_rule_distribution: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             deleted_at: None,

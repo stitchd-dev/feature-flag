@@ -230,7 +230,7 @@ mod tests {
     };
 
     /// Build the org → project → env → flag → rule chain; return (`env_id`, `flag_rule_id`).
-    async fn build_env_context(pool: &sqlx::PgPool) -> (EnvironmentId, RuleId) {
+    async fn build_env_context(pool: &sqlx::PgPool) -> (EnvironmentId, FlagId, RuleId) {
         let audit = Arc::new(PgAuditLogger::new(pool.clone()));
         let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
         let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
@@ -279,6 +279,7 @@ mod tests {
             value_type: FlagValueType::Bool,
             enabled: true,
             default_variant_id: None,
+            default_rule_distribution: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             deleted_at: None,
@@ -306,26 +307,31 @@ mod tests {
         .await
         .unwrap();
 
-        (env.id, RuleId::from_uuid(rule_uuid))
+        (env.id, flag.id, RuleId::from_uuid(rule_uuid))
     }
 
     /// Create a minimal org → project → env → flag → rule → experiment chain.
     /// Returns the experiment's UUID, which satisfies the FK on `stats_schedule`.
     async fn setup_experiment(pool: sqlx::PgPool) -> Uuid {
-        let (env_id, flag_rule_id) = build_env_context(&pool).await;
+        let (env_id, flag_id, flag_rule_id) = build_env_context(&pool).await;
         let audit = Arc::new(PgAuditLogger::new(pool.clone()));
         let exp_repo = PgExperimentRepository::new(pool.clone(), audit);
 
         let exp = Experiment {
             id: ExperimentId::new(),
             environment_id: env_id,
-            flag_rule_id,
+            flag_id,
+            flag_rule_id: Some(flag_rule_id),
+            targets_default_rule: false,
             name: "Sched Test Experiment".into(),
             description: None,
             hypothesis: None,
             metric_ids: vec![MetricId::new()],
+            guardrail_metric_ids: vec![],
             traffic_allocation: 100.0,
             min_sample_size: None,
+            pre_period_days: 0,
+            unit_context_types: vec!["user".to_string()],
             scheduled_start_at: None,
             scheduled_end_at: None,
             status: ExperimentStatus::Draft,

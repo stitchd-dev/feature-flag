@@ -162,11 +162,16 @@ impl ExperimentationService for ExperimentationServiceImpl {
         let env_id = EnvironmentId::from_uuid(env_uuid);
 
         let now = Utc::now();
+        // Proto layer doesn't yet carry the new attribution fields; placeholder
+        // values land here. Phase 3 (Gateway API Surface) extends the proto
+        // schema with flag_id/targets_default_rule/guardrails/pre_period_days/
+        // unit_context_types and switches gateway validators on accordingly.
         let experiment = Experiment {
             id: ExperimentId::new(),
             environment_id: env_id,
-            // flag_rule_id not available in proto; use a placeholder
-            flag_rule_id: stitchd_core::id::RuleId::new(),
+            flag_id: stitchd_core::id::FlagId::new(),
+            flag_rule_id: Some(stitchd_core::id::RuleId::new()),
+            targets_default_rule: false,
             name: proto_exp.name.clone(),
             description: if proto_exp.description.is_empty() {
                 None
@@ -175,8 +180,11 @@ impl ExperimentationService for ExperimentationServiceImpl {
             },
             hypothesis: None,
             metric_ids: vec![],
+            guardrail_metric_ids: vec![],
             traffic_allocation: 100.0,
             min_sample_size: None,
+            pre_period_days: 0,
+            unit_context_types: vec!["user".to_string()],
             scheduled_start_at: None,
             scheduled_end_at: None,
             status: ExperimentStatus::Draft,
@@ -709,13 +717,18 @@ mod tests {
         Experiment {
             id: ExperimentId::new(),
             environment_id: env_id,
-            flag_rule_id: RuleId::new(),
+            flag_id: stitchd_core::id::FlagId::new(),
+            flag_rule_id: Some(RuleId::new()),
+            targets_default_rule: false,
             name: "Test Experiment".to_string(),
             description: Some("A description".to_string()),
             hypothesis: None,
             metric_ids: vec![MetricId::new()],
+            guardrail_metric_ids: vec![],
             traffic_allocation: 100.0,
             min_sample_size: None,
+            pre_period_days: 0,
+            unit_context_types: vec!["user".to_string()],
             scheduled_start_at: None,
             scheduled_end_at: None,
             status: ExperimentStatus::Draft,
@@ -800,12 +813,18 @@ mod tests {
             Ok(ExperimentIteration {
                 id: iteration_id,
                 experiment_id: ExperimentId::new(),
+                flag_id: stitchd_core::id::FlagId::new(),
                 iteration_number: 1,
                 started_at: Utc::now(),
                 ended_at: None,
                 metric_ids: vec![MetricId::new()],
+                guardrail_metric_ids: vec![],
                 traffic_allocation: 100.0,
                 min_sample_size: None,
+                targets_default_rule: false,
+                pre_period_days: 0,
+                unit_context_types: vec!["user".to_string()],
+                default_rule_distribution: None,
             })
         }
     }
@@ -1671,12 +1690,18 @@ mod tests {
             Ok(vec![ExperimentIteration {
                 id: ExperimentIterationId::new(),
                 experiment_id,
+                flag_id: stitchd_core::id::FlagId::new(),
                 iteration_number: 1,
                 started_at: Utc::now(),
                 ended_at: None, // still active
                 metric_ids: vec![MetricId::new()],
+                guardrail_metric_ids: vec![],
                 traffic_allocation: 100.0,
                 min_sample_size: None,
+                targets_default_rule: false,
+                pre_period_days: 0,
+                unit_context_types: vec!["user".to_string()],
+                default_rule_distribution: None,
             }])
         }
 
@@ -1705,12 +1730,18 @@ mod tests {
             Ok(ExperimentIteration {
                 id: iteration_id,
                 experiment_id: ExperimentId::new(),
+                flag_id: stitchd_core::id::FlagId::new(),
                 iteration_number: 1,
                 started_at: Utc::now(),
                 ended_at: None,
                 metric_ids: vec![MetricId::new()],
+                guardrail_metric_ids: vec![],
                 traffic_allocation: 100.0,
                 min_sample_size: None,
+                targets_default_rule: false,
+                pre_period_days: 0,
+                unit_context_types: vec!["user".to_string()],
+                default_rule_distribution: None,
             })
         }
     }

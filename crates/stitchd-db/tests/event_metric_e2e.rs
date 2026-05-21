@@ -135,7 +135,7 @@ async fn pg_pool() -> sqlx::PgPool {
 
 /// Insert org → project → environment and return their IDs plus a flag
 /// rule ID we can pin an experiment to.
-async fn seed_tenant(pool: &sqlx::PgPool) -> (EnvironmentId, RuleId) {
+async fn seed_tenant(pool: &sqlx::PgPool) -> (EnvironmentId, FlagId, RuleId) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
@@ -189,6 +189,7 @@ async fn seed_tenant(pool: &sqlx::PgPool) -> (EnvironmentId, RuleId) {
         value_type: FlagValueType::Bool,
         enabled: true,
         default_variant_id: None,
+        default_rule_distribution: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         deleted_at: None,
@@ -219,7 +220,7 @@ async fn seed_tenant(pool: &sqlx::PgPool) -> (EnvironmentId, RuleId) {
     .await
     .expect("flag rule fetch");
 
-    (env.id, RuleId::from_uuid(rule_uuid))
+    (env.id, flag.id, RuleId::from_uuid(rule_uuid))
 }
 
 /// Insert two event definitions and return their IDs.
@@ -336,6 +337,7 @@ async fn seed_metrics(
 async fn seed_running_experiment(
     pool: &sqlx::PgPool,
     env_id: EnvironmentId,
+    flag_id: FlagId,
     flag_rule_id: RuleId,
     ratio_id: MetricId,
 ) -> (ExperimentId, uuid::Uuid) {
@@ -345,13 +347,18 @@ async fn seed_running_experiment(
     let exp = Experiment {
         id: ExperimentId::new(),
         environment_id: env_id,
-        flag_rule_id,
+        flag_id,
+        flag_rule_id: Some(flag_rule_id),
+        targets_default_rule: false,
         name: "E2E Conversion Rate".into(),
         description: Some("ratio metric end-to-end".into()),
         hypothesis: None,
         metric_ids: vec![ratio_id],
+        guardrail_metric_ids: vec![],
         traffic_allocation: 100.0,
         min_sample_size: None,
+        pre_period_days: 0,
+        unit_context_types: vec!["user".to_string()],
         scheduled_start_at: None,
         scheduled_end_at: None,
         status: ExperimentStatus::Draft,
@@ -467,10 +474,11 @@ async fn sdk_fires_events_experiment_reads_via_ratio_metric() {
         .await
         .expect("CH migrations must apply");
 
-    let (env_id, flag_rule_id) = seed_tenant(&pool).await;
+    let (env_id, flag_id, flag_rule_id) = seed_tenant(&pool).await;
     seed_event_definitions(&pool, env_id).await;
     let (_count_started_id, _count_completed_id, ratio_id) = seed_metrics(&pool, env_id).await;
-    let (exp_id, iter_uuid) = seed_running_experiment(&pool, env_id, flag_rule_id, ratio_id).await;
+    let (exp_id, iter_uuid) =
+        seed_running_experiment(&pool, env_id, flag_id, flag_rule_id, ratio_id).await;
 
     // ── 2. Fire events directly into ClickHouse ───────────────────────────
     //

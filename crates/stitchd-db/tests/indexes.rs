@@ -151,6 +151,7 @@ async fn soft_delete_partial_index_flags_excludes_deleted(pool: sqlx::PgPool) {
         name: "My Flag".into(),
         description: String::new(),
         default_variant_id: None,
+        default_rule_distribution: None,
     };
     flag_repo.create(&flag).await.unwrap();
 

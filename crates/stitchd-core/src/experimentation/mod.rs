@@ -11,7 +11,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::id::{EnvironmentId, ExperimentId, ExperimentIterationId, MetricId, RuleId};
+use crate::id::{EnvironmentId, ExperimentId, ExperimentIterationId, FlagId, MetricId, RuleId};
+use crate::rollout::RolloutDistribution;
 
 /// Errors that can occur during experiment operations.
 #[derive(Debug, Error, PartialEq)]
@@ -113,8 +114,17 @@ pub struct Experiment {
     pub id: ExperimentId,
     /// The environment this experiment belongs to.
     pub environment_id: EnvironmentId,
-    /// The flag rule this experiment is bound to.
-    pub flag_rule_id: RuleId,
+    /// The flag this experiment is bound to. Always populated — either the
+    /// parent of `flag_rule_id` (when rule-bound) or chosen directly
+    /// (when `targets_default_rule == true`).
+    pub flag_id: FlagId,
+    /// The flag rule this experiment is bound to, or `None` when the
+    /// experiment binds to the flag's default-rule fall-through.
+    pub flag_rule_id: Option<RuleId>,
+    /// `true` when the experiment binds to the flag's default-rule
+    /// percentage-distribution fall-through. XOR with `flag_rule_id`:
+    /// exactly one of `flag_rule_id`/`targets_default_rule=true` is set.
+    pub targets_default_rule: bool,
     /// Human-readable name.
     pub name: String,
     /// Optional description of the experiment.
@@ -125,10 +135,19 @@ pub struct Experiment {
     /// (at least one required). Phase 7 cutover replaced raw `metric_keys`
     /// (event-key strings) with metric-definition UUIDs.
     pub metric_ids: Vec<MetricId>,
+    /// References to `metric_definitions` rows treated as guardrails
+    /// (computed identically to primaries but surfaced separately in the
+    /// results UI).
+    pub guardrail_metric_ids: Vec<MetricId>,
     /// Percentage of rule-matched contexts to enrol (0.1% granularity, default 100%).
     pub traffic_allocation: f64,
     /// Optional informational minimum sample size guardrail.
     pub min_sample_size: Option<i64>,
+    /// CUPED pre-period window in days; `0` disables variance reduction.
+    pub pre_period_days: u32,
+    /// Analysis unit context types (e.g. `["user"]` or `["user","account"]`).
+    /// At least one entry is required; validated against `context_type_registry`.
+    pub unit_context_types: Vec<String>,
     /// Optional scheduled start time (persisted; enforcement out of scope).
     pub scheduled_start_at: Option<DateTime<Utc>>,
     /// Optional scheduled end time (persisted; enforcement out of scope).
@@ -156,6 +175,9 @@ pub struct ExperimentIteration {
     pub id: ExperimentIterationId,
     /// The experiment this iteration belongs to.
     pub experiment_id: ExperimentId,
+    /// Snapshot of the parent experiment's `flag_id` at iteration start
+    /// (denormalised for the attribution + assignment hot paths).
+    pub flag_id: FlagId,
     /// Sequential iteration number within the experiment (1-based).
     pub iteration_number: i32,
     /// When this iteration started (i.e. when the transition to running occurred).
@@ -164,10 +186,23 @@ pub struct ExperimentIteration {
     pub ended_at: Option<DateTime<Utc>>,
     /// Snapshot of metric definition IDs at the moment this iteration started.
     pub metric_ids: Vec<MetricId>,
+    /// Snapshot of guardrail metric IDs at iteration start.
+    pub guardrail_metric_ids: Vec<MetricId>,
     /// Snapshot of traffic allocation at the moment this iteration started.
     pub traffic_allocation: f64,
     /// Snapshot of minimum sample size at the moment this iteration started.
     pub min_sample_size: Option<i64>,
+    /// Snapshot of `targets_default_rule` at iteration start.
+    pub targets_default_rule: bool,
+    /// Snapshot of `pre_period_days` (CUPED) at iteration start.
+    pub pre_period_days: u32,
+    /// Snapshot of analysis unit context types at iteration start.
+    pub unit_context_types: Vec<String>,
+    /// Snapshot of the parent flag's `default_rule_distribution` at iteration
+    /// start — `Some` only when `targets_default_rule == true`; preserved here
+    /// so SRM's expected-allocation calculation does not depend on the live
+    /// flag row.
+    pub default_rule_distribution: Option<RolloutDistribution>,
 }
 
 #[cfg(test)]
@@ -378,13 +413,18 @@ mod tests {
         let exp = Experiment {
             id: ExperimentId::new(),
             environment_id: EnvironmentId::new(),
-            flag_rule_id: RuleId::new(),
+            flag_id: FlagId::new(),
+            flag_rule_id: Some(RuleId::new()),
+            targets_default_rule: false,
             name: "My Experiment".to_string(),
             description: Some("A/B test of checkout flow".to_string()),
             hypothesis: Some("Variant B increases conversion".to_string()),
             metric_ids: vec![MetricId::new()],
+            guardrail_metric_ids: vec![],
             traffic_allocation: 100.0,
             min_sample_size: Some(1000),
+            pre_period_days: 0,
+            unit_context_types: vec!["user".into()],
             scheduled_start_at: None,
             scheduled_end_at: None,
             status: ExperimentStatus::Draft,
@@ -395,6 +435,8 @@ mod tests {
         };
         assert_eq!(exp.status, ExperimentStatus::Draft);
         assert_eq!(exp.metric_ids.len(), 1);
+        assert!(exp.flag_rule_id.is_some());
+        assert!(!exp.targets_default_rule);
     }
 
     #[test]
@@ -402,12 +444,18 @@ mod tests {
         let iter = ExperimentIteration {
             id: ExperimentIterationId::new(),
             experiment_id: ExperimentId::new(),
+            flag_id: FlagId::new(),
             iteration_number: 1,
             started_at: Utc::now(),
             ended_at: None,
             metric_ids: vec![MetricId::new()],
+            guardrail_metric_ids: vec![],
             traffic_allocation: 50.0,
             min_sample_size: None,
+            targets_default_rule: false,
+            pre_period_days: 0,
+            unit_context_types: vec!["user".into()],
+            default_rule_distribution: None,
         };
         assert_eq!(iter.iteration_number, 1);
         assert!(iter.ended_at.is_none());

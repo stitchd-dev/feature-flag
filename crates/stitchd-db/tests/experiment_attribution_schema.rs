@@ -88,6 +88,7 @@ async fn seed_minimum(pool: &PgPool) -> (Uuid, Uuid, Uuid, Uuid) {
     (env_id, flag_id, rule_a, rule_b)
 }
 
+#[allow(clippy::too_many_arguments)] // test helper; constraints make consolidation noisy
 async fn insert_experiment(
     pool: &PgPool,
     env_id: Uuid,
@@ -99,7 +100,10 @@ async fn insert_experiment(
     pre_period_days: i32,
 ) -> Result<Uuid, sqlx::Error> {
     let exp_id = Uuid::new_v4();
-    let ucts: Vec<String> = unit_context_types.iter().map(|s| (*s).to_string()).collect();
+    let ucts: Vec<String> = unit_context_types
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
     sqlx::query(
         "INSERT INTO experiments \
             (id, env_id, flag_id, flag_rule_id, name, status, traffic_allocation, \
@@ -125,31 +129,25 @@ async fn insert_experiment(
 #[sqlx::test(migrations = "./migrations")]
 async fn xor_accepts_rule_bound_experiment(pool: PgPool) {
     let (env, flag, rule, _) = seed_minimum(&pool).await;
-    insert_experiment(
-        &pool, env, flag, Some(rule), false, "draft", &["user"], 0,
-    )
-    .await
-    .expect("rule-bound + targets_default_rule=false must satisfy XOR");
+    insert_experiment(&pool, env, flag, Some(rule), false, "draft", &["user"], 0)
+        .await
+        .expect("rule-bound + targets_default_rule=false must satisfy XOR");
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn xor_accepts_default_rule_bound_experiment(pool: PgPool) {
     let (env, flag, _, _) = seed_minimum(&pool).await;
-    insert_experiment(
-        &pool, env, flag, None, true, "draft", &["user"], 0,
-    )
-    .await
-    .expect("flag_rule_id=NULL + targets_default_rule=true must satisfy XOR");
+    insert_experiment(&pool, env, flag, None, true, "draft", &["user"], 0)
+        .await
+        .expect("flag_rule_id=NULL + targets_default_rule=true must satisfy XOR");
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn xor_rejects_neither_set(pool: PgPool) {
     let (env, flag, _, _) = seed_minimum(&pool).await;
-    let err = insert_experiment(
-        &pool, env, flag, None, false, "draft", &["user"], 0,
-    )
-    .await
-    .expect_err("must violate XOR when neither is set");
+    let err = insert_experiment(&pool, env, flag, None, false, "draft", &["user"], 0)
+        .await
+        .expect_err("must violate XOR when neither is set");
     let msg = err.to_string();
     assert!(
         msg.contains("experiments_rule_xor_default"),
@@ -160,11 +158,9 @@ async fn xor_rejects_neither_set(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn xor_rejects_both_set(pool: PgPool) {
     let (env, flag, rule, _) = seed_minimum(&pool).await;
-    let err = insert_experiment(
-        &pool, env, flag, Some(rule), true, "draft", &["user"], 0,
-    )
-    .await
-    .expect_err("must violate XOR when both are set");
+    let err = insert_experiment(&pool, env, flag, Some(rule), true, "draft", &["user"], 0)
+        .await
+        .expect_err("must violate XOR when both are set");
     assert!(err.to_string().contains("experiments_rule_xor_default"));
 }
 
@@ -172,17 +168,32 @@ async fn xor_rejects_both_set(pool: PgPool) {
 async fn unique_per_flag_index_blocks_second_running_experiment(pool: PgPool) {
     let (env, flag, rule_a, rule_b) = seed_minimum(&pool).await;
     insert_experiment(
-        &pool, env, flag, Some(rule_a), false, "running", &["user"], 0,
+        &pool,
+        env,
+        flag,
+        Some(rule_a),
+        false,
+        "running",
+        &["user"],
+        0,
     )
     .await
     .expect("first running experiment on flag should succeed");
     let err = insert_experiment(
-        &pool, env, flag, Some(rule_b), false, "running", &["user"], 0,
+        &pool,
+        env,
+        flag,
+        Some(rule_b),
+        false,
+        "running",
+        &["user"],
+        0,
     )
     .await
     .expect_err("second running experiment on same flag must violate uniqueness");
     assert!(
-        err.to_string().contains("idx_experiments_one_active_per_flag"),
+        err.to_string()
+            .contains("idx_experiments_one_active_per_flag"),
         "expected per-flag uniqueness violation, got: {err}"
     );
 }
@@ -191,11 +202,9 @@ async fn unique_per_flag_index_blocks_second_running_experiment(pool: PgPool) {
 async fn empty_unit_context_types_is_rejected(pool: PgPool) {
     let (env, flag, rule, _) = seed_minimum(&pool).await;
     let empty: Vec<&str> = vec![];
-    let err = insert_experiment(
-        &pool, env, flag, Some(rule), false, "draft", &empty, 0,
-    )
-    .await
-    .expect_err("empty unit_context_types must violate CHECK");
+    let err = insert_experiment(&pool, env, flag, Some(rule), false, "draft", &empty, 0)
+        .await
+        .expect_err("empty unit_context_types must violate CHECK");
     assert!(
         err.to_string()
             .contains("experiments_unit_context_types_nonempty"),
@@ -206,11 +215,9 @@ async fn empty_unit_context_types_is_rejected(pool: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn negative_pre_period_days_is_rejected(pool: PgPool) {
     let (env, flag, rule, _) = seed_minimum(&pool).await;
-    let err = insert_experiment(
-        &pool, env, flag, Some(rule), false, "draft", &["user"], -1,
-    )
-    .await
-    .expect_err("negative pre_period_days must violate CHECK");
+    let err = insert_experiment(&pool, env, flag, Some(rule), false, "draft", &["user"], -1)
+        .await
+        .expect_err("negative pre_period_days must violate CHECK");
     assert!(
         err.to_string()
             .contains("experiments_pre_period_days_nonneg"),
@@ -234,13 +241,12 @@ async fn flag_default_rule_distribution_accepts_jsonb(pool: PgPool) {
         .await
         .expect("UPDATE default_rule_distribution must succeed");
 
-    let row: (Option<serde_json::Value>,) = sqlx::query_as(
-        "SELECT default_rule_distribution FROM feature_flags WHERE id = $1",
-    )
-    .bind(flag)
-    .fetch_one(&pool)
-    .await
-    .expect("SELECT must succeed");
+    let row: (Option<serde_json::Value>,) =
+        sqlx::query_as("SELECT default_rule_distribution FROM feature_flags WHERE id = $1")
+            .bind(flag)
+            .fetch_one(&pool)
+            .await
+            .expect("SELECT must succeed");
     assert_eq!(row.0, Some(distribution));
 }
 
@@ -248,7 +254,14 @@ async fn flag_default_rule_distribution_accepts_jsonb(pool: PgPool) {
 async fn experiment_iterations_carries_snapshot_columns(pool: PgPool) {
     let (env, flag, rule, _) = seed_minimum(&pool).await;
     let exp = insert_experiment(
-        &pool, env, flag, Some(rule), false, "draft", &["user", "account"], 7,
+        &pool,
+        env,
+        flag,
+        Some(rule),
+        false,
+        "draft",
+        &["user", "account"],
+        7,
     )
     .await
     .expect("seed experiment");
@@ -266,7 +279,7 @@ async fn experiment_iterations_carries_snapshot_columns(pool: PgPool) {
     .bind(exp)
     .bind(flag)
     .bind(1_i32)
-    .bind(&Vec::<Uuid>::new())
+    .bind(Vec::<Uuid>::new())
     .bind(false)
     .bind(7_i32)
     .bind(&ucts)

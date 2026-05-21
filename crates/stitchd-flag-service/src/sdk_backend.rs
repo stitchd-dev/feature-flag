@@ -354,11 +354,18 @@ fn event_to_row(ev: FlagEvaluationEvent, env_id: EnvironmentId) -> Result<EvalLo
         flag_id,
         flag_key: ev.flag_key,
         variant_key: ev.variant_key,
-        is_disabled: ev.outcome == "disabled",
+        // Inverted from the previous `is_disabled = ev.outcome == "disabled"`.
+        // `targeting_on = true` ⇔ rule evaluation actually ran.
+        targeting_on: ev.outcome != "disabled",
         evaluated_at,
         context_type: ev.context_type,
         context_key: ev.context_key,
         params_json,
+        // Phase 2 of experimentation_full_20260521 will wire the real value
+        // from the flag-service rule-eval result. For now, `None` means
+        // either "default-rule fallthrough" (when targeting_on) or
+        // "no rule evaluation" (when !targeting_on).
+        matched_rule_id: None,
     })
 }
 
@@ -782,6 +789,7 @@ mod tests {
             value_type: FlagValueType::Bool,
             enabled: true,
             default_variant_id: None,
+            default_rule_distribution: None,
             version: 1,
             created_at: Utc::now(),
             updated_at: Utc::now(),
@@ -1127,7 +1135,7 @@ mod tests {
         assert_eq!(row.flag_id, flag_uuid);
         assert_eq!(row.flag_key, "checkout-flow");
         assert_eq!(row.variant_key, "treatment");
-        assert!(!row.is_disabled);
+        assert!(row.targeting_on);
         assert_eq!(row.context_type, "user");
         assert_eq!(row.context_key, "alice");
         assert_eq!(row.params_json, "{}");
@@ -1150,11 +1158,11 @@ mod tests {
             environment_id: String::new(),
         };
         let row = event_to_row(event.clone(), env_id).unwrap();
-        assert!(row.is_disabled);
+        assert!(!row.targeting_on);
         // Compare with non-disabled outcome.
         event.outcome = "matched".into();
         let row2 = event_to_row(event, env_id).unwrap();
-        assert!(!row2.is_disabled);
+        assert!(row2.targeting_on);
     }
 
     #[test]
