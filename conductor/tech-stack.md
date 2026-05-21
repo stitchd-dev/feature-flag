@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-05-20 (post events_metrics_20260519 merge) -->
+<!-- Last refreshed: 2026-05-22 (post experimentation_full_20260521 merge) -->
 
 ## Architecture
 
@@ -190,21 +190,54 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 
 ## ClickHouse Schema
 
-**Tables and materialized views as of 2026-05-20 (post-`events_metrics_20260519`):**
+**Tables and materialized views as of 2026-05-22 (post-`experimentation_full_20260521`):**
 
 | Table | Engine | Notes |
 |---|---|---|
 | `events` | MergeTree, monthly partitions | Legacy ingestion table |
 | `events_v2` | MergeTree, weekly `toMonday()` partitions | Optimized partition granularity (migration 000007). `contexts Array(Tuple(String, String))` carries multi-context attribution per firing; `metric_key LowCardinality(String)`, three nullable typed value columns (`value_bool / value_int / value_double`); `properties Map(String, String)`; `timestamp DateTime64(3, 'UTC')` + `occurred_at DateTime64(3, 'UTC')` |
-| `flag_evaluation_log_v2` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log (migration `0004_flag_evaluation_log_v2.sql`) |
+| `flag_evaluation_log_v2` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log (migration `0004_flag_evaluation_log_v2.sql`). New columns (`experimentation_full_20260521`): `targeting_on Bool` (renamed from `is_disabled`) + `matched_rule_id Nullable(UUID)` — drive `experiment_assignments_mv` row routing |
 | `events_experiment_daily` | AggregatingMergeTree | Pre-aggregated experiment stats by `(env_id, experiment_id, variant_key, metric_key, day)` |
 | `events_experiment_daily_mv` | Materialized View | Auto-populates `events_experiment_daily` on `events` insert using `*State` combiners |
-| `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`; replaces the retired PostgreSQL `experiment_results` table (PG drop migration `20260519000001_drop_experiment_results.sql`) |
+| `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`; replaces the retired PostgreSQL `experiment_results` table (PG drop migration `20260519000001_drop_experiment_results.sql`). `experimentation_full_20260521` migration adds `context_type LowCardinality(String) DEFAULT 'user'` so per-context-type results sit on the same row shape |
+| `experiment_assignments` | ReplacingMergeTree(`_version`) | **NEW** (`experimentation_full_20260521`). First-exposure (ITT) assignments keyed on `(experiment_id, iteration_id, context_type, context_key)`. Inverted version column (`-toUnixTimestamp64Milli(assigned_at)`) so MAX(_version) returns the MIN(assigned_at) — first exposure wins. Monthly partitions, 180-day TTL |
+| `experiment_assignments_mv` | Materialized View | **NEW** (`experimentation_full_20260521`). Watches `flag_evaluation_log` inserts; routes rows where `targeting_on = true AND dictHas('experiment_iterations_active', (env_id, flag_id, matched_rule_id, context_type))` into `experiment_assignments` |
+
+**ClickHouse dictionaries:**
+
+| Dictionary | Source | Keys | Notes |
+|---|---|---|---|
+| `experiment_iterations_active` | PG `experiment_iterations_active` view | `(env_id UUID, flag_id UUID, matched_rule_id Nullable(UUID), context_type String)` | **NEW** (`experimentation_full_20260521`). Returns `(experiment_id UUID, iteration_id UUID)`. `LIFETIME(MIN 300 MAX 600)` + explicit `SYSTEM RELOAD DICTIONARY` on every iteration start/stop. Cardinality bounded by `count(running_experiments) * sum(unit_context_types)` |
 
 **AggregatingMergeTree invariants:**
 - Insert: use `*State` combiners (`countState()`, `sumState(Float64)`, `uniqState()`)
 - Read: use `*Merge` combiners (`countMerge`, `sumMerge`, `uniqMerge`) in GROUP BY — NOT `finalizeAggregation` (scalar only)
 - `sumState(Nullable(Float64))` mismatches `AggregateFunction(sum, Float64)` — wrap with `ifNull(..., 0.0)`
+
+**ReplacingMergeTree first-exposure pattern (new):**
+- `experiment_assignments` uses `ReplacingMergeTree(_version)` where `_version = -toUnixTimestamp64Milli(assigned_at)`. MAX(_version) during merges → MIN(assigned_at) → first-exposure variant wins per `(experiment_id, iteration_id, context_type, context_key)`.
+- Readers MUST use `FINAL` (or `argMin(...)` GROUP BY) to collapse the unmerged window between INSERT and merge.
+- Tests force determinism with `OPTIMIZE TABLE experiment_assignments FINAL` before assertion.
+
+### Experimentation migrations (`experimentation_full_20260521`)
+
+PG migrations:
+
+| Migration | Change |
+|---|---|
+| `20260521000001_experiment_attribution_fields.sql` | Add `targets_default_rule Boolean`, `guardrail_metric_ids UUID[]`, `pre_period_days Integer`, `unit_context_types text[] NOT NULL DEFAULT '{user}'`, `flag_id UUID NOT NULL` to `experiments`; XOR `CHECK ((flag_rule_id IS NOT NULL AND targets_default_rule = false) OR (flag_rule_id IS NULL AND targets_default_rule = true))`; replace `idx_experiments_one_active_per_rule` with `idx_experiments_one_active_per_flag` |
+| `20260521000002_flag_default_rule_distribution.sql` | Add `default_rule_distribution Jsonb` to `feature_flags` |
+| `20260521000003_experiment_iterations_snapshot.sql` | Add `targets_default_rule`, `unit_context_types`, `default_rule_distribution` snapshot columns to `experiment_iterations` (so restart-with-changes captures the new config) |
+
+CH migrations (under `stitchd-event-writer/migrations/`):
+
+| Migration | Change |
+|---|---|
+| `20260521000001_flag_eval_log_matched_rule.sql` | Add `targeting_on Bool` + `matched_rule_id Nullable(UUID)` to `flag_evaluation_log`. Rename pattern: MATERIALIZE COLUMN → MODIFY COLUMN DEFAULT → DROP COLUMN to break DEFAULT-expression dependency on the old `is_disabled` |
+| `20260521000002_experiment_iterations_active_dict.sql` | Create the `experiment_iterations_active` PG-backed dictionary |
+| `20260521000003_experiment_assignments_mv.sql` | Create `experiment_assignments` table + `experiment_assignments_mv` materialized view |
+| `20260521000004_backfill_experiment_assignments.sql` | One-shot 90-day backfill from `flag_evaluation_log` via the dictionary |
+| `20260521000005_experiment_results_context_type.sql` | Add `context_type LowCardinality(String) DEFAULT 'user'` to `experiment_results` (per-context-type stats) |
 
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
