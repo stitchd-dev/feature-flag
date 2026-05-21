@@ -625,6 +625,19 @@ pub trait ExperimentRepository: Send + Sync {
     /// Returns only experiments with `status = 'running'` and `deleted_at IS NULL`.
     async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError>;
 
+    /// Find the (single) experiment that is currently locking a flag — i.e. has
+    /// `status IN ('running','paused')` and `deleted_at IS NULL` for the given
+    /// `flag_id`. Returns `None` when no such experiment exists.
+    ///
+    /// Used by the flag-service `is_flag_locked` helper to enforce the
+    /// whole-flag freeze invariant (see spec §2 "Whole-flag freeze"). The
+    /// per-flag uniqueness index `idx_experiments_one_active_per_flag`
+    /// guarantees at most one such row, so returning a single ID is sound.
+    async fn find_active_experiment_for_flag(
+        &self,
+        flag_id: FlagId,
+    ) -> Result<Option<ExperimentId>, RepositoryError>;
+
     /// Fetch a single iteration by its ID.
     async fn find_iteration_by_id(
         &self,

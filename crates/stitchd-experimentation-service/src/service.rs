@@ -806,6 +806,13 @@ mod tests {
             Ok(vec![exp])
         }
 
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<ExperimentId>, RepositoryError> {
+            Ok(None)
+        }
+
         async fn find_iteration_by_id(
             &self,
             iteration_id: stitchd_core::id::ExperimentIterationId,
@@ -892,6 +899,13 @@ mod tests {
 
         async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
             Err(RepositoryError::Database(sqlx::Error::RowNotFound))
+        }
+
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<ExperimentId>, RepositoryError> {
+            Ok(None)
         }
 
         async fn find_iteration_by_id(
@@ -1721,6 +1735,13 @@ mod tests {
             let mut exp = make_experiment(self.env_id);
             exp.status = ExperimentStatus::Running;
             Ok(vec![exp])
+        }
+
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<ExperimentId>, RepositoryError> {
+            Ok(None)
         }
 
         async fn find_iteration_by_id(

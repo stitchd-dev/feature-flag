@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use clickhouse::Client as ChClient;
-use stitchd_db::{FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository};
+use stitchd_db::{
+    ExperimentRepository, FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository,
+};
 use stitchd_proto::flags::v1::{
     EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
     GetFlagRequest, ListFlagsRequest, ListFlagsResponse, MutateFlagRequest, MutateFlagResponse,
@@ -16,7 +18,11 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
-use crate::{error::FlagServiceError, mapping};
+use crate::{
+    error::FlagServiceError,
+    flag_lock::{FlagLockCache, is_flag_locked},
+    mapping,
+};
 
 /// gRPC implementation of [`FlagService`].
 #[allow(clippy::struct_field_names)]
@@ -27,6 +33,14 @@ pub struct FlagServiceImpl {
     segment_repo: Arc<dyn SegmentRepository>,
     /// Optional ClickHouse client for evaluation telemetry. `None` disables logging.
     ch_client: Option<Arc<ChClient>>,
+    /// Optional experiment repository for whole-flag lock enforcement. When
+    /// `None`, the lock check is a no-op (admissible only in legacy or in
+    /// targeted tests that do not exercise the lock path). Production setups
+    /// always wire this in via [`FlagServiceImpl::with_experiment_repo`].
+    experiment_repo: Option<Arc<dyn ExperimentRepository>>,
+    /// In-process cache for `is_flag_locked` results. Populated only when
+    /// `experiment_repo` is set.
+    flag_lock_cache: FlagLockCache,
 }
 
 impl FlagServiceImpl {
@@ -44,6 +58,8 @@ impl FlagServiceImpl {
             sdk_key_repo,
             segment_repo,
             ch_client: None,
+            experiment_repo: None,
+            flag_lock_cache: FlagLockCache::new(),
         }
     }
 
@@ -52,6 +68,45 @@ impl FlagServiceImpl {
     pub fn with_clickhouse(mut self, client: Arc<ChClient>) -> Self {
         self.ch_client = Some(client);
         self
+    }
+
+    /// Wire in the experiment repository so flag mutation paths can enforce
+    /// the whole-flag lock. Without this, mutations skip the lock check —
+    /// useful for unit tests that don't need lock semantics, but the
+    /// production `main.rs` always sets it.
+    #[must_use]
+    pub fn with_experiment_repo(mut self, repo: Arc<dyn ExperimentRepository>) -> Self {
+        self.experiment_repo = Some(repo);
+        self
+    }
+
+    /// Expose the in-process flag-lock cache so adjacent services
+    /// (experimentation-service running in the same process during tests)
+    /// can invalidate entries on experiment lifecycle transitions.
+    #[must_use]
+    pub fn flag_lock_cache(&self) -> FlagLockCache {
+        self.flag_lock_cache.clone()
+    }
+
+    /// Look up the flag lock for `flag_id`, returning [`FlagServiceError::FlagLocked`]
+    /// when an experiment in `running`/`paused` state owns the flag. The error
+    /// surfaces to clients as a `tonic::Status::failed_precondition` with a
+    /// `flag_locked_by_experiment:{experiment_id}` message which the gateway
+    /// decodes back into HTTP 409 with the structured error body.
+    pub(crate) async fn ensure_flag_unlocked(
+        &self,
+        flag_id: stitchd_core::id::FlagId,
+    ) -> Result<(), FlagServiceError> {
+        let Some(repo) = self.experiment_repo.as_deref() else {
+            return Ok(());
+        };
+        match is_flag_locked(repo, &self.flag_lock_cache, flag_id).await {
+            Ok(Some(exp_id)) => Err(FlagServiceError::FlagLocked {
+                experiment_id: exp_id,
+            }),
+            Ok(None) => Ok(()),
+            Err(status) => Err(FlagServiceError::Internal(status.message().to_string())),
+        }
     }
 
     /// Fetch `SegmentDefinition`s for a set of IDs in three bulk DB queries.
@@ -500,6 +555,12 @@ impl FlagService for FlagServiceImpl {
                         Status::not_found(format!("flag '{}' not found", flag_proto.key))
                     })?;
 
+                // Whole-flag lock: an experiment in running/paused state on
+                // this flag rejects every admin mutation with 409.
+                self.ensure_flag_unlocked(record.id)
+                    .await
+                    .map_err(Status::from)?;
+
                 // Optimistic locking check
                 #[allow(clippy::cast_sign_loss)]
                 let stored_version = record.version as u64;
@@ -619,6 +680,12 @@ impl FlagService for FlagServiceImpl {
                         Status::not_found(format!("flag '{}' not found", flag_proto.key))
                     })?;
 
+                // Whole-flag lock: refuse delete/archive while an experiment
+                // in running/paused state is bound to this flag.
+                self.ensure_flag_unlocked(record.id)
+                    .await
+                    .map_err(Status::from)?;
+
                 // Optimistic locking check
                 #[allow(clippy::cast_sign_loss)]
                 let stored_version = record.version as u64;
@@ -716,6 +783,12 @@ impl FlagService for FlagServiceImpl {
             .into_iter()
             .find(|f| f.key.as_str() == flag_key.as_str())
             .ok_or_else(|| Status::not_found(format!("flag '{}' not found", req.flag_key)))?;
+
+        // Whole-flag lock: refuse hashing-config mutation while an experiment
+        // in running/paused state is bound to this flag.
+        self.ensure_flag_unlocked(record.id)
+            .await
+            .map_err(Status::from)?;
 
         let domain_configs: Vec<stitchd_core::flag::FlagHashingConfig> = req
             .configs
@@ -2278,13 +2351,12 @@ mod tests {
             .collect();
 
         let spy = Arc::new(SpySegmentRepo::new(segments.clone(), rules));
-        let svc = FlagServiceImpl {
-            flag_repo: StubFlagRepo::empty(),
-            variant_repo: Arc::new(StubVariantRepo),
-            sdk_key_repo: StubSdkKeyRepo::empty(),
-            segment_repo: spy.clone(),
-            ch_client: None,
-        };
+        let svc = FlagServiceImpl::new(
+            StubFlagRepo::empty(),
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            spy.clone(),
+        );
 
         let ids: HashSet<_> = segments.iter().map(|s| s.id).collect();
         let result = svc.fetch_segment_definitions(&ids).await.unwrap();
@@ -2325,5 +2397,170 @@ mod tests {
         let result = svc.evaluate_preview(req).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    // ── Whole-flag lock — Task 3.2 ────────────────────────────────────────────
+    //
+    // Asserts that mutate_flag/Update returns a `FailedPrecondition` with the
+    // `flag_locked_by_experiment:<exp_id>` sentinel message when the bound
+    // experiment-repo says the flag is locked.
+
+    struct LockedExperimentRepo {
+        experiment_id: stitchd_core::id::ExperimentId,
+    }
+
+    #[async_trait]
+    impl stitchd_db::ExperimentRepository for LockedExperimentRepo {
+        async fn find_by_id(
+            &self,
+            _id: stitchd_core::id::ExperimentId,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: stitchd_core::id::EnvironmentId,
+            _status_filter: Option<stitchd_core::experimentation::ExperimentStatus>,
+        ) -> Result<Vec<stitchd_core::experimentation::Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: stitchd_core::id::EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<stitchd_core::experimentation::Experiment>, u64), RepositoryError>
+        {
+            Ok((vec![], 0))
+        }
+        async fn create(
+            &self,
+            _experiment: &stitchd_core::experimentation::Experiment,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(
+            &self,
+            _experiment: &stitchd_core::experimentation::Experiment,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_delete(
+            &self,
+            _id: stitchd_core::id::ExperimentId,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn list_iterations(
+            &self,
+            _experiment_id: stitchd_core::id::ExperimentId,
+        ) -> Result<Vec<stitchd_core::experimentation::ExperimentIteration>, RepositoryError>
+        {
+            Ok(vec![])
+        }
+        async fn apply_transition(
+            &self,
+            _id: stitchd_core::id::ExperimentId,
+            _to: stitchd_core::experimentation::ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_all_running(
+            &self,
+        ) -> Result<Vec<stitchd_core::experimentation::Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<stitchd_core::id::ExperimentId>, RepositoryError> {
+            Ok(Some(self.experiment_id))
+        }
+        async fn find_iteration_by_id(
+            &self,
+            _iteration_id: stitchd_core::id::ExperimentIterationId,
+        ) -> Result<stitchd_core::experimentation::ExperimentIteration, RepositoryError> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn mutate_flag_update_rejects_locked_flag_with_failed_precondition() {
+        let flag = make_flag_record();
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+        let flag_repo = StubFlagRepo::with_flags(vec![flag]);
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(LockedExperimentRepo {
+            experiment_id: exp_id,
+        }));
+
+        let req = Request::new(MutateFlagRequest {
+            environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
+            kind: MutationKind::Update as i32,
+            flag: Some(FeatureFlag {
+                key: flag_key,
+                name: String::new(),
+                description: String::new(),
+                enabled: false,
+                value_type: stitchd_proto::flags::v1::FlagValueType::Bool as i32,
+                variants: vec![],
+                rules: vec![],
+                ..Default::default()
+            }),
+            version: 1,
+        });
+        let result = svc.mutate_flag(req).await;
+        let err = result.expect_err("expected FailedPrecondition for locked flag");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            err.message().contains(&exp_id.to_string()),
+            "expected experiment id in status message; got {}",
+            err.message()
+        );
+        assert!(
+            err.message()
+                .starts_with(crate::error::FLAG_LOCKED_STATUS_PREFIX),
+            "expected flag-lock sentinel prefix; got {}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn mutate_flag_archive_rejects_locked_flag() {
+        let flag = make_flag_record();
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+        let flag_repo = StubFlagRepo::with_flags(vec![flag]);
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(LockedExperimentRepo {
+            experiment_id: exp_id,
+        }));
+
+        let req = Request::new(MutateFlagRequest {
+            environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
+            kind: MutationKind::Archive as i32,
+            flag: Some(FeatureFlag {
+                key: flag_key,
+                ..Default::default()
+            }),
+            version: 1,
+        });
+        let err = svc.mutate_flag(req).await.expect_err("archive should fail");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains(&exp_id.to_string()));
     }
 }

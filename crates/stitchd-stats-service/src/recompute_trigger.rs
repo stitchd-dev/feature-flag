@@ -260,6 +260,12 @@ mod tests {
         async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
             unimplemented!()
         }
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<ExperimentId>, RepositoryError> {
+            Ok(None)
+        }
         async fn find_iteration_by_id(
             &self,
             _iteration_id: stitchd_db::ExperimentIterationId,
