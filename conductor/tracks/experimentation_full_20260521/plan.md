@@ -24,17 +24,17 @@
 ## Phase 2: Flag Service — Eval Log Enhancement
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Eval log writer emits `matched_rule_id`
-  - [ ] Sub-task 1.1: TDD `eval_log_writer.rs` — assert `matched_rule_id` = rule UUID when custom rule matched, `None` when default-rule path, row skipped when disabled
-  - [ ] Sub-task 1.2: Wire matched rule ID through `EvalLogRow`
-  - [ ] Sub-task 1.3: Update flag-service evaluation hook to pass matched rule ID downstream
-- [ ] Task 2: Default-rule percentage-distribution evaluation
-  - [ ] Sub-task 2.1: TDD flag evaluation with `default_rule_distribution` returns a hashed variant (not the single `default_variant_id`) when distribution is set + flag enabled + no rule matched
-  - [ ] Sub-task 2.2: Implement distribution-based fallthrough in `crates/stitchd-core/src/evaluation/`
-  - [ ] Sub-task 2.3: Backwards-compat: when `default_rule_distribution` is None, fall through to `default_variant_id` (today's behavior)
-- [ ] Task 3: Integration test — eval log rows have correct `matched_rule_id`
-  - [ ] Sub-task 3.1: TDD against in-process flag-service: eval with rule match → row has `matched_rule_id = rule_id`; eval falling through → `matched_rule_id IS NULL`; disabled flag → no row written
-- [ ] Task: Conductor — User Manual Verification 'Flag Service Eval Log' (Protocol in workflow.md)
+- [x] Task 1: Eval log writer emits `matched_rule_id` [0f0516c]
+  - [x] Sub-task 1.1: TDD `eval_log_writer.rs` — assert `matched_rule_id` = rule UUID when custom rule matched, `None` when default-rule path, row skipped when disabled
+  - [x] Sub-task 1.2: Wire matched rule ID through `EvalLogRow`
+  - [x] Sub-task 1.3: Update flag-service evaluation hook to pass matched rule ID downstream
+- [x] Task 2: Default-rule percentage-distribution evaluation [9d02142]
+  - [x] Sub-task 2.1: TDD flag evaluation with `default_rule_distribution` returns a hashed variant (not the single `default_variant_id`) when distribution is set + flag enabled + no rule matched
+  - [x] Sub-task 2.2: Implement distribution-based fallthrough in `crates/stitchd-core/src/evaluation/`
+  - [x] Sub-task 2.3: Backwards-compat: when `default_rule_distribution` is None, fall through to `default_variant_id` (today's behavior)
+- [x] Task 3: Integration test — eval log rows have correct `matched_rule_id` [9313c75]
+  - [x] Sub-task 3.1: TDD against in-process flag-service: eval with rule match → row has `matched_rule_id = rule_id`; eval falling through → `matched_rule_id IS NULL`; disabled flag → no row written
+- [x] Task: Conductor — User Manual Verification 'Flag Service Eval Log' (Protocol in workflow.md)
 
 ## Phase 3: Flag Lock Enforcement
 <!-- depends: phase1 -->
