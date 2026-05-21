@@ -5,6 +5,7 @@
 
 pub mod bayesian;
 pub mod bootstrap;
+pub mod cuped;
 pub mod frequentist;
 pub mod recommendation;
 pub mod srm;
