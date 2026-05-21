@@ -68,6 +68,10 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "20260521000003_experiment_assignments_mv",
         include_str!("../migrations/20260521000003_experiment_assignments_mv.sql"),
     ),
+    (
+        "20260521000004_backfill_experiment_assignments",
+        include_str!("../migrations/20260521000004_backfill_experiment_assignments.sql"),
+    ),
 ];
 
 /// Apply all pending ClickHouse migrations.
