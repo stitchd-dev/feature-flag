@@ -349,6 +349,15 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .await
             .map_err(repo_err_to_status)?;
 
+        // Note: the flag-service holds an in-process `FlagLockCache` keyed on
+        // `flag_id` that derives lockedness from PG. Because flag-service and
+        // experimentation-service run as separate binaries in production we
+        // cannot invalidate that cache directly from here; instead the cache's
+        // 30s TTL caps the staleness window. A future proto RPC
+        // (`InvalidateFlagLockCache`) would let us push invalidations across
+        // the wire — out of scope for the Phase 3 lock-enforcement work.
+        // See `crates/stitchd-flag-service/src/flag_lock.rs` for the cache.
+
         metrics::counter!("experimentation_service.transition_experiment.ok").increment(1);
         Ok(Response::new(core_to_proto(&updated)))
     }
