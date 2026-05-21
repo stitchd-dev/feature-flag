@@ -349,23 +349,47 @@ fn event_to_row(ev: FlagEvaluationEvent, env_id: EnvironmentId) -> Result<EvalLo
         }
         serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_else(|_| "{}".to_string())
     };
+    // `targeting_on = true` ⇔ rule evaluation actually ran on the SDK side.
+    let targeting_on = ev.outcome != "disabled";
+
+    // Parse the SDK-supplied matched_rule_id. Wire contract (see
+    // sdks/spec/proto/sdk/v1/service.proto): empty string means "no specific
+    // rule matched" (default-rule fall-through OR disabled flag). A non-empty
+    // value must be a UUID; otherwise the SDK is misbehaving and we drop to
+    // None with a warning.
+    //
+    // Invariant enforced: when `targeting_on = false`, the SDK never ran rule
+    // evaluation — any matched_rule_id sent in that case is invalid and we
+    // force it to None to keep the Phase 4 experiment_assignments MV invariant
+    // safe (it joins on (targeting_on, matched_rule_id)).
+    let matched_rule_id = if !targeting_on || ev.matched_rule_id.is_empty() {
+        None
+    } else {
+        match uuid::Uuid::parse_str(&ev.matched_rule_id) {
+            Ok(u) => Some(u),
+            Err(_) => {
+                tracing::warn!(
+                    matched_rule_id = %ev.matched_rule_id,
+                    flag_key = %ev.flag_key,
+                    "SDK sent non-empty matched_rule_id that is not a valid UUID; dropping to None"
+                );
+                None
+            }
+        }
+    };
+
     Ok(EvalLogRow {
         env_id: env_id.as_uuid(),
         flag_id,
         flag_key: ev.flag_key,
         variant_key: ev.variant_key,
         // Inverted from the previous `is_disabled = ev.outcome == "disabled"`.
-        // `targeting_on = true` ⇔ rule evaluation actually ran.
-        targeting_on: ev.outcome != "disabled",
+        targeting_on,
         evaluated_at,
         context_type: ev.context_type,
         context_key: ev.context_key,
         params_json,
-        // Phase 2 of experimentation_full_20260521 will wire the real value
-        // from the flag-service rule-eval result. For now, `None` means
-        // either "default-rule fallthrough" (when targeting_on) or
-        // "no rule evaluation" (when !targeting_on).
-        matched_rule_id: None,
+        matched_rule_id,
     })
 }
 
@@ -1183,6 +1207,105 @@ mod tests {
         };
         let err = event_to_row(event, env_id).unwrap_err();
         assert!(err.contains("flag_id"));
+    }
+
+    #[test]
+    fn event_to_row_parses_matched_rule_id_when_matched() {
+        // matched outcome + valid UUID in matched_rule_id → row carries Some(uuid).
+        let env_id = EnvironmentId::new();
+        let rule_uuid = uuid::Uuid::new_v4();
+        let event = FlagEvaluationEvent {
+            flag_key: "f".into(),
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            variant_key: "treatment".into(),
+            context_type: "user".into(),
+            context_key: "alice".into(),
+            evaluated_at: "2026-05-21T18:00:00Z".into(),
+            matched_rule_id: rule_uuid.to_string(),
+            outcome: "matched".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let row = event_to_row(event, env_id).unwrap();
+        assert!(row.targeting_on);
+        assert_eq!(row.matched_rule_id, Some(rule_uuid));
+    }
+
+    #[test]
+    fn event_to_row_default_rule_outcome_produces_none_matched_rule_id() {
+        // outcome = "default_rule" with empty matched_rule_id (per proto contract)
+        // → row carries None. targeting_on stays true (rule eval ran, just no
+        // custom rule matched).
+        let env_id = EnvironmentId::new();
+        let event = FlagEvaluationEvent {
+            flag_key: "f".into(),
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            variant_key: "control".into(),
+            context_type: "user".into(),
+            context_key: "alice".into(),
+            evaluated_at: "2026-05-21T18:00:00Z".into(),
+            matched_rule_id: String::new(),
+            outcome: "default_rule".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let row = event_to_row(event, env_id).unwrap();
+        assert!(row.targeting_on);
+        assert!(row.matched_rule_id.is_none());
+    }
+
+    #[test]
+    fn event_to_row_disabled_outcome_forces_matched_rule_id_to_none() {
+        // Defensive: even if an SDK ships a matched_rule_id alongside
+        // outcome = "disabled" (which it shouldn't per the contract), the
+        // server forces it to None — disabled-flag evals never produce
+        // experiment exposures.
+        let env_id = EnvironmentId::new();
+        let event = FlagEvaluationEvent {
+            flag_key: "f".into(),
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            variant_key: "__disabled__".into(),
+            context_type: "user".into(),
+            context_key: "alice".into(),
+            evaluated_at: "2026-05-21T18:00:00Z".into(),
+            matched_rule_id: uuid::Uuid::new_v4().to_string(),
+            outcome: "disabled".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let row = event_to_row(event, env_id).unwrap();
+        assert!(!row.targeting_on);
+        assert!(
+            row.matched_rule_id.is_none(),
+            "disabled-flag evals must never carry a matched_rule_id"
+        );
+    }
+
+    #[test]
+    fn event_to_row_malformed_matched_rule_id_drops_to_none_with_warning() {
+        // Non-empty matched_rule_id that fails UUID parse → drop to None
+        // (warning logged, row still accepted so we don't lose the eval).
+        let env_id = EnvironmentId::new();
+        let event = FlagEvaluationEvent {
+            flag_key: "f".into(),
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            variant_key: "treatment".into(),
+            context_type: "user".into(),
+            context_key: "alice".into(),
+            evaluated_at: "2026-05-21T18:00:00Z".into(),
+            matched_rule_id: "not-a-uuid".into(),
+            outcome: "matched".into(),
+            reasoning_included: false,
+            context_parameters: std::collections::HashMap::new(),
+            environment_id: String::new(),
+        };
+        let row = event_to_row(event, env_id).unwrap();
+        // The row is still accepted; matched_rule_id silently drops.
+        assert!(row.targeting_on);
+        assert!(row.matched_rule_id.is_none());
     }
 
     #[test]

@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use crate::context::EvaluationContext;
 use crate::flag::Flag;
 use crate::hashing::calculate_allocation;
-use crate::id::{EnvironmentId, SegmentId};
+use crate::id::{EnvironmentId, RuleId, SegmentId};
 use crate::rule_engine::condition::Condition;
 use crate::rule_engine::eval_expr::evaluate_expr;
 use crate::rule_engine::eval_leaf::evaluate_leaf;
@@ -63,6 +63,14 @@ pub struct ContextPreviewResult {
     /// `None` means the default rule fired (no targeting rule matched).
     pub fired_rule_index: Option<usize>,
     pub fired_rule_name: Option<String>,
+    /// UUID of the rule that matched, or `None` for default-rule fall-through
+    /// / disabled flag. Distinct from `fired_rule_index` because the index is
+    /// positional within the flag's rule list (useful for the admin preview
+    /// UI), whereas the ID is the stable identifier used by the Phase 4
+    /// `experiment_assignments_mv` to scope exposures to the experiment's
+    /// bound rule.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fired_rule_id: Option<RuleId>,
     pub rule_traces: Vec<RuleTrace>,
     pub rollout_debug: Option<RolloutDebug>,
 }
@@ -145,6 +153,7 @@ fn evaluate_single(
             variant_value: default_value,
             fired_rule_index: None,
             fired_rule_name: None,
+            fired_rule_id: None,
             rule_traces: vec![],
             rollout_debug: None,
         };
@@ -160,6 +169,7 @@ fn evaluate_single(
     let mut traces: Vec<RuleTrace> = Vec::with_capacity(rules.len());
     let mut fired_rule_index: Option<usize> = None;
     let mut fired_rule_name: Option<String> = None;
+    let mut fired_rule_id: Option<RuleId> = None;
     let mut result_variant_key = default_key.clone();
     let mut result_variant_value = default_value.clone();
     let mut rollout_debug: Option<RolloutDebug> = None;
@@ -257,6 +267,7 @@ fn evaluate_single(
 
             fired_rule_index = Some(i);
             fired_rule_name = rule.name.clone();
+            fired_rule_id = Some(rule.id);
 
             traces.push(RuleTrace {
                 rule_index: i,
@@ -283,6 +294,7 @@ fn evaluate_single(
         variant_value: result_variant_value,
         fired_rule_index,
         fired_rule_name,
+        fired_rule_id,
         rule_traces: traces,
         rollout_debug,
     }
@@ -568,7 +580,41 @@ mod tests {
         let r = &results[0];
         assert_eq!(r.variant_key, "off");
         assert_eq!(r.fired_rule_index, None);
+        assert!(r.fired_rule_id.is_none());
         assert!(matches!(r.rule_traces[0].outcome, RuleOutcome::NoMatch));
+    }
+
+    // ── fired_rule_id: surfaces matching rule UUID for eval-log attribution ──
+
+    #[test]
+    fn matching_rule_surfaces_fired_rule_id() {
+        let (mut flag, on_id, _) = make_bool_flag(true);
+        let rule = beta_rule(on_id, flag.record.id);
+        let expected_rule_id = rule.rule.id;
+        flag.rules.push(rule);
+
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
+
+        let r = &results[0];
+        assert_eq!(r.variant_key, "on");
+        assert_eq!(
+            r.fired_rule_id,
+            Some(expected_rule_id),
+            "matched rule's UUID must be surfaced for the eval-log writer to attribute exposures"
+        );
+    }
+
+    #[test]
+    fn disabled_flag_has_no_fired_rule_id() {
+        let (flag, _, _) = make_bool_flag(false);
+        let ec = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
+        assert!(results[0].fired_rule_id.is_none());
     }
 
     // ── Multiple rules: second matches; first is no_match ─────────────────────

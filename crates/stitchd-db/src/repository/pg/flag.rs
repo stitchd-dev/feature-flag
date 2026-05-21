@@ -116,6 +116,28 @@ fn assemble_flag(
     })
 }
 
+/// Assemble a [`FlagRecord`] from a sqlx `PgRow`. Convenience wrapper around
+/// [`assemble_flag`] that keeps caller bodies small (helps `clippy::too_many_lines`
+/// across the `impl FlagRepository for PgFlagRepository` block, which `async_trait`
+/// expands into a single macro-generated function).
+fn assemble_flag_from_row(row: &sqlx::postgres::PgRow) -> Result<FlagRecord, RepositoryError> {
+    assemble_flag(
+        row.get("id"),
+        row.get("project_id"),
+        row.get("key"),
+        row.get("name"),
+        row.get("description"),
+        row.get::<String, _>("value_type").as_str(),
+        row.get("enabled"),
+        row.get("default_variant_id"),
+        row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
+        row.get("created_at"),
+        row.get("updated_at"),
+        row.get("deleted_at"),
+        row.get("version"),
+    )
+}
+
 /// Parse a [`Variant`] from its DB columns.
 fn assemble_variant(
     id: uuid::Uuid,
@@ -169,21 +191,7 @@ impl FlagRepository for PgFlagRepository {
             other => RepositoryError::Database(other),
         })?;
 
-        assemble_flag(
-            row.get("id"),
-            row.get("project_id"),
-            row.get("key"),
-            row.get("name"),
-            row.get("description"),
-            row.get::<String, _>("value_type").as_str(),
-            row.get("enabled"),
-            row.get("default_variant_id"),
-            row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
-            row.get("created_at"),
-            row.get("updated_at"),
-            row.get("deleted_at"),
-            row.get("version"),
-        )
+        assemble_flag_from_row(&row)
     }
 
     async fn find_by_key(
@@ -211,21 +219,7 @@ impl FlagRepository for PgFlagRepository {
             other => RepositoryError::Database(other),
         })?;
 
-        assemble_flag(
-            row.get("id"),
-            row.get("project_id"),
-            row.get("key"),
-            row.get("name"),
-            row.get("description"),
-            row.get::<String, _>("value_type").as_str(),
-            row.get("enabled"),
-            row.get("default_variant_id"),
-            row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
-            row.get("created_at"),
-            row.get("updated_at"),
-            row.get("deleted_at"),
-            row.get("version"),
-        )
+        assemble_flag_from_row(&row)
     }
 
     async fn list_by_project(
@@ -248,23 +242,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         rows.into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect()
     }
 
@@ -305,23 +283,7 @@ impl FlagRepository for PgFlagRepository {
 
         let flags = rows
             .into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok((flags, total))
@@ -347,23 +309,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         rows.into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect()
     }
 
@@ -388,23 +334,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         rows.into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect()
     }
 
@@ -429,23 +359,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         rows.into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect()
     }
 
@@ -531,21 +445,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         if let Some(row) = result {
-            let updated = assemble_flag(
-                row.get("id"),
-                row.get("project_id"),
-                row.get("key"),
-                row.get("name"),
-                row.get("description"),
-                row.get::<String, _>("value_type").as_str(),
-                row.get("enabled"),
-                row.get("default_variant_id"),
-                row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
-                row.get("created_at"),
-                row.get("updated_at"),
-                row.get("deleted_at"),
-                row.get("version"),
-            )?;
+            let updated = assemble_flag_from_row(&row)?;
             self.audit
                 .log(
                     None,
