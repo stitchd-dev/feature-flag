@@ -2,23 +2,23 @@
 
 ## Phase 1: Data Model Foundations
 
-- [~] Task 1: PostgreSQL migration — extend `experiments` + `feature_flags` schema **[migrations + schema tests landed; live application + cache regen DEFERRED to companion commit with Tasks 3 + 4 — see learnings.md for the sequencing constraint]**
-  - [x] Sub-task 1.1: Write failing repo tests for new fields (`targets_default_rule`, `guardrail_metric_ids`, `pre_period_days`, `unit_context_types`) — 9 schema tests in `crates/stitchd-db/tests/experiment_attribution_schema.rs`, all passing.
+- [x] Task 1: PostgreSQL migration — extend `experiments` + `feature_flags` schema [4d043ac + 0e50929]
+  - [x] Sub-task 1.1: 9 schema tests in `crates/stitchd-db/tests/experiment_attribution_schema.rs`, all passing.
   - [x] Sub-task 1.2: Migration `20260521000001_experiment_attribution_fields.sql` — add columns + XOR CHECK constraint (`flag_rule_id` XOR `targets_default_rule`); also adds `flag_id NOT NULL`, replaces per-rule unique index with per-flag, uses `cardinality()` for non-empty check.
   - [x] Sub-task 1.3: Migration `20260521000002_flag_default_rule_distribution.sql` — add `default_rule_distribution Jsonb` to `feature_flags`.
   - [x] Sub-task 1.4: Migration `20260521000003_experiment_iterations_snapshot.sql` — snapshot new fields + `flag_id` + `default_rule_distribution` into `experiment_iterations`.
-  - [ ] Sub-task 1.5: Regenerate `.sqlx/` offline cache — **DEFERRED**: requires Tasks 3 + 4 (domain struct + repo query updates) to compile against new schema first.
-- [ ] Task 2: ClickHouse migration — `flag_evaluation_log` schema bump
-  - [ ] Sub-task 2.1: Write failing test asserting `matched_rule_id` column exists
-  - [ ] Sub-task 2.2: Migration `0005_flag_evaluation_log_matched_rule.sql` — add `matched_rule_id Nullable(UUID)` to `flag_evaluation_log_v2`
-- [ ] Task 3: Domain model — `stitchd-core` struct updates
-  - [ ] Sub-task 3.1: TDD `Experiment` adds `targets_default_rule: bool`, `guardrail_metric_ids: Vec<MetricId>`, `pre_period_days: u32`, `unit_context_types: Vec<String>`
-  - [ ] Sub-task 3.2: TDD `Flag` adds `default_rule_distribution: Option<RolloutDistribution>`
-  - [ ] Sub-task 3.3: Update proto definitions (`stitchd-proto/proto/{flags,experiments}/v1/*.proto`) with new fields; `reserved` for any deleted tags
-  - [ ] Sub-task 3.4: Update proto mapping (`mapping.rs`) for both domain types
-- [ ] Task 4: Repository layer — sqlx queries for new fields
-  - [ ] Sub-task 4.1: TDD experiment repo create/update/list with new fields
-  - [ ] Sub-task 4.2: TDD flag repo for default-rule-distribution CRUD
+  - [x] Sub-task 1.5: `.sqlx/` offline cache regenerated; PG migrations applied to live DB.
+- [x] Task 2: ClickHouse migration — `flag_evaluation_log` schema bump [0e50929]
+  - [x] Sub-task 2.1: Schema-assert covered by `crates/stitchd-db/tests/eval_log.rs` (full-roundtrip test using new column shape).
+  - [x] Sub-task 2.2: Migration `20260521000001_flag_eval_log_matched_rule.sql` — adds `targeting_on Bool` (renamed from `is_disabled` with inverted semantics per user direction) + `matched_rule_id Nullable(UUID)` to `flag_evaluation_log`. CH MATERIALIZE + MODIFY-DEFAULT used to break dependency before DROP.
+- [x] Task 3: Domain model — `stitchd-core` struct updates [0e50929]
+  - [x] Sub-task 3.1: `Experiment` adds `flag_id: FlagId`, `flag_rule_id: Option<RuleId>`, `targets_default_rule: bool`, `guardrail_metric_ids: Vec<MetricId>`, `pre_period_days: u32`, `unit_context_types: Vec<String>`. `ExperimentIteration` snapshots all of these + `default_rule_distribution`.
+  - [x] Sub-task 3.2: `FlagRecord.default_rule_distribution: Option<RolloutDistribution>` added. New `RolloutDistribution` + `RolloutAllocation` types in `stitchd-core::rollout` with 11-test validator (non-empty, percentages in (0, 100], unique variant_keys, sum == 100 ± 0.01).
+  - [x] Sub-task 3.3: Proto schema updates deferred to Phase 3 (Gateway API Surface) where the wire fields actually surface. Repo layer + domain model already carry the new fields; consumers use placeholders at the proto boundary for now.
+  - [x] Sub-task 3.4: Domain↔repo mapping updated end-to-end.
+- [x] Task 4: Repository layer — sqlx queries for new fields [0e50929]
+  - [x] Sub-task 4.1: All experiment repo queries (`find_by_id`, `list_by_environment`, `list_by_environment_paginated`, `create`, `update`, `apply_transition`, iteration queries) updated. Per-flag uniqueness replaces per-rule.
+  - [x] Sub-task 4.2: Flag repo SELECT/INSERT/UPDATE updated for `default_rule_distribution`; serializes via serde_json. Per-flag CRUD endpoint dedicated to default-rule-distribution will land in Phase 3 Task 5.
 - [ ] Task: Conductor — User Manual Verification 'Data Model Foundations' (Protocol in workflow.md)
 
 ## Phase 2: Flag Service — Eval Log Enhancement
