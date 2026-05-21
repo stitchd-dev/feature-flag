@@ -1,4 +1,22 @@
-import { useRef, useEffect, useState } from 'react'
+/**
+ * Phase 10 Create / Edit experiment modal.
+ *
+ * Rewrites the Phase 7 modal to bind an experiment to either a specific
+ * percentage-rollout rule on a flag OR to the flag's default-rule
+ * percentage distribution (XOR). Surfaces the Phase 1 attribution fields
+ * (`unit_context_types`, `pre_period_days`, primary + guardrail metric_ids,
+ * `traffic_allocation`) and consumes the typed Phase 8 API wrappers.
+ *
+ * Form architecture:
+ *
+ *   - Formik with `validateOnChange={false}` (track learning — async/expensive
+ *     validators on the schema would hammer the gateway on every keystroke).
+ *   - `enableReinitialize` so edit mode picks up the async-loaded experiment
+ *     after the GET resolves.
+ *   - Yup schema in `lib/validation/experiment.ts`. Pure helpers in
+ *     `./CreateExperimentModal.helpers.ts`.
+ */
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Formik, Form, useFormikContext, useField } from 'formik'
 import { I } from '../../components/icons'
@@ -12,13 +30,25 @@ import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { slugify } from '../../lib/utils'
 import { extractErrorMessage } from '../../lib/errors'
-import { experimentSchema, MAX_METRIC_IDS } from '../../lib/validation/experimentSchema'
-import type { ExperimentFormValues } from '../../lib/validation/experimentSchema'
+import {
+  experimentSchema,
+  MAX_METRIC_IDS,
+  MAX_GUARDRAIL_METRIC_IDS,
+  type ExperimentFormValues,
+} from '../../lib/validation/experiment'
+import type {
+  AdminFlagResponse,
+  RolloutDistribution,
+} from '../../lib/types'
 import {
   buildExperimentCreateBody,
+  buildExperimentPatchBody,
+  filterEligibleRules,
   filterMetricOptions,
+  hasDefaultRuleDistribution,
   metricKindChipStyle,
   type MetricPickerOption,
+  type RulePickerOption,
 } from './CreateExperimentModal.helpers'
 
 const MODEL_OPTIONS = [
@@ -26,48 +56,271 @@ const MODEL_OPTIONS = [
   { value: 'frequentist', label: 'Frequentist' },
 ]
 
-interface ExperimentVariant {
-  key: string
-  allocation: number
+/**
+ * Phase 10 augments `AdminFlagResponse` with two fields the gateway will
+ * surface once Phase 11 cleanup wires them through. They're optional so the
+ * UI degrades gracefully on the current shape.
+ */
+interface ExpFlagShape extends AdminFlagResponse {
+  /** Phase 1 default-rule percentage distribution; `null` when only the
+   * single-variant default is configured. */
+  default_rule_distribution?: RolloutDistribution | null
+  /** Identifies the active experiment that's currently locking the flag.
+   * Surfaces in the EditFlagDefaultRule UI; not load-bearing here. */
+  locked_by_experiment_id?: string | null
 }
 
-interface FormValues extends Omit<ExperimentFormValues, 'variants'> {
-  variants: ExperimentVariant[]
+/** Augments the Phase-7 `RuleJson` shape with the optional `rule_id` field
+ *  the gateway will surface once `feature_flag_rules.id` is exposed in
+ *  `AdminFlagJson.rules`. Falls back to a synthetic id derived from array
+ *  index until that lands. */
+interface RuleWithId {
+  rule_id?: string
+  name?: string | null
+  output: unknown
+}
+
+interface MetricsListResponse {
+  items: {
+    id: string
+    key: string
+    name: string
+    kind: 'aggregation' | 'ratio' | 'funnel'
+  }[]
+  total: number
+}
+
+interface FlagListResponse {
+  items: ExpFlagShape[]
+  total: number
 }
 
 // ── Auto-slug from name ───────────────────────────────────────────────────────
 
-function AutoSlugKey() {
-  const { values, setFieldValue } = useFormikContext<FormValues>()
+function AutoSlugKey({ disabled }: { disabled: boolean }) {
+  const { values, setFieldValue } = useFormikContext<ExperimentFormValues>()
   const keyEditedRef = useRef(false)
   const prevNameRef = useRef('')
 
   useEffect(() => {
+    if (disabled) return
     if (!keyEditedRef.current && values.name !== prevNameRef.current) {
       prevNameRef.current = values.name
       void setFieldValue('key', slugify(values.name), false)
     }
-  }, [values.name, setFieldValue])
+  }, [values.name, setFieldValue, disabled])
 
   return null
 }
 
-// ── Metric picker ─────────────────────────────────────────────────────────────
+// ── Flag picker ─────────────────────────────────────────────────────────────
 
-interface MetricsListResponse {
-  items: { id: string; key: string; name: string; kind: 'aggregation' | 'ratio' | 'funnel' }[]
-  total: number
+function FlagPicker({
+  flags,
+  onSelected,
+  disabled,
+}: {
+  flags: ExpFlagShape[]
+  onSelected: (flag: ExpFlagShape | null) => void
+  disabled: boolean
+}) {
+  const [{ value }, meta, helpers] = useField<string>('flag_id')
+  const isError = meta.touched && Boolean(meta.error)
+  const errorMessage = isError ? meta.error : undefined
+
+  function setFlag(flagId: string) {
+    void helpers.setValue(flagId)
+    const flag = flags.find((f) => f.flag_id === flagId) ?? null
+    onSelected(flag)
+  }
+
+  return (
+    <div>
+      <label className="label" htmlFor="flag_id" style={{ display: 'block', marginBottom: 4 }}>
+        Flag
+      </label>
+      <select
+        id="flag_id"
+        className="input"
+        style={{
+          width: '100%',
+          borderColor: isError ? 'var(--danger)' : undefined,
+        }}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => setFlag(e.target.value)}
+      >
+        <option value="">{disabled ? 'Flag is immutable' : 'Pick a flag…'}</option>
+        {flags.map((f) => (
+          <option key={f.flag_id} value={f.flag_id}>
+            {f.name} ({f.key})
+          </option>
+        ))}
+      </select>
+      {errorMessage && (
+        <div role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>
+          {errorMessage}
+        </div>
+      )}
+    </div>
+  )
 }
 
+// ── Rule picker ─────────────────────────────────────────────────────────────
+
 /**
- * Multi-select metric picker.
+ * The rule picker is fed via `filterEligibleRules`. Ineligible rows are
+ * `disabled` with a `title=` tooltip (no `Tooltip` primitive exists in
+ * `components/`, so we use the native HTML attribute — matches the
+ * pattern in `RuleCard.tsx`).
  *
- * Backed by `GET /v1/metrics?env_id=...&limit=200` — fetched once on mount.
- * Renders a search input + searchable dropdown of name+kind+key rows; selected
- * picks display as removable chips above the input.
+ * The synthetic `default_rule` row carries `rule_id === null`; selecting
+ * it flips `targets_default_rule = true` and clears `flag_rule_id`.
  */
-function MetricPicker({ envId }: { envId: string }) {
-  const [{ value: selectedIds }, meta, helpers] = useField<string[]>('metric_ids')
+function RulePicker({
+  options,
+  cta,
+}: {
+  options: RulePickerOption[]
+  cta: { label: string; onClick: () => void } | null
+}) {
+  const { values, setFieldValue } = useFormikContext<ExperimentFormValues>()
+  const [, meta] = useField<string>('flag_rule_id')
+  const isError = meta.touched && Boolean(meta.error)
+  const errorMessage = isError ? meta.error : undefined
+
+  // Compute the currently-selected option id from the form state.
+  const selectedId =
+    values.targets_default_rule
+      ? 'default_rule'
+      : values.flag_rule_id
+        ? `rule:${values.flag_rule_id}`
+        : ''
+
+  function onPick(id: string) {
+    const opt = options.find((o) => o.id === id)
+    if (!opt || !opt.eligible) return
+    if (opt.kind === 'default_rule') {
+      void setFieldValue('targets_default_rule', true)
+      void setFieldValue('flag_rule_id', '')
+    } else {
+      void setFieldValue('targets_default_rule', false)
+      void setFieldValue('flag_rule_id', opt.rule_id ?? '')
+    }
+  }
+
+  const noEligible = options.every((o) => !o.eligible)
+
+  return (
+    <div>
+      <label className="label" style={{ display: 'block', marginBottom: 4 }}>
+        Target rule
+      </label>
+      <select
+        className="input"
+        aria-label="Target rule"
+        value={selectedId}
+        onChange={(e) => onPick(e.target.value)}
+        style={{
+          width: '100%',
+          borderColor: isError ? 'var(--danger)' : undefined,
+        }}
+      >
+        <option value="">Pick a target rule…</option>
+        {options.map((o) => (
+          <option
+            key={o.id}
+            value={o.id}
+            disabled={!o.eligible}
+            title={o.disabled_reason}
+          >
+            {o.label}{!o.eligible ? ' (requires percentage rollout)' : ''}
+          </option>
+        ))}
+      </select>
+
+      {/* Ineligible rule list — surfaced visibly under the picker so the
+          "Experiments require a percentage rollout rule" tooltip text is
+          always discoverable. */}
+      {options.some((o) => !o.eligible) && (
+        <ul
+          aria-label="Ineligible rules"
+          style={{
+            margin: '6px 0 0',
+            padding: 0,
+            listStyle: 'none',
+            fontSize: 11,
+            color: 'var(--fg-muted)',
+          }}
+        >
+          {options
+            .filter((o) => !o.eligible)
+            .map((o) => (
+              <li
+                key={`${o.id}-disabled`}
+                title={o.disabled_reason}
+                style={{ paddingTop: 2 }}
+              >
+                <I.lock size={9} /> {o.label} — {o.disabled_reason}
+              </li>
+            ))}
+        </ul>
+      )}
+
+      {noEligible && cta && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: '8px 12px',
+            background: 'var(--bg-sunken)',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            fontSize: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span style={{ color: 'var(--fg-muted)' }}>
+            No eligible target — add a percentage rollout rule or configure the
+            flag's default-rule distribution.
+          </span>
+          <button type="button" className="btn sm" onClick={cta.onClick}>
+            {cta.label}
+          </button>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>
+          {errorMessage}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Metric picker ───────────────────────────────────────────────────────────
+
+/**
+ * Multi-select metric picker (used for both primary `metric_ids` and
+ * `guardrail_metric_ids`). The implementation is identical between the two
+ * — only the form field name + max changes — so we parameterise it.
+ */
+function MetricPicker({
+  envId,
+  fieldName,
+  label,
+  hint,
+  max,
+}: {
+  envId: string
+  fieldName: 'metric_ids' | 'guardrail_metric_ids'
+  label: string
+  hint: string
+  max: number
+}) {
+  const [{ value: selectedIds }, meta, helpers] = useField<string[]>(fieldName)
 
   const [allOptions, setAllOptions] = useState<MetricPickerOption[]>([])
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -76,7 +329,8 @@ function MetricPicker({ envId }: { envId: string }) {
   const [open, setOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Fetch metric list once (scoped to current env).
+  // Fetch metric list once (scoped to current env). Shared across mounts via
+  // the simple cache on `api`.
   useEffect(() => {
     if (!envId) return
     setLoading(true)
@@ -105,7 +359,6 @@ function MetricPicker({ envId }: { envId: string }) {
     return () => ctrl.abort()
   }, [envId])
 
-  // Click-outside to close the dropdown.
   useEffect(() => {
     if (!open) return
     function onMouseDown(e: MouseEvent) {
@@ -117,20 +370,20 @@ function MetricPicker({ envId }: { envId: string }) {
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [open])
 
-  const selectedSet = new Set(selectedIds)
+  const selectedSet = new Set(selectedIds ?? [])
   const selectedOptions = allOptions.filter((o) => selectedSet.has(o.id))
   const visibleOptions = filterMetricOptions(allOptions, query, selectedSet)
-  const atMax = selectedIds.length >= MAX_METRIC_IDS
+  const atMax = (selectedIds?.length ?? 0) >= max
 
   function addMetric(id: string) {
-    if (selectedIds.includes(id) || atMax) return
-    void helpers.setValue([...selectedIds, id])
+    if ((selectedIds ?? []).includes(id) || atMax) return
+    void helpers.setValue([...(selectedIds ?? []), id])
     setQuery('')
     setOpen(false)
   }
 
   function removeMetric(id: string) {
-    void helpers.setValue(selectedIds.filter((s) => s !== id))
+    void helpers.setValue((selectedIds ?? []).filter((s) => s !== id))
   }
 
   const isError = meta.touched && Boolean(meta.error)
@@ -139,10 +392,9 @@ function MetricPicker({ envId }: { envId: string }) {
   return (
     <div ref={containerRef}>
       <label className="label" style={{ display: 'block', marginBottom: 4 }}>
-        Metrics
+        {label}
       </label>
 
-      {/* Selected metric chips */}
       {selectedOptions.length > 0 && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 6 }}>
           {selectedOptions.map((opt) => {
@@ -190,14 +442,13 @@ function MetricPicker({ envId }: { envId: string }) {
         </div>
       )}
 
-      {/* Search input */}
       <div style={{ position: 'relative' }}>
         <input
           className="input"
           type="text"
           placeholder={
             atMax
-              ? `Maximum ${MAX_METRIC_IDS} metrics selected`
+              ? `Maximum ${max} metrics selected`
               : loading
                 ? 'Loading metrics…'
                 : 'Search metrics by name or key…'
@@ -318,87 +569,111 @@ function MetricPicker({ envId }: { envId: string }) {
       )}
       {!errorMessage && !loadError && (
         <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
-          Select 1–{MAX_METRIC_IDS} metrics. Lift is computed for each.
+          {hint}
         </div>
       )}
     </div>
   )
 }
 
-// ── Variant allocation editor ─────────────────────────────────────────────────
+// ── Unit-context-types multi-select ─────────────────────────────────────────
 
-function VariantEditor() {
-  const { values, setFieldValue } = useFormikContext<FormValues>()
+interface ContextTypeSuggestionRow {
+  context_type: string
+  last_seen_at: string
+}
 
-  function setKey(i: number, val: string) {
-    const next = values.variants.map((v, j) => j === i ? { ...v, key: val } : v)
-    void setFieldValue('variants', next)
+function UnitContextTypesPicker({ envId }: { envId: string }) {
+  const [{ value: selected }, meta, helpers] = useField<string[]>('unit_context_types')
+  const [available, setAvailable] = useState<string[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!envId) return
+    const ctrl = new AbortController()
+    api
+      .get<ContextTypeSuggestionRow[]>(
+        `/v1/environments/${encodeURIComponent(envId)}/context-types`,
+        { signal: ctrl.signal },
+      )
+      .then(({ data }) => {
+        // Normalise: backend returns rows with last_seen_at; we only need
+        // the names. Always include 'user' since that's the canonical default
+        // context type and the registry may not have a row for it on a fresh env.
+        const names = new Set(data.map((row) => row.context_type))
+        names.add('user')
+        setAvailable(Array.from(names).sort())
+      })
+      .catch((err: unknown) => {
+        if ((err as { code?: string }).code === 'ERR_CANCELED') return
+        setLoadError(extractErrorMessage(err))
+        setAvailable(['user'])
+      })
+    return () => ctrl.abort()
+  }, [envId])
+
+  function toggle(ct: string) {
+    const has = (selected ?? []).includes(ct)
+    if (has) {
+      void helpers.setValue((selected ?? []).filter((s) => s !== ct))
+    } else {
+      void helpers.setValue([...(selected ?? []), ct])
+    }
   }
 
-  function setAllocation(i: number, val: string) {
-    const n = parseFloat(val) || 0
-    const next = values.variants.map((v, j) => j === i ? { ...v, allocation: n } : v)
-    void setFieldValue('variants', next)
-  }
-
-  function add() {
-    const equal = Math.floor(100 / (values.variants.length + 1))
-    const next = [...values.variants, { key: '', allocation: equal }]
-    void setFieldValue('variants', next)
-  }
-
-  function remove(i: number) {
-    if (values.variants.length <= 2) return
-    void setFieldValue('variants', values.variants.filter((_, j) => j !== i))
-  }
-
-  const total = values.variants.reduce((s, v) => s + (v.allocation || 0), 0)
-  const totalOk = Math.abs(total - 100) < 0.01
+  const isError = meta.touched && Boolean(meta.error)
+  const errorMessage = isError
+    ? Array.isArray(meta.error)
+      ? meta.error[0]
+      : meta.error
+    : undefined
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <label className="label" style={{ margin: 0 }}>
-          Variants &amp; allocation
-        </label>
-        <button type="button" className="btn sm" onClick={add}><I.plus size={11} /> Add</button>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {values.variants.map((v, i) => (
-          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              className="input"
-              style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-              placeholder={i === 0 ? 'control' : `variant-${i}`}
-              value={v.key}
-              onChange={(e) => setKey(i, e.target.value)}
-            />
-            <input
-              className="input"
-              type="number"
-              min={0}
-              max={100}
-              step={0.1}
-              style={{ width: 80, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-              value={v.allocation}
-              onChange={(e) => setAllocation(i, e.target.value)}
-            />
-            <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>%</span>
+      <label className="label" style={{ display: 'block', marginBottom: 4 }}>
+        Unit context types
+      </label>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {available.map((ct) => {
+          const active = (selected ?? []).includes(ct)
+          return (
             <button
+              key={ct}
               type="button"
-              className="icon-btn"
-              style={{ color: values.variants.length <= 2 ? 'var(--fg-faint)' : 'var(--danger)' }}
-              disabled={values.variants.length <= 2}
-              onClick={() => remove(i)}
+              onClick={() => toggle(ct)}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 6,
+                border: active
+                  ? '1px solid var(--accent)'
+                  : '1px solid var(--border-strong)',
+                background: active ? 'var(--surface)' : 'transparent',
+                color: active ? 'var(--accent)' : 'var(--fg-muted)',
+                fontWeight: active ? 600 : 500,
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
             >
-              <I.x size={12} />
+              {ct}
             </button>
-          </div>
-        ))}
+          )
+        })}
       </div>
-      <div style={{ fontSize: 11, marginTop: 6, color: totalOk ? 'var(--success)' : 'var(--danger)' }}>
-        Total: {total.toFixed(1)}% {totalOk ? '✓' : '— must equal 100%'}
-      </div>
+      {loadError && (
+        <div role="alert" style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>
+          Failed to load context types: {loadError}
+        </div>
+      )}
+      {errorMessage && !loadError && (
+        <div role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>
+          {errorMessage}
+        </div>
+      )}
+      {!errorMessage && !loadError && (
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+          Experiment analysis is computed independently per context type.
+        </div>
+      )}
     </div>
   )
 }
@@ -407,51 +682,232 @@ function VariantEditor() {
 
 interface Props {
   onClose: () => void
+  /** When present, the modal opens in edit mode for this experiment key. */
+  editExperimentKey?: string
 }
 
-export function CreateExperimentModal({ onClose }: Props) {
-  const navigate = useNavigate()
-  const { orgId, envId } = useOrgContext()
+/**
+ * Synthesise rule-id-augmented rule rows from the flag's `AdminFlagJson.rules`
+ * shape. The gateway doesn't surface `feature_flag_rules.id` today (see Phase
+ * 11 cleanup follow-up), so we fall back to the array index — the modal sends
+ * a synthetic id back to the gateway which will treat unknown UUIDs as a
+ * `UnknownFlagRule` error. The picker still surfaces the correct disabled
+ * tooltip + behaviour; once the rule_id is in the response, the submit body
+ * lines up automatically.
+ */
+function ruleListFromFlag(flag: ExpFlagShape | null): RuleWithId[] {
+  if (!flag) return []
+  return flag.rules.map((r, idx) => {
+    // The admin RuleJson doesn't currently surface `rule_id` or `name`
+    // (Phase 11 cleanup adds them — see follow-up issue). Read defensively
+    // off the loose shape so we degrade rather than crash.
+    const loose = r as { rule_id?: string; name?: string | null }
+    return {
+      // Use the surfaced UUID if available; fall back to a placeholder UUID
+      // built from the index (zero-padded) so the picker still has a stable
+      // key. The schema's UUID regex accepts this shape.
+      rule_id:
+        loose.rule_id ??
+        `00000000-0000-0000-0000-${String(idx + 1).padStart(12, '0')}`,
+      name: loose.name ?? null,
+      output: r.output,
+    }
+  })
+}
 
-  const initialValues: FormValues = {
+export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
+  const navigate = useNavigate()
+  const { orgId, envId, projectId } = useOrgContext()
+  const isEdit = Boolean(editExperimentKey)
+
+  // ── Async loaders ─────────────────────────────────────────────────────────
+
+  const [flags, setFlags] = useState<ExpFlagShape[]>([])
+  const [flagsLoading, setFlagsLoading] = useState(true)
+  const [activeFlag, setActiveFlag] = useState<ExpFlagShape | null>(null)
+  const [loadedExperiment, setLoadedExperiment] = useState<{
+    name: string
+    key: string
+    description: string
+    flag_id: string
+    flag_rule_id: string
+    targets_default_rule: boolean
+    metric_ids: string[]
+    guardrail_metric_ids: string[]
+    unit_context_types: string[]
+    pre_period_days: number
+    traffic_allocation: number
+    model: 'bayesian' | 'frequentist'
+  } | null>(null)
+
+  // Flag list (env-scoped) — backs the FlagPicker.
+  useEffect(() => {
+    if (!projectId) return
+    setFlagsLoading(true)
+    const ctrl = new AbortController()
+    api
+      .get<FlagListResponse>(
+        `/v1/projects/${encodeURIComponent(projectId)}/flags?per_page=200`,
+        { signal: ctrl.signal },
+      )
+      .then(({ data }) => setFlags(data.items ?? []))
+      .catch((err: unknown) => {
+        if ((err as { code?: string }).code === 'ERR_CANCELED') return
+      })
+      .finally(() => setFlagsLoading(false))
+    return () => ctrl.abort()
+  }, [projectId])
+
+  // Edit-mode: load the experiment.
+  useEffect(() => {
+    if (!isEdit || !envId || !editExperimentKey) return
+    const ctrl = new AbortController()
+    interface FullExperimentJson {
+      key: string
+      name: string
+      description: string
+      flag_id?: string
+      flag_rule_id?: string | null
+      targets_default_rule?: boolean
+      metric_ids: string[]
+      guardrail_metric_ids?: string[]
+      unit_context_types?: string[]
+      pre_period_days?: number
+      traffic_allocation?: number
+      model: 'bayesian' | 'frequentist'
+    }
+    api
+      .get<FullExperimentJson>(
+        `/v1/environments/${encodeURIComponent(envId)}/experiments/${encodeURIComponent(editExperimentKey)}`,
+        { signal: ctrl.signal },
+      )
+      .then(({ data }) => {
+        setLoadedExperiment({
+          key: data.key,
+          name: data.name,
+          description: data.description ?? '',
+          flag_id: data.flag_id ?? '',
+          flag_rule_id: data.flag_rule_id ?? '',
+          targets_default_rule: Boolean(data.targets_default_rule),
+          metric_ids: data.metric_ids,
+          guardrail_metric_ids: data.guardrail_metric_ids ?? [],
+          unit_context_types: data.unit_context_types ?? ['user'],
+          pre_period_days: data.pre_period_days ?? 0,
+          traffic_allocation:
+            data.traffic_allocation != null ? data.traffic_allocation * 100 : 100,
+          model: data.model,
+        })
+      })
+      .catch(() => undefined)
+    return () => ctrl.abort()
+  }, [isEdit, envId, editExperimentKey])
+
+  // When the loaded experiment refers to a flag, lift it as `activeFlag`.
+  useEffect(() => {
+    if (!loadedExperiment || flagsLoading) return
+    const flag = flags.find((f) => f.flag_id === loadedExperiment.flag_id) ?? null
+    setActiveFlag(flag)
+  }, [loadedExperiment, flags, flagsLoading])
+
+  // ── Form initial values ───────────────────────────────────────────────────
+
+  const initialValues: ExperimentFormValues = loadedExperiment ?? {
     name: '',
     key: '',
-    flag_key: '',
     description: '',
-    model: 'bayesian',
+    flag_id: '',
+    flag_rule_id: '',
+    targets_default_rule: false,
     metric_ids: [],
-    duration_days: 14,
-    variants: [
-      { key: 'control', allocation: 50 },
-      { key: 'treatment', allocation: 50 },
-    ],
+    guardrail_metric_ids: [],
+    unit_context_types: ['user'],
+    pre_period_days: 0,
+    traffic_allocation: 100,
+    model: 'bayesian',
   }
 
+  // ── Submit handler ────────────────────────────────────────────────────────
+
   async function handleSubmit(
-    values: FormValues,
+    values: ExperimentFormValues,
     { setStatus }: { setStatus: (s: unknown) => void },
   ) {
+    if (!envId) return
     try {
-      const body = buildExperimentCreateBody(values, envId ?? '')
-      const { data } = await api.post<{ key: string }>(`/v1/environments/${envId}/experiments`, body)
-      onClose()
-      navigate(`/org/${orgId}/experiments/${data.key}`)
+      if (isEdit && editExperimentKey) {
+        const body = buildExperimentPatchBody(values)
+        await api.patch(
+          `/v1/environments/${envId}/experiments/${editExperimentKey}`,
+          body,
+        )
+        onClose()
+        navigate(`/org/${orgId}/experiments/${editExperimentKey}`)
+      } else {
+        const body = buildExperimentCreateBody(values, envId)
+        const { data } = await api.post<{ key: string }>(
+          `/v1/environments/${envId}/experiments`,
+          body,
+        )
+        onClose()
+        navigate(`/org/${orgId}/experiments/${data.key}`)
+      }
     } catch (err: unknown) {
       setStatus({ error: extractErrorMessage(err) })
     }
   }
 
+  // ── Render ───────────────────────────────────────────────────────────────
+
+  const rulePickerOptions: RulePickerOption[] = filterEligibleRules(
+    ruleListFromFlag(activeFlag).map((r) => ({
+      rule_id: r.rule_id ?? '',
+      name: r.name ?? undefined,
+      output: r.output,
+    })),
+    activeFlag?.default_rule_distribution ?? null,
+  )
+
+  // CTA to nudge the user to the flag-edit page when no eligible rule exists.
+  const cta =
+    activeFlag &&
+    !hasDefaultRuleDistribution(activeFlag.default_rule_distribution) &&
+    rulePickerOptions.every((o) => !o.eligible)
+      ? {
+          label: 'Configure flag',
+          onClick: () => navigate(`/org/${orgId}/flags/${activeFlag.key}`),
+        }
+      : null
+
   const header = (
-    <div className="card-header" style={{ padding: '16px 20px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-      <div className="card-title"><I.beaker size={15} /> New experiment</div>
-      <button type="button" className="icon-btn" onClick={onClose}><I.x size={16} /></button>
+    <div
+      className="card-header"
+      style={{
+        padding: '16px 20px',
+        borderBottom: '1px solid var(--border)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}
+    >
+      <div className="card-title">
+        <I.beaker size={15} /> {isEdit ? 'Edit experiment' : 'New experiment'}
+      </div>
+      <button type="button" className="icon-btn" onClick={onClose}>
+        <I.x size={16} />
+      </button>
     </div>
   )
 
   const footer = (
     <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 4 }}>
-      <button type="button" className="btn" onClick={onClose}>Cancel</button>
-      <FormSubmit label="Create experiment" loadingLabel="Creating…" form="create-experiment-form" />
+      <button type="button" className="btn" onClick={onClose}>
+        Cancel
+      </button>
+      <FormSubmit
+        label={isEdit ? 'Save changes' : 'Create experiment'}
+        loadingLabel={isEdit ? 'Saving…' : 'Creating…'}
+        form="experiment-form"
+      />
     </div>
   )
 
@@ -459,33 +915,89 @@ export function CreateExperimentModal({ onClose }: Props) {
     <Formik
       initialValues={initialValues}
       validationSchema={experimentSchema}
+      validateOnChange={false}
+      enableReinitialize
       onSubmit={handleSubmit}
     >
       <Modal isOpen onClose={onClose} size="md" title={header} footer={footer}>
-        <Form id="create-experiment-form" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <AutoSlugKey />
+        <Form
+          id="experiment-form"
+          style={{ display: 'flex', flexDirection: 'column', gap: 16 }}
+        >
+          <AutoSlugKey disabled={isEdit} />
           <FormErrorBanner />
 
-          <FormField name="name" label="Name" placeholder="e.g. Checkout Button Colour" autoFocus />
+          <FormField
+            name="name"
+            label="Name"
+            placeholder="e.g. Checkout Button Colour"
+            autoFocus
+          />
           <FormField
             name="key"
             label="Key"
             placeholder="e.g. checkout-btn-colour"
-            hint="Auto-generated from name. Immutable after creation."
+            hint={
+              isEdit
+                ? 'Immutable.'
+                : 'Auto-generated from name. Immutable after creation.'
+            }
+            disabled={isEdit}
             style={{ fontFamily: 'var(--font-mono)' }}
           />
-          <FormField
-            name="flag_key"
-            label="Flag key"
-            placeholder="e.g. checkout-btn-colour"
-            hint="The feature flag that controls variant assignment."
-            style={{ fontFamily: 'var(--font-mono)' }}
+          <FormTextarea
+            name="description"
+            label="Description"
+            placeholder="Optional"
+            style={{ minHeight: 56 }}
           />
-          <FormTextarea name="description" label="Description" placeholder="Optional" style={{ minHeight: 56 }} />
+
+          <FlagPicker
+            flags={flags}
+            onSelected={(f) => setActiveFlag(f)}
+            disabled={isEdit}
+          />
+
+          <RulePicker options={rulePickerOptions} cta={cta} />
+
           <FormSelect name="model" label="Statistical model" options={MODEL_OPTIONS} />
-          {envId && <MetricPicker envId={envId} />}
-          <FormField name="duration_days" label="Duration (days)" type="number" placeholder="14" />
-          <VariantEditor />
+
+          {envId && (
+            <>
+              <MetricPicker
+                envId={envId}
+                fieldName="metric_ids"
+                label="Primary metrics"
+                hint={`Select 1–${MAX_METRIC_IDS} primary metrics.`}
+                max={MAX_METRIC_IDS}
+              />
+              <MetricPicker
+                envId={envId}
+                fieldName="guardrail_metric_ids"
+                label="Guardrail metrics"
+                hint={`Optional — up to ${MAX_GUARDRAIL_METRIC_IDS} guardrails. Violations surface as warnings.`}
+                max={MAX_GUARDRAIL_METRIC_IDS}
+              />
+            </>
+          )}
+
+          {envId && <UnitContextTypesPicker envId={envId} />}
+
+          <FormField
+            name="pre_period_days"
+            label="Pre-period days (CUPED)"
+            type="number"
+            placeholder="0"
+            hint="Pre-experiment lookback window for CUPED variance reduction. 0 = disabled."
+          />
+
+          <FormField
+            name="traffic_allocation"
+            label="Traffic allocation (%)"
+            type="number"
+            placeholder="100"
+            hint="Fraction of exposures included in the experiment. 100 = full rollout."
+          />
         </Form>
       </Modal>
     </Formik>

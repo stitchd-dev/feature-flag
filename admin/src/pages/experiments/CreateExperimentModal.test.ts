@@ -1,54 +1,57 @@
 /**
- * Unit tests for CreateExperimentModal helpers — pure logic only.
+ * Unit tests for CreateExperimentModal — pure helpers + module-shape checks.
  *
- * Mirrors the pattern in MetricsList.test.ts: extract behaviour to pure
- * functions exported from the modal, then test them with Vitest.
+ * The admin Vitest harness runs in node env (no jsdom / Testing Library), so
+ * this file uses the same testable-seam pattern as `ExperimentDetail.test.ts`:
  *
- * Covers:
- *   • Yup `experimentSchema` cutover from `primary_metric: string` →
- *     `metric_ids: string[]` (min 1, max 5, UUIDs).
- *   • Metric picker helpers (kind chip + search filter).
- *   • Request body shape sent to `POST /v1/environments/{id}/experiments`.
+ *   1. Yup schema (`experimentSchema`) — drives validate() to assert each
+ *      field's rules.
+ *   2. Pure helpers — `filterEligibleRules`, `filterMetricOptions`,
+ *      `metricKindChipStyle`, `buildExperimentCreateBody`,
+ *      `buildExperimentPatchBody`, `hasDefaultRuleDistribution`.
+ *   3. Module-shape grep — confirms the modal component imports the new
+ *      schema + helpers, surfaces the required form fields, and uses
+ *      `validateOnChange={false}` (track learning).
  */
 import { describe, it, expect } from 'vitest'
 import { ValidationError } from 'yup'
-import { experimentSchema } from '../../lib/validation/experimentSchema'
+import SOURCE from './CreateExperimentModal.tsx?raw'
+import {
+  experimentSchema,
+  type ExperimentFormValues,
+  MAX_METRIC_IDS,
+  MAX_GUARDRAIL_METRIC_IDS,
+} from '../../lib/validation/experiment'
 import {
   buildExperimentCreateBody,
+  buildExperimentPatchBody,
+  filterEligibleRules,
   filterMetricOptions,
+  hasDefaultRuleDistribution,
+  isPercentageRolloutRule,
   metricKindChipStyle,
   type MetricPickerOption,
 } from './CreateExperimentModal.helpers'
 
-// ─── Validation helper ───────────────────────────────────────────────────────
+// ─── Schema helpers ──────────────────────────────────────────────────────────
 
-interface FormShape {
-  name: string
-  key: string
-  flag_key: string
-  description?: string
-  model: 'bayesian' | 'frequentist'
-  metric_ids: string[]
-  duration_days: number
-  variants: { key: string; allocation: number }[]
-}
-
-const validBase: FormShape = {
+const validBase: ExperimentFormValues = {
   name: 'Checkout button colour',
   key: 'checkout-btn-colour',
-  flag_key: 'checkout-btn-colour',
   description: 'Test the button colour',
+  flag_id: '00000000-0000-0000-0000-000000000001',
+  flag_rule_id: '11111111-1111-1111-1111-111111111111',
+  targets_default_rule: false,
+  metric_ids: ['22222222-2222-2222-2222-222222222222'],
+  guardrail_metric_ids: [],
+  unit_context_types: ['user'],
+  pre_period_days: 0,
+  traffic_allocation: 100,
   model: 'bayesian',
-  metric_ids: ['11111111-1111-1111-1111-111111111111'],
-  duration_days: 14,
-  variants: [
-    { key: 'control', allocation: 50 },
-    { key: 'treatment', allocation: 50 },
-  ],
 }
 
 async function validate(
-  patch: Partial<FormShape>,
+  patch: Partial<ExperimentFormValues>,
 ): Promise<{ ok: true } | { ok: false; errors: Record<string, string> }> {
   try {
     await experimentSchema.validate({ ...validBase, ...patch }, { abortEarly: false })
@@ -65,165 +68,437 @@ async function validate(
   }
 }
 
-// ─── Validation tests ────────────────────────────────────────────────────────
+// ─── Schema: basic required + length validations ────────────────────────────
 
-describe('test_validation_requires_at_least_one_metric_id', () => {
-  it('rejects an empty metric_ids array', async () => {
-    const result = await validate({ metric_ids: [] })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.errors.metric_ids).toMatch(/at least 1|required/i)
+describe('experimentSchema — name + key + flag_id', () => {
+  it('accepts a fully-valid base value', async () => {
+    const r = await validate({})
+    expect(r.ok).toBe(true)
   })
 
-  it('accepts a single UUID', async () => {
-    const result = await validate({
-      metric_ids: ['11111111-1111-1111-1111-111111111111'],
+  it('rejects empty name', async () => {
+    const r = await validate({ name: '' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.name).toMatch(/required/i)
+  })
+
+  it('rejects name > 255 chars', async () => {
+    const r = await validate({ name: 'x'.repeat(256) })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.name).toMatch(/255/i)
+  })
+
+  it('rejects invalid key format', async () => {
+    const r = await validate({ key: 'Bad Key!' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.key).toMatch(/lowercase/i)
+  })
+
+  it('rejects flag_id when missing', async () => {
+    const r = await validate({ flag_id: '' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.flag_id).toBeDefined()
+  })
+})
+
+// ─── Schema: XOR rule binding ───────────────────────────────────────────────
+
+describe('experimentSchema — flag_rule_id XOR targets_default_rule', () => {
+  it('accepts a specific flag_rule_id with targets_default_rule=false', async () => {
+    const r = await validate({
+      flag_rule_id: '11111111-1111-1111-1111-111111111111',
+      targets_default_rule: false,
     })
-    expect(result.ok).toBe(true)
+    expect(r.ok).toBe(true)
+  })
+
+  it('accepts targets_default_rule=true with empty flag_rule_id', async () => {
+    const r = await validate({
+      flag_rule_id: '',
+      targets_default_rule: true,
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('rejects when both flag_rule_id AND targets_default_rule are set', async () => {
+    const r = await validate({
+      flag_rule_id: '11111111-1111-1111-1111-111111111111',
+      targets_default_rule: true,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.flag_rule_id).toMatch(/cannot bind to both/i)
+  })
+
+  it('rejects when neither is set', async () => {
+    const r = await validate({
+      flag_rule_id: '',
+      targets_default_rule: false,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.flag_rule_id).toMatch(/pick a percentage/i)
+  })
+
+  it('rejects when flag_rule_id is set but not a UUID', async () => {
+    const r = await validate({
+      flag_rule_id: 'not-a-uuid',
+      targets_default_rule: false,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.flag_rule_id).toMatch(/uuid/i)
   })
 })
 
-describe('test_validation_rejects_more_than_5_metric_ids', () => {
-  it('accepts exactly 5 metric_ids', async () => {
-    const ids = [
-      '11111111-1111-1111-1111-111111111111',
-      '22222222-2222-2222-2222-222222222222',
-      '33333333-3333-3333-3333-333333333333',
-      '44444444-4444-4444-4444-444444444444',
-      '55555555-5555-5555-5555-555555555555',
-    ]
-    const result = await validate({ metric_ids: ids })
-    expect(result.ok).toBe(true)
+// ─── Schema: metric_ids + guardrails ────────────────────────────────────────
+
+describe('experimentSchema — metric_ids', () => {
+  it('rejects empty metric_ids array', async () => {
+    const r = await validate({ metric_ids: [] })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.metric_ids).toMatch(/at least 1|required/i)
   })
 
-  it('rejects 6 metric_ids', async () => {
-    const ids = [
-      '11111111-1111-1111-1111-111111111111',
-      '22222222-2222-2222-2222-222222222222',
-      '33333333-3333-3333-3333-333333333333',
-      '44444444-4444-4444-4444-444444444444',
-      '55555555-5555-5555-5555-555555555555',
-      '66666666-6666-6666-6666-666666666666',
-    ]
-    const result = await validate({ metric_ids: ids })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.errors.metric_ids).toMatch(/at most 5|max/i)
+  it(`rejects more than ${MAX_METRIC_IDS} metric_ids`, async () => {
+    const ids = Array.from({ length: MAX_METRIC_IDS + 1 }, (_, i) =>
+      `${String(i + 1).repeat(8)}-1111-1111-1111-111111111111`.slice(0, 36),
+    )
+    const r = await validate({ metric_ids: ids })
+    expect(r.ok).toBe(false)
   })
-})
 
-describe('test_validation_rejects_non_uuid_metric_id', () => {
-  it('rejects a non-UUID string', async () => {
-    const result = await validate({ metric_ids: ['not-a-uuid'] })
-    expect(result.ok).toBe(false)
-    if (!result.ok) {
-      // Either the parent or the element path fails — both indicate a bad value.
-      const errKey = Object.keys(result.errors).find((k) => k.startsWith('metric_ids'))
-      expect(errKey).toBeDefined()
-    }
+  it('accepts up to MAX guardrail_metric_ids', async () => {
+    const ids = Array.from({ length: MAX_GUARDRAIL_METRIC_IDS }, (_, i) =>
+      `${String(i + 1).repeat(8)}-1111-1111-1111-111111111111`.slice(0, 36),
+    )
+    const r = await validate({ guardrail_metric_ids: ids })
+    expect(r.ok).toBe(true)
+  })
+
+  it('accepts an empty guardrail_metric_ids array (optional)', async () => {
+    const r = await validate({ guardrail_metric_ids: [] })
+    expect(r.ok).toBe(true)
   })
 })
 
-// ─── Picker rendering helpers ────────────────────────────────────────────────
+// ─── Schema: unit_context_types ─────────────────────────────────────────────
 
-describe('test_metric_picker_shows_kind_chip', () => {
-  it('uses blue for aggregation, purple for ratio, green for funnel', () => {
+describe('experimentSchema — unit_context_types', () => {
+  it('defaults to ["user"] in the valid base', async () => {
+    expect(validBase.unit_context_types).toEqual(['user'])
+  })
+
+  it('rejects empty array', async () => {
+    const r = await validate({ unit_context_types: [] })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.unit_context_types).toMatch(/at least 1/i)
+  })
+
+  it('accepts multiple distinct context types', async () => {
+    const r = await validate({ unit_context_types: ['user', 'account'] })
+    expect(r.ok).toBe(true)
+  })
+
+  it('rejects duplicate context types', async () => {
+    const r = await validate({ unit_context_types: ['user', 'user'] })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.unit_context_types).toMatch(/unique/i)
+  })
+})
+
+// ─── Schema: pre_period_days + traffic_allocation ───────────────────────────
+
+describe('experimentSchema — pre_period_days', () => {
+  it('accepts 0 (CUPED off)', async () => {
+    const r = await validate({ pre_period_days: 0 })
+    expect(r.ok).toBe(true)
+  })
+
+  it('rejects negative values', async () => {
+    const r = await validate({ pre_period_days: -1 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.pre_period_days).toMatch(/negative/i)
+  })
+
+  it('rejects non-integer values', async () => {
+    const r = await validate({ pre_period_days: 1.5 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.pre_period_days).toMatch(/whole/i)
+  })
+})
+
+describe('experimentSchema — traffic_allocation', () => {
+  it('accepts 50 (mid-range)', async () => {
+    const r = await validate({ traffic_allocation: 50 })
+    expect(r.ok).toBe(true)
+  })
+
+  it('accepts 0.1 increments', async () => {
+    const r = await validate({ traffic_allocation: 12.3 })
+    expect(r.ok).toBe(true)
+  })
+
+  it('rejects values outside [0, 100]', async () => {
+    const r = await validate({ traffic_allocation: 101 })
+    expect(r.ok).toBe(false)
+  })
+
+  it('rejects sub-0.1 precision', async () => {
+    const r = await validate({ traffic_allocation: 12.345 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.traffic_allocation).toMatch(/0\.1/i)
+  })
+})
+
+// ─── Picker helpers ─────────────────────────────────────────────────────────
+
+describe('metricKindChipStyle', () => {
+  it('returns a distinct colour per metric kind', () => {
     expect(metricKindChipStyle('aggregation').color).toBe('#2563eb')
     expect(metricKindChipStyle('ratio').color).toBe('#9333ea')
     expect(metricKindChipStyle('funnel').color).toBe('#16a34a')
   })
-
-  it('returns a distinct background per kind', () => {
-    const a = metricKindChipStyle('aggregation')
-    const r = metricKindChipStyle('ratio')
-    const f = metricKindChipStyle('funnel')
-    expect(a.background).not.toBe(r.background)
-    expect(r.background).not.toBe(f.background)
-    expect(a.background).not.toBe(f.background)
-  })
 })
 
-describe('test_metric_picker_search_filters_by_name_and_key', () => {
+describe('filterMetricOptions', () => {
   const opts: MetricPickerOption[] = [
     { id: 'a', key: 'checkout_completed', name: 'Checkout completed', kind: 'aggregation' },
     { id: 'b', key: 'cart_value', name: 'Cart value (USD)', kind: 'aggregation' },
     { id: 'c', key: 'signup_funnel', name: 'Signup funnel', kind: 'funnel' },
-    { id: 'd', key: 'conversion_rate', name: 'Conversion ratio', kind: 'ratio' },
   ]
 
   it('returns all options when query is empty', () => {
-    expect(filterMetricOptions(opts, '')).toHaveLength(4)
+    expect(filterMetricOptions(opts, '')).toHaveLength(3)
   })
 
   it('filters by name (case-insensitive substring)', () => {
-    const r = filterMetricOptions(opts, 'cart')
-    expect(r.map((o) => o.id)).toEqual(['b'])
+    expect(filterMetricOptions(opts, 'cart').map((o) => o.id)).toEqual(['b'])
   })
 
   it('filters by key (case-insensitive substring)', () => {
-    const r = filterMetricOptions(opts, 'CONVERSION')
-    expect(r.map((o) => o.id)).toEqual(['d'])
+    expect(filterMetricOptions(opts, 'SIGNUP').map((o) => o.id)).toEqual(['c'])
   })
 
-  it('returns empty when nothing matches', () => {
-    expect(filterMetricOptions(opts, 'nothing-here')).toHaveLength(0)
-  })
-
-  it('matches against both name and key — name wins if both match', () => {
-    const r = filterMetricOptions(opts, 'signup')
-    expect(r.map((o) => o.id)).toEqual(['c'])
-  })
-
-  it('hides options already selected', () => {
-    const r = filterMetricOptions(opts, '', new Set(['a', 'b']))
-    expect(r.map((o) => o.id)).toEqual(['c', 'd'])
+  it('hides selected options', () => {
+    expect(filterMetricOptions(opts, '', new Set(['a'])).map((o) => o.id)).toEqual([
+      'b',
+      'c',
+    ])
   })
 })
 
-// ─── Request body shape ─────────────────────────────────────────────────────
+// ─── Rule picker eligibility ────────────────────────────────────────────────
 
-describe('test_form_submits_metric_ids_array_to_backend', () => {
-  it('builds a body with metric_ids array (NOT primary_metric)', () => {
-    const body = buildExperimentCreateBody(validBase, 'env-1')
-    expect(body.metric_ids).toEqual(['11111111-1111-1111-1111-111111111111'])
-    expect(body.primary_metric).toBeUndefined()
+describe('isPercentageRolloutRule', () => {
+  it('returns true for an allocation output', () => {
+    expect(
+      isPercentageRolloutRule({
+        allocation: {
+          buckets: [{ variant_key: 'a', weight_milli: 500 }],
+        },
+      }),
+    ).toBe(true)
   })
 
-  it('preserves all required fields from the form', () => {
-    const body = buildExperimentCreateBody(validBase, 'env-42')
-    expect(body).toMatchObject({
-      key: 'checkout-btn-colour',
-      name: 'Checkout button colour',
-      flag_key: 'checkout-btn-colour',
-      model: 'bayesian',
-      duration_days: 14,
-      environment_id: 'env-42',
+  it('returns false for a specific variant output', () => {
+    expect(isPercentageRolloutRule({ variant_key: 'control' })).toBe(false)
+  })
+
+  it('returns false for null / undefined', () => {
+    expect(isPercentageRolloutRule(null)).toBe(false)
+    expect(isPercentageRolloutRule(undefined)).toBe(false)
+  })
+
+  it('returns false for an allocation with empty buckets', () => {
+    expect(isPercentageRolloutRule({ allocation: { buckets: [] } })).toBe(false)
+  })
+})
+
+describe('filterEligibleRules', () => {
+  const rules = [
+    {
+      rule_id: 'r1',
+      name: 'percentage A',
+      output: { allocation: { buckets: [{ variant_key: 'a', weight_milli: 500 }] } },
+    },
+    { rule_id: 'r2', name: 'specific variant', output: { variant_key: 'control' } },
+    {
+      rule_id: 'r3',
+      name: null,
+      output: { allocation: { buckets: [{ variant_key: 'b', weight_milli: 1000 }] } },
+    },
+  ]
+
+  it('marks percentage-rollout rules eligible', () => {
+    const opts = filterEligibleRules(rules, null)
+    expect(opts[0].eligible).toBe(true)
+    expect(opts[2].eligible).toBe(true)
+  })
+
+  it('marks specific-variant rules ineligible with a tooltip', () => {
+    const opts = filterEligibleRules(rules, null)
+    expect(opts[1].eligible).toBe(false)
+    expect(opts[1].disabled_reason).toMatch(/percentage rollout/i)
+  })
+
+  it('falls back to "Rule N" when the rule has no name', () => {
+    const opts = filterEligibleRules(rules, null)
+    expect(opts[2].label).toBe('Rule 3')
+  })
+
+  it('omits the default-rule entry when distribution is null', () => {
+    const opts = filterEligibleRules(rules, null)
+    expect(opts.find((o) => o.kind === 'default_rule')).toBeUndefined()
+  })
+
+  it('appends a default-rule entry when distribution is set', () => {
+    const opts = filterEligibleRules(rules, {
+      allocations: [{ variant_key: 'a', percentage: 100 }],
     })
+    const defaultEntry = opts.find((o) => o.kind === 'default_rule')
+    expect(defaultEntry).toBeDefined()
+    expect(defaultEntry?.eligible).toBe(true)
+    expect(defaultEntry?.label).toMatch(/default rule/i)
+    expect(defaultEntry?.rule_id).toBeNull()
+  })
+})
+
+describe('hasDefaultRuleDistribution', () => {
+  it('returns false for null / undefined / empty', () => {
+    expect(hasDefaultRuleDistribution(null)).toBe(false)
+    expect(hasDefaultRuleDistribution(undefined)).toBe(false)
+    expect(hasDefaultRuleDistribution({ allocations: [] })).toBe(false)
   })
 
-  it('maps allocation percentages to 0–1 floats', () => {
-    const body = buildExperimentCreateBody(validBase, 'env-1')
-    const variants = body.variants as { key: string; allocation: number }[]
-    expect(variants[0].allocation).toBe(0.5)
-    expect(variants[1].allocation).toBe(0.5)
+  it('returns true for a populated distribution', () => {
+    expect(
+      hasDefaultRuleDistribution({
+        allocations: [{ variant_key: 'a', percentage: 100 }],
+      }),
+    ).toBe(true)
+  })
+})
+
+// ─── Submit body shape ──────────────────────────────────────────────────────
+
+describe('buildExperimentCreateBody', () => {
+  it('includes flag_rule_id when targets_default_rule=false', () => {
+    const body = buildExperimentCreateBody(validBase, 'env-42')
+    expect(body.flag_rule_id).toBe(validBase.flag_rule_id)
+    expect(body.targets_default_rule).toBeUndefined()
   })
 
-  it('trims whitespace from name, key, flag_key, description', () => {
+  it('omits flag_rule_id and sets targets_default_rule when default-bound', () => {
     const body = buildExperimentCreateBody(
-      { ...validBase, name: '  Name  ', key: '  k  ', flag_key: '  f  ', description: '  d  ' },
+      { ...validBase, flag_rule_id: '', targets_default_rule: true },
       'env-1',
     )
-    expect(body.name).toBe('Name')
-    expect(body.key).toBe('k')
-    expect(body.flag_key).toBe('f')
-    expect(body.description).toBe('d')
+    expect(body.flag_rule_id).toBeUndefined()
+    expect(body.targets_default_rule).toBe(true)
   })
 
-  it('passes through multiple metric_ids in order', () => {
-    const ids = [
-      '11111111-1111-1111-1111-111111111111',
+  it('emits primary + guardrail metric_ids arrays', () => {
+    const body = buildExperimentCreateBody(
+      {
+        ...validBase,
+        metric_ids: ['11111111-1111-1111-1111-111111111111'],
+        guardrail_metric_ids: ['22222222-2222-2222-2222-222222222222'],
+      },
+      'env-1',
+    )
+    expect(body.metric_ids).toEqual(['11111111-1111-1111-1111-111111111111'])
+    expect(body.guardrail_metric_ids).toEqual([
       '22222222-2222-2222-2222-222222222222',
-      '33333333-3333-3333-3333-333333333333',
-    ]
-    const body = buildExperimentCreateBody({ ...validBase, metric_ids: ids }, 'env-1')
-    expect(body.metric_ids).toEqual(ids)
+    ])
+  })
+
+  it('emits unit_context_types and pre_period_days', () => {
+    const body = buildExperimentCreateBody(
+      { ...validBase, unit_context_types: ['user', 'account'], pre_period_days: 14 },
+      'env-1',
+    )
+    expect(body.unit_context_types).toEqual(['user', 'account'])
+    expect(body.pre_period_days).toBe(14)
+  })
+
+  it('converts traffic_allocation from 0–100 percent to 0–1 float', () => {
+    const body = buildExperimentCreateBody(
+      { ...validBase, traffic_allocation: 25 },
+      'env-1',
+    )
+    expect(body.traffic_allocation).toBeCloseTo(0.25, 6)
+  })
+
+  it('trims and drops empty description', () => {
+    const body = buildExperimentCreateBody(
+      { ...validBase, description: '   ' },
+      'env-1',
+    )
+    expect(body.description).toBeUndefined()
+  })
+
+  it('sets environment_id', () => {
+    const body = buildExperimentCreateBody(validBase, 'env-99')
+    expect(body.environment_id).toBe('env-99')
+  })
+})
+
+describe('buildExperimentPatchBody', () => {
+  it('omits key + flag_id (immutable on edit)', () => {
+    const body = buildExperimentPatchBody(validBase)
+    expect(body.key).toBeUndefined()
+    expect(body.flag_id).toBeUndefined()
+    expect(body.environment_id).toBeUndefined()
+  })
+
+  it('emits explicit flag_rule_id null when switching to default-rule', () => {
+    const body = buildExperimentPatchBody({
+      ...validBase,
+      flag_rule_id: '',
+      targets_default_rule: true,
+    })
+    expect(body.flag_rule_id).toBeNull()
+    expect(body.targets_default_rule).toBe(true)
+  })
+
+  it('emits explicit targets_default_rule=false when switching to a rule', () => {
+    const body = buildExperimentPatchBody({
+      ...validBase,
+      targets_default_rule: false,
+    })
+    expect(body.targets_default_rule).toBe(false)
+    expect(body.flag_rule_id).toBe(validBase.flag_rule_id)
+  })
+})
+
+// ─── Module-shape grep tests ────────────────────────────────────────────────
+
+describe('CreateExperimentModal (module shape)', () => {
+  it('imports the Phase 10 schema from lib/validation/experiment', () => {
+    expect(SOURCE).toMatch(/from\s+['"][^'"]*lib\/validation\/experiment['"]/)
+  })
+
+  it('imports the helpers module', () => {
+    expect(SOURCE).toMatch(/from\s+['"]\.\/CreateExperimentModal\.helpers['"]/)
+  })
+
+  it('uses Formik with validateOnChange={false} for async-tolerant validation', () => {
+    expect(SOURCE).toMatch(/validateOnChange=\{false\}/)
+  })
+
+  it('uses enableReinitialize for edit mode', () => {
+    expect(SOURCE).toMatch(/enableReinitialize/)
+  })
+
+  it('renders the FormErrorBanner primitive for inline server errors', () => {
+    expect(SOURCE).toMatch(/FormErrorBanner/)
+  })
+
+  it('renders the rule picker, unit_context_types, guardrail, and pre_period inputs', () => {
+    // We don't depend on the exact JSX shape — just that each labeled
+    // field is present in the file. (Tests assert behaviour via helpers
+    // + schema; the grep confirms wiring is in place.)
+    expect(SOURCE).toMatch(/flag_rule_id|targets_default_rule|RulePicker/)
+    expect(SOURCE).toMatch(/unit_context_types/)
+    expect(SOURCE).toMatch(/guardrail_metric_ids/)
+    expect(SOURCE).toMatch(/pre_period_days/)
   })
 })

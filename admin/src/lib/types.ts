@@ -68,6 +68,9 @@ export interface ExperimentResponse {
   name: string
   description: string
   flag_key: string
+  /** Flag UUID (Phase 10 — surfaced for the list filter; optional until
+   *  gateway surfaces it everywhere). */
+  flag_id?: string
   status: string // "draft" | "running" | "stopped" | "completed"
   model: string // "frequentist" | "bayesian"
   /**
@@ -80,6 +83,11 @@ export interface ExperimentResponse {
   variants: number
   started_at: string | null
   ended_at: string | null
+  /** Optional ISO-8601 scheduled end. UI uses this to compute "days remaining"
+   *  on the experiments list. */
+  scheduled_end_at?: string | null
+  /** Optional list of context types declared on the experiment. */
+  unit_context_types?: string[]
   created_at: string
   updated_at: string
 }
