@@ -23,6 +23,7 @@ use stitchd_proto::experiments::v1::{
 };
 
 use crate::analytics_client::AnalyticsResultsPort;
+use crate::dict_refresh::{DictionaryRefresher, spawn_refresh};
 use crate::flag_client::FlagClient;
 
 // ---------------------------------------------------------------------------
@@ -95,6 +96,12 @@ pub struct ExperimentationServiceImpl {
     schedule_repo: Arc<dyn StatsScheduleRepository>,
     /// Optional Flag Service client. When `None`, flag verification is skipped.
     flag_client: Option<FlagClient>,
+    /// Optional CH dictionary refresher. When `Some`, every successful
+    /// transition fires `SYSTEM RELOAD DICTIONARY experiment_iterations_active`
+    /// so the attribution MV picks up the iteration change immediately.
+    /// `None` skips the refresh (the dictionary's LIFETIME caps staleness at
+    /// 60s in that case).
+    dictionary_refresher: Option<Arc<dyn DictionaryRefresher>>,
 }
 
 impl ExperimentationServiceImpl {
@@ -111,7 +118,18 @@ impl ExperimentationServiceImpl {
             analytics_client,
             schedule_repo,
             flag_client,
+            dictionary_refresher: None,
         }
+    }
+
+    /// Attach a ClickHouse dictionary refresher. Every successful
+    /// `transition_experiment` invocation will fire-and-forget a reload of
+    /// the `experiment_iterations_active` dictionary after the PG transition
+    /// lands.
+    #[must_use]
+    pub fn with_dictionary_refresher(mut self, refresher: Arc<dyn DictionaryRefresher>) -> Self {
+        self.dictionary_refresher = Some(refresher);
+        self
     }
 }
 
@@ -357,6 +375,14 @@ impl ExperimentationService for ExperimentationServiceImpl {
         // (`InvalidateFlagLockCache`) would let us push invalidations across
         // the wire — out of scope for the Phase 3 lock-enforcement work.
         // See `crates/stitchd-flag-service/src/flag_lock.rs` for the cache.
+
+        // Phase 4 attribution pipeline: ping CH to reload the
+        // `experiment_iterations_active` dictionary. Fire-and-forget — the
+        // dictionary's LIFETIME(MIN 30 MAX 60) refresh is the fallback if
+        // this call fails. Logging happens inside the spawned task.
+        if let Some(refresher) = self.dictionary_refresher.as_ref() {
+            spawn_refresh(refresher.clone());
+        }
 
         metrics::counter!("experimentation_service.transition_experiment.ok").increment(1);
         Ok(Response::new(core_to_proto(&updated)))
@@ -1907,6 +1933,113 @@ mod tests {
             last_computed_at_ms: 0,
         });
         let result = svc.update_iteration_last_computed(req).await;
+        assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // transition_experiment dictionary-refresh hook tests (Phase 4)
+    // -----------------------------------------------------------------------
+
+    /// Recording mock that counts refresher invocations.
+    struct RecordingRefresher {
+        count: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::dict_refresh::DictionaryRefresher for RecordingRefresher {
+        async fn reload_experiment_iterations_active(
+            &self,
+        ) -> Result<(), clickhouse::error::Error> {
+            self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    async fn await_count(count: &std::sync::atomic::AtomicUsize, expected: usize) {
+        for _ in 0..50 {
+            if count.load(std::sync::atomic::Ordering::SeqCst) >= expected {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!(
+            "expected refresher count >= {} but observed {}",
+            expected,
+            count.load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
+    /// Every successful transition fires `SYSTEM RELOAD DICTIONARY` exactly once.
+    #[tokio::test]
+    async fn test_transition_experiment_fires_dictionary_refresh_per_call() {
+        let (env_id, _env_str) = env_uuid();
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let refresher: Arc<dyn crate::dict_refresh::DictionaryRefresher> =
+            Arc::new(RecordingRefresher {
+                count: count.clone(),
+            });
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_dictionary_refresher(refresher);
+
+        // draft → running
+        let exp_id = ExperimentId::new();
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: exp_id.to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
+            environment_id: String::new(),
+            reason: String::new(),
+        });
+        svc.transition_experiment(req).await.expect("ok");
+        await_count(&count, 1).await;
+
+        // running → paused
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: exp_id.to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Paused as i32,
+            environment_id: String::new(),
+            reason: String::new(),
+        });
+        svc.transition_experiment(req).await.expect("ok");
+        await_count(&count, 2).await;
+
+        // paused → stopped
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: exp_id.to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Concluded as i32,
+            environment_id: String::new(),
+            reason: String::new(),
+        });
+        svc.transition_experiment(req).await.expect("ok");
+        await_count(&count, 3).await;
+
+        // stopped → running (restart)
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: exp_id.to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
+            environment_id: String::new(),
+            reason: String::new(),
+        });
+        svc.transition_experiment(req).await.expect("ok");
+        await_count(&count, 4).await;
+    }
+
+    /// When no refresher is attached, transitions still succeed.
+    #[tokio::test]
+    async fn test_transition_experiment_without_refresher_is_noop() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: ExperimentId::new().to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
+            environment_id: String::new(),
+            reason: String::new(),
+        });
+        let result = svc.transition_experiment(req).await;
         assert!(result.is_ok());
     }
 }
