@@ -162,6 +162,10 @@ use utoipa::{
             crate::routes::experiments::ExperimentJson,
             crate::routes::experiments::IterationJson,
             crate::routes::experiments::VariantResultJson,
+            crate::routes::experiments::SrmResultJson,
+            crate::routes::experiments::SrmPerVariantJson,
+            crate::routes::experiments::ContextTypeResultsJson,
+            crate::routes::experiments::BoundTargetJson,
             crate::routes::experiments::ExperimentResultsJson,
             // Stats
             crate::routes::stats::RecomputeJobJson,

@@ -13,12 +13,12 @@ use stitchd_core::{
 };
 use stitchd_db::{ExperimentRepository, StatsScheduleRepository};
 use stitchd_proto::experiments::v1::{
-    CreateExperimentRequest, DeleteExperimentRequest, ExperimentIteration as ProtoIteration,
-    ExperimentResults, GetExperimentIterationRequest, GetExperimentRequest, GetResultsRequest,
-    ListExperimentsRequest, ListExperimentsResponse, ListIterationsRequest, ListIterationsResponse,
-    ListRunningExperimentsRequest, RunningExperiment, TransitionExperimentRequest,
-    UpdateExperimentRequest, UpdateIterationLastComputedRequest,
-    UpdateIterationLastComputedResponse, VariantResult,
+    BoundTarget, ContextTypeResults, CreateExperimentRequest, DeleteExperimentRequest,
+    ExperimentIteration as ProtoIteration, ExperimentResults, GetExperimentIterationRequest,
+    GetExperimentRequest, GetResultsRequest, ListExperimentsRequest, ListExperimentsResponse,
+    ListIterationsRequest, ListIterationsResponse, ListRunningExperimentsRequest,
+    RunningExperiment, TransitionExperimentRequest, UpdateExperimentRequest,
+    UpdateIterationLastComputedRequest, UpdateIterationLastComputedResponse, VariantResult,
     experimentation_service_server::ExperimentationService,
 };
 
@@ -64,6 +64,70 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         metric_ids: i.metric_ids.iter().map(ToString::to_string).collect(),
         traffic_allocation: i.traffic_allocation,
     }
+}
+
+/// Map an SRM JSON payload (as written by stats-service) into the proto
+/// [`stitchd_proto::experiments::v1::SrmResult`] message.
+///
+/// Expected JSON shape (matches `stitchd_core::experimentation::stats::srm::SrmResult`):
+/// ```json
+/// {
+///   "per_variant": [
+///     { "variant_key": "control", "observed": 100, "expected": 100.0, "chi_sq_contribution": 0.0 }
+///   ],
+///   "overall_chi_sq": 0.0,
+///   "overall_chi_sq_p": 1.0,
+///   "health": "green" | "yellow" | "red"
+/// }
+/// ```
+fn srm_json_to_proto(
+    val: &serde_json::Value,
+) -> Option<stitchd_proto::experiments::v1::SrmResult> {
+    use stitchd_proto::experiments::v1::{SrmPerVariant, SrmResult};
+    let obj = val.as_object()?;
+    let per_variant = obj
+        .get("per_variant")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|row| SrmPerVariant {
+                    variant_key: row
+                        .get("variant_key")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    observed: row
+                        .get("observed")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0),
+                    expected: row
+                        .get("expected")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0),
+                    chi_sq_contribution: row
+                        .get("chi_sq_contribution")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(0.0),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(SrmResult {
+        per_variant,
+        overall_chi_sq: obj
+            .get("overall_chi_sq")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0),
+        overall_chi_sq_p: obj
+            .get("overall_chi_sq_p")
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(1.0),
+        health: obj
+            .get("health")
+            .and_then(|s| s.as_str())
+            .unwrap_or("green")
+            .to_lowercase(),
+    })
 }
 
 /// Map a core [`Experiment`] to the proto [`stitchd_proto::experiments::v1::Experiment`] message.
@@ -438,12 +502,48 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .await
             .map_err(|e| Status::internal(format!("analytics-service error: {e}")))?;
 
-        // Aggregate streamed ExperimentResult protos into VariantResult messages.
-        // variant_stats is a JSON string: {"<variant_key>": <participant_count>, ...}
-        // We build one VariantResult per variant across all metric rows.
+        // Aggregate streamed ExperimentResult protos into VariantResult messages
+        // bucketed BY CONTEXT TYPE (Phase 7). `variant_stats` is a JSON string
+        // either `{"<variant_key>": <count_or_obj>, ...}` (back-compat) or
+        // `{"<variant_key>": { "count": N, "lift": L, ... }, ...}` (Phase 6).
+        //
+        // The legacy `variant_results` field is also populated (flat, across
+        // context types) for back-compat with callers that haven't switched to
+        // `results_by_context_type` yet.
+        //
+        // Guardrail rows are identified via the metric_id membership in the
+        // experiment's `guardrail_metric_ids`. They are written by stats-service
+        // with the same shape as primaries; we split them into the
+        // `guardrails` bucket here.
         use std::collections::HashMap;
-        let mut by_variant: HashMap<String, VariantResult> = HashMap::new();
+        // Map<(context_type, variant_key), VariantResult> for primaries.
+        let mut by_ctx_variant: HashMap<(String, String), VariantResult> = HashMap::new();
+        // Map<(context_type, variant_key), VariantResult> for guardrails.
+        let mut guardrails_by_ctx_variant: HashMap<(String, String), VariantResult> =
+            HashMap::new();
+        // SRM JSON snapshots per context_type (any metric row may carry it; we
+        // overwrite — they should agree across rows for a given context type).
+        let mut srm_by_ctx: HashMap<String, serde_json::Value> = HashMap::new();
+        // Track which metric_ids are guardrails so we route rows accordingly.
+        // Fetched once below from the experiment row.
         let mut latest_computed_at_ms: i64 = 0;
+
+        // Fetch experiment to determine guardrail metric ids + bound_target + pre_period.
+        let experiment_record =
+            self.experiment_repo
+                .find_by_id(stitchd_core::id::ExperimentId::from_uuid(exp_id_uuid))
+                .await
+                .ok();
+
+        let guardrail_metric_ids: std::collections::HashSet<String> = experiment_record
+            .as_ref()
+            .map(|e| {
+                e.guardrail_metric_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
 
         for result in &results {
             // Parse computed_at RFC 3339 → milliseconds.
@@ -456,34 +556,82 @@ impl ExperimentationService for ExperimentationServiceImpl {
                 latest_computed_at_ms = computed_ms;
             }
 
+            let context_type = if result.context_type.is_empty() {
+                "user".to_string()
+            } else {
+                result.context_type.clone()
+            };
+
+            let is_guardrail = guardrail_metric_ids.contains(&result.metric_key);
+            let target = if is_guardrail {
+                &mut guardrails_by_ctx_variant
+            } else {
+                &mut by_ctx_variant
+            };
+
             // variant_stats is a JSON object string.
             let variant_stats: serde_json::Value =
                 serde_json::from_str(&result.variant_stats).unwrap_or(serde_json::Value::Null);
 
-            if let Some(obj) = variant_stats.as_object() {
-                for (variant_key, count_val) in obj {
-                    let participant_count = count_val.as_u64().unwrap_or(0);
-                    let entry =
-                        by_variant
-                            .entry(variant_key.clone())
-                            .or_insert_with(|| VariantResult {
-                                variant_key: variant_key.clone(),
-                                participant_count,
-                                metric_values: HashMap::new(),
-                                p_value: 0.0,
-                                p_value_present: false,
-                            });
+            // SRM payload — stats-service may attach it under top-level "srm"
+            // of the variant_stats JSON (Phase 6) or in a `srm_result` key.
+            if let Some(srm_val) = variant_stats.get("srm") {
+                srm_by_ctx
+                    .entry(context_type.clone())
+                    .or_insert_with(|| srm_val.clone());
+            }
 
-                    // Extract p_value from frequentist_result JSON string if present.
+            if let Some(obj) = variant_stats.as_object() {
+                for (variant_key, val) in obj {
+                    if variant_key == "srm" {
+                        continue;
+                    }
+                    let (participant_count, lift) = match val {
+                        serde_json::Value::Number(n) => (n.as_u64().unwrap_or(0), 0.0_f64),
+                        serde_json::Value::Object(map) => {
+                            let count = map
+                                .get("count")
+                                .or_else(|| map.get("participant_count"))
+                                .and_then(serde_json::Value::as_u64)
+                                .unwrap_or(0);
+                            let lift = map
+                                .get("lift")
+                                .and_then(serde_json::Value::as_f64)
+                                .unwrap_or(0.0);
+                            (count, lift)
+                        }
+                        _ => (0, 0.0),
+                    };
+
+                    let key = (context_type.clone(), variant_key.clone());
+                    let entry = target.entry(key).or_insert_with(|| VariantResult {
+                        variant_key: variant_key.clone(),
+                        participant_count,
+                        metric_values: HashMap::new(),
+                        p_value: 0.0,
+                        p_value_present: false,
+                        p_value_corrected: None,
+                        context_type: context_type.clone(),
+                        direction_violation: false,
+                        lift,
+                    });
+
+                    // Pull p_value (+ corrected) from frequentist_result JSON.
                     if let Some(freq_str) = &result.frequentist_result
                         && let Ok(freq_json) = serde_json::from_str::<serde_json::Value>(freq_str)
-                        && let Some(p_val) = freq_json.get("p_value").and_then(|v| v.as_f64())
                     {
-                        entry.p_value = p_val;
-                        entry.p_value_present = true;
+                        if let Some(p_val) = freq_json.get("p_value").and_then(|v| v.as_f64()) {
+                            entry.p_value = p_val;
+                            entry.p_value_present = true;
+                        }
+                        if let Some(p_corr) = freq_json
+                            .get("p_value_corrected")
+                            .and_then(|v| v.as_f64())
+                        {
+                            entry.p_value_corrected = Some(p_corr);
+                        }
                     }
 
-                    // Record participant_count as metric value.
                     entry
                         .metric_values
                         .insert(result.metric_key.clone(), participant_count as f64);
@@ -491,7 +639,67 @@ impl ExperimentationService for ExperimentationServiceImpl {
             }
         }
 
-        let variant_results: Vec<VariantResult> = by_variant.into_values().collect();
+        // Flat back-compat list (across context types + primaries only).
+        let variant_results: Vec<VariantResult> = by_ctx_variant.values().cloned().collect();
+
+        // Build per-context-type buckets.
+        let mut ctx_groups: HashMap<String, (Vec<VariantResult>, Vec<VariantResult>)> =
+            HashMap::new();
+        for ((ct, _), vr) in by_ctx_variant {
+            ctx_groups.entry(ct).or_default().0.push(vr);
+        }
+        for ((ct, _), vr) in guardrails_by_ctx_variant {
+            ctx_groups.entry(ct).or_default().1.push(vr);
+        }
+
+        let mut results_by_context_type: Vec<ContextTypeResults> = ctx_groups
+            .into_iter()
+            .map(|(context_type, (variants, guardrails))| {
+                let srm = srm_by_ctx
+                    .get(&context_type)
+                    .and_then(srm_json_to_proto);
+                ContextTypeResults {
+                    context_type,
+                    variants,
+                    srm,
+                    guardrails,
+                }
+            })
+            .collect();
+        // Deterministic ordering for stable test snapshots.
+        results_by_context_type.sort_by(|a, b| a.context_type.cmp(&b.context_type));
+
+        // Bound-target + pre_period_days from the experiment row.
+        let (bound_target, pre_period_days) = match &experiment_record {
+            Some(e) => {
+                let kind = if e.targets_default_rule {
+                    "default_rule"
+                } else {
+                    "rule"
+                };
+                let rule_id = e
+                    .flag_rule_id
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default();
+                let label = if e.targets_default_rule {
+                    "Default rule (fallthrough)".to_string()
+                } else {
+                    // Rule names live on the flag service; the gateway enriches
+                    // when needed. Default to the rule_id string here.
+                    rule_id.clone()
+                };
+                (
+                    Some(BoundTarget {
+                        kind: kind.to_string(),
+                        rule_id,
+                        label,
+                    }),
+                    e.pre_period_days,
+                )
+            }
+            None => (None, 0u32),
+        };
 
         // Fetch schedule for staleness metadata.
         let schedule = self
@@ -525,6 +733,9 @@ impl ExperimentationService for ExperimentationServiceImpl {
             is_stale,
             next_run_at_ms,
             computation_status,
+            results_by_context_type,
+            bound_target,
+            pre_period_days,
         }))
     }
 

@@ -11,9 +11,10 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use stitchd_proto::experiments::v1::{
-    CreateExperimentRequest, DeleteExperimentRequest, Experiment, ExperimentIteration,
-    ExperimentStatus, GetExperimentRequest, GetResultsRequest, ListExperimentsRequest,
-    ListIterationsRequest, TransitionExperimentRequest, UpdateExperimentRequest, VariantResult,
+    BoundTarget, ContextTypeResults, CreateExperimentRequest, DeleteExperimentRequest, Experiment,
+    ExperimentIteration, ExperimentStatus, GetExperimentRequest, GetResultsRequest,
+    ListExperimentsRequest, ListIterationsRequest, SrmResult as ProtoSrmResult,
+    TransitionExperimentRequest, UpdateExperimentRequest, VariantResult,
 };
 
 use crate::error::GatewayError;
@@ -95,16 +96,85 @@ pub struct ExperimentJson {
     pub variant_keys: Vec<String>,
 }
 
+/// Per-variant result row — used in both `variants` and `guardrails` buckets
+/// of a [`ContextTypeResultsJson`]. The `direction_violation` flag is only
+/// load-bearing for guardrail rows.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct VariantResultJson {
     pub variant_key: String,
     pub participant_count: u64,
+    /// Frequentist p-value when present; absent (omitted from JSON) otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p_value: Option<f64>,
+    /// Multiple-comparison-corrected p-value (Bonferroni); only set when
+    /// multiple metrics were analysed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p_value_corrected: Option<f64>,
+    /// Observed `treatment − control` lift. `0.0` for control rows.
+    pub lift: f64,
+    /// `true` only for guardrail rows that violate the metric's
+    /// `goal_direction`.
+    pub direction_violation: bool,
+    /// Attribution unit context type ("user", "account", …).
+    pub context_type: String,
+}
+
+/// SRM (Sample Ratio Mismatch) breakdown for one context type.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SrmPerVariantJson {
+    pub variant_key: String,
+    pub observed: u64,
+    pub expected: f64,
+    pub chi_sq_contribution: f64,
+}
+
+/// Aggregate SRM result for one context type's assignments.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SrmResultJson {
+    pub per_variant: Vec<SrmPerVariantJson>,
+    pub overall_chi_sq: f64,
+    pub overall_chi_sq_p: f64,
+    /// `"green"` | `"yellow"` | `"red"`
+    pub health: String,
+}
+
+/// One context-type's results bundle: variants, SRM, and guardrails computed
+/// independently per spec §3 "Per-context-type stats".
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ContextTypeResultsJson {
+    pub variants: Vec<VariantResultJson>,
+    /// Absent if SRM was not computed (e.g. legacy iterations).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub srm: Option<SrmResultJson>,
+    pub guardrails: Vec<VariantResultJson>,
+}
+
+/// Identifies what flag target the experiment is bound to — either a
+/// specific rule or the flag's default-rule fall-through. `rule_id` is
+/// `None` (omitted) when `kind == "default_rule"`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BoundTargetJson {
+    /// `"rule"` | `"default_rule"`
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<String>,
+    pub label: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ExperimentResultsJson {
     pub experiment_id: String,
-    pub variant_results: Vec<VariantResultJson>,
+    /// Per-context-type results bundles, keyed by `context_type` (e.g.
+    /// `"user"`, `"account"`). Each value carries variants + SRM +
+    /// guardrails for that context type. Empty `{}` when no rows have
+    /// been computed yet.
+    pub results_by_context_type:
+        std::collections::HashMap<String, ContextTypeResultsJson>,
+    /// What the experiment is bound to (rule vs default-rule).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bound_target: Option<BoundTargetJson>,
+    /// CUPED pre-period window in days; `0` disables variance reduction.
+    pub pre_period_days: u32,
     pub computed_at_ms: i64,
     pub is_stale: bool,
     pub next_run_at_ms: i64,
@@ -137,6 +207,57 @@ fn variant_result_to_json(v: &VariantResult) -> VariantResultJson {
     VariantResultJson {
         variant_key: v.variant_key.clone(),
         participant_count: v.participant_count,
+        p_value: if v.p_value_present {
+            Some(v.p_value)
+        } else {
+            None
+        },
+        p_value_corrected: v.p_value_corrected,
+        lift: v.lift,
+        direction_violation: v.direction_violation,
+        context_type: if v.context_type.is_empty() {
+            "user".to_string()
+        } else {
+            v.context_type.clone()
+        },
+    }
+}
+
+fn srm_result_to_json(s: &ProtoSrmResult) -> SrmResultJson {
+    SrmResultJson {
+        per_variant: s
+            .per_variant
+            .iter()
+            .map(|r| SrmPerVariantJson {
+                variant_key: r.variant_key.clone(),
+                observed: r.observed,
+                expected: r.expected,
+                chi_sq_contribution: r.chi_sq_contribution,
+            })
+            .collect(),
+        overall_chi_sq: s.overall_chi_sq,
+        overall_chi_sq_p: s.overall_chi_sq_p,
+        health: s.health.clone(),
+    }
+}
+
+fn context_type_results_to_json(c: &ContextTypeResults) -> ContextTypeResultsJson {
+    ContextTypeResultsJson {
+        variants: c.variants.iter().map(variant_result_to_json).collect(),
+        srm: c.srm.as_ref().map(srm_result_to_json),
+        guardrails: c.guardrails.iter().map(variant_result_to_json).collect(),
+    }
+}
+
+fn bound_target_to_json(b: &BoundTarget) -> BoundTargetJson {
+    BoundTargetJson {
+        kind: b.kind.clone(),
+        rule_id: if b.rule_id.is_empty() {
+            None
+        } else {
+            Some(b.rule_id.clone())
+        },
+        label: b.label.clone(),
     }
 }
 
@@ -695,13 +816,42 @@ pub async fn get_results(
     let mut client = state.experimentation_client.lock().await;
     let resp = client.get_results(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
+
+    let mut results_by_context_type =
+        std::collections::HashMap::<String, ContextTypeResultsJson>::new();
+    for bundle in &inner.results_by_context_type {
+        results_by_context_type.insert(
+            bundle.context_type.clone(),
+            context_type_results_to_json(bundle),
+        );
+    }
+    // Back-compat: when the experimentation service did not populate the
+    // per-context-type bundles (e.g. legacy iterations) but did return a flat
+    // `variant_results` list, synthesise a single bucket keyed by
+    // each row's `context_type` (defaulting to "user").
+    if results_by_context_type.is_empty() && !inner.variant_results.is_empty() {
+        for vr in &inner.variant_results {
+            let ct = if vr.context_type.is_empty() {
+                "user".to_string()
+            } else {
+                vr.context_type.clone()
+            };
+            let bucket = results_by_context_type
+                .entry(ct)
+                .or_insert_with(|| ContextTypeResultsJson {
+                    variants: Vec::new(),
+                    srm: None,
+                    guardrails: Vec::new(),
+                });
+            bucket.variants.push(variant_result_to_json(vr));
+        }
+    }
+
     let results = ExperimentResultsJson {
         experiment_id: inner.experiment_id.clone(),
-        variant_results: inner
-            .variant_results
-            .iter()
-            .map(variant_result_to_json)
-            .collect(),
+        results_by_context_type,
+        bound_target: inner.bound_target.as_ref().map(bound_target_to_json),
+        pre_period_days: inner.pre_period_days,
         computed_at_ms: inner.computed_at_ms,
         is_stale: inner.is_stale,
         next_run_at_ms: inner.next_run_at_ms,
@@ -782,6 +932,91 @@ mod tests {
         let j = variant_result_to_json(&vr);
         assert_eq!(j.variant_key, "control");
         assert_eq!(j.participant_count, 42);
+        assert!(j.p_value.is_none());
+        assert!(j.p_value_corrected.is_none());
+        assert!((j.lift - 0.0).abs() < f64::EPSILON);
+        assert!(!j.direction_violation);
+        // Empty context_type defaults to "user".
+        assert_eq!(j.context_type, "user");
+    }
+
+    #[test]
+    fn variant_result_to_json_propagates_p_values_and_lift() {
+        let vr = VariantResult {
+            variant_key: "treatment".to_string(),
+            participant_count: 1024,
+            p_value: 0.03,
+            p_value_present: true,
+            p_value_corrected: Some(0.09),
+            context_type: "account".to_string(),
+            direction_violation: true,
+            lift: -0.12,
+            ..Default::default()
+        };
+        let j = variant_result_to_json(&vr);
+        assert_eq!(j.p_value, Some(0.03));
+        assert_eq!(j.p_value_corrected, Some(0.09));
+        assert_eq!(j.context_type, "account");
+        assert!(j.direction_violation);
+        assert!((j.lift - (-0.12)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bound_target_to_json_omits_empty_rule_id() {
+        let bt = BoundTarget {
+            kind: "default_rule".to_string(),
+            rule_id: String::new(),
+            label: "Default rule (fallthrough)".to_string(),
+        };
+        let j = bound_target_to_json(&bt);
+        assert_eq!(j.kind, "default_rule");
+        assert!(j.rule_id.is_none());
+        assert_eq!(j.label, "Default rule (fallthrough)");
+    }
+
+    #[test]
+    fn bound_target_to_json_round_trips_rule_id() {
+        let rid = "11111111-2222-3333-4444-555555555555".to_string();
+        let bt = BoundTarget {
+            kind: "rule".to_string(),
+            rule_id: rid.clone(),
+            label: rid.clone(),
+        };
+        let j = bound_target_to_json(&bt);
+        assert_eq!(j.rule_id.as_deref(), Some(rid.as_str()));
+    }
+
+    #[test]
+    fn context_type_results_to_json_renders_variants_srm_and_guardrails() {
+        let bundle = ContextTypeResults {
+            context_type: "user".to_string(),
+            variants: vec![VariantResult {
+                variant_key: "control".to_string(),
+                participant_count: 100,
+                context_type: "user".to_string(),
+                ..Default::default()
+            }],
+            srm: Some(ProtoSrmResult {
+                per_variant: vec![],
+                overall_chi_sq: 1.5,
+                overall_chi_sq_p: 0.22,
+                health: "green".to_string(),
+            }),
+            guardrails: vec![VariantResult {
+                variant_key: "treatment".to_string(),
+                participant_count: 99,
+                direction_violation: true,
+                lift: -0.5,
+                context_type: "user".to_string(),
+                ..Default::default()
+            }],
+        };
+        let j = context_type_results_to_json(&bundle);
+        assert_eq!(j.variants.len(), 1);
+        assert_eq!(j.guardrails.len(), 1);
+        let srm = j.srm.expect("srm present");
+        assert_eq!(srm.health, "green");
+        assert!(j.guardrails[0].direction_violation);
     }
 
     #[test]
