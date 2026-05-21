@@ -3,33 +3,17 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useTweaks } from '../../hooks/useTweaks'
 import { PageHeader } from '../../components/primitives'
 import { I } from '../../components/icons'
-import { EXPERIMENTS } from '../../lib/mockData'
-import type { Experiment } from '../../lib/mockData'
 import { useOrgContext } from '../../context/OrgContext'
-import { api } from '../../lib/api'
+import { getExperiment, getExperimentResults, api } from '../../lib/api'
+import type { ExperimentSummary } from '../../lib/api'
+import type { ExperimentResults } from '../../lib/types'
 import { extractErrorMessage } from '../../lib/errors'
-
-interface ExperimentResponse {
-  experiment_id: string
-  environment_id: string
-  key: string
-  name: string
-  description: string
-  flag_key: string
-  status: string
-  model: string
-  /**
-   * UUID list of `metric_definitions` rows attached to this experiment.
-   * Phase 7 cutover replaced the legacy `primary_metric: string` (event-key)
-   * field — see `experiments.metric_ids UUID[]` in Postgres.
-   */
-  metric_ids: string[]
-  variants: number
-  started_at: string | null
-  ended_at: string | null
-  created_at: string
-  updated_at: string
-}
+import {
+  buildExperimentDisplay,
+  listContextTypes,
+  pickContextTypeResult,
+} from './ExperimentDetail.helpers'
+import type { ExperimentDisplay } from './ExperimentDetail.helpers'
 
 /**
  * Minimal projection of a `metric_definitions` row used by ExperimentDetail
@@ -41,16 +25,23 @@ interface MetricNameRow {
   kind: 'aggregation' | 'ratio' | 'funnel'
 }
 
-interface ExperimentResults {
-  experiment_id: string
-  computed_at: string
-  lift: string
-  confidence: number
-  samples: number
-  remaining: string
-}
-
 type Tab = 'results' | 'config' | 'metrics' | 'events'
+
+/**
+ * Adapter shape consumed by the Phase 8 mock-flavoured viz subcomponents.
+ *
+ * Phase 9 will rewrite `BayesianViz`, `VariantBreakdown`, and
+ * `MultiVariantMatrix` to read directly from `ExperimentResults`. Until then,
+ * this adapter folds the live API responses through `buildExperimentDisplay`
+ * into a structure the legacy viz components expect — so we drop the
+ * legacy mock-data dependency without invasive viz rewrites.
+ */
+interface VizAdapter {
+  /** Number of variants in the experiment (control + treatments). */
+  variants: number
+  /** Confidence as an integer percent — drives both P(beats control) and badge thresholds. */
+  confidence: number
+}
 
 // ─── Frequentist visualization ───────────────────────────────────────────────
 
@@ -116,14 +107,14 @@ function FrequentistViz() {
 
 // ─── Bayesian visualization ──────────────────────────────────────────────────
 
-function BayesianViz({ exp }: { exp: Experiment }) {
-  const isMulti = exp.variants > 2
+function BayesianViz({ adapter }: { adapter: VizAdapter }) {
+  const isMulti = adapter.variants > 2
   return (
     <div className="split-2">
       <div className="card">
         <div className="card-header">
           <div className="card-title">Posterior distributions</div>
-          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{isMulti ? `${exp.variants} arms` : `P(variant > control) = ${exp.confidence}%`}</span>
+          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{isMulti ? `${adapter.variants} arms` : `P(variant > control) = ${adapter.confidence}%`}</span>
         </div>
         <div style={{ padding: 18 }}>
           <svg viewBox="0 0 600 220" style={{ width: '100%' }}>
@@ -174,7 +165,7 @@ function BayesianViz({ exp }: { exp: Experiment }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
             <div style={{ padding: 12, background: 'var(--success-bg)', borderRadius: 8, border: '1px solid rgba(17,122,61,0.25)' }}>
               <div style={{ fontSize: 10, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>{isMulti ? 'P(variant-b is best)' : 'P(beats control)'}</div>
-              <div style={{ fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 800, color: 'var(--success)' }}>{isMulti ? '85%' : `${exp.confidence}%`}</div>
+              <div style={{ fontFamily: 'var(--font-display)', fontSize: 28, fontWeight: 800, color: 'var(--success)' }}>{isMulti ? '85%' : `${adapter.confidence}%`}</div>
             </div>
             <div style={{ padding: 12, background: 'var(--bg-sunken)', borderRadius: 8 }}>
               <div style={{ fontSize: 10, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Expected loss</div>
@@ -205,15 +196,15 @@ function BayesianViz({ exp }: { exp: Experiment }) {
 
 const PALETTE = ['#8B8D96', '#F0461F', '#5BAEF5', '#3DD68C', '#A892FF']
 
-function VariantBreakdown({ exp, useBayesian }: { exp: Experiment; useBayesian: boolean }) {
-  const v3 = exp.variants > 2
+function VariantBreakdown({ adapter, useBayesian }: { adapter: VizAdapter; useBayesian: boolean }) {
+  const v3 = adapter.variants > 2
   const variants = v3 ? [
     { name: 'control', alloc: 34, samples: '40,812', rate: '9.84%', mean: '$24.10', winner: false, vsControl: '—', ci: '[9.31%, 10.39%]' },
     { name: 'variant-a', alloc: 33, samples: '39,694', rate: '10.21%', mean: '$25.88', winner: false, vsControl: useBayesian ? '62%' : '0.184', ci: '[−0.6%, +5.1%]', lift: '+3.8%' },
     { name: 'variant-b', alloc: 33, samples: '39,901', rate: '12.04%', mean: '$28.92', winner: true, vsControl: useBayesian ? '94%' : '0.012', ci: '[+1.4%, +6.8%]', lift: '+22.4%' },
   ] : [
     { name: 'control', alloc: 50, samples: '206,418', rate: '11.42%', mean: '$28.41', winner: false, vsControl: '—', ci: '[10.92%, 11.94%]' },
-    { name: 'variant-a', alloc: 50, samples: '205,997', rate: '11.96%', mean: '$29.74', winner: true, vsControl: useBayesian ? `${exp.confidence}%` : '0.0023', ci: '[+1.2%, +8.3%]', lift: '+4.7%' },
+    { name: 'variant-a', alloc: 50, samples: '205,997', rate: '11.96%', mean: '$29.74', winner: true, vsControl: useBayesian ? `${adapter.confidence}%` : '0.0023', ci: '[+1.2%, +8.3%]', lift: '+4.7%' },
   ]
 
   return (
@@ -351,26 +342,26 @@ function MultiVariantMatrix({ useBayesian }: { useBayesian: boolean }) {
 
 // ─── Config tab ──────────────────────────────────────────────────────────────
 
-function ExpConfig({ exp, metricNames }: { exp: Experiment; metricNames: string[] }) {
+function ExpConfig({ display, metricNames }: { display: ExperimentDisplay; metricNames: string[] }) {
   // Phase 7 cutover: display the resolved metric names (from
   // `metric_definitions.name`) instead of the legacy free-form `primary_metric`
-  // event key. Falls back to the mock-data `exp.primary` until the experiment
-  // API surfaces `metric_ids`.
-  const primaryLabel = metricNames[0] ?? exp.primary
+  // event key. Falls back to the raw metric_id when name resolution hasn't
+  // landed yet.
+  const primaryLabel = metricNames[0] ?? display.primary
   const secondary = metricNames.slice(1)
   const rows: [string, React.ReactNode][] = [
-    ['Bound flag', <span className="mono-key">{exp.flag}</span>],
-    ['Statistical model', <span className="badge">{exp.model}</span>],
+    ['Bound flag', <span className="mono-key">{display.flag}</span>],
+    ['Statistical model', <span className="badge">{display.model}</span>],
     ['Primary metric', <span style={{ fontWeight: 600 }}>{primaryLabel}</span>],
     [
       'Secondary metrics',
       secondary.length > 0
         ? <span style={{ fontSize: 12 }}>{secondary.join(' · ')}</span>
-        : <span style={{ fontSize: 12 }}>cart_value (sum) · session_minutes (avg)</span>,
+        : <span style={{ fontSize: 12, color: 'var(--fg-muted)' }}>—</span>,
     ],
     ['Allocation', <span style={{ fontFamily: 'var(--font-mono)' }}>50 / 50</span>],
     ['Targeting', <span style={{ fontSize: 12 }}>segment <span className="mono-key">beta-customers</span> AND country in [US, CA]</span>],
-    ['Duration', <span>14 days (started {exp.started})</span>],
+    ['Duration', <span>14 days (started {display.started})</span>],
     ['Min sample size', <span style={{ fontFamily: 'var(--font-mono)' }}>380,000</span>],
     ['MDE', <span style={{ fontFamily: 'var(--font-mono)' }}>2.0%</span>],
     ['α / β', <span style={{ fontFamily: 'var(--font-mono)' }}>0.05 / 0.20</span>],
@@ -421,30 +412,67 @@ export function ExperimentDetail() {
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
   const { envId, orgId } = useOrgContext()
-  const [apiExp, setApiExp] = useState<ExperimentResponse | null>(null)
+  const [apiExp, setApiExp] = useState<ExperimentSummary | null>(null)
   const [apiResults, setApiResults] = useState<ExperimentResults | null>(null)
   const [apiLoading, setApiLoading] = useState(false)
   const [apiError, setApiError] = useState<string | null>(null)
   const [metricNames, setMetricNames] = useState<string[]>([])
 
+  // Active context type — defaults from localStorage, then first key in
+  // results_by_context_type, falling back to 'user' if results haven't
+  // loaded yet. Task 8.3 will lift this into a provider.
+  const storageKey = key ? `experiment_${key}_ctx` : null
+  const [activeContextType, setActiveContextType] = useState<string | null>(() => {
+    if (typeof window === 'undefined' || !storageKey) return null
+    return localStorage.getItem(storageKey)
+  })
+
   useEffect(() => {
     if (!envId || !key) return
     setApiLoading(true)
     setApiError(null)
-    api.get<ExperimentResponse>(`/v1/environments/${envId}/experiments/${key}`)
-      .then(({ data }) => {
-        setApiExp(data)
-        return api.get<ExperimentResults>(`/v1/environments/${envId}/experiments/${key}/results`)
-          .then(({ data: results }) => setApiResults(results))
-          .catch(() => { /* results may not exist yet */ })
+    const ctrl = new AbortController()
+    Promise.all([
+      getExperiment(envId, key, ctrl.signal),
+      getExperimentResults(envId, key, ctrl.signal).catch((err) => {
+        // 409 = no completed iteration yet, 404 = no results endpoint result.
+        // Both are non-fatal — render the page with summary-only data.
+        if (ctrl.signal.aborted) throw err
+        return null
+      }),
+    ])
+      .then(([exp, results]) => {
+        setApiExp(exp)
+        setApiResults(results)
       })
-      .catch((err) => setApiError(extractErrorMessage(err)))
-      .finally(() => setApiLoading(false))
+      .catch((err) => {
+        if (ctrl.signal.aborted) return
+        setApiError(extractErrorMessage(err))
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setApiLoading(false)
+      })
+    return () => ctrl.abort()
   }, [envId, key])
 
+  // Persist active context type when it changes.
+  useEffect(() => {
+    if (storageKey && activeContextType) {
+      localStorage.setItem(storageKey, activeContextType)
+    }
+  }, [storageKey, activeContextType])
+
+  // Once results load, ensure the active context type points at a real key.
+  useEffect(() => {
+    if (!apiResults) return
+    const types = listContextTypes(apiResults)
+    if (types.length === 0) return
+    if (!activeContextType || !types.includes(activeContextType)) {
+      setActiveContextType(types[0])
+    }
+  }, [apiResults, activeContextType])
+
   // Phase 7: resolve metric IDs → names by fetching the metric list once.
-  // The IDs are returned alongside the experiment by the gateway; the list
-  // call is scoped to the active environment and capped at 200 metrics.
   useEffect(() => {
     const ids = apiExp?.metric_ids
     if (!envId || !ids || ids.length === 0) {
@@ -462,31 +490,34 @@ export function ExperimentDetail() {
         setMetricNames(ids.map((id) => byId.get(id) ?? id))
       })
       .catch(() => {
-        // Best-effort — config tab falls back to mock data.
+        // Best-effort — config tab falls back to the raw metric_id.
       })
     return () => ctrl.abort()
   }, [envId, apiExp])
 
-  // Fall back to mock data while API data loads
-  const exp = EXPERIMENTS.find((e) => e.key === key) ?? EXPERIMENTS[0]
   const [tab, setTab] = useState<Tab>('results')
   const [vizOverride, setVizOverride] = useState<'auto' | 'frequentist' | 'bayesian'>(tweaks.expViz)
 
+  // The viz toggle picks Bayesian when:
+  //   • explicit override is bayesian, OR
+  //   • auto + experiment is bayesian, OR
+  //   • global tweak is bayesian and no explicit override
   const useBayesian =
     vizOverride === 'bayesian' ||
-    (vizOverride === 'auto' && (apiExp?.model === 'bayesian' || exp.model === 'Bayesian')) ||
+    (vizOverride === 'auto' && apiExp?.model === 'bayesian') ||
     (vizOverride !== 'frequentist' && tweaks.expViz === 'bayesian')
 
-  const displayName = apiExp?.name ?? exp.name
-  const displayKey = apiExp?.key ?? exp.key
-  const displayStatus = apiExp?.status ?? exp.state
-  const displayLift = apiResults?.lift ?? exp.lift
-  const displayConfidence = apiResults?.confidence ?? exp.confidence
-  const displaySamples = apiResults ? String(apiResults.samples) : exp.samples
-  const displayRemaining = apiResults?.remaining ?? exp.remaining
-  const displayModel = apiExp?.model ?? exp.model
-  const displayFlag = apiExp?.flag_key ?? exp.flag
-  const displayStarted = apiExp?.started_at ? new Date(apiExp.started_at).toLocaleDateString() : exp.started
+  // Build the display model from real API responses — Phase 9 will replace
+  // the remaining placeholder "—" / 0 fields with iteration-aware values.
+  const display = buildExperimentDisplay(apiExp, apiResults, activeContextType, useBayesian)
+  const adapter: VizAdapter = {
+    variants: display.variants,
+    confidence: display.confidence,
+  }
+
+  // Picked block — used to drive samples accurately when results are present.
+  const picked = pickContextTypeResult(apiResults, activeContextType)
+  const sampleCount = picked?.block.variants.reduce((a, v) => a + (v.sample_size ?? 0), 0) ?? 0
 
   if (apiLoading) {
     return (
@@ -496,23 +527,27 @@ export function ExperimentDetail() {
     )
   }
 
-  if (apiError) {
+  if (apiError || !apiExp) {
     return (
       <div className="page-body">
         <div style={{ padding: '12px 16px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 8, color: 'var(--danger)', fontSize: 13 }}>
           <I.alert size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />
-          {apiError}
+          {apiError ?? 'Experiment not found'}
         </div>
       </div>
     )
   }
+
+  const displayName = apiExp.name
+  const displayKey = apiExp.key
+  const displayStatus = apiExp.status
 
   return (
     <>
       <PageHeader
         crumbs={[<a key="1" onClick={() => navigate(`/org/${orgId}/experiments`)} style={{ cursor: 'pointer' }}>Experiments</a>, displayKey]}
         title={displayName}
-        subtitle={`Bound to flag ${displayFlag} · ${displayModel} model · started ${displayStarted}`}
+        subtitle={`Bound to flag ${display.flag} · ${display.model} model · started ${display.started}`}
         badge={<span className={`badge ${displayStatus === 'running' ? 'info' : 'success'}`}>{displayStatus}</span>}
         actions={
           <>
@@ -522,7 +557,7 @@ export function ExperimentDetail() {
                 <button className="btn danger"><I.pause size={13} /> Stop</button>
               </>
             )}
-            {displayStatus === 'running' && displayConfidence >= 95 && (
+            {displayStatus === 'running' && display.confidence >= 95 && (
               <button className="btn primary"><I.rocket size={13} /> Ship winner</button>
             )}
           </>
@@ -532,7 +567,7 @@ export function ExperimentDetail() {
         <div className="tabs">
           <button className={`tab ${tab === 'results' ? 'active' : ''}`} onClick={() => setTab('results')}>Results</button>
           <button className={`tab ${tab === 'config' ? 'active' : ''}`} onClick={() => setTab('config')}>Configuration</button>
-          <button className={`tab ${tab === 'metrics' ? 'active' : ''}`} onClick={() => setTab('metrics')}>Metrics <span className="count">3</span></button>
+          <button className={`tab ${tab === 'metrics' ? 'active' : ''}`} onClick={() => setTab('metrics')}>Metrics <span className="count">{metricNames.length || apiExp.metric_ids.length || 0}</span></button>
           <button className={`tab ${tab === 'events' ? 'active' : ''}`} onClick={() => setTab('events')}>Events</button>
         </div>
 
@@ -554,28 +589,37 @@ export function ExperimentDetail() {
             </div>
 
             <div className="stat-grid" style={{ marginBottom: 14 }}>
-              <div className="stat"><div className="stat-label">Lift (relative)</div><div className="stat-value" style={{ color: 'var(--success)' }}>{displayLift}</div><div className="stat-delta">vs control</div></div>
-              <div className="stat"><div className="stat-label">{useBayesian ? 'P(variant > control)' : 'P-value'}</div><div className="stat-value">{useBayesian ? `${displayConfidence}%` : '0.0023'}</div><div className="stat-delta">{useBayesian ? 'Bayesian posterior' : 'two-sided'}</div></div>
-              <div className="stat"><div className="stat-label">Samples</div><div className="stat-value">{displaySamples}</div><div className="stat-delta">control + {exp.variants - 1} variant{exp.variants > 2 ? 's' : ''}</div></div>
-              <div className="stat"><div className="stat-label">Time remaining</div><div className="stat-value" style={{ fontSize: 22 }}>{displayRemaining}</div><div className="stat-delta">{displayRemaining === 'ready' ? 'min sample size reached' : 'of 14d'}</div></div>
+              <div className="stat"><div className="stat-label">Lift (relative)</div><div className="stat-value" style={{ color: 'var(--success)' }}>{display.lift}</div><div className="stat-delta">vs control</div></div>
+              <div className="stat"><div className="stat-label">{useBayesian ? 'P(variant > control)' : 'P-value'}</div><div className="stat-value">{useBayesian ? `${display.confidence}%` : (display.confidence > 0 ? (1 - display.confidence / 100).toFixed(4) : '—')}</div><div className="stat-delta">{useBayesian ? 'Bayesian posterior' : 'two-sided'}</div></div>
+              <div className="stat"><div className="stat-label">Samples</div><div className="stat-value">{sampleCount > 0 ? sampleCount.toLocaleString('en-US') : display.samples}</div><div className="stat-delta">control + {display.variants - 1} variant{display.variants > 2 ? 's' : ''}</div></div>
+              <div className="stat"><div className="stat-label">Time remaining</div><div className="stat-value" style={{ fontSize: 22 }}>{display.remaining}</div><div className="stat-delta">{display.remaining === 'ready' ? 'min sample size reached' : 'of 14d'}</div></div>
             </div>
 
-            {useBayesian ? <BayesianViz exp={exp} /> : <FrequentistViz />}
-            <VariantBreakdown exp={exp} useBayesian={useBayesian} />
-            {exp.variants > 2 && <MultiVariantMatrix useBayesian={useBayesian} />}
+            {useBayesian ? <BayesianViz adapter={adapter} /> : <FrequentistViz />}
+            <VariantBreakdown adapter={adapter} useBayesian={useBayesian} />
+            {display.variants > 2 && <MultiVariantMatrix useBayesian={useBayesian} />}
           </>
         )}
 
-        {tab === 'config' && <ExpConfig exp={exp} metricNames={metricNames} />}
+        {tab === 'config' && <ExpConfig display={display} metricNames={metricNames} />}
 
         {tab === 'metrics' && (
           <div className="card">
             <table className="table">
               <thead><tr><th>Metric</th><th>Type</th><th>Aggregation</th><th>Role</th><th>Threshold</th></tr></thead>
               <tbody>
-                <tr><td><span className="mono-key">checkout_completed</span></td><td><span className="type-pill bool">bool</span></td><td>conversion rate</td><td><span className="badge accent">primary</span></td><td>+2% MDE</td></tr>
-                <tr><td><span className="mono-key">cart_value</span></td><td><span className="type-pill double">double</span></td><td>sum</td><td><span className="badge">secondary</span></td><td>—</td></tr>
-                <tr><td><span className="mono-key">session_minutes</span></td><td><span className="type-pill double">double</span></td><td>p50, mean</td><td><span className="badge">guardrail</span></td><td>−5% drop alerts</td></tr>
+                {(metricNames.length > 0 ? metricNames : apiExp.metric_ids).map((m, i) => (
+                  <tr key={m}>
+                    <td><span className="mono-key">{m}</span></td>
+                    <td><span className="type-pill bool">—</span></td>
+                    <td>—</td>
+                    <td><span className={`badge ${i === 0 ? 'accent' : ''}`}>{i === 0 ? 'primary' : 'secondary'}</span></td>
+                    <td>—</td>
+                  </tr>
+                ))}
+                {apiExp.metric_ids.length === 0 && (
+                  <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--fg-muted)', padding: 24 }}>No metrics attached</td></tr>
+                )}
               </tbody>
             </table>
           </div>
