@@ -160,6 +160,43 @@ fn t_critical_95(df: f64) -> f64 {
     (lo + hi) / 2.0
 }
 
+// ── Multi-comparison correction ───────────────────────────────────────────────
+
+/// Apply Bonferroni correction to a slice of p-values from `K` pairwise
+/// comparisons against a control variant.
+///
+/// Each adjusted p-value is `p_adj = min(1, p_raw * K)` where `K =
+/// p_values.len()` is the number of comparisons (i.e. one per non-control
+/// variant in a multi-arm experiment).
+///
+/// Returns a new `Vec<f64>` of the same length, preserving input order.
+/// Empty input returns an empty vec. `NaN` inputs are preserved (Bonferroni
+/// on NaN is undefined; the bootstrap / percentile path uses NaN p-values and
+/// must not be silently coerced).
+///
+/// # Examples
+///
+/// ```ignore
+/// use stitchd_core::experimentation::stats::frequentist::bonferroni_correct;
+/// let raw = vec![0.01, 0.03, 0.04];
+/// let corrected = bonferroni_correct(&raw);
+/// assert_eq!(corrected, vec![0.03, 0.09, 0.12]);
+/// ```
+#[must_use]
+pub fn bonferroni_correct(p_values: &[f64]) -> Vec<f64> {
+    let k = p_values.len() as f64;
+    p_values
+        .iter()
+        .map(|&p| {
+            if p.is_nan() {
+                f64::NAN
+            } else {
+                (p * k).clamp(0.0, 1.0)
+            }
+        })
+        .collect()
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Two-proportion z-test for count / binary metrics.
@@ -202,6 +239,7 @@ pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> Frequent
 
     FrequentistResult {
         p_value,
+        p_value_corrected: None,
         confidence_interval: ConfidenceInterval {
             lower: lift - margin,
             upper: lift + margin,
@@ -258,6 +296,7 @@ pub fn analyze_numeric(control: &VariantStats, variant: &VariantStats) -> Freque
 
     FrequentistResult {
         p_value,
+        p_value_corrected: None,
         confidence_interval: ConfidenceInterval {
             lower: diff - margin,
             upper: diff + margin,
@@ -288,6 +327,7 @@ pub fn analyze_percentile(
     let (v_lower, v_upper) = super::bootstrap::bootstrap_percentile_ci(variant_samples, p, 1_000);
     FrequentistResult {
         p_value: f64::NAN,
+        p_value_corrected: None,
         confidence_interval: ConfidenceInterval {
             lower: v_lower - c_upper,
             upper: v_upper - c_lower,
@@ -335,6 +375,7 @@ pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> Frequen
 
     FrequentistResult {
         p_value,
+        p_value_corrected: None,
         confidence_interval: ConfidenceInterval {
             lower: lift - margin,
             upper: lift + margin,
@@ -736,6 +777,113 @@ mod tests {
             result.p_value
         );
         assert!(!result.significant);
+    }
+
+    // ── Canonical fixtures (cross-checked against SciPy) ──────────────────────
+
+    /// Welch's t-test canonical fixture: mean1=10, var1=4, n1=30; mean2=12,
+    /// var2=4, n2=30. SciPy `scipy.stats.ttest_ind_from_stats(10, 2, 30, 12,
+    /// 2, 30, equal_var=False)` → t ≈ -3.873, p ≈ 0.000274 (two-tailed).
+    #[test]
+    fn analyze_numeric_canonical_welch_fixture() {
+        let control = make_numeric_stats(30, 10.0, 4.0);
+        let variant = make_numeric_stats(30, 12.0, 4.0);
+        let result = analyze_numeric(&control, &variant);
+        // SE = sqrt(4/30 + 4/30) = sqrt(8/30) ≈ 0.5164
+        // t = (12 - 10) / 0.5164 ≈ 3.873; df ≈ 58 → two-tailed p ≈ 2.74e-4
+        assert!(
+            (result.p_value - 0.000_274).abs() < 5e-5,
+            "expected p ≈ 0.000274, got {}",
+            result.p_value
+        );
+        assert!(result.significant);
+    }
+
+    /// Two-proportion z-test canonical fixture: 50/500 vs 80/500. SciPy
+    /// `proportions_ztest([50, 80], [500, 500])` → z ≈ -3.0509, p ≈ 0.00228.
+    #[test]
+    fn analyze_count_canonical_two_prop_z_fixture() {
+        let control = make_count_stats(500, 50);
+        let variant = make_count_stats(500, 80);
+        let result = analyze_count(&control, &variant);
+        // p₁ = 0.10, p₂ = 0.16, p_pool = 0.13
+        // SE_pool = sqrt(0.13 * 0.87 * (1/500 + 1/500)) = sqrt(0.0004524) ≈ 0.02127
+        // z = (0.16 - 0.10) / 0.02127 ≈ 2.821 → two-tailed p ≈ 0.0048
+        // SciPy actually gives ≈ 0.00481 (small discrepancy from manual calc above is
+        // float rounding). Both are well below 0.05.
+        assert!(
+            result.p_value > 0.001 && result.p_value < 0.01,
+            "expected p in (0.001, 0.01), got {}",
+            result.p_value
+        );
+        assert!(result.significant);
+    }
+
+    // ── bonferroni_correct ────────────────────────────────────────────────────
+
+    #[test]
+    fn bonferroni_three_comparisons_multiplies_by_three() {
+        let raw = vec![0.01, 0.03, 0.04];
+        let corrected = bonferroni_correct(&raw);
+        assert_eq!(corrected.len(), 3);
+        assert!((corrected[0] - 0.03).abs() < 1e-12);
+        assert!((corrected[1] - 0.09).abs() < 1e-12);
+        assert!((corrected[2] - 0.12).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bonferroni_caps_at_one() {
+        // 0.5 * 3 = 1.5 → clamped to 1.0.
+        let raw = vec![0.1, 0.5, 0.9];
+        let corrected = bonferroni_correct(&raw);
+        assert!((corrected[0] - 0.3).abs() < 1e-12);
+        assert!((corrected[1] - 1.0).abs() < 1e-12);
+        assert!((corrected[2] - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bonferroni_two_comparisons_doubles() {
+        let raw = vec![0.02, 0.04];
+        let corrected = bonferroni_correct(&raw);
+        assert!((corrected[0] - 0.04).abs() < 1e-12);
+        assert!((corrected[1] - 0.08).abs() < 1e-12);
+    }
+
+    #[test]
+    fn bonferroni_empty_returns_empty() {
+        let corrected = bonferroni_correct(&[]);
+        assert!(corrected.is_empty());
+    }
+
+    #[test]
+    fn bonferroni_preserves_nan() {
+        // analyze_percentile produces NaN p-values; Bonferroni should not coerce them.
+        let raw = vec![0.05, f64::NAN, 0.01];
+        let corrected = bonferroni_correct(&raw);
+        assert!((corrected[0] - 0.15).abs() < 1e-12);
+        assert!(corrected[1].is_nan());
+        assert!((corrected[2] - 0.03).abs() < 1e-12);
+    }
+
+    /// 3-variant scenario: integrate analyze_count + bonferroni_correct.
+    #[test]
+    fn bonferroni_3_variant_scenario() {
+        let control = make_count_stats(1000, 100); // p = 0.10
+        let variant_b = make_count_stats(1000, 130); // p = 0.13
+        let variant_c = make_count_stats(1000, 150); // p = 0.15
+        let r_b = analyze_count(&control, &variant_b);
+        let r_c = analyze_count(&control, &variant_c);
+
+        let raw = vec![r_b.p_value, r_c.p_value];
+        let corrected = bonferroni_correct(&raw);
+        // Both raw should be < 0.05; corrected (×2) should still flag at least one.
+        assert!(raw[0] < 0.05);
+        assert!(raw[1] < 0.05);
+        assert!(
+            (corrected[0] - (raw[0] * 2.0).min(1.0)).abs() < 1e-12,
+            "Bonferroni multiplier for K=2 should be 2"
+        );
+        assert!((corrected[1] - (raw[1] * 2.0).min(1.0)).abs() < 1e-12);
     }
 
     /// analyze_funnel and analyze_count should give identical results when

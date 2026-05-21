@@ -127,6 +127,7 @@ mod tests {
     fn make_frequentist(significant: bool, ci_lower: f64, ci_upper: f64) -> FrequentistResult {
         FrequentistResult {
             p_value: if significant { 0.03 } else { 0.42 },
+            p_value_corrected: None,
             confidence_interval: ConfidenceInterval {
                 lower: ci_lower,
                 upper: ci_upper,

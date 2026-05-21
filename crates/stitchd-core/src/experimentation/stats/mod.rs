@@ -101,6 +101,12 @@ pub struct ConfidenceInterval {
 pub struct FrequentistResult {
     /// Two-tailed p-value for the null hypothesis of no difference.
     pub p_value: f64,
+    /// Multi-comparison-corrected p-value (Bonferroni). `None` when only one
+    /// comparison was run (i.e. a 2-variant experiment with K=1) or when
+    /// callers have not applied a correction. When `Some`, this is the value
+    /// callers should use for significance decisions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p_value_corrected: Option<f64>,
     /// Confidence interval for the effect size.
     pub confidence_interval: ConfidenceInterval,
     /// Whether the result is statistically significant at the configured alpha level.
@@ -459,6 +465,7 @@ mod tests {
     fn frequentist_result_significant_when_p_value_low() {
         let result = FrequentistResult {
             p_value: 0.01,
+            p_value_corrected: None,
             confidence_interval: ConfidenceInterval {
                 lower: 0.02,
                 upper: 0.18,
@@ -473,6 +480,7 @@ mod tests {
     fn frequentist_result_not_significant_when_p_value_high() {
         let result = FrequentistResult {
             p_value: 0.42,
+            p_value_corrected: None,
             confidence_interval: ConfidenceInterval {
                 lower: -0.05,
                 upper: 0.15,
@@ -480,6 +488,41 @@ mod tests {
             significant: false,
         };
         assert!(!result.significant);
+    }
+
+    #[test]
+    fn frequentist_result_with_bonferroni_corrected_p_value() {
+        let result = FrequentistResult {
+            p_value: 0.02,
+            p_value_corrected: Some(0.06), // Bonferroni K=3
+            confidence_interval: ConfidenceInterval {
+                lower: 0.01,
+                upper: 0.15,
+            },
+            significant: false,
+        };
+        assert!(result.p_value_corrected.is_some());
+        // After correction, the variant is no longer significant.
+        assert!(!result.significant);
+    }
+
+    #[test]
+    fn frequentist_result_corrected_field_skipped_when_none() {
+        let result = FrequentistResult {
+            p_value: 0.01,
+            p_value_corrected: None,
+            confidence_interval: ConfidenceInterval {
+                lower: 0.02,
+                upper: 0.18,
+            },
+            significant: true,
+        };
+        let json = serde_json::to_value(&result).unwrap();
+        assert!(
+            json.get("p_value_corrected").is_none(),
+            "None should be skipped, got {}",
+            json
+        );
     }
 
     // ── BayesianResult ────────────────────────────────────────────────────────
@@ -533,6 +576,7 @@ mod tests {
             variant_stats,
             frequentist_result: Some(FrequentistResult {
                 p_value: 0.03,
+                p_value_corrected: None,
                 confidence_interval: ConfidenceInterval {
                     lower: 0.005,
                     upper: 0.035,
