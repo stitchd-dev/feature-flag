@@ -336,6 +336,8 @@ function SelectorRow({
       >
         <input
           type="radio"
+          name={`hash-selector-${index}-kind`}
+          value="context_key"
           checked={selector.kind === 'context_key'}
           onChange={() => setKind('context_key')}
           disabled={disabled}
@@ -354,6 +356,8 @@ function SelectorRow({
       >
         <input
           type="radio"
+          name={`hash-selector-${index}-kind`}
+          value="context_parameter"
           checked={selector.kind === 'context_parameter'}
           onChange={() => setKind('context_parameter')}
           disabled={disabled}

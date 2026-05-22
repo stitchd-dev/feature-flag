@@ -194,12 +194,12 @@ export function OutputEditor({
     <div>
       <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="radio" name={radioName} checked={isVariant}
+          <input type="radio" name={radioName} value="variant" checked={isVariant}
             onChange={() => onChange({ variant_key: variants[0] ?? '' })} />
           Serve variant
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="radio" name={radioName} checked={!isVariant}
+          <input type="radio" name={radioName} value="allocation" checked={!isVariant}
             onChange={() => onChange({ allocation: defaultAllocationOutput(variants) })} />
           Percentage rollout
         </label>

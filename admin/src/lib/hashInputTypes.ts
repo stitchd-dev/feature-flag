@@ -59,9 +59,11 @@ export function selectorIdentity(sel: HashSelector): string {
 
 /**
  * Default selector used when the user clicks "Add hash input" on a fresh
- * percentage rule. The gateway treats `user.key` as the historical default
- * (and our migration backfilled this when legacy rules had no hash spec).
+ * percentage rule. Returns an unconfigured ContextKey so successive clicks
+ * produce visually distinct rows the user can configure independently — a
+ * `user.key` default would collide with the existing first row on the
+ * uniqueness check and silently look like the add did nothing (feature-flag-xf2).
  */
 export function defaultSelector(): HashSelector {
-  return { kind: 'context_key', context_type: 'user' }
+  return { kind: 'context_key', context_type: '' }
 }
