@@ -17,14 +17,14 @@
  */
 import { describe, it, expect } from 'vitest'
 import { renderToString } from 'react-dom/server'
+import { HashInputSelectorList } from './HashInputSelectorList'
 import {
-  HashInputSelectorList,
   addSelector,
   removeSelector,
   moveSelectorUp,
   moveSelectorDown,
   formatWorkedExample,
-} from './HashInputSelectorList'
+} from './HashInputSelectorList.helpers'
 import type { HashSelector } from '../../lib/hashInputTypes'
 
 describe('HashInputSelectorList — SSR shape', () => {
