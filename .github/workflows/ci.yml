@@ -301,9 +301,10 @@ jobs:
   docs-build:
     name: Docs Build (idempotent + link-check)
     runs-on: ubuntu-latest
-    # Docs is the last gate — runs only after the test suite + coverage have
-    # signed off. Avoids spending xtask runtime on a tree that fails earlier.
-    needs: coverage
+    # Docs is the last gate — runs only after both the Rust test suite AND the
+    # admin frontend suite have signed off so a failing Vitest run can't slip
+    # past into a docs deploy.
+    needs: [coverage, admin-frontend]
     steps:
       - uses: actions/checkout@v4
 
