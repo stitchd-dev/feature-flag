@@ -541,3 +541,128 @@ async fn legacy_default_rule_distribution_column_is_preserved(pool: sqlx::PgPool
         "legacy default_rule_distribution column must survive Phase 3 migration"
     );
 }
+
+#[sqlx::test(migrations = "./migrations")]
+async fn backfill_produces_canonical_sorted_hash_inputs(pool: sqlx::PgPool) {
+    // Bootstrap minimum org + project + flag rows so we can attach a rule.
+    let org_id = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO organisations (id, name) VALUES ($1, 'TestOrg')")
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let project_id = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id, organisation_id, name) VALUES ($1, $2, 'TestProj')")
+        .bind(project_id)
+        .bind(org_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let flag_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        r"INSERT INTO feature_flags (id, project_id, key, value_type, enabled)
+          VALUES ($1, $2, 'bk-flag', 'Bool', true)",
+    )
+    .bind(flag_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Insert a rule whose `rule_def->'output'->'Percentage'->'targets'` is
+    // intentionally NOT in canonical order: `[user.Key, device.Parameter(os),
+    // device.Parameter(browser)]`. Backfill should re-emit as
+    // `[device.Parameter(browser), device.Parameter(os), user.Key]`
+    // (context_type ASC, parameter ASC within type).
+    let rule_id = uuid::Uuid::new_v4();
+    let variant_id = uuid::Uuid::new_v4();
+    let rule_def = serde_json::json!({
+        "id": rule_id.to_string(),
+        "condition": { "And": [] },
+        "output": {
+            "Percentage": {
+                "targets": [
+                    { "context_type": "user",   "field": "Key" },
+                    { "context_type": "device", "field": { "Parameter": "os" } },
+                    { "context_type": "device", "field": { "Parameter": "browser" } }
+                ],
+                "weights": [[variant_id.to_string(), 1000]]
+            }
+        }
+    });
+    sqlx::query(
+        r"INSERT INTO feature_flag_rules (id, flag_id, rule_index, rule_def)
+          VALUES ($1, $2, 0, $3)",
+    )
+    .bind(rule_id)
+    .bind(flag_id)
+    .bind(&rule_def)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // The migration already ran (via sqlx::test). But the rule was inserted
+    // *after* migration, so its hash_inputs is NULL. Re-run the backfill
+    // step manually to exercise the canonical-sort logic against this row.
+    sqlx::query(
+        r#"WITH expanded AS (
+            SELECT
+                r.id AS rule_id,
+                (t.value->>'context_type') AS context_type,
+                CASE
+                    WHEN t.value->'field' = '"Key"'::jsonb THEN NULL
+                    ELSE t.value->'field'->>'Parameter'
+                END AS parameter
+            FROM feature_flag_rules r,
+                 LATERAL jsonb_array_elements(
+                     COALESCE(r.rule_def->'output'->'Percentage'->'targets', '[]'::jsonb)
+                 ) AS t(value)
+            WHERE r.hash_inputs IS NULL
+        ),
+        aggregated AS (
+            SELECT
+                rule_id,
+                jsonb_agg(
+                    CASE
+                        WHEN parameter IS NULL THEN
+                            jsonb_build_object('kind', 'context_key', 'context_type', context_type)
+                        ELSE
+                            jsonb_build_object('kind', 'context_parameter', 'context_type', context_type, 'parameter', parameter)
+                    END
+                    ORDER BY context_type ASC, COALESCE(parameter, '') ASC
+                ) AS hash_inputs
+            FROM expanded
+            GROUP BY rule_id
+        )
+        UPDATE feature_flag_rules r
+           SET hash_inputs = a.hash_inputs
+          FROM aggregated a
+         WHERE r.id = a.rule_id
+           AND r.hash_inputs IS NULL"#,
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Read back and assert canonical order.
+    let row: (serde_json::Value,) =
+        sqlx::query_as(r"SELECT hash_inputs FROM feature_flag_rules WHERE id = $1")
+            .bind(rule_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let arr = row.0.as_array().expect("hash_inputs must be a JSON array");
+    assert_eq!(arr.len(), 3);
+    // Expected canonical ordering:
+    //   [0] device.parameter(browser)
+    //   [1] device.parameter(os)
+    //   [2] user.key
+    assert_eq!(arr[0]["kind"], "context_parameter");
+    assert_eq!(arr[0]["context_type"], "device");
+    assert_eq!(arr[0]["parameter"], "browser");
+    assert_eq!(arr[1]["kind"], "context_parameter");
+    assert_eq!(arr[1]["context_type"], "device");
+    assert_eq!(arr[1]["parameter"], "os");
+    assert_eq!(arr[2]["kind"], "context_key");
+    assert_eq!(arr[2]["context_type"], "user");
+}
