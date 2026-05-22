@@ -673,19 +673,15 @@ impl FlagService for FlagServiceImpl {
                     // validation of every percentage-allocation rule's
                     // `hash_inputs` selector list (when populated).
                     for (i, r) in flag_proto.rules.iter().enumerate() {
-                        if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(
-                            alloc,
-                        )) = &r.output
+                        if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) =
+                            &r.output
+                            && !alloc.hash_inputs.is_empty()
                         {
-                            if !alloc.hash_inputs.is_empty() {
-                                mapping::validate_proto_hash_inputs(&alloc.hash_inputs)
-                                    .map_err(|msg| {
-                                        FlagServiceError::InvalidHashInputs(format!(
-                                            "rule[{i}]: {msg}"
-                                        ))
-                                    })
-                                    .map_err(Status::from)?;
-                            }
+                            mapping::validate_proto_hash_inputs(&alloc.hash_inputs)
+                                .map_err(|msg| {
+                                    FlagServiceError::InvalidHashInputs(format!("rule[{i}]: {msg}"))
+                                })
+                                .map_err(Status::from)?;
                         }
                     }
                     let variant_key_to_id: std::collections::HashMap<_, _> =

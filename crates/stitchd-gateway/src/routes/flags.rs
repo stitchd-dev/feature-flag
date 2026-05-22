@@ -158,13 +158,13 @@ pub fn validate_hash_inputs(selectors: &[HashSelectorJson]) -> Result<(), String
     }
     let mut seen = std::collections::HashSet::new();
     for selector in selectors {
-        if let HashSelectorJson::ContextParameter { parameter, .. } = selector {
-            if parameter.is_empty() {
-                return Err(
-                    "hash_inputs: context_parameter selector requires a non-empty `parameter`"
-                        .to_string(),
-                );
-            }
+        if let HashSelectorJson::ContextParameter { parameter, .. } = selector
+            && parameter.is_empty()
+        {
+            return Err(
+                "hash_inputs: context_parameter selector requires a non-empty `parameter`"
+                    .to_string(),
+            );
         }
         let id = selector.identity();
         if !seen.insert(id.clone()) {
@@ -1340,10 +1340,10 @@ pub async fn set_default_rule_distribution(
     // level plumbing of `hash_inputs` through `SetDefaultRuleDistribution`
     // lands in Phase 5/6 — for now the gateway validates the shape and
     // discards it.)
-    if let Some(dist) = body.distribution.as_ref() {
-        if let Some(selectors) = dist.hash_inputs.as_ref() {
-            validate_hash_inputs(selectors).map_err(GatewayError::BadRequest)?;
-        }
+    if let Some(dist) = body.distribution.as_ref()
+        && let Some(selectors) = dist.hash_inputs.as_ref()
+    {
+        validate_hash_inputs(selectors).map_err(GatewayError::BadRequest)?;
     }
 
     let allocations: Vec<DefaultRuleAllocation> = body
