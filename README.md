@@ -216,12 +216,13 @@ Coverage is enforced at **90%** for the Rust workspace (`backend` flag) and is i
 
 All Stitchd-owned env vars carry the `STITCHD_` prefix (the only exception is `RUST_LOG`, which follows the Rust ecosystem standard). Service ports follow a predictable pattern: `STITCHD_{SERVICE}_GRPC_PORT` + `STITCHD_{SERVICE}_METRICS_PORT`.
 
+> The authoritative, complete list is auto-generated at [`docs/src/deployment/env-vars.md`](docs/src/deployment/env-vars.md) by `cargo xtask docs`. The tables below show the most commonly-set variables.
+
 #### Gateway
 
 | Variable | Default | Description |
 |---|---|---|
-| `STITCHD_GATEWAY_HTTP_PORT` | `8080` | REST API listen port |
-| `STITCHD_GATEWAY_METRICS_PORT` | `9080` | Prometheus metrics port |
+| `STITCHD_GATEWAY_HTTP_PORT` | `8080` | REST API listen port (also serves `/metrics` for Prometheus scrape) |
 | `STITCHD_GATEWAY_GRPC_PORT` | `50050` | SDK gRPC sync listen port |
 | `STITCHD_AUTH_SERVICE_ADDR` | `http://localhost:50051` | Auth service gRPC address |
 | `STITCHD_FLAG_SERVICE_ADDR` | `http://localhost:50052` | Flag service gRPC address |

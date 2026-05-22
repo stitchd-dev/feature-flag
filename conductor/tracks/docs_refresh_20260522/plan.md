@@ -100,16 +100,16 @@ rewritten doc resolves to a live symbol (grep audit).
 ## Phase 4: CI Integration + Final Verification
 <!-- execution: sequential -->
 
-- [ ] Task 4.1: Add CI job (`.github/workflows/<existing>.yml` or new `docs.yml`) that
+- [x] Task 4.1: Add CI job (`.github/workflows/<existing>.yml` or new `docs.yml`) that
       runs `cargo xtask docs` then `git diff --exit-code` — fails if any generator output
       drifted. Use the same Rust toolchain matrix as the rest of CI.
-- [ ] Task 4.2: Add link-check to the CI docs job (separate from cargo xtask docs in case
+- [x] Task 4.2: Add link-check to the CI docs job (separate from cargo xtask docs in case
       the broken-link tool is heavier).
-- [ ] Task 4.3: Update `conductor/workflow.md` "Daily Development" + "Before Committing"
+- [x] Task 4.3: Update `conductor/workflow.md` "Daily Development" + "Before Committing"
       sections to mention `cargo xtask docs` produces no diff as a pre-commit check.
-- [ ] Task 4.4: Update `conductor/patterns.md` with a new "Docs Autogeneration" section
+- [x] Task 4.4: Update `conductor/patterns.md` with a new "Docs Autogeneration" section
       capturing the env-vars + cargo-rdme + idempotency patterns.
-- [ ] Task 4.5: Update root `README.md` if any badges / quickstart commands change as a
+- [x] Task 4.5: Update root `README.md` if any badges / quickstart commands change as a
       result of the rewrites (e.g. point new contributors at `cargo xtask docs`).
-- [ ] Task 4.6: Conductor - User Manual Verification 'CI Integration + Final Verification'
+- [x] Task 4.6: Conductor - User Manual Verification 'CI Integration + Final Verification'
       (Protocol in workflow.md)
