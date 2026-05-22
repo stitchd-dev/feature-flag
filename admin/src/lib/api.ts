@@ -676,6 +676,93 @@ export async function getExperimentTimeseries(
   return data
 }
 
+/**
+ * Raw JSON row shape returned by
+ * `GET /v1/environments/{env}/experiments/{exp}/iterations`. Mirrors the
+ * gateway's `IterationJson` 1:1 — the IterationsTab consumes a wider
+ * `IterationSummary` shape, so callers map via [`mapIterationRow`] before
+ * passing to the UI.
+ */
+export interface IterationJsonRow {
+  id: string
+  experiment_id: string
+  iteration_number: number
+  started_at_ms: number
+  ended_at_ms: number
+  traffic_allocation: number
+  /** Snapshot of `unit_context_types` at iteration start. */
+  unit_context_types: string[]
+}
+
+/**
+ * Iteration row in the shape the admin IterationsTab consumes
+ * (`IterationSummary` keeps timestamps ISO + nullable). Exposed so callers can
+ * type their state without importing the tab module.
+ */
+export interface IterationSummaryDto {
+  iteration_id: string
+  iteration_number: number
+  started_at: string
+  ended_at: string | null
+  unit_context_types: string[]
+  /**
+   * Per-iteration "stats last computed at" timestamp. Currently null — the
+   * `experiment_iterations` table does not track this column yet. Reserved for
+   * a future migration that surfaces stats-schedule data per-iteration.
+   */
+  computed_at: string | null
+}
+
+/** Map a raw `IterationJsonRow` from the gateway to the admin's view shape. */
+export function mapIterationRow(row: IterationJsonRow): IterationSummaryDto {
+  return {
+    iteration_id: row.id,
+    iteration_number: row.iteration_number,
+    started_at: new Date(row.started_at_ms).toISOString(),
+    // `ended_at_ms == 0` is the proto sentinel for "still running".
+    ended_at:
+      row.ended_at_ms === 0 ? null : new Date(row.ended_at_ms).toISOString(),
+    unit_context_types: row.unit_context_types,
+    computed_at: null,
+  }
+}
+
+/**
+ * Paginated list of iterations for an experiment. Drives the Iterations tab in
+ * the admin's experiment-detail page.
+ *
+ * The gateway returns rows in the proto-millis shape; callers typically push
+ * the result through [`mapIterationRow`] before handing to the UI. This
+ * wrapper returns both the mapped + raw forms so callers can pick whichever
+ * is more convenient.
+ */
+export async function listExperimentIterations(
+  environmentId: string,
+  experimentKey: string,
+  params?: { page?: number; per_page?: number },
+  signal?: AbortSignal,
+): Promise<{
+  items: IterationSummaryDto[]
+  total: number
+  page: number
+  per_page: number
+}> {
+  const qs = new URLSearchParams()
+  if (params?.page != null) qs.set('page', String(params.page))
+  if (params?.per_page != null) qs.set('per_page', String(params.per_page))
+  const suffix = qs.toString() ? `?${qs}` : ''
+  const { data } = await api.get<PaginatedResponse<IterationJsonRow>>(
+    `/v1/environments/${environmentId}/experiments/${experimentKey}/iterations${suffix}`,
+    { signal },
+  )
+  return {
+    items: data.items.map(mapIterationRow),
+    total: data.total,
+    page: data.page,
+    per_page: data.per_page,
+  }
+}
+
 /** Response envelope shared by `POST /recompute` and `GET /recompute/{job_id}`. */
 export interface RecomputeJobResponse {
   job_id: string

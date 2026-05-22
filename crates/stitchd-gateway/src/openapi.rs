@@ -178,6 +178,7 @@ use utoipa::{
             crate::routes::experiments::ExperimentResultsJson,
             crate::routes::experiments::ExposureRowJson,
             crate::routes::experiments::ListExposuresQuery,
+            crate::routes::experiments::ListIterationsQuery,
             // Stats
             crate::routes::stats::RecomputeJobJson,
             crate::routes::stats::JobStatusJson,

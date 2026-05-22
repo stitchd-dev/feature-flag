@@ -56,6 +56,8 @@ const {
   getExperimentResults,
   listExperimentExposures,
   getExperimentTimeseries,
+  listExperimentIterations,
+  mapIterationRow,
   triggerExperimentRecompute,
   getRecomputeStatus,
   setDefaultRuleDistribution,
@@ -306,5 +308,95 @@ describe('setDefaultRuleDistribution', () => {
         allocations: [{ variant_key: 'on', percentage: 60 }],
       }),
     ).rejects.toMatchObject({ response: { status: 422 } })
+  })
+})
+
+// ─── listExperimentIterations + mapIterationRow ─────────────────────────────
+
+describe('mapIterationRow', () => {
+  it('maps the proto-millis row shape to the admin IterationSummary shape', () => {
+    const row = {
+      id: 'iter-1',
+      experiment_id: 'exp-1',
+      iteration_number: 3,
+      started_at_ms: Date.UTC(2026, 3, 10, 8, 0, 0),
+      ended_at_ms: Date.UTC(2026, 3, 24, 8, 0, 0),
+      traffic_allocation: 1.0,
+      unit_context_types: ['user', 'account'],
+    }
+    const summary = mapIterationRow(row)
+    expect(summary.iteration_id).toBe('iter-1')
+    expect(summary.iteration_number).toBe(3)
+    expect(summary.started_at).toBe('2026-04-10T08:00:00.000Z')
+    expect(summary.ended_at).toBe('2026-04-24T08:00:00.000Z')
+    expect(summary.unit_context_types).toEqual(['user', 'account'])
+    // `computed_at` is reserved for a future migration; null today.
+    expect(summary.computed_at).toBeNull()
+  })
+
+  it('treats `ended_at_ms == 0` as still-running (ended_at = null)', () => {
+    const row = {
+      id: 'iter-2',
+      experiment_id: 'exp-1',
+      iteration_number: 4,
+      started_at_ms: Date.UTC(2026, 3, 25, 8, 0, 0),
+      ended_at_ms: 0,
+      traffic_allocation: 1.0,
+      unit_context_types: ['user'],
+    }
+    const summary = mapIterationRow(row)
+    expect(summary.ended_at).toBeNull()
+  })
+})
+
+describe('listExperimentIterations', () => {
+  it('GETs the iterations endpoint and maps rows to the admin summary shape', async () => {
+    const fixture = {
+      items: [
+        {
+          id: 'iter-1',
+          experiment_id: 'exp-1',
+          iteration_number: 1,
+          started_at_ms: Date.UTC(2026, 3, 10, 8, 0, 0),
+          ended_at_ms: Date.UTC(2026, 3, 24, 8, 0, 0),
+          traffic_allocation: 1.0,
+          unit_context_types: ['user'],
+        },
+      ],
+      total: 1,
+      page: 1,
+      per_page: 50,
+    }
+    spyClient.get.mockResolvedValueOnce({ data: fixture })
+
+    const result = await listExperimentIterations('env-1', 'exp-1')
+
+    expect(spyClient.get).toHaveBeenCalledTimes(1)
+    expect(spyClient.get.mock.calls[0][0]).toBe(
+      '/v1/environments/env-1/experiments/exp-1/iterations',
+    )
+    expect(result.items).toHaveLength(1)
+    expect(result.items[0].iteration_id).toBe('iter-1')
+    expect(result.items[0].started_at).toBe('2026-04-10T08:00:00.000Z')
+    expect(result.total).toBe(1)
+  })
+
+  it('appends pagination query params when provided', async () => {
+    spyClient.get.mockResolvedValueOnce({
+      data: { items: [], total: 0, page: 2, per_page: 25 },
+    })
+    await listExperimentIterations('env-1', 'exp-1', { page: 2, per_page: 25 })
+    expect(spyClient.get.mock.calls[0][0]).toBe(
+      '/v1/environments/env-1/experiments/exp-1/iterations?page=2&per_page=25',
+    )
+  })
+
+  it('propagates 502 errors from the gateway', async () => {
+    spyClient.get.mockRejectedValueOnce({
+      response: { status: 502, data: { message: 'upstream unavailable' } },
+    })
+    await expect(
+      listExperimentIterations('env-1', 'exp-1'),
+    ).rejects.toMatchObject({ response: { status: 502 } })
   })
 })
