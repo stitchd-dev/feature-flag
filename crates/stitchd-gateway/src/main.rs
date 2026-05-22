@@ -23,6 +23,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::signal;
 use tracing::info;
 
+use stitchd_core::util::grpc_connect::connect_with_retry_default;
 use stitchd_gateway::{
     grpc_server::build_grpc_server, openapi::export_to_file, router::build_router,
     state::GatewayState,
@@ -61,21 +62,49 @@ async fn main() -> anyhow::Result<()> {
     metrics::counter!("gateway_up_total").increment(1);
     info!("prometheus metrics recorder installed (served at GET /metrics)");
 
-    let state = GatewayState::connect(
-        env_or("STITCHD_AUTH_SERVICE_ADDR", "http://localhost:50051"),
-        env_or("STITCHD_FLAG_SERVICE_ADDR", "http://localhost:50052"),
-        env_or(
-            "STITCHD_SEGMENTATION_SERVICE_ADDR",
-            "http://localhost:50053",
-        ),
-        env_or("STITCHD_ANALYTICS_SERVICE_ADDR", "http://localhost:50054"),
-        env_or(
-            "STITCHD_EXPERIMENTATION_SERVICE_ADDR",
-            "http://localhost:50055",
-        ),
-        env_or("STITCHD_STATS_SERVICE_ADDR", "http://localhost:50056"),
-    )
-    .await?;
+    let auth_addr = env_or("STITCHD_AUTH_SERVICE_ADDR", "http://localhost:50051");
+    let flag_addr = env_or("STITCHD_FLAG_SERVICE_ADDR", "http://localhost:50052");
+    let segmentation_addr = env_or(
+        "STITCHD_SEGMENTATION_SERVICE_ADDR",
+        "http://localhost:50053",
+    );
+    let analytics_addr = env_or("STITCHD_ANALYTICS_SERVICE_ADDR", "http://localhost:50054");
+    let experimentation_addr = env_or(
+        "STITCHD_EXPERIMENTATION_SERVICE_ADDR",
+        "http://localhost:50055",
+    );
+    let stats_addr = env_or("STITCHD_STATS_SERVICE_ADDR", "http://localhost:50056");
+
+    // `GatewayState::connect` dials all six downstream services in sequence
+    // and fails fast on the first transport error. During a parallel cold
+    // boot any one of those peers may not yet be listening, so we wrap the
+    // whole sequence in `connect_with_retry_default` — when any single
+    // dependency is slow to bind, the helper retries the full sequence
+    // until every peer is reachable (or the ~60s budget is exhausted).
+    let downstream_summary = format!(
+        "auth={auth_addr} flag={flag_addr} seg={segmentation_addr} analytics={analytics_addr} experimentation={experimentation_addr} stats={stats_addr}"
+    );
+    let state =
+        connect_with_retry_default("gateway downstream services", &downstream_summary, || {
+            let auth_addr = auth_addr.clone();
+            let flag_addr = flag_addr.clone();
+            let segmentation_addr = segmentation_addr.clone();
+            let analytics_addr = analytics_addr.clone();
+            let experimentation_addr = experimentation_addr.clone();
+            let stats_addr = stats_addr.clone();
+            async move {
+                GatewayState::connect(
+                    auth_addr,
+                    flag_addr,
+                    segmentation_addr,
+                    analytics_addr,
+                    experimentation_addr,
+                    stats_addr,
+                )
+                .await
+            }
+        })
+        .await?;
 
     let gateway_port: u16 = env_or("STITCHD_GATEWAY_HTTP_PORT", "8080")
         .parse()
