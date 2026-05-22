@@ -272,9 +272,19 @@ function VariantsPanel({
 
 // ─── TargetingPanel (rule builder) ───────────────────────────────────────────
 
+function hasNoConditions(expr: ConditionExpr): boolean {
+  if ('And' in expr) return (expr as { And: ConditionExpr[] }).And.length === 0
+  if ('Or' in expr) return (expr as { Or: ConditionExpr[] }).Or.length === 0
+  return false
+}
+
 function validateRules(rules: RuleState[], catchAllOutput?: RuleOutputJson): string | null {
   for (let i = 0; i < rules.length; i++) {
-    const o = rules[i].output
+    const r = rules[i]
+    if (hasNoConditions(r.condition)) {
+      return `Rule ${i + 1}: add at least one WHEN condition, or remove the rule — the catch-all is the default rule below.`
+    }
+    const o = r.output
     if ('allocation' in o) {
       const sum = allocationSum((o as { allocation: { buckets: AllocationBucket[] } }).allocation.buckets)
       if (sum !== 1000) return `Rule ${i + 1}: allocation must sum to 100% (currently ${(sum / 10).toFixed(1)}%)`
