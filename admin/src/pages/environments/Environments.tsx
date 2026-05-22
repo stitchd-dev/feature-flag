@@ -264,7 +264,7 @@ function SdkKeysSection({ environmentId, environmentName, canCreate, canRevoke }
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function Environments() {
-  const { projectId, envId, setEnvId } = useOrgContext()
+  const { projectId, envId, setEnvId, refreshEnvironments } = useOrgContext()
   const { can, loading: permLoading } = usePermissions()
 
   const [envs, setEnvs] = useState<EnvironmentSummary[]>([])
@@ -311,6 +311,7 @@ export function Environments() {
       const res = await createEnvironment(projectId, name.trim())
       setCreatingEnv(false)
       loadEnvs()
+      refreshEnvironments()
       setEnvId(res.environment_id)
     } catch {
       setError('Failed to create environment')
@@ -326,6 +327,7 @@ export function Environments() {
       await renameEnvironment(id, name.trim())
       setRenamingId(null)
       loadEnvs()
+      refreshEnvironments()
     } catch {
       setError('Rename failed')
     } finally {
@@ -341,6 +343,7 @@ export function Environments() {
       setDeletingId(null)
       if (envId === id) setEnvId(envs.find((e) => e.environment_id !== id)?.environment_id ?? '')
       loadEnvs()
+      refreshEnvironments()
     } catch {
       setError('Delete failed')
     } finally {
