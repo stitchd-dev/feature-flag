@@ -41,6 +41,117 @@ Patterns, gotchas, and context discovered during implementation.
 
 <!-- Learnings from implementation will be appended below -->
 
+## [2026-05-22] Phase 4 — REST + gRPC rule-CRUD API refactor (worker P4)
+
+- **Implemented:** Gateway REST DTOs and flag-service gRPC handlers
+  carry the new `HashInputSpec` schema end-to-end. A new
+  `HashSelectorJson` enum on the gateway mirrors core's `HashSelector`
+  serde representation (`#[serde(tag = "kind", rename_all =
+  "snake_case")]`); a free `validate_hash_inputs` function enforces FR-8
+  rules (non-empty, no duplicates by `(context_type, field)` identity,
+  non-empty `parameter` for `ContextParameter`). The validator runs in
+  the gateway BEFORE the upstream gRPC call so bad payloads return 400
+  even when the flag-service is unreachable. mapping.rs in flag-service
+  dual-writes proto (`hash_inputs` authoritative + `context_hash_specs`
+  synthesised for the backwards-compat window) and prefers `hash_inputs`
+  on read, falling back to canonical `(context_type ASC, parameter
+  ASC)` sort of the legacy map. A symmetrical
+  `validate_proto_hash_inputs` in mapping.rs runs at the gRPC boundary so
+  non-gateway clients hit the same rules. `set_default_rule_distribution`
+  gained a variant-key referential check that reinstates the diagnostic
+  Phase 2 dropped from core's purity-bound `evaluate_flag`.
+
+- **Files changed:**
+  - `crates/stitchd-gateway/src/routes/flags.rs` — `HashSelectorJson`,
+    `validate_hash_inputs`, `extract_hash_inputs_from_allocation`,
+    `synthesise_context_hash_specs`, new field on
+    `DefaultRuleDistributionBody`, validation hooked into `update_rules`
+    + `set_default_rule_distribution`, dual response shape
+    (`hash_inputs` + `hash_targets`) in `flag_rule_to_json`.
+  - `crates/stitchd-flag-service/src/mapping.rs` — dual-write proto,
+    prefer-hash_inputs read, canonical-sort fallback, public
+    `validate_proto_hash_inputs`.
+  - `crates/stitchd-flag-service/src/error.rs` — `InvalidHashInputs`,
+    `UnknownDefaultRuleVariant` variants; mapped to
+    `Status::invalid_argument` with the sentinel prefixes
+    `invalid_hash_inputs:` and `invalid_distribution:`.
+  - `crates/stitchd-flag-service/src/service.rs` — `mutate_flag` Update
+    rule-validation loop; `set_default_rule_distribution` variant-key
+    check via `variant_repo.find_by_flag`.
+  - `crates/stitchd-gateway/src/openapi.rs` — register
+    `HashSelectorJson`, `RuleBody`, `ReplaceRulesBody`, `RuleJson`,
+    `VariantBody`, `VariantJson`, `AdminFlagJson` in
+    `components.schemas`.
+  - `crates/xtask/README.md` — cargo-rdme refresh for Phase 3's
+    `verify-hash-cutover` subcommand (Phase 3 left this stale).
+
+- **Commits (chronological):**
+  - `20490e6` test(gateway): failing tests for hash_inputs rule CRUD +
+    default-rule dist
+  - `53ca54a` feat(gateway): accept hash_inputs in rule CRUD DTOs
+  - `1c6cb01` feat(flag-service): dual-write hash_inputs + server-side
+    validation
+  - `0c04f09` feat(gateway): register Phase 4 rule-CRUD DTOs in OpenAPI
+  - `e63ad81` docs(xtask): refresh cargo-rdme block
+  - `a7910b6` refactor(gateway,flag-service): collapse nested if-lets
+    for clippy
+
+- **Tests:** 17 new tests (11 gateway integration, 3 mapping, 3
+  service); workspace lib total 1715 passed, 0 failed.
+
+- **Learnings:**
+  - **JSON wire shape — dual fields on responses, prefer-new on
+    requests:** REST responses populate BOTH `hash_inputs` (new,
+    authoritative) and `hash_targets` (legacy, kept for the existing
+    admin UI). Requests accept either; `hash_inputs` wins when both are
+    present. Spec FR-8 reads "removed" but the worker prompt's "alongside"
+    interpretation matches the safest migration path — sibling worker P7
+    will sweep the legacy field after the Admin UI migrates.
+  - **Gateway validation runs BEFORE upstream RPC:** stubbed gRPC
+    channels in unit tests connect lazily and fail at the first RPC
+    attempt with `BAD_GATEWAY` (502). Putting validation in front of the
+    RPC means 400 cleanly distinguishes "request rejected by validator"
+    from "upstream unreachable". `assert_ne!(BAD_REQUEST)` is the
+    happy-path assertion against the same stub.
+  - **`HashSelectorJson::identity` uses `"__key__"` sentinel:**
+    `(context_type, field)` duplicate-detection collapses
+    `ContextKey { context_type }` and `ContextParameter { context_type,
+    parameter }` into a single tuple by stuffing the reserved sentinel
+    `"__key__"` for the key variant. A real parameter named `"__key__"`
+    can never collide because `parameter` is validated non-empty
+    separately and the sentinel is never serialised on the wire.
+  - **Canonical sort of legacy `context_hash_specs`:** Both directions
+    (proto→core for old data, and synthesis core→proto map for legacy
+    consumers) use `context_type ASC, parameter ASC within type`. Hash
+    stability across the cutover is preserved only when producers used
+    that order — `cargo xtask verify-hash-cutover` (P3) prints the
+    operator-review report.
+  - **Proto `SetDefaultRuleDistributionRequest` doesn't carry
+    `hash_inputs`:** P3 added a `default_rule_hash_inputs` column to
+    `feature_flags` but did not extend the proto RPC. Phase 4 validates
+    the new field in the gateway DTO but discards it at the wire
+    boundary; full plumb-through lands in P5/P6.
+  - **Variant-key referential validation lives in the gRPC handler, not
+    core:** Phase 2 dropped `tracing::warn!` from `evaluate_flag` per
+    NFR-3 (no logging side effects in core). Phase 4 reinstates the
+    diagnostic by checking referential integrity at the
+    `set_default_rule_distribution` boundary via
+    `variant_repo.find_by_flag`. Returns a typed `FlagServiceError`
+    variant that maps to `Status::invalid_argument` with the
+    `invalid_distribution:` sentinel the gateway already converts to
+    HTTP 400.
+  - **Rust 1.95 `clippy::collapsible_if` covers `if let` too:** nested
+    `if let Some(x) = … { if … { … } }` patterns must use the
+    `let-chain` form `if let Some(x) = … && … { … }`. Three of our new
+    diffs tripped this — fixed in `a7910b6`.
+  - **`docs/src/api/openapi.json` is gitignored:** `cargo xtask docs`
+    regenerates it on every run but the file never lands in git. The
+    docs idempotency check looks for drift in TRACKED files only —
+    crates/xtask/README.md is the canonical signal that Phase 3's
+    xtask command wasn't `cargo-rdme`-refreshed. Worth catching in CI.
+
+---
+
 ## [2026-05-22] Phase 2 — Core orchestration (worker P2)
 
 - **Implemented:** Body of `evaluate_flag` in `evaluation/engine.rs` —

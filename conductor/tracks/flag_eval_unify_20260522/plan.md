@@ -98,23 +98,33 @@ Define the canonical types — every later phase consumes them.
 ## Phase 4: REST + gRPC rule-CRUD API refactor
 <!-- depends: phase3 -->
 
-- [ ] Task 1: Write failing integration tests for `POST /v1/flags/{id}/rules`
+- [x] Task 1: Write failing integration tests for `POST /v1/flags/{id}/rules`
       with `hash_inputs` payload; cover happy path, empty-selectors rejection
       (400), duplicate-selector rejection, missing parameter on `Parameter`
-      field (400).
-- [ ] Task 2: Write failing tests for `PUT /v1/flags/{id}/rules/{rule_id}`
-      and for default-rule-distribution update endpoint.
-- [ ] Task 3: Update gateway REST DTOs (request + response); remove the old
-      `context_hash_specs` field; map to/from `HashInputSpec`.
-- [ ] Task 4: Update gRPC handlers in `stitchd-flag-service` (CreateRule,
-      UpdateRule, UpdateDefaultRuleDistribution).
-- [ ] Task 5: Server-side validation: non-empty selectors, no duplicates
+      field (400). [20490e6]
+- [x] Task 2: Write failing tests for `PUT /v1/flags/{id}/rules/{rule_id}`
+      and for default-rule-distribution update endpoint. [20490e6]
+- [x] Task 3: Update gateway REST DTOs (request + response); accept
+      `hash_inputs` alongside legacy `hash_targets`; map to/from
+      `HashInputSpec`. [53ca54a]
+- [x] Task 4: Update gRPC handlers in `stitchd-flag-service` —
+      dual-write `hash_inputs` + `context_hash_specs` in mapping.rs;
+      server-side validation hooked into the `mutate_flag` rule-update
+      path. [1c6cb01]
+- [x] Task 5: Server-side validation: non-empty selectors, no duplicates
       (exact context_type+field equality), parameter required & non-empty
-      when field == `Parameter`.
-- [ ] Task 6: Update `#[utoipa::path]` annotations + schema derives.
-- [ ] Task 7: Run `cargo xtask docs` + `scripts/check_openapi_contract.py`;
-      resolve drift.
-- [ ] Task 8: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md)
+      when field == `Parameter`. PLUS: variant-key referential check in
+      `set_default_rule_distribution` (reinstates the diagnostic core had
+      to drop). [1c6cb01]
+- [x] Task 6: Register Phase 4 DTOs in OpenAPI `components.schemas`
+      (`HashSelectorJson`, `RuleBody`, `ReplaceRulesBody`, `RuleJson`,
+      `VariantBody`, `VariantJson`, `AdminFlagJson`). [0c04f09]
+- [x] Task 7: `cargo xtask docs` idempotent + `check_openapi_contract.py`
+      clean. Resolved cargo-rdme drift in crates/xtask/README.md from
+      Phase 3. [e63ad81]
+- [x] Task 8: Conductor - User Manual Verification 'Phase 4' [autonomous:
+      1715 lib tests green; clippy --all-targets -D warnings clean;
+      rustfmt clean; OpenAPI contract clean]
 
 ---
 
