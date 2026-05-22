@@ -41,6 +41,129 @@ Patterns, gotchas, and context discovered during implementation.
 
 <!-- Learnings from implementation will be appended below -->
 
+## [2026-05-22] Phase 7 — Admin UI cross-context selector control (worker P7)
+
+- **Implemented:** Net-new `HashInputSelectorList` React 19 component in
+  `admin/src/components/flag/` is the canonical authoring surface for
+  the Phase-4 `hash_inputs` selector list. Pure helpers (add / remove /
+  reorder up + down / formatWorkedExample) split into a sibling
+  `.helpers.ts` file so the `.tsx` is component-only — keeps
+  `react-refresh/only-export-components` happy without ESLint
+  suppressions. New Yup schema in `admin/src/lib/validation/hashInputSchema.ts`
+  mirrors the gateway's `validate_hash_inputs` rules verbatim (non-empty,
+  ContextParameter requires non-empty `parameter`, selectors unique by
+  `(context_type, field)` identity). Net-new shared
+  `deriveHashInputErrors(inputs)` helper threads Yup `inner` errors
+  back into a `{ arrayError, rowErrors }` split that the component
+  consumes for inline routing. Component is wired at BOTH author sites:
+  (a) inside `PercentageRolloutEditor` (per-rule output editor AND the
+  catch-all default-rule editor surfaced by `RuleList`); (b) inside
+  `EditFlagDefaultRule.tsx` for the flag-level default-rule
+  distribution. TS types updated: `AllocationOutput.hash_inputs` is now
+  required and canonical; `hash_targets` becomes a derived legacy
+  projection (re-derived from `hash_inputs` on every write via
+  `hashTargetsFromInputs`); `normalizeOutput` upgrades pre-Phase-4
+  payloads in-place; `RolloutDistribution.hash_inputs?` carries the
+  default-rule selector list to the gateway.
+
+- **Discovered pattern — admin test env is `node`, not jsdom:**
+  `vite.config.ts` sets `test.environment = 'node'`. The existing
+  test pattern is `react-dom/server.renderToString` + SSR HTML
+  assertions. No `@testing-library/react`, no jsdom. The spec asked
+  for "Vitest + RTL", but RTL is not installed and adding it would
+  pull in jsdom + a sizeable diff to vitest config — out of scope for
+  Phase 7. SSR + pure-helper unit tests cover the same surface
+  (component shape, role attributes, helper behaviour) without
+  expanding the test toolchain.
+
+- **Discovered pattern — admin rule builder is `useState`-driven, NOT
+  Formik:** The Phase 7 prompt named Formik as "the existing pattern".
+  In practice the rule builder (PercentageRolloutEditor, RuleCard,
+  RuleList) is built with controlled `value` / `onChange` props and
+  ad-hoc `useState` at the page level — Formik is only used in
+  modal-shaped forms (CreateFlagModal, CreateExperimentModal). Matching
+  the surrounding pattern means `HashInputSelectorList` is a controlled
+  component (no `useField` / `FieldArray`), and the parent runs the Yup
+  schema and threads errors back via `arrayError` + `rowErrors` props.
+  This sidesteps the `validateOnChange={false}` requirement entirely
+  since validation runs synchronously against the in-memory selector
+  list on every keystroke — no network calls in the Yup path.
+
+- **Discovered pattern — gateway's `setDefaultRuleDistribution` body
+  already accepts `hash_inputs` (Phase 4 wiring):** Reading
+  `crates/stitchd-gateway/src/routes/flags.rs::DefaultRuleDistributionBody`
+  shows the gateway already validates an optional `hash_inputs` field on
+  the default-rule POST body (and discards it at the proto boundary
+  until Phase 5/6 plumbs it through). The TS client only had to extend
+  `RolloutDistribution` with an optional `hash_inputs` field — no API
+  surface change needed.
+
+- **Discovered pattern — Reuse existing context-suggestion hooks:**
+  `useContextTypeSuggestions(envId)` and `useContextParamSuggestions(envId, ct)`
+  in `admin/src/hooks/useContextSuggestions.ts` already wrap the
+  `/v1/environments/{env_id}/context-types` and
+  `/v1/environments/{env_id}/context-types/{ct}/params` endpoints with
+  a 200ms debounce + cancellation. Tasks 4 + 5 (context-type picker +
+  parameter autocomplete) became zero-API-code by binding these
+  existing hooks into the new component's `SuggestionInput` rows.
+
+- **Pattern: dual-emit hash_inputs + hash_targets on write:** During the
+  Phase 4 → Phase 5/6 transition the gateway accepts EITHER shape on
+  input and still emits `hash_targets` on read for older readers. The
+  admin UI now ALWAYS sets both fields on every write, with
+  `hash_targets = hashTargetsFromInputs(hash_inputs)`. After
+  Phase 8 closes and the gateway drops `hash_targets`, this dual-emit
+  collapses into a single-field write.
+
+- **Pattern: native HTML5 DnD beats adding a DnD library:**
+  `react-dnd` / `dnd-kit` / `react-beautiful-dnd` are absent from
+  `package.json`. The existing `RuleList.tsx` uses native HTML5 DnD
+  events (`onDragStart`, `onDragOver`, `onDrop`) with `dataTransfer`
+  carrying the source index. `HashInputSelectorList` mirrors that
+  pattern — the drag handle owns `draggable=true` so users don't
+  accidentally drag while editing fields. Keyboard reorder is
+  independent (Alt+ArrowUp / Alt+ArrowDown when row is focused) and
+  also surfaces as click-affordance up/down buttons for users without
+  drag access.
+
+- **Pattern: TS `import type` cycles via inline namespace import:**
+  `RolloutDistribution.hash_inputs` needs to reference `HashSelector`
+  from `./hashInputTypes`, but adding `import type { HashSelector }` at
+  the top of `types.ts` would tangle the import graph (types.ts is
+  loaded everywhere). Inline `import('./hashInputTypes').HashSelector[]`
+  inside the property type works under `verbatimModuleSyntax: true`
+  and keeps the eager import graph unchanged.
+
+- **Gotcha: lint rule `react-refresh/only-export-components`** flags
+  every non-component export from a `.tsx` file. The first cut of
+  `HashInputSelectorList.tsx` exported `addSelector`, `removeSelector`,
+  `moveSelectorUp`, `moveSelectorDown`, `formatWorkedExample` alongside
+  the component — five warnings. Fix: move all pure helpers into a
+  sibling `.helpers.ts` file. The component imports from helpers; tests
+  import from helpers. The component file is component-only.
+
+- **Gotcha: lint-clean and tsc-clean are separate gates.** A successful
+  `npm run build` runs `tsc -b && vite build` which uses the project
+  references (`tsconfig.json`). That references `tsconfig.app.json` +
+  `tsconfig.node.json`. The standalone gate `node_modules/.bin/tsc
+  --noEmit -p tsconfig.app.json` is what the worker prompt asked for —
+  these MUST be run from `admin/` and use the local `node_modules`
+  binary, never `npx tsc` (resolves to a stray TS 2.0.x package on the
+  user's machine).
+
+- **Verification gates passed (autonomous Phase 7 Task 9):**
+  - `cd admin && npm test` → 713 passed / 0 failed (added 47:
+    14 Yup schema + 20 HashInputSelectorList SSR+helper + 13 ruleTypes
+    round-trip).
+  - `cd admin && npm run build` → clean (`tsc -b && vite build`).
+  - `cd admin && node_modules/.bin/tsc --noEmit -p tsconfig.app.json`
+    → clean (no errors).
+  - `cd admin && npm run lint` → 0 errors / 55 warnings (all
+    pre-existing `react-hooks/set-state-in-effect` warnings in
+    `OrgsList.tsx` + `OrgDetail.tsx`; my files are clean).
+
+---
+
 ## [2026-05-22] Phase 4 — REST + gRPC rule-CRUD API refactor (worker P4)
 
 - **Implemented:** Gateway REST DTOs and flag-service gRPC handlers
