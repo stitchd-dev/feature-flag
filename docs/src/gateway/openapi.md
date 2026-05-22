@@ -19,6 +19,30 @@ docker run -p 8888:8080 \
 
 Or use the [Swagger Editor](https://editor.swagger.io/) and paste the JSON.
 
+## Interactive Swagger UI (in this book)
+
+<div id="swagger-ui"></div>
+
+<link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>
+window.addEventListener('load', function() {
+  SwaggerUIBundle({
+    url: "../api/openapi.json",
+    dom_id: '#swagger-ui',
+    presets: [
+      SwaggerUIBundle.presets.apis,
+      SwaggerUIBundle.SwaggerUIStandalonePreset
+    ],
+    layout: "BaseLayout",
+    deepLinking: true,
+    tryItOutEnabled: false
+  });
+});
+</script>
+
+> **Note:** The interactive spec above renders the generated `openapi.json` directly inside the mdBook.
+
 ## Regenerating the Spec
 
 ```bash

@@ -14,9 +14,12 @@ rewritten doc resolves to a live symbol (grep audit).
       tagged `auto-generated | narrative | orphan | shared-readme`. [c29f2f9]
 - [x] Task 1.2: Delete orphaned `docs/src/internal/*` subtree
       (auth/, events-experimentation/, flag-segmentation/ — confirmed NOT in `SUMMARY.md`).
-      Verify with `grep -r "docs/src/internal" docs/` → no references remain.
-- [ ] Task 1.3: Decide fate of `docs/openapi-pre-decomposition.json` and
+      Verify with `grep -r "docs/src/internal" docs/` → no references remain. [6a5071e]
+- [x] Task 1.3: Decide fate of `docs/openapi-pre-decomposition.json` and
       `docs/src/api/rest.md` (latter overlaps `gateway/openapi.md`). Archive or delete.
+      DECISION: KEEP openapi-pre-decomposition.json (load-bearing for contract-check CI).
+      MERGE the Swagger UI viewer block from `api/rest.md` into `gateway/openapi.md` as
+      a new "Interactive Swagger UI" section, then DELETE `api/rest.md`.
 - [ ] Task 1.4: Capture golden baseline — run `cargo xtask docs`, snapshot
       `docs/src/grpc/`, `docs/src/api/openapi.json`, `docs/src/sdk/quickstart.md` to a
       tmp dir; commit the snapshot path note so later phases can confirm regression-free.
