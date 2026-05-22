@@ -70,7 +70,8 @@ This file tracks all major tracks for the project.
 -->
 
 
----
+<!-- Archived (continued):
+- flag_eval_unify_20260522 (Unify Feature-Flag Variant Evaluation — single pure stitchd-core entry point for flag-service preview + Rust SDK; canonical HashInputSpec end-to-end Admin UI → REST → proto → PG → core → SDK; multi-context SDK input enabling cross-context percentage hashing; closes SDK default_rule_distribution gap. Includes post-merge wisp fixing utp/yrj/7yc backend eval, jte service-boot retry, and 8 admin UI bugs (tcy/zh9/042/42f/hw9/e7v/xf2/2zv) with 4 regression tests.)
+-->
 
-## [x] Track: Unify Feature-Flag Variant Evaluation (Service Preview + SDK) with Canonical Cross-Context Percentage-Hash Schema
-*Link: [./conductor/tracks/flag_eval_unify_20260522/](./conductor/tracks/flag_eval_unify_20260522/)*
+---

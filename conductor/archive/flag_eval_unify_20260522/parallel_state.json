@@ -1,0 +1,37 @@
+{
+  "wave": 1,
+  "phase_set": ["phase2", "phase3"],
+  "execution_mode": "parallel",
+  "started_at": "2026-05-22T13:15:00Z",
+  "workers": [
+    {
+      "worker_id": "worker_2_phase2_core",
+      "phase": "Phase 2: Core orchestration",
+      "beads_milestone": "feature-flag-ncq.2",
+      "beads_tasks": ["feature-flag-ncq.2.1", "feature-flag-ncq.2.2", "feature-flag-ncq.2.3", "feature-flag-ncq.2.4", "feature-flag-ncq.2.5", "feature-flag-ncq.2.6", "feature-flag-ncq.2.7", "feature-flag-ncq.2.8", "feature-flag-ncq.2.9", "feature-flag-ncq.2.10"],
+      "worktree": ".worktrees/flag_eval_unify_20260522_worker_2_phase2_core",
+      "branch": "track_flag_eval_unify_20260522_worker_2_phase2_core",
+      "owns": ["crates/stitchd-core/**"],
+      "sibling_files_do_not_touch": ["crates/stitchd-proto/**", "crates/stitchd-db/migrations/**", "crates/xtask/**", "crates/stitchd-flag-service/src/mapping.rs"],
+      "status": "in_progress",
+      "started_at": "2026-05-22T13:15:00Z"
+    },
+    {
+      "worker_id": "worker_3_phase3_protopg",
+      "phase": "Phase 3: Proto + PG schema migration",
+      "beads_milestone": "feature-flag-ncq.3",
+      "beads_tasks": ["feature-flag-ncq.3.1", "feature-flag-ncq.3.2", "feature-flag-ncq.3.3", "feature-flag-ncq.3.4", "feature-flag-ncq.3.5", "feature-flag-ncq.3.6", "feature-flag-ncq.3.7"],
+      "worktree": ".worktrees/flag_eval_unify_20260522_worker_3_phase3_protopg",
+      "branch": "track_flag_eval_unify_20260522_worker_3_phase3_protopg",
+      "owns": ["crates/stitchd-proto/**", "crates/stitchd-db/migrations/**", "crates/xtask/**"],
+      "sibling_files_do_not_touch": ["crates/stitchd-core/**", "crates/stitchd-flag-service/src/mapping.rs", "crates/stitchd-flag-service/src/service.rs"],
+      "status": "in_progress",
+      "started_at": "2026-05-22T13:15:00Z"
+    }
+  ],
+  "completed_workers": 0,
+  "total_workers": 2,
+  "shared_seam_files": [
+    "crates/stitchd-flag-service/src/mapping.rs (DEFERRED — neither worker touches; updated in Phase 5/6 rewire)"
+  ]
+}
