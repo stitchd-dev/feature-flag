@@ -1360,6 +1360,10 @@ pub fn test_router(_client: Arc<GatewayState>, state: Arc<GatewayState>) -> axum
             put(update_flag_hashing),
         )
         .route(
+            "/v1/projects/{project_id}/flags/{flag_key}/default-rule-distribution",
+            post(set_default_rule_distribution),
+        )
+        .route(
             "/v1/projects/{project_id}/flags/{flag_id}/evaluate-preview",
             post(evaluate_preview),
         )
@@ -1674,5 +1678,251 @@ mod tests {
         };
         let admin = flag_to_admin_json(&flag);
         assert_eq!(admin.status, "archived");
+    }
+
+    // ─── Phase 4 (flag_eval_unify_20260522): hash_inputs validation ───────────
+
+    /// Helper: PUT a rules-replace body and return the response status code.
+    async fn put_rules_status(body: &str) -> StatusCode {
+        let state = make_stub_state();
+        let app = test_router(Arc::clone(&state), state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/v1/projects/env-1/flags/flag-key/rules")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        resp.status()
+    }
+
+    /// Happy path — a valid `hash_inputs` payload SHOULD bypass the validator
+    /// (returns OK / NOT_FOUND / BAD_GATEWAY depending on stub behaviour).
+    /// MUST NOT return 400.
+    #[tokio::test]
+    async fn update_rules_accepts_hash_inputs_happy_path() {
+        let body = r#"{
+            "rules": [{
+                "condition": null,
+                "output": {
+                    "allocation": {
+                        "hash_inputs": [
+                            {"kind":"context_key","context_type":"user"},
+                            {"kind":"context_parameter","context_type":"device","parameter":"os"}
+                        ],
+                        "buckets": [
+                            {"variant_key":"on","weight_milli":500},
+                            {"variant_key":"off","weight_milli":500}
+                        ]
+                    }
+                }
+            }],
+            "version": 1
+        }"#;
+        let status = put_rules_status(body).await;
+        assert_ne!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "happy-path body must not 400 (got {status})"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rules_rejects_empty_hash_inputs() {
+        let body = r#"{
+            "rules": [{
+                "condition": null,
+                "output": {
+                    "allocation": {
+                        "hash_inputs": [],
+                        "buckets": [{"variant_key":"on","weight_milli":1000}]
+                    }
+                }
+            }],
+            "version": 1
+        }"#;
+        let status = put_rules_status(body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "empty hash_inputs must return 400"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rules_rejects_duplicate_selectors() {
+        let body = r#"{
+            "rules": [{
+                "condition": null,
+                "output": {
+                    "allocation": {
+                        "hash_inputs": [
+                            {"kind":"context_key","context_type":"user"},
+                            {"kind":"context_key","context_type":"user"}
+                        ],
+                        "buckets": [{"variant_key":"on","weight_milli":1000}]
+                    }
+                }
+            }],
+            "version": 1
+        }"#;
+        let status = put_rules_status(body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "duplicate hash_inputs selectors must return 400"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rules_rejects_duplicate_parameter_selectors() {
+        let body = r#"{
+            "rules": [{
+                "condition": null,
+                "output": {
+                    "allocation": {
+                        "hash_inputs": [
+                            {"kind":"context_parameter","context_type":"user","parameter":"plan"},
+                            {"kind":"context_parameter","context_type":"user","parameter":"plan"}
+                        ],
+                        "buckets": [{"variant_key":"on","weight_milli":1000}]
+                    }
+                }
+            }],
+            "version": 1
+        }"#;
+        let status = put_rules_status(body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "duplicate parameter selectors must return 400"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_rules_rejects_parameter_selector_missing_parameter() {
+        // `kind: context_parameter` MUST have a non-empty `parameter` field.
+        let body = r#"{
+            "rules": [{
+                "condition": null,
+                "output": {
+                    "allocation": {
+                        "hash_inputs": [
+                            {"kind":"context_parameter","context_type":"user","parameter":""}
+                        ],
+                        "buckets": [{"variant_key":"on","weight_milli":1000}]
+                    }
+                }
+            }],
+            "version": 1
+        }"#;
+        let status = put_rules_status(body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "context_parameter selector with empty parameter must return 400"
+        );
+    }
+
+    /// Helper: POST a default-rule-distribution body and return the status.
+    async fn post_default_rule_dist_status(body: &str) -> StatusCode {
+        let state = make_stub_state();
+        let app = test_router(Arc::clone(&state), state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/projects/env-1/flags/flag-key/default-rule-distribution")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        resp.status()
+    }
+
+    /// Happy path: default-rule distribution carrying `hash_inputs` is
+    /// accepted (validator does not 400 it).
+    #[tokio::test]
+    async fn default_rule_distribution_accepts_hash_inputs_happy_path() {
+        let body = r#"{
+            "distribution": {
+                "allocations": [
+                    {"variant_key":"on","percentage":50.0},
+                    {"variant_key":"off","percentage":50.0}
+                ],
+                "hash_inputs": [
+                    {"kind":"context_key","context_type":"user"}
+                ]
+            },
+            "version": 1
+        }"#;
+        let status = post_default_rule_dist_status(body).await;
+        assert_ne!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "happy-path default-rule distribution body must not 400 (got {status})"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_rule_distribution_rejects_empty_hash_inputs() {
+        let body = r#"{
+            "distribution": {
+                "allocations": [{"variant_key":"on","percentage":100.0}],
+                "hash_inputs": []
+            },
+            "version": 1
+        }"#;
+        let status = post_default_rule_dist_status(body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "default-rule with empty hash_inputs must return 400"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_rule_distribution_rejects_duplicate_hash_inputs() {
+        let body = r#"{
+            "distribution": {
+                "allocations": [{"variant_key":"on","percentage":100.0}],
+                "hash_inputs": [
+                    {"kind":"context_key","context_type":"user"},
+                    {"kind":"context_key","context_type":"user"}
+                ]
+            },
+            "version": 1
+        }"#;
+        let status = post_default_rule_dist_status(body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "default-rule with duplicate selectors must return 400"
+        );
+    }
+
+    #[tokio::test]
+    async fn default_rule_distribution_rejects_parameter_selector_missing_parameter() {
+        let body = r#"{
+            "distribution": {
+                "allocations": [{"variant_key":"on","percentage":100.0}],
+                "hash_inputs": [
+                    {"kind":"context_parameter","context_type":"user","parameter":""}
+                ]
+            },
+            "version": 1
+        }"#;
+        let status = post_default_rule_dist_status(body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "default-rule with empty parameter must return 400"
+        );
     }
 }
