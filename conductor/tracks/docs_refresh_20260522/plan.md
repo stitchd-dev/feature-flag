@@ -9,7 +9,7 @@ rewritten doc resolves to a live symbol (grep audit).
 ## Phase 1: Discovery, Orphan Cleanup, Baseline
 <!-- execution: sequential -->
 
-- [ ] Task 1.1: Audit doc inventory — produce table of every `.md` under `docs/src/`,
+- [x] Task 1.1: Audit doc inventory — produce table of every `.md` under `docs/src/`,
       every `crates/*/README.md`, every reference doc (README.md, CONTRIBUTING if present),
       tagged `auto-generated | narrative | orphan | shared-readme`.
 - [ ] Task 1.2: Delete orphaned `docs/src/internal/*` subtree

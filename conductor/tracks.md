@@ -66,7 +66,7 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Docs Refresh & Autogeneration Pipeline
+## [~] Track: Docs Refresh & Autogeneration Pipeline
 *Link: [./conductor/tracks/docs_refresh_20260522/](./conductor/tracks/docs_refresh_20260522/)*
 
 Bulk-replace stale mdBook narrative pages against current code, extend `cargo xtask docs`
