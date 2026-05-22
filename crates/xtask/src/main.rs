@@ -1,3 +1,11 @@
+//! `xtask` — workspace utility commands invoked via `cargo xtask <task>`.
+//!
+//! Implements two tasks:
+//! - `docs` — regenerate gRPC reference, OpenAPI JSON, env-vars table, SDK rustdoc, and
+//!   the mdBook site under `docs/book/`. Idempotent: running twice produces no diff.
+//! - `scylla-migrate` — apply pending CQL migrations from
+//!   `crates/stitchd-db/scylla-migrations/` against the configured ScyllaDB cluster.
+
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -56,6 +64,7 @@ fn docs() -> Result<()> {
 
     ensure_tool("mdbook", "^0.5")?;
     ensure_tool("mdbook-mermaid", "^0.17")?;
+    ensure_cargo_subcommand("cargo-rdme", "^1.5")?;
 
     // Step 1: Generate gRPC reference from .proto files
     generate_grpc_docs(&root)?;
@@ -63,13 +72,55 @@ fn docs() -> Result<()> {
     export_openapi(&root)?;
     // Step 3: Generate env-vars reference by scraping STITCHD_ usage from Rust source
     generate_env_vars(&root)?;
-    // Step 4: Build rustdoc for stitchd-sdk-rust and copy into docs/
+    // Step 4: Regenerate every crate-level README.md from its `//!` rustdoc
+    generate_crate_readmes(&root)?;
+    // Step 5: Build rustdoc for stitchd-sdk-rust and copy into docs/
     generate_sdk_rustdoc(&root)?;
 
-    // Step 5: build the mdBook site
+    // Step 6: build the mdBook site
     mdbook_build(&root)?;
 
     println!("✓ Documentation built at docs/book/");
+    Ok(())
+}
+
+/// All workspace crates that should have a `cargo-rdme`-generated README.md, by
+/// `package.name` in Cargo.toml (NOT directory name — `sdks/rust/Cargo.toml`'s package
+/// name is `stitchd-sdk-rust`).
+const CRATE_README_TARGETS: &[&str] = &[
+    "stitchd-analytics-service",
+    "stitchd-auth-service",
+    "stitchd-core",
+    "stitchd-db",
+    "stitchd-event-writer",
+    "stitchd-experimentation-service",
+    "stitchd-flag-service",
+    "stitchd-gateway",
+    "stitchd-proto",
+    "stitchd-segmentation-service",
+    "stitchd-stats-service",
+    "stitchd-sdk-rust",
+    "xtask",
+];
+
+fn generate_crate_readmes(root: &Path) -> Result<()> {
+    println!("Regenerating crate READMEs via cargo-rdme");
+    for name in CRATE_README_TARGETS {
+        let status = Command::new("cargo")
+            .args([
+                "rdme",
+                "--workspace-project",
+                name,
+                "--intralinks-strip-links",
+            ])
+            .current_dir(root)
+            .status()
+            .with_context(|| format!("failed to run cargo-rdme for {name}"))?;
+        anyhow::ensure!(
+            status.success(),
+            "`cargo rdme --workspace-project {name}` exited with {status}"
+        );
+    }
     Ok(())
 }
 
@@ -1123,6 +1174,35 @@ fn ensure_tool(name: &str, version: &str) -> Result<()> {
     anyhow::ensure!(
         status.success(),
         "`cargo install {name}` exited with {status}"
+    );
+    Ok(())
+}
+
+/// Same as [`ensure_tool`] but for tools whose binary name is `cargo-<X>` and that are
+/// invoked as `cargo <X>`. Checks via `cargo <X> --version` instead of `which`.
+fn ensure_cargo_subcommand(crate_name: &str, version: &str) -> Result<()> {
+    // crate_name is e.g. "cargo-rdme"; subcommand is the part after the dash.
+    let subcommand = crate_name.strip_prefix("cargo-").unwrap_or(crate_name);
+    let check = Command::new("cargo")
+        .args([subcommand, "--version"])
+        .output();
+    if matches!(check, Ok(o) if o.status.success()) {
+        return Ok(());
+    }
+    println!("Installing {crate_name}@{version} via `cargo install`…");
+    let status = Command::new("cargo")
+        .args([
+            "install",
+            "--locked",
+            "--version",
+            version,
+            crate_name,
+        ])
+        .status()
+        .with_context(|| format!("failed to run `cargo install {crate_name}`"))?;
+    anyhow::ensure!(
+        status.success(),
+        "`cargo install {crate_name}` exited with {status}"
     );
     Ok(())
 }

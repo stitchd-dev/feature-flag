@@ -1,6 +1,56 @@
 # stitchd-sdk-rust — Rust Server-Side Feature Flag SDK
 
-`stitchd-sdk-rust` is a server-side Rust SDK for the Stitchd Feature Flag platform. It evaluates flags entirely in-process using a locally-cached definition snapshot that is continuously synchronized from the Stitchd gateway via gRPC polling. Optional LFU list-segment membership is maintained in a bounded LRU cache, and evaluation events are submitted to the gateway asynchronously via a fire-and-forget batch flush — keeping the hot evaluation path free of network I/O. Conforms to the language-agnostic contract in [`sdks/spec/`](../spec/).
+<!-- cargo-rdme start -->
+
+## stitchd-sdk-rust — Server-Side Rust SDK for Stitchd Feature Flags
+
+Embed this crate (`stitchd-sdk-rust`) in a backend service to evaluate
+feature flags entirely in-process. Flag and segment definitions are pulled
+from `stitchd-gateway` via gRPC polling and cached locally; list-segment
+membership is maintained in a bounded LRU cache. Evaluation events are
+submitted asynchronously via a fire-and-forget batch flush, keeping the
+hot evaluation path free of network I/O.
+
+This crate conforms to the language-agnostic SDK contract defined in
+`sdks/spec/`. See `sdks/spec/docs/` for the canonical evaluation algorithm,
+caching rules, polling lifecycle, and event-delivery semantics.
+
+## Quickstart
+
+```rust
+use stitchd_sdk_rust::{SdkClient, SdkConfig, EvalRequest};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = SdkConfig {
+        gateway_url: "http://localhost:8081".to_string(),
+        sdk_key:     std::env::var("STITCHD_SDK_KEY")?,
+        ..Default::default()
+    };
+
+    let client = SdkClient::init(config).await?;
+    let ctx    = stitchd_core::context::Context::new("user", "alice");
+    let results = client
+        .evaluate(&[EvalRequest::flag("my-flag", ctx)])
+        .await;
+    println!("variant = {}", results[0].variant_key);
+    client.shutdown(std::time::Duration::from_secs(5)).await?;
+    Ok(())
+}
+```
+
+## Modules
+
+- [`config`]       — [`SdkConfig`] and defaults
+- [`client`]       — [`SdkClient`], [`EvalRequest`], [`EvalResult`]
+- [`error`]        — [`SdkError`] taxonomy
+- [`event_buffer`] — client-side track-event buffer + flush (Phase 5)
+- [`events`]       — fire-and-forget flag-evaluation event queue
+- [`lru`]          — bounded list-segment membership cache
+- [`polling`]      — gRPC definition sync loop
+- [`snapshot`]     — immutable [`DefinitionSnapshot`] and [`DefinitionStore`]
+
+<!-- cargo-rdme end -->
 
 ## Installation
 

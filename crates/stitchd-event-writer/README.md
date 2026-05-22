@@ -1,6 +1,12 @@
 # stitchd-event-writer
 
-ClickHouse event ingestion library. Provides the `EventWriter` and schema migration helpers used by `stitchd-analytics-service`.
+<!-- cargo-rdme start -->
+
+ClickHouse event ingestion for experiments and metrics.
+
+Only pre-registered events with known types are accepted at the ingestion boundary.
+
+<!-- cargo-rdme end -->
 
 ## Modules
 

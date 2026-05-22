@@ -1,6 +1,15 @@
 # stitchd-flag-service
 
-gRPC microservice that owns flag definitions, variant configurations, and SDK flag-sync streaming.
+<!-- cargo-rdme start -->
+
+`stitchd-flag-service` — gRPC microservice that owns the `feature_flags` PostgreSQL
+schema and the flag evaluation hot path.
+
+Exposes the `FlagService` and `FlagSync` proto contracts via tonic. Used by the gateway
+for synchronous CRUD calls and by SDKs (via the gateway's `/v1/sdk/*` proxy) for high-
+throughput definition sync + evaluation.
+
+<!-- cargo-rdme end -->
 
 Listens on `:50052` and exposes two gRPC services:
 

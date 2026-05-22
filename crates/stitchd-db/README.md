@@ -1,6 +1,13 @@
 # stitchd-db
 
-Database access layer for the Stitchd platform. Provides compile-time-verified SQL repositories via `sqlx` (PostgreSQL) and a ClickHouse client for event data.
+<!-- cargo-rdme start -->
+
+Database access layer: sqlx queries, migrations, and repository implementations.
+
+All SQL queries use compile-time checked `sqlx::query!` / `sqlx::query_as!` macros.
+Schema changes are managed via migrations in `migrations/`.
+
+<!-- cargo-rdme end -->
 
 ## Repositories
 
