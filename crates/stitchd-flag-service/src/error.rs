@@ -31,6 +31,20 @@ pub enum FlagServiceError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
+    /// A `hash_inputs` selector list failed server-side validation.
+    /// Phase 4 of `flag_eval_unify_20260522`: empty list, duplicate
+    /// selectors by `(context_type, field)` identity, or a
+    /// `ContextParameter` selector with an empty `parameter`.
+    #[error("invalid hash_inputs: {0}")]
+    InvalidHashInputs(String),
+
+    /// A `default_rule_distribution.variant_key` referenced an unknown
+    /// variant on the flag. Phase 4 of `flag_eval_unify_20260522` —
+    /// reinstates the diagnostic that core's purity-bound
+    /// `evaluate_flag` had to drop.
+    #[error("default_rule_distribution: unknown variant_key `{variant_key}`")]
+    UnknownDefaultRuleVariant { variant_key: String },
+
     /// The targeted flag is locked because an experiment in
     /// `running`/`paused` status is bound to it. Every admin mutation on
     /// such a flag must be rejected until the experiment is stopped.
@@ -77,6 +91,12 @@ impl From<FlagServiceError> for Status {
             )),
             FlagServiceError::Conflict(msg) => Self::already_exists(msg),
             FlagServiceError::InvalidArgument(msg) => Self::invalid_argument(msg),
+            FlagServiceError::InvalidHashInputs(msg) => {
+                Self::invalid_argument(format!("invalid_hash_inputs: {msg}"))
+            }
+            FlagServiceError::UnknownDefaultRuleVariant { variant_key } => Self::invalid_argument(
+                format!("invalid_distribution: unknown variant_key `{variant_key}`"),
+            ),
             FlagServiceError::FlagLocked { experiment_id } => {
                 Self::failed_precondition(format!("{FLAG_LOCKED_STATUS_PREFIX}{experiment_id}"))
             }

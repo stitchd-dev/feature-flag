@@ -4,11 +4,15 @@
 
 `xtask` — workspace utility commands invoked via `cargo xtask <task>`.
 
-Implements two tasks:
+Implements three tasks:
 - `docs` — regenerate gRPC reference, OpenAPI JSON, env-vars table, SDK rustdoc, and
   the mdBook site under `docs/book/`. Idempotent: running twice produces no diff.
 - `scylla-migrate` — apply pending CQL migrations from
   `crates/stitchd-db/scylla-migrations/` against the configured ScyllaDB cluster.
+- `verify-hash-cutover` — re-hash a frozen corpus of `(legacy
+  context_hash_specs, new hash_inputs)` pairs and report bucket-identical vs.
+  operator-review-required percentages. See Phase 3 of
+  `conductor/tracks/flag_eval_unify_20260522/`.
 
 <!-- cargo-rdme end -->
 
