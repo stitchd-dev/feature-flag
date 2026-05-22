@@ -5,9 +5,7 @@ use crate::id::{EnvironmentId, ProjectId, SegmentId};
 use crate::rule_engine::error::RuleEngineError;
 use crate::rule_engine::eval_expr::evaluate_expr;
 use crate::rule_engine::eval_rules::evaluate_rules;
-use crate::rule_engine::types::{
-    EvaluationInput, PercentageTarget, Rule, RuleOutput, TargetField,
-};
+use crate::rule_engine::types::{EvaluationInput, PercentageTarget, Rule, RuleOutput, TargetField};
 use crate::segment::{SegmentDefinition, SegmentEvaluator};
 use crate::variants::VariantValue;
 use std::collections::{HashMap, HashSet};
@@ -92,7 +90,17 @@ pub fn evaluate_flag(
     let _ = project_id; // reserved for future hash-salt extensions
     contexts
         .iter()
-        .map(|ctx| evaluate_one(flag, ctx, contexts, rule_based_segments, list_segment_memberships, environment_id, trace))
+        .map(|ctx| {
+            evaluate_one(
+                flag,
+                ctx,
+                contexts,
+                rule_based_segments,
+                list_segment_memberships,
+                environment_id,
+                trace,
+            )
+        })
         .collect()
 }
 
@@ -213,8 +221,7 @@ fn evaluate_one(
 
                     let flag_key = flag.record.key.as_str();
                     let env_str = environment_id.to_string();
-                    let percentage =
-                        calculate_allocation(flag_key, &env_str, &target_values);
+                    let percentage = calculate_allocation(flag_key, &env_str, &target_values);
                     let bucket = ((percentage * 10.0).floor() as u32).min(999);
 
                     // Build per-variant ranges + identify winning bucket.
@@ -293,7 +300,9 @@ fn evaluate_one(
 
     // ── 4. Default-rule percentage distribution (no rule matched) ─────────
     let outcome = if let Some(rule_idx) = fired_rule_index {
-        EvalOutcome::RuleMatch { rule_index: rule_idx }
+        EvalOutcome::RuleMatch {
+            rule_index: rule_idx,
+        }
     } else if let Some(dist) = flag.record.default_rule_distribution.as_ref() {
         // Default-rule distribution: hash using all bundle context keys
         // (same convention as the legacy `FlagEvaluator::evaluate` and
@@ -1648,10 +1657,8 @@ mod tests {
         let bundle = vec![
             Context::new("user", "alice")
                 .with_parameter("name", ParameterValue::Str("Alice".to_string())),
-            Context::new("device", "d1").with_parameter(
-                "os",
-                ParameterValue::Str("macOS".to_string()),
-            ),
+            Context::new("device", "d1")
+                .with_parameter("os", ParameterValue::Str("macOS".to_string())),
             Context::new("application", "stitchd-admin"),
         ];
         let spec = HashInputSpec::new(vec![
@@ -1785,7 +1792,13 @@ mod tests {
                 TraceLevel::Full,
             );
             // hash_input must include BOTH the user key and the OS value
-            let dbg = results[0].trace.as_ref().unwrap().rollout_debug.as_ref().unwrap();
+            let dbg = results[0]
+                .trace
+                .as_ref()
+                .unwrap()
+                .rollout_debug
+                .as_ref()
+                .unwrap();
             assert!(
                 dbg.hash_input.contains(&format!("u{i}")),
                 "hash_input must contain user.key"
@@ -1897,13 +1910,11 @@ mod tests {
                 rule: Rule {
                     id: RuleId::new(),
                     name: None,
-                    condition: ConditionExpr::Leaf(
-                        crate::rule_engine::condition::Condition::Eq {
-                            context_type: "user".into(),
-                            param: format!("param{i}"),
-                            value: ParameterValue::Bool(true),
-                        },
-                    ),
+                    condition: ConditionExpr::Leaf(crate::rule_engine::condition::Condition::Eq {
+                        context_type: "user".into(),
+                        param: format!("param{i}"),
+                        value: ParameterValue::Bool(true),
+                    }),
                     output: RuleOutput::Variant(on_id),
                 },
             });
@@ -1967,7 +1978,13 @@ mod tests {
             proj,
             TraceLevel::Full,
         );
-        let dbg = results[0].trace.as_ref().unwrap().rollout_debug.as_ref().unwrap();
+        let dbg = results[0]
+            .trace
+            .as_ref()
+            .unwrap()
+            .rollout_debug
+            .as_ref()
+            .unwrap();
         assert!(dbg.hash_input.contains("alice"));
         // Result must be one of the two variants — not a panic.
         assert!(

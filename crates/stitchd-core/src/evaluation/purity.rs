@@ -119,11 +119,7 @@ mod tests {
         // Catch `use tokio::…`, `use reqwest::…`, `use sqlx::…` import
         // lines at module level. These would be transitive deps the
         // evaluation module pulls in even if no call site uses them.
-        const FORBIDDEN_USE_PREFIXES: &[&str] = &[
-            "use tokio::",
-            "use reqwest::",
-            "use sqlx::",
-        ];
+        const FORBIDDEN_USE_PREFIXES: &[&str] = &["use tokio::", "use reqwest::", "use sqlx::"];
         for path in evaluation_module_files() {
             let raw = fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
