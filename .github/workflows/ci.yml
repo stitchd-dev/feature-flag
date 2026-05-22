@@ -69,6 +69,10 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          # Proto files are compiled by build.rs; a proto change must bust
+          # the build cache even when Cargo.lock is unchanged.
+          key: proto-${{ hashFiles('proto/**/*.proto', 'sdks/spec/proto/**/*.proto') }}
 
       - name: Install sqlx-cli
         uses: taiki-e/install-action@v2
@@ -101,6 +105,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          key: proto-${{ hashFiles('proto/**/*.proto', 'sdks/spec/proto/**/*.proto') }}
 
       - name: Run Clippy
         # SDK crate is `stitchd-sdk-rust` (renamed during sdk_rewrite_20260516).
@@ -158,6 +164,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          key: proto-${{ hashFiles('proto/**/*.proto', 'sdks/spec/proto/**/*.proto') }}
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
@@ -313,6 +321,8 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          key: proto-${{ hashFiles('proto/**/*.proto', 'sdks/spec/proto/**/*.proto') }}
 
       - name: Install xtask-managed CLI tools
         # xtask auto-installs missing tools via `cargo install` at runtime, but
