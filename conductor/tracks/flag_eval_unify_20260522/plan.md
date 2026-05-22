@@ -157,30 +157,32 @@ Define the canonical types — every later phase consumes them.
 ## Phase 6: SDK rewire + multi-context EvalRequest + API consolidation
 <!-- depends: phase2, phase3 -->
 
-- [ ] Task 1: Write failing test for `EvalRequest { flag_key, contexts: Vec<Context> }`
-      accepting a multi-context bundle.
-- [ ] Task 2: Write failing test for unified
+- [x] Task 1: Write failing test for `EvalRequest { flag_key, contexts: Vec<Context> }`
+      accepting a multi-context bundle. [c8068a3]
+- [x] Task 2: Write failing test for unified
       `SdkClient::evaluate(&[EvalRequest], TraceLevel)`:
-      thin result when `Off`, rich `EvaluationTrace` when `Full`.
-- [ ] Task 3: Write failing **parity test** (lives in
+      thin result when `Off`, rich `EvaluationTrace` when `Full`. [c8068a3]
+- [x] Task 3: Write failing **parity test** (lives in
       `crates/stitchd-flag-service/tests/` or `sdks/rust/tests/`): for a
       shared corpus of flags + contexts + segment configs + memberships,
       preview and SDK paths return identical variants + identical traces.
       Corpus includes at least one cross-context-hash flag and one
-      default-rule-distribution flag.
-- [ ] Task 4: Write failing SDK-side cross-context hashing test:
+      default-rule-distribution flag. [e46c732]
+- [x] Task 4: Write failing SDK-side cross-context hashing test:
       EvalRequest with user + device + application contexts, percentage
-      rule mixes key + parameter selectors.
-- [ ] Task 5: Update `EvalRequest` + `EvalResult` public types; collapse
-      `evaluate` and `evaluate_with_reasoning` into one method.
-- [ ] Task 6: Delete `evaluate_inner` + `resolve_segments` in
+      rule mixes key + parameter selectors. [c8068a3]
+- [x] Task 5: Update `EvalRequest` + `EvalResult` public types; collapse
+      `evaluate` and `evaluate_with_reasoning` into one method. [c8068a3]
+- [x] Task 6: Delete `evaluate_inner` + `resolve_segments` in
       `sdks/rust/src/client.rs`. New SDK eval path: snapshot → list-membership
-      cache lookup → assemble `ListMembershipIndex` → `evaluate_flag`.
-- [ ] Task 7: Update SDK integration tests, in-tree examples, crate-level
-      rustdoc Quickstart, `sdks/rust/README.md`.
-- [ ] Task 8: SDK gains `default_rule_distribution` support automatically
-      via core; assert via parity test on a default-rule-distribution flag.
-- [ ] Task 9: Conductor - User Manual Verification 'Phase 6' (Protocol in workflow.md)
+      cache lookup → assemble `ListMembershipIndex` → `evaluate_flag`. [c8068a3]
+- [x] Task 7: Update SDK integration tests, in-tree examples, crate-level
+      rustdoc Quickstart, `sdks/rust/README.md`. [c8068a3, 2002276]
+- [x] Task 8: SDK gains `default_rule_distribution` support automatically
+      via core; assert via parity test on a default-rule-distribution flag. [e46c732, 2002276]
+- [x] Task 9: Conductor - User Manual Verification 'Phase 6' (Protocol in workflow.md)
+      [autonomous: 139 lib + 8 conformance + 3 parity + 1 doc tests pass for stitchd-sdk-rust;
+      clippy --all-targets --features test-util -D warnings clean; cargo fmt --all --check clean]
 
 ---
 

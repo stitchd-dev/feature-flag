@@ -19,7 +19,7 @@ caching rules, polling lifecycle, and event-delivery semantics.
 
 ```rust
 use std::time::Duration;
-use stitchd_sdk_rust::{EvalRequest, SdkClient, SdkConfig};
+use stitchd_sdk_rust::{EvalRequest, SdkClient, SdkConfig, TraceLevel};
 use stitchd_core::context::Context;
 
 #[tokio::main]
@@ -36,13 +36,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // spawns the three background tasks (poll, LRU refresh, event flush).
     let client = SdkClient::init(config).await?;
 
-    // Evaluate a flag for a `(context_type, key)` tuple.
+    // Evaluate a flag for a `(context_type, key)` tuple. Each `EvalRequest`
+    // carries a context BUNDLE (`contexts: Vec<Context>`) — supply every
+    // context type referenced by the flag's rules and/or its
+    // percentage-hash selectors.
     let context = Context::new("user", "alice");
     let results = client
-        .evaluate(&[EvalRequest {
-            flag_key: "checkout-flow".to_string(),
-            context,
-        }])
+        .evaluate(
+            &[EvalRequest::single("checkout-flow", context)],
+            TraceLevel::Off,
+        )
         .await;
     println!("variant = {}", results[0].variant_key);
 
@@ -77,29 +80,36 @@ tokio            = { version = "1", features = ["full"] }
 ## Quickstart
 
 ```rust
-use stitchd_sdk_rust::{SdkClient, SdkConfig, EvalRequest};
+use std::time::Duration;
+use stitchd_sdk_rust::{EvalRequest, SdkClient, SdkConfig, TraceLevel};
 use stitchd_core::context::Context;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = SdkConfig {
-        gateway_url: "http://localhost:8081".to_string(),
-        sdk_key:     std::env::var("STITCHD_SDK_KEY")?,
-        ..Default::default()
-    };
+    let config = SdkConfig::new(
+        "http://localhost:8081",
+        std::env::var("STITCHD_SDK_KEY")?,
+    );
 
     let client = SdkClient::init(config).await?;
 
+    // Single-context bundle. For flags whose percentage hash references
+    // multiple context types (e.g. user + device + application), build
+    // an `EvalRequest { flag_key, contexts: vec![user, device, app] }`
+    // directly to feed the full bundle.
     let context = Context::new("user", "alice")
         .with_parameter("plan", "pro".into());
 
     let results = client
-        .evaluate(&[EvalRequest::flag("checkout-flow", context)])
+        .evaluate(
+            &[EvalRequest::single("checkout-flow", context)],
+            TraceLevel::Off,
+        )
         .await;
 
     println!("variant = {}", results[0].variant_key);
 
-    client.shutdown().await;
+    client.shutdown(Duration::from_secs(5)).await?;
     Ok(())
 }
 ```
@@ -121,20 +131,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Evaluation
 
-`SdkClient::evaluate` accepts a slice of `EvalRequest` values and returns a
-`Vec<EvalResult>` in the same order. Each result contains:
+`SdkClient::evaluate(&[EvalRequest], TraceLevel)` accepts a slice of
+`EvalRequest` values and returns a `Vec<EvalResult>` — one entry per
+`(request, context_in_bundle)` pair. Each result contains:
 
 - `flag_key` — echoed from the request
 - `variant_key` — the assigned variant key (empty string when `FlagNotFound`)
 - `variant_value` — the variant's JSON value (`serde_json::Value`)
-- `outcome` — `EvalOutcome::{Matched, DefaultRule, Disabled, FlagNotFound}`
+- `outcome` — `EvalOutcome::{Matched, DefaultRule, DefaultRuleDistribution, Disabled, FlagNotFound}`
+- `context_index` — 0-based position of this result's context within the
+  request's `contexts` bundle
+- `trace: Option<EvaluationTrace>` — populated only when
+  `TraceLevel::Full` is requested; carries per-rule + per-condition trace
+  detail plus rollout-debug info
 
-To include rule traces:
+### Multi-context bundles (cross-context hashing)
+
+A single `EvalRequest` may bundle multiple `Context` values — typically
+one per `context_type` the flag's rules or its percentage-hash
+`HashInputSpec` reference. The unified evaluator (shared with the flag
+service's preview endpoint) draws hash inputs from the full bundle:
 
 ```rust
-let results = client.evaluate_with_reasoning(&requests).await;
-let trace = &results[0].reasoning;
-// trace.matched_rule_index, trace.matched_rule_name
+let user = Context::new("user", "alice")
+    .with_parameter("tier", "gold".into());
+let device = Context::new("device", "iphone-12")
+    .with_parameter("os", "ios".into());
+let app = Context::new("application", "v2");
+
+let results = client
+    .evaluate(
+        &[EvalRequest {
+            flag_key: "cross-ctx-flag".to_string(),
+            contexts: vec![user, device, app],
+        }],
+        TraceLevel::Off,
+    )
+    .await;
+```
+
+### Rich tracing
+
+```rust
+use stitchd_sdk_rust::TraceLevel;
+
+let results = client.evaluate(&requests, TraceLevel::Full).await;
+if let Some(trace) = &results[0].trace {
+    // trace.fired_rule_name, trace.fired_rule_id,
+    // trace.rule_traces, trace.rollout_debug
+}
 ```
 
 ## Background tasks
