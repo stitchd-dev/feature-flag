@@ -1,12 +1,94 @@
-use crate::context::EvaluationContext;
+use crate::context::{Context, EvaluationContext};
 use crate::flag::{Flag, Variant};
 use crate::hashing::calculate_allocation;
-use crate::id::{EnvironmentId, SegmentId};
+use crate::id::{EnvironmentId, ProjectId, SegmentId};
 use crate::rule_engine::error::RuleEngineError;
 use crate::rule_engine::eval_rules::evaluate_rules;
 use crate::rule_engine::types::{EvaluationInput, Rule, RuleOutput, TargetField};
+use crate::segment::SegmentDefinition;
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
+
+use super::types::{FlagEvaluationResult, ListMembershipIndex, TraceLevel};
+
+/// Unified pure entry point for flag variant evaluation.
+///
+/// This is the single orchestrator of:
+///
+/// 1. Rule iteration with first-match semantics,
+/// 2. Rule-based segment evaluation (in-process from supplied segment defs),
+/// 3. List-segment membership lookup (from the caller-supplied index),
+/// 4. Percentage allocation + hash-based variant selection,
+/// 5. Default-rule fallthrough (single variant or hash-based distribution).
+///
+/// Both the flag service's evaluate-preview endpoint and the Rust SDK call
+/// this function — no other code in the project should re-implement variant
+/// orchestration.
+///
+/// # Purity
+///
+/// `evaluate_flag` performs no I/O, no network calls, no clock reads, and no
+/// side-effecting logging. All inputs must be assembled by the caller
+/// (typically: the flag service fetches from PG + Scylla, the SDK reads from
+/// its `DefinitionSnapshot` and `MembershipCache`).
+///
+/// # Trace level
+///
+/// - [`TraceLevel::Off`] — hot-path mode. The returned
+///   [`FlagEvaluationResult::trace`] is `None` and **no trace structures
+///   are allocated**. Used by SDK consumers who only need the variant.
+/// - [`TraceLevel::Full`] — preview / debug mode. Every rule and condition
+///   outcome is captured, plus rollout-debug detail per result.
+///
+/// # Parameters
+///
+/// - `flag` — the flag's record, variants, rules, and
+///   `default_rule_distribution` config.
+/// - `contexts` — the evaluation context bundle. Percentage hashing may pull
+///   key or parameter values from any context in the bundle (see the spec's
+///   FR-2: unified percentage-hash input schema).
+/// - `rule_based_segments` — full definitions of any rule-based segment that
+///   the flag's rules reference. Evaluated in-process by `evaluate_flag`.
+/// - `list_segment_memberships` — pre-computed membership index for any
+///   list-based segment that the flag's rules reference, keyed by
+///   `(context_type, context_key)`. The caller must populate this before
+///   calling (no I/O happens here).
+/// - `environment_id`, `project_id` — used as salt components for the
+///   percentage-allocation hash.
+/// - `trace` — see "Trace level" above.
+///
+/// # Returns
+///
+/// One [`FlagEvaluationResult`] per context in the input bundle, in the
+/// same order as `contexts`.
+///
+/// # Status
+///
+/// **Phase 1 stub.** Body is `todo!()`; the implementation lands in Phase 2
+/// (port the existing preview orchestration into this function and rewire
+/// `evaluate_preview` to call it).
+pub fn evaluate_flag(
+    flag: &Flag,
+    contexts: &[Context],
+    rule_based_segments: &[SegmentDefinition],
+    list_segment_memberships: &ListMembershipIndex,
+    environment_id: EnvironmentId,
+    project_id: ProjectId,
+    trace: TraceLevel,
+) -> Vec<FlagEvaluationResult> {
+    // Phase 1: signature only. Phase 2 ports the body of evaluate_preview /
+    // FlagEvaluator::evaluate / SdkClient::evaluate_inner here.
+    let _ = (
+        flag,
+        contexts,
+        rule_based_segments,
+        list_segment_memberships,
+        environment_id,
+        project_id,
+        trace,
+    );
+    todo!("evaluate_flag is a Phase 1 signature stub; Phase 2 implements the body")
+}
 
 /// A high-level evaluator for feature flags.
 pub struct FlagEvaluator;
