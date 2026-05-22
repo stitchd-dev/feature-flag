@@ -79,11 +79,11 @@ use stitchd_core::id::{EnvironmentId, FlagId, FlagKey, ProjectId, VariantId};
 use stitchd_core::variants::{FlagValueType, VariantValue};
 
 use stitchd_proto::flags::v1::{
-    AllocationBucket, ContextKeySelector as ProtoCtxKey,
-    ContextParameterSelector as ProtoCtxParam, FeatureFlag, FlagRule as ProtoFlagRule,
-    HashSelector as ProtoHashSelector, PercentageAllocation, Variant as ProtoVariant,
-    VariantValue as ProtoVariantValue, flag_rule::Output as ProtoOutput,
-    hash_selector::Selector as ProtoSelectorOneof, variant_value::Value as ProtoVValue,
+    AllocationBucket, ContextKeySelector as ProtoCtxKey, ContextParameterSelector as ProtoCtxParam,
+    FeatureFlag, FlagRule as ProtoFlagRule, HashSelector as ProtoHashSelector,
+    PercentageAllocation, Variant as ProtoVariant, VariantValue as ProtoVariantValue,
+    flag_rule::Output as ProtoOutput, hash_selector::Selector as ProtoSelectorOneof,
+    variant_value::Value as ProtoVValue,
 };
 use stitchd_proto::sdk::v1::SyncDefinitionsResponse;
 
@@ -546,8 +546,7 @@ fn dto_validator_rejects_invalid_shapes() {
         context_type: "device".into(),
         parameter: String::new(),
     }];
-    let err =
-        validate_hash_inputs(&empty_param).expect_err("empty parameter must be rejected");
+    let err = validate_hash_inputs(&empty_param).expect_err("empty parameter must be rejected");
     assert!(err.contains("non-empty `parameter`"), "got: {err}");
 }
 
@@ -573,8 +572,7 @@ async fn cross_context_hashing_preview_and_sdk_agree_end_to_end() {
     //    UI's "Test" panel POSTs to `/evaluate-preview`) ──────────────────
     let bundle = vec![
         Context::new("user", "alice").with_parameter("tier", CoreParam::Str("gold".into())),
-        Context::new("device", "iphone-14")
-            .with_parameter("os", CoreParam::Str("ios".into())),
+        Context::new("device", "iphone-14").with_parameter("os", CoreParam::Str("ios".into())),
         Context::new("application", "stitchd-web"),
     ];
 
@@ -715,9 +713,10 @@ async fn cross_context_hashing_sensitivity_each_selector_lives() {
     let proto_flag = build_proto_flag(&dto);
     let core_flag = build_core_flag_from_proto(&proto_flag);
 
-    let base_user = Context::new("user", "alice").with_parameter("tier", CoreParam::Str("gold".into()));
-    let base_device = Context::new("device", "iphone-14")
-        .with_parameter("os", CoreParam::Str("ios".into()));
+    let base_user =
+        Context::new("user", "alice").with_parameter("tier", CoreParam::Str("gold".into()));
+    let base_device =
+        Context::new("device", "iphone-14").with_parameter("os", CoreParam::Str("ios".into()));
     let base_app = Context::new("application", "stitchd-web");
 
     // The four bundles below mutate ONE selector at a time. If the
@@ -742,8 +741,7 @@ async fn cross_context_hashing_sensitivity_each_selector_lives() {
     ];
     let mut_os = [
         base_user.clone(),
-        Context::new("device", "iphone-14")
-            .with_parameter("os", CoreParam::Str("android".into())),
+        Context::new("device", "iphone-14").with_parameter("os", CoreParam::Str("android".into())),
         base_app.clone(),
     ];
     let mut_app = [
@@ -835,8 +833,7 @@ async fn cross_context_hashing_sensitivity_each_selector_lives() {
     );
 
     // ── And preview + SDK buckets agree per-bundle ──────────────────────
-    for (i, ((label_p, bp), (_, bs))) in
-        preview_buckets.iter().zip(sdk_buckets.iter()).enumerate()
+    for (i, ((label_p, bp), (_, bs))) in preview_buckets.iter().zip(sdk_buckets.iter()).enumerate()
     {
         assert_eq!(
             bp, bs,
