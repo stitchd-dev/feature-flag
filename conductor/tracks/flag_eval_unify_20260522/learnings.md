@@ -41,6 +41,132 @@ Patterns, gotchas, and context discovered during implementation.
 
 <!-- Learnings from implementation will be appended below -->
 
+## [2026-05-22] Phase 6 — SDK rewire + multi-context EvalRequest + API consolidation (Worker P6)
+
+- **Implemented:** Rewired `sdks/rust/src/client.rs::SdkClient::evaluate` to
+  delegate orchestration entirely to
+  `stitchd_core::evaluation::evaluate_flag`. Deleted the duplicate
+  `evaluate_inner` (~120 lines) + `resolve_segments` (~80 lines) inline
+  orchestration. Added proto -> core flag conversion in the SDK
+  (`convert_proto_flag_to_core`, `convert_proto_flag_rule_to_core`,
+  `proto_allocation_to_core`, `proto_to_core_hash_input_spec`,
+  `proto_variant_value_to_core`, `core_variant_value_to_json`,
+  `proto_value_type_to_core`, `parse_env_id`). The conversion prefers the
+  Phase 3 `PercentageAllocation.hash_inputs` selector list and falls
+  back to canonical-sorted legacy `context_hash_specs` for back-compat.
+- **Public-API breaking changes** (SDK is pre-1.0):
+  - `EvalRequest::context: Context` → `EvalRequest::contexts: Vec<Context>`
+    + new `EvalRequest::single(flag_key, ctx)` ergonomic constructor for
+    the common single-context case.
+  - `evaluate(&[EvalRequest]) -> Vec<EvalResult>` + `evaluate_with_reasoning(...)`
+    collapsed into ONE method:
+    `evaluate(&[EvalRequest], TraceLevel) -> Vec<EvalResult>`. The thin
+    vs rich split is gated by `TraceLevel`.
+  - `EvalResult` gains `Option<EvaluationTrace>` (populated only at
+    `TraceLevel::Full`) + `context_index: usize` so callers can correlate
+    results back to the bundle position.
+  - `EvalResult` and `EvalOutcome` gain `DefaultRuleDistribution`
+    variant — the SDK now surfaces the core engine's distributed-variant
+    outcome (inert until the proto SDK wire carries the field; gated by
+    a future tracking ticket).
+  - `EvalResultWithReasoning` + `ReasoningTrace` types DELETED — callers
+    use `EvalResult.trace` directly.
+  - Re-exports: `stitchd_sdk_rust::{EvaluationTrace, TraceLevel}` from
+    `stitchd_core::evaluation` so callers don't depend on core for the
+    one-method API.
+- **Files changed:** `sdks/rust/src/client.rs`,
+  `sdks/rust/src/lib.rs`, `sdks/rust/examples/live_verify.rs`,
+  `sdks/rust/tests/conformance.rs`, `sdks/rust/tests/parity_with_preview.rs` (NEW),
+  `sdks/rust/README.md`.
+- **Commits:** c8068a3 (main rewire + struct change + cross-context test),
+  e46c732 (parity test), 2002276 (README + Task 8 dedicated test).
+- **Tests added:**
+  - `client::tests::eval_request_accepts_multi_context_bundle` (Task 1)
+  - `client::tests::evaluate_full_trace_includes_evaluation_trace` (Task 2)
+  - `client::tests::evaluate_full_trace_for_flag_not_found_has_no_trace` (Task 2)
+  - `client::tests::evaluate_cross_context_hash_selectors_match_core` (Task 4)
+  - `parity_with_preview::parity_cross_context_percentage_hash_matches_core` (Task 3)
+  - `parity_with_preview::parity_default_rule_distribution_via_core_engine` (Task 3 + 8)
+  - `parity_with_preview::default_rule_distribution_assigns_listed_variant_not_fallback` (Task 8)
+- **Test totals:** 139 lib + 8 conformance + 3 parity + 1 doc = 151 SDK
+  tests, all green. Clippy --all-targets --features test-util -D warnings
+  clean. cargo fmt --all --check clean. Workspace build clean.
+- **Learnings:**
+  - Patterns:
+    - **Proto -> core conversion ON the evaluation hot path:** Acceptable
+      cost — `FeatureFlag` is small (variants + rules), and the
+      `rule_payload` JSON deserialisation was happening on the old path
+      anyway. A future SDK refresh can pre-convert at snapshot-load
+      time; for Phase 6 the per-evaluation conversion keeps the
+      `DefinitionSnapshot` proto shape unchanged.
+    - **`evaluate_flag` returns one result per context** in the input
+      bundle. The SDK propagates this by emitting one `EvalResult` per
+      `(request, context_index)` pair. Single-context bundles produce a
+      single result — the common case stays terse via
+      `EvalRequest::single`.
+    - **`ListMembershipIndex` assembly per request:** for each context
+      in `req.contexts`, look up `(type, key)` in the SDK's existing
+      `MembershipCache` (LRU); on miss, batch-fetch via the existing
+      `MembershipBatchFetcher` and write back to the LRU. The aggregated
+      index is then fed into `evaluate_flag` which folds it into its
+      per-context segment-resolution loop.
+    - **`hash_inputs` (Phase 3 new field) preferred over the legacy
+      `context_hash_specs` map** when both are present in proto. Legacy-
+      only path uses canonical sort (`context_type ASC, parameter ASC
+      within type`) matching the PG migration backfill — preserves
+      bucket-identical behaviour for legacy rules during dual-schema
+      state. New code authoring `hash_inputs` preserves selector order.
+  - Gotchas:
+    - **The proto SDK service does NOT yet carry
+      `default_rule_distribution`** on `FeatureFlag` (proto is sealed
+      for Phase 6 scope per the orchestrator prompt). The SDK proto ->
+      core conversion sets `record.default_rule_distribution = None`,
+      so the SDK gains "automatic" support via core ONCE the proto wire
+      ships the field (separate track). Task 8 verification works
+      around this by constructing a core `Flag` with the distribution
+      directly and asserting `evaluate_flag` returns the distributed
+      variant + `EvalOutcome::DefaultRuleDistribution`. The contract
+      the SDK inherits is verified; the SDK's own conversion picks up
+      the field automatically when proto is updated.
+    - **`RolloutDistribution` has no `::new()` constructor** — use the
+      struct literal `RolloutDistribution { allocations: vec![...] }`
+      directly. The `validate()` method exists for runtime validation
+      but isn't a constructor.
+    - **`RuleOutput::Percentage` still carries `Vec<PercentageTarget>`**
+      (the legacy shape) — the core engine has a bridge
+      (`hash_input_spec_from_targets`) that converts to `HashInputSpec`
+      internally during evaluation. The SDK uses the reverse bridge
+      (`hash_input_spec_to_targets`) when converting proto allocations.
+      Both bridges go away when Phase 5/6 of the broader cutover (separate
+      flag-service work, not SDK scope) rewires `RuleOutput::Percentage`
+      to carry `HashInputSpec` directly.
+    - **`FlagNotFound` is an SDK-only outcome.** The core engine never
+      sees a missing flag — the SDK short-circuits before calling
+      `evaluate_flag`. Consequently, an `EvalResult` with
+      `outcome == FlagNotFound` always has `trace == None` even at
+      `TraceLevel::Full`. Documented inline.
+    - **Clippy `useless_vec` fires on `let bundles = vec![v1, v2]`**
+      where the binding is iterated by ref — use an array literal
+      `let bundles: [Vec<_>; 2] = [v1, v2]` instead (the inner Vec is
+      still a Vec, but the outer collection can be an array).
+    - **rustfmt re-orders `pub use` blocks alphabetically** when the
+      first re-export changes. Don't fight it; the `pub use stitchd_core::...`
+      line ended up at the bottom after fmt because of casing rules.
+  - Context:
+    - The `parity_with_preview.rs` integration test lives in
+      `sdks/rust/tests/` (not `crates/stitchd-flag-service/tests/`) because
+      Worker P6's scope is the SDK crate and the parity check needs both
+      the SDK client + the core engine. Adding it to flag-service tests
+      would create a cross-worker dependency P6 doesn't own.
+    - The `--features test-util` flag is REQUIRED for both the lib + the
+      integration tests (the `parity_with_preview.rs` uses
+      `client::testing::sdk_client_with_snapshot_and_lru` to inject
+      stubs). Run via
+      `cargo test -p stitchd-sdk-rust --features test-util` to exercise
+      every test.
+
+---
+
 ## [2026-05-22] Phase 2 — Core orchestration (worker P2)
 
 - **Implemented:** Body of `evaluate_flag` in `evaluation/engine.rs` —
