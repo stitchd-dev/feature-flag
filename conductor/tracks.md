@@ -64,14 +64,8 @@ This file tracks all major tracks for the project.
 - experimentation_full_20260521 (Experimentation — Complete UI + Backend with eval-log-based first-exposure attribution (rule-scoped, context-type-scoped); whole-flag lock while running; default-rule percentage distribution; Frequentist/Bayesian/CUPED/SRM/Guardrails math; per-context-type result views)
 -->
 
----
 
-## [x] Track: Docs Refresh & Autogeneration Pipeline
-*Link: [./conductor/tracks/docs_refresh_20260522/](./conductor/tracks/docs_refresh_20260522/)*
-
-Bulk-replace stale mdBook narrative pages against current code, extend `cargo xtask docs`
-with env-vars + cargo-rdme + link-check generators, delete orphan `docs/src/internal/*`
-subtree, wire idempotency into CI. Phase 3 (narrative rewrites) runs as 5 parallel workers
-by topic (introduction+architecture / gateway / deployment / sdk / experimentation).
-
+<!-- Archived (continued):
+- docs_refresh_20260522 (Docs Refresh & Autogeneration Pipeline — bulk-replace 22 stale mdBook narrative pages against current code via 5 parallel topic workers; extend cargo xtask docs with env-vars scraper + cargo-rdme + custom in-xtask link-checker; delete orphan docs/src/internal/* subtree + api/rest.md; wire idempotency CI gate. Surfaced 4 production-affecting findings for follow-up: CH migrations not auto-run on service boot, CH dictionary hard-codes host.docker.internal, OpenAPI ghost event-ingest routes, dead 9080 metrics port mapping.)
+-->
 
