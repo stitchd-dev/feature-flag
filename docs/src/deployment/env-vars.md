@@ -50,8 +50,10 @@ _35 variables discovered across the workspace._
 
 | Variable | Default | Required |
 |----------|---------|----------|
+| `STITCHD_ANALYTICS_SERVICE_GRPC_URL` | `http://localhost:50054` | no (has default) |
 | `STITCHD_EXPERIMENTATION_SERVICE_GRPC_PORT` | `50055` | no (has default) |
 | `STITCHD_EXPERIMENTATION_SERVICE_METRICS_PORT` | `9055` | no (has default) |
+| `STITCHD_FLAG_SERVICE_ADDR` | `http://localhost:50052` | no (has default) |
 
 ### `stitchd-flag-service`
 
@@ -66,7 +68,6 @@ _35 variables discovered across the workspace._
 |----------|---------|----------|
 | `STITCHD_ANALYTICS_SERVICE_ADDR` | `http://localhost:50054` | no (has default) |
 | `STITCHD_AUTH_SERVICE_ADDR` | `http://localhost:50051` | no (has default) |
-| `STITCHD_FLAG_SERVICE_ADDR` | `http://localhost:50052` | no (has default) |
 | `STITCHD_GATEWAY_GRPC_PORT` | `50050` | no (has default) |
 | `STITCHD_GATEWAY_HTTP_PORT` | `8080` | no (has default) |
 | `STITCHD_STATS_SERVICE_ADDR` | `http://localhost:50056` | no (has default) |
@@ -84,7 +85,6 @@ _35 variables discovered across the workspace._
 
 | Variable | Default | Required |
 |----------|---------|----------|
-| `STITCHD_ANALYTICS_SERVICE_GRPC_URL` | `http://localhost:50055` | no (has default) |
 | `STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL` | `http://localhost:50054` | no (has default) |
 | `STITCHD_STATS_SCHEDULER_INTERVAL_SECS` | `3600` | no (has default) |
 | `STITCHD_STATS_SERVICE_GRPC_PORT` | `50056` | no (has default) |

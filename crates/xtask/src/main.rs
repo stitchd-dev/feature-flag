@@ -833,11 +833,21 @@ fn scan_rust_files_for_env_vars(
     dir: &Path,
     out: &mut BTreeMap<String, EnvVarInfo>,
 ) -> Result<()> {
-    for entry in
-        std::fs::read_dir(dir).with_context(|| format!("failed to read dir {}", dir.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path();
+    // `std::fs::read_dir` returns entries in **filesystem-dependent** order
+    // (APFS is alphabetical, ext4 is insertion/inode order, network filesystems
+    // are arbitrary). Because `record_var()` uses "first sighting wins" to pick
+    // the crate name for a shared env var, an unsorted walk produces different
+    // output on different filesystems. Sort entries by path so the walk is
+    // deterministic across local + CI + future runners.
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read dir {}", dir.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|e| e.path())
+        .collect();
+    entries.sort();
+
+    for path in entries {
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
 
         // Skip target/, hidden dirs, tests/ and examples/ (env vars in tests + examples
