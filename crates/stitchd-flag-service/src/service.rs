@@ -669,6 +669,25 @@ impl FlagService for FlagServiceImpl {
 
                 // Replace rules if the request includes a non-empty list.
                 if !flag_proto.rules.is_empty() {
+                    // Phase 4 of flag_eval_unify_20260522: server-side
+                    // validation of every percentage-allocation rule's
+                    // `hash_inputs` selector list (when populated).
+                    for (i, r) in flag_proto.rules.iter().enumerate() {
+                        if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(
+                            alloc,
+                        )) = &r.output
+                        {
+                            if !alloc.hash_inputs.is_empty() {
+                                mapping::validate_proto_hash_inputs(&alloc.hash_inputs)
+                                    .map_err(|msg| {
+                                        FlagServiceError::InvalidHashInputs(format!(
+                                            "rule[{i}]: {msg}"
+                                        ))
+                                    })
+                                    .map_err(Status::from)?;
+                            }
+                        }
+                    }
                     let variant_key_to_id: std::collections::HashMap<_, _> =
                         variants.iter().map(|v| (v.key.clone(), v.id)).collect();
                     let domain_rules: Vec<_> = flag_proto
@@ -1013,6 +1032,29 @@ impl FlagService for FlagServiceImpl {
             };
             dist.validate()
                 .map_err(|e| Status::invalid_argument(format!("invalid_distribution: {e}")))?;
+
+            // Phase 4 of flag_eval_unify_20260522: variant_key referential
+            // integrity. Reinstates the diagnostic that Phase 2 had to drop
+            // from core's purity-bound `evaluate_flag` (no logging side
+            // effects allowed in core). The check runs here at the gRPC
+            // boundary so unknown variant_keys are rejected with
+            // `INVALID_ARGUMENT` before persistence.
+            let known_variants = self
+                .variant_repo
+                .find_by_flag(record.id)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?;
+            let known_keys: std::collections::HashSet<&str> =
+                known_variants.iter().map(|v| v.key.as_str()).collect();
+            for alloc in &req.allocations {
+                if !known_keys.contains(alloc.variant_key.as_str()) {
+                    return Err(Status::from(FlagServiceError::UnknownDefaultRuleVariant {
+                        variant_key: alloc.variant_key.clone(),
+                    }));
+                }
+            }
+
             Some(dist)
         };
 
@@ -2755,5 +2797,190 @@ mod tests {
         let err = svc.mutate_flag(req).await.expect_err("archive should fail");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert!(err.message().contains(&exp_id.to_string()));
+    }
+
+    // ─── Phase 4 (flag_eval_unify_20260522) — server-side validation ─────────
+
+    #[tokio::test]
+    async fn mutate_flag_update_rejects_empty_hash_inputs() {
+        use stitchd_proto::flags::v1::{
+            AllocationBucket, FlagRule, PercentageAllocation, flag_rule::Output,
+        };
+
+        let flag = make_flag_record();
+        let flag_key = flag.key.as_str().to_string();
+        let flag_repo = StubFlagRepo::with_flags(vec![flag]);
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        );
+
+        // A `PercentageAllocation` with an EMPTY-but-present `hash_inputs`
+        // list. The gateway-side validator catches this earlier, but a
+        // non-gateway gRPC client must hit the server-side validator. We
+        // need at least one entry in `hash_inputs` to trigger the
+        // validation path, otherwise the legacy `context_hash_specs`
+        // fallback would silently accept the payload — so we send a
+        // duplicate-selectors case to exercise the validator.
+        let bad_rule = FlagRule {
+            rule_payload: serde_json::to_vec(&serde_json::Value::Null).unwrap(),
+            output: Some(Output::Allocation(PercentageAllocation {
+                context_hash_specs: Default::default(),
+                buckets: vec![AllocationBucket {
+                    variant_key: "on".to_string(),
+                    weight_milli: 1000,
+                }],
+                hash_inputs: vec![
+                    stitchd_proto::flags::v1::HashSelector {
+                        selector: Some(
+                            stitchd_proto::flags::v1::hash_selector::Selector::ContextKey(
+                                stitchd_proto::flags::v1::ContextKeySelector {
+                                    context_type: "user".to_string(),
+                                },
+                            ),
+                        ),
+                    },
+                    stitchd_proto::flags::v1::HashSelector {
+                        selector: Some(
+                            stitchd_proto::flags::v1::hash_selector::Selector::ContextKey(
+                                stitchd_proto::flags::v1::ContextKeySelector {
+                                    context_type: "user".to_string(),
+                                },
+                            ),
+                        ),
+                    },
+                ],
+            })),
+            name: String::new(),
+            rule_id: String::new(),
+        };
+
+        let req = Request::new(MutateFlagRequest {
+            environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
+            kind: MutationKind::Update as i32,
+            flag: Some(FeatureFlag {
+                key: flag_key,
+                rules: vec![bad_rule],
+                ..Default::default()
+            }),
+            version: 1,
+        });
+        let err = svc
+            .mutate_flag(req)
+            .await
+            .expect_err("duplicate hash_inputs must fail");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("invalid_hash_inputs"),
+            "expected invalid_hash_inputs sentinel; got `{}`",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn mutate_flag_update_rejects_parameter_selector_missing_parameter() {
+        use stitchd_proto::flags::v1::{
+            AllocationBucket, FlagRule, PercentageAllocation, flag_rule::Output,
+        };
+
+        let flag = make_flag_record();
+        let flag_key = flag.key.as_str().to_string();
+        let flag_repo = StubFlagRepo::with_flags(vec![flag]);
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        );
+
+        let bad_rule = FlagRule {
+            rule_payload: serde_json::to_vec(&serde_json::Value::Null).unwrap(),
+            output: Some(Output::Allocation(PercentageAllocation {
+                context_hash_specs: Default::default(),
+                buckets: vec![AllocationBucket {
+                    variant_key: "on".to_string(),
+                    weight_milli: 1000,
+                }],
+                hash_inputs: vec![stitchd_proto::flags::v1::HashSelector {
+                    selector: Some(
+                        stitchd_proto::flags::v1::hash_selector::Selector::ContextParameter(
+                            stitchd_proto::flags::v1::ContextParameterSelector {
+                                context_type: "user".to_string(),
+                                parameter: String::new(),
+                            },
+                        ),
+                    ),
+                }],
+            })),
+            name: String::new(),
+            rule_id: String::new(),
+        };
+
+        let req = Request::new(MutateFlagRequest {
+            environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
+            kind: MutationKind::Update as i32,
+            flag: Some(FeatureFlag {
+                key: flag_key,
+                rules: vec![bad_rule],
+                ..Default::default()
+            }),
+            version: 1,
+        });
+        let err = svc
+            .mutate_flag(req)
+            .await
+            .expect_err("context_parameter with empty parameter must fail");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("invalid_hash_inputs"),
+            "expected invalid_hash_inputs sentinel; got `{}`",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn set_default_rule_distribution_rejects_unknown_variant_key() {
+        // The default-rule distribution's `variant_key` must reference a
+        // variant that exists on the flag. Reinstates the diagnostic that
+        // core's purity-bound evaluator had to drop.
+        use stitchd_proto::flags::v1::{DefaultRuleAllocation, SetDefaultRuleDistributionRequest};
+
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        let project_id = flag.project_id;
+        let flag_key = flag.key.as_str().to_string();
+        let flag_repo = StubFlagRepo::with_flags(vec![flag]);
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            // StubVariantRepo returns empty variants → every variant_key
+            // is unknown.
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        );
+
+        let req = Request::new(SetDefaultRuleDistributionRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            allocations: vec![DefaultRuleAllocation {
+                variant_key: "does-not-exist".to_string(),
+                percentage: 100.0,
+            }],
+            version: 1,
+        });
+        let err = svc
+            .set_default_rule_distribution(req)
+            .await
+            .expect_err("unknown variant_key must fail");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(
+            err.message().contains("does-not-exist"),
+            "expected variant_key in error message; got `{}`",
+            err.message()
+        );
     }
 }

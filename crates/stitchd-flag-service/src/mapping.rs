@@ -9,9 +9,11 @@ use stitchd_core::{
     variants::VariantValue,
 };
 use stitchd_proto::flags::v1::{
-    AllocationBucket, ContextHashSpec, FeatureFlag, FlagRule as ProtoFlagRule,
-    FlagValueType as ProtoFlagValueType, PercentageAllocation, Variant as ProtoVariant,
-    VariantValue as ProtoVariantValue, variant_value::Value as ProtoVariantValueInner,
+    AllocationBucket, ContextHashSpec, ContextKeySelector, ContextParameterSelector, FeatureFlag,
+    FlagRule as ProtoFlagRule, FlagValueType as ProtoFlagValueType,
+    HashSelector as ProtoHashSelector, PercentageAllocation, Variant as ProtoVariant,
+    VariantValue as ProtoVariantValue, hash_selector::Selector as ProtoSelectorInner,
+    variant_value::Value as ProtoVariantValueInner,
 };
 
 /// Convert a proto [`ProtoVariant`] to a domain [`stitchd_core::flag::Variant`].
@@ -83,22 +85,43 @@ pub fn proto_flag_rule_to_domain(
             RuleOutput::Variant(vid)
         }
         Some(Output::Allocation(alloc)) => {
-            let mut targets: Vec<PercentageTarget> = Vec::new();
-            for (ctx_type, spec) in &alloc.context_hash_specs {
-                if spec.parameter_names.is_empty() {
-                    targets.push(PercentageTarget {
-                        context_type: ctx_type.clone(),
-                        field: TargetField::Key,
-                    });
-                } else {
-                    for param in &spec.parameter_names {
-                        targets.push(PercentageTarget {
+            // Phase 4 of flag_eval_unify_20260522: prefer `hash_inputs`
+            // (ordered, new shape) when present. Fall back to canonically
+            // sorting the legacy `context_hash_specs` map (context_type
+            // ASC; parameters ASC within type) so pre-migration data
+            // continues to hash to the same bucket whenever the map's
+            // canonical order matches the producer's original insertion
+            // order. Operator-review of mismatches is the
+            // `cargo xtask verify-hash-cutover` job.
+            let targets: Vec<PercentageTarget> = if !alloc.hash_inputs.is_empty() {
+                alloc
+                    .hash_inputs
+                    .iter()
+                    .filter_map(proto_hash_selector_to_target)
+                    .collect()
+            } else {
+                let mut sorted: Vec<_> = alloc.context_hash_specs.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(b.0));
+                let mut out = Vec::new();
+                for (ctx_type, spec) in sorted {
+                    if spec.parameter_names.is_empty() {
+                        out.push(PercentageTarget {
                             context_type: ctx_type.clone(),
-                            field: TargetField::Parameter(param.clone()),
+                            field: TargetField::Key,
                         });
+                    } else {
+                        let mut params = spec.parameter_names.clone();
+                        params.sort();
+                        for param in params {
+                            out.push(PercentageTarget {
+                                context_type: ctx_type.clone(),
+                                field: TargetField::Parameter(param),
+                            });
+                        }
                     }
                 }
-            }
+                out
+            };
             let weights = alloc
                 .buckets
                 .iter()
@@ -141,6 +164,94 @@ pub fn proto_flag_rule_to_domain(
     })
 }
 
+/// Validate a proto `hash_inputs` selector list per FR-8 of
+/// `flag_eval_unify_20260522`. Mirrors the gateway-side validator so
+/// non-gateway gRPC clients hit the same rules.
+///
+/// Returns an error message describing the first failure:
+/// 1. Empty list.
+/// 2. Duplicate selectors by `(context_type, field)` identity.
+/// 3. `ContextParameter` with empty `parameter`.
+///
+/// Selectors with an unset oneof (corrupted payload) are treated as
+/// invalid and rejected.
+///
+/// # Errors
+/// Returns a [`String`] describing the first validation failure.
+pub fn validate_proto_hash_inputs(selectors: &[ProtoHashSelector]) -> Result<(), String> {
+    if selectors.is_empty() {
+        return Err("hash_inputs must not be empty".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for sel in selectors {
+        let inner = sel
+            .selector
+            .as_ref()
+            .ok_or_else(|| "hash_inputs: unset selector oneof".to_string())?;
+        let (ctx_type, field) = match inner {
+            ProtoSelectorInner::ContextKey(s) => (s.context_type.clone(), "__key__".to_string()),
+            ProtoSelectorInner::ContextParameter(s) => {
+                if s.parameter.is_empty() {
+                    return Err(
+                        "hash_inputs: context_parameter selector requires a non-empty `parameter`"
+                            .to_string(),
+                    );
+                }
+                (s.context_type.clone(), s.parameter.clone())
+            }
+        };
+        if !seen.insert((ctx_type.clone(), field.clone())) {
+            return Err(format!(
+                "hash_inputs: duplicate selector for context_type=`{ctx_type}` field=`{}`",
+                if field == "__key__" { "<key>" } else { &field }
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Convert a proto [`ProtoHashSelector`] to a domain [`PercentageTarget`].
+///
+/// Returns `None` if the oneof field is unset (corrupted / legacy data).
+#[must_use]
+fn proto_hash_selector_to_target(
+    sel: &ProtoHashSelector,
+) -> Option<stitchd_core::rule_engine::types::PercentageTarget> {
+    use stitchd_core::rule_engine::types::{PercentageTarget, TargetField};
+    match sel.selector.as_ref()? {
+        ProtoSelectorInner::ContextKey(s) => Some(PercentageTarget {
+            context_type: s.context_type.clone(),
+            field: TargetField::Key,
+        }),
+        ProtoSelectorInner::ContextParameter(s) => Some(PercentageTarget {
+            context_type: s.context_type.clone(),
+            field: TargetField::Parameter(s.parameter.clone()),
+        }),
+    }
+}
+
+/// Convert a domain [`PercentageTarget`] to a proto [`ProtoHashSelector`].
+#[must_use]
+fn target_to_proto_hash_selector(
+    target: &stitchd_core::rule_engine::types::PercentageTarget,
+) -> ProtoHashSelector {
+    use stitchd_core::rule_engine::types::TargetField;
+    let inner = match &target.field {
+        TargetField::Key => ProtoSelectorInner::ContextKey(ContextKeySelector {
+            context_type: target.context_type.clone(),
+        }),
+        TargetField::Parameter(name) => {
+            ProtoSelectorInner::ContextParameter(ContextParameterSelector {
+                context_type: target.context_type.clone(),
+                parameter: name.clone(),
+            })
+        }
+    };
+    ProtoHashSelector {
+        selector: Some(inner),
+    }
+}
+
 /// Convert a domain `FlagValueType` to the proto [`ProtoFlagValueType`].
 #[must_use]
 pub const fn domain_value_type_to_proto(
@@ -172,6 +283,15 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
             Some(Output::VariantKey(key))
         }
         RuleOutput::Percentage { targets, weights } => {
+            // Phase 4 of flag_eval_unify_20260522: dual-populate the proto.
+            // - `hash_inputs` is the authoritative new field — built
+            //   straight from the ordered domain `targets`.
+            // - `context_hash_specs` is synthesised from the same targets
+            //   so pre-Phase-4 readers continue to work for the dual-
+            //   schema window (Phase 5/6 retires the legacy field).
+            let hash_inputs: Vec<ProtoHashSelector> =
+                targets.iter().map(target_to_proto_hash_selector).collect();
+
             let mut context_hash_specs: HashMap<String, ContextHashSpec> = HashMap::new();
             for target in targets {
                 let spec = context_hash_specs
@@ -195,12 +315,7 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
             Some(Output::Allocation(PercentageAllocation {
                 context_hash_specs,
                 buckets,
-                // Phase 3 of flag_eval_unify_20260522 added the new
-                // `hash_inputs` selector list alongside the legacy
-                // `context_hash_specs` map. Phase 5/6 migrates the producer
-                // here; until then, the new field stays empty (callers still
-                // read the legacy map).
-                hash_inputs: Vec::new(),
+                hash_inputs,
             }))
         }
     };
@@ -530,6 +645,186 @@ mod tests {
         } else {
             panic!("expected Allocation output");
         }
+    }
+
+    #[test]
+    fn domain_percentage_dual_writes_hash_inputs_and_legacy_map() {
+        // Phase 4 of flag_eval_unify_20260522: every domain-to-proto
+        // conversion of `RuleOutput::Percentage` populates BOTH new and
+        // legacy proto fields.
+        let vid = make_variant_id();
+        let mut key_map = HashMap::new();
+        key_map.insert(vid, "t".to_string());
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: FlagId::new(),
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![
+                        PercentageTarget {
+                            context_type: "user".to_string(),
+                            field: TargetField::Key,
+                        },
+                        PercentageTarget {
+                            context_type: "device".to_string(),
+                            field: TargetField::Parameter("os".to_string()),
+                        },
+                    ],
+                    weights: vec![(vid, 1000)],
+                },
+            },
+        };
+
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = proto.output
+        else {
+            panic!("expected Allocation output");
+        };
+
+        // New field populated with two ordered selectors.
+        assert_eq!(alloc.hash_inputs.len(), 2);
+        let s0 = alloc.hash_inputs[0].selector.as_ref().unwrap();
+        let s1 = alloc.hash_inputs[1].selector.as_ref().unwrap();
+        match s0 {
+            ProtoSelectorInner::ContextKey(s) => assert_eq!(s.context_type, "user"),
+            _ => panic!("expected ContextKey"),
+        }
+        match s1 {
+            ProtoSelectorInner::ContextParameter(s) => {
+                assert_eq!(s.context_type, "device");
+                assert_eq!(s.parameter, "os");
+            }
+            _ => panic!("expected ContextParameter"),
+        }
+        // Legacy field also populated.
+        assert!(alloc.context_hash_specs.contains_key("user"));
+        assert!(alloc.context_hash_specs.contains_key("device"));
+    }
+
+    #[test]
+    fn proto_to_domain_prefers_hash_inputs_over_legacy_map() {
+        // When both proto fields are populated, the new `hash_inputs`
+        // ordered list wins — selector order is preserved end-to-end.
+        let vid = make_variant_id();
+        let variant_map: HashMap<String, VariantId> =
+            [("t".to_string(), vid)].into_iter().collect();
+
+        let mut legacy_map = HashMap::new();
+        legacy_map.insert(
+            "z_other".to_string(),
+            ContextHashSpec {
+                parameter_names: vec!["ignored".to_string()],
+            },
+        );
+
+        let proto = ProtoFlagRule {
+            rule_payload: serde_json::to_vec(
+                &stitchd_core::rule_engine::types::ConditionExpr::And(vec![]),
+            )
+            .unwrap(),
+            output: Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(
+                PercentageAllocation {
+                    context_hash_specs: legacy_map,
+                    buckets: vec![AllocationBucket {
+                        variant_key: "t".to_string(),
+                        weight_milli: 1000,
+                    }],
+                    hash_inputs: vec![
+                        ProtoHashSelector {
+                            selector: Some(ProtoSelectorInner::ContextKey(ContextKeySelector {
+                                context_type: "user".to_string(),
+                            })),
+                        },
+                        ProtoHashSelector {
+                            selector: Some(ProtoSelectorInner::ContextParameter(
+                                ContextParameterSelector {
+                                    context_type: "device".to_string(),
+                                    parameter: "os".to_string(),
+                                },
+                            )),
+                        },
+                    ],
+                },
+            )),
+            name: String::new(),
+            rule_id: String::new(),
+        };
+
+        let domain =
+            proto_flag_rule_to_domain(FlagId::new(), 0, &proto, &variant_map).expect("conversion");
+        let RuleOutput::Percentage { targets, .. } = domain.rule.output else {
+            panic!("expected Percentage output");
+        };
+        assert_eq!(
+            targets.len(),
+            2,
+            "selector order preserved from hash_inputs"
+        );
+        assert_eq!(targets[0].context_type, "user");
+        assert!(matches!(targets[0].field, TargetField::Key));
+        assert_eq!(targets[1].context_type, "device");
+        assert!(matches!(targets[1].field, TargetField::Parameter(ref p) if p == "os"));
+    }
+
+    #[test]
+    fn proto_to_domain_legacy_map_uses_canonical_sort() {
+        // When only the legacy `context_hash_specs` map is populated (no
+        // `hash_inputs`), conversion walks the map in
+        // `context_type ASC, parameter ASC` order.
+        let vid = make_variant_id();
+        let variant_map: HashMap<String, VariantId> =
+            [("t".to_string(), vid)].into_iter().collect();
+
+        let mut legacy_map = HashMap::new();
+        legacy_map.insert(
+            "b".to_string(),
+            ContextHashSpec {
+                parameter_names: vec!["z".to_string(), "a".to_string()],
+            },
+        );
+        legacy_map.insert(
+            "a".to_string(),
+            ContextHashSpec {
+                parameter_names: vec![],
+            },
+        );
+
+        let proto = ProtoFlagRule {
+            rule_payload: serde_json::to_vec(
+                &stitchd_core::rule_engine::types::ConditionExpr::And(vec![]),
+            )
+            .unwrap(),
+            output: Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(
+                PercentageAllocation {
+                    context_hash_specs: legacy_map,
+                    buckets: vec![AllocationBucket {
+                        variant_key: "t".to_string(),
+                        weight_milli: 1000,
+                    }],
+                    hash_inputs: vec![], // legacy-only payload
+                },
+            )),
+            name: String::new(),
+            rule_id: String::new(),
+        };
+
+        let domain =
+            proto_flag_rule_to_domain(FlagId::new(), 0, &proto, &variant_map).expect("conversion");
+        let RuleOutput::Percentage { targets, .. } = domain.rule.output else {
+            panic!("expected Percentage output");
+        };
+        // a.key, b.a, b.z — canonical ASC sort.
+        assert_eq!(targets.len(), 3);
+        assert_eq!(targets[0].context_type, "a");
+        assert!(matches!(targets[0].field, TargetField::Key));
+        assert_eq!(targets[1].context_type, "b");
+        assert!(matches!(targets[1].field, TargetField::Parameter(ref p) if p == "a"));
+        assert_eq!(targets[2].context_type, "b");
+        assert!(matches!(targets[2].field, TargetField::Parameter(ref p) if p == "z"));
     }
 
     #[test]
