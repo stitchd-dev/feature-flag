@@ -50,7 +50,7 @@ Define the canonical types — every later phase consumes them.
       Include missing-context and missing-parameter sentinel-empty cases.
 - [x] Task 6: Implement hash-input resolution from `HashInputSpec` +
       context bundle; preserve current empty-string sentinel semantics.
-- [ ] Task 7: Reduce `crates/stitchd-core/src/evaluation/preview.rs` to a
+- [x] Task 7: Reduce `crates/stitchd-core/src/evaluation/preview.rs` to a
       thin wrapper over `evaluate_flag(trace=Full)`, or delete it. No
       duplicate rule-iteration loop survives.
 - [ ] Task 8: Add purity-assertion test (`evaluation` module's transitive
