@@ -1,7 +1,8 @@
 # Stitchd Feature Flag
 
 [![CI](https://github.com/stitchd-dev/feature-flag/actions/workflows/ci.yml/badge.svg)](https://github.com/stitchd-dev/feature-flag/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/stitchd-dev/feature-flag/graph/badge.svg)](https://codecov.io/gh/stitchd-dev/feature-flag)
+[![Backend coverage](https://codecov.io/gh/stitchd-dev/feature-flag/branch/main/graph/badge.svg?flag=backend&label=backend)](https://codecov.io/gh/stitchd-dev/feature-flag/flags?flag=backend)
+[![Frontend coverage](https://codecov.io/gh/stitchd-dev/feature-flag/branch/main/graph/badge.svg?flag=admin&label=frontend)](https://codecov.io/gh/stitchd-dev/feature-flag/flags?flag=admin)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 

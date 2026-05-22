@@ -1,19 +1,75 @@
 comment:
-  layout: "reach,diff,files"
+  layout: "reach,diff,flags,files"
   behavior: default
 
 coverage:
   precision: 2
   round: down
   status:
+    # ── Project-level gates per flag ───────────────────────────────────────
+    # Each flagged report has its own threshold so the unified Codecov
+    # status reflects backend's hard 90% gate AND admin's informational
+    # auto-target side-by-side, instead of mixing Rust + TypeScript
+    # denominators into one misleading number.
     project:
-      default:
+      # Backend (Rust workspace) keeps the hard 90% gate.
+      backend:
         target: 90%
         threshold: 1%        # tolerate ≤1% noise between commits
+        flags:
+          - backend
+      # Admin (TypeScript SPA) — informational only for now. Most pages are
+      # React components without direct unit tests; a hard gate would block
+      # legitimate PRs. Trend visibility via the badge + Codecov page is the
+      # value. Flip to a real target once jsdom + Playwright land and the
+      # baseline rises above the current ~15%.
+      admin:
+        target: auto
+        threshold: 5%
+        flags:
+          - admin
     patch:
-      default:
+      backend:
         target: 90%
         threshold: 1%
+        flags:
+          - backend
+      admin:
+        target: auto         # informational
+        threshold: 5%
+        flags:
+          - admin
+
+# ── Flag definitions ─────────────────────────────────────────────────────
+# The CI workflow uploads two cobertura reports tagged `backend` (Rust
+# workspace via cargo-llvm-cov) and `admin` (Vitest). These definitions
+# scope each flag's "covered code" to its own filesystem paths so the
+# coverage numbers reflect what that report actually measures — not the
+# whole repo's line count.
+flag_management:
+  default_rules:
+    carryforward: true       # carry forward when only one report uploads
+    statuses:
+      - type: project
+        target: auto
+  individual_flags:
+    - name: backend
+      paths:
+        - crates/
+        - sdks/rust/
+      carryforward: true
+      statuses:
+        - type: project
+          target: 90%
+          threshold: 1%
+    - name: admin
+      paths:
+        - admin/
+      carryforward: true
+      statuses:
+        - type: project
+          target: auto
+          threshold: 5%
 
 ignore:
   - "crates/stitchd-proto/**"   # generated protobuf
