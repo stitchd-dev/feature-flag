@@ -8,11 +8,12 @@
  *   2. "Percentage distribution" — new in Phase 1; required for default-rule
  *      experiments. Sets `default_rule_distribution`.
  *
- * Locked when an active experiment is bound to the flag — surfaced via the
- * gateway's 409 `FLAG_LOCKED_BY_EXPERIMENT` response. We surface the lock
- * either from the flag-load response (when the gateway eventually adds
- * `locked_by_experiment_id`) or by attempting the save and catching the
- * 409 — whichever fires first.
+ * Locked when an active experiment is bound to the flag. The badge is
+ * sourced from `AdminFlagResponse.locked_by_experiment_id` (feature-flag-1p6)
+ * so the UI renders the locked state on mount rather than after a failing
+ * save. The 409 `FLAG_LOCKED_BY_EXPERIMENT` response path is still handled
+ * defensively for the race where an experiment starts between page load and
+ * save.
  */
 import { useState } from 'react'
 import { I } from '../../components/icons'
@@ -31,12 +32,11 @@ import {
   type AllocationRow,
 } from './EditFlagDefaultRule.helpers'
 
-/** Flag shape extended with the Phase 1 default-rule fields. */
+/** Flag shape extended with the Phase 1 default-rule fields. The gateway
+ *  already surfaces `locked_by_experiment_id` on `AdminFlagResponse`
+ *  (feature-flag-1p6), so we inherit it via `extends`. */
 interface FlagWithDefaultRule extends AdminFlagResponse {
   default_rule_distribution?: RolloutDistribution | null
-  /** Phase 11 cleanup: the gateway will surface this on flag GET. Until then
-   *  we derive lock state from 409 attempts. */
-  locked_by_experiment_id?: string | null
 }
 
 interface Props {

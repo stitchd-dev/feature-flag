@@ -109,6 +109,33 @@ impl FlagServiceImpl {
         }
     }
 
+    /// Populate the proto's `locked_by_experiment_id` field by consulting the
+    /// `is_flag_locked` helper. Best-effort — when the experiment repository
+    /// is not configured (legacy/test setups) or the lookup fails the field
+    /// stays empty rather than failing the admin read.
+    async fn populate_lock_state(
+        &self,
+        flag_id: stitchd_core::id::FlagId,
+        proto: &mut FeatureFlag,
+    ) {
+        let Some(repo) = self.experiment_repo.as_deref() else {
+            return;
+        };
+        match is_flag_locked(repo, &self.flag_lock_cache, flag_id).await {
+            Ok(Some(exp_id)) => {
+                proto.locked_by_experiment_id = exp_id.to_string();
+            }
+            Ok(None) => {}
+            Err(status) => {
+                tracing::warn!(
+                    flag_id = %flag_id,
+                    error = %status.message(),
+                    "flag lock lookup failed during admin read; surfacing without lock state",
+                );
+            }
+        }
+    }
+
     /// Fetch `SegmentDefinition`s for a set of IDs in three bulk DB queries.
     async fn fetch_segment_definitions(
         &self,
@@ -341,7 +368,13 @@ impl FlagService for FlagServiceImpl {
             .map_err(FlagServiceError::from)
             .map_err(Status::from)?;
 
-        let proto_flag = mapping::build_feature_flag_proto(&record, variants, &rules);
+        let mut proto_flag = mapping::build_feature_flag_proto(&record, variants, &rules);
+        // Admin reads (`project_id` set) surface the lock state so the UI
+        // can show the lock badge proactively rather than after a failed
+        // save. SDK paths leave `locked_by_experiment_id` empty.
+        if project_id.is_some() {
+            self.populate_lock_state(record.id, &mut proto_flag).await;
+        }
         Ok(Response::new(proto_flag))
     }
 
@@ -423,7 +456,11 @@ impl FlagService for FlagServiceImpl {
                 .map_err(FlagServiceError::from)
                 .map_err(Status::from)?;
 
-            proto_flags.push(mapping::build_feature_flag_proto(record, variants, &rules));
+            let mut proto = mapping::build_feature_flag_proto(record, variants, &rules);
+            if project_id.is_some() {
+                self.populate_lock_state(record.id, &mut proto).await;
+            }
+            proto_flags.push(proto);
         }
 
         Ok(Response::new(ListFlagsResponse {
@@ -1704,6 +1741,71 @@ mod tests {
         let result = svc.get_flag(req).await;
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_flag_admin_path_populates_locked_by_experiment_id() {
+        // Admin (project-scoped) reads must surface the lock UUID so the UI
+        // can render the lock badge before the user attempts a save and the
+        // gateway rewrites the 409. See feature-flag-1p6.
+        let flag = make_flag_record();
+        let project_id = flag.project_id;
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+
+        let svc = FlagServiceImpl::new(
+            StubFlagRepo::with_flags(vec![flag]),
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(LockedExperimentRepo {
+            experiment_id: exp_id,
+        }));
+
+        let req = Request::new(GetFlagRequest {
+            environment_id: String::new(),
+            project_id: project_id.to_string(),
+            flag_key,
+        });
+        let resp = svc.get_flag(req).await.expect("get_flag ok");
+        let proto = resp.into_inner();
+        assert_eq!(
+            proto.locked_by_experiment_id,
+            exp_id.to_string(),
+            "admin get_flag must populate locked_by_experiment_id when an experiment is active",
+        );
+    }
+
+    #[tokio::test]
+    async fn get_flag_sdk_path_leaves_locked_by_experiment_id_empty() {
+        // SDK reads (env-scoped) must not leak admin lock metadata.
+        let flag = make_flag_record();
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+
+        let svc = FlagServiceImpl::new(
+            StubFlagRepo::with_flags(vec![flag]),
+            Arc::new(StubVariantRepo),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(LockedExperimentRepo {
+            experiment_id: exp_id,
+        }));
+
+        let req = Request::new(GetFlagRequest {
+            environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
+            flag_key,
+        });
+        let resp = svc.get_flag(req).await.expect("get_flag ok");
+        let proto = resp.into_inner();
+        assert!(
+            proto.locked_by_experiment_id.is_empty(),
+            "SDK path must keep locked_by_experiment_id empty; got {:?}",
+            proto.locked_by_experiment_id,
+        );
     }
 
     #[tokio::test]

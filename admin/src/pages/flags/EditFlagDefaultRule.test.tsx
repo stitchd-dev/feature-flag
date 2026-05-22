@@ -150,6 +150,13 @@ describe('EditFlagDefaultRule (module shape)', () => {
     expect(SOURCE).toMatch(/locked_by_experiment|Locked by experiment/)
   })
 
+  it('seeds the lock state from flag.locked_by_experiment_id on mount (feature-flag-1p6)', () => {
+    // The badge must be visible on first render — we read the lock UUID
+    // straight off the flag rather than waiting for a failing save to
+    // populate it.
+    expect(SOURCE).toMatch(/flag\.locked_by_experiment_id\s*\?\?\s*null/)
+  })
+
   it('uses the validation helpers for the percentage mode', () => {
     expect(SOURCE).toMatch(/validateDistributionAllocations/)
   })

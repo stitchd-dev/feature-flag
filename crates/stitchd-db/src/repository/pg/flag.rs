@@ -593,7 +593,7 @@ impl FlagRepository for PgFlagRepository {
     async fn find_rules(&self, flag_id: FlagId) -> Result<Vec<FlagRule>, RepositoryError> {
         let rows = sqlx::query(
             r"
-            SELECT rule_index, rule_def
+            SELECT id, rule_index, rule_def
             FROM feature_flag_rules
             WHERE flag_id = $1
             ORDER BY rule_index ASC
@@ -607,10 +607,17 @@ impl FlagRepository for PgFlagRepository {
         let mut rules = Vec::with_capacity(rows.len());
         for row in rows {
             let rule_def: serde_json::Value = row.get("rule_def");
-            let rule: stitchd_core::rule_engine::types::Rule = serde_json::from_value(rule_def)
+            let mut rule: stitchd_core::rule_engine::types::Rule = serde_json::from_value(rule_def)
                 .map_err(|e| {
                     RepositoryError::Unexpected(anyhow::anyhow!("failed to deserialize rule: {e}"))
                 })?;
+            // Authoritative rule UUID is the `feature_flag_rules.id` column —
+            // overwrite any stale value carried in the serialised `rule_def`
+            // JSON so callers (admin UI, experiment bindings) always see the
+            // real row PK. Experiments FK on this UUID, so we must surface it
+            // exactly as stored.
+            let db_rule_id: uuid::Uuid = row.get("id");
+            rule.id = stitchd_core::id::RuleId::from_uuid(db_rule_id);
             rules.push(FlagRule {
                 flag_id,
                 rule_index: row.get("rule_index"),

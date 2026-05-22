@@ -501,4 +501,15 @@ describe('CreateExperimentModal (module shape)', () => {
     expect(SOURCE).toMatch(/guardrail_metric_ids/)
     expect(SOURCE).toMatch(/pre_period_days/)
   })
+
+  it('does not synthesise a placeholder rule UUID from the array index (feature-flag-1p6)', () => {
+    // The gateway now surfaces `feature_flag_rules.id` as `rule_id`. The
+    // earlier workaround that built a UUID from the rule's array index
+    // (`00000000-0000-0000-0000-${idx}`) must be gone — otherwise the
+    // experiment-create body posts a placeholder the backend rejects.
+    expect(SOURCE).not.toMatch(/00000000-0000-0000-0000-\$\{/)
+    expect(SOURCE).not.toMatch(/padStart\(12,\s*['"]0['"]\)/)
+    // The narrower acceptance grep the spec uses must also stay clean.
+    expect(SOURCE).not.toMatch(/synthetic|index-derived|index.*UUID/)
+  })
 })
