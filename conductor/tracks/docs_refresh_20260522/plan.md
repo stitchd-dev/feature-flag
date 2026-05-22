@@ -19,12 +19,15 @@ rewritten doc resolves to a live symbol (grep audit).
       `docs/src/api/rest.md` (latter overlaps `gateway/openapi.md`). Archive or delete.
       DECISION: KEEP openapi-pre-decomposition.json (load-bearing for contract-check CI).
       MERGE the Swagger UI viewer block from `api/rest.md` into `gateway/openapi.md` as
-      a new "Interactive Swagger UI" section, then DELETE `api/rest.md`.
-- [ ] Task 1.4: Capture golden baseline — run `cargo xtask docs`, snapshot
+      a new "Interactive Swagger UI" section, then DELETE `api/rest.md`. [fcf204c]
+- [x] Task 1.4: Capture golden baseline — run `cargo xtask docs`, snapshot
       `docs/src/grpc/`, `docs/src/api/openapi.json`, `docs/src/sdk/quickstart.md` to a
       tmp dir; commit the snapshot path note so later phases can confirm regression-free.
-- [ ] Task 1.5: Conductor - User Manual Verification 'Discovery, Orphan Cleanup, Baseline'
-      (Protocol in workflow.md)
+      Snapshot at `/tmp/docs_refresh_baseline_20260522/`; xtask exits 0 (3 rustdoc + 2 mdbook
+      warnings noted in learnings.md as in-track follow-ups).
+- [x] Task 1.5: Conductor - User Manual Verification 'Discovery, Orphan Cleanup, Baseline'
+      (Protocol in workflow.md) — autonomous mode: gates verified inline (inventory written,
+      internal/* deleted, openapi.md merged, baseline captured, xtask succeeds).
 
 ## Phase 2: Extend xtask Generators
 <!-- execution: sequential -->
