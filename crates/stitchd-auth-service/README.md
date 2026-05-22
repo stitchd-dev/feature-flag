@@ -1,6 +1,20 @@
 # stitchd-auth-service
 
-gRPC microservice responsible for authentication and organisation/project management.
+<!-- cargo-rdme start -->
+
+`stitchd-auth-service` — gRPC auth microservice.
+
+Implements the `AuthService` gRPC contract, accepting a [`CredentialRequest`]
+(JWT bearer token or SDK key) and returning a [`RbacContext`] with tenant,
+environment, roles, permissions, and subject identity.
+
+## Modules
+- [`grpc`]: tonic `AuthService` trait implementation
+- [`jwt`]: JWT validation logic (decode + signature verification)
+- [`sdk_key`]: SDK key hash lookup and active-key constraint enforcement
+- [`rbac`]: RBAC context assembly helpers
+
+<!-- cargo-rdme end -->
 
 Listens on `:50051` and exposes two gRPC services:
 

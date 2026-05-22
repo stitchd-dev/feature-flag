@@ -1,6 +1,16 @@
 # stitchd-experimentation-service
 
-gRPC microservice for experiment lifecycle management and result aggregation.
+<!-- cargo-rdme start -->
+
+Stitchd Experimentation Service — gRPC service for experiment lifecycle management.
+
+Implements the `ExperimentationService` proto contract:
+- `CreateExperiment` — creates an experiment; calls Flag Service when activating
+- `GetExperiment` — fetch a single experiment by ID
+- `ListExperiments` — list all experiments for an environment
+- `GetResults` — fetch pre-computed statistical results
+
+<!-- cargo-rdme end -->
 
 Listens on `:50055` and exposes **`ExperimentationService`** — CRUD for experiments, metric configurations, and result queries.
 

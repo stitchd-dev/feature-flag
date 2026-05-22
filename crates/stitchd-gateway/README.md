@@ -1,6 +1,21 @@
 # stitchd-gateway
 
-The single entry point for all external traffic in the Stitchd platform. It exposes:
+<!-- cargo-rdme start -->
+
+`stitchd-gateway` — API Gateway for the stitchd microservices platform.
+
+Exposes the same REST surface as the former monolith (`stitchd-server`) but
+delegates every request to the appropriate domain gRPC service after
+authenticating the caller via the Auth Service.
+
+## Architecture
+- Every request passes through [`middleware::auth::auth_middleware`], which
+  calls the Auth Service and injects an [`RbacContext`] extension.
+- Admin routes require a `Bearer` JWT token.
+- SDK routes require an `x-sdk-key` header.
+- No business logic lives here — the gateway is pure proxy.
+
+<!-- cargo-rdme end -->
 
 - **REST API** (`:8080`) — admin management, SDK flag evaluation, event ingestion, and auth endpoints.
 - **gRPC FlagSync** (`:50050`) — proxies `FlagSyncService.SyncDefinitions` to `stitchd-flag-service` for SDK clients.

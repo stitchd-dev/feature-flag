@@ -1,6 +1,13 @@
 # stitchd-proto
 
-Protobuf definitions and generated tonic stubs for all Stitchd gRPC services.
+<!-- cargo-rdme start -->
+
+Protobuf-generated types and tonic service stubs for Stitchd gRPC APIs.
+
+Generated code is included via [`include_proto!`] macros.
+Do not edit generated files directly — modify the `.proto` sources instead.
+
+<!-- cargo-rdme end -->
 
 ## Services
 

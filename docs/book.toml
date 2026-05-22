@@ -16,3 +16,10 @@ command = "mdbook-mermaid"
 git-repository-url = "https://github.com/stitchd-dev/feature-flag"
 no-section-label = false
 additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+# NOTE on internal-link checking: mdbook-linkcheck (0.7) is incompatible with mdbook
+# 0.5.x (RenderContext schema drift — `missing field 'sections'`). The check is done
+# instead by `crates/xtask/src/main.rs::check_internal_links()`, which runs as a
+# post-mdbook-build step in `cargo xtask docs`. It walks every `.md` under `docs/src/`
+# for relative-path markdown links and verifies each target exists. Faster, no
+# network, no schema drift.

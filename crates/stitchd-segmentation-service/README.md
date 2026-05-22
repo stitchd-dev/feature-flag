@@ -1,6 +1,12 @@
 # stitchd-segmentation-service
 
-gRPC microservice that evaluates segment membership.
+<!-- cargo-rdme start -->
+
+Segmentation Service — gRPC service for segment definitions and membership evaluation.
+
+Owns the `segments` PostgreSQL schema. Exposes `SegmentationService` via tonic.
+
+<!-- cargo-rdme end -->
 
 Listens on `:50053` and exposes **`SegmentationService`** — `CheckMembership` RPC used by the gateway when an SDK client performs a list-based segment check.
 

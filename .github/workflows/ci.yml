@@ -274,9 +274,22 @@ jobs:
           path: admin/coverage/
           retention-days: 7
 
-  # ── 6. Docs build ──────────────────────────────────────────────────────────
+  # ── 6. Docs build + idempotency + link-check ───────────────────────────────
+  # `cargo xtask docs` is idempotent by contract — re-running on already-
+  # generated output produces zero diff. Step 7 below enforces that contract
+  # in CI by running xtask and then `git diff --exit-code` on the workspace.
+  # If a developer hand-edits a generator-owned file (anything under
+  # docs/src/grpc/ except README.md, docs/src/deployment/env-vars.md,
+  # docs/src/sdk/quickstart.md, docs/src/api/openapi.json, or any
+  # crates/*/README.md or sdks/rust/README.md), the next CI run for their PR
+  # will fail at the `git diff` step.
+  #
+  # The link-check step (broken internal markdown links fail the build) runs
+  # *inside* `cargo xtask docs` — see `check_internal_links()` in
+  # crates/xtask/src/main.rs. Custom in-xtask implementation chosen because
+  # mdbook-linkcheck 0.7 is incompatible with mdbook 0.5.x.
   docs-build:
-    name: Docs Build
+    name: Docs Build (idempotent + link-check)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -287,8 +300,29 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build docs
+      - name: Install xtask-managed CLI tools
+        # xtask auto-installs missing tools via `cargo install` at runtime, but
+        # installing them as a separate step makes failures easy to read and
+        # benefits from `Swatinem/rust-cache` over multiple PR runs.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook,mdbook-mermaid,cargo-rdme
+
+      - name: Build docs (also runs internal-link check)
         run: cargo run --manifest-path crates/xtask/Cargo.toml -- docs
+
+      - name: Assert generators are idempotent (no drift)
+        # If this step fails, a generator-owned file was hand-edited. To fix:
+        # change the source-of-truth (//! preamble, STITCHD_* declaration,
+        # .proto file, or sdks/rust/src/lib.rs # Quickstart section) instead.
+        run: |
+          if ! git diff --exit-code; then
+            echo ""
+            echo "::error::cargo xtask docs produced a diff against the committed state."
+            echo "::error::A generator-owned file was hand-edited. Move the change into the source-of-truth."
+            echo "::error::See conductor/workflow.md 'Before Committing' for details."
+            exit 1
+          fi
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
