@@ -38,10 +38,12 @@ rewritten doc resolves to a live symbol (grep audit).
       (if `unwrap_or` / `unwrap_or_else` immediately follows). Idempotent.
       35 vars discovered. Generator also handles `env_or("X","Y")` (gateway helper) and
       const-identifier defaults via in-file `const IDENT = LIT;` resolution.
-- [ ] Task 2.2: Add `cargo-rdme` integration — standardize the `//!` preamble across all
+- [x] Task 2.2: Add `cargo-rdme` integration — standardize the `//!` preamble across all
       11 workspace crates + `sdks/rust` (one-paragraph crate purpose, link to mdBook section).
-      Add `crate-readmes` step to xtask that runs `cargo rdme --workspace --no-fail-on-warnings`.
-      Verify each `crates/*/README.md` regenerates cleanly with zero diff on second run.
+      Add `crate-readmes` step to xtask that runs `cargo rdme --workspace-project <name>`.
+      Verify each `crates/*/README.md` regenerates cleanly with zero diff on second run. [5cd046d]
+      Created 2 new READMEs (analytics-service, stats-service); all 13 crate READMEs
+      idempotent on 2nd xtask run.
 - [ ] Task 2.3: Add `mdbook-linkcheck` (or equivalent — could be a custom in-xtask
       walker) integration. Wire into xtask's `mdbook_build` step so broken internal links
       fail the build.
