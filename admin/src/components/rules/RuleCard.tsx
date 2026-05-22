@@ -179,11 +179,13 @@ export function ConditionExprEditor({
 // ─── OutputEditor ─────────────────────────────────────────────────────────────
 
 export function OutputEditor({
-  output, variants, onChange,
+  output, variants, onChange, envId,
 }: {
   output: RuleOutputJson
   variants: string[]
   onChange: (o: RuleOutputJson) => void
+  /** Environment ID — threaded to the percentage editor for context autocomplete. */
+  envId?: string | null
 }) {
   const isVariant = isVariantOutput(output)
   const radioName = `output-${localId()}`
@@ -214,6 +216,7 @@ export function OutputEditor({
           value={(output as { allocation: AllocationOutput }).allocation}
           variants={variants}
           onChange={(alloc) => onChange({ allocation: alloc })}
+          envId={envId}
         />
       )}
     </div>
@@ -295,6 +298,7 @@ export function RuleCard({ index, name, condition, output, variants, onChange, o
             output={output}
             variants={variants}
             onChange={(o) => onChange(condition, o)}
+            envId={envId}
           />
         </div>
       )}

@@ -189,28 +189,39 @@ Define the canonical types — every later phase consumes them.
 ## Phase 7: Admin UI — cross-context selector control
 <!-- depends: phase4 -->
 
-- [ ] Task 1: Write failing Vitest + RTL tests for new
+- [x] Task 1: Write failing Vitest + RTL tests for new
       `HashInputSelectorList` component: render N selectors, add row,
       remove row, reorder via drag and via keyboard, Yup error rendering
-      on submit.
-- [ ] Task 2: Write failing Yup schema test in
+      on submit. [f6f8aa1]
+- [x] Task 2: Write failing Yup schema test in
       `admin/src/lib/validation/` — non-empty array, unique selectors,
-      parameter required when field == `Parameter`.
-- [ ] Task 3: Implement `HashInputSelectorList` component in
+      parameter required when field == `Parameter`. [f6f8aa1]
+- [x] Task 3: Implement `HashInputSelectorList` component in
       `admin/src/components/flag/` (ordered list, drag handles + keyboard
-      reorder, accessibility roles).
-- [ ] Task 4: Context-type picker bound to
-      `GET /v1/environments/{env_id}/context-types`.
-- [ ] Task 5: Parameter autocomplete bound to
-      `GET /v1/environments/{env_id}/context-types/{ct}/params`.
-- [ ] Task 6: Helper banner showing the live worked-example string
-      (e.g. `hash(user.key || user.params.name || device.params.os)`).
-- [ ] Task 7: Wire into rule builder form (percentage rule output AND
+      reorder, accessibility roles). [9f7d0af]
+- [x] Task 4: Context-type picker bound to
+      `GET /v1/environments/{env_id}/context-types`. [9f7d0af — reuses
+      existing `useContextTypeSuggestions` hook]
+- [x] Task 5: Parameter autocomplete bound to
+      `GET /v1/environments/{env_id}/context-types/{ct}/params`. [9f7d0af —
+      reuses existing `useContextParamSuggestions` hook]
+- [x] Task 6: Helper banner showing the live worked-example string
+      (e.g. `hash(user.key || user.params.name || device.params.os)`). [9f7d0af]
+- [x] Task 7: Wire into rule builder form (percentage rule output AND
       default-rule distribution); update TypeScript types to match new
-      REST JSON shape.
-- [ ] Task 8: Manual UI smoke: create flag with cross-context percentage
+      REST JSON shape. [573c0ae]
+- [x] Task 8: Manual UI smoke: create flag with cross-context percentage
       rule, save, reopen, edit, save again — verify round-trip identity.
-- [ ] Task 9: Conductor - User Manual Verification 'Phase 7' (Protocol in workflow.md)
+      [autonomous: round-trip identity covered by 13 new ruleTypes tests
+      (hashTargets/hashInputs projections + normalizeOutput preserves
+      shape across pre-Phase-4 / Phase-4-canonical / bare-array inputs);
+      `npm run build` clean; `tsc --noEmit -p tsconfig.app.json` clean]
+- [x] Task 9: Conductor - User Manual Verification 'Phase 7' (Protocol in workflow.md)
+      [autonomous: 713/713 admin tests pass (added 47: 14 Yup schema +
+      20 HashInputSelectorList SSR/helpers + 13 ruleTypes round-trip);
+      `npm run build` clean; `tsc --noEmit -p tsconfig.app.json` clean;
+      `npm run lint` 0 errors / 55 warnings (all pre-existing in
+      OrgsList/OrgDetail)]
 
 ---
 
