@@ -33,10 +33,10 @@ Define the canonical types — every later phase consumes them.
 ## Phase 2: Core orchestration — port preview into evaluate_flag
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Write failing tests for `evaluate_flag` happy paths:
+- [x] Task 1: Write failing tests for `evaluate_flag` happy paths:
       flag disabled → default variant; first rule fires; no rule matches →
       default variant; no rule + `default_rule_distribution` → hashed variant.
-- [ ] Task 2: Implement rule iteration (first-match), rule-based segment
+- [x] Task 2: Implement rule iteration (first-match), rule-based segment
       evaluation via existing `SegmentEvaluator`, list-segment membership
       lookup via `ListMembershipIndex`, percentage allocation, default-rule
       fallthrough — `TraceLevel::Off` only.

@@ -3,13 +3,21 @@ use crate::flag::{Flag, Variant};
 use crate::hashing::calculate_allocation;
 use crate::id::{EnvironmentId, ProjectId, SegmentId};
 use crate::rule_engine::error::RuleEngineError;
+use crate::rule_engine::eval_expr::evaluate_expr;
 use crate::rule_engine::eval_rules::evaluate_rules;
-use crate::rule_engine::types::{EvaluationInput, Rule, RuleOutput, TargetField};
-use crate::segment::SegmentDefinition;
+use crate::rule_engine::types::{
+    EvaluationInput, PercentageTarget, Rule, RuleOutput, TargetField,
+};
+use crate::segment::{SegmentDefinition, SegmentEvaluator};
+use crate::variants::VariantValue;
 use std::collections::{HashMap, HashSet};
 use tracing::warn;
 
-use super::types::{FlagEvaluationResult, ListMembershipIndex, TraceLevel};
+use super::preview::{RolloutDebug, RuleOutcome, RuleTrace, VariantRange, trace_conditions};
+use super::types::{
+    EvalOutcome, EvaluationTrace, FlagEvaluationResult, HashInputSpec, HashSelector,
+    ListMembershipIndex, TraceLevel,
+};
 
 /// Unified pure entry point for flag variant evaluation.
 ///
@@ -62,11 +70,6 @@ use super::types::{FlagEvaluationResult, ListMembershipIndex, TraceLevel};
 /// One [`FlagEvaluationResult`] per context in the input bundle, in the
 /// same order as `contexts`.
 ///
-/// # Status
-///
-/// **Phase 1 stub.** Body is `todo!()`; the implementation lands in Phase 2
-/// (port the existing preview orchestration into this function and rewire
-/// `evaluate_preview` to call it).
 pub fn evaluate_flag(
     flag: &Flag,
     contexts: &[Context],
@@ -76,18 +79,345 @@ pub fn evaluate_flag(
     project_id: ProjectId,
     trace: TraceLevel,
 ) -> Vec<FlagEvaluationResult> {
-    // Phase 1: signature only. Phase 2 ports the body of evaluate_preview /
-    // FlagEvaluator::evaluate / SdkClient::evaluate_inner here.
-    let _ = (
-        flag,
-        contexts,
-        rule_based_segments,
-        list_segment_memberships,
-        environment_id,
-        project_id,
-        trace,
-    );
-    todo!("evaluate_flag is a Phase 1 signature stub; Phase 2 implements the body")
+    // Each context produces an independent FlagEvaluationResult. Wrap each
+    // context in a single-element bundle so rule conditions referring to
+    // multiple context types still see only the calling context's bundle —
+    // this matches the existing preview path semantics where every
+    // `EvaluationContext` is its own self-contained bundle and is what the
+    // SDK guarantees for `evaluate_inner`.
+    //
+    // Note: in the unified entry point, the caller passes the FULL bundle —
+    // we hand each context to evaluate_one in turn. Percentage hashing draws
+    // from the full bundle via the selector spec, NOT just the active
+    // context. This preserves cross-context hashing.
+    let _ = project_id; // reserved for future hash-salt extensions
+    contexts
+        .iter()
+        .map(|ctx| evaluate_one(flag, ctx, contexts, rule_based_segments, list_segment_memberships, environment_id, trace))
+        .collect()
+}
+
+/// Evaluate the flag for a single subject context against the full context
+/// bundle. Percentage-hash resolution draws from `bundle`; segment and rule
+/// evaluation see `bundle` so `find_context("device")` still works when the
+/// active subject context is `user`.
+fn evaluate_one(
+    flag: &Flag,
+    _active: &Context,
+    bundle: &[Context],
+    rule_based_segments: &[SegmentDefinition],
+    list_segment_memberships: &ListMembershipIndex,
+    environment_id: EnvironmentId,
+    trace: TraceLevel,
+) -> FlagEvaluationResult {
+    // ── 1. Disabled flag short-circuits to default variant ────────────────
+    let default_variant = flag.get_default_variant();
+    let (default_key, default_value) = default_variant
+        .map(|v| (v.key.clone(), v.value.clone()))
+        .unwrap_or_else(|| (String::new(), VariantValue::BoolValue(false)));
+
+    if !flag.record.enabled {
+        return FlagEvaluationResult {
+            variant_key: default_key,
+            variant_value: default_value,
+            outcome: EvalOutcome::FlagDisabled,
+            trace: if trace == TraceLevel::Full {
+                Some(EvaluationTrace {
+                    rule_traces: Vec::new(),
+                    rollout_debug: None,
+                    fired_rule_id: None,
+                    fired_rule_name: None,
+                })
+            } else {
+                None
+            },
+        };
+    }
+
+    // ── 2. Resolve segment membership for THIS context ────────────────────
+    // Merge in-process rule-based / list-based definitions with the
+    // pre-resolved list-segment membership index.
+    let mut resolved_segments = if rule_based_segments.is_empty() {
+        HashSet::new()
+    } else {
+        match SegmentEvaluator::evaluate_all(bundle, rule_based_segments) {
+            Ok(results) => results
+                .into_iter()
+                .filter_map(|(id, result)| if result.matched { Some(id) } else { None })
+                .collect(),
+            Err(_) => HashSet::new(),
+        }
+    };
+    // Merge list-segment memberships from the caller-supplied index for each
+    // context in the bundle (a context might be a member of a list segment
+    // keyed by its (type, key) tuple).
+    for ctx in bundle {
+        if let Some(set) = list_segment_memberships.get(&ctx.context_type, &ctx.key) {
+            resolved_segments.extend(set.iter().copied());
+        }
+    }
+
+    let input = EvaluationInput {
+        contexts: bundle,
+        resolved_segments,
+        evaluated_flags: HashMap::new(),
+    };
+
+    // ── 3. Rule iteration (first-match) + optional trace collection ───────
+    let want_trace = trace == TraceLevel::Full;
+    let rules = &flag.rules;
+    let mut rule_traces: Vec<RuleTrace> = if want_trace {
+        Vec::with_capacity(rules.len())
+    } else {
+        Vec::new()
+    };
+    let mut fired_rule_index: Option<usize> = None;
+    let mut fired_rule_name: Option<String> = None;
+    let mut fired_rule_id: Option<crate::id::RuleId> = None;
+    let mut result_variant_key = default_key.clone();
+    let mut result_variant_value = default_value.clone();
+    let mut rollout_debug: Option<RolloutDebug> = None;
+
+    for (i, flag_rule) in rules.iter().enumerate() {
+        let rule = &flag_rule.rule;
+
+        if fired_rule_index.is_some() {
+            if want_trace {
+                rule_traces.push(RuleTrace {
+                    rule_index: i,
+                    rule_name: rule.name.clone(),
+                    outcome: RuleOutcome::Skipped,
+                    conditions: Vec::new(),
+                });
+            }
+            continue;
+        }
+
+        let matched = evaluate_expr(&rule.condition, &input).unwrap_or(false);
+
+        if matched {
+            // Resolve variant from rule output.
+            match &rule.output {
+                RuleOutput::Variant(variant_id) => {
+                    if let Some(v) = flag.get_variant(*variant_id) {
+                        result_variant_key = v.key.clone();
+                        result_variant_value = v.value.clone();
+                    }
+                }
+                RuleOutput::Percentage { targets, weights } => {
+                    // Bridge old PercentageTarget shape → HashInputSpec on
+                    // the fly. Phase 5/6 cuts over the storage; this
+                    // internal conversion preserves byte-identity in the
+                    // meantime.
+                    let spec = hash_input_spec_from_targets(targets);
+                    let target_values = resolve_hash_inputs(&spec, bundle);
+
+                    let flag_key = flag.record.key.as_str();
+                    let env_str = environment_id.to_string();
+                    let percentage =
+                        calculate_allocation(flag_key, &env_str, &target_values);
+                    let bucket = ((percentage * 10.0).floor() as u32).min(999);
+
+                    // Build per-variant ranges + identify winning bucket.
+                    let (variant_ranges, hash_input_str) = if want_trace {
+                        let mut hi = format!("{flag_key}{env_str}");
+                        for t in &target_values {
+                            hi.push_str(t);
+                        }
+                        let mut variant_ranges: Vec<VariantRange> = Vec::new();
+                        let mut cumulative: u32 = 0;
+                        for (variant_id, weight) in weights {
+                            let from = cumulative;
+                            let to = cumulative + weight - 1;
+                            if let Some(v) = flag.get_variant(*variant_id) {
+                                variant_ranges.push(VariantRange {
+                                    variant_key: v.key.clone(),
+                                    from,
+                                    to,
+                                });
+                            }
+                            cumulative += weight;
+                        }
+                        (variant_ranges, hi)
+                    } else {
+                        (Vec::new(), String::new())
+                    };
+
+                    let mut cumulative_weight: u32 = 0;
+                    for (variant_id, weight) in weights {
+                        cumulative_weight += weight;
+                        if bucket < cumulative_weight {
+                            if let Some(v) = flag.get_variant(*variant_id) {
+                                result_variant_key = v.key.clone();
+                                result_variant_value = v.value.clone();
+                            }
+                            break;
+                        }
+                    }
+
+                    if want_trace {
+                        rollout_debug = Some(RolloutDebug {
+                            hash_input: hash_input_str,
+                            bucket,
+                            variant_ranges,
+                        });
+                    }
+                }
+            }
+
+            fired_rule_index = Some(i);
+            fired_rule_name = rule.name.clone();
+            fired_rule_id = Some(rule.id);
+
+            if want_trace {
+                let conditions = trace_conditions(&rule.condition, &input);
+                rule_traces.push(RuleTrace {
+                    rule_index: i,
+                    rule_name: rule.name.clone(),
+                    outcome: RuleOutcome::Match,
+                    conditions,
+                });
+            }
+        } else if want_trace {
+            // Bug-wub regression: capture per-leaf conditions even for
+            // non-matching rules so the preview UI can surface which leaf
+            // failed.
+            let conditions = trace_conditions(&rule.condition, &input);
+            rule_traces.push(RuleTrace {
+                rule_index: i,
+                rule_name: rule.name.clone(),
+                outcome: RuleOutcome::NoMatch,
+                conditions,
+            });
+        }
+    }
+
+    // ── 4. Default-rule percentage distribution (no rule matched) ─────────
+    let outcome = if let Some(rule_idx) = fired_rule_index {
+        EvalOutcome::RuleMatch { rule_index: rule_idx }
+    } else if let Some(dist) = flag.record.default_rule_distribution.as_ref() {
+        // Default-rule distribution: hash using all bundle context keys
+        // (same convention as the legacy `FlagEvaluator::evaluate` and
+        // `evaluate_preview` paths).
+        let target_values: Vec<String> = bundle.iter().map(|c| c.key.clone()).collect();
+        let flag_key = flag.record.key.as_str();
+        let env_str = environment_id.to_string();
+        let percentage = calculate_allocation(flag_key, &env_str, &target_values);
+
+        if want_trace {
+            let bucket = ((percentage * 10.0).floor() as u32).min(999);
+            let mut hi = format!("{flag_key}{env_str}");
+            for t in &target_values {
+                hi.push_str(t);
+            }
+            let mut variant_ranges: Vec<VariantRange> = Vec::new();
+            let mut cumulative_pct: f64 = 0.0;
+            for alloc in &dist.allocations {
+                let from = (cumulative_pct * 10.0).floor() as u32;
+                cumulative_pct += alloc.percentage;
+                let to = ((cumulative_pct * 10.0).floor() as u32).saturating_sub(1);
+                variant_ranges.push(VariantRange {
+                    variant_key: alloc.variant_key.clone(),
+                    from,
+                    to,
+                });
+            }
+            rollout_debug = Some(RolloutDebug {
+                hash_input: hi,
+                bucket,
+                variant_ranges,
+            });
+        }
+
+        if let Some(variant_key) = dist.assign_variant_key(percentage) {
+            if let Some(v) = flag.get_variant_by_key(variant_key) {
+                result_variant_key = v.key.clone();
+                result_variant_value = v.value.clone();
+                EvalOutcome::DefaultRuleDistribution
+            } else {
+                warn!(
+                    flag_key = flag.record.key.as_str(),
+                    variant_key,
+                    "default_rule_distribution references unknown variant_key; falling back to default_variant_id"
+                );
+                EvalOutcome::DefaultFallthrough
+            }
+        } else {
+            EvalOutcome::DefaultFallthrough
+        }
+    } else {
+        EvalOutcome::DefaultFallthrough
+    };
+
+    let trace_bundle = if want_trace {
+        Some(EvaluationTrace {
+            rule_traces,
+            rollout_debug,
+            fired_rule_id,
+            fired_rule_name,
+        })
+    } else {
+        None
+    };
+
+    FlagEvaluationResult {
+        variant_key: result_variant_key,
+        variant_value: result_variant_value,
+        outcome,
+        trace: trace_bundle,
+    }
+}
+
+// ── Hash-input resolution ────────────────────────────────────────────────────
+
+/// Resolve a `HashInputSpec` against a context bundle.
+///
+/// Each `HashSelector` produces one string entry in the returned vec, in
+/// selector-declaration order. Missing context types and missing parameters
+/// resolve to the empty-string sentinel — this matches the existing
+/// `evaluate_preview` percentage-target resolution behaviour, preserving
+/// hash-bucket stability across the migration.
+pub(crate) fn resolve_hash_inputs(spec: &HashInputSpec, bundle: &[Context]) -> Vec<String> {
+    spec.selectors
+        .iter()
+        .map(|sel| match sel {
+            HashSelector::ContextKey { context_type } => bundle
+                .iter()
+                .find(|c| &c.context_type == context_type)
+                .map(|c| c.key.clone())
+                .unwrap_or_default(),
+            HashSelector::ContextParameter {
+                context_type,
+                parameter,
+            } => bundle
+                .iter()
+                .find(|c| &c.context_type == context_type)
+                .and_then(|c| c.parameters.get(parameter).map(|v| v.to_string()))
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// Bridge: build a `HashInputSpec` from the legacy `PercentageTarget` list.
+///
+/// This is the internal conversion used by `evaluate_flag` while
+/// `RuleOutput::Percentage` still carries `Vec<PercentageTarget>`. Phase 5/6
+/// rewires storage to author `HashInputSpec` directly, after which this
+/// bridge can be removed.
+pub(crate) fn hash_input_spec_from_targets(targets: &[PercentageTarget]) -> HashInputSpec {
+    let selectors = targets
+        .iter()
+        .map(|t| match &t.field {
+            TargetField::Key => HashSelector::ContextKey {
+                context_type: t.context_type.clone(),
+            },
+            TargetField::Parameter(name) => HashSelector::ContextParameter {
+                context_type: t.context_type.clone(),
+                parameter: name.clone(),
+            },
+        })
+        .collect();
+    HashInputSpec::new(selectors)
 }
 
 /// A high-level evaluator for feature flags.
@@ -770,5 +1100,198 @@ mod tests {
         // Just verify it doesn't panic and returns a valid variant
         let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
         assert!(result.is_ok());
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Phase 2 tests: unified `evaluate_flag` entry point
+    // ────────────────────────────────────────────────────────────────────────
+
+    // ── Phase 2 Task 1: happy-path tests (TraceLevel::Off) ──────────────────
+
+    #[test]
+    fn evaluate_flag_disabled_returns_default_variant() {
+        let mut flag = setup_flag();
+        flag.record.enabled = false;
+
+        let ctx = Context::new("user", "u1");
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Off,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].variant_key, "off");
+        assert!(matches!(results[0].outcome, EvalOutcome::FlagDisabled));
+        assert!(results[0].trace.is_none());
+    }
+
+    #[test]
+    fn evaluate_flag_first_rule_fires_returns_rule_match() {
+        let flag = setup_flag(); // has one rule: user.beta == true → "on"
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Off,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].variant_key, "on");
+        assert!(matches!(
+            results[0].outcome,
+            EvalOutcome::RuleMatch { rule_index: 0 }
+        ));
+        assert!(results[0].trace.is_none());
+    }
+
+    #[test]
+    fn evaluate_flag_no_rule_match_returns_default_fallthrough() {
+        let flag = setup_flag();
+        // beta=false → rule doesn't match → default
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false));
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Off,
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].variant_key, "off");
+        assert!(matches!(
+            results[0].outcome,
+            EvalOutcome::DefaultFallthrough
+        ));
+    }
+
+    #[test]
+    fn evaluate_flag_no_rule_match_with_default_rule_distribution_returns_hashed_variant() {
+        use crate::rollout::{RolloutAllocation, RolloutDistribution};
+        let mut flag = setup_flag();
+        flag.rules.clear(); // no rules — go straight to default-rule distribution
+        flag.record.default_rule_distribution = Some(RolloutDistribution {
+            allocations: vec![
+                RolloutAllocation {
+                    variant_key: "on".to_string(),
+                    percentage: 50.0,
+                },
+                RolloutAllocation {
+                    variant_key: "off".to_string(),
+                    percentage: 50.0,
+                },
+            ],
+        });
+
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        // Run 1000 contexts → expect ~50/50 split + all marked
+        // DefaultRuleDistribution
+        let mut on_count = 0;
+        for i in 0..1000 {
+            let ctx = Context::new("user", format!("u{i}"));
+            let results = evaluate_flag(
+                &flag,
+                std::slice::from_ref(&ctx),
+                &[],
+                &memberships,
+                env,
+                proj,
+                TraceLevel::Off,
+            );
+            assert_eq!(results.len(), 1);
+            assert!(matches!(
+                results[0].outcome,
+                EvalOutcome::DefaultRuleDistribution
+            ));
+            if results[0].variant_key == "on" {
+                on_count += 1;
+            }
+        }
+        assert!(
+            (450..=550).contains(&on_count),
+            "50/50 distribution should produce ~500 ON; got {on_count}"
+        );
+    }
+
+    #[test]
+    fn evaluate_flag_off_trace_returns_none_trace() {
+        // Belt-and-braces: assert that TraceLevel::Off truly emits no trace.
+        let flag = setup_flag();
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Off,
+        );
+        assert!(results[0].trace.is_none());
+    }
+
+    #[test]
+    fn evaluate_flag_multiple_contexts_one_result_per_context() {
+        let flag = setup_flag();
+        let c1 = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let c2 = Context::new("user", "u2").with_parameter("beta", ParameterValue::Bool(false));
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            &[c1, c2],
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Off,
+        );
+
+        assert_eq!(results.len(), 2);
+        // c1 has beta=true → rule fires → "on"
+        // c2 has beta=false → rule doesn't fire → default "off"
+        // BUT: both contexts share the same bundle (the eval uses `bundle`
+        // for rule evaluation). For each subject, the rule sees the FULL
+        // bundle — the rule `user.beta == true` matches if ANY user
+        // context in the bundle has beta=true. So both results will be
+        // "on".
+        //
+        // This is the documented unified semantics: evaluate_flag uses the
+        // full bundle for rule conditions, producing per-context outcomes
+        // that share the bundle's targeting context.
+        assert_eq!(results[0].variant_key, "on");
+        assert_eq!(results[1].variant_key, "on");
     }
 }

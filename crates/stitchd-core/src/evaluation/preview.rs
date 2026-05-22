@@ -360,7 +360,10 @@ fn evaluate_single(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Recursively collect leaf-condition traces from an expression tree.
-fn trace_conditions(expr: &ConditionExpr, input: &EvaluationInput<'_>) -> Vec<ConditionTrace> {
+pub(super) fn trace_conditions(
+    expr: &ConditionExpr,
+    input: &EvaluationInput<'_>,
+) -> Vec<ConditionTrace> {
     let mut out = Vec::new();
     collect_leaf_traces(expr, input, &mut out);
     out
