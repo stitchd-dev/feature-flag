@@ -29,6 +29,40 @@
 --
 -- Pre-launch: no production analytics queries reference `is_disabled` yet
 -- (per `db_optim_20260516` index audit), so the destructive rename is safe.
+--
+-- ── Fresh-deploy guard ──────────────────────────────────────────────────
+-- Idempotent `CREATE TABLE IF NOT EXISTS` for the v2 schema (weekly
+-- `toMonday()` partitions + 90-day TTL — matches
+-- `crates/stitchd-db/clickhouse-migrations/0004_flag_evaluation_log_v2.sql`).
+--
+-- On existing deploys this is a no-op (the table already exists from the
+-- pre-runner manual DDL flow). On fresh deploys (CI, new dev boxes) it
+-- creates the table so the subsequent `ALTER ... ADD COLUMN` statements
+-- have something to alter. Without this CI fails with `UNKNOWN_TABLE`
+-- because the original `0003_flag_evaluation_log.sql` lives in the
+-- reference-only `crates/stitchd-db/clickhouse-migrations/` directory
+-- and is NOT wired into the embedded migration runner.
+--
+-- The table is created with the OLD column shape (`is_disabled Bool`)
+-- because the rename to `targeting_on` happens immediately below. The
+-- IF NOT EXISTS clause means existing deploys (with their actual data)
+-- are untouched.
+CREATE TABLE IF NOT EXISTS flag_evaluation_log
+(
+    env_id        UUID,
+    flag_id       UUID,
+    flag_key      String,
+    variant_key   String,
+    is_disabled   Bool,
+    evaluated_at  DateTime64(3, 'UTC'),
+    context_type  String,
+    context_key   String,
+    params_json   String
+)
+ENGINE = MergeTree()
+PARTITION BY toMonday(evaluated_at)
+ORDER BY (env_id, flag_id, evaluated_at)
+TTL toDateTime(evaluated_at) + INTERVAL 90 DAY DELETE;
 
 ALTER TABLE flag_evaluation_log
     ADD COLUMN IF NOT EXISTS targeting_on Bool DEFAULT (NOT is_disabled) AFTER variant_key;
