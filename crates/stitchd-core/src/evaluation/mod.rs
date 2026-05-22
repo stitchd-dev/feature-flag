@@ -1,5 +1,7 @@
 pub mod engine;
 pub mod preview;
+#[cfg(test)]
+mod purity;
 pub mod types;
 
 pub use engine::{FlagEvaluator, evaluate_flag};

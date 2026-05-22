@@ -53,7 +53,7 @@ Define the canonical types — every later phase consumes them.
 - [x] Task 7: Reduce `crates/stitchd-core/src/evaluation/preview.rs` to a
       thin wrapper over `evaluate_flag(trace=Full)`, or delete it. No
       duplicate rule-iteration loop survives.
-- [ ] Task 8: Add purity-assertion test (`evaluation` module's transitive
+- [x] Task 8: Add purity-assertion test (`evaluation` module's transitive
       deps must not include `tokio`, `reqwest`, `sqlx`, or
       `tracing::warn!/error!`).
 - [ ] Task 9: Add zero-allocation assertion for `TraceLevel::Off` (doc test

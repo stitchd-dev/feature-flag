@@ -11,7 +11,6 @@ use crate::rule_engine::types::{
 use crate::segment::{SegmentDefinition, SegmentEvaluator};
 use crate::variants::VariantValue;
 use std::collections::{HashMap, HashSet};
-use tracing::warn;
 
 use super::preview::{RolloutDebug, RuleOutcome, RuleTrace, VariantRange, trace_conditions};
 use super::types::{
@@ -335,11 +334,14 @@ fn evaluate_one(
                 result_variant_value = v.value.clone();
                 EvalOutcome::DefaultRuleDistribution
             } else {
-                warn!(
-                    flag_key = flag.record.key.as_str(),
-                    variant_key,
-                    "default_rule_distribution references unknown variant_key; falling back to default_variant_id"
-                );
+                // Distribution references an unknown variant_key — fall
+                // through to the flag's default_variant_id. This is a
+                // configuration bug that the admin-UI / REST validation
+                // layer should reject at write time; the pure evaluator
+                // stays silent (no tracing::warn!/error! to keep this
+                // function I/O-free per the purity contract enforced by
+                // `evaluation_module_is_pure` in `purity.rs`).
+                let _ = variant_key;
                 EvalOutcome::DefaultFallthrough
             }
         } else {
@@ -537,13 +539,12 @@ impl FlagEvaluator {
                     return Ok(v);
                 }
                 // Variant referenced by the distribution doesn't exist on
-                // the flag. Fall through to default_variant_id with a
-                // warning so operators get a diagnostic.
-                warn!(
-                    flag_key = flag.record.key.as_str(),
-                    variant_key,
-                    "default_rule_distribution references unknown variant_key; falling back to default_variant_id"
-                );
+                // the flag. Fall through to default_variant_id silently —
+                // the evaluation module is constrained to be I/O-free per
+                // the purity contract (`evaluation_module_is_pure` in
+                // `purity.rs`). Misconfiguration should be caught at write
+                // time by REST validation.
+                let _ = variant_key;
             }
         }
 
