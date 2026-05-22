@@ -14,6 +14,7 @@ import {
   getExperimentResults,
   listExperimentExposures,
   getExperimentTimeseries,
+  listExperimentIterations,
   triggerExperimentRecompute,
   getRecomputeStatus,
   api,
@@ -302,6 +303,44 @@ function ExperimentDetailBody({
     setExposuresPage(1)
   }, [activeContextType])
 
+  // ── Iterations fetch ──────────────────────────────────────────────────────
+  // The Iterations tab consumes a list of past + active iterations. We fetch
+  // lazily when the tab is selected (cheap query, but no reason to preload).
+  const [iterations, setIterations] = useState<IterationSummary[]>([])
+  const [iterationsLoading, setIterationsLoading] = useState(false)
+  const [iterationsError, setIterationsError] = useState<string | null>(null)
+  const [selectedIteration, setSelectedIteration] =
+    useState<IterationSummary | null>(null)
+
+  useEffect(() => {
+    if (tab !== 'iterations' || !envId || !apiExp.key) return
+    const ctrl = new AbortController()
+    setIterationsLoading(true)
+    setIterationsError(null)
+    listExperimentIterations(envId, apiExp.key, undefined, ctrl.signal)
+      .then((data) => {
+        if (ctrl.signal.aborted) return
+        // The DTO shape matches `IterationSummary` 1:1; the cast is just to
+        // bridge the duplicate type declarations (admin/lib vs. tab module).
+        setIterations(data.items as IterationSummary[])
+      })
+      .catch((err) => {
+        if (ctrl.signal.aborted) return
+        setIterationsError(extractErrorMessage(err))
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setIterationsLoading(false)
+      })
+    return () => ctrl.abort()
+  }, [tab, envId, apiExp.key])
+
+  // Clear the past-iteration drill-down when the user switches context types
+  // (the snapshot is keyed by iteration_id, but the active context type drives
+  // which per-context-type results bucket renders inside <Results>).
+  useEffect(() => {
+    setSelectedIteration(null)
+  }, [activeContextType])
+
   // ── Timeseries fetch ──────────────────────────────────────────────────────
   const [tsDays, setTsDays] = useState(7)
   const [tsSeries, setTsSeries] = useState<Record<string, TimeseriesData>>({})
@@ -546,16 +585,17 @@ function ExperimentDetailBody({
 
         {tab === 'iterations' && (
           <IterationsTab
-            // Phase 9 wires the rendering surface; the gateway endpoint to
-            // list past iterations is queued for Phase 10/11. Until then
-            // we render the empty-state + the recompute button.
-            iterations={[] as IterationSummary[]}
-            loading={false}
-            error={null}
-            selectedIteration={null}
+            iterations={iterations}
+            loading={iterationsLoading}
+            error={iterationsError}
+            selectedIteration={selectedIteration}
+            // Per-iteration drill-down results are reserved for a future
+            // `getIterationResults(iter_id)` wrapper. The tab gracefully
+            // renders a loading placeholder until then; selecting a row only
+            // toggles the highlight + header banner.
             selectedResults={null}
             selectedLoading={false}
-            onIterationSelect={() => {}}
+            onIterationSelect={setSelectedIteration}
             onRecompute={startRecompute}
             recomputeStatus={recomputeStatus}
             recomputeError={recomputeError}
