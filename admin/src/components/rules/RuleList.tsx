@@ -4,6 +4,7 @@ import { RuleCard } from './RuleCard'
 import { PercentageRolloutEditor } from './PercentageRolloutEditor'
 import type { RuleState, RuleOutputJson, ConditionExpr, AllocationOutput } from '../../lib/ruleTypes'
 import { defaultCondition, defaultOutput, localId, isVariantOutput, defaultAllocationOutput } from '../../lib/ruleTypes'
+import { formatSelector } from '../../lib/hashInputTypes'
 
 interface Props {
   rules: RuleState[]
@@ -86,6 +87,7 @@ export function RuleList({
       onCatchAllChange={onCatchAllChange}
       onCatchAllNameChange={onCatchAllNameChange}
       onSaveDefaultVariant={onSaveDefaultVariant}
+      envId={envId}
     />
   )
 
@@ -165,6 +167,7 @@ function DefaultRuleFooter({
   onCatchAllChange,
   onCatchAllNameChange,
   onSaveDefaultVariant,
+  envId,
 }: {
   flagEnabled: boolean
   defaultVariantKey: string | null
@@ -175,6 +178,7 @@ function DefaultRuleFooter({
   onCatchAllChange: (o: RuleOutputJson) => void
   onCatchAllNameChange?: (name: string) => void
   onSaveDefaultVariant?: (key: string) => Promise<void>
+  envId?: string | null
 }) {
   // ── DISABLED state: simple single-variant auto-save ──────────────────────
   if (!flagEnabled) {
@@ -227,6 +231,7 @@ function DefaultRuleFooter({
           output={catchAllOutput}
           variants={variants}
           onChange={onCatchAllChange}
+          envId={envId}
         />
       ) : (
         <CatchAllReadOnly output={catchAllOutput} />
@@ -293,8 +298,8 @@ function CatchAllReadOnly({ output }: { output: RuleOutputJson }) {
       </div>
     )
   }
-  const { hash_targets, buckets } = (output as { allocation: AllocationOutput }).allocation
-  const targetSummary = hash_targets.map((t) => `${t.context_type}.${t.field}`).join(', ')
+  const { hash_inputs, buckets } = (output as { allocation: AllocationOutput }).allocation
+  const targetSummary = hash_inputs.map(formatSelector).join(', ')
   return (
     <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
@@ -316,11 +321,12 @@ function CatchAllReadOnly({ output }: { output: RuleOutputJson }) {
 // ─── Enabled catch-all: editable output (variant or allocation) ───────────────
 
 function CatchAllOutputEditor({
-  output, variants, onChange,
+  output, variants, onChange, envId,
 }: {
   output: RuleOutputJson
   variants: string[]
   onChange: (o: RuleOutputJson) => void
+  envId?: string | null
 }) {
   const isVariant = isVariantOutput(output)
   const radioName = 'catchall-output-type'
@@ -358,6 +364,7 @@ function CatchAllOutputEditor({
           value={(output as { allocation: AllocationOutput }).allocation}
           variants={variants}
           onChange={(alloc) => onChange({ allocation: alloc })}
+          envId={envId}
         />
       )}
     </div>

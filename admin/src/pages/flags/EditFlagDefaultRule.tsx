@@ -15,11 +15,14 @@
  * defensively for the race where an experiment starts between page load and
  * save.
  */
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { I } from '../../components/icons'
+import { HashInputSelectorList } from '../../components/flag/HashInputSelectorList'
 import { useOrgContext } from '../../context/OrgContext'
 import { api, setDefaultRuleDistribution } from '../../lib/api'
 import { extractErrorMessage } from '../../lib/errors'
+import { deriveHashInputErrors } from '../../lib/validation/hashInputSchema'
+import { defaultSelector, type HashSelector } from '../../lib/hashInputTypes'
 import type {
   AdminFlagResponse,
   RolloutDistribution,
@@ -49,7 +52,7 @@ interface Props {
 type Mode = 'single_variant' | 'percentage'
 
 export function EditFlagDefaultRule({ flag, canWrite, onSaved, onConflict }: Props) {
-  const { projectId } = useOrgContext()
+  const { projectId, envId } = useOrgContext()
   const [mode, setMode] = useState<Mode>(() => pickDefaultMode(flag))
   const [singleVariantKey, setSingleVariantKey] = useState<string>(
     flag.default_variant_key ?? flag.variants[0]?.key ?? '',
@@ -57,6 +60,12 @@ export function EditFlagDefaultRule({ flag, canWrite, onSaved, onConflict }: Pro
   const [allocations, setAllocations] = useState<AllocationRow[]>(() =>
     seedAllocations(flag),
   )
+  // Phase 7: hash_inputs for the default-rule distribution. Seeded from the
+  // saved distribution when present; otherwise a single `user.key` default.
+  const [hashInputs, setHashInputs] = useState<HashSelector[]>(() => {
+    const saved = flag.default_rule_distribution?.hash_inputs
+    return saved && saved.length > 0 ? saved : [defaultSelector()]
+  })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lockedByExperiment, setLockedByExperiment] = useState<string | null>(
@@ -65,6 +74,12 @@ export function EditFlagDefaultRule({ flag, canWrite, onSaved, onConflict }: Pro
 
   const locked = Boolean(lockedByExperiment)
   const interactive = canWrite && !locked
+
+  // Yup errors for the hash inputs editor — surfaced inline.
+  const { arrayError: hashArrayError, rowErrors: hashRowErrors } = useMemo(
+    () => deriveHashInputErrors(hashInputs),
+    [hashInputs],
+  )
 
   // ── Allocation editing helpers ──────────────────────────────────────────
 
@@ -109,11 +124,21 @@ export function EditFlagDefaultRule({ flag, canWrite, onSaved, onConflict }: Pro
           setSaving(false)
           return
         }
+        if (hashArrayError || Object.keys(hashRowErrors).length > 0) {
+          setError(
+            hashArrayError ??
+              Object.values(hashRowErrors)[0] ??
+              'Fix hash input errors before saving.',
+          )
+          setSaving(false)
+          return
+        }
         await setDefaultRuleDistribution(projectId, flag.key, {
           allocations: allocations.map((r) => ({
             variant_key: r.variant_key.trim(),
             percentage: r.percentage,
           })),
+          hash_inputs: hashInputs,
         })
         // The endpoint returns 204; refetch the flag to surface the updated
         // shape upstream.
@@ -386,8 +411,19 @@ export function EditFlagDefaultRule({ flag, canWrite, onSaved, onConflict }: Pro
             <div
               style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 6 }}
             >
-              Required for default-rule experiments. The hash of the context
-              key buckets users into a variant.
+              Required for default-rule experiments. Hash inputs determine
+              which context attributes are combined to compute the bucket.
+            </div>
+
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--border-faint)' }}>
+              <HashInputSelectorList
+                value={hashInputs}
+                onChange={setHashInputs}
+                envId={envId}
+                disabled={!interactive}
+                arrayError={hashArrayError}
+                rowErrors={hashRowErrors}
+              />
             </div>
           </div>
         )}
@@ -395,3 +431,4 @@ export function EditFlagDefaultRule({ flag, canWrite, onSaved, onConflict }: Pro
     </div>
   )
 }
+

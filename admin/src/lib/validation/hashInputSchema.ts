@@ -77,3 +77,51 @@ export const hashInputsSchema = Yup.array()
  * mirror.
  */
 export type HashInputsFormValue = Yup.InferType<typeof hashInputsSchema>
+
+/**
+ * Run the schema over `inputs` and split the result into:
+ *   - `arrayError` — the first array-level Yup error message (or undefined).
+ *   - `rowErrors` — a map from row index → first per-row error message.
+ *
+ * Used by callers that surface inline errors next to the offending row
+ * (the rule builder + the default-rule editor). Both call-sites construct
+ * the exact same shape, so this helper avoids drift between them.
+ */
+export function deriveHashInputErrors(
+  inputs: HashSelector[],
+): { arrayError?: string; rowErrors: Record<number, string> } {
+  try {
+    hashInputsSchema.validateSync(inputs, { abortEarly: false })
+    return { rowErrors: {} }
+  } catch (e) {
+    const err = e as {
+      inner?: { path?: string; message: string }[]
+      errors?: string[]
+    }
+    const rowErrors: Record<number, string> = {}
+    let arrayError: string | undefined
+    for (const issue of err.inner ?? []) {
+      if (!issue.path) {
+        arrayError = arrayError ?? issue.message
+        continue
+      }
+      // Yup paths for array elements look like `[0]` or `[0].parameter`.
+      const match = issue.path.match(/^\[(\d+)\]/)
+      if (match) {
+        const idx = parseInt(match[1], 10)
+        rowErrors[idx] = rowErrors[idx] ?? issue.message
+      } else {
+        arrayError = arrayError ?? issue.message
+      }
+    }
+    if (
+      !arrayError &&
+      err.errors &&
+      err.errors.length > 0 &&
+      Object.keys(rowErrors).length === 0
+    ) {
+      arrayError = err.errors[0]
+    }
+    return { arrayError, rowErrors }
+  }
+}

@@ -1,118 +1,45 @@
+import { useMemo } from 'react'
 import { I } from '../icons'
-import type { AllocationOutput, HashTarget } from '../../lib/ruleTypes'
-import { allocationSum } from '../../lib/ruleTypes'
+import type { AllocationOutput } from '../../lib/ruleTypes'
+import { allocationSum, hashTargetsFromInputs } from '../../lib/ruleTypes'
+import type { HashSelector } from '../../lib/hashInputTypes'
+import { HashInputSelectorList } from '../flag/HashInputSelectorList'
+import { deriveHashInputErrors } from '../../lib/validation/hashInputSchema'
 
 interface Props {
   value: AllocationOutput
   variants: string[]
   onChange: (value: AllocationOutput) => void
-}
-
-// ─── HashTargetsEditor ────────────────────────────────────────────────────────
-
-function HashTargetsEditor({
-  targets, onChange,
-}: {
-  targets: HashTarget[]
-  onChange: (targets: HashTarget[]) => void
-}) {
-  function addTarget() {
-    onChange([...targets, { context_type: 'user', field: 'key' }])
-  }
-
-  function removeTarget(i: number) {
-    onChange(targets.filter((_, j) => j !== i))
-  }
-
-  function setContextType(i: number, val: string) {
-    onChange(targets.map((t, j) => j === i ? { ...t, context_type: val } : t))
-  }
-
-  function setField(i: number, val: string) {
-    onChange(targets.map((t, j) => j === i ? { ...t, field: val } : t))
-  }
-
-  return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
-        Hash by (determines bucket stickiness)
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-        {targets.map((t, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {/* context type */}
-            <input
-              className="input"
-              list="ctx-types"
-              placeholder="context type"
-              value={t.context_type}
-              onChange={(e) => setContextType(i, e.target.value)}
-              style={{ width: 90, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-            />
-            <datalist id="ctx-types">
-              <option value="user" />
-              <option value="org" />
-              <option value="device" />
-              <option value="session" />
-            </datalist>
-
-            <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>.</span>
-
-            {/* field: "key" or param name */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 1 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                <input
-                  type="radio"
-                  checked={t.field === 'key'}
-                  onChange={() => setField(i, 'key')}
-                />
-                key
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                <input
-                  type="radio"
-                  checked={t.field !== 'key'}
-                  onChange={() => setField(i, '')}
-                />
-                param:
-              </label>
-              {t.field !== 'key' && (
-                <input
-                  className="input"
-                  placeholder="param name"
-                  value={t.field}
-                  onChange={(e) => setField(i, e.target.value)}
-                  style={{ width: 110, fontFamily: 'var(--font-mono)', fontSize: 12 }}
-                  autoFocus
-                />
-              )}
-            </div>
-
-            <button
-              className="icon-btn"
-              style={{ color: targets.length <= 1 ? 'var(--fg-faint)' : 'var(--danger)' }}
-              disabled={targets.length <= 1}
-              onClick={() => removeTarget(i)}
-              title="Remove hash target"
-            >
-              <I.x size={12} />
-            </button>
-          </div>
-        ))}
-      </div>
-      <button className="btn sm" style={{ marginTop: 6 }} onClick={addTarget}>
-        <I.plus size={11} /> Add hash input
-      </button>
-    </div>
-  )
+  /** Environment ID for context-type + parameter autocomplete. */
+  envId?: string | null
 }
 
 // ─── PercentageRolloutEditor ──────────────────────────────────────────────────
+//
+// Phase 7 refactor: the legacy `HashTargetsEditor` inline component was
+// replaced by `HashInputSelectorList` from `components/flag/`. The new
+// component authors the canonical `hash_inputs` shape; we mirror to
+// `hash_targets` on every change via `hashTargetsFromInputs` so the wire
+// payload satisfies both schemas during the dual-schema window.
 
-export function PercentageRolloutEditor({ value, variants, onChange }: Props) {
-  const { hash_targets, buckets } = value
+export function PercentageRolloutEditor({ value, variants, onChange, envId }: Props) {
+  const { hash_inputs, buckets } = value
   const sum = allocationSum(buckets)
   const remaining = 1000 - sum
+
+  // Compute Yup errors for the inputs list — surfaced inline on the row.
+  const { arrayError, rowErrors } = useMemo(
+    () => deriveHashInputErrors(hash_inputs),
+    [hash_inputs],
+  )
+
+  function setHashInputs(next: HashSelector[]) {
+    onChange({
+      ...value,
+      hash_inputs: next,
+      hash_targets: hashTargetsFromInputs(next),
+    })
+  }
 
   function setVariantKey(i: number, key: string) {
     const next = buckets.map((b, j) => j === i ? { ...b, variant_key: key } : b)
@@ -143,12 +70,15 @@ export function PercentageRolloutEditor({ value, variants, onChange }: Props) {
 
   return (
     <div>
-      <HashTargetsEditor
-        targets={hash_targets}
-        onChange={(t) => onChange({ ...value, hash_targets: t })}
+      <HashInputSelectorList
+        value={hash_inputs}
+        onChange={setHashInputs}
+        envId={envId}
+        arrayError={arrayError}
+        rowErrors={rowErrors}
       />
 
-      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-subtle)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 16, marginBottom: 6 }}>
         Variant weights
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -193,3 +123,4 @@ export function PercentageRolloutEditor({ value, variants, onChange }: Props) {
     </div>
   )
 }
+

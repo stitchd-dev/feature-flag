@@ -46,7 +46,12 @@ export interface AllocationBucket {
 }
 
 /**
- * One input to the percentage hash.
+ * One input to the percentage hash — legacy wire shape preserved for
+ * backwards-compatibility (the gateway still emits `hash_targets` on read).
+ * The Phase 4 cutover introduced `hash_inputs` (a tagged union) as the
+ * canonical authoring shape; new payloads we build set `hash_inputs` and
+ * leave `hash_targets` to the gateway to derive server-side.
+ *
  * `field === "key"` → hash Context.key.
  * Any other string → hash Context.parameters[field].
  */
@@ -55,11 +60,58 @@ export interface HashTarget {
   field: string // "key" or a parameter name
 }
 
+import type { HashSelector } from './hashInputTypes'
+export type { HashSelector }
+
 export interface AllocationOutput {
-  /** At least one target required. Default: user.key. */
+  /**
+   * Canonical Phase 4 selector list. Required on write (the admin UI
+   * authors this) and present on read for all post-Phase-4 payloads.
+   */
+  hash_inputs: HashSelector[]
+  /**
+   * Legacy projection — still emitted by the gateway for older readers,
+   * still accepted on input. The Phase 4 admin UI builds `hash_inputs` and
+   * derives `hash_targets` on the fly via `hashTargetsFromInputs` so the
+   * legacy shape stays consistent until the gateway drops it.
+   */
   hash_targets: HashTarget[]
   /** Must sum to 1000 (= 100%). */
   buckets: AllocationBucket[]
+}
+
+/**
+ * Project a canonical `HashSelector` list to the legacy `HashTarget` shape.
+ *
+ * Used only when persisting allocation outputs — the gateway prefers
+ * `hash_inputs` but still validates `hash_targets`, so we send both. After
+ * the gateway drops `hash_targets`, this helper becomes dead code.
+ */
+export function hashTargetsFromInputs(inputs: HashSelector[]): HashTarget[] {
+  return inputs.map((s) => {
+    if (s.kind === 'context_key') {
+      return { context_type: s.context_type, field: 'key' }
+    }
+    return { context_type: s.context_type, field: s.parameter }
+  })
+}
+
+/**
+ * Reverse projection — convert a legacy `HashTarget` list to the canonical
+ * `HashSelector` shape. Used by `normalizeOutput` to upgrade older
+ * payloads in-memory so the admin UI always works with `hash_inputs`.
+ */
+export function hashInputsFromTargets(targets: HashTarget[]): HashSelector[] {
+  return targets.map((t) => {
+    if (t.field === 'key' || t.field === '') {
+      return { kind: 'context_key', context_type: t.context_type }
+    }
+    return {
+      kind: 'context_parameter',
+      context_type: t.context_type,
+      parameter: t.field,
+    }
+  })
 }
 
 export type RuleOutputJson =
@@ -69,6 +121,11 @@ export type RuleOutputJson =
 /**
  * Normalise legacy wire format (allocation as bare array) to the current
  * object format. Call this when parsing rules received from the backend.
+ *
+ * Phase 4 cutover: payloads may now carry either `hash_inputs` (canonical),
+ * `hash_targets` (legacy), or both. This normaliser ALWAYS produces a
+ * canonical `hash_inputs` field — when absent, it's derived from
+ * `hash_targets` via `hashInputsFromTargets`.
  */
 export function normalizeOutput(raw: unknown): RuleOutputJson {
   if (!raw || typeof raw !== 'object') return { variant_key: '' }
@@ -77,15 +134,34 @@ export function normalizeOutput(raw: unknown): RuleOutputJson {
   if ('allocation' in o) {
     const alloc = o.allocation
     if (Array.isArray(alloc)) {
-      // Legacy: bare array — migrate to object form with user.key as default target
+      // Legacy: bare array — migrate to object form with user.key as default target.
+      const targets: HashTarget[] = [{ context_type: 'user', field: 'key' }]
       return {
         allocation: {
-          hash_targets: [{ context_type: 'user', field: 'key' }],
+          hash_inputs: hashInputsFromTargets(targets),
+          hash_targets: targets,
           buckets: alloc as AllocationBucket[],
         },
       }
     }
-    return { allocation: alloc as AllocationOutput }
+    const a = alloc as Partial<AllocationOutput>
+    const targets: HashTarget[] = Array.isArray(a.hash_targets)
+      ? a.hash_targets
+      : [{ context_type: 'user', field: 'key' }]
+    const inputs: HashSelector[] = Array.isArray(a.hash_inputs)
+      ? a.hash_inputs
+      : hashInputsFromTargets(targets)
+    return {
+      allocation: {
+        hash_inputs: inputs,
+        // Keep `hash_targets` in sync with `hash_inputs` so older readers
+        // see a consistent projection. The two fields always describe the
+        // same selector list — the parent UI mutates `hash_inputs` and
+        // derives `hash_targets` via `hashTargetsFromInputs` on persist.
+        hash_targets: hashTargetsFromInputs(inputs),
+        buckets: Array.isArray(a.buckets) ? a.buckets : [],
+      },
+    }
   }
   return { variant_key: '' }
 }
@@ -127,8 +203,10 @@ export function allocationSum(buckets: AllocationBucket[]): number {
 export function defaultAllocationOutput(variants: string[]): AllocationOutput {
   const each = Math.floor(1000 / Math.max(variants.length, 1))
   const leftover = 1000 - each * variants.length
+  const inputs: HashSelector[] = [{ kind: 'context_key', context_type: 'user' }]
   return {
-    hash_targets: [{ context_type: 'user', field: 'key' }],
+    hash_inputs: inputs,
+    hash_targets: hashTargetsFromInputs(inputs),
     buckets: variants.map((v, i) => ({
       variant_key: v,
       weight_milli: each + (i === 0 ? leftover : 0),
