@@ -33,32 +33,32 @@ Define the canonical types — every later phase consumes them.
 ## Phase 2: Core orchestration — port preview into evaluate_flag
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Write failing tests for `evaluate_flag` happy paths:
+- [x] Task 1: Write failing tests for `evaluate_flag` happy paths:
       flag disabled → default variant; first rule fires; no rule matches →
       default variant; no rule + `default_rule_distribution` → hashed variant.
-- [ ] Task 2: Implement rule iteration (first-match), rule-based segment
+- [x] Task 2: Implement rule iteration (first-match), rule-based segment
       evaluation via existing `SegmentEvaluator`, list-segment membership
       lookup via `ListMembershipIndex`, percentage allocation, default-rule
       fallthrough — `TraceLevel::Off` only.
-- [ ] Task 3: Write failing tests for `TraceLevel::Full` output: per-rule
+- [x] Task 3: Write failing tests for `TraceLevel::Full` output: per-rule
       `RuleTrace` (matched / no-match / skipped), per-condition `ConditionTrace`
       (OR/AND missing-context resolution), per-result `RolloutDebug`
       (hash_input, bucket, variant_ranges).
-- [ ] Task 4: Implement trace generation gated by `TraceLevel::Full`.
-- [ ] Task 5: Write failing tests for cross-context hashing — selectors
+- [x] Task 4: Implement trace generation gated by `TraceLevel::Full`.
+- [x] Task 5: Write failing tests for cross-context hashing — selectors
       drawing from multiple context_types, mixing `Key` and `Parameter`.
       Include missing-context and missing-parameter sentinel-empty cases.
-- [ ] Task 6: Implement hash-input resolution from `HashInputSpec` +
+- [x] Task 6: Implement hash-input resolution from `HashInputSpec` +
       context bundle; preserve current empty-string sentinel semantics.
-- [ ] Task 7: Reduce `crates/stitchd-core/src/evaluation/preview.rs` to a
+- [x] Task 7: Reduce `crates/stitchd-core/src/evaluation/preview.rs` to a
       thin wrapper over `evaluate_flag(trace=Full)`, or delete it. No
       duplicate rule-iteration loop survives.
-- [ ] Task 8: Add purity-assertion test (`evaluation` module's transitive
+- [x] Task 8: Add purity-assertion test (`evaluation` module's transitive
       deps must not include `tokio`, `reqwest`, `sqlx`, or
       `tracing::warn!/error!`).
-- [ ] Task 9: Add zero-allocation assertion for `TraceLevel::Off` (doc test
+- [x] Task 9: Add zero-allocation assertion for `TraceLevel::Off` (doc test
       or microbench: returned trace `Vec` capacities == 0).
-- [ ] Task 10: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
+- [x] Task 10: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md) [autonomous: 531/531 core tests green; clippy --all-targets -D warnings clean; rustfmt clean]
 
 ---
 

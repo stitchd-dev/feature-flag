@@ -2,20 +2,28 @@
 //!
 //! This module is used by the admin UI's "Preview" feature to let operators
 //! test flag targeting rules against sample contexts without recording events.
+//!
+//! As of Phase 2 (flag_eval_unify_20260522), `evaluate_preview` is a thin
+//! wrapper that delegates orchestration to
+//! [`crate::evaluation::engine::evaluate_flag`] with [`TraceLevel::Full`].
+//! All rule-iteration / percentage / default-rule-distribution logic lives
+//! in `engine.rs`; this module only wires the per-`EvaluationContext` shape
+//! that the flag-service preview RPC expects.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 use crate::context::EvaluationContext;
 use crate::flag::Flag;
-use crate::hashing::calculate_allocation;
 use crate::id::{EnvironmentId, RuleId, SegmentId};
 use crate::rule_engine::condition::Condition;
-use crate::rule_engine::eval_expr::evaluate_expr;
 use crate::rule_engine::eval_leaf::evaluate_leaf;
-use crate::rule_engine::types::{ConditionExpr, EvaluationInput, RuleOutput, TargetField};
-use crate::segment::{SegmentDefinition, SegmentEvaluator};
+use crate::rule_engine::types::{ConditionExpr, EvaluationInput};
+use crate::segment::SegmentDefinition;
 use crate::variants::VariantValue;
+
+use super::engine::evaluate_flag;
+use super::types::{EvalOutcome, ListMembershipIndex, TraceLevel};
 
 // ── Output types ──────────────────────────────────────────────────────────────
 
@@ -99,260 +107,110 @@ pub fn evaluate_preview(
     env_id: EnvironmentId,
     pre_resolved_list_memberships: &[HashSet<SegmentId>],
 ) -> Vec<ContextPreviewResult> {
+    // Phase 2 of `flag_eval_unify_20260522`: delegate to the unified core
+    // entry point. Each `EvaluationContext` here corresponds to one
+    // independent bundle; we call `evaluate_flag` once per bundle, take its
+    // first FlagEvaluationResult (one per bundle since each EvaluationContext
+    // collapses to one result for the preview API), and remap the result
+    // shape to the per-context preview payload expected by the flag-service
+    // RPC.
+    //
+    // `project_id` is reserved for future hash-salt extensions; today the
+    // hashing salt is `(flag_key, env_id, target_values)`, so we pass a
+    // synthetic ProjectId (the flag's project).
+    let project_id = flag.record.project_id;
+
     evaluation_contexts
         .iter()
         .enumerate()
         .map(|(idx, ec)| {
-            // Resolve segment membership for this specific context from rule-based definitions.
-            let mut resolved_segments = resolve_segments(ec, segment_definitions);
-            // Merge any pre-resolved list-segment memberships supplied by the caller.
-            if let Some(extra) = pre_resolved_list_memberships.get(idx) {
-                resolved_segments.extend(extra.iter().copied());
+            // Build a per-bundle ListMembershipIndex from the caller-supplied
+            // pre-resolved memberships (aligned by EvaluationContext index).
+            // The set applies to the WHOLE bundle for that index, so we
+            // register it under EVERY (context_type, context_key) tuple in
+            // the bundle — the engine's `for ctx in bundle` lookup loop will
+            // then merge it into the resolved segment set regardless of
+            // which context the flag rule references.
+            let mut memberships = ListMembershipIndex::new();
+            if let Some(extra) = pre_resolved_list_memberships.get(idx)
+                && !extra.is_empty()
+            {
+                for ctx in &ec.contexts {
+                    memberships.insert(ctx.context_type.clone(), ctx.key.clone(), extra.clone());
+                }
             }
-            evaluate_single(flag, ec, &resolved_segments, env_id, idx)
+
+            let results = evaluate_flag(
+                flag,
+                &ec.contexts,
+                segment_definitions,
+                &memberships,
+                env_id,
+                project_id,
+                TraceLevel::Full,
+            );
+
+            // For preview semantics: one ContextPreviewResult per
+            // EvaluationContext. Take the first per-context result from
+            // evaluate_flag (each bundle context produces an entry, all
+            // identical for the same bundle since rule eval uses the full
+            // bundle). If the bundle is empty (no contexts), emit an empty
+            // result that mirrors the disabled-flag default.
+            let first = results.into_iter().next();
+            from_flag_eval_result(flag, first, idx)
         })
         .collect()
 }
 
-/// Resolve which segments the context belongs to by evaluating each segment definition.
-fn resolve_segments(
-    ec: &EvaluationContext,
-    definitions: &[SegmentDefinition],
-) -> HashSet<SegmentId> {
-    if definitions.is_empty() {
-        return HashSet::new();
-    }
-    match SegmentEvaluator::evaluate_all(&ec.contexts, definitions) {
-        Ok(results) => results
-            .into_iter()
-            .filter_map(|(id, result)| if result.matched { Some(id) } else { None })
-            .collect(),
-        Err(_) => HashSet::new(),
-    }
-}
-
-// ── Per-context evaluation ────────────────────────────────────────────────────
-
-fn evaluate_single(
+/// Remap a `FlagEvaluationResult` (core type) into a `ContextPreviewResult`
+/// (preview RPC type) for the given evaluation-context index.
+fn from_flag_eval_result(
     flag: &Flag,
-    ec: &EvaluationContext,
-    segments: &HashSet<SegmentId>,
-    env_id: EnvironmentId,
+    result: Option<crate::evaluation::types::FlagEvaluationResult>,
     context_index: usize,
 ) -> ContextPreviewResult {
-    let default_variant = flag.get_default_variant();
-    let (default_key, default_value) = default_variant
-        .map(|v| (v.key.clone(), variant_value_to_json(&v.value)))
-        .unwrap_or_else(|| ("".to_string(), serde_json::Value::Null));
-
-    // Disabled flag: return default immediately, no rule traces.
-    if !flag.record.enabled {
+    let Some(r) = result else {
+        // Empty bundle — fall back to the flag's default variant payload.
+        let (variant_key, variant_value) = flag
+            .get_default_variant()
+            .map(|v| (v.key.clone(), variant_value_to_json(&v.value)))
+            .unwrap_or_else(|| (String::new(), serde_json::Value::Null));
         return ContextPreviewResult {
             context_index,
-            variant_key: default_key,
-            variant_value: default_value,
+            variant_key,
+            variant_value,
             fired_rule_index: None,
             fired_rule_name: None,
             fired_rule_id: None,
             rule_traces: vec![],
             rollout_debug: None,
         };
-    }
-
-    let input = EvaluationInput {
-        contexts: &ec.contexts,
-        resolved_segments: segments.clone(),
-        evaluated_flags: std::collections::HashMap::new(),
     };
 
-    let rules = &flag.rules;
-    let mut traces: Vec<RuleTrace> = Vec::with_capacity(rules.len());
-    let mut fired_rule_index: Option<usize> = None;
-    let mut fired_rule_name: Option<String> = None;
-    let mut fired_rule_id: Option<RuleId> = None;
-    let mut result_variant_key = default_key.clone();
-    let mut result_variant_value = default_value.clone();
-    let mut rollout_debug: Option<RolloutDebug> = None;
-
-    for (i, flag_rule) in rules.iter().enumerate() {
-        let rule = &flag_rule.rule;
-
-        if fired_rule_index.is_some() {
-            // A previous rule already fired — this rule is skipped.
-            traces.push(RuleTrace {
-                rule_index: i,
-                rule_name: rule.name.clone(),
-                outcome: RuleOutcome::Skipped,
-                conditions: vec![],
-            });
-            continue;
-        }
-
-        let matched = evaluate_expr(&rule.condition, &input).unwrap_or(false);
-
-        if matched {
-            // Collect leaf-condition traces for the fired rule.
-            let conditions = trace_conditions(&rule.condition, &input);
-
-            // Resolve the variant from the rule output.
-            match &rule.output {
-                RuleOutput::Variant(variant_id) => {
-                    if let Some(v) = flag.get_variant(*variant_id) {
-                        result_variant_key = v.key.clone();
-                        result_variant_value = variant_value_to_json(&v.value);
-                    }
-                }
-                RuleOutput::Percentage { targets, weights } => {
-                    let mut target_values: Vec<String> = Vec::new();
-                    for t in targets {
-                        let val = ec
-                            .get_context(&t.context_type)
-                            .and_then(|ctx| match &t.field {
-                                TargetField::Key => Some(ctx.key.clone()),
-                                TargetField::Parameter(name) => {
-                                    ctx.parameters.get(name).map(|v| v.to_string())
-                                }
-                            })
-                            .unwrap_or_default();
-                        target_values.push(val);
-                    }
-
-                    let flag_key = flag.record.key.as_str();
-                    let env_str = env_id.to_string();
-                    let percentage = calculate_allocation(flag_key, &env_str, &target_values);
-                    let bucket = ((percentage * 10.0).floor() as u32).min(999);
-
-                    // Build hash_input string the same way calculate_allocation does.
-                    let mut hash_input = format!("{}{}", flag_key, env_str);
-                    for t in &target_values {
-                        hash_input.push_str(t);
-                    }
-
-                    // Build variant ranges from cumulative weights.
-                    let mut variant_ranges: Vec<VariantRange> = Vec::new();
-                    let mut cumulative: u32 = 0;
-                    for (variant_id, weight) in weights {
-                        let from = cumulative;
-                        let to = cumulative + weight - 1;
-                        if let Some(v) = flag.get_variant(*variant_id) {
-                            variant_ranges.push(VariantRange {
-                                variant_key: v.key.clone(),
-                                from,
-                                to,
-                            });
-                        }
-                        cumulative += weight;
-                    }
-
-                    // Find which variant bucket falls into.
-                    let mut cumulative_weight: u32 = 0;
-                    for (variant_id, weight) in weights {
-                        cumulative_weight += weight;
-                        if bucket < cumulative_weight {
-                            if let Some(v) = flag.get_variant(*variant_id) {
-                                result_variant_key = v.key.clone();
-                                result_variant_value = variant_value_to_json(&v.value);
-                            }
-                            break;
-                        }
-                    }
-
-                    rollout_debug = Some(RolloutDebug {
-                        hash_input,
-                        bucket,
-                        variant_ranges,
-                    });
-                }
-            }
-
-            fired_rule_index = Some(i);
-            fired_rule_name = rule.name.clone();
-            fired_rule_id = Some(rule.id);
-
-            traces.push(RuleTrace {
-                rule_index: i,
-                rule_name: rule.name.clone(),
-                outcome: RuleOutcome::Match,
-                conditions,
-            });
-        } else {
-            // Collect per-leaf traces even for non-matching rules so the UI can
-            // show which specific conditions failed (bug wub).
-            let conditions = trace_conditions(&rule.condition, &input);
-            traces.push(RuleTrace {
-                rule_index: i,
-                rule_name: rule.name.clone(),
-                outcome: RuleOutcome::NoMatch,
-                conditions,
-            });
-        }
-    }
-
-    // If no custom rule fired and the flag has a default-rule percentage
-    // distribution, hash the context into one of the listed allocations
-    // (Phase 2 of experimentation_full_20260521). Uses the same hashing
-    // convention as percentage rollout rules so cohort assignment is shared
-    // across the two code paths.
-    if fired_rule_index.is_none()
-        && let Some(dist) = flag.record.default_rule_distribution.as_ref()
+    let fired_rule_index = match &r.outcome {
+        EvalOutcome::RuleMatch { rule_index } => Some(*rule_index),
+        _ => None,
+    };
+    let (fired_rule_name, fired_rule_id, rule_traces, rollout_debug) = if let Some(trace) = r.trace
     {
-        let target_values: Vec<String> = ec.contexts.iter().map(|c| c.key.clone()).collect();
-        let flag_key = flag.record.key.as_str();
-        let env_str = env_id.to_string();
-        let percentage = calculate_allocation(flag_key, &env_str, &target_values);
-        let bucket = ((percentage * 10.0).floor() as u32).min(999);
-
-        // Build hash_input matching `calculate_allocation` for the
-        // rollout_debug surface.
-        let mut hash_input = format!("{flag_key}{env_str}");
-        for t in &target_values {
-            hash_input.push_str(t);
-        }
-
-        // Build per-variant ranges in bucket-coordinates (0..999) so the
-        // preview UI can render the same visualisation it uses for
-        // percentage rollout rules.
-        let mut variant_ranges: Vec<VariantRange> = Vec::new();
-        let mut cumulative_pct: f64 = 0.0;
-        for alloc in &dist.allocations {
-            let from = (cumulative_pct * 10.0).floor() as u32;
-            cumulative_pct += alloc.percentage;
-            let to = ((cumulative_pct * 10.0).floor() as u32).saturating_sub(1);
-            variant_ranges.push(VariantRange {
-                variant_key: alloc.variant_key.clone(),
-                from,
-                to,
-            });
-        }
-
-        if let Some(variant_key) = dist.assign_variant_key(percentage) {
-            if let Some(v) = flag.get_variant_by_key(variant_key) {
-                result_variant_key = v.key.clone();
-                result_variant_value = variant_value_to_json(&v.value);
-            } else {
-                tracing::warn!(
-                    flag_key,
-                    variant_key,
-                    "default_rule_distribution references unknown variant_key; falling back to default_variant_id"
-                );
-            }
-        }
-
-        rollout_debug = Some(RolloutDebug {
-            hash_input,
-            bucket,
-            variant_ranges,
-        });
-    }
+        (
+            trace.fired_rule_name,
+            trace.fired_rule_id,
+            trace.rule_traces,
+            trace.rollout_debug,
+        )
+    } else {
+        (None, None, vec![], None)
+    };
 
     ContextPreviewResult {
         context_index,
-        variant_key: result_variant_key,
-        variant_value: result_variant_value,
+        variant_key: r.variant_key,
+        variant_value: variant_value_to_json(&r.variant_value),
         fired_rule_index,
         fired_rule_name,
         fired_rule_id,
-        rule_traces: traces,
+        rule_traces,
         rollout_debug,
     }
 }
@@ -360,7 +218,10 @@ fn evaluate_single(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Recursively collect leaf-condition traces from an expression tree.
-fn trace_conditions(expr: &ConditionExpr, input: &EvaluationInput<'_>) -> Vec<ConditionTrace> {
+pub(super) fn trace_conditions(
+    expr: &ConditionExpr,
+    input: &EvaluationInput<'_>,
+) -> Vec<ConditionTrace> {
     let mut out = Vec::new();
     collect_leaf_traces(expr, input, &mut out);
     out

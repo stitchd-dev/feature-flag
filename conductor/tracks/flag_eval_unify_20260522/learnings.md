@@ -41,6 +41,87 @@ Patterns, gotchas, and context discovered during implementation.
 
 <!-- Learnings from implementation will be appended below -->
 
+## [2026-05-22] Phase 2 — Core orchestration (worker P2)
+
+- **Implemented:** Body of `evaluate_flag` in `evaluation/engine.rs` —
+  per-context iteration over a shared bundle, rule iteration with
+  first-match short-circuit, rule-based segment evaluation via
+  `SegmentEvaluator`, list-segment membership lookup via the caller-supplied
+  `ListMembershipIndex`, percentage allocation via `calculate_allocation`,
+  default-rule-distribution fallthrough, and full trace assembly gated by
+  `TraceLevel::Full`. Reduced `evaluate_preview` to a thin wrapper. Added a
+  grep-based purity test in a new `evaluation/purity.rs` module that fails
+  if `tracing::warn!`/`error!`/`tokio::`/`reqwest::`/`sqlx::` ever appear
+  in any of the evaluation module's source files (with comments stripped
+  before scanning to avoid docstring false-positives).
+- **Files changed:**
+  - `crates/stitchd-core/src/evaluation/engine.rs` (added `evaluate_flag`
+    body, `evaluate_one`, `resolve_hash_inputs`, `hash_input_spec_from_targets`;
+    removed `tracing::warn!` from both `evaluate_flag` and the legacy
+    `FlagEvaluator::evaluate` to satisfy the purity contract).
+  - `crates/stitchd-core/src/evaluation/preview.rs` (rewrote `evaluate_preview`
+    body to delegate to `evaluate_flag(Full)` + remap the result; deleted the
+    in-file `evaluate_single` + `resolve_segments` helpers; made
+    `trace_conditions` `pub(super)` so the engine.rs trace path can reuse it).
+  - `crates/stitchd-core/src/evaluation/purity.rs` (NEW — purity test).
+  - `crates/stitchd-core/src/evaluation/mod.rs` (`#[cfg(test)] mod purity;`).
+- **Commits:** 23dfd9a, c15e368, c38fce5, 37c0995, 5ca62dd, 87e87e2
+- **Tests:** Added 26 new tests in engine.rs (happy path, full trace,
+  cross-context hashing, zero-allocation guards) + 2 purity tests in
+  purity.rs. Total core suite: 531 passed (was 505 at start of phase).
+- **Learnings:**
+  - Patterns:
+    - **One bundle, one call:** `evaluate_flag` takes a single bundle of
+      contexts and returns `Vec<FlagEvaluationResult>` with one entry per
+      context. All entries share the bundle for rule evaluation and
+      percentage hashing — the per-context aspect just makes the API
+      symmetric for future batched-subject use cases. For preview,
+      `evaluate_preview` calls `evaluate_flag` once per `EvaluationContext`
+      and takes the first per-context result.
+    - **Pre-resolved list-segment memberships → per-bundle index:** When
+      the flag service supplies a `HashSet<SegmentId>` aligned by
+      `EvaluationContext` index, the `evaluate_preview` wrapper registers
+      that set under EVERY `(context_type, context_key)` tuple in the
+      bundle. The engine's per-bundle union loop then folds the set into
+      `resolved_segments` regardless of which context type the flag rule's
+      `InSegment` predicate references — preserving the byte-equivalent
+      behaviour of the legacy `evaluate_single::resolved_segments.extend(extra)`.
+    - **Internal `PercentageTarget → HashInputSpec` bridge:** Inside
+      `evaluate_flag`, `RuleOutput::Percentage { targets: Vec<PercentageTarget> }`
+      is converted on the fly via `hash_input_spec_from_targets`. Phase 5/6
+      cuts over storage to author `HashInputSpec` directly; the bridge
+      survives until then to keep the proto/PG layer untouched in Phase 2.
+    - **Single-codepath trace gating:** Trace collection lives on the
+      SAME code path as the hot path, gated by `want_trace = trace == Full`.
+      Every `rule_traces.push`, every `trace_conditions` call, every
+      `rollout_debug = Some(...)` is wrapped in `if want_trace`. On the
+      Off path the `rule_traces: Vec<RuleTrace>` is `Vec::new()` (cap=0)
+      and never grows — `FlagEvaluationResult.trace = None`.
+  - Gotchas:
+    - **`tracing::warn!` in the evaluation module breaks purity:** The
+      legacy `FlagEvaluator::evaluate` in the SAME engine.rs file uses
+      `warn!` for the unknown-variant_key fallback. To satisfy the
+      grep-based purity assertion, both call sites had to be silenced.
+      This is a minor regression vs current behaviour (admin operators
+      no longer see the diagnostic), justified by the purity contract:
+      a misconfigured `default_rule_distribution.variant_key` should be
+      caught at REST validation write time (Phase 4 task 5).
+    - **The purity test must exclude itself:** The forbidden-token
+      constant array literally contains the forbidden tokens. The scan
+      excludes `purity.rs` by filename.
+    - **`cargo fmt` reformats `const` slice literals across lines based
+      on line width:** A 3-element string slice that fits on one line
+      collapses to a single line. Always run `cargo fmt` before
+      committing — clippy/test gates won't flag this, but the workflow's
+      `cargo fmt -p stitchd-core --check` will.
+    - **Test-only `Condition` import:** Tests that need
+      `crate::rule_engine::condition::Condition` only inside one or two
+      cases can either `use` it locally inside the test (cleaner, fewer
+      unused-import warnings) or pull a `std::marker::PhantomData::<Condition>`
+      no-op to silence the unused-import diagnostic.
+
+---
+
 ## [2026-05-22] Phase 1 — Foundation Types
 
 - **Implemented:** New `crates/stitchd-core/src/evaluation/types.rs` module with `HashSelector`, `HashInputSpec`, `TraceLevel`, `ListMembershipIndex`, `EvalOutcome`, `EvaluationTrace`, `FlagEvaluationResult`. Added `evaluate_flag` signature with `todo!()` body in `evaluation/engine.rs`. Phase 1 implementation requires no behavioural change — Phase 2 ports the body.
