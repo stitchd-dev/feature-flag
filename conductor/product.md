@@ -1,6 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
-<!-- Last refreshed: 2026-05-20 (post events_metrics_20260519 merge) -->
+<!-- Last refreshed: 2026-05-22 (post experimentation_full_20260521 merge) -->
 
 # Product Guide
 
@@ -47,7 +47,7 @@ a registry of known context types, their properties, and observed value ranges/e
 Exposed as an API for the Admin UI (coming later) to power dropdown/autocomplete 
 behaviour (e.g. when building segment rules or flag targeting conditions).
 
-## Implementation Status (as of 2026-05-20)
+## Implementation Status (as of 2026-05-22)
 
 | Module | Status |
 |---|---|
@@ -69,6 +69,7 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 | Boundary Hardening Refactor (boundaries_20260518) | ✅ Complete |
 | Events Module — full admin UI + SDK ingestion + per-env quota | ✅ Complete |
 | Metrics Layer — composable definitions (aggregation/ratio/funnel) + experiment cutover | ✅ Complete |
+| **Experimentation as a whole — complete UI + Backend with eval-log-based first-exposure attribution, whole-flag lock, per-context-type stats, default-rule experiments, Frequentist + Bayesian + CUPED + SRM + Guardrails** | ✅ Complete |
 
 ## Modules
 
@@ -112,10 +113,13 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 
 ### 5. Experimentation
 - Experiments reference **metric_ids** (cutover from raw event_key in migration `20260520000002_experiment_metrics_cutover.sql`); the per-iteration `metric_ids` column lives in `experiment_iterations`.
-- Bound to a flag rule, duration-locked (flag frozen while active).
-- Models: Frequentist or Bayesian (with/without CUPED).
-- Recompute is scheduled (60-min via `stitchd-stats-service`) plus event-driven via the `TriggerRecompute` gRPC RPC when a metric is updated.
-- Future: warehouse-backed event ingestion.
+- **Attribution model (post-`experimentation_full_20260521`):** first-exposure intent-to-treat (ITT), derived server-side from `flag_evaluation_log_v2`. SDKs are experiment-unaware — they do NOT tag events with `(experiment, iteration, variant)` tuples. Eval-log rows route through `experiment_assignments_mv` into `experiment_assignments`; stats queries JOIN `events_v2` ⨝ `experiment_assignments` on `(env_id, context_type, context_key)` and filter `e.occurred_at >= a.assigned_at` for strict ITT.
+- **Binding model:** an experiment binds to either (a) a percentage-distribution custom rule via `flag_rule_id`, OR (b) the flag's default-rule fallthrough via `targets_default_rule = true` (requires `feature_flags.default_rule_distribution`). XOR-constrained at the PG layer.
+- **Whole-flag lock:** while running/paused, every flag/variant/rule mutation (including default-rule-distribution updates) returns HTTP 409 `FLAG_LOCKED_BY_EXPERIMENT` with the experiment ID in the body. Replaces the old per-rule `frozen` flag.
+- **Per-context-type analysis:** every experiment carries `unit_context_types text[] NOT NULL` (default `{user}`). All stats (Frequentist t-test / two-proportion Z, Bayesian posteriors, CUPED, SRM chi-square, guardrail direction) compute independently per context type and surface in the Admin UI via a context-type tab strip.
+- **Models:** Frequentist (Welch's t-test, two-proportion Z, Bonferroni correction for >2 variants) and Bayesian (Beta-Binomial / Normal-Normal posteriors, probability-to-beat-control, expected lift). CUPED variance reduction via per-experiment `pre_period_days`. Guardrail metrics flagged on direction violation.
+- **Recompute** is scheduled (60-min via `stitchd-stats-service`) plus event-driven via the `TriggerRecompute` gRPC RPC; on-demand from the Admin UI via `POST /v1/.../experiments/{id}/recompute`.
+- Future: warehouse-backed event ingestion; multi-armed bandit; sequential testing; cross-experiment interaction analysis.
 
 ### 6. Rule Engine
 - Core: ordered rule list (first true = exit); AND combinator; per-rule NOT

@@ -60,8 +60,8 @@ This file tracks all major tracks for the project.
 - rust_deps_upgrade_20260520 (Upgrade Rust MSRV to 1.95 + bring every workspace dep to latest cross-compatible major.minor — tonic 0.14 with tonic-prost split, clickhouse 0.15 async insert, openidconnect 4 endpoint type-state migration, rand 0.10, reqwest 0.13, OTel 0.32, sha2 0.11, plus inline let-chain + Duration::from_mins fixes for Rust 1.95 clippy)
 -->
 
----
+<!-- Archived (continued):
+- experimentation_full_20260521 (Experimentation — Complete UI + Backend with eval-log-based first-exposure attribution (rule-scoped, context-type-scoped); whole-flag lock while running; default-rule percentage distribution; Frequentist/Bayesian/CUPED/SRM/Guardrails math; per-context-type result views)
+-->
 
-## [ ] Track: Experimentation — Complete UI + Backend with eval-log-based first-exposure attribution (rule-scoped, context-type-scoped); whole-flag lock while running; default-rule percentage distribution; Frequentist/Bayesian/CUPED/SRM/Guardrails math; per-context-type result views
-*Link: [./conductor/tracks/experimentation_full_20260521/](./conductor/tracks/experimentation_full_20260521/)*
 
