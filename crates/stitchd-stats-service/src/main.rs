@@ -24,6 +24,7 @@ use tonic::transport::{Channel, Server};
 use tonic_health::server::health_reporter;
 use tracing::{error, info, warn};
 
+use stitchd_core::util::grpc_connect::connect_with_retry_default;
 use stitchd_db::PgContextRegistryRepository;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -77,22 +78,36 @@ async fn main() -> anyhow::Result<()> {
         url = %config.experimentation_service_grpc_url,
         "Connecting to experimentation-service gRPC"
     );
-    let exp_channel = Channel::from_shared(config.experimentation_service_grpc_url.clone())
-        .context("Invalid STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL")?
-        .connect()
-        .await
-        .context("Failed to connect to experimentation-service gRPC")?;
+    let exp_endpoint = Channel::from_shared(config.experimentation_service_grpc_url.clone())
+        .context("Invalid STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL")?;
+    let exp_channel = connect_with_retry_default(
+        "experimentation-service",
+        &config.experimentation_service_grpc_url,
+        || {
+            let endpoint = exp_endpoint.clone();
+            async move { endpoint.connect().await }
+        },
+    )
+    .await
+    .context("Failed to connect to experimentation-service gRPC")?;
     let exp_client = Arc::new(Mutex::new(ExperimentationServiceClient::new(exp_channel)));
 
     info!(
         url = %config.analytics_service_grpc_url,
         "Connecting to analytics-service gRPC"
     );
-    let analytics_channel = Channel::from_shared(config.analytics_service_grpc_url.clone())
-        .context("Invalid STITCHD_ANALYTICS_SERVICE_GRPC_URL")?
-        .connect()
-        .await
-        .context("Failed to connect to analytics-service gRPC")?;
+    let analytics_endpoint = Channel::from_shared(config.analytics_service_grpc_url.clone())
+        .context("Invalid STITCHD_ANALYTICS_SERVICE_GRPC_URL")?;
+    let analytics_channel = connect_with_retry_default(
+        "analytics-service",
+        &config.analytics_service_grpc_url,
+        || {
+            let endpoint = analytics_endpoint.clone();
+            async move { endpoint.connect().await }
+        },
+    )
+    .await
+    .context("Failed to connect to analytics-service gRPC")?;
     let analytics_client = Arc::new(Mutex::new(AnalyticsServiceClient::new(analytics_channel)));
 
     // ── Context registry refresh loop (15-min cadence) ────────────────────────
