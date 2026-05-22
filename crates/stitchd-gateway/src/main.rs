@@ -84,10 +84,8 @@ async fn main() -> anyhow::Result<()> {
     let downstream_summary = format!(
         "auth={auth_addr} flag={flag_addr} seg={segmentation_addr} analytics={analytics_addr} experimentation={experimentation_addr} stats={stats_addr}"
     );
-    let state = connect_with_retry_default(
-        "gateway downstream services",
-        &downstream_summary,
-        || {
+    let state =
+        connect_with_retry_default("gateway downstream services", &downstream_summary, || {
             let auth_addr = auth_addr.clone();
             let flag_addr = flag_addr.clone();
             let segmentation_addr = segmentation_addr.clone();
@@ -105,9 +103,8 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await
             }
-        },
-    )
-    .await?;
+        })
+        .await?;
 
     let gateway_port: u16 = env_or("STITCHD_GATEWAY_HTTP_PORT", "8080")
         .parse()

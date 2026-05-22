@@ -156,8 +156,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     #[derive(Debug)]
     struct TestError(&'static str);
@@ -227,7 +227,10 @@ mod tests {
         )
         .await;
 
-        assert_eq!(result.expect("retry should eventually succeed"), "connected");
+        assert_eq!(
+            result.expect("retry should eventually succeed"),
+            "connected"
+        );
         assert_eq!(
             attempts.load(Ordering::SeqCst),
             3,
@@ -331,18 +334,15 @@ mod tests {
         let attempts = Arc::new(AtomicU32::new(0));
         let attempts_c = attempts.clone();
 
-        let result: Result<(), TestError> = connect_with_retry_default(
-            "test-svc",
-            "http://localhost:9999",
-            move || {
+        let result: Result<(), TestError> =
+            connect_with_retry_default("test-svc", "http://localhost:9999", move || {
                 let attempts = attempts_c.clone();
                 async move {
                     attempts.fetch_add(1, Ordering::SeqCst);
                     Err(TestError("always fails"))
                 }
-            },
-        )
-        .await;
+            })
+            .await;
 
         assert!(result.is_err());
         assert_eq!(
