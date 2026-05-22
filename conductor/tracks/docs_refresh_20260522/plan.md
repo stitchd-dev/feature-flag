@@ -32,10 +32,12 @@ rewritten doc resolves to a live symbol (grep audit).
 ## Phase 2: Extend xtask Generators
 <!-- execution: sequential -->
 
-- [ ] Task 2.1: Add `env-vars` generator to `crates/xtask/src/main.rs` — scrape every
+- [x] Task 2.1: Add `env-vars` generator to `crates/xtask/src/main.rs` — scrape every
       `std::env::var("STITCHD_*")` invocation across `crates/*/src/` + `sdks/*/src/`,
       group by service, emit `docs/src/deployment/env-vars.md` with var name + crate + default
       (if `unwrap_or` / `unwrap_or_else` immediately follows). Idempotent.
+      35 vars discovered. Generator also handles `env_or("X","Y")` (gateway helper) and
+      const-identifier defaults via in-file `const IDENT = LIT;` resolution.
 - [ ] Task 2.2: Add `cargo-rdme` integration — standardize the `//!` preamble across all
       11 workspace crates + `sdks/rust` (one-paragraph crate purpose, link to mdBook section).
       Add `crate-readmes` step to xtask that runs `cargo rdme --workspace --no-fail-on-warnings`.
