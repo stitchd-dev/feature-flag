@@ -7,12 +7,15 @@
 //! outer `WHERE` clause.
 //!
 //! Each leg is a per-leg `build_aggregation_query` — so the experiment-
-//! attribution model (JOIN against `experiment_assignments`, ITT bound
-//! `e.occurred_at >= a.assigned_at`, GROUP BY `(a.context_type, a.variant_key)`)
-//! applies uniformly to numerator and denominator. Joining on both
-//! `context_type` AND `variant_key` keeps the per-context-type pairing
-//! sound: a `(user, treatment)` numerator row matches only the
-//! `(user, treatment)` denominator row.
+//! attribution model (ARRAY JOIN of `e.contexts` + equi-join against
+//! `experiment_assignments`, ITT bound `e.occurred_at >= a.assigned_at`,
+//! GROUP BY `(a.context_type, a.variant_key)`) applies uniformly to
+//! numerator and denominator. The ARRAY JOIN shape matters because CH
+//! 24's new analyzer rejects `arrayExists(...)` inside `JOIN ON`; see
+//! [`super::aggregation`] for the full rewrite rationale. Joining on both
+//! `context_type` AND `variant_key` in the outer SELECT keeps the
+//! per-context-type pairing sound: a `(user, treatment)` numerator row
+//! matches only the `(user, treatment)` denominator row.
 //!
 //! The caller is responsible for resolving the numerator and denominator
 //! [`MetricDefinition`]s into their underlying [`AggregationConfig`]s
@@ -447,9 +450,9 @@ mod tests {
     #[test]
     fn ratio_legs_use_assignments_join_no_context_tag_filter() {
         // Each leg is a `build_aggregation_query` — verify the post-cutover
-        // structure flows through to the ratio output: no `arrayExists`
-        // filtering on `'experiment'/'iteration'/'variant'` context tags,
-        // and the assignments JOIN is present in each CTE.
+        // structure flows through to the ratio output: no event-side
+        // `'experiment'/'iteration'/'variant'` context tag filters,
+        // and the ARRAY JOIN + assignments JOIN is present in each CTE.
         let q = build_ratio_query(
             &ratio_cfg(0),
             &count_cfg("a"),
@@ -462,15 +465,19 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !q.sql.contains("arrayExists(t -> t.1 = 'experiment'"),
+            !q.sql.contains("arrayExists"),
+            "ratio legs must not use arrayExists (CH 24 analyzer rejects it in JOIN ON)"
+        );
+        assert!(
+            !q.sql.contains("'experiment'"),
             "ratio legs must not filter on event-side experiment tags"
         );
         assert!(
-            !q.sql.contains("t.1 = 'iteration'"),
+            !q.sql.contains("'iteration'"),
             "ratio legs must not filter on event-side iteration tags"
         );
         assert!(
-            !q.sql.contains("t.1 = 'variant'"),
+            !q.sql.contains("'variant'"),
             "ratio legs must not filter on event-side variant tags"
         );
         // Each leg's INNER JOIN against experiment_assignments appears 3
@@ -482,6 +489,12 @@ mod tests {
         assert_eq!(
             join_count, 3,
             "expected 3 assignments JOINs (num + den + den_count), got {join_count}"
+        );
+        // Same for the ARRAY JOIN.
+        let array_join_count = q.sql.matches("ARRAY JOIN e.contexts AS ctx_pair").count();
+        assert_eq!(
+            array_join_count, 3,
+            "expected 3 ARRAY JOINs (num + den + den_count), got {array_join_count}"
         );
     }
 

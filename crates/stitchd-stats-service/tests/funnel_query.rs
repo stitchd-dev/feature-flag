@@ -18,10 +18,15 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, clickhouse::Row)]
 struct AssignmentRow {
+    #[serde(with = "clickhouse::serde::uuid")]
     experiment_id: Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
     iteration_id: Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
     env_id: Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
     flag_id: Uuid,
+    #[serde(with = "clickhouse::serde::uuid::option")]
     matched_rule_id: Option<Uuid>,
     context_type: String,
     context_key: String,
@@ -34,6 +39,7 @@ struct AssignmentRow {
 
 #[derive(Debug, Clone, Serialize, clickhouse::Row)]
 struct EventRow {
+    #[serde(with = "clickhouse::serde::uuid")]
     env_id: Uuid,
     contexts: Vec<(String, String)>,
     metric_key: String,
@@ -399,4 +405,133 @@ async fn funnel_excludes_unassigned_contexts() {
     let s1 = by_step.get(&1).expect("step 1 row");
     assert_eq!(s1.step_count, 1, "only alice should count");
     assert_eq!(s1.step_total, 1, "only alice entered the funnel");
+}
+
+/// Multi-context-type funnel: events whose `contexts` array carries BOTH a
+/// `user` and an `account` pair must attribute to BOTH assignment rows
+/// (one user-level, one account-level). With the ARRAY JOIN rewrite each
+/// event yields one row per matched tuple, so a 2-step funnel completed
+/// by a single event-pair is counted under both context types.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs running clickhouse"]
+async fn funnel_multi_context_type_attributes_both_user_and_account() {
+    let ch = make_client();
+    stitchd_event_writer::migrations::run(&ch)
+        .await
+        .expect("apply CH migrations");
+
+    let env_id = Uuid::new_v4();
+    let exp_id = Uuid::new_v4();
+    let iter_id = Uuid::new_v4();
+    let flag_id = Uuid::new_v4();
+    let assigned_at = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let iter_end = Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap();
+
+    insert_assignments(
+        &ch,
+        &[
+            AssignmentRow {
+                experiment_id: exp_id,
+                iteration_id: iter_id,
+                env_id,
+                flag_id,
+                matched_rule_id: None,
+                context_type: "user".into(),
+                context_key: "u_alice".into(),
+                variant_key: "treatment".into(),
+                assigned_at,
+                version: -assigned_at.timestamp_millis(),
+            },
+            AssignmentRow {
+                experiment_id: exp_id,
+                iteration_id: iter_id,
+                env_id,
+                flag_id,
+                matched_rule_id: None,
+                context_type: "account".into(),
+                context_key: "acct_42".into(),
+                variant_key: "treatment".into(),
+                assigned_at,
+                version: -assigned_at.timestamp_millis(),
+            },
+        ],
+    )
+    .await;
+
+    let t0 = assigned_at + Duration::minutes(1);
+    let t1 = t0 + Duration::minutes(5);
+    // One event-pair tagged with BOTH user and account contexts —
+    // the ARRAY JOIN expands each event into two rows, one per
+    // (context_type, context_key) tuple, attributing the funnel
+    // completion to both assignment rows.
+    insert_events(
+        &ch,
+        &[
+            EventRow {
+                env_id,
+                contexts: vec![
+                    ("user".into(), "u_alice".into()),
+                    ("account".into(), "acct_42".into()),
+                ],
+                metric_key: "step_a".into(),
+                value_bool: None,
+                value_int: None,
+                value_double: None,
+                timestamp: t0,
+                ingested_at: t0,
+                properties: vec![],
+                occurred_at: t0,
+            },
+            EventRow {
+                env_id,
+                contexts: vec![
+                    ("user".into(), "u_alice".into()),
+                    ("account".into(), "acct_42".into()),
+                ],
+                metric_key: "step_b".into(),
+                value_bool: None,
+                value_int: None,
+                value_double: None,
+                timestamp: t1,
+                ingested_at: t1,
+                properties: vec![],
+                occurred_at: t1,
+            },
+        ],
+    )
+    .await;
+
+    let cfg = FunnelConfig {
+        steps: vec![step("step_a"), step("step_b")],
+        window_seconds: 3600,
+        count_repeats: false,
+    };
+    let built = build_funnel_query(
+        &cfg,
+        &exp_id.to_string(),
+        &iter_id.to_string(),
+        &env_id.to_string(),
+        &["treatment"],
+        iter_end,
+    )
+    .expect("build funnel query");
+    let rows = execute(&ch, built.sql, built.binds).await;
+
+    // 2 steps × 2 context_types = 4 rows expected.
+    let user_s1 = rows
+        .iter()
+        .find(|r| r.context_type == "user" && r.step_index == 1)
+        .expect("user step 1 row");
+    let acct_s1 = rows
+        .iter()
+        .find(|r| r.context_type == "account" && r.step_index == 1)
+        .expect("account step 1 row");
+    assert_eq!(
+        user_s1.step_count, 1,
+        "alice completed step_b under the user context"
+    );
+    assert_eq!(
+        acct_s1.step_count, 1,
+        "acct_42 completed step_b under the account context"
+    );
 }

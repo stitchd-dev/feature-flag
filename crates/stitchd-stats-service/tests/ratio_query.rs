@@ -26,10 +26,15 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, clickhouse::Row)]
 struct AssignmentRow {
+    #[serde(with = "clickhouse::serde::uuid")]
     experiment_id: Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
     iteration_id: Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
     env_id: Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
     flag_id: Uuid,
+    #[serde(with = "clickhouse::serde::uuid::option")]
     matched_rule_id: Option<Uuid>,
     context_type: String,
     context_key: String,
@@ -42,6 +47,7 @@ struct AssignmentRow {
 
 #[derive(Debug, Clone, Serialize, clickhouse::Row)]
 struct EventRow {
+    #[serde(with = "clickhouse::serde::uuid")]
     env_id: Uuid,
     contexts: Vec<(String, String)>,
     metric_key: String,

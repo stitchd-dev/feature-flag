@@ -4,10 +4,16 @@
 //! JOIN experiment_assignments ...` query that:
 //!
 //! - JOINs `events_v2 e` against `experiment_assignments a` on
-//!   `(env_id, context_type, context_key)` — the join key is implicit on
-//!   the event side via `arrayExists(t -> t.1 = a.context_type AND
-//!   t.2 = a.context_key, e.contexts)` since contexts is an array of
-//!   `(type, key)` tuples per event.
+//!   `(env_id, context_type, context_key)`. Because `events_v2.contexts`
+//!   is `Array(Tuple(String, String))`, the events side is first flattened
+//!   via `ARRAY JOIN e.contexts AS ctx_pair`, then equi-joined on the
+//!   tuple's `.1`/`.2` against `a.context_type`/`a.context_key`. (CH 24's
+//!   new analyzer rejects `arrayExists(...)` inside `JOIN ON` with
+//!   `Not found column __table2.context_type ...`; the legacy analyzer
+//!   rejects it with `INVALID_JOIN_ON_EXPRESSION`. Same semantics — one
+//!   event row per matched assignment context — without the analyzer
+//!   trap; mirrors the Phase 11 E2E pattern in
+//!   `crates/stitchd-experimentation-service/tests/experiment_lifecycle_e2e.rs`.)
 //! - Filters by `experiment_id`, `iteration_id`, `env_id`, the iteration
 //!   time window (`a.assigned_at <= e.occurred_at < iteration_end`) and
 //!   the supplied `variant_keys` allow-list.
@@ -131,15 +137,30 @@ pub fn build_aggregation_query(
     // Aggregator expression.
     let agg_expr = render_aggregator(cfg)?;
 
+    // ARRAY JOIN flattens each event into one row per (context_type,
+    // context_key) tuple in its `contexts` array; the subsequent INNER
+    // JOIN against `experiment_assignments` is then a plain equi-join on
+    // (env_id, context_type, context_key). This matches the Phase 11 E2E
+    // pattern (`crates/stitchd-experimentation-service/tests/experiment_lifecycle_e2e.rs`)
+    // and avoids CH 24's analyzer rejecting `arrayExists(...)` inside
+    // `JOIN ON`.
+    //
+    // The aggregator output is wrapped in `toFloat64(...)` so the wire
+    // shape is uniform across operators (`count()` → UInt64, `uniq()` →
+    // UInt64, `sum`/`avg`/`quantile` → Float64). Without the cast the
+    // result row's `metric_value: f64` deserialisation fails with
+    // "ClickHouse type UInt64 as f64 not compatible" for count + uniq.
     let sql = format!(
         "SELECT\n    \
             a.context_type AS context_type,\n    \
             a.variant_key AS variant_key,\n    \
-            {agg_expr} AS metric_value\n\
+            toFloat64({agg_expr}) AS metric_value\n\
         FROM events_v2 AS e\n\
+        ARRAY JOIN e.contexts AS ctx_pair\n\
         INNER JOIN experiment_assignments AS a\n    \
             ON e.env_id = a.env_id\n   \
-            AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)\n\
+            AND ctx_pair.1 = a.context_type\n   \
+            AND ctx_pair.2 = a.context_key\n\
         WHERE a.env_id = toUUID({env_ph})\n  \
           AND a.experiment_id = toUUID({exp_ph})\n  \
           AND a.iteration_id = toUUID({iter_ph})\n  \
@@ -300,10 +321,23 @@ mod tests {
             q.sql
         );
         assert!(
-            q.sql.contains(
-                "AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)"
-            ),
-            "join predicate must walk e.contexts vs a.(context_type, context_key), got:\n{}",
+            q.sql.contains("ARRAY JOIN e.contexts AS ctx_pair"),
+            "must ARRAY JOIN e.contexts (CH 24 analyzer rejects arrayExists in JOIN ON), got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("ctx_pair.1 = a.context_type"),
+            "join predicate must equi-join ctx_pair.1 to a.context_type, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("ctx_pair.2 = a.context_key"),
+            "join predicate must equi-join ctx_pair.2 to a.context_key, got:\n{}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains("arrayExists"),
+            "no arrayExists in JOIN ON (CH 24 analyzer rejects this shape), got:\n{}",
             q.sql
         );
         // ITT bound + iteration upper bound.
@@ -338,7 +372,7 @@ mod tests {
 
     #[test]
     fn aggregation_no_event_side_experiment_context_tags() {
-        // The spec's headline cutover: no more arrayExists() filtering on
+        // The spec's headline cutover: no more event-side filtering on
         // contexts for 'experiment' / 'iteration' / 'variant' tags. The
         // attribution comes from `experiment_assignments` instead.
         let cfg = AggregationConfig {
@@ -351,17 +385,17 @@ mod tests {
             .unwrap();
 
         assert!(
-            !q.sql.contains("arrayExists(t -> t.1 = 'experiment'"),
+            !q.sql.contains("'experiment'"),
             "event-side experiment context filter must be removed, got:\n{}",
             q.sql
         );
         assert!(
-            !q.sql.contains("t.1 = 'iteration'"),
+            !q.sql.contains("'iteration'"),
             "event-side iteration context filter must be removed, got:\n{}",
             q.sql
         );
         assert!(
-            !q.sql.contains("t.1 = 'variant'"),
+            !q.sql.contains("'variant'"),
             "event-side variant context filter must be removed, got:\n{}",
             q.sql
         );
@@ -379,9 +413,9 @@ mod tests {
             .unwrap();
         assert!(
             q.sql.contains(
-                "sum(ifNull(toFloat64OrNull(e.properties['revenue']), 0.0)) AS metric_value"
+                "toFloat64(sum(ifNull(toFloat64OrNull(e.properties['revenue']), 0.0))) AS metric_value"
             ),
-            "sum aggregator should wrap e.properties['revenue'] in ifNull+toFloat64OrNull, got:\n{}",
+            "sum aggregator should wrap e.properties['revenue'] in ifNull+toFloat64OrNull and the whole agg in toFloat64, got:\n{}",
             q.sql
         );
     }
@@ -402,9 +436,9 @@ mod tests {
             .unwrap();
         assert!(
             q.sql.contains(
-                "avg(ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0))"
+                "toFloat64(avg(ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)))"
             ),
-            "avg over 'value' should coalesce native numeric columns directly, got:\n{}",
+            "avg over 'value' should coalesce native numeric columns directly and be wrapped in toFloat64, got:\n{}",
             q.sql
         );
         assert!(
@@ -426,9 +460,9 @@ mod tests {
             .unwrap();
         assert!(
             q.sql.contains(
-                "quantile(0.9)(ifNull(toFloat64OrNull(e.properties['latency_ms']), 0.0))"
+                "toFloat64(quantile(0.9)(ifNull(toFloat64OrNull(e.properties['latency_ms']), 0.0)))"
             ),
-            "P90 should emit quantile(0.9)(...), got:\n{}",
+            "P90 should emit quantile(0.9)(...) wrapped in toFloat64, got:\n{}",
             q.sql
         );
     }
@@ -445,8 +479,8 @@ mod tests {
             .unwrap();
         assert!(
             q.sql
-                .contains("uniq(e.properties['user_id']) AS metric_value"),
-            "uniq aggregator missing or wrong, got:\n{}",
+                .contains("toFloat64(uniq(e.properties['user_id'])) AS metric_value"),
+            "uniq aggregator missing or wrong (must be wrapped in toFloat64), got:\n{}",
             q.sql
         );
     }

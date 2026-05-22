@@ -17,9 +17,11 @@
 //!             e.metric_key = <step_0>, …, e.metric_key = <step_N-1>
 //!         ) AS level
 //!     FROM events_v2 e
+//!     ARRAY JOIN e.contexts AS ctx_pair
 //!     INNER JOIN experiment_assignments a
 //!         ON e.env_id = a.env_id
-//!        AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)
+//!        AND ctx_pair.1 = a.context_type
+//!        AND ctx_pair.2 = a.context_key
 //!     WHERE a.env_id = toUUID(?)
 //!       AND a.experiment_id = toUUID(?)
 //!       AND a.iteration_id  = toUUID(?)
@@ -174,6 +176,18 @@ pub fn build_funnel_query(
     // row per assigned context that entered the funnel within the iteration
     // window. The dedup key is `(context_type, context_key)` — funnel
     // completion is per-assigned-context.
+    // ARRAY JOIN flattens each event into one row per (context_type,
+    // context_key) tuple in `e.contexts`; the INNER JOIN against
+    // `experiment_assignments` is then a plain equi-join on
+    // (env_id, context_type, context_key). Mirrors the Phase 11 E2E
+    // pattern — see `experiment_lifecycle_e2e.rs` and the rewrite
+    // rationale in [`super::aggregation`]. CH 24's new analyzer rejects
+    // the legacy `arrayExists(...)` shape inside `JOIN ON`.
+    //
+    // Bind order is UNCHANGED relative to the legacy shape: ARRAY JOIN
+    // and the equi-join predicates introduce no new placeholders, and
+    // the SELECT list (whose `windowFunnel(...)` predicates contribute
+    // the head-of-vec binds) is untouched.
     let levels_cte = format!(
         "WITH levels AS (\n    \
             SELECT\n        \
@@ -185,9 +199,11 @@ pub fn build_funnel_query(
                     {step_predicates}\n        \
                 ) AS level\n    \
             FROM events_v2 AS e\n    \
+            ARRAY JOIN e.contexts AS ctx_pair\n    \
             INNER JOIN experiment_assignments AS a\n        \
                 ON e.env_id = a.env_id\n       \
-                AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)\n    \
+                AND ctx_pair.1 = a.context_type\n       \
+                AND ctx_pair.2 = a.context_key\n    \
             WHERE a.env_id = toUUID({env_ph})\n      \
               AND a.experiment_id = toUUID({exp_ph})\n      \
               AND a.iteration_id = toUUID({iter_ph})\n      \
@@ -501,10 +517,15 @@ mod tests {
         };
         let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
         assert!(q.sql.contains("FROM events_v2 AS e"));
+        assert!(q.sql.contains("ARRAY JOIN e.contexts AS ctx_pair"));
         assert!(q.sql.contains("INNER JOIN experiment_assignments AS a"));
-        assert!(q.sql.contains(
-            "AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)"
-        ));
+        assert!(q.sql.contains("ctx_pair.1 = a.context_type"));
+        assert!(q.sql.contains("ctx_pair.2 = a.context_key"));
+        assert!(
+            !q.sql.contains("arrayExists"),
+            "CH 24 analyzer rejects arrayExists in JOIN ON; got:\n{}",
+            q.sql
+        );
     }
 
     #[test]
@@ -533,15 +554,15 @@ mod tests {
         };
         let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
         assert!(
-            !q.sql.contains("arrayExists(t -> t.1 = 'experiment'"),
+            !q.sql.contains("'experiment'"),
             "no event-side experiment tag filter"
         );
         assert!(
-            !q.sql.contains("t.1 = 'iteration'"),
+            !q.sql.contains("'iteration'"),
             "no event-side iteration tag filter"
         );
         assert!(
-            !q.sql.contains("t.1 = 'variant'"),
+            !q.sql.contains("'variant'"),
             "no event-side variant tag filter"
         );
     }
