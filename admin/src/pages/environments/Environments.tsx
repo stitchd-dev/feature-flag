@@ -294,7 +294,10 @@ export function Environments() {
       })
       .catch(() => setEnvs([]))
       .finally(() => setEnvsLoading(false))
-  }, [projectId, envId, setEnvId])
+  // envId/setEnvId intentionally omitted so loadEnvs doesn't refetch every
+  // time the selected env changes; only project changes should reload.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId])
 
   useEffect(() => { loadEnvs() }, [loadEnvs])
 
