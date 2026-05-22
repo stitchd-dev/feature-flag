@@ -658,6 +658,120 @@ impl FlagService for FlagServiceImpl {
                         })?;
                     record.default_variant_id = Some(variant_id);
                 }
+
+                // Bug fix `feature-flag-7yc` — server-side defense-in-depth:
+                // if the inbound rule list ends with a catch-all rule whose
+                // condition is the legal `And: []` (always-true) sentinel
+                // AND the caller did NOT provide an explicit
+                // `default_variant_key`, absorb the catch-all's output into
+                // the canonical default-rule fields (`default_variant_id`
+                // and/or `default_rule_distribution`) and drop the rule
+                // itself from the persisted list. Rationale: pre-Phase-8 the
+                // admin UI appended a synthetic catch-all rule on save,
+                // which polluted GET responses with an extra rule and broke
+                // the "saved rule count = 1" contract. The canonical
+                // fallthrough lives on the flag record — not in the rule
+                // list — so we normalise here.
+                //
+                // The catch-all is detected ONLY when it is the last entry
+                // in the list (mid-list always-true rules are legitimate
+                // unconditional matches that the operator authored on
+                // purpose).
+                let strip_trailing_catch_all = !flag_proto.rules.is_empty()
+                    && flag_proto.default_variant_key.is_empty()
+                    && {
+                        let last = flag_proto.rules.last().expect("rules non-empty");
+                        // Empty rule_payload is treated as the catch-all
+                        // sentinel by the engine (`ConditionExpr::And(vec![])`
+                        // is the deserialised form, but the UI may submit
+                        // either). Also handle the explicit `And: []`.
+                        let is_catch_all_cond = last.rule_payload.is_empty()
+                            || serde_json::from_slice::<
+                                stitchd_core::rule_engine::types::ConditionExpr,
+                            >(&last.rule_payload)
+                            .map(|c| {
+                                matches!(
+                                    c,
+                                    stitchd_core::rule_engine::types::ConditionExpr::And(ref v)
+                                        if v.is_empty()
+                                )
+                            })
+                            .unwrap_or(false);
+                        is_catch_all_cond
+                    };
+
+                if strip_trailing_catch_all {
+                    let catch_all = flag_proto.rules.last().expect("checked non-empty").clone();
+                    match &catch_all.output {
+                        Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey(key))
+                            if !key.is_empty() =>
+                        {
+                            // Resolve variant_key → variant_id and stash on
+                            // the record's `default_variant_id`. The
+                            // variants for this flag may have just been
+                            // replaced via `flag_proto.variants`; prefer the
+                            // incoming list when present so a freshly-added
+                            // variant can be referenced.
+                            let lookup_variants = if !flag_proto.variants.is_empty() {
+                                flag_proto
+                                    .variants
+                                    .iter()
+                                    .filter_map(|v| mapping::proto_variant_to_domain(v.clone()))
+                                    .collect::<Vec<_>>()
+                            } else {
+                                self.variant_repo
+                                    .find_by_flag(record.id)
+                                    .await
+                                    .map_err(FlagServiceError::from)
+                                    .map_err(Status::from)?
+                            };
+                            if let Some(v) = lookup_variants.iter().find(|v| &v.key == key) {
+                                record.default_variant_id = Some(v.id);
+                                // Clear any prior percentage fallthrough —
+                                // the catch-all rule's variant output is
+                                // single-variant, not percentage.
+                                record.default_rule_distribution = None;
+                            }
+                        }
+                        Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc))
+                            if !alloc.buckets.is_empty() =>
+                        {
+                            // Percentage catch-all → `default_rule_distribution`.
+                            // Convert weight_milli (0..=1000) → percentage
+                            // (0.0..=100.0) preserving operator intent. Sum
+                            // is normalised to 100.0 by RolloutDistribution::validate
+                            // downstream; if validation fails we leave the
+                            // record's default fields alone and let the rule
+                            // persist as-is (best-effort defense-in-depth,
+                            // not strict normalisation).
+                            let allocations: Vec<stitchd_core::rollout::RolloutAllocation> = alloc
+                                .buckets
+                                .iter()
+                                .map(|b| stitchd_core::rollout::RolloutAllocation {
+                                    variant_key: b.variant_key.clone(),
+                                    percentage: f64::from(b.weight_milli) / 10.0,
+                                })
+                                .collect();
+                            let dist =
+                                stitchd_core::rollout::RolloutDistribution { allocations };
+                            // Only adopt the distribution if it validates;
+                            // otherwise leave the record alone (the strict
+                            // pre-existing validators on
+                            // `set_default_rule_distribution` already
+                            // reject malformed shapes).
+                            if dist.validate().is_ok() {
+                                record.default_rule_distribution = Some(dist);
+                                record.default_variant_id = None;
+                            }
+                        }
+                        _ => {
+                            // No usable output on the catch-all (e.g.
+                            // unset oneof). Leave the catch-all rule in
+                            // place — better to round-trip the operator's
+                            // payload than to silently drop it.
+                        }
+                    }
+                }
                 // Do NOT increment version here — the repo's update() does
                 // `new_version = flag.version + 1` and `WHERE version = flag.version`,
                 // so flag.version must remain the current stored value.
@@ -692,10 +806,23 @@ impl FlagService for FlagServiceImpl {
 
                 // Replace rules if the request includes a non-empty list.
                 if !flag_proto.rules.is_empty() {
+                    // Bug fix `feature-flag-7yc`: persist only the
+                    // non-catch-all rules. The trailing `And: []` rule
+                    // (when present) was already absorbed into the
+                    // record's `default_variant_id` /
+                    // `default_rule_distribution` above.
+                    let rules_to_persist: Vec<_> = if strip_trailing_catch_all {
+                        let mut r = flag_proto.rules.clone();
+                        r.pop();
+                        r
+                    } else {
+                        flag_proto.rules.clone()
+                    };
+
                     // Phase 4 of flag_eval_unify_20260522: server-side
                     // validation of every percentage-allocation rule's
                     // `hash_inputs` selector list (when populated).
-                    for (i, r) in flag_proto.rules.iter().enumerate() {
+                    for (i, r) in rules_to_persist.iter().enumerate() {
                         if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) =
                             &r.output
                             && !alloc.hash_inputs.is_empty()
@@ -720,8 +847,7 @@ impl FlagService for FlagServiceImpl {
                     }
                     let variant_key_to_id: std::collections::HashMap<_, _> =
                         variants.iter().map(|v| (v.key.clone(), v.id)).collect();
-                    let domain_rules: Vec<_> = flag_proto
-                        .rules
+                    let domain_rules: Vec<_> = rules_to_persist
                         .iter()
                         .enumerate()
                         .filter_map(|(i, r)| {
@@ -3072,6 +3198,165 @@ mod tests {
             err.message().contains("invalid_condition"),
             "expected invalid_condition sentinel; got `{}`",
             err.message()
+        );
+    }
+
+    // ─── feature-flag-7yc — trailing catch-all absorption ──────────────────
+
+    #[tokio::test]
+    async fn mutate_flag_update_strips_trailing_catch_all_rule_into_default_variant() {
+        // Bug fix `feature-flag-7yc`: when the inbound rule list ends with
+        // a catch-all (And: []) rule whose output is a single VariantKey,
+        // the server strips that rule from persistence and absorbs the
+        // variant into `default_variant_id`. The persisted rule count
+        // therefore equals the count of user-authored rules — not
+        // (user-authored + 1).
+        use stitchd_core::context::ParameterValue;
+        use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_core::rule_engine::types::ConditionExpr;
+        use stitchd_proto::flags::v1::{FlagRule, flag_rule::Output};
+
+        // Build the variants. We need them on the flag-id so the catch-all
+        // resolution can find them.
+        let (variants, _on_id, off_id) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.default_variant_id = None; // pre-state: no default yet
+        let flag_id = flag.id;
+        let flag_key = flag.key.as_str().to_string();
+        let flag_repo = StubFlagRepo::with_flags(vec![flag]);
+        let variant_repo = StubVariantRepoWithData::with_variants(variants.clone());
+        let svc = FlagServiceImpl::new(
+            flag_repo.clone(),
+            variant_repo,
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        );
+
+        // User-authored rule.
+        let user_when = ConditionExpr::Leaf(Condition::Eq {
+            context_type: "user".to_string(),
+            param: "tier".to_string(),
+            value: ParameterValue::Str("gold".to_string()),
+        });
+        let user_rule = FlagRule {
+            rule_payload: serde_json::to_vec(&user_when).unwrap(),
+            output: Some(Output::VariantKey("on".to_string())),
+            name: "gold targeting".to_string(),
+            rule_id: String::new(),
+        };
+
+        // Trailing catch-all (UI pre-fix shape).
+        let catch_all = FlagRule {
+            rule_payload: serde_json::to_vec(&ConditionExpr::And(vec![])).unwrap(),
+            output: Some(Output::VariantKey("off".to_string())),
+            name: String::new(),
+            rule_id: String::new(),
+        };
+
+        let req = Request::new(MutateFlagRequest {
+            environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
+            kind: MutationKind::Update as i32,
+            flag: Some(FeatureFlag {
+                key: flag_key,
+                rules: vec![user_rule, catch_all],
+                ..Default::default()
+            }),
+            version: 1,
+        });
+        let resp = svc
+            .mutate_flag(req)
+            .await
+            .expect("update should succeed")
+            .into_inner();
+        let proto = resp.flag.expect("flag in response");
+
+        // Only ONE rule survives — the user-authored rule.
+        assert_eq!(
+            proto.rules.len(),
+            1,
+            "expected 1 rule after stripping trailing catch-all; got {}",
+            proto.rules.len()
+        );
+
+        // The catch-all's variant_key now lives in `default_variant_key`.
+        assert_eq!(
+            proto.default_variant_key, "off",
+            "trailing catch-all variant must populate default_variant_key"
+        );
+        // Crosscheck the persisted record's default_variant_id matches.
+        let stored = flag_repo
+            .flags
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|f| f.id == flag_id)
+            .cloned()
+            .expect("flag still present");
+        assert_eq!(stored.default_variant_id, Some(off_id));
+    }
+
+    #[tokio::test]
+    async fn mutate_flag_update_keeps_non_catch_all_trailing_rule() {
+        // Sanity: a trailing rule with a NON-empty condition (a real
+        // targeting rule) must NOT be stripped — only the always-true
+        // (And: []) sentinel is treated as the synthetic catch-all.
+        use stitchd_core::context::ParameterValue;
+        use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_core::rule_engine::types::ConditionExpr;
+        use stitchd_proto::flags::v1::{FlagRule, flag_rule::Output};
+
+        let (variants, _on_id, _off_id) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.default_variant_id = None;
+        let flag_key = flag.key.as_str().to_string();
+        let flag_repo = StubFlagRepo::with_flags(vec![flag]);
+        let variant_repo = StubVariantRepoWithData::with_variants(variants);
+        let svc = FlagServiceImpl::new(
+            flag_repo,
+            variant_repo,
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        );
+
+        let real_rule = FlagRule {
+            rule_payload: serde_json::to_vec(&ConditionExpr::Leaf(Condition::Eq {
+                context_type: "user".to_string(),
+                param: "tier".to_string(),
+                value: ParameterValue::Str("gold".to_string()),
+            }))
+            .unwrap(),
+            output: Some(Output::VariantKey("on".to_string())),
+            name: String::new(),
+            rule_id: String::new(),
+        };
+
+        let req = Request::new(MutateFlagRequest {
+            environment_id: EnvironmentId::new().to_string(),
+            project_id: String::new(),
+            kind: MutationKind::Update as i32,
+            flag: Some(FeatureFlag {
+                key: flag_key,
+                rules: vec![real_rule],
+                ..Default::default()
+            }),
+            version: 1,
+        });
+        let resp = svc
+            .mutate_flag(req)
+            .await
+            .expect("update should succeed")
+            .into_inner();
+        let proto = resp.flag.expect("flag in response");
+
+        // The single (non-catch-all) rule is preserved.
+        assert_eq!(proto.rules.len(), 1);
+        // No default_variant_key was set (caller didn't supply one and
+        // there's no catch-all to absorb).
+        assert!(
+            proto.default_variant_key.is_empty(),
+            "default_variant_key should remain unset; got `{}`",
+            proto.default_variant_key
         );
     }
 
