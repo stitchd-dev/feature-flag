@@ -149,6 +149,88 @@ Patterns, gotchas, and context discovered during implementation.
     docs idempotency check looks for drift in TRACKED files only —
     crates/xtask/README.md is the canonical signal that Phase 3's
     xtask command wasn't `cargo-rdme`-refreshed. Worth catching in CI.
+---
+
+## [2026-05-22] Phase 5 — Flag-service preview rewire (worker P5)
+
+- **Implemented:** A new byte-equivalence regression test
+  `crates/stitchd-flag-service/tests/evaluate_preview_byte_equivalence.rs`
+  that locks the JSON wire shape of `evaluate_preview` against a frozen
+  baseline for a 4-flag corpus (single-rule, multi-rule,
+  default-rule-distribution, cross-context-hash) plus a gRPC
+  `results_json` round-trip check and a list-membership-pathway guard
+  (6 tests total). All 6 green.
+- **No code change required for Tasks 2 + 3.** This phase landed
+  PURELY as a test + documentation pass, by design — worker P2's Phase 2
+  rewire (commit 37c0995) had already reduced
+  `stitchd_core::evaluation::preview::evaluate_preview` to a thin
+  delegating wrapper over `evaluate_flag(trace=Full)`, and the flag
+  service's gRPC handler at `crates/stitchd-flag-service/src/service.rs:871`
+  was already calling that wrapper. The Phase 5 prompt explicitly
+  anticipated this ("Phase 5 may be MOSTLY a TEST-WRITING +
+  VERIFICATION exercise").
+- **Files changed:**
+  - `crates/stitchd-flag-service/tests/evaluate_preview_byte_equivalence.rs`
+    (NEW, 565 lines).
+  - `conductor/tracks/flag_eval_unify_20260522/plan.md` (Phase 5 tasks
+    checked off).
+  - `conductor/tracks/flag_eval_unify_20260522/learnings.md` (this block).
+- **Commits:** 1c8a357
+- **Tests:** 6 new tests in
+  `crates/stitchd-flag-service/tests/evaluate_preview_byte_equivalence.rs`.
+  Suite totals: flag-service 90 lib + 1 eval_log_matched_rule_e2e +
+  1 eval_preview_clickhouse + 6 new = 98 tests green. Core: 531/531 green
+  (unchanged from Phase 2). Clippy `-p stitchd-flag-service -p stitchd-core
+  --all-targets -- -D warnings` clean. `cargo fmt --all --check` clean.
+- **Learnings:**
+  - Patterns:
+    - **UUID serde format is `8-4-4-4-12` hyphenated, not 32-char hex.**
+      The `uuid` crate's default `Serialize` impl produces the canonical
+      `00000000-0000-0000-0000-0000000000c1` form. Phase 5's first
+      byte-equivalence baseline initially failed because the expected
+      JSON used the un-hyphenated 32-char form; the hyphenated form is
+      the one downstream JSON clients (admin UI, gateway) see, so the
+      hyphenated form is what we lock in.
+    - **`serde_json::Value` semantic comparison beats raw-string
+      comparison for byte-equivalence tests.** JSON map field order is
+      not stable across serde / serde_json versions; a string `==`
+      would brittle-break on a serde upgrade even though the JSON is
+      equivalent. Compare parsed `Value`s — that's what consumers do.
+    - **Hand-authored deterministic IDs (`Uuid::from_u128(N)`)
+      sidestep the need for an external fixture file.** Baselines stay
+      inline next to the assertion, the test is fully self-contained,
+      and the diff is a single new file.
+    - **For `rollout_debug` baselines on default-rule and
+      percentage-rule entries, assert the STRUCTURAL shape (variant
+      ranges, range boundaries, hash_input format) but allow the
+      Murmur3-derived bucket to be ANY value in `0..1000`.** Trying to
+      pin the bucket against a literal would require running
+      `calculate_allocation` by hand once and copy-pasting; the
+      structural assertions are sufficient to catch any Phase 2
+      regression that would change the hash input or the range
+      math.
+  - Gotchas:
+    - **`stitchd-core` is in regular `dependencies`, not
+      `dev-dependencies`, of `stitchd-flag-service`** — so the tests
+      directory can import core types without any
+      `[dev-dependencies]` edit. Worth noting for future
+      cross-service test authors.
+    - **`Vec<ContextPreviewResult>` is the *direct* result of the
+      core `evaluate_preview` function and is what the gRPC handler
+      `serde_json::to_string`s into `EvaluatePreviewResponse.results_json`.**
+      The handler does NOT remap the structure — its only
+      post-evaluation work is the JSON encode. So testing the core
+      function's serialization output IS testing the gRPC wire shape
+      (modulo the bookkeeping at the gRPC envelope level).
+  - Context:
+    - **Worker P3's mapping.rs `hash_inputs: vec![]` patch (commit
+      ec999cf via merge) is the dual-schema state Phase 5 still
+      relies on.** The `PercentageAllocation` proto carries both the
+      new repeated `hash_inputs` field AND the legacy
+      `context_hash_specs` map; the flag service's `mapping.rs` (P4's
+      scope) reads/writes the legacy field, and the engine.rs bridge
+      `hash_input_spec_from_targets` (P2's scope) converts on the
+      fly. This phase produces no change to either path.
 
 ---
 
