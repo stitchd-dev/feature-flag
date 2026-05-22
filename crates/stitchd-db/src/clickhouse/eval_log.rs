@@ -24,8 +24,13 @@ pub struct EvalLogRow {
     pub flag_key: String,
     /// Variant that was served, or `"__disabled__"` when the flag is off.
     pub variant_key: String,
-    /// `true` when the flag was disabled and the default variant was applied.
-    pub is_disabled: bool,
+    /// `true` when the flag's targeting toggle was ON at evaluation time
+    /// (i.e. `Flag.enabled = true` — rule evaluation actually happened).
+    /// `false` when targeting was off and the default-variant fallthrough
+    /// was applied. The Phase 4 `experiment_assignments_mv` filters on
+    /// `WHERE targeting_on` so disabled-flag evals never produce
+    /// experiment exposures.
+    pub targeting_on: bool,
     /// When the evaluation occurred (millisecond precision UTC).
     #[serde(with = "clickhouse::serde::chrono::datetime64::millis")]
     pub evaluated_at: DateTime<Utc>,
@@ -35,6 +40,14 @@ pub struct EvalLogRow {
     pub context_key: String,
     /// JSON object `{"key": "value"}` with private values replaced by `"********"`.
     pub params_json: String,
+    /// The rule UUID that matched, or `None` if the flag fell through to the
+    /// default-rule path. `None` is also used when the row predates the
+    /// schema migration (CH `Nullable(UUID)` column added 2026-05-21).
+    /// Populated by `stitchd-flag-service::eval_log_writer` in Phase 2 of the
+    /// `experimentation_full_20260521` track. Used by `experiment_assignments_mv`
+    /// to scope exposures to the experiment's bound rule (or default-rule).
+    #[serde(with = "clickhouse::serde::uuid::option")]
+    pub matched_rule_id: Option<Uuid>,
 }
 
 // ── Write ────────────────────────────────────────────────────────────────────
@@ -67,33 +80,34 @@ pub async fn insert_eval_log_rows(
 mod tests {
     use super::*;
 
-    fn make_row(params_json: &str, is_disabled: bool) -> EvalLogRow {
+    fn make_row(params_json: &str, targeting_on: bool) -> EvalLogRow {
         EvalLogRow {
             env_id: Uuid::new_v4(),
             flag_id: Uuid::new_v4(),
             flag_key: "test-flag".into(),
             variant_key: "on".into(),
-            is_disabled,
+            targeting_on,
             evaluated_at: Utc::now(),
             context_type: "user".into(),
             context_key: "alice".into(),
             params_json: params_json.into(),
+            matched_rule_id: None,
         }
     }
 
     #[test]
     fn row_serializes_with_correct_fields() {
-        let row = make_row(r#"{"plan":"pro"}"#, false);
+        let row = make_row(r#"{"plan":"pro"}"#, true);
         // The Row derive requires all fields to be present; just confirm construction.
         assert_eq!(row.flag_key, "test-flag");
         assert_eq!(row.variant_key, "on");
-        assert!(!row.is_disabled);
+        assert!(row.targeting_on);
         assert_eq!(row.params_json, r#"{"plan":"pro"}"#);
     }
 
     #[test]
     fn row_with_masked_private_value() {
-        let row = make_row(r#"{"ssn":"********","plan":"pro"}"#, false);
+        let row = make_row(r#"{"ssn":"********","plan":"pro"}"#, true);
         assert!(row.params_json.contains(r#""ssn":"********""#));
         assert!(row.params_json.contains(r#""plan":"pro""#));
     }

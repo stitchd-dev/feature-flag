@@ -7,7 +7,8 @@ use sqlx::PgPool;
 
 use stitchd_core::{
     experimentation::{Experiment, ExperimentIteration, ExperimentStatus, validate_transition},
-    id::{EnvironmentId, ExperimentId, ExperimentIterationId, MetricId, RuleId, UserId},
+    id::{EnvironmentId, ExperimentId, ExperimentIterationId, FlagId, MetricId, RuleId, UserId},
+    rollout::RolloutDistribution,
 };
 
 use crate::{
@@ -28,40 +29,61 @@ impl PgExperimentRepository {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Row → domain helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a stored `pre_period_days` (signed `i32`) to the domain's `u32`.
+/// The DB CHECK guarantees `>= 0`, so any negative value is corruption — we
+/// surface it as `0` rather than panic.
+#[allow(clippy::cast_sign_loss)]
+const fn pre_period_to_u32(v: i32) -> u32 {
+    if v < 0 { 0 } else { v as u32 }
+}
+
+/// Convert the domain's `u32` back to PG's signed `i32`. Saturating cast —
+/// values above `i32::MAX` are clamped, which is harmless for a day-count.
+#[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+const fn pre_period_to_i32(v: u32) -> i32 {
+    if v > i32::MAX as u32 {
+        i32::MAX
+    } else {
+        v as i32
+    }
+}
+
+fn parse_status(s: &str) -> ExperimentStatus {
+    match s {
+        "running" => ExperimentStatus::Running,
+        "paused" => ExperimentStatus::Paused,
+        "stopped" => ExperimentStatus::Stopped,
+        _ => ExperimentStatus::Draft,
+    }
+}
+
 #[async_trait]
 impl ExperimentRepository for PgExperimentRepository {
     async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
-        sqlx::query_as!(
-            Experiment,
-            r#"
+        let row = sqlx::query(
+            r"
             SELECT
-                id                  AS "id: ExperimentId",
-                env_id              AS "environment_id: EnvironmentId",
-                flag_rule_id        AS "flag_rule_id: RuleId",
-                name,
-                description,
-                hypothesis,
-                status              AS "status: ExperimentStatus",
-                metric_ids          AS "metric_ids: Vec<MetricId>",
-                traffic_allocation  AS "traffic_allocation: f64",
-                min_sample_size     AS "min_sample_size: i64",
-                scheduled_start_at,
-                scheduled_end_at,
-                version             AS "version: i64",
-                created_at,
-                updated_at,
-                deleted_at
+                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
+                hypothesis, status, metric_ids, guardrail_metric_ids,
+                traffic_allocation::float8 AS traffic_allocation,
+                min_sample_size, pre_period_days, unit_context_types,
+                scheduled_start_at, scheduled_end_at,
+                version, created_at, updated_at, deleted_at
             FROM experiments
             WHERE id = $1 AND deleted_at IS NULL
-            "#,
-            id as ExperimentId,
+            ",
         )
-        .fetch_one(&self.pool)
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::RowNotFound => RepositoryError::NotFound { id: id.to_string() },
-            other => RepositoryError::Database(other),
-        })
+        .map_err(RepositoryError::Database)?;
+
+        let row = row.ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })?;
+        Ok(row_to_experiment(&row))
     }
 
     async fn list_by_environment(
@@ -69,43 +91,34 @@ impl ExperimentRepository for PgExperimentRepository {
         env_id: EnvironmentId,
         status_filter: Option<ExperimentStatus>,
     ) -> Result<Vec<Experiment>, RepositoryError> {
-        // We use a raw query with an optional status filter.
-        // Since sqlx::query_as! doesn't support dynamic WHERE clauses,
-        // we fetch all and filter in Rust when a filter is given.
-        let rows = sqlx::query_as!(
-            Experiment,
-            r#"
+        let rows = sqlx::query(
+            r"
             SELECT
-                id                  AS "id: ExperimentId",
-                env_id              AS "environment_id: EnvironmentId",
-                flag_rule_id        AS "flag_rule_id: RuleId",
-                name,
-                description,
-                hypothesis,
-                status              AS "status: ExperimentStatus",
-                metric_ids          AS "metric_ids: Vec<MetricId>",
-                traffic_allocation  AS "traffic_allocation: f64",
-                min_sample_size     AS "min_sample_size: i64",
-                scheduled_start_at,
-                scheduled_end_at,
-                version             AS "version: i64",
-                created_at,
-                updated_at,
-                deleted_at
+                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
+                hypothesis, status, metric_ids, guardrail_metric_ids,
+                traffic_allocation::float8 AS traffic_allocation,
+                min_sample_size, pre_period_days, unit_context_types,
+                scheduled_start_at, scheduled_end_at,
+                version, created_at, updated_at, deleted_at
             FROM experiments
             WHERE env_id = $1 AND deleted_at IS NULL
             ORDER BY created_at
-            "#,
-            env_id as EnvironmentId,
+            ",
         )
+        .bind(env_id.as_uuid())
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
+        let experiments: Vec<Experiment> = rows.iter().map(row_to_experiment).collect();
+
         if let Some(status) = status_filter {
-            Ok(rows.into_iter().filter(|e| e.status == status).collect())
+            Ok(experiments
+                .into_iter()
+                .filter(|e| e.status == status)
+                .collect())
         } else {
-            Ok(rows)
+            Ok(experiments)
         }
     }
 
@@ -120,9 +133,12 @@ impl ExperimentRepository for PgExperimentRepository {
         let rows = sqlx::query(
             r"
             SELECT
-                id, env_id, flag_rule_id, name, description, hypothesis, status,
-                metric_ids, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
-                scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at,
+                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
+                hypothesis, status, metric_ids, guardrail_metric_ids,
+                traffic_allocation::float8 AS traffic_allocation,
+                min_sample_size, pre_period_days, unit_context_types,
+                scheduled_start_at, scheduled_end_at,
+                version, created_at, updated_at, deleted_at,
                 COUNT(*) OVER() AS total_count
             FROM experiments
             WHERE env_id = $1 AND deleted_at IS NULL
@@ -152,92 +168,59 @@ impl ExperimentRepository for PgExperimentRepository {
             result
         });
 
-        let experiments = rows
-            .iter()
-            .map(|r| {
-                use stitchd_core::id::RuleId;
-                let status_str: &str = r.get("status");
-                let status = match status_str {
-                    "running" => ExperimentStatus::Running,
-                    "paused" => ExperimentStatus::Paused,
-                    "stopped" => ExperimentStatus::Stopped,
-                    _ => ExperimentStatus::Draft,
-                };
-                let metric_uuids: Vec<uuid::Uuid> = r.get("metric_ids");
-                let metric_ids: Vec<MetricId> =
-                    metric_uuids.into_iter().map(MetricId::from_uuid).collect();
-                Ok(Experiment {
-                    id: ExperimentId::from_uuid(r.get("id")),
-                    environment_id: EnvironmentId::from_uuid(r.get("env_id")),
-                    flag_rule_id: RuleId::from_uuid(r.get("flag_rule_id")),
-                    name: r.get("name"),
-                    description: r.get("description"),
-                    hypothesis: r.get("hypothesis"),
-                    status,
-                    metric_ids,
-                    traffic_allocation: {
-                        let v: f64 = r.get("traffic_allocation");
-                        v
-                    },
-                    min_sample_size: r.get("min_sample_size"),
-                    scheduled_start_at: r.get("scheduled_start_at"),
-                    scheduled_end_at: r.get("scheduled_end_at"),
-                    version: r.get("version"),
-                    created_at: r.get("created_at"),
-                    updated_at: r.get("updated_at"),
-                    deleted_at: r.get("deleted_at"),
-                })
-            })
-            .collect::<Result<Vec<_>, RepositoryError>>()?;
+        let experiments: Vec<Experiment> = rows.iter().map(row_to_experiment).collect();
 
         Ok((experiments, total))
     }
 
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError> {
-        // sqlx can't infer `Vec<MetricId>` for a `UUID[]` bind through the
-        // query!() macro, so we project to `Vec<Uuid>` at the bind site.
         let metric_uuids: Vec<uuid::Uuid> = experiment
             .metric_ids
             .iter()
             .map(MetricId::as_uuid)
             .collect();
-        sqlx::query!(
-            r#"
+        let guardrail_uuids: Vec<uuid::Uuid> = experiment
+            .guardrail_metric_ids
+            .iter()
+            .map(MetricId::as_uuid)
+            .collect();
+
+        sqlx::query(
+            r"
             INSERT INTO experiments
-                (id, env_id, flag_rule_id, name, description, hypothesis, status,
-                 metric_ids, traffic_allocation, min_sample_size,
-                 scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7::text, $8, $9::float8::numeric, $10, $11, $12, $13, $14, $15, $16)
-            "#,
-            experiment.id as ExperimentId,
-            experiment.environment_id as EnvironmentId,
-            experiment.flag_rule_id as RuleId,
-            experiment.name,
-            experiment.description,
-            experiment.hypothesis,
-            experiment.status as ExperimentStatus,
-            &metric_uuids,
-            experiment.traffic_allocation,
-            experiment.min_sample_size,
-            experiment.scheduled_start_at,
-            experiment.scheduled_end_at,
-            experiment.version,
-            experiment.created_at,
-            experiment.updated_at,
-            experiment.deleted_at,
+                (id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
+                 hypothesis, status, metric_ids, guardrail_metric_ids, traffic_allocation,
+                 min_sample_size, pre_period_days, unit_context_types,
+                 scheduled_start_at, scheduled_end_at,
+                 version, created_at, updated_at, deleted_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text, $10, $11,
+                    $12::float8::numeric, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+            ",
         )
+        .bind(experiment.id.as_uuid())
+        .bind(experiment.environment_id.as_uuid())
+        .bind(experiment.flag_id.as_uuid())
+        .bind(experiment.flag_rule_id.map(|r| r.as_uuid()))
+        .bind(experiment.targets_default_rule)
+        .bind(&experiment.name)
+        .bind(&experiment.description)
+        .bind(&experiment.hypothesis)
+        .bind(experiment_status_str(experiment.status))
+        .bind(&metric_uuids)
+        .bind(&guardrail_uuids)
+        .bind(experiment.traffic_allocation)
+        .bind(experiment.min_sample_size)
+        .bind(pre_period_to_i32(experiment.pre_period_days))
+        .bind(&experiment.unit_context_types)
+        .bind(experiment.scheduled_start_at)
+        .bind(experiment.scheduled_end_at)
+        .bind(experiment.version)
+        .bind(experiment.created_at)
+        .bind(experiment.updated_at)
+        .bind(experiment.deleted_at)
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            if let sqlx::Error::Database(ref dbe) = e
-                && let Some(constraint) = dbe.constraint()
-            {
-                return RepositoryError::UniqueViolation {
-                    field: constraint.to_string(),
-                };
-            }
-            RepositoryError::Database(e)
-        })?;
+        .map_err(map_experiment_db_err)?;
 
         self.audit
             .log(
@@ -248,7 +231,10 @@ impl ExperimentRepository for PgExperimentRepository {
                 serde_json::json!({
                     "name": experiment.name,
                     "environment_id": experiment.environment_id.to_string(),
-                    "flag_rule_id": experiment.flag_rule_id.to_string(),
+                    "flag_id": experiment.flag_id.to_string(),
+                    "flag_rule_id": experiment.flag_rule_id.map(|r| r.to_string()),
+                    "targets_default_rule": experiment.targets_default_rule,
+                    "unit_context_types": experiment.unit_context_types,
                     "status": format!("{:?}", experiment.status),
                 }),
             )
@@ -260,21 +246,21 @@ impl ExperimentRepository for PgExperimentRepository {
     #[allow(clippy::too_many_lines)]
     async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
         // Mutation guard: reject updates on active (running or paused) experiments.
-        let current_status: Option<ExperimentStatus> = sqlx::query_scalar!(
-            r#"SELECT status AS "status: ExperimentStatus" FROM experiments WHERE id = $1 AND deleted_at IS NULL"#,
-            experiment.id as ExperimentId,
+        let current_status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM experiments WHERE id = $1 AND deleted_at IS NULL",
         )
+        .bind(experiment.id.as_uuid())
         .fetch_optional(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        match current_status {
+        match current_status.as_deref() {
             None => {
                 return Err(RepositoryError::NotFound {
                     id: experiment.id.to_string(),
                 });
             }
-            Some(ExperimentStatus::Running | ExperimentStatus::Paused) => {
+            Some("running" | "paused") => {
                 return Err(RepositoryError::InvalidState {
                     reason: "cannot update an experiment that is running or paused".to_string(),
                 });
@@ -288,58 +274,60 @@ impl ExperimentRepository for PgExperimentRepository {
             .iter()
             .map(MetricId::as_uuid)
             .collect();
-        let result = sqlx::query_as!(
-            Experiment,
-            r#"
+        let guardrail_uuids: Vec<uuid::Uuid> = experiment
+            .guardrail_metric_ids
+            .iter()
+            .map(MetricId::as_uuid)
+            .collect();
+
+        let row = sqlx::query(
+            r"
             UPDATE experiments
             SET name = $1,
                 description = $2,
                 hypothesis = $3,
                 status = $4::text,
                 metric_ids = $5,
-                traffic_allocation = $6::float8::numeric,
-                min_sample_size = $7,
-                scheduled_start_at = $8,
-                scheduled_end_at = $9,
+                guardrail_metric_ids = $6,
+                traffic_allocation = $7::float8::numeric,
+                min_sample_size = $8,
+                pre_period_days = $9,
+                unit_context_types = $10,
+                scheduled_start_at = $11,
+                scheduled_end_at = $12,
                 updated_at = NOW(),
-                version = $10
-            WHERE id = $11 AND version = $12 AND deleted_at IS NULL
+                version = $13
+            WHERE id = $14 AND version = $15 AND deleted_at IS NULL
             RETURNING
-                id                  AS "id: ExperimentId",
-                env_id              AS "environment_id: EnvironmentId",
-                flag_rule_id        AS "flag_rule_id: RuleId",
-                name,
-                description,
-                hypothesis,
-                status              AS "status: ExperimentStatus",
-                metric_ids          AS "metric_ids: Vec<MetricId>",
-                traffic_allocation  AS "traffic_allocation: f64",
-                min_sample_size     AS "min_sample_size: i64",
-                scheduled_start_at,
-                scheduled_end_at,
-                version             AS "version: i64",
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
-            experiment.name,
-            experiment.description,
-            experiment.hypothesis,
-            experiment.status as ExperimentStatus,
-            &metric_uuids,
-            experiment.traffic_allocation as f64,
-            experiment.min_sample_size,
-            experiment.scheduled_start_at,
-            experiment.scheduled_end_at,
-            new_version,
-            experiment.id as ExperimentId,
-            experiment.version,
+                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
+                hypothesis, status, metric_ids, guardrail_metric_ids,
+                traffic_allocation::float8 AS traffic_allocation,
+                min_sample_size, pre_period_days, unit_context_types,
+                scheduled_start_at, scheduled_end_at,
+                version, created_at, updated_at, deleted_at
+            ",
         )
+        .bind(&experiment.name)
+        .bind(&experiment.description)
+        .bind(&experiment.hypothesis)
+        .bind(experiment_status_str(experiment.status))
+        .bind(&metric_uuids)
+        .bind(&guardrail_uuids)
+        .bind(experiment.traffic_allocation)
+        .bind(experiment.min_sample_size)
+        .bind(pre_period_to_i32(experiment.pre_period_days))
+        .bind(&experiment.unit_context_types)
+        .bind(experiment.scheduled_start_at)
+        .bind(experiment.scheduled_end_at)
+        .bind(new_version)
+        .bind(experiment.id.as_uuid())
+        .bind(experiment.version)
         .fetch_optional(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        if let Some(updated) = result {
+        if let Some(row) = row {
+            let updated = row_to_experiment(&row);
             self.audit
                 .log(
                     None,
@@ -353,65 +341,61 @@ impl ExperimentRepository for PgExperimentRepository {
                     }),
                 )
                 .await?;
-            Ok(updated)
-        } else {
-            // Distinguish NotFound vs VersionConflict.
-            let current = sqlx::query_scalar!(
-                "SELECT version FROM experiments WHERE id = $1 AND deleted_at IS NULL",
-                experiment.id as ExperimentId
-            )
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(RepositoryError::Database)?;
-
-            current.map_or_else(
-                || {
-                    Err(RepositoryError::NotFound {
-                        id: experiment.id.to_string(),
-                    })
-                },
-                |current_version| {
-                    Err(RepositoryError::VersionConflict {
-                        expected: experiment.version,
-                        actual: current_version,
-                    })
-                },
-            )
+            return Ok(updated);
         }
-    }
 
-    async fn soft_delete(&self, id: ExperimentId) -> Result<(), RepositoryError> {
-        // Fetch the current status to reject running experiments.
-        let row = sqlx::query!(
-            r#"
-            SELECT status AS "status: ExperimentStatus"
-            FROM experiments
-            WHERE id = $1 AND deleted_at IS NULL
-            "#,
-            id as ExperimentId,
+        // Distinguish NotFound vs VersionConflict.
+        let current = sqlx::query_scalar::<_, i64>(
+            "SELECT version FROM experiments WHERE id = $1 AND deleted_at IS NULL",
         )
+        .bind(experiment.id.as_uuid())
         .fetch_optional(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let Some(row) = row else {
+        current.map_or_else(
+            || {
+                Err(RepositoryError::NotFound {
+                    id: experiment.id.to_string(),
+                })
+            },
+            |current_version| {
+                Err(RepositoryError::VersionConflict {
+                    expected: experiment.version,
+                    actual: current_version,
+                })
+            },
+        )
+    }
+
+    async fn soft_delete(&self, id: ExperimentId) -> Result<(), RepositoryError> {
+        // Fetch the current status to reject running experiments.
+        let current: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM experiments WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let Some(status_str) = current else {
             return Err(RepositoryError::NotFound { id: id.to_string() });
         };
 
-        if row.status == ExperimentStatus::Running {
+        if status_str == "running" {
             return Err(RepositoryError::InvalidState {
                 reason: "cannot delete a running experiment; pause or stop it first".to_string(),
             });
         }
 
-        sqlx::query!(
-            r#"
+        sqlx::query(
+            r"
             UPDATE experiments
             SET deleted_at = NOW(), updated_at = NOW()
             WHERE id = $1 AND deleted_at IS NULL
-            "#,
-            id as ExperimentId,
+            ",
         )
+        .bind(id.as_uuid())
         .execute(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
@@ -433,27 +417,25 @@ impl ExperimentRepository for PgExperimentRepository {
         &self,
         experiment_id: ExperimentId,
     ) -> Result<Vec<ExperimentIteration>, RepositoryError> {
-        sqlx::query_as!(
-            ExperimentIteration,
-            r#"
+        let rows = sqlx::query(
+            r"
             SELECT
-                id                  AS "id: ExperimentIterationId",
-                experiment_id       AS "experiment_id: ExperimentId",
-                iteration_number,
-                started_at,
-                ended_at,
-                metric_ids          AS "metric_ids: Vec<MetricId>",
-                traffic_allocation  AS "traffic_allocation: f64",
-                min_sample_size     AS "min_sample_size: i64"
+                id, experiment_id, flag_id, iteration_number, started_at, ended_at,
+                metric_ids, guardrail_metric_ids,
+                traffic_allocation::float8 AS traffic_allocation,
+                min_sample_size, targets_default_rule, pre_period_days,
+                unit_context_types, default_rule_distribution
             FROM experiment_iterations
             WHERE experiment_id = $1
             ORDER BY iteration_number
-            "#,
-            experiment_id as ExperimentId,
+            ",
         )
+        .bind(experiment_id.as_uuid())
         .fetch_all(&self.pool)
         .await
-        .map_err(RepositoryError::Database)
+        .map_err(RepositoryError::Database)?;
+
+        rows.iter().map(row_to_iteration).collect()
     }
 
     #[allow(clippy::too_many_lines)]
@@ -476,98 +458,87 @@ impl ExperimentRepository for PgExperimentRepository {
         let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
 
         // 3a. Uniqueness check: if transitioning to running or paused, ensure no
-        //     other non-deleted experiment on the same flag_rule_id is already
-        //     running or paused (excluding self).
+        //     other non-deleted experiment on the same flag is already running
+        //     or paused (excluding self).
         if to == ExperimentStatus::Running || to == ExperimentStatus::Paused {
-            let conflict_count: i64 = sqlx::query_scalar!(
-                r#"
-                SELECT COUNT(*) AS "count!"
+            let conflict_count: i64 = sqlx::query_scalar(
+                r"
+                SELECT COUNT(*)::bigint
                 FROM experiments
-                WHERE flag_rule_id = $1
+                WHERE flag_id = $1
                   AND id <> $2
                   AND status IN ('running', 'paused')
                   AND deleted_at IS NULL
-                "#,
-                current.flag_rule_id as RuleId,
-                id as ExperimentId,
+                ",
             )
+            .bind(current.flag_id.as_uuid())
+            .bind(id.as_uuid())
             .fetch_one(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
 
             if conflict_count > 0 {
                 return Err(RepositoryError::UniqueViolation {
-                    field: "flag_rule_id".to_string(),
+                    field: "flag_id".to_string(),
                 });
             }
         }
 
         // 3b. Update experiment status and bump version (optimistic concurrency).
         let new_version = current.version + 1;
-        let updated = sqlx::query_as!(
-            Experiment,
-            r#"
+        let updated_row = sqlx::query(
+            r"
             UPDATE experiments
             SET status    = $1::text,
                 version   = $2,
                 updated_at = NOW()
             WHERE id = $3 AND version = $4 AND deleted_at IS NULL
             RETURNING
-                id                  AS "id: ExperimentId",
-                env_id              AS "environment_id: EnvironmentId",
-                flag_rule_id        AS "flag_rule_id: RuleId",
-                name,
-                description,
-                hypothesis,
-                status              AS "status: ExperimentStatus",
-                metric_ids          AS "metric_ids: Vec<MetricId>",
-                traffic_allocation  AS "traffic_allocation: f64",
-                min_sample_size     AS "min_sample_size: i64",
-                scheduled_start_at,
-                scheduled_end_at,
-                version             AS "version: i64",
-                created_at,
-                updated_at,
-                deleted_at
-            "#,
-            to as ExperimentStatus,
-            new_version,
-            id as ExperimentId,
-            current.version,
+                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
+                hypothesis, status, metric_ids, guardrail_metric_ids,
+                traffic_allocation::float8 AS traffic_allocation,
+                min_sample_size, pre_period_days, unit_context_types,
+                scheduled_start_at, scheduled_end_at,
+                version, created_at, updated_at, deleted_at
+            ",
         )
+        .bind(experiment_status_str(to))
+        .bind(new_version)
+        .bind(id.as_uuid())
+        .bind(current.version)
         .fetch_optional(&mut *tx)
         .await
         .map_err(RepositoryError::Database)?
-        .ok_or_else(|| RepositoryError::VersionConflict {
+        .ok_or(RepositoryError::VersionConflict {
             expected: current.version,
-            actual: new_version, // could be stale, but we can't re-query inside the tx here
+            actual: new_version,
         })?;
 
+        let updated = row_to_experiment(&updated_row);
+
         // 3c. If transitioning into Running: end the previous active iteration (if any),
-        //     then insert a new iteration.
+        //     then insert a new iteration with the snapshot columns.
         if to == ExperimentStatus::Running {
-            // End any currently active iteration (handles paused→running restart).
-            sqlx::query!(
-                r#"
+            sqlx::query(
+                r"
                 UPDATE experiment_iterations
                 SET ended_at = NOW()
                 WHERE experiment_id = $1 AND ended_at IS NULL
-                "#,
-                id as ExperimentId,
+                ",
             )
+            .bind(id.as_uuid())
             .execute(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
 
-            // Calculate next iteration_number.
-            let max_iter: Option<i32> = sqlx::query_scalar!(
-                r#"
+            let max_iter: Option<i32> = sqlx::query_scalar(
+                r"
                 SELECT MAX(iteration_number)
                 FROM experiment_iterations
                 WHERE experiment_id = $1
-                "#,
-                id as ExperimentId,
+                ",
             )
+            .bind(id.as_uuid())
             .fetch_one(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
@@ -576,60 +547,86 @@ impl ExperimentRepository for PgExperimentRepository {
             let iteration_id = ExperimentIterationId::new();
             let metric_uuids: Vec<uuid::Uuid> =
                 current.metric_ids.iter().map(MetricId::as_uuid).collect();
+            let guardrail_uuids: Vec<uuid::Uuid> = current
+                .guardrail_metric_ids
+                .iter()
+                .map(MetricId::as_uuid)
+                .collect();
 
-            sqlx::query!(
-                r#"
+            // Snapshot the flag's default_rule_distribution at iteration
+            // start when the experiment is bound to the default rule.
+            let dist_json: Option<serde_json::Value> = if current.targets_default_rule {
+                let raw: Option<serde_json::Value> = sqlx::query_scalar(
+                    "SELECT default_rule_distribution FROM feature_flags WHERE id = $1",
+                )
+                .bind(current.flag_id.as_uuid())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(RepositoryError::Database)?
+                .flatten();
+                raw
+            } else {
+                None
+            };
+
+            sqlx::query(
+                r"
                 INSERT INTO experiment_iterations
-                    (id, experiment_id, iteration_number, started_at, metric_ids,
-                     traffic_allocation, min_sample_size)
-                VALUES ($1, $2, $3, NOW(), $4, $5::float8::numeric, $6)
-                "#,
-                iteration_id as ExperimentIterationId,
-                id as ExperimentId,
-                next_iteration,
-                &metric_uuids,
-                current.traffic_allocation as f64,
-                current.min_sample_size,
+                    (id, experiment_id, flag_id, iteration_number, started_at, metric_ids,
+                     guardrail_metric_ids, traffic_allocation, min_sample_size,
+                     targets_default_rule, pre_period_days, unit_context_types,
+                     default_rule_distribution)
+                VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7::float8::numeric, $8, $9, $10, $11, $12)
+                ",
             )
+            .bind(iteration_id.as_uuid())
+            .bind(id.as_uuid())
+            .bind(current.flag_id.as_uuid())
+            .bind(next_iteration)
+            .bind(&metric_uuids)
+            .bind(&guardrail_uuids)
+            .bind(current.traffic_allocation)
+            .bind(current.min_sample_size)
+            .bind(current.targets_default_rule)
+            .bind(pre_period_to_i32(current.pre_period_days))
+            .bind(&current.unit_context_types)
+            .bind(dist_json)
             .execute(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
         }
 
-        // 3d. If transitioning into Running: freeze the flag rule.
-        if to == ExperimentStatus::Running {
-            sqlx::query!(
-                "UPDATE feature_flag_rules SET frozen = TRUE WHERE id = $1",
-                current.flag_rule_id as RuleId,
-            )
-            .execute(&mut *tx)
-            .await
-            .map_err(RepositoryError::Database)?;
+        // 3d. Freeze/unfreeze the bound flag rule (rule-bound experiments only).
+        //     Default-rule-bound experiments rely on the flag-level lock derived
+        //     in Phase 3 — there is no per-rule `frozen` column update.
+        if let Some(rule_id) = current.flag_rule_id {
+            if to == ExperimentStatus::Running {
+                sqlx::query("UPDATE feature_flag_rules SET frozen = TRUE WHERE id = $1")
+                    .bind(rule_id.as_uuid())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(RepositoryError::Database)?;
+            } else if to == ExperimentStatus::Paused || to == ExperimentStatus::Stopped {
+                sqlx::query("UPDATE feature_flag_rules SET frozen = FALSE WHERE id = $1")
+                    .bind(rule_id.as_uuid())
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(RepositoryError::Database)?;
+            }
         }
 
-        // 3e. If transitioning into Paused or Stopped: unfreeze the flag rule.
-        if to == ExperimentStatus::Paused || to == ExperimentStatus::Stopped {
-            sqlx::query!(
-                "UPDATE feature_flag_rules SET frozen = FALSE WHERE id = $1",
-                current.flag_rule_id as RuleId,
-            )
-            .execute(&mut *tx)
-            .await
-            .map_err(RepositoryError::Database)?;
-        }
-
-        // 3f. If from == Running and transitioning to Paused or Stopped: end active iteration.
+        // 3e. If from == Running and transitioning to Paused or Stopped: end active iteration.
         if from == ExperimentStatus::Running
             && (to == ExperimentStatus::Paused || to == ExperimentStatus::Stopped)
         {
-            sqlx::query!(
-                r#"
+            sqlx::query(
+                r"
                 UPDATE experiment_iterations
                 SET ended_at = NOW()
                 WHERE experiment_id = $1 AND ended_at IS NULL
-                "#,
-                id as ExperimentId,
+                ",
             )
+            .bind(id.as_uuid())
             .execute(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
@@ -656,13 +653,15 @@ impl ExperimentRepository for PgExperimentRepository {
     }
 
     async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
-        use sqlx::Row as _;
         let rows = sqlx::query(
             r"
             SELECT
-                id, env_id, flag_rule_id, name, description, hypothesis, status,
-                metric_ids, traffic_allocation::float8 AS traffic_allocation, min_sample_size,
-                scheduled_start_at, scheduled_end_at, version, created_at, updated_at, deleted_at
+                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
+                hypothesis, status, metric_ids, guardrail_metric_ids,
+                traffic_allocation::float8 AS traffic_allocation,
+                min_sample_size, pre_period_days, unit_context_types,
+                scheduled_start_at, scheduled_end_at,
+                version, created_at, updated_at, deleted_at
             FROM experiments
             WHERE status = 'running' AND deleted_at IS NULL
             ORDER BY created_at
@@ -672,53 +671,46 @@ impl ExperimentRepository for PgExperimentRepository {
         .await
         .map_err(RepositoryError::Database)?;
 
-        rows.iter()
-            .map(|r| {
-                let status_str: &str = r.get("status");
-                let status = match status_str {
-                    "running" => ExperimentStatus::Running,
-                    "paused" => ExperimentStatus::Paused,
-                    "stopped" => ExperimentStatus::Stopped,
-                    _ => ExperimentStatus::Draft,
-                };
-                let metric_uuids: Vec<uuid::Uuid> = r.get("metric_ids");
-                let metric_ids: Vec<MetricId> =
-                    metric_uuids.into_iter().map(MetricId::from_uuid).collect();
-                Ok(Experiment {
-                    id: ExperimentId::from_uuid(r.get("id")),
-                    environment_id: EnvironmentId::from_uuid(r.get("env_id")),
-                    flag_rule_id: RuleId::from_uuid(r.get("flag_rule_id")),
-                    name: r.get("name"),
-                    description: r.get("description"),
-                    hypothesis: r.get("hypothesis"),
-                    status,
-                    metric_ids,
-                    traffic_allocation: {
-                        let v: f64 = r.get("traffic_allocation");
-                        v
-                    },
-                    min_sample_size: r.get("min_sample_size"),
-                    scheduled_start_at: r.get("scheduled_start_at"),
-                    scheduled_end_at: r.get("scheduled_end_at"),
-                    version: r.get("version"),
-                    created_at: r.get("created_at"),
-                    updated_at: r.get("updated_at"),
-                    deleted_at: r.get("deleted_at"),
-                })
-            })
-            .collect::<Result<Vec<_>, RepositoryError>>()
+        Ok(rows.iter().map(row_to_experiment).collect())
+    }
+
+    async fn find_active_experiment_for_flag(
+        &self,
+        flag_id: FlagId,
+    ) -> Result<Option<ExperimentId>, RepositoryError> {
+        use sqlx::Row as _;
+        // Per-flag uniqueness (idx_experiments_one_active_per_flag) guarantees
+        // at most one row here; we still LIMIT 1 defensively.
+        let row = sqlx::query(
+            r"
+            SELECT id
+            FROM experiments
+            WHERE flag_id = $1
+              AND status IN ('running', 'paused')
+              AND deleted_at IS NULL
+            LIMIT 1
+            ",
+        )
+        .bind(flag_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        Ok(row.map(|r| ExperimentId::from_uuid(r.get("id"))))
     }
 
     async fn find_iteration_by_id(
         &self,
         iteration_id: ExperimentIterationId,
     ) -> Result<ExperimentIteration, RepositoryError> {
-        use sqlx::Row as _;
         let row = sqlx::query(
             r"
             SELECT
-                id, experiment_id, iteration_number, started_at, ended_at,
-                metric_ids, traffic_allocation::float8 AS traffic_allocation, min_sample_size
+                id, experiment_id, flag_id, iteration_number, started_at, ended_at,
+                metric_ids, guardrail_metric_ids,
+                traffic_allocation::float8 AS traffic_allocation,
+                min_sample_size, targets_default_rule, pre_period_days,
+                unit_context_types, default_rule_distribution
             FROM experiment_iterations
             WHERE id = $1
             ",
@@ -732,20 +724,100 @@ impl ExperimentRepository for PgExperimentRepository {
             id: iteration_id.to_string(),
         })?;
 
-        let metric_uuids: Vec<uuid::Uuid> = row.get("metric_ids");
-        let metric_ids: Vec<MetricId> = metric_uuids.into_iter().map(MetricId::from_uuid).collect();
-        Ok(ExperimentIteration {
-            id: ExperimentIterationId::from_uuid(row.get("id")),
-            experiment_id: ExperimentId::from_uuid(row.get("experiment_id")),
-            iteration_number: row.get("iteration_number"),
-            started_at: row.get("started_at"),
-            ended_at: row.get("ended_at"),
-            metric_ids,
-            traffic_allocation: {
-                let v: f64 = row.get("traffic_allocation");
-                v
-            },
-            min_sample_size: row.get("min_sample_size"),
-        })
+        row_to_iteration(&row)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Free helpers
+// ---------------------------------------------------------------------------
+
+const fn experiment_status_str(s: ExperimentStatus) -> &'static str {
+    match s {
+        ExperimentStatus::Draft => "draft",
+        ExperimentStatus::Running => "running",
+        ExperimentStatus::Paused => "paused",
+        ExperimentStatus::Stopped => "stopped",
+    }
+}
+
+fn row_to_experiment(row: &sqlx::postgres::PgRow) -> Experiment {
+    use sqlx::Row as _;
+    let metric_uuids: Vec<uuid::Uuid> = row.get("metric_ids");
+    let guardrail_uuids: Vec<uuid::Uuid> = row.get("guardrail_metric_ids");
+    let status_str: &str = row.get("status");
+    let flag_rule_uuid: Option<uuid::Uuid> = row.get("flag_rule_id");
+
+    Experiment {
+        id: ExperimentId::from_uuid(row.get("id")),
+        environment_id: EnvironmentId::from_uuid(row.get("env_id")),
+        flag_id: FlagId::from_uuid(row.get("flag_id")),
+        flag_rule_id: flag_rule_uuid.map(RuleId::from_uuid),
+        targets_default_rule: row.get("targets_default_rule"),
+        name: row.get("name"),
+        description: row.get("description"),
+        hypothesis: row.get("hypothesis"),
+        status: parse_status(status_str),
+        metric_ids: metric_uuids.into_iter().map(MetricId::from_uuid).collect(),
+        guardrail_metric_ids: guardrail_uuids
+            .into_iter()
+            .map(MetricId::from_uuid)
+            .collect(),
+        traffic_allocation: row.get("traffic_allocation"),
+        min_sample_size: row.get("min_sample_size"),
+        pre_period_days: pre_period_to_u32(row.get::<i32, _>("pre_period_days")),
+        unit_context_types: row.get::<Vec<String>, _>("unit_context_types"),
+        scheduled_start_at: row.get("scheduled_start_at"),
+        scheduled_end_at: row.get("scheduled_end_at"),
+        version: row.get("version"),
+        created_at: row.get("created_at"),
+        updated_at: row.get("updated_at"),
+        deleted_at: row.get("deleted_at"),
+    }
+}
+
+fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, RepositoryError> {
+    use sqlx::Row as _;
+    let metric_uuids: Vec<uuid::Uuid> = row.get("metric_ids");
+    let guardrail_uuids: Vec<uuid::Uuid> = row.get("guardrail_metric_ids");
+    let dist_json: Option<serde_json::Value> = row.get("default_rule_distribution");
+    let default_rule_distribution: Option<RolloutDistribution> = match dist_json {
+        None => None,
+        Some(v) => Some(serde_json::from_value(v).map_err(|e| {
+            RepositoryError::Unexpected(anyhow::anyhow!(
+                "default_rule_distribution JSONB malformed: {e}"
+            ))
+        })?),
+    };
+
+    Ok(ExperimentIteration {
+        id: ExperimentIterationId::from_uuid(row.get("id")),
+        experiment_id: ExperimentId::from_uuid(row.get("experiment_id")),
+        flag_id: FlagId::from_uuid(row.get("flag_id")),
+        iteration_number: row.get("iteration_number"),
+        started_at: row.get("started_at"),
+        ended_at: row.get("ended_at"),
+        metric_ids: metric_uuids.into_iter().map(MetricId::from_uuid).collect(),
+        guardrail_metric_ids: guardrail_uuids
+            .into_iter()
+            .map(MetricId::from_uuid)
+            .collect(),
+        traffic_allocation: row.get("traffic_allocation"),
+        min_sample_size: row.get("min_sample_size"),
+        targets_default_rule: row.get("targets_default_rule"),
+        pre_period_days: pre_period_to_u32(row.get::<i32, _>("pre_period_days")),
+        unit_context_types: row.get::<Vec<String>, _>("unit_context_types"),
+        default_rule_distribution,
+    })
+}
+
+fn map_experiment_db_err(e: sqlx::Error) -> RepositoryError {
+    if let sqlx::Error::Database(ref dbe) = e
+        && let Some(constraint) = dbe.constraint()
+    {
+        return RepositoryError::UniqueViolation {
+            field: constraint.to_string(),
+        };
+    }
+    RepositoryError::Database(e)
 }

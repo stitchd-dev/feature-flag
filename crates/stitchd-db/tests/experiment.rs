@@ -26,7 +26,7 @@ use stitchd_db::{
 
 /// Insert org → project → environment and return (env_id, flag_rule_id).
 /// The flag rule is needed as a FK for experiments.
-async fn setup_experiment_deps(pool: sqlx::PgPool) -> (EnvironmentId, RuleId) {
+async fn setup_experiment_deps(pool: sqlx::PgPool) -> (EnvironmentId, FlagId, RuleId) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
@@ -76,6 +76,7 @@ async fn setup_experiment_deps(pool: sqlx::PgPool) -> (EnvironmentId, RuleId) {
         value_type: FlagValueType::Bool,
         enabled: true,
         default_variant_id: None,
+        default_rule_distribution: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
         deleted_at: None,
@@ -106,20 +107,25 @@ async fn setup_experiment_deps(pool: sqlx::PgPool) -> (EnvironmentId, RuleId) {
     .unwrap();
     let flag_rule_id = RuleId::from_uuid(rule_uuid);
 
-    (env.id, flag_rule_id)
+    (env.id, flag.id, flag_rule_id)
 }
 
-fn make_experiment(env_id: EnvironmentId, flag_rule_id: RuleId) -> Experiment {
+fn make_experiment(env_id: EnvironmentId, flag_id: FlagId, flag_rule_id: RuleId) -> Experiment {
     Experiment {
         id: ExperimentId::new(),
         environment_id: env_id,
-        flag_rule_id,
+        flag_id,
+        flag_rule_id: Some(flag_rule_id),
+        targets_default_rule: false,
         name: "Test Experiment".into(),
         description: Some("A test".into()),
         hypothesis: None,
         metric_ids: vec![MetricId::new()],
+        guardrail_metric_ids: vec![],
         traffic_allocation: 100.0,
         min_sample_size: None,
+        pre_period_days: 0,
+        unit_context_types: vec!["user".to_string()],
         scheduled_start_at: None,
         scheduled_end_at: None,
         status: ExperimentStatus::Draft,
@@ -136,11 +142,11 @@ fn make_experiment(env_id: EnvironmentId, flag_rule_id: RuleId) -> Experiment {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_create_and_find(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.expect("create should succeed");
 
     let found = repo.find_by_id(exp.id).await.expect("should find by id");
@@ -155,13 +161,13 @@ async fn test_create_and_find(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_list_by_environment(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
     // Create two draft experiments
-    let exp1 = make_experiment(env_id, rule_id);
-    let mut exp2 = make_experiment(env_id, rule_id);
+    let exp1 = make_experiment(env_id, flag_id, rule_id);
+    let mut exp2 = make_experiment(env_id, flag_id, rule_id);
     exp2.id = ExperimentId::new();
     exp2.name = "Second Experiment".into();
     // We need a different flag_rule_id or different status to avoid the unique partial index
@@ -194,11 +200,11 @@ async fn test_list_by_environment(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_update_optimistic_locking(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // First update: version 1 → 2
@@ -222,11 +228,11 @@ async fn test_update_optimistic_locking(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_soft_delete(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     repo.soft_delete(exp.id)
@@ -243,11 +249,11 @@ async fn test_soft_delete(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_soft_delete_running_rejected(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let mut exp = make_experiment(env_id, rule_id);
+    let mut exp = make_experiment(env_id, flag_id, rule_id);
     exp.status = ExperimentStatus::Running;
     repo.create(&exp).await.unwrap();
 
@@ -261,11 +267,11 @@ async fn test_soft_delete_running_rejected(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_list_iterations_empty(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     let iterations = repo
@@ -284,11 +290,11 @@ async fn test_list_iterations_empty(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_transition_draft_to_running_creates_iteration(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // Transition draft → running
@@ -326,11 +332,11 @@ async fn test_transition_draft_to_running_creates_iteration(pool: sqlx::PgPool) 
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_transition_running_to_paused_ends_iteration(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // draft → running
@@ -370,11 +376,11 @@ async fn test_transition_running_to_paused_ends_iteration(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_transition_paused_to_running_creates_next_iteration(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // draft → running → paused
@@ -410,11 +416,11 @@ async fn test_transition_paused_to_running_creates_next_iteration(pool: sqlx::Pg
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_transition_running_to_stopped_unfreezes_rule(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // draft → running → stopped
@@ -452,19 +458,19 @@ async fn test_transition_running_to_stopped_unfreezes_rule(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_uniqueness_guard_rejects_second_active_experiment(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
     // Create first experiment and start it
-    let exp1 = make_experiment(env_id, rule_id);
+    let exp1 = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp1).await.unwrap();
     repo.apply_transition(exp1.id, ExperimentStatus::Running, None)
         .await
         .expect("first experiment should start");
 
     // Create a second experiment on the same flag_rule_id
-    let exp2 = make_experiment(env_id, rule_id);
+    let exp2 = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp2).await.unwrap();
 
     // Attempting to run the second experiment on the same rule must fail with UniqueViolation
@@ -473,18 +479,19 @@ async fn test_uniqueness_guard_rejects_second_active_experiment(pool: sqlx::PgPo
         .await;
 
     assert!(
-        matches!(result, Err(RepositoryError::UniqueViolation { ref field }) if field == "flag_rule_id"),
+        // Uniqueness moved from per-rule to per-flag in 20260521000001 (whole-flag-lock semantics).
+        matches!(result, Err(RepositoryError::UniqueViolation { ref field }) if field == "flag_id"),
         "second active experiment on same rule must return UniqueViolation, got: {result:?}"
     );
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_invalid_transition_rejected(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // draft → paused is invalid
@@ -510,11 +517,11 @@ async fn test_invalid_transition_rejected(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_stopped_to_running_restart_increments_iteration(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // draft → running → stopped → running (restart)
@@ -564,11 +571,11 @@ async fn test_stopped_to_running_restart_increments_iteration(pool: sqlx::PgPool
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // draft → running (creates iteration 1, freezes rule)
@@ -667,11 +674,11 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_stopped_to_running_second_restart_increments_to_iteration_3(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // draft → running (iter 1) → stopped → running (iter 2) → stopped → running (iter 3)
@@ -722,11 +729,11 @@ async fn test_stopped_to_running_second_restart_increments_to_iteration_3(pool: 
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_mutation_guard_patch_while_running_rejected(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // Transition to running
@@ -749,11 +756,11 @@ async fn test_mutation_guard_patch_while_running_rejected(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_flag_rule_frozen_while_running(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // Transition to running
@@ -795,13 +802,13 @@ async fn test_flag_rule_frozen_while_running(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_two_experiments_same_rule_second_active_rejected(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
     // Create two experiments bound to the same flag_rule_id
-    let exp1 = make_experiment(env_id, rule_id);
-    let exp2 = make_experiment(env_id, rule_id);
+    let exp1 = make_experiment(env_id, flag_id, rule_id);
+    let exp2 = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp1).await.unwrap();
     repo.create(&exp2).await.unwrap();
 
@@ -816,7 +823,8 @@ async fn test_two_experiments_same_rule_second_active_rejected(pool: sqlx::PgPoo
         .await;
 
     assert!(
-        matches!(result, Err(RepositoryError::UniqueViolation { ref field }) if field == "flag_rule_id"),
+        // Uniqueness moved from per-rule to per-flag in 20260521000001 (whole-flag-lock semantics).
+        matches!(result, Err(RepositoryError::UniqueViolation { ref field }) if field == "flag_id"),
         "second active experiment on same rule must return UniqueViolation(flag_rule_id), got: {:?}",
         result
     );
@@ -824,11 +832,11 @@ async fn test_two_experiments_same_rule_second_active_rejected(pool: sqlx::PgPoo
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_soft_delete_while_running_rejected(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // Transition to running
@@ -848,11 +856,11 @@ async fn test_soft_delete_while_running_rejected(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn test_soft_delete_while_stopped_succeeds(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let exp = make_experiment(env_id, rule_id);
+    let exp = make_experiment(env_id, flag_id, rule_id);
     repo.create(&exp).await.unwrap();
 
     // Transition to running → stopped
@@ -896,12 +904,12 @@ async fn test_soft_delete_while_stopped_succeeds(pool: sqlx::PgPool) {
 
 #[sqlx::test(migrations = "./migrations")]
 async fn list_by_environment_paginated_page_1_returns_first_slice(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
     for i in 0..5u32 {
-        let mut exp = make_experiment(env_id, rule_id);
+        let mut exp = make_experiment(env_id, flag_id, rule_id);
         exp.id = ExperimentId::new();
         exp.name = format!("exp-{i:02}");
         repo.create(&exp).await.unwrap();
@@ -917,12 +925,12 @@ async fn list_by_environment_paginated_page_1_returns_first_slice(pool: sqlx::Pg
 
 #[sqlx::test(migrations = "./migrations")]
 async fn list_by_environment_paginated_page_2_returns_remainder(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
     for i in 0..5u32 {
-        let mut exp = make_experiment(env_id, rule_id);
+        let mut exp = make_experiment(env_id, flag_id, rule_id);
         exp.id = ExperimentId::new();
         exp.name = format!("exp-{i:02}");
         repo.create(&exp).await.unwrap();
@@ -938,12 +946,12 @@ async fn list_by_environment_paginated_page_2_returns_remainder(pool: sqlx::PgPo
 
 #[sqlx::test(migrations = "./migrations")]
 async fn list_by_environment_paginated_total_count_accurate(pool: sqlx::PgPool) {
-    let (env_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 
     for i in 0..10u32 {
-        let mut exp = make_experiment(env_id, rule_id);
+        let mut exp = make_experiment(env_id, flag_id, rule_id);
         exp.id = ExperimentId::new();
         exp.name = format!("exp-{i:02}");
         repo.create(&exp).await.unwrap();
@@ -958,7 +966,7 @@ async fn list_by_environment_paginated_total_count_accurate(pool: sqlx::PgPool) 
 
 #[sqlx::test(migrations = "./migrations")]
 async fn list_by_environment_paginated_empty_returns_zero_total(pool: sqlx::PgPool) {
-    let (env_id, _rule_id) = setup_experiment_deps(pool.clone()).await;
+    let (env_id, _flag_id, _rule_id) = setup_experiment_deps(pool.clone()).await;
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExperimentRepository::new(pool.clone(), audit);
 

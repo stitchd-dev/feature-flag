@@ -1700,6 +1700,12 @@ mod handler_tests {
         async fn list_all_running(&self) -> Result<Vec<Experiment>, stitchd_db::RepositoryError> {
             unimplemented!()
         }
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<ExperimentId>, stitchd_db::RepositoryError> {
+            Ok(None)
+        }
         async fn find_iteration_by_id(
             &self,
             _iteration_id: stitchd_db::ExperimentIterationId,
@@ -1712,13 +1718,18 @@ mod handler_tests {
         Experiment {
             id: ExperimentId::new(),
             environment_id: env,
-            flag_rule_id: RuleId::new(),
+            flag_id: stitchd_core::id::FlagId::new(),
+            flag_rule_id: Some(RuleId::new()),
+            targets_default_rule: false,
             name: "exp".into(),
             description: None,
             hypothesis: None,
             metric_ids: vec![metric_id],
+            guardrail_metric_ids: vec![],
             traffic_allocation: 100.0,
             min_sample_size: None,
+            pre_period_days: 0,
+            unit_context_types: vec!["user".to_string()],
             scheduled_start_at: None,
             scheduled_end_at: None,
             status: ExperimentStatus::Running,

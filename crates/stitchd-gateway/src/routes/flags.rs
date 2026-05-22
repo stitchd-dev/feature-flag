@@ -89,6 +89,9 @@ pub struct VariantJson {
 /// Rule as returned in admin API responses.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct RuleJson {
+    /// UUID of the underlying `feature_flag_rules.id` row. Empty string when the
+    /// flag-service did not surface a rule ID (legacy SDK-sync style payload).
+    pub rule_id: String,
     /// Optional human-readable label set by the user; ignored by the evaluator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -117,6 +120,11 @@ pub struct AdminFlagJson {
     pub default_variant_key: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// UUID of the experiment currently locking this flag (running or paused),
+    /// or `None` when the flag is not locked. Lets the admin UI render the
+    /// lock badge before the user attempts a save and gets a 409.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked_by_experiment_id: Option<String>,
 }
 
 fn proto_variant_value_to_json(
@@ -221,6 +229,7 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
         Some(r.name.clone())
     };
     RuleJson {
+        rule_id: r.rule_id.clone(),
         name,
         condition,
         output,
@@ -362,6 +371,11 @@ fn flag_to_admin_json(f: &FeatureFlag) -> AdminFlagJson {
         },
         created_at,
         updated_at,
+        locked_by_experiment_id: if f.locked_by_experiment_id.is_empty() {
+            None
+        } else {
+            Some(f.locked_by_experiment_id.clone())
+        },
     }
 }
 
@@ -731,6 +745,11 @@ pub async fn update_variants(
 /// A single rule in a replace-rules request.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct RuleBody {
+    /// Optional `feature_flag_rules.id` UUID. When the client preserves the
+    /// rule's existing UUID across an edit the backend round-trips it through;
+    /// otherwise the DB-side `gen_random_uuid()` mints a fresh one.
+    #[serde(default)]
+    pub rule_id: Option<String>,
     /// Optional human-readable label; ignored by the evaluator.
     pub name: Option<String>,
     /// ConditionExpr as a JSON value.
@@ -828,6 +847,7 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
         rule_payload,
         output,
         name: r.name.unwrap_or_default(),
+        rule_id: r.rule_id.unwrap_or_default(),
     }
 }
 
@@ -959,6 +979,127 @@ pub async fn update_flag_hashing(
     Ok(Json(UpdateHashingResponse {
         flag: flag_json,
         configs: configs_json,
+    }))
+}
+
+// ─── Default-rule distribution (Phase 7 Task 5) ───────────────────────────────
+
+/// Single allocation entry in the default-rule distribution body.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct DefaultRuleAllocationBody {
+    pub variant_key: String,
+    pub percentage: f64,
+}
+
+/// Request body for `POST /v1/projects/{project_id}/flags/{flag_key}/default-rule-distribution`.
+///
+/// `None` / empty `distribution.allocations` clears the distribution (reverts
+/// the default-rule path to single-default-variant behaviour). When `Some`,
+/// the server validates the distribution via
+/// `RolloutDistribution::validate` (allocations non-empty, each percentage in
+/// `(0, 100]`, no duplicate variant keys, sum ≈ 100.0).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetDefaultRuleDistributionBody {
+    /// `None` or empty `allocations` clears the distribution.
+    #[serde(default)]
+    pub distribution: Option<DefaultRuleDistributionBody>,
+    /// Optimistic-locking version (matches the flag's current `version`).
+    pub version: u64,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct DefaultRuleDistributionBody {
+    pub allocations: Vec<DefaultRuleAllocationBody>,
+}
+
+/// Response body — echoes the updated flag and its new version.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SetDefaultRuleDistributionResponseJson {
+    pub flag: AdminFlagJson,
+    pub version: u64,
+}
+
+/// `POST /v1/projects/{project_id}/flags/{flag_key}/default-rule-distribution`
+///
+/// Sets (or clears) the flag's percentage distribution for the default-rule
+/// fall-through. Returns 409 when the flag is locked by a running/paused
+/// experiment, 422 for invalid distributions.
+#[utoipa::path(
+    post,
+    path = "/v1/projects/{project_id}/flags/{flag_key}/default-rule-distribution",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("flag_key" = String, Path, description = "Flag key"),
+    ),
+    request_body = SetDefaultRuleDistributionBody,
+    responses(
+        (status = 200, description = "Distribution updated", body = SetDefaultRuleDistributionResponseJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Flag locked by an experiment"),
+        (status = 422, description = "Invalid distribution"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn set_default_rule_distribution(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<SetDefaultRuleDistributionBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    use stitchd_proto::flags::v1::{DefaultRuleAllocation, SetDefaultRuleDistributionRequest};
+
+    let allocations: Vec<DefaultRuleAllocation> = body
+        .distribution
+        .map(|d| {
+            d.allocations
+                .into_iter()
+                .map(|a| DefaultRuleAllocation {
+                    variant_key: a.variant_key,
+                    percentage: a.percentage,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let req = tonic::Request::new(SetDefaultRuleDistributionRequest {
+        project_id,
+        flag_key,
+        allocations,
+        version: body.version,
+    });
+
+    let mut client = state.flag_client.lock().await;
+    let resp = match client.set_default_rule_distribution(req).await {
+        Ok(r) => r,
+        Err(s) => {
+            // The flag-service returns `INVALID_ARGUMENT` with a message
+            // prefixed `invalid_distribution:` when the distribution fails
+            // validation. The gateway rewrites that into a structured 422
+            // body the admin UI can branch on. Lock-precondition errors
+            // are already handled by `GatewayError::from(tonic::Status)`.
+            if s.code() == tonic::Code::InvalidArgument
+                && s.message().starts_with("invalid_distribution:")
+            {
+                return Err(GatewayError::InvalidDistribution(
+                    s.message()
+                        .trim_start_matches("invalid_distribution:")
+                        .trim()
+                        .to_string(),
+                ));
+            }
+            return Err(GatewayError::from(s));
+        }
+    };
+    let inner = resp.into_inner();
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
+    Ok(Json(SetDefaultRuleDistributionResponseJson {
+        flag: flag_json,
+        version: inner.version,
     }))
 }
 
@@ -1469,6 +1610,7 @@ mod tests {
                 }),
             }],
             rules: vec![],
+            locked_by_experiment_id: String::new(),
         };
 
         let admin = flag_to_admin_json(&flag);
@@ -1487,6 +1629,36 @@ mod tests {
         assert_eq!(admin.variants[0].value, serde_json::Value::Bool(true));
         assert!(admin.created_at.is_some());
         assert!(admin.updated_at.is_some());
+        // Empty proto field means we omit the JSON `locked_by_experiment_id`
+        // key entirely (skip_serializing_if = Option::is_none).
+        assert!(admin.locked_by_experiment_id.is_none());
+    }
+
+    #[test]
+    fn flag_to_admin_json_surfaces_rule_id_name_and_lock_state() {
+        use stitchd_proto::flags::v1::{FlagRule, flag_rule::Output};
+
+        let exp_uuid = "11111111-2222-3333-4444-555555555555";
+        let rule_uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+        let flag = FeatureFlag {
+            key: "k".to_string(),
+            flag_id: "fid".to_string(),
+            rules: vec![FlagRule {
+                rule_payload: b"null".to_vec(),
+                output: Some(Output::VariantKey("on".to_string())),
+                name: "premium-cohort".to_string(),
+                rule_id: rule_uuid.to_string(),
+            }],
+            locked_by_experiment_id: exp_uuid.to_string(),
+            ..Default::default()
+        };
+
+        let admin = flag_to_admin_json(&flag);
+        assert_eq!(admin.locked_by_experiment_id.as_deref(), Some(exp_uuid));
+        assert_eq!(admin.rules.len(), 1);
+        assert_eq!(admin.rules[0].rule_id, rule_uuid);
+        assert_eq!(admin.rules[0].name.as_deref(), Some("premium-cohort"));
     }
 
     #[test]

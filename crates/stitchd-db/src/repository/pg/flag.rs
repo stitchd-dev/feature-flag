@@ -8,6 +8,7 @@ use sqlx::{PgPool, Row};
 use stitchd_core::{
     flag::{FlagHashingConfig, FlagRecord, FlagRule, FlagValueType, Variant, VariantValue},
     id::{EnvironmentId, FlagId, FlagKey, ProjectId, VariantId},
+    rollout::RolloutDistribution,
 };
 
 use crate::{
@@ -80,6 +81,7 @@ fn assemble_flag(
     value_type: &str,
     enabled: bool,
     default_variant_id: Option<uuid::Uuid>,
+    default_rule_distribution: Option<serde_json::Value>,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
     deleted_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -89,6 +91,14 @@ fn assemble_flag(
     let key = FlagKey::new(key).map_err(|e| {
         RepositoryError::Unexpected(anyhow::anyhow!("invalid flag key stored in DB: {e}"))
     })?;
+    let default_rule_distribution: Option<RolloutDistribution> = match default_rule_distribution {
+        None => None,
+        Some(v) => Some(serde_json::from_value(v).map_err(|e| {
+            RepositoryError::Unexpected(anyhow::anyhow!(
+                "default_rule_distribution JSONB malformed: {e}"
+            ))
+        })?),
+    };
     Ok(FlagRecord {
         id: FlagId::from_uuid(id),
         project_id: ProjectId::from_uuid(project_id),
@@ -98,11 +108,34 @@ fn assemble_flag(
         value_type,
         enabled,
         default_variant_id: default_variant_id.map(VariantId::from_uuid),
+        default_rule_distribution,
         created_at,
         updated_at,
         deleted_at,
         version,
     })
+}
+
+/// Assemble a [`FlagRecord`] from a sqlx `PgRow`. Convenience wrapper around
+/// [`assemble_flag`] that keeps caller bodies small (helps `clippy::too_many_lines`
+/// across the `impl FlagRepository for PgFlagRepository` block, which `async_trait`
+/// expands into a single macro-generated function).
+fn assemble_flag_from_row(row: &sqlx::postgres::PgRow) -> Result<FlagRecord, RepositoryError> {
+    assemble_flag(
+        row.get("id"),
+        row.get("project_id"),
+        row.get("key"),
+        row.get("name"),
+        row.get("description"),
+        row.get::<String, _>("value_type").as_str(),
+        row.get("enabled"),
+        row.get("default_variant_id"),
+        row.get::<Option<serde_json::Value>, _>("default_rule_distribution"),
+        row.get("created_at"),
+        row.get("updated_at"),
+        row.get("deleted_at"),
+        row.get("version"),
+    )
 }
 
 /// Parse a [`Variant`] from its DB columns.
@@ -144,7 +177,8 @@ impl FlagRepository for PgFlagRepository {
         let row = sqlx::query(
             r"
             SELECT id, project_id, key, name, description, value_type, enabled,
-                   default_variant_id, created_at, updated_at, deleted_at, version
+                   default_variant_id, default_rule_distribution,
+                   created_at, updated_at, deleted_at, version
             FROM feature_flags
             WHERE id = $1 AND deleted_at IS NULL
             ",
@@ -157,20 +191,7 @@ impl FlagRepository for PgFlagRepository {
             other => RepositoryError::Database(other),
         })?;
 
-        assemble_flag(
-            row.get("id"),
-            row.get("project_id"),
-            row.get("key"),
-            row.get("name"),
-            row.get("description"),
-            row.get::<String, _>("value_type").as_str(),
-            row.get("enabled"),
-            row.get("default_variant_id"),
-            row.get("created_at"),
-            row.get("updated_at"),
-            row.get("deleted_at"),
-            row.get("version"),
-        )
+        assemble_flag_from_row(&row)
     }
 
     async fn find_by_key(
@@ -181,7 +202,8 @@ impl FlagRepository for PgFlagRepository {
         let row = sqlx::query(
             r"
             SELECT id, project_id, key, name, description, value_type, enabled,
-                   default_variant_id, created_at, updated_at, deleted_at, version
+                   default_variant_id, default_rule_distribution,
+                   created_at, updated_at, deleted_at, version
             FROM feature_flags
             WHERE key = $1 AND project_id = $2 AND deleted_at IS NULL
             ",
@@ -197,20 +219,7 @@ impl FlagRepository for PgFlagRepository {
             other => RepositoryError::Database(other),
         })?;
 
-        assemble_flag(
-            row.get("id"),
-            row.get("project_id"),
-            row.get("key"),
-            row.get("name"),
-            row.get("description"),
-            row.get::<String, _>("value_type").as_str(),
-            row.get("enabled"),
-            row.get("default_variant_id"),
-            row.get("created_at"),
-            row.get("updated_at"),
-            row.get("deleted_at"),
-            row.get("version"),
-        )
+        assemble_flag_from_row(&row)
     }
 
     async fn list_by_project(
@@ -220,7 +229,8 @@ impl FlagRepository for PgFlagRepository {
         let rows = sqlx::query(
             r"
             SELECT id, project_id, key, name, description, value_type, enabled,
-                   default_variant_id, created_at, updated_at, deleted_at, version
+                   default_variant_id, default_rule_distribution,
+                   created_at, updated_at, deleted_at, version
             FROM feature_flags
             WHERE project_id = $1 AND deleted_at IS NULL
             ORDER BY created_at
@@ -232,22 +242,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         rows.into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect()
     }
 
@@ -263,7 +258,8 @@ impl FlagRepository for PgFlagRepository {
         let rows = sqlx::query(
             r"
             SELECT id, project_id, key, name, description, value_type, enabled,
-                   default_variant_id, created_at, updated_at, deleted_at, version,
+                   default_variant_id, default_rule_distribution,
+                   created_at, updated_at, deleted_at, version,
                    COUNT(*) OVER() AS total_count
             FROM feature_flags
             WHERE project_id = $1 AND deleted_at IS NULL
@@ -287,22 +283,7 @@ impl FlagRepository for PgFlagRepository {
 
         let flags = rows
             .into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok((flags, total))
@@ -315,7 +296,8 @@ impl FlagRepository for PgFlagRepository {
         let rows = sqlx::query(
             r"
             SELECT id, project_id, key, name, description, value_type, enabled,
-                   default_variant_id, created_at, updated_at, deleted_at, version
+                   default_variant_id, default_rule_distribution,
+                   created_at, updated_at, deleted_at, version
             FROM feature_flags
             WHERE project_id = $1
             ORDER BY created_at
@@ -327,22 +309,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         rows.into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect()
     }
 
@@ -353,7 +320,7 @@ impl FlagRepository for PgFlagRepository {
         let rows = sqlx::query(
             r"
             SELECT ff.id, ff.project_id, ff.key, ff.name, ff.description, ff.value_type,
-                   ff.enabled, ff.default_variant_id,
+                   ff.enabled, ff.default_variant_id, ff.default_rule_distribution,
                    ff.created_at, ff.updated_at, ff.deleted_at, ff.version
             FROM feature_flags ff
             JOIN environments env ON ff.project_id = env.project_id
@@ -367,22 +334,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         rows.into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect()
     }
 
@@ -393,7 +345,7 @@ impl FlagRepository for PgFlagRepository {
         let rows = sqlx::query(
             r"
             SELECT ff.id, ff.project_id, ff.key, ff.name, ff.description, ff.value_type,
-                   ff.enabled, ff.default_variant_id,
+                   ff.enabled, ff.default_variant_id, ff.default_rule_distribution,
                    ff.created_at, ff.updated_at, ff.deleted_at, ff.version
             FROM feature_flags ff
             JOIN environments env ON ff.project_id = env.project_id
@@ -407,22 +359,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         rows.into_iter()
-            .map(|row| {
-                assemble_flag(
-                    row.get("id"),
-                    row.get("project_id"),
-                    row.get("key"),
-                    row.get("name"),
-                    row.get("description"),
-                    row.get::<String, _>("value_type").as_str(),
-                    row.get("enabled"),
-                    row.get("default_variant_id"),
-                    row.get("created_at"),
-                    row.get("updated_at"),
-                    row.get("deleted_at"),
-                    row.get("version"),
-                )
-            })
+            .map(|row| assemble_flag_from_row(&row))
             .collect()
     }
 
@@ -432,8 +369,8 @@ impl FlagRepository for PgFlagRepository {
             r"
             INSERT INTO feature_flags
                 (id, project_id, key, name, description, value_type, enabled, default_variant_id,
-                 created_at, updated_at, deleted_at, version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 default_rule_distribution, created_at, updated_at, deleted_at, version)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             ",
         )
         .bind(flag.id.as_uuid())
@@ -444,6 +381,11 @@ impl FlagRepository for PgFlagRepository {
         .bind(value_type)
         .bind(flag.enabled)
         .bind(flag.default_variant_id.map(|id| id.as_uuid()))
+        .bind(
+            flag.default_rule_distribution
+                .as_ref()
+                .map(|d| serde_json::to_value(d).expect("RolloutDistribution -> JSON")),
+        )
         .bind(flag.created_at)
         .bind(flag.updated_at)
         .bind(flag.deleted_at)
@@ -469,6 +411,10 @@ impl FlagRepository for PgFlagRepository {
         Ok(())
     }
 
+    // SQL + result-mapping + version-conflict probe + audit-log call exceed the
+    // 80-line clippy threshold; the function is still a single linear step
+    // sequence and splitting it hurts readability more than it helps.
+    #[allow(clippy::too_many_lines)]
     async fn update(&self, flag: &FlagRecord) -> Result<FlagRecord, RepositoryError> {
         let new_version = flag.version + 1;
         let value_type = flag_value_type_to_str(flag.value_type);
@@ -476,10 +422,12 @@ impl FlagRepository for PgFlagRepository {
             r"
             UPDATE feature_flags
             SET key = $1, name = $2, description = $3, value_type = $4, enabled = $5,
-                default_variant_id = $6, updated_at = NOW(), version = $7
-            WHERE id = $8 AND version = $9 AND deleted_at IS NULL
+                default_variant_id = $6, default_rule_distribution = $7,
+                updated_at = NOW(), version = $8
+            WHERE id = $9 AND version = $10 AND deleted_at IS NULL
             RETURNING id, project_id, key, name, description, value_type, enabled,
-                      default_variant_id, created_at, updated_at, deleted_at, version
+                      default_variant_id, default_rule_distribution,
+                      created_at, updated_at, deleted_at, version
             ",
         )
         .bind(flag.key.as_str())
@@ -488,6 +436,11 @@ impl FlagRepository for PgFlagRepository {
         .bind(value_type)
         .bind(flag.enabled)
         .bind(flag.default_variant_id.map(|id| id.as_uuid()))
+        .bind(
+            flag.default_rule_distribution
+                .as_ref()
+                .map(|d| serde_json::to_value(d).expect("RolloutDistribution -> JSON")),
+        )
         .bind(new_version)
         .bind(flag.id.as_uuid())
         .bind(flag.version)
@@ -496,20 +449,7 @@ impl FlagRepository for PgFlagRepository {
         .map_err(RepositoryError::Database)?;
 
         if let Some(row) = result {
-            let updated = assemble_flag(
-                row.get("id"),
-                row.get("project_id"),
-                row.get("key"),
-                row.get("name"),
-                row.get("description"),
-                row.get::<String, _>("value_type").as_str(),
-                row.get("enabled"),
-                row.get("default_variant_id"),
-                row.get("created_at"),
-                row.get("updated_at"),
-                row.get("deleted_at"),
-                row.get("version"),
-            )?;
+            let updated = assemble_flag_from_row(&row)?;
             self.audit
                 .log(
                     None,
@@ -653,7 +593,7 @@ impl FlagRepository for PgFlagRepository {
     async fn find_rules(&self, flag_id: FlagId) -> Result<Vec<FlagRule>, RepositoryError> {
         let rows = sqlx::query(
             r"
-            SELECT rule_index, rule_def
+            SELECT id, rule_index, rule_def
             FROM feature_flag_rules
             WHERE flag_id = $1
             ORDER BY rule_index ASC
@@ -667,10 +607,17 @@ impl FlagRepository for PgFlagRepository {
         let mut rules = Vec::with_capacity(rows.len());
         for row in rows {
             let rule_def: serde_json::Value = row.get("rule_def");
-            let rule: stitchd_core::rule_engine::types::Rule = serde_json::from_value(rule_def)
+            let mut rule: stitchd_core::rule_engine::types::Rule = serde_json::from_value(rule_def)
                 .map_err(|e| {
                     RepositoryError::Unexpected(anyhow::anyhow!("failed to deserialize rule: {e}"))
                 })?;
+            // Authoritative rule UUID is the `feature_flag_rules.id` column —
+            // overwrite any stale value carried in the serialised `rule_def`
+            // JSON so callers (admin UI, experiment bindings) always see the
+            // real row PK. Experiments FK on this UUID, so we must surface it
+            // exactly as stored.
+            let db_rule_id: uuid::Uuid = row.get("id");
+            rule.id = stitchd_core::id::RuleId::from_uuid(db_rule_id);
             rules.push(FlagRule {
                 flag_id,
                 rule_index: row.get("rule_index"),
@@ -1000,6 +947,7 @@ mod unit_tests {
             "bool",
             true,
             None,
+            None,
             now,
             now,
             None,
@@ -1025,6 +973,7 @@ mod unit_tests {
             "badtype",
             true,
             None,
+            None,
             now,
             now,
             None,
@@ -1047,6 +996,7 @@ mod unit_tests {
             String::new(),
             "bool",
             true,
+            None,
             None,
             now,
             now,

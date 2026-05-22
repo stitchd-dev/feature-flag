@@ -3,6 +3,7 @@
 pub mod clickhouse_query;
 pub mod config;
 pub mod context_refresher;
+pub mod cuped_fetch;
 pub mod dispatch;
 pub mod grpc;
 pub mod job_service;
@@ -11,3 +12,4 @@ pub mod recompute_trigger;
 pub mod results_writer;
 pub mod schedule_updater;
 pub mod scheduler;
+pub mod timeseries_reader;

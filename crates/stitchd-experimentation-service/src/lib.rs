@@ -7,5 +7,7 @@
 //! - `GetResults` — fetch pre-computed statistical results
 
 pub mod analytics_client;
+pub mod dict_refresh;
+pub mod exposure_reader;
 pub mod flag_client;
 pub mod service;

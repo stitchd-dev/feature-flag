@@ -31,7 +31,7 @@ struct EvalLogRowRead {
     flag_id: Uuid,
     flag_key: String,
     variant_key: String,
-    is_disabled: bool,
+    targeting_on: bool,
     context_type: String,
     context_key: String,
     params_json: String,
@@ -55,22 +55,24 @@ async fn eval_log_rows_appear_in_clickhouse() {
             flag_id,
             flag_key: flag_key.clone(),
             variant_key: "on".to_string(),
-            is_disabled: false,
+            targeting_on: true,
             evaluated_at: now,
             context_type: "user".to_string(),
             context_key: "alice".to_string(),
             params_json: r#"{"plan":"pro","email":"********"}"#.to_string(),
+            matched_rule_id: None,
         },
         EvalLogRow {
             env_id,
             flag_id,
             flag_key: flag_key.clone(),
             variant_key: "off".to_string(),
-            is_disabled: false,
+            targeting_on: true,
             evaluated_at: now,
             context_type: "org".to_string(),
             context_key: "acme".to_string(),
             params_json: r#"{"tier":"enterprise"}"#.to_string(),
+            matched_rule_id: None,
         },
     ];
 
@@ -82,7 +84,7 @@ async fn eval_log_rows_appear_in_clickhouse() {
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let fetched: Vec<EvalLogRowRead> = client
-        .query("SELECT env_id, flag_id, flag_key, variant_key, is_disabled, context_type, context_key, params_json FROM flag_evaluation_log WHERE flag_key = ? ORDER BY context_type")
+        .query("SELECT env_id, flag_id, flag_key, variant_key, targeting_on, context_type, context_key, params_json FROM flag_evaluation_log WHERE flag_key = ? ORDER BY context_type")
         .bind(&flag_key)
         .fetch_all()
         .await
@@ -94,7 +96,7 @@ async fn eval_log_rows_appear_in_clickhouse() {
     assert_eq!(fetched[0].context_type, "org");
     assert_eq!(fetched[0].context_key, "acme");
     assert_eq!(fetched[0].variant_key, "off");
-    assert!(!fetched[0].is_disabled);
+    assert!(fetched[0].targeting_on);
     assert_eq!(fetched[0].env_id, env_id);
 
     // Row 1: user/alice
@@ -127,11 +129,12 @@ async fn eval_log_n_contexts_produces_n_rows() {
             flag_id,
             flag_key: flag_key.clone(),
             variant_key: "on".to_string(),
-            is_disabled: false,
+            targeting_on: true,
             evaluated_at: now,
             context_type: "user".to_string(),
             context_key: format!("user-{i}"),
             params_json: r#"{}"#.to_string(),
+            matched_rule_id: None,
         })
         .collect();
 

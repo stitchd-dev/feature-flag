@@ -40,6 +40,10 @@ message ExperimentIteration {
   // cutover replaced the previous `metric_keys` (event-key strings).
   repeated string metric_ids       = 6;
   double          traffic_allocation = 7;
+  // Snapshot of analysis unit context types at iteration start.
+  // Surfaced to the admin Iterations tab so per-iteration context-type
+  // badges render correctly without an extra round-trip.
+  repeated string unit_context_types = 8;
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────
@@ -50,6 +54,53 @@ message VariantResult {
   map<string, double> metric_values = 3;
   double p_value           = 4;
   bool   p_value_present   = 5;
+  // Multiple-comparison-corrected p-value (Bonferroni); empty when single-metric.
+  optional double p_value_corrected = 6;
+  // Attribution unit context type ("user", "account"). Empty defaults to "user"
+  // for back-compat with rows written before the Phase 5 per-context-type cutover.
+  string context_type      = 7;
+  // Whether this row violates the metric's `goal_direction` (guardrail-only).
+  bool   direction_violation = 8;
+  // Observed `treatment − control` lift on the metric. `0.0` for the control row.
+  double lift              = 9;
+}
+
+// SRM (Sample Ratio Mismatch) summary for one context type's assignment counts.
+// Mirrors `stitchd_core::experimentation::stats::srm::SrmResult`.
+message SrmPerVariant {
+  string variant_key = 1;
+  uint64 observed   = 2;
+  double expected   = 3;
+  double chi_sq_contribution = 4;
+}
+
+message SrmResult {
+  repeated SrmPerVariant per_variant = 1;
+  double overall_chi_sq    = 2;
+  double overall_chi_sq_p  = 3;
+  // "green" | "yellow" | "red"
+  string health           = 4;
+}
+
+// One context-type's results bundle (variants + srm + guardrails).
+message ContextTypeResults {
+  string                 context_type = 1;
+  repeated VariantResult variants     = 2;
+  // SRM is computed once per context type. Empty when not computed.
+  optional SrmResult     srm          = 3;
+  // Guardrail per-variant rows (same shape as `variants`).
+  repeated VariantResult guardrails   = 4;
+}
+
+// Identifies whether the experiment is bound to a specific rule or to the
+// flag's default-rule fall-through. Mirrors the `bound_target` JSON.
+message BoundTarget {
+  // "rule" | "default_rule"
+  string kind     = 1;
+  // Empty when `kind == "default_rule"`.
+  string rule_id  = 2;
+  // Human-readable label (rule name, or "Default rule (fallthrough)").
+  string label    = 3;
 }
 
 message ExperimentResults {
@@ -59,6 +110,13 @@ message ExperimentResults {
   bool                   is_stale           = 4;
   int64                  next_run_at_ms     = 5;
   string                 computation_status = 6;
+  // Per-context-type result bundle (Phase 7). Keys are context types such as
+  // "user" or "account". When empty, callers fall back to `variant_results`.
+  repeated ContextTypeResults results_by_context_type = 7;
+  // Which target the experiment is bound to (set at create time).
+  optional BoundTarget   bound_target       = 8;
+  // CUPED pre-period window in days; 0 = disabled.
+  uint32                 pre_period_days    = 9;
 }
 
 // ─── CRUD requests ────────────────────────────────────────────────────────────
@@ -110,10 +168,18 @@ message TransitionExperimentRequest {
 message ListIterationsRequest {
   string environment_id = 1;
   string experiment_id  = 2;
+  // 0-based row offset for paginated listing. Default = 0.
+  uint64 offset         = 3;
+  // Maximum rows to return. `0` means "no limit" — the service returns the
+  // full list (back-compat for stats-service callers that don't paginate).
+  uint64 limit          = 4;
 }
 
 message ListIterationsResponse {
   repeated ExperimentIteration iterations = 1;
+  // Total iterations available for the experiment, regardless of pagination
+  // window. Equal to `iterations.len()` when `limit == 0`.
+  uint64 total = 2;
 }
 
 // ─── Stats-service–facing messages ───────────────────────────────────────────
@@ -146,6 +212,37 @@ message UpdateIterationLastComputedRequest {
 
 message UpdateIterationLastComputedResponse {}
 
+// ─── Exposures (Phase 7) ──────────────────────────────────────────────────────
+//
+// Paginated read against the ClickHouse `experiment_assignments` table for a
+// single experiment + context_type. One row per assigned context.
+
+message ListExposuresRequest {
+  string experiment_id = 1;
+  // Required — at least one entry of the experiment's `unit_context_types`.
+  string context_type  = 2;
+  // 0-based offset; defaults to 0.
+  uint64 offset        = 3;
+  // Page size; capped server-side at 200.
+  uint64 limit         = 4;
+}
+
+message ExposureRow {
+  string context_type   = 1;
+  string context_key    = 2;
+  string variant_key    = 3;
+  // RFC 3339 UTC timestamp of first exposure.
+  string assigned_at    = 4;
+  // Stringified UUID of the matched rule (empty for default-rule
+  // experiments).
+  string matched_rule_id = 5;
+}
+
+message ListExposuresResponse {
+  repeated ExposureRow exposures = 1;
+  uint64               total     = 2;
+}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
@@ -169,4 +266,9 @@ service ExperimentationService {
   // Update the last_computed_at timestamp for a given iteration's stats_schedule row.
   rpc UpdateIterationLastComputed(UpdateIterationLastComputedRequest)
       returns (UpdateIterationLastComputedResponse);
+
+  // ── Phase 7 admin reads ────────────────────────────────────────────────────
+  // Paginated read against ClickHouse `experiment_assignments` for one
+  // experiment + context_type. Powers the admin UI's "Exposures" panel.
+  rpc ListExposures(ListExposuresRequest) returns (ListExposuresResponse);
 }

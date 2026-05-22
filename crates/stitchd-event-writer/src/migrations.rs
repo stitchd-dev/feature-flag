@@ -56,6 +56,26 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "20260520000001_events_v2_properties",
         include_str!("../migrations/20260520000001_events_v2_properties.sql"),
     ),
+    (
+        "20260521000001_flag_eval_log_matched_rule",
+        include_str!("../migrations/20260521000001_flag_eval_log_matched_rule.sql"),
+    ),
+    (
+        "20260521000002_experiment_iterations_active_dict",
+        include_str!("../migrations/20260521000002_experiment_iterations_active_dict.sql"),
+    ),
+    (
+        "20260521000003_experiment_assignments_mv",
+        include_str!("../migrations/20260521000003_experiment_assignments_mv.sql"),
+    ),
+    (
+        "20260521000004_backfill_experiment_assignments",
+        include_str!("../migrations/20260521000004_backfill_experiment_assignments.sql"),
+    ),
+    (
+        "20260521000005_experiment_results_context_type",
+        include_str!("../migrations/20260521000005_experiment_results_context_type.sql"),
+    ),
 ];
 
 /// Apply all pending ClickHouse migrations.
@@ -90,16 +110,23 @@ pub async fn run(client: &Client) -> Result<(), MigrationError> {
 
         tracing::info!(migration = name, "applying ClickHouse migration");
 
-        // Split on semicolons so multi-statement migration files work (e.g. table + MV).
-        // Strip leading SQL line-comments before checking if a statement is empty,
-        // since our migration files include comment blocks above each DDL statement.
-        for statement in sql.split(';') {
-            let stmt: String = statement
-                .lines()
-                .filter(|l| !l.trim().starts_with("--"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let stmt = stmt.trim();
+        // Strip `--` line-comments FIRST, then split on `;`. The previous
+        // split-then-strip order broke when a comment line contained a `;`
+        // (e.g. `-- foo; bar`) — the split point fell mid-comment and the
+        // post-`;` text leaked into the next "statement", confusing the CH
+        // parser with stray words like "naming the" prepended to an ALTER.
+        let stripped: String = sql
+            .lines()
+            .map(|l| {
+                // Truncate each line at the start of a `--` comment (if any).
+                // Keep the leading whitespace + pre-comment SQL.
+                l.find("--").map_or(l, |idx| &l[..idx])
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for statement in stripped.split(';') {
+            let stmt = statement.trim();
             if stmt.is_empty() {
                 continue;
             }

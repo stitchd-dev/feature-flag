@@ -1,18 +1,30 @@
 //! Ratio query builder.
 //!
-//! Produces a `WITH numerator AS (...), denominator AS (...) SELECT ...`
-//! query that joins the two CTEs per `variant_key`, computes
-//! `metric_value = num / den`, and filters rows where `den_count <
-//! min_denominator` out via `HAVING`.
+//! Produces a `WITH numerator AS (...), denominator AS (...), denominator_count
+//! AS (...) SELECT ...` query that joins the three CTEs per
+//! `(context_type, variant_key)`, computes `metric_value = num / den`,
+//! and filters rows where `den_count < min_denominator` out via the
+//! outer `WHERE` clause.
 //!
-//! The caller (Phase 4 Task 2 — `compute_experiment` dispatch) is
-//! responsible for resolving the numerator and denominator
+//! Each leg is a per-leg `build_aggregation_query` — so the experiment-
+//! attribution model (ARRAY JOIN of `e.contexts` + equi-join against
+//! `experiment_assignments`, ITT bound `e.occurred_at >= a.assigned_at`,
+//! GROUP BY `(a.context_type, a.variant_key)`) applies uniformly to
+//! numerator and denominator. The ARRAY JOIN shape matters because CH
+//! 24's new analyzer rejects `arrayExists(...)` inside `JOIN ON`; see
+//! [`super::aggregation`] for the full rewrite rationale. Joining on both
+//! `context_type` AND `variant_key` in the outer SELECT keeps the
+//! per-context-type pairing sound: a `(user, treatment)` numerator row
+//! matches only the `(user, treatment)` denominator row.
+//!
+//! The caller is responsible for resolving the numerator and denominator
 //! [`MetricDefinition`]s into their underlying [`AggregationConfig`]s
 //! and passing them into this builder. The builder itself does not
 //! touch the metric repo.
 //!
 //! [`MetricDefinition`]: stitchd_core::metric::MetricDefinition
 
+use chrono::{DateTime, Utc};
 use stitchd_core::metric::{AggregationConfig, RatioConfig};
 
 use super::{
@@ -29,6 +41,13 @@ use super::{
 /// Propagates any [`QueryBuildError`] from the two underlying aggregation
 /// builds, plus a fresh [`QueryBuildError::InvalidConfig`] when
 /// `min_denominator` is negative.
+// `clippy::too_many_arguments`: the ratio builder genuinely needs every
+// argument — three configs (the ratio + numerator + denominator) plus
+// the four experiment-scope parameters (experiment/iteration/env/variants)
+// plus iteration_end. Folding any of these into a struct would create a
+// builder pattern with one consumer; the long arg list is the simpler
+// shape.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ratio_query(
     ratio_cfg: &RatioConfig,
     numerator_cfg: &AggregationConfig,
@@ -37,6 +56,7 @@ pub fn build_ratio_query(
     iteration_id: &str,
     env_id: &str,
     variant_keys: &[&str],
+    iteration_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, QueryBuildError> {
     if ratio_cfg.min_denominator < 0 {
         return Err(QueryBuildError::InvalidConfig(format!(
@@ -54,6 +74,7 @@ pub fn build_ratio_query(
         iteration_id,
         env_id,
         variant_keys,
+        iteration_end,
     )?;
     let den_q = build_aggregation_query(
         denominator_cfg,
@@ -61,6 +82,7 @@ pub fn build_ratio_query(
         iteration_id,
         env_id,
         variant_keys,
+        iteration_end,
     )?;
 
     // Numerator binds keep indices [0, num_count); denominator starts at
@@ -97,6 +119,7 @@ pub fn build_ratio_query(
         iteration_id,
         env_id,
         variant_keys,
+        iteration_end,
     )?;
     let den_count_offset = offset + den_q.binds.len();
     let den_count_sql_shifted = shift_placeholders(&den_count_q.sql, den_count_offset);
@@ -109,7 +132,12 @@ pub fn build_ratio_query(
     binds.extend(den_count_q.binds);
     let min_den_ph = push_bind(&mut binds, QueryBind::I64(ratio_cfg.min_denominator));
 
-    // Assemble final SQL with three CTEs + ratio computation.
+    // Assemble final SQL with three CTEs + ratio computation. The outer
+    // JOIN keys are `(context_type, variant_key)` so per-context numerator
+    // and denominator metrics stay paired — joining only on variant_key
+    // would mix `(user, treatment)` numerator with `(account, treatment)`
+    // denominator and produce nonsense per-context ratios for
+    // multi-context-type experiments (spec §3 — analyses are per-context-type).
     let sql = format!(
         "WITH numerator AS (\n\
         {num_sql}\n\
@@ -119,14 +147,19 @@ pub fn build_ratio_query(
         {den_count_sql}\n\
         )\n\
         SELECT\n    \
+            numerator.context_type AS context_type,\n    \
             numerator.variant_key AS variant_key,\n    \
             numerator.metric_value AS num_value,\n    \
             denominator.metric_value AS den_value,\n    \
             denominator_count.metric_value AS den_count,\n    \
             numerator.metric_value / nullIf(denominator.metric_value, 0) AS metric_value\n\
         FROM numerator\n\
-        INNER JOIN denominator ON numerator.variant_key = denominator.variant_key\n\
-        INNER JOIN denominator_count ON numerator.variant_key = denominator_count.variant_key\n\
+        INNER JOIN denominator\n    \
+            ON numerator.context_type = denominator.context_type\n   \
+            AND numerator.variant_key = denominator.variant_key\n\
+        INNER JOIN denominator_count\n    \
+            ON numerator.context_type = denominator_count.context_type\n   \
+            AND numerator.variant_key = denominator_count.variant_key\n\
         WHERE den_count >= {min_den_ph}",
         num_sql = indent_lines(&num_q.sql),
         den_sql = indent_lines(&den_sql_shifted),
@@ -174,6 +207,7 @@ fn indent_lines(sql: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
     use serde_json::json;
     use stitchd_core::id::MetricId;
     use stitchd_core::metric::{AggregationConfig, AggregationOperator};
@@ -203,6 +237,10 @@ mod tests {
         }
     }
 
+    fn iter_end() -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 5, 21, 0, 0, 0).unwrap()
+    }
+
     #[test]
     fn ratio_two_aggregations_emits_three_ctes() {
         let q = build_ratio_query(
@@ -213,6 +251,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
         assert!(q.sql.contains("WITH numerator AS"));
@@ -232,6 +271,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
         assert!(
@@ -253,6 +293,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
 
@@ -284,6 +325,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
 
@@ -309,22 +351,23 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap();
 
-        // Numerator emits binds 0..=5 → env, exp, iter, event_a, ctrl, treat
-        // Denominator emits binds 6..=11 → env, exp, iter, event_b, ctrl, treat
-        // Denominator_count reuses the same Count config → binds 12..=17
-        // min_denominator → bind 18
-        assert_eq!(q.binds.len(), 19);
+        // Numerator emits binds 0..=6 → env, exp, iter, event_a, iter_end, ctrl, treat
+        // Denominator emits binds 7..=13 → env, exp, iter, event_b, iter_end, ctrl, treat
+        // Denominator_count reuses the same Count config → binds 14..=20
+        // min_denominator → bind 21
+        assert_eq!(q.binds.len(), 22);
 
-        // Spot-check: the denominator CTE must reference {p6} (the env_id
+        // Spot-check: the denominator CTE must reference {p7} (the env_id
         // of the denominator leg, since each leg starts with env_id).
         let den_cte_start = q.sql.find("), denominator AS (").unwrap();
         let den_cte_end = q.sql.find("), denominator_count AS (").unwrap();
         let den_cte = &q.sql[den_cte_start..den_cte_end];
         assert!(
-            den_cte.contains("{p6}"),
+            den_cte.contains("{p7}"),
             "denominator CTE must use shifted placeholders, got:\n{den_cte}"
         );
     }
@@ -339,6 +382,7 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
@@ -360,9 +404,98 @@ mod tests {
             ITER_ID,
             ENV_ID,
             &variants(),
+            iter_end(),
         )
         .unwrap_err();
         assert_eq!(err, QueryBuildError::UnsupportedJsonLogic("%".into()));
+    }
+
+    #[test]
+    fn ratio_joins_on_context_type_and_variant_key() {
+        // The outer JOIN must include `context_type` so multi-context-type
+        // experiments keep per-(context_type, variant) numerator/denominator
+        // pairs aligned — otherwise the `(user, treatment)` numerator could
+        // pair with the `(account, treatment)` denominator and produce a
+        // nonsense per-context ratio.
+        let q = build_ratio_query(
+            &ratio_cfg(0),
+            &count_cfg("a"),
+            &count_cfg("b"),
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            &variants(),
+            iter_end(),
+        )
+        .unwrap();
+        assert!(
+            q.sql
+                .contains("ON numerator.context_type = denominator.context_type"),
+            "outer JOIN must scope on context_type, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql
+                .contains("AND numerator.variant_key = denominator.variant_key"),
+            "outer JOIN must keep variant_key predicate, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("numerator.context_type AS context_type"),
+            "outer SELECT must surface context_type, got:\n{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn ratio_legs_use_assignments_join_no_context_tag_filter() {
+        // Each leg is a `build_aggregation_query` — verify the post-cutover
+        // structure flows through to the ratio output: no event-side
+        // `'experiment'/'iteration'/'variant'` context tag filters,
+        // and the ARRAY JOIN + assignments JOIN is present in each CTE.
+        let q = build_ratio_query(
+            &ratio_cfg(0),
+            &count_cfg("a"),
+            &count_cfg("b"),
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            &variants(),
+            iter_end(),
+        )
+        .unwrap();
+        assert!(
+            !q.sql.contains("arrayExists"),
+            "ratio legs must not use arrayExists (CH 24 analyzer rejects it in JOIN ON)"
+        );
+        assert!(
+            !q.sql.contains("'experiment'"),
+            "ratio legs must not filter on event-side experiment tags"
+        );
+        assert!(
+            !q.sql.contains("'iteration'"),
+            "ratio legs must not filter on event-side iteration tags"
+        );
+        assert!(
+            !q.sql.contains("'variant'"),
+            "ratio legs must not filter on event-side variant tags"
+        );
+        // Each leg's INNER JOIN against experiment_assignments appears 3
+        // times — numerator + denominator + denominator_count CTE bodies.
+        let join_count = q
+            .sql
+            .matches("INNER JOIN experiment_assignments AS a")
+            .count();
+        assert_eq!(
+            join_count, 3,
+            "expected 3 assignments JOINs (num + den + den_count), got {join_count}"
+        );
+        // Same for the ARRAY JOIN.
+        let array_join_count = q.sql.matches("ARRAY JOIN e.contexts AS ctx_pair").count();
+        assert_eq!(
+            array_join_count, 3,
+            "expected 3 ARRAY JOINs (num + den + den_count), got {array_join_count}"
+        );
     }
 
     // ── shift_placeholders helper ─────────────────────────────────────────────

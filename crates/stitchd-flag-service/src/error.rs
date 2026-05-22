@@ -1,7 +1,16 @@
 //! Error types for the flag service.
 
+use stitchd_core::id::ExperimentId;
 use thiserror::Error;
 use tonic::Status;
+
+/// Sentinel prefix used to encode the locking experiment ID into the
+/// `tonic::Status::failed_precondition` message so the gateway's
+/// `IntoResponse` mapper can rebuild the structured 409 error body
+/// (`{ "error": "flag_locked_by_experiment", "experiment_id": "<uuid>" }`).
+///
+/// Format: `"flag_locked_by_experiment:<uuid>"`.
+pub const FLAG_LOCKED_STATUS_PREFIX: &str = "flag_locked_by_experiment:";
 
 /// Errors that can occur in the flag service.
 #[derive(Debug, Error)]
@@ -21,6 +30,15 @@ pub enum FlagServiceError {
     /// Invalid input was provided.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// The targeted flag is locked because an experiment in
+    /// `running`/`paused` status is bound to it. Every admin mutation on
+    /// such a flag must be rejected until the experiment is stopped.
+    ///
+    /// Encoded on the wire as `tonic::Status::failed_precondition`
+    /// with message `"flag_locked_by_experiment:<experiment_id>"`.
+    #[error("flag is locked by experiment {experiment_id}")]
+    FlagLocked { experiment_id: ExperimentId },
 
     /// An internal/database error occurred.
     #[error("internal error: {0}")]
@@ -59,6 +77,9 @@ impl From<FlagServiceError> for Status {
             )),
             FlagServiceError::Conflict(msg) => Self::already_exists(msg),
             FlagServiceError::InvalidArgument(msg) => Self::invalid_argument(msg),
+            FlagServiceError::FlagLocked { experiment_id } => {
+                Self::failed_precondition(format!("{FLAG_LOCKED_STATUS_PREFIX}{experiment_id}"))
+            }
             FlagServiceError::Internal(msg) => Self::internal(msg),
         }
     }
@@ -138,5 +159,25 @@ mod tests {
         };
         let err: FlagServiceError = repo_err.into();
         assert!(matches!(err, FlagServiceError::Conflict(_)));
+    }
+
+    #[test]
+    fn flag_locked_maps_to_failed_precondition_with_id_in_message() {
+        let exp_id = ExperimentId::new();
+        let err = FlagServiceError::FlagLocked {
+            experiment_id: exp_id,
+        };
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            status.message().starts_with(FLAG_LOCKED_STATUS_PREFIX),
+            "status message missing sentinel prefix: {}",
+            status.message()
+        );
+        assert!(
+            status.message().contains(&exp_id.to_string()),
+            "status message missing experiment id: {}",
+            status.message()
+        );
     }
 }

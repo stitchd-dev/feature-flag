@@ -13,6 +13,7 @@ import { extractErrorMessage } from '../../lib/errors'
 import type { AdminFlagResponse, VariantJson } from '../../lib/types'
 import { PreviewTab } from './PreviewTab'
 import { AnalyticsTab } from './AnalyticsTab'
+import { EditFlagDefaultRule } from './EditFlagDefaultRule'
 import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
 import { localId, allocationSum, isCatchAll, defaultCatchAll, normalizeOutput } from '../../lib/ruleTypes'
 import { RuleList } from '../../components/rules/RuleList'
@@ -569,7 +570,7 @@ function MetadataEditor({
 
 // ─── FlagDetail ───────────────────────────────────────────────────────────────
 
-type Tab = 'targeting' | 'variants' | 'evals' | 'preview' | 'code' | 'history'
+type Tab = 'targeting' | 'variants' | 'default_rule' | 'evals' | 'preview' | 'code' | 'history'
 
 export function FlagDetail() {
   const { key } = useParams<{ key: string }>()
@@ -719,6 +720,9 @@ export function FlagDetail() {
           <button className={`tab ${tab === 'variants' ? 'active' : ''}`} onClick={() => setTab('variants')}>
             <I.layers size={13} /> Variants <span className="count">{flag.variants.length}</span>
           </button>
+          <button className={`tab ${tab === 'default_rule' ? 'active' : ''}`} onClick={() => setTab('default_rule')}>
+            <I.toggle size={13} /> Default rule
+          </button>
           <button className={`tab ${tab === 'evals' ? 'active' : ''}`} onClick={() => setTab('evals')}>
             <I.zap size={13} /> Evaluations
           </button>
@@ -747,6 +751,14 @@ export function FlagDetail() {
             flag={flag}
             canWrite={canWrite}
             onSaved={(updated) => { setFlag(updated); toast('Variants saved', 'success') }}
+            onConflict={handleConflict}
+          />
+        )}
+        {tab === 'default_rule' && (
+          <EditFlagDefaultRule
+            flag={flag}
+            canWrite={canWrite}
+            onSaved={(updated) => { setFlag(updated); toast('Default rule saved', 'success') }}
             onConflict={handleConflict}
           />
         )}

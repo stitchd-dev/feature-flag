@@ -9,6 +9,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::id::{FlagId, FlagKey, ProjectId, SegmentId, VariantId};
+use crate::rollout::RolloutDistribution;
+pub use crate::rollout::{RolloutAllocation, RolloutDistributionError};
 use crate::rule_engine::types::Rule;
 pub use crate::variants::{FlagValueType, Variant, VariantValue};
 
@@ -34,6 +36,11 @@ pub struct FlagRecord {
     pub enabled: bool,
     /// The variant to return if no rules match.
     pub default_variant_id: Option<VariantId>,
+    /// Optional percentage distribution applied at the default-rule
+    /// fall-through (Phase 1 of `experimentation_full_20260521`). When
+    /// `Some`, evaluation hashes the context into one of the listed
+    /// variants instead of serving `default_variant_id`.
+    pub default_rule_distribution: Option<RolloutDistribution>,
     /// When this record was created.
     pub created_at: DateTime<Utc>,
     /// When this record was last modified.
@@ -99,6 +106,11 @@ impl Flag {
             .and_then(|id| self.get_variant(id))
     }
 
+    /// Returns the variant with the given `key`, if it belongs to this flag.
+    pub fn get_variant_by_key(&self, key: &str) -> Option<&Variant> {
+        self.variants.iter().find(|v| v.key == key)
+    }
+
     /// Returns all `SegmentId`s referenced in any of this flag's rules.
     pub fn referenced_segment_ids(&self) -> HashSet<SegmentId> {
         let mut ids = HashSet::new();
@@ -126,6 +138,7 @@ mod tests {
                 value_type: FlagValueType::Bool,
                 enabled: true,
                 default_variant_id: Some(vid),
+                default_rule_distribution: None,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
                 deleted_at: None,

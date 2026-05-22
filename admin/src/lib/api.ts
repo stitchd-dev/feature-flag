@@ -1,6 +1,16 @@
 import axios from 'axios'
 import { auth } from './auth'
-import type { AdminFlagResponse, PaginatedResponse, Segment, CreateSegmentRequest, UpdateSegmentRequest } from './types'
+import type {
+  AdminFlagResponse,
+  PaginatedResponse,
+  Segment,
+  CreateSegmentRequest,
+  UpdateSegmentRequest,
+  ExperimentResults,
+  PaginatedExposures,
+  Timeseries,
+  RolloutDistribution,
+} from './types'
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
@@ -597,16 +607,227 @@ export async function getExperiment(
   return data
 }
 
+/**
+ * Per-context-type experiment results envelope.
+ *
+ * Returns the Phase 7 shape:
+ *   `{ results_by_context_type: { [ct]: { variants, srm, guardrails } }, bound_target, pre_period_days }`.
+ *
+ * Errors:
+ *   404 — experiment not found
+ *   409 — no completed iteration yet (computed_at is null on the latest iteration)
+ */
 export async function getExperimentResults(
   environmentId: string,
   experimentKey: string,
   signal?: AbortSignal,
-): Promise<unknown> {
-  const { data } = await api.get<unknown>(
+): Promise<ExperimentResults> {
+  const { data } = await api.get<ExperimentResults>(
     `/v1/environments/${environmentId}/experiments/${experimentKey}/results`,
     { signal },
   )
   return data
+}
+
+/**
+ * Paginated list of first-exposure rows for an experiment, scoped to one
+ * context type. Each row represents the moment a context was first assigned
+ * to a variant (sticky bucket).
+ *
+ * `contextType` is required by the gateway — passing a value not in the
+ * experiment's `unit_context_types` returns an empty page.
+ */
+export async function listExperimentExposures(
+  environmentId: string,
+  experimentKey: string,
+  contextType: string,
+  params?: { page?: number; per_page?: number },
+  signal?: AbortSignal,
+): Promise<PaginatedExposures> {
+  const qs = new URLSearchParams({ context_type: contextType })
+  if (params?.page != null) qs.set('page', String(params.page))
+  if (params?.per_page != null) qs.set('per_page', String(params.per_page))
+  const { data } = await api.get<PaginatedExposures>(
+    `/v1/environments/${environmentId}/experiments/${experimentKey}/exposures?${qs}`,
+    { signal },
+  )
+  return data
+}
+
+/**
+ * Daily per-variant time-series for a single metric on an experiment, scoped
+ * to one context type. `days` is the trailing window — typically 14 or 30.
+ */
+export async function getExperimentTimeseries(
+  environmentId: string,
+  experimentKey: string,
+  params: { metric_id: string; context_type: string; days: number },
+  signal?: AbortSignal,
+): Promise<Timeseries> {
+  const qs = new URLSearchParams({
+    metric_id: params.metric_id,
+    context_type: params.context_type,
+    days: String(params.days),
+  })
+  const { data } = await api.get<Timeseries>(
+    `/v1/environments/${environmentId}/experiments/${experimentKey}/timeseries?${qs}`,
+    { signal },
+  )
+  return data
+}
+
+/**
+ * Raw JSON row shape returned by
+ * `GET /v1/environments/{env}/experiments/{exp}/iterations`. Mirrors the
+ * gateway's `IterationJson` 1:1 — the IterationsTab consumes a wider
+ * `IterationSummary` shape, so callers map via [`mapIterationRow`] before
+ * passing to the UI.
+ */
+export interface IterationJsonRow {
+  id: string
+  experiment_id: string
+  iteration_number: number
+  started_at_ms: number
+  ended_at_ms: number
+  traffic_allocation: number
+  /** Snapshot of `unit_context_types` at iteration start. */
+  unit_context_types: string[]
+}
+
+/**
+ * Iteration row in the shape the admin IterationsTab consumes
+ * (`IterationSummary` keeps timestamps ISO + nullable). Exposed so callers can
+ * type their state without importing the tab module.
+ */
+export interface IterationSummaryDto {
+  iteration_id: string
+  iteration_number: number
+  started_at: string
+  ended_at: string | null
+  unit_context_types: string[]
+  /**
+   * Per-iteration "stats last computed at" timestamp. Currently null — the
+   * `experiment_iterations` table does not track this column yet. Reserved for
+   * a future migration that surfaces stats-schedule data per-iteration.
+   */
+  computed_at: string | null
+}
+
+/** Map a raw `IterationJsonRow` from the gateway to the admin's view shape. */
+export function mapIterationRow(row: IterationJsonRow): IterationSummaryDto {
+  return {
+    iteration_id: row.id,
+    iteration_number: row.iteration_number,
+    started_at: new Date(row.started_at_ms).toISOString(),
+    // `ended_at_ms == 0` is the proto sentinel for "still running".
+    ended_at:
+      row.ended_at_ms === 0 ? null : new Date(row.ended_at_ms).toISOString(),
+    unit_context_types: row.unit_context_types,
+    computed_at: null,
+  }
+}
+
+/**
+ * Paginated list of iterations for an experiment. Drives the Iterations tab in
+ * the admin's experiment-detail page.
+ *
+ * The gateway returns rows in the proto-millis shape; callers typically push
+ * the result through [`mapIterationRow`] before handing to the UI. This
+ * wrapper returns both the mapped + raw forms so callers can pick whichever
+ * is more convenient.
+ */
+export async function listExperimentIterations(
+  environmentId: string,
+  experimentKey: string,
+  params?: { page?: number; per_page?: number },
+  signal?: AbortSignal,
+): Promise<{
+  items: IterationSummaryDto[]
+  total: number
+  page: number
+  per_page: number
+}> {
+  const qs = new URLSearchParams()
+  if (params?.page != null) qs.set('page', String(params.page))
+  if (params?.per_page != null) qs.set('per_page', String(params.per_page))
+  const suffix = qs.toString() ? `?${qs}` : ''
+  const { data } = await api.get<PaginatedResponse<IterationJsonRow>>(
+    `/v1/environments/${environmentId}/experiments/${experimentKey}/iterations${suffix}`,
+    { signal },
+  )
+  return {
+    items: data.items.map(mapIterationRow),
+    total: data.total,
+    page: data.page,
+    per_page: data.per_page,
+  }
+}
+
+/** Response envelope shared by `POST /recompute` and `GET /recompute/{job_id}`. */
+export interface RecomputeJobResponse {
+  job_id: string
+  /** "queued" | "running" | "succeeded" | "failed" — string typed to allow future variants without UI breakage. */
+  status: string
+  started_at?: string | null
+  finished_at?: string | null
+  /** Populated on `failed`; null otherwise. */
+  error?: string | null
+}
+
+/**
+ * Triggers an out-of-band recompute job for the experiment via the stats
+ * service. The gateway returns immediately with `{ job_id, status: "queued" }`;
+ * callers poll `getRecomputeStatus` to observe progress.
+ */
+export async function triggerExperimentRecompute(
+  environmentId: string,
+  experimentKey: string,
+): Promise<RecomputeJobResponse> {
+  const { data } = await api.post<RecomputeJobResponse>(
+    `/v1/environments/${environmentId}/experiments/${experimentKey}/recompute`,
+    {},
+  )
+  return data
+}
+
+/** Polls the status of a previously-triggered recompute job. */
+export async function getRecomputeStatus(
+  environmentId: string,
+  experimentKey: string,
+  jobId: string,
+  signal?: AbortSignal,
+): Promise<RecomputeJobResponse> {
+  const { data } = await api.get<RecomputeJobResponse>(
+    `/v1/environments/${environmentId}/experiments/${experimentKey}/recompute/${jobId}`,
+    { signal },
+  )
+  return data
+}
+
+// ─── Flag default-rule distribution ───────────────────────────────────────────
+
+/**
+ * Sets (or clears) the default-rule percentage distribution on a flag.
+ *
+ * Pass a `RolloutDistribution` to enable a percentage fallthrough; pass `null`
+ * to revert to single-variant default behaviour.
+ *
+ * Errors:
+ *   409 `FLAG_LOCKED_BY_EXPERIMENT` — an experiment is currently bound to this
+ *     flag (running or paused); the distribution cannot change until the
+ *     experiment stops.
+ *   422 — invalid distribution (percentages don't sum to 100, unknown
+ *     variant_key, empty allocations).
+ */
+export async function setDefaultRuleDistribution(
+  projectId: string,
+  flagKey: string,
+  distribution: RolloutDistribution | null,
+): Promise<void> {
+  await api.post(
+    `/v1/projects/${projectId}/flags/${flagKey}/default-rule-distribution`,
+    { distribution },
+  )
 }
 
 // ─── Context intelligence ─────────────────────────────────────────────────────

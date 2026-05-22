@@ -102,6 +102,36 @@ message EvaluatePreviewResponse {
   string results_json  = 2;
 }
 
+// ─── Default-rule distribution (Phase 7 Task 5) ───────────────────────────────
+//
+// Sets or clears the flag's percentage distribution used by the default-rule
+// fall-through. Rejected with FAILED_PRECONDITION + the
+// `flag_locked_by_experiment:<uuid>` sentinel when the flag is currently
+// locked by a running/paused experiment.
+
+message DefaultRuleAllocation {
+  string variant_key = 1;
+  // In (0, 100]. Sum across all entries must equal 100 ± 0.01.
+  double percentage  = 2;
+}
+
+message SetDefaultRuleDistributionRequest {
+  // Project-scoped admin operation — required.
+  string project_id = 1;
+  // Flag identifier — the flag key within the project.
+  string flag_key   = 2;
+  // The new distribution. Empty `allocations` clears the distribution
+  // (reverting the flag to single-default-variant behaviour).
+  repeated DefaultRuleAllocation allocations = 3;
+  // Optimistic-locking version (matches FeatureFlag.version).
+  uint64 version    = 4;
+}
+
+message SetDefaultRuleDistributionResponse {
+  FeatureFlag flag    = 1;
+  uint64      version = 2;
+}
+
 // ─── Flag management service ──────────────────────────────────────────────────
 
 service FlagService {
@@ -122,4 +152,9 @@ service FlagService {
 
   // Simulate flag evaluation for admin preview — returns rule traces, no side effects.
   rpc EvaluatePreview(EvaluatePreviewRequest) returns (EvaluatePreviewResponse);
+
+  // Set or clear the flag's default-rule percentage distribution.
+  // Rejects with FAILED_PRECONDITION when the flag is locked.
+  rpc SetDefaultRuleDistribution(SetDefaultRuleDistributionRequest)
+      returns (SetDefaultRuleDistributionResponse);
 }

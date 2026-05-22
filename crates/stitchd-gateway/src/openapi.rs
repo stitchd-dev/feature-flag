@@ -45,6 +45,7 @@ use utoipa::{
         crate::routes::flags::update_variants,
         crate::routes::flags::update_rules,
         crate::routes::flags::update_flag_hashing,
+        crate::routes::flags::set_default_rule_distribution,
         // Segments (JWT)
         crate::routes::segments::list_segments,
         crate::routes::segments::create_segment,
@@ -83,9 +84,13 @@ use utoipa::{
         crate::routes::experiments::transition_experiment,
         crate::routes::experiments::list_iterations,
         crate::routes::experiments::get_results,
+        crate::routes::experiments::list_exposures,
         // Stats recompute
         crate::routes::stats::trigger_recompute,
         crate::routes::stats::get_job_status,
+        crate::routes::stats::get_timeseries,
+        crate::routes::stats::trigger_recompute_env_scoped,
+        crate::routes::stats::get_recompute_job_status,
     ),
     components(
         schemas(
@@ -111,6 +116,10 @@ use utoipa::{
             crate::routes::flags::UpdateHashingBody,
             crate::routes::flags::HashingConfigJson,
             crate::routes::flags::UpdateHashingResponse,
+            crate::routes::flags::DefaultRuleAllocationBody,
+            crate::routes::flags::DefaultRuleDistributionBody,
+            crate::routes::flags::SetDefaultRuleDistributionBody,
+            crate::routes::flags::SetDefaultRuleDistributionResponseJson,
             // Segments
             crate::routes::segments::SegmentCreateRequest,
             crate::routes::segments::SegmentUpdateRequest,
@@ -162,10 +171,20 @@ use utoipa::{
             crate::routes::experiments::ExperimentJson,
             crate::routes::experiments::IterationJson,
             crate::routes::experiments::VariantResultJson,
+            crate::routes::experiments::SrmResultJson,
+            crate::routes::experiments::SrmPerVariantJson,
+            crate::routes::experiments::ContextTypeResultsJson,
+            crate::routes::experiments::BoundTargetJson,
             crate::routes::experiments::ExperimentResultsJson,
+            crate::routes::experiments::ExposureRowJson,
+            crate::routes::experiments::ListExposuresQuery,
+            crate::routes::experiments::ListIterationsQuery,
             // Stats
             crate::routes::stats::RecomputeJobJson,
             crate::routes::stats::JobStatusJson,
+            crate::routes::stats::GetTimeseriesQuery,
+            crate::routes::stats::TimeseriesBucketJson,
+            crate::routes::stats::GetTimeseriesResponseJson,
         )
     ),
     modifiers(&SecurityAddon)

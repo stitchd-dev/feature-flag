@@ -6,6 +6,7 @@ use crate::rule_engine::error::RuleEngineError;
 use crate::rule_engine::eval_rules::evaluate_rules;
 use crate::rule_engine::types::{EvaluationInput, Rule, RuleOutput, TargetField};
 use std::collections::{HashMap, HashSet};
+use tracing::warn;
 
 /// A high-level evaluator for feature flags.
 pub struct FlagEvaluator;
@@ -95,7 +96,46 @@ impl FlagEvaluator {
             }
         }
 
-        // 5. Fallback to default variant
+        // 5. No custom rule matched. Check whether the flag has a
+        //    default-rule percentage distribution (Phase 2 of
+        //    experimentation_full_20260521) — if so, hash the context using
+        //    the same convention as percentage rollout rules so cohort
+        //    assignment stays stable across the two code paths. Otherwise
+        //    serve the single `default_variant_id`.
+        if let Some(dist) = flag.record.default_rule_distribution.as_ref() {
+            // Hash inputs follow the percentage-rule convention. We use the
+            // primary context's key as the target (single hash input — keeps
+            // assignment deterministic for the most common case where a flag
+            // is evaluated against one context). Multi-context flags
+            // (`unit_context_types: ["user", "org"]`) get the same treatment
+            // as percentage rules: only `Context::key` of each present
+            // context contributes; the user explicitly cannot configure
+            // targets on the default-rule distribution today, so this is the
+            // canonical convention.
+            let target_values: Vec<String> =
+                context.contexts.iter().map(|c| c.key.clone()).collect();
+            let percentage = calculate_allocation(
+                flag.record.key.as_str(),
+                &environment_id.to_string(),
+                &target_values,
+            );
+
+            if let Some(variant_key) = dist.assign_variant_key(percentage) {
+                if let Some(v) = flag.get_variant_by_key(variant_key) {
+                    return Ok(v);
+                }
+                // Variant referenced by the distribution doesn't exist on
+                // the flag. Fall through to default_variant_id with a
+                // warning so operators get a diagnostic.
+                warn!(
+                    flag_key = flag.record.key.as_str(),
+                    variant_key,
+                    "default_rule_distribution references unknown variant_key; falling back to default_variant_id"
+                );
+            }
+        }
+
+        // 6. Fallback to default variant
         flag.get_default_variant().ok_or_else(|| {
             RuleEngineError::Internal(
                 "No rules matched and flag has no default variant".to_string(),
@@ -130,6 +170,7 @@ mod tests {
             value_type: FlagValueType::Bool,
             enabled: true,
             default_variant_id: Some(v2_id),
+            default_rule_distribution: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
             deleted_at: None,
@@ -478,6 +519,148 @@ mod tests {
 
         let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id);
         assert!(matches!(result, Err(RuleEngineError::Internal(_))));
+    }
+
+    // ── Phase 2 Task 2.2: Default-rule percentage distribution ──────────────
+
+    use crate::rollout::{RolloutAllocation, RolloutDistribution};
+
+    fn flag_with_default_rule_distribution(
+        dist: Option<RolloutDistribution>,
+        rules: Vec<FlagRule>,
+    ) -> Flag {
+        let mut f = setup_flag();
+        f.record.default_rule_distribution = dist;
+        f.rules = rules;
+        f
+    }
+
+    #[test]
+    fn default_rule_distribution_assigns_via_hashing_when_no_rule_matches() {
+        // Flag enabled, no custom rules (or none match), default-rule
+        // distribution set. Evaluation must hash the context into one of the
+        // distribution's variants instead of serving `default_variant_id`.
+        let dist = RolloutDistribution {
+            allocations: vec![
+                RolloutAllocation {
+                    variant_key: "on".to_string(),
+                    percentage: 50.0,
+                },
+                RolloutAllocation {
+                    variant_key: "off".to_string(),
+                    percentage: 50.0,
+                },
+            ],
+        };
+        let flag = flag_with_default_rule_distribution(Some(dist), vec![]);
+
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        // Run many users and check the split is approximately balanced.
+        let mut on_count = 0;
+        for i in 0..1000 {
+            let context = EvaluationContext::new()
+                .with_context(Context::new("user", format!("u{i}").as_str()));
+            let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
+            if result.key == "on" {
+                on_count += 1;
+            }
+        }
+        assert!(
+            (450..=550).contains(&on_count),
+            "default-rule 50/50 distribution should produce ~500 ON; got {on_count}"
+        );
+    }
+
+    #[test]
+    fn default_rule_distribution_none_falls_through_to_default_variant() {
+        // Backwards-compat: when default_rule_distribution is None and no
+        // rule matches, serve default_variant_id (today's behavior).
+        let flag = flag_with_default_rule_distribution(None, vec![]);
+        let context = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false)),
+        );
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
+        // Default variant key is "off" per setup_flag().
+        assert_eq!(result.key, "off");
+    }
+
+    #[test]
+    fn default_rule_distribution_with_unknown_variant_key_falls_back_to_default_variant() {
+        // Distribution references "nonexistent" variant_key not present on
+        // the flag — evaluation falls back to default_variant_id with a
+        // tracing warning (not an error).
+        let dist = RolloutDistribution {
+            allocations: vec![RolloutAllocation {
+                variant_key: "nonexistent".to_string(),
+                percentage: 100.0,
+            }],
+        };
+        let flag = flag_with_default_rule_distribution(Some(dist), vec![]);
+        let context = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&flag, &context, &segments, env_id).unwrap();
+        // Falls back to default variant ("off").
+        assert_eq!(result.key, "off");
+    }
+
+    #[test]
+    fn matching_rule_short_circuits_default_rule_distribution() {
+        // If any custom rule matches, the default-rule distribution must not
+        // be evaluated — the rule's output applies.
+        let dist = RolloutDistribution {
+            allocations: vec![
+                RolloutAllocation {
+                    variant_key: "on".to_string(),
+                    percentage: 0.001,
+                },
+                RolloutAllocation {
+                    variant_key: "off".to_string(),
+                    percentage: 99.999,
+                },
+            ],
+        };
+        let mut f = setup_flag(); // setup_flag includes a rule that matches when user.beta = true
+        f.record.default_rule_distribution = Some(dist);
+
+        let context = EvaluationContext::new().with_context(
+            Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true)),
+        );
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        let result = FlagEvaluator::evaluate(&f, &context, &segments, env_id).unwrap();
+        // Despite the distribution being weighted 99.999% to "off", the
+        // matching rule wins.
+        assert_eq!(result.key, "on");
+    }
+
+    #[test]
+    fn default_rule_distribution_not_evaluated_when_flag_disabled() {
+        // Disabled flag short-circuits — distribution never runs.
+        let dist = RolloutDistribution {
+            allocations: vec![RolloutAllocation {
+                variant_key: "on".to_string(),
+                percentage: 100.0,
+            }],
+        };
+        let mut f = flag_with_default_rule_distribution(Some(dist), vec![]);
+        f.record.enabled = false;
+        let context = EvaluationContext::new().with_context(Context::new("user", "u1"));
+        let segments = HashSet::new();
+        let env_id = EnvironmentId::from_uuid(Uuid::nil());
+
+        // Default variant fires (the disabled-flag branch). Even though the
+        // distribution would map all traffic to "on", we never reach that code
+        // path.
+        let result = FlagEvaluator::evaluate(&f, &context, &segments, env_id).unwrap();
+        assert_eq!(result.key, "off");
     }
 
     // ── Percentage rollout using Parameter field ─────────────────────────────

@@ -34,6 +34,32 @@ message GetJobStatusResponse {
   string error          = 5;
 }
 
+// ─── Experiment Timeseries API ────────────────────────────────────────────────
+
+message GetExperimentTimeseriesRequest {
+  // UUID of the experiment.
+  string experiment_id = 1;
+  // UUID of a saved metric_definitions row (Aggregation kind only).
+  string metric_id     = 2;
+  // Required — restricts to one of the experiment's `unit_context_types`.
+  string context_type  = 3;
+  // Days of history to query, default 7, clamped to [1, 90].
+  uint32 days          = 4;
+}
+
+message TimeseriesBucket {
+  // RFC 3339 UTC day-start (00:00 UTC).
+  string day         = 1;
+  // The variant the bucket aggregates over.
+  string variant_key = 2;
+  // Daily aggregated value (count / sum / avg / ratio / funnel rate).
+  double value       = 3;
+}
+
+message GetExperimentTimeseriesResponse {
+  repeated TimeseriesBucket buckets = 1;
+}
+
 // ─── StatsService ─────────────────────────────────────────────────────────────
 
 service StatsService {
@@ -43,4 +69,9 @@ service StatsService {
 
   // Query the status of a previously triggered recompute job.
   rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
+
+  // Daily per-variant aggregated series for one metric scoped to a
+  // context_type. Backs the admin UI's Timeseries tab.
+  rpc GetExperimentTimeseries(GetExperimentTimeseriesRequest)
+      returns (GetExperimentTimeseriesResponse);
 }

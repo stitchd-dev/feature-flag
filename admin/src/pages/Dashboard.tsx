@@ -1,7 +1,21 @@
 import { useNavigate } from 'react-router-dom'
 import { PageHeader, VariantBar, Sparkline } from '../components/primitives'
 import { I } from '../components/icons'
-import { FLAGS, EXPERIMENTS } from '../lib/mockData'
+import { FLAGS } from '../lib/mockData'
+
+// experimentation_full_20260521 Phase 11 cleanup: the EXPERIMENTS mock was
+// removed from mockData.ts now that the real Experiments page reads from
+// the gateway API. The dashboard's experiments widget is rendered as an
+// empty-state placeholder until a future track wires the
+// `/v1/environments/{env}/experiments?limit=4&order=recent` API in here.
+const RECENT_EXPERIMENTS: Array<{
+  key: string
+  name: string
+  state: 'running' | 'draft' | 'stopped' | 'completed'
+  model: string
+  lift: string
+  confidence: number
+}> = []
 
 const SERVICES = [
   ['gateway', '8080', 'healthy'],
@@ -93,7 +107,7 @@ export function Dashboard() {
                 <button className="btn sm" onClick={() => navigate('/experiments')}>See all</button>
               </div>
               <div className="card-body" style={{ padding: 0 }}>
-                {EXPERIMENTS.slice(0, 4).map((e) => (
+                {RECENT_EXPERIMENTS.slice(0, 4).map((e) => (
                   <div key={e.key} style={{ padding: '12px 18px', borderBottom: '1px solid var(--border-faint)', cursor: 'pointer' }} onClick={() => navigate(`/experiments/${e.key}`)}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                       <div style={{ fontWeight: 600, fontSize: 13 }}>{e.name}</div>
