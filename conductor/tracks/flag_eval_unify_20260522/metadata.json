@@ -1,0 +1,13 @@
+{
+  "track_id": "flag_eval_unify_20260522",
+  "type": "refactor",
+  "status": "new",
+  "priority": "medium",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-22T12:42:12Z",
+  "updated_at": "2026-05-22T12:42:12Z",
+  "description": "Unify feature-flag variant evaluation orchestration across the flag-service preview path and the Rust SDK into a single pure stitchd-core entry point. Collapse the divergent percentage-hash schemas (PercentageTarget vs ContextHashSpec) into one canonical HashInputSpec end-to-end (Admin UI → REST → proto → PG → core → SDK). Bring the SDK to multi-context input so cross-context hashing (e.g. user.key + user.params.name + device.params.os + application.key) works from authoring UI through to in-process SDK evaluation. Close the SDK's default_rule_distribution feature gap as a side effect of unification.",
+  "git_branch": "track/flag_eval_unify_20260522",
+  "worktree_path": ".worktrees/flag_eval_unify_20260522"
+}

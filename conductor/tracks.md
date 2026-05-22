@@ -69,3 +69,8 @@ This file tracks all major tracks for the project.
 - docs_refresh_20260522 (Docs Refresh & Autogeneration Pipeline — bulk-replace 22 stale mdBook narrative pages against current code via 5 parallel topic workers; extend cargo xtask docs with env-vars scraper + cargo-rdme + custom in-xtask link-checker; delete orphan docs/src/internal/* subtree + api/rest.md; wire idempotency CI gate. Surfaced 4 production-affecting findings for follow-up: CH migrations not auto-run on service boot, CH dictionary hard-codes host.docker.internal, OpenAPI ghost event-ingest routes, dead 9080 metrics port mapping.)
 -->
 
+
+---
+
+## [ ] Track: Unify Feature-Flag Variant Evaluation (Service Preview + SDK) with Canonical Cross-Context Percentage-Hash Schema
+*Link: [./conductor/tracks/flag_eval_unify_20260522/](./conductor/tracks/flag_eval_unify_20260522/)*
