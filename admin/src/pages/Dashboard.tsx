@@ -1,146 +1,203 @@
+/**
+ * Dashboard — org-scoped overview page.
+ *
+ * Replaces the previous mock-data scaffold (feature-flag-tcy + feature-flag-zh9).
+ * Renders real counts queried from the management API:
+ *   • Projects count (per org)
+ *   • Environments count (per selected project)
+ *   • Flags count (per selected project)
+ *
+ * When there's no project selected yet (fresh org) we show a welcome empty
+ * state instead of fake stats. Service-health panel was removed entirely —
+ * the dashboard is not the right surface for ops-style health checks.
+ */
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PageHeader, VariantBar, Sparkline } from '../components/primitives'
+import { PageHeader } from '../components/primitives'
 import { I } from '../components/icons'
-import { FLAGS } from '../lib/mockData'
+import { useOrgContext } from '../context/OrgContext'
+import { listFlags } from '../lib/api'
+import { auth } from '../lib/auth'
 
-// experimentation_full_20260521 Phase 11 cleanup: the EXPERIMENTS mock was
-// removed from mockData.ts now that the real Experiments page reads from
-// the gateway API. The dashboard's experiments widget is rendered as an
-// empty-state placeholder until a future track wires the
-// `/v1/environments/{env}/experiments?limit=4&order=recent` API in here.
-const RECENT_EXPERIMENTS: Array<{
-  key: string
-  name: string
-  state: 'running' | 'draft' | 'stopped' | 'completed'
-  model: string
-  lift: string
-  confidence: number
-}> = []
-
-const SERVICES = [
-  ['gateway', '8080', 'healthy'],
-  ['flag-service', '50051', 'healthy'],
-  ['segmentation-service', '50052', 'healthy'],
-  ['analytics-service', '50053', 'healthy'],
-  ['experimentation-service', '50054', 'healthy'],
-  ['auth-service', '50055', 'healthy'],
-]
+interface DashboardCounts {
+  projects: number
+  environments: number
+  flags: number | null // null = not yet loaded (or no project)
+}
 
 export function Dashboard() {
   const navigate = useNavigate()
+  const {
+    orgId,
+    projectId,
+    projects,
+    projectsLoading,
+    environments,
+    envsLoading,
+  } = useOrgContext()
+
+  const [flagsCount, setFlagsCount] = useState<number | null>(null)
+  const [flagsLoading, setFlagsLoading] = useState(false)
+
+  // Resolve a friendly org name from local org-history (set on switch/login).
+  const orgName = (() => {
+    const history = auth.getOrgHistory()
+    return history.find((h) => h.orgId === orgId)?.orgName ?? orgId ?? '—'
+  })()
+
+  const currentProject = projects.find((p) => p.project_id === projectId) ?? null
+
+  useEffect(() => {
+    if (!projectId) {
+      setFlagsCount(null)
+      return
+    }
+    let cancelled = false
+    setFlagsLoading(true)
+    listFlags(projectId, { page: 1, per_page: 1 })
+      .then((res) => {
+        if (!cancelled) setFlagsCount(res.total ?? res.items?.length ?? 0)
+      })
+      .catch(() => {
+        if (!cancelled) setFlagsCount(null)
+      })
+      .finally(() => {
+        if (!cancelled) setFlagsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [projectId])
+
+  const counts: DashboardCounts = {
+    projects: projects.length,
+    environments: environments.length,
+    flags: flagsCount,
+  }
+
+  const isFreshOrg = !projectsLoading && projects.length === 0
 
   return (
     <>
       <PageHeader
-        crumbs={['Acme Cloud', 'stitchd-app', 'production']}
-        title="Dashboard"
-        subtitle="Snapshot of flag evaluations, experiments, and event volume across the production environment."
+        crumbs={[orgName, currentProject?.project_name ?? 'No project']}
+        title={`Welcome to ${orgName}`}
+        subtitle={
+          isFreshOrg
+            ? 'Get started by creating your first project, then add an environment and a flag.'
+            : 'Snapshot of projects, environments, and flags in this organisation.'
+        }
         actions={
-          <>
-            <button className="btn"><I.refresh size={13} /> Refresh</button>
-            <button className="btn"><I.download size={13} /> Export</button>
-            <button className="btn primary" onClick={() => navigate('/flags')}><I.plus size={14} /> New flag</button>
-          </>
+          <button className="btn primary" onClick={() => navigate(`/org/${orgId}/flags`)}>
+            <I.flag size={14} /> View flags
+          </button>
         }
       />
       <div className="page-body">
-        <div className="stat-grid" style={{ marginBottom: 18 }}>
-          <div className="stat">
-            <div className="stat-label">Flag evaluations / 24h</div>
-            <div className="stat-value">19.4M</div>
-            <div className="stat-delta up">▲ 12.4% vs prior 24h</div>
-            <Sparkline data={[12, 14, 15, 14, 16, 18, 17, 19, 20, 18, 21, 19]} />
-          </div>
-          <div className="stat">
-            <div className="stat-label">Active flags</div>
-            <div className="stat-value">142</div>
-            <div className="stat-delta">3 archived this week</div>
-            <Sparkline data={[120, 124, 128, 131, 134, 136, 138, 139, 140, 141, 142, 142]} color="var(--info)" />
-          </div>
-          <div className="stat">
-            <div className="stat-label">Running experiments</div>
-            <div className="stat-value">6</div>
-            <div className="stat-delta up">2 ready to ship</div>
-            <Sparkline data={[3, 3, 4, 4, 5, 5, 5, 6, 6, 6, 6, 6]} color="var(--success)" />
-          </div>
-          <div className="stat">
-            <div className="stat-label">Eval p95 latency</div>
-            <div className="stat-value">8ms</div>
-            <div className="stat-delta">SDK in-process</div>
-            <Sparkline data={[9, 8, 9, 8, 7, 8, 9, 8, 7, 8, 8, 8]} color="var(--warning)" />
-          </div>
-        </div>
-
-        <div className="split-2-third">
-          <div className="card">
-            <div className="card-header">
-              <div className="card-title"><I.flag size={14} /> Recently changed flags</div>
-              <button className="btn sm" onClick={() => navigate('/flags')}>See all <I.arrowRight size={12} /></button>
+        {isFreshOrg ? (
+          <FreshOrgEmptyState orgId={orgId} />
+        ) : (
+          <>
+            <div className="stat-grid" style={{ marginBottom: 18 }}>
+              <StatCard
+                label="Projects"
+                value={projectsLoading ? '—' : String(counts.projects)}
+                hint={counts.projects === 0 ? 'No projects yet' : `${counts.projects} project${counts.projects === 1 ? '' : 's'}`}
+                onClick={() => navigate(`/org/${orgId}/environments`)}
+              />
+              <StatCard
+                label="Environments"
+                value={!projectId ? '—' : envsLoading ? '…' : String(counts.environments)}
+                hint={
+                  !projectId
+                    ? 'Select a project first'
+                    : counts.environments === 0
+                      ? 'No environments yet'
+                      : currentProject
+                        ? `in ${currentProject.project_name}`
+                        : ''
+                }
+                onClick={() => navigate(`/org/${orgId}/environments`)}
+              />
+              <StatCard
+                label="Flags"
+                value={!projectId ? '—' : flagsLoading ? '…' : String(counts.flags ?? 0)}
+                hint={
+                  !projectId
+                    ? 'Select a project first'
+                    : (counts.flags ?? 0) === 0
+                      ? 'No flags yet'
+                      : currentProject
+                        ? `in ${currentProject.project_name}`
+                        : ''
+                }
+                onClick={() => navigate(`/org/${orgId}/flags`)}
+              />
             </div>
-            <table className="table">
-              <thead>
-                <tr><th>Key</th><th>Type</th><th>Rollout</th><th>Updated</th><th></th></tr>
-              </thead>
-              <tbody>
-                {FLAGS.slice(0, 5).map((f) => (
-                  <tr key={f.key} className="row-clickable" onClick={() => navigate(`/flags/${f.key}`)}>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <span className={`toggle ${f.state === 'on' ? 'on' : ''}`} onClick={(e) => e.stopPropagation()} />
-                        <span className="mono-key">{f.key}</span>
-                      </div>
-                    </td>
-                    <td><span className={`type-pill ${f.type}`}>{f.type}</span></td>
-                    <td style={{ minWidth: 160 }}><VariantBar variants={f.variants} /></td>
-                    <td style={{ color: 'var(--fg-muted)' }}>{f.updated}</td>
-                    <td><I.chevronRight size={14} stroke="var(--fg-subtle)" /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
 
-          <div className="stack">
             <div className="card">
               <div className="card-header">
-                <div className="card-title"><I.beaker size={14} /> Experiments</div>
-                <button className="btn sm" onClick={() => navigate('/experiments')}>See all</button>
+                <div className="card-title">
+                  <I.info size={14} /> Getting started
+                </div>
               </div>
-              <div className="card-body" style={{ padding: 0 }}>
-                {RECENT_EXPERIMENTS.slice(0, 4).map((e) => (
-                  <div key={e.key} style={{ padding: '12px 18px', borderBottom: '1px solid var(--border-faint)', cursor: 'pointer' }} onClick={() => navigate(`/experiments/${e.key}`)}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                      <div style={{ fontWeight: 600, fontSize: 13 }}>{e.name}</div>
-                      <span className={`badge ${e.state === 'running' ? 'info' : e.state === 'completed' ? 'success' : ''}`}>{e.state}</span>
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--fg-muted)', display: 'flex', gap: 12 }}>
-                      <span>{e.model}</span>
-                      <span>·</span>
-                      <span style={{ color: e.lift.startsWith('+') ? 'var(--success)' : e.lift.startsWith('−') ? 'var(--danger)' : 'var(--fg-muted)', fontFamily: 'var(--font-mono)' }}>{e.lift}</span>
-                      <span>·</span>
-                      <span>{e.confidence}% conf</span>
-                    </div>
-                  </div>
-                ))}
+              <div style={{ padding: '14px 18px', fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.6 }}>
+                <p style={{ margin: '0 0 8px' }}>
+                  Use the sidebar to navigate between projects, environments, flags, segments,
+                  experiments, events, and metrics.
+                </p>
+                <p style={{ margin: 0 }}>
+                  Each environment scopes its own rules, segments, experiments, and SDK keys.
+                  Make sure to create at least one environment per project before creating flags.
+                </p>
               </div>
             </div>
-
-            <div className="card">
-              <div className="card-header"><div className="card-title"><I.zap size={14} /> Service health</div></div>
-              <div className="card-body" style={{ padding: 0 }}>
-                {SERVICES.map(([svc, port, status]) => (
-                  <div key={svc} style={{ display: 'flex', alignItems: 'center', padding: '9px 18px', borderBottom: '1px solid var(--border-faint)', fontSize: 12 }}>
-                    <span className="env-dot" style={{ width: 7, height: 7 }} />
-                    <span style={{ marginLeft: 10, fontFamily: 'var(--font-mono)', flex: 1 }}>stitchd-{svc}</span>
-                    <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)', marginRight: 12 }}>:{port}</span>
-                    <span className="badge success">{status}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
     </>
+  )
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+interface StatCardProps {
+  label: string
+  value: string
+  hint?: string
+  onClick?: () => void
+}
+
+function StatCard({ label, value, hint, onClick }: StatCardProps) {
+  return (
+    <div
+      className="stat"
+      style={onClick ? { cursor: 'pointer' } : undefined}
+      onClick={onClick}
+    >
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">{value}</div>
+      {hint && <div className="stat-delta">{hint}</div>}
+    </div>
+  )
+}
+
+function FreshOrgEmptyState({ orgId }: { orgId: string }) {
+  return (
+    <div className="card" style={{ padding: 32 }}>
+      <div style={{ textAlign: 'center' }}>
+        <I.home size={28} stroke="var(--fg-subtle)" style={{ marginBottom: 12 }} />
+        <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>
+          No projects yet
+        </div>
+        <div style={{ color: 'var(--fg-muted)', fontSize: 13, maxWidth: 420, margin: '0 auto 16px' }}>
+          A project groups your flags, segments, environments, and SDK keys. Open the
+          Environments page from the sidebar to create your first project + environment.
+        </div>
+        <a className="btn primary" href={`/org/${orgId}/environments`}>
+          <I.plus size={13} /> Go to Environments
+        </a>
+      </div>
+    </div>
   )
 }
