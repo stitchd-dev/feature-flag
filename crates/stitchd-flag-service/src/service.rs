@@ -230,17 +230,31 @@ impl FlagServiceImpl {
             ]);
         }
 
-        // Build (context_type, context_key) pairs from each EvaluationContext's first sub-context.
-        // The flag-service preview path uses single-sub-context EvaluationContexts.
-        let contexts_for_batch: Vec<(String, String)> = evaluation_contexts
-            .iter()
-            .map(|ec| {
-                ec.contexts
-                    .first()
-                    .map(|c| (c.context_type.clone(), c.key.clone()))
-                    .unwrap_or_default()
-            })
-            .collect();
+        // Build (context_type, context_key) pairs across every sub-context
+        // in every bundle (bug fix `feature-flag-utp`: bundles may carry
+        // multiple sub-contexts, e.g. user + device + application; list
+        // membership must be resolved for ALL of them so an `InSegment`
+        // leaf referencing any context_type evaluates correctly).
+        let mut contexts_for_batch: Vec<(String, String)> = Vec::new();
+        // `ec_offsets[i]` is the index of the first (ct, key) tuple in
+        // `contexts_for_batch` belonging to `evaluation_contexts[i]`.
+        // Used after the batch lookup to fold per-sub-context membership
+        // sets back into one set-per-EC (the engine's caller contract).
+        let mut ec_offsets: Vec<usize> = Vec::with_capacity(evaluation_contexts.len());
+        for ec in evaluation_contexts {
+            ec_offsets.push(contexts_for_batch.len());
+            for ctx in &ec.contexts {
+                contexts_for_batch.push((ctx.context_type.clone(), ctx.key.clone()));
+            }
+        }
+        ec_offsets.push(contexts_for_batch.len());
+
+        if contexts_for_batch.is_empty() {
+            return Ok(vec![
+                std::collections::HashSet::new();
+                evaluation_contexts.len()
+            ]);
+        }
 
         let memberships = self
             .segment_repo
@@ -248,10 +262,8 @@ impl FlagServiceImpl {
             .await
             .map_err(|e| Status::internal(format!("list membership batch check failed: {e}")))?;
 
-        // Align results back to context index order.
-        // `find_memberships_batch` returns one `SegmentIdMembership` per context pair,
-        // in the same order as `contexts_for_batch`.
-        let pre_resolved: Vec<std::collections::HashSet<stitchd_core::id::SegmentId>> = memberships
+        // Per-sub-context membership sets (in input order).
+        let per_subctx: Vec<std::collections::HashSet<stitchd_core::id::SegmentId>> = memberships
             .into_iter()
             .map(|m| {
                 m.memberships
@@ -261,10 +273,21 @@ impl FlagServiceImpl {
             })
             .collect();
 
-        // Pad with empty sets if fewer results were returned than contexts
-        // (defensive — should not happen in practice).
-        let mut result = pre_resolved;
-        result.resize_with(evaluation_contexts.len(), std::collections::HashSet::new);
+        // Fold per-sub-context sets into per-EC sets (UNION across the
+        // sub-contexts of each bundle). The engine then merges this set
+        // into the resolved segments for every context in the bundle.
+        let mut result: Vec<std::collections::HashSet<stitchd_core::id::SegmentId>> =
+            Vec::with_capacity(evaluation_contexts.len());
+        for i in 0..evaluation_contexts.len() {
+            let start = ec_offsets[i];
+            let end = ec_offsets[i + 1].min(per_subctx.len());
+            let mut merged: std::collections::HashSet<stitchd_core::id::SegmentId> =
+                std::collections::HashSet::new();
+            for s in &per_subctx[start..end] {
+                merged.extend(s.iter().copied());
+            }
+            result.push(merged);
+        }
         Ok(result)
     }
 

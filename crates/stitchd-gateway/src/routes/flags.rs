@@ -1471,42 +1471,63 @@ pub async fn evaluate_preview(
 ) -> Result<impl IntoResponse, GatewayError> {
     let environment_id = body.environment_id;
     // Translate simplified UI format → EvaluationContext format.
-    // UI sends: [{"_type":"user","key":"alice","parameters":{...}}]
-    // Core expects: [{"contexts":[{"context_type":"user","key":"alice","parameters":{...},"private_parameters":[]}]}]
-    let evaluation_contexts: Vec<serde_json::Value> = body
-        .contexts
-        .into_iter()
-        .map(|item| {
-            if item.get("contexts").is_some() {
-                // Already in EvaluationContext shape — pass through.
-                item
-            } else {
-                // Simplified shape: lift into a single-sub-context EvaluationContext.
-                let context_type = item
-                    .get("_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let key = item
-                    .get("key")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let parameters = item
-                    .get("parameters")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Object(Default::default()));
-                serde_json::json!({
-                    "contexts": [{
-                        "context_type": context_type,
-                        "key": key,
-                        "parameters": parameters,
-                        "private_parameters": []
-                    }]
-                })
-            }
-        })
-        .collect();
+    //
+    // UI sends a FLAT list of sub-contexts:
+    //   [{"_type":"user","key":"alice","parameters":{...}},
+    //    {"_type":"device","key":"d42","parameters":{...}}, ...]
+    //
+    // Bug fix `feature-flag-utp`: the entire flat list represents ONE
+    // bundle (one EvaluationContext containing multiple sub-contexts) —
+    // not N independent single-sub-context bundles. This preserves
+    // cross-context hashing in preview (FR-2 of `flag_eval_unify_20260522`):
+    // a percentage rule whose `hash_inputs` mix `user.key`, `device.os`,
+    // and `application.key` must resolve against the FULL bundle.
+    //
+    // The core `evaluate_preview` emits one `ContextPreviewResult` per
+    // sub-context in the bundle, so the UI still gets a per-context row
+    // (one row per input sub-context, all sharing the same hash_input).
+    //
+    // Backward compat: if a caller passes already-shaped EvaluationContext
+    // objects (each with its own `"contexts"` array), each becomes its own
+    // bundle. We split UI-shape items from EC-shape items and combine the
+    // UI items into a single bundle, preserving EC items as-is.
+    let mut ui_subcontexts: Vec<serde_json::Value> = Vec::new();
+    let mut explicit_bundles: Vec<serde_json::Value> = Vec::new();
+    for item in body.contexts.into_iter() {
+        if item.get("contexts").is_some() {
+            // Already in EvaluationContext shape — preserve as an
+            // independent bundle.
+            explicit_bundles.push(item);
+        } else {
+            // Simplified shape — flatten into the shared bundle.
+            let context_type = item
+                .get("_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let key = item
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let parameters = item
+                .get("parameters")
+                .cloned()
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            ui_subcontexts.push(serde_json::json!({
+                "context_type": context_type,
+                "key": key,
+                "parameters": parameters,
+                "private_parameters": []
+            }));
+        }
+    }
+
+    let mut evaluation_contexts: Vec<serde_json::Value> = Vec::new();
+    if !ui_subcontexts.is_empty() {
+        evaluation_contexts.push(serde_json::json!({ "contexts": ui_subcontexts }));
+    }
+    evaluation_contexts.extend(explicit_bundles);
 
     let contexts_json = serde_json::to_string(&evaluation_contexts)
         .map_err(|e| GatewayError::BadRequest(e.to_string()))?;
@@ -1529,15 +1550,29 @@ pub async fn evaluate_preview(
     let raw_results: Vec<serde_json::Value> = serde_json::from_str(&resp.results_json)
         .map_err(|e| GatewayError::Upstream(e.to_string()))?;
 
+    // Flatten the input evaluation_contexts into a single list of sub-contexts
+    // in iteration order — `context_index` on each result is a GLOBAL
+    // sub-context index across all input EvaluationContext bundles (see
+    // `feature-flag-utp` fix in core `evaluate_preview`).
+    let flat_subcontexts: Vec<&serde_json::Value> = evaluation_contexts
+        .iter()
+        .flat_map(|ec| {
+            ec["contexts"]
+                .as_array()
+                .map(|arr| arr.iter().collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .collect();
+
     let results: Vec<PreviewResultJson> = raw_results
         .into_iter()
         .map(|v| {
             let context_index = v["context_index"].as_u64().unwrap_or(0) as usize;
-            // Extract context_key from the first sub-context of the input evaluation context.
-            let context_key = evaluation_contexts
+            // Extract context_key from the flat sub-context list at the
+            // matching global index. Falls back to empty for out-of-range
+            // (defensive — should not happen).
+            let context_key = flat_subcontexts
                 .get(context_index)
-                .and_then(|ec| ec["contexts"].as_array())
-                .and_then(|ctxs| ctxs.first())
                 .and_then(|c| c["key"].as_str())
                 .unwrap_or("")
                 .to_string();
