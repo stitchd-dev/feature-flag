@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde_json::json;
 use stitchd_core::context::Context;
-use stitchd_sdk_rust::{EvalOutcome, EvalRequest, SdkClient, SdkConfig};
+use stitchd_sdk_rust::{EvalOutcome, EvalRequest, SdkClient, SdkConfig, TraceLevel};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,10 +41,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- Test 1: evaluate 'test-flag' ---");
     let ctx = Context::new("user", "alice");
     let results = client
-        .evaluate(&[EvalRequest {
-            flag_key: "test-flag".to_string(),
-            context: ctx.clone(),
-        }])
+        .evaluate(
+            &[EvalRequest::single("test-flag", ctx.clone())],
+            TraceLevel::Off,
+        )
         .await;
 
     let r = &results[0];
@@ -60,26 +60,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Test 2: unknown flag returns FlagNotFound ────────────────────────────
     println!("--- Test 2: unknown flag → FlagNotFound ---");
     let r2 = &client
-        .evaluate(&[EvalRequest {
-            flag_key: "does-not-exist-xyz".to_string(),
-            context: ctx.clone(),
-        }])
+        .evaluate(
+            &[EvalRequest::single("does-not-exist-xyz", ctx.clone())],
+            TraceLevel::Off,
+        )
         .await[0];
     assert!(matches!(r2.outcome, EvalOutcome::FlagNotFound));
     println!("  outcome: {:?}  PASS", r2.outcome);
     println!();
 
-    // ── Test 3: evaluate_with_reasoning ─────────────────────────────────────
-    println!("--- Test 3: evaluate_with_reasoning ---");
+    // ── Test 3: evaluate with TraceLevel::Full ──────────────────────────────
+    println!("--- Test 3: evaluate with TraceLevel::Full ---");
     let r3 = &client
-        .evaluate_with_reasoning(&[EvalRequest {
-            flag_key: "test-flag".to_string(),
-            context: ctx,
-        }])
+        .evaluate(&[EvalRequest::single("test-flag", ctx)], TraceLevel::Full)
         .await[0];
     println!("  variant_key : {}", r3.variant_key);
     println!("  outcome     : {:?}", r3.outcome);
-    println!("  reasoning   : {:?}", r3.reasoning);
+    println!("  trace       : {:?}", r3.trace);
     assert!(!matches!(r3.outcome, EvalOutcome::FlagNotFound));
     println!("  PASS");
     println!();
@@ -89,11 +86,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let batch = client
         .evaluate(
             &(1..=3)
-                .map(|i| EvalRequest {
-                    flag_key: format!("pagination-test-{i}"),
-                    context: Context::new("user", "batch-user"),
+                .map(|i| {
+                    EvalRequest::single(
+                        format!("pagination-test-{i}"),
+                        Context::new("user", "batch-user"),
+                    )
                 })
                 .collect::<Vec<_>>(),
+            TraceLevel::Off,
         )
         .await;
     assert_eq!(batch.len(), 3);
@@ -177,10 +177,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- Test 6: event flush endpoint ---");
     // Trigger an evaluation so the SDK enqueues an event.
     client
-        .evaluate(&[EvalRequest {
-            flag_key: "test-flag".to_string(),
-            context: Context::new("user", "event-test-user"),
-        }])
+        .evaluate(
+            &[EvalRequest::single(
+                "test-flag",
+                Context::new("user", "event-test-user"),
+            )],
+            TraceLevel::Off,
+        )
         .await;
 
     // Direct probe: send a minimal valid payload to the events:batch endpoint.

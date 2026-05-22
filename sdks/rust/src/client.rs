@@ -33,14 +33,23 @@ use tracing::warn;
 use uuid::Uuid;
 
 use stitchd_core::context::Context;
-use stitchd_core::hashing::calculate_allocation;
-use stitchd_core::id::SegmentId;
+use stitchd_core::evaluation::{
+    EvalOutcome as CoreEvalOutcome, EvaluationTrace, HashInputSpec, HashSelector,
+    ListMembershipIndex, TraceLevel, evaluate_flag,
+};
+use stitchd_core::flag::{Flag, FlagRecord, FlagRule as CoreFlagRule, Variant as CoreVariant};
+use stitchd_core::id::{EnvironmentId, FlagId, FlagKey, ProjectId, RuleId, SegmentId, VariantId};
 use stitchd_core::rule_engine::condition::Condition;
-use stitchd_core::rule_engine::eval_expr::evaluate_expr;
-use stitchd_core::rule_engine::types::{ConditionExpr, EvaluationInput, Rule};
-use stitchd_core::segment::RuleBasedSegment;
+use stitchd_core::rule_engine::types::{
+    ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField,
+};
+use stitchd_core::segment::{RuleBasedSegment, SegmentDefinition};
+use stitchd_core::variants::{FlagValueType, VariantValue as CoreVariantValue};
 
-use stitchd_proto::flags::v1::FeatureFlag;
+use stitchd_proto::flags::v1::{
+    FeatureFlag, FlagRule as ProtoFlagRule, PercentageAllocation, flag_rule::Output as ProtoOutput,
+    hash_selector::Selector as ProtoHashSelectorOneof,
+};
 use stitchd_proto::sdk::v1::SyncDefinitionsRequest;
 use stitchd_proto::sdk::v1::sdk_service_client::SdkServiceClient;
 
@@ -58,20 +67,53 @@ use crate::snapshot::{DefinitionSnapshot, DefinitionStore, EventValueType};
 // ============================================================================
 
 /// A single flag-evaluation request.
+///
+/// Carries a bundle of [`Context`] values — typically one entry per context
+/// type the flag's rules may reference (e.g. `user`, `device`, `application`).
+/// Cross-context percentage hashing draws from the FULL bundle via the
+/// flag's `HashInputSpec`, so callers must include every context type the
+/// rule selectors reference for hash stability.
+///
+/// **Single-context callers:** when a flag only references one context type,
+/// `contexts` is a single-element vec — see [`EvalRequest::single`] for a
+/// terse helper.
 pub struct EvalRequest {
     /// The flag's string key (e.g. `"checkout-flow"`).
     pub flag_key: String,
-    /// Evaluation context (one `(type, key, params)` tuple per request).
-    pub context: Context,
+    /// Evaluation context bundle. One entry per `(type, key, params)` tuple
+    /// the flag's rules may inspect. Cross-context percentage hashing draws
+    /// from the full bundle.
+    pub contexts: Vec<Context>,
+}
+
+impl EvalRequest {
+    /// Convenience constructor for the single-context case.
+    ///
+    /// Equivalent to `EvalRequest { flag_key, contexts: vec![context] }`.
+    pub fn single(flag_key: impl Into<String>, context: Context) -> Self {
+        Self {
+            flag_key: flag_key.into(),
+            contexts: vec![context],
+        }
+    }
 }
 
 /// Outcome category of a completed evaluation.
+///
+/// Phase 6 of `flag_eval_unify_20260522`: this is the SDK-facing outcome
+/// taxonomy. It mirrors [`stitchd_core::evaluation::EvalOutcome`] plus the
+/// two SDK-only variants (`Disabled` collapses into `FlagDisabled`,
+/// `FlagNotFound` is SDK-only because the core engine never sees a missing
+/// flag — the SDK short-circuits before calling `evaluate_flag`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum EvalOutcome {
     /// A targeting rule matched — the rule's 0-based index is included.
     Matched { rule_index: usize },
     /// No targeting rule matched; the flag's default rule fired.
     DefaultRule,
+    /// No targeting rule matched; a variant was selected from the flag's
+    /// `default_rule_distribution` via hash-based assignment.
+    DefaultRuleDistribution,
     /// Flag exists but is disabled; default variant returned.
     Disabled,
     /// Flag key not found in the current snapshot.
@@ -83,39 +125,39 @@ impl EvalOutcome {
         match self {
             Self::Matched { .. } => "matched",
             Self::DefaultRule => "default_rule",
+            Self::DefaultRuleDistribution => "default_rule_distribution",
             Self::Disabled => "disabled",
             Self::FlagNotFound => "flag_not_found",
         }
     }
 }
 
-/// Result of a single flag evaluation (no reasoning).
-pub struct EvalResult {
-    pub flag_key: String,
-    pub variant_key: String,
-    pub variant_value: serde_json::Value,
-    pub outcome: EvalOutcome,
-}
-
-/// Which rule matched and how (included in `evaluate_with_reasoning`).
+/// Result of a single flag evaluation, optionally carrying a full
+/// [`EvaluationTrace`] when the caller requested [`TraceLevel::Full`].
+///
+/// Phase 6 of `flag_eval_unify_20260522` collapses the legacy
+/// `evaluate` / `evaluate_with_reasoning` split into a single
+/// [`SdkClient::evaluate`] entry — the `trace` field replaces the old
+/// `EvalResultWithReasoning.reasoning` shape and carries the rich trace
+/// bundle from `stitchd-core` verbatim.
 #[derive(Debug, Clone)]
-pub struct ReasoningTrace {
-    pub outcome: EvalOutcome,
-    /// 0-based index of the matched rule in `flag.rules`; `None` when
-    /// outcome is `DefaultRule`, `Disabled`, or `FlagNotFound`.
-    pub matched_rule_index: Option<usize>,
-    /// Human-readable name of the matched rule (from `FlagRule.name`);
-    /// `None` when no rule matched or the rule has no name.
-    pub matched_rule_name: Option<String>,
-}
-
-/// Result of a single flag evaluation with full reasoning.
-pub struct EvalResultWithReasoning {
+pub struct EvalResult {
+    /// Echo of the request's `flag_key`.
     pub flag_key: String,
+    /// The variant `key` that was selected.
     pub variant_key: String,
+    /// The variant `value` payload as a JSON value.
     pub variant_value: serde_json::Value,
+    /// Outcome classification.
     pub outcome: EvalOutcome,
-    pub reasoning: ReasoningTrace,
+    /// Per-context-index of the entry within the request's `contexts` bundle.
+    /// Useful when a request bundles multiple subject contexts and the
+    /// caller wants to correlate results back to the input ordering.
+    pub context_index: usize,
+    /// Rich evaluation trace — only `Some` when the caller passed
+    /// [`TraceLevel::Full`] to [`SdkClient::evaluate`]. Always `None` on the
+    /// hot path ([`TraceLevel::Off`]).
+    pub trace: Option<EvaluationTrace>,
 }
 
 // ============================================================================
@@ -499,74 +541,51 @@ impl SdkClient {
         }))
     }
 
-    // ── evaluate (Task 8) ────────────────────────────────────────────────────
+    // ── evaluate (Task 8 + Phase 6 of flag_eval_unify_20260522) ──────────────
 
-    /// Evaluate a batch of flags using the local definition snapshot.
+    /// Evaluate a batch of flag requests using the local definition snapshot.
     ///
-    /// Each request is independent — no cross-request state. On LRU miss for a
-    /// list-segment, the SDK makes a synchronous HTTP call to the gateway to
-    /// fetch membership, inserts the result into the LRU, then continues
-    /// evaluation. The call is fast on LRU hit.
-    pub async fn evaluate(&self, requests: &[EvalRequest]) -> Vec<EvalResult> {
+    /// Phase 6 of `flag_eval_unify_20260522` collapses the prior
+    /// `evaluate` / `evaluate_with_reasoning` pair into a single entry point
+    /// gated by the [`TraceLevel`] argument:
+    ///
+    /// - [`TraceLevel::Off`] — hot-path mode. `EvalResult.trace` is always
+    ///   `None` and no trace structures are allocated.
+    /// - [`TraceLevel::Full`] — preview / debug mode. `EvalResult.trace`
+    ///   carries the rich [`EvaluationTrace`] (rule traces + rollout debug).
+    ///
+    /// The orchestration is delegated to
+    /// [`stitchd_core::evaluation::evaluate_flag`] — the SDK only assembles
+    /// the inputs (flag, contexts, rule-based segments, list-segment
+    /// membership index) and emits one [`FlagEvaluationEvent`] per result.
+    ///
+    /// Each request carries an N-context bundle (`contexts: Vec<Context>`);
+    /// cross-context percentage hashing draws from the full bundle. The
+    /// returned `Vec<EvalResult>` has one entry per `(request, context)` —
+    /// i.e. if a request bundles 3 contexts, the result vec gains 3 entries
+    /// for that request (each carrying its `context_index`).
+    ///
+    /// On LRU miss for a list-segment, the SDK makes a synchronous HTTP call
+    /// to the gateway to fetch membership, inserts the result into the LRU,
+    /// then continues evaluation. The call is fast on LRU hit.
+    pub async fn evaluate(&self, requests: &[EvalRequest], trace: TraceLevel) -> Vec<EvalResult> {
         let snapshot = self.definition_store.load();
+        // Capacity guess — most requests are single-context, so this is a
+        // good first approximation. The vec grows naturally for multi-
+        // context requests.
         let mut results = Vec::with_capacity(requests.len());
-        for req in requests {
-            let (variant_key, variant_value, outcome, _trace) = self
-                .evaluate_inner(&snapshot, &req.flag_key, &req.context, false)
-                .await;
-            let event = build_event(
-                &req.flag_key,
-                find_flag_id(&snapshot, &req.flag_key),
-                &variant_key,
-                outcome.as_str(),
-                "",
-                false,
-                &req.context,
-            );
-            self.event_queue.send(event);
-            results.push(EvalResult {
-                flag_key: req.flag_key.clone(),
-                variant_key,
-                variant_value,
-                outcome,
-            });
-        }
-        results
-    }
+        let env_id = parse_env_id(snapshot.environment_id());
+        // Project id is reserved for future hash-salt extensions
+        // (cf. evaluate_flag rustdoc). Today the hash salt is
+        // `(flag_key, env_id, target_values)` — the project_id is unused,
+        // but the core API requires one so we pass a fresh placeholder.
+        let project_id = ProjectId::new();
 
-    /// Evaluate a batch of flags with full reasoning traces.
-    pub async fn evaluate_with_reasoning(
-        &self,
-        requests: &[EvalRequest],
-    ) -> Vec<EvalResultWithReasoning> {
-        let snapshot = self.definition_store.load();
-        let mut results = Vec::with_capacity(requests.len());
         for req in requests {
-            let (variant_key, variant_value, outcome, trace) = self
-                .evaluate_inner(&snapshot, &req.flag_key, &req.context, true)
+            let request_results = self
+                .evaluate_request(&snapshot, req, trace, env_id, project_id)
                 .await;
-            let reasoning = trace.unwrap_or_else(|| ReasoningTrace {
-                outcome: outcome.clone(),
-                matched_rule_index: None,
-                matched_rule_name: None,
-            });
-            let event = build_event(
-                &req.flag_key,
-                find_flag_id(&snapshot, &req.flag_key),
-                &variant_key,
-                outcome.as_str(),
-                "",
-                true,
-                &req.context,
-            );
-            self.event_queue.send(event);
-            results.push(EvalResultWithReasoning {
-                flag_key: req.flag_key.clone(),
-                variant_key,
-                variant_value,
-                outcome,
-                reasoning,
-            });
+            results.extend(request_results);
         }
         results
     }
@@ -753,217 +772,289 @@ impl SdkClient {
         Ok(report)
     }
 
-    // ── Internal evaluation (Task 8) ─────────────────────────────────────────
+    // ── Internal evaluation (Phase 6) ────────────────────────────────────────
 
-    /// Core evaluation path.
+    /// Evaluate a single [`EvalRequest`] against the snapshot.
     ///
-    /// Returns `(variant_key, variant_value, outcome, Option<ReasoningTrace>)`.
-    /// `build_reasoning` controls whether the third return value is `Some`.
-    async fn evaluate_inner(
+    /// Implements Phase 6 of `flag_eval_unify_20260522` — orchestration is
+    /// delegated to [`stitchd_core::evaluation::evaluate_flag`]; this method
+    /// only assembles the inputs (proto → core flag conversion, rule-based
+    /// segment definitions, list-segment membership index via the
+    /// existing LRU + REST fetcher) and emits one event per result.
+    ///
+    /// Returns one [`EvalResult`] per context in `req.contexts` — when the
+    /// flag is missing or disabled, the result vec is the same length as
+    /// `req.contexts` and every entry shares the same default-variant
+    /// payload (semantics mirror the core engine).
+    async fn evaluate_request(
         &self,
         snapshot: &DefinitionSnapshot,
-        flag_key: &str,
-        context: &Context,
-        build_reasoning: bool,
-    ) -> (
-        String,
-        serde_json::Value,
-        EvalOutcome,
-        Option<ReasoningTrace>,
-    ) {
-        let Some(flag) = snapshot.flag(flag_key) else {
-            let trace = build_reasoning.then_some(ReasoningTrace {
-                outcome: EvalOutcome::FlagNotFound,
-                matched_rule_index: None,
-                matched_rule_name: None,
-            });
-            return (
-                String::new(),
-                serde_json::Value::Null,
-                EvalOutcome::FlagNotFound,
-                trace,
-            );
+        req: &EvalRequest,
+        trace: TraceLevel,
+        env_id: EnvironmentId,
+        project_id: ProjectId,
+    ) -> Vec<EvalResult> {
+        let flag_id_str = find_flag_id(snapshot, &req.flag_key).to_string();
+        let want_trace = trace == TraceLevel::Full;
+
+        // ── Flag missing or archived → short-circuit (per existing SDK
+        //    semantics — core engine never sees a missing flag) ─────────
+        let Some(proto_flag) = snapshot.flag(&req.flag_key) else {
+            return req
+                .contexts
+                .iter()
+                .enumerate()
+                .map(|(idx, ctx)| {
+                    let event = build_event(
+                        &req.flag_key,
+                        &flag_id_str,
+                        "",
+                        EvalOutcome::FlagNotFound.as_str(),
+                        "",
+                        want_trace,
+                        ctx,
+                    );
+                    self.event_queue.send(event);
+                    EvalResult {
+                        flag_key: req.flag_key.clone(),
+                        variant_key: String::new(),
+                        variant_value: serde_json::Value::Null,
+                        outcome: EvalOutcome::FlagNotFound,
+                        context_index: idx,
+                        trace: None,
+                    }
+                })
+                .collect();
         };
 
-        if flag.archived {
-            let (key, val) = default_variant(flag);
-            let trace = build_reasoning.then_some(ReasoningTrace {
-                outcome: EvalOutcome::FlagNotFound,
-                matched_rule_index: None,
-                matched_rule_name: None,
-            });
-            return (key, val, EvalOutcome::FlagNotFound, trace);
+        if proto_flag.archived {
+            // Archived flags behave like missing flags at the SDK boundary.
+            let (default_key, default_value) = default_variant(proto_flag);
+            return req
+                .contexts
+                .iter()
+                .enumerate()
+                .map(|(idx, ctx)| {
+                    let event = build_event(
+                        &req.flag_key,
+                        &flag_id_str,
+                        &default_key,
+                        EvalOutcome::FlagNotFound.as_str(),
+                        "",
+                        want_trace,
+                        ctx,
+                    );
+                    self.event_queue.send(event);
+                    EvalResult {
+                        flag_key: req.flag_key.clone(),
+                        variant_key: default_key.clone(),
+                        variant_value: default_value.clone(),
+                        outcome: EvalOutcome::FlagNotFound,
+                        context_index: idx,
+                        trace: None,
+                    }
+                })
+                .collect();
         }
 
-        if !flag.enabled {
-            let (key, val) = default_variant(flag);
-            let trace = build_reasoning.then_some(ReasoningTrace {
-                outcome: EvalOutcome::Disabled,
-                matched_rule_index: None,
-                matched_rule_name: None,
-            });
-            return (key, val, EvalOutcome::Disabled, trace);
-        }
-
-        // ── Parse rule conditions ─────────────────────────────────────────
-        let parsed_rules: Vec<(usize, ConditionExpr, &stitchd_proto::flags::v1::FlagRule)> = flag
-            .rules
-            .iter()
-            .enumerate()
-            .filter_map(|(i, rule)| {
-                let cond: ConditionExpr = serde_json::from_slice(&rule.rule_payload).ok()?;
-                Some((i, cond, rule))
-            })
-            .collect();
-
-        // ── Collect all referenced segment IDs ───────────────────────────
+        // ── Collect all referenced segment IDs across all rules ──────────
         let mut all_seg_ids: HashSet<SegmentId> = HashSet::new();
-        for (_, cond, _) in &parsed_rules {
-            collect_segment_ids(cond, &mut all_seg_ids);
-        }
-
-        // ── Resolve segment membership ────────────────────────────────────
-        let resolved_segments = self.resolve_segments(snapshot, context, &all_seg_ids).await;
-
-        // ── Evaluate rules ────────────────────────────────────────────────
-        let input = EvaluationInput {
-            contexts: std::slice::from_ref(context),
-            resolved_segments,
-            evaluated_flags: HashMap::new(),
-        };
-
-        let env_id = snapshot.environment_id();
-
-        for (idx, cond, rule) in &parsed_rules {
-            match evaluate_expr(cond, &input) {
-                Ok(true) => {
-                    use stitchd_proto::flags::v1::flag_rule::Output;
-                    let (variant_key, variant_value) = match &rule.output {
-                        Some(Output::VariantKey(k)) => {
-                            let val = lookup_variant_value(flag, k);
-                            (k.clone(), val)
-                        }
-                        Some(Output::Allocation(alloc)) => {
-                            let key = compute_allocation(alloc, context, env_id, flag_key);
-                            let val = lookup_variant_value(flag, &key);
-                            (key, val)
-                        }
-                        None => continue,
-                    };
-                    let rule_name = if rule.name.is_empty() {
-                        None
-                    } else {
-                        Some(rule.name.clone())
-                    };
-                    let outcome = EvalOutcome::Matched { rule_index: *idx };
-                    let trace = build_reasoning.then_some(ReasoningTrace {
-                        outcome: outcome.clone(),
-                        matched_rule_index: Some(*idx),
-                        matched_rule_name: rule_name,
-                    });
-                    return (variant_key, variant_value, outcome, trace);
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    warn!(rule_index = idx, error = %e, flag_key, "rule evaluation error; skipping rule");
-                }
+        for rule in &proto_flag.rules {
+            if let Ok(cond) = serde_json::from_slice::<ConditionExpr>(&rule.rule_payload) {
+                collect_segment_ids(&cond, &mut all_seg_ids);
             }
         }
 
-        // ── Default rule ──────────────────────────────────────────────────
-        let (key, val) = default_variant(flag);
-        let trace = build_reasoning.then_some(ReasoningTrace {
-            outcome: EvalOutcome::DefaultRule,
-            matched_rule_index: None,
-            matched_rule_name: None,
-        });
-        (key, val, EvalOutcome::DefaultRule, trace)
-    }
-
-    /// Resolve membership for `segment_ids` given a single evaluation context.
-    ///
-    /// - Rule-based segments: evaluated in-process from the snapshot.
-    /// - List-based segments: checked in LRU; fetched from gateway on miss.
-    async fn resolve_segments(
-        &self,
-        snapshot: &DefinitionSnapshot,
-        context: &Context,
-        segment_ids: &HashSet<SegmentId>,
-    ) -> HashSet<SegmentId> {
-        if segment_ids.is_empty() {
-            return HashSet::new();
-        }
-
-        let mut resolved = HashSet::with_capacity(segment_ids.len());
-        let mut list_ids_to_fetch: Vec<String> = Vec::new();
-
-        // First pass: classify each segment and handle rule-based ones immediately.
-        for &seg_id in segment_ids {
+        // ── Resolve list-segment + rule-based-segment definitions ────────
+        // Partition the referenced segment IDs into rule-based + list-based.
+        // Build a Vec<SegmentDefinition> for the rule-based ones (core
+        // engine evaluates them in-process), and a list of list-segment IDs
+        // for the LRU + REST lookup.
+        let mut rule_based_segments: Vec<SegmentDefinition> = Vec::new();
+        let mut list_segment_ids: Vec<String> = Vec::new();
+        for seg_id in &all_seg_ids {
             let id_str = seg_id.as_uuid().to_string();
-
             if let Some(rule_seg) = snapshot.rule_segment(&id_str) {
-                // Evaluate the rule-based segment in-process.
                 let rules: Vec<Rule> =
                     serde_json::from_slice(&rule_seg.rule_payload).unwrap_or_default();
-                let seg = RuleBasedSegment { id: seg_id, rules };
-                if seg
-                    .evaluate(std::slice::from_ref(context))
-                    .map(|r| r.matched)
-                    .unwrap_or(false)
-                {
-                    resolved.insert(seg_id);
-                }
+                rule_based_segments.push(SegmentDefinition::RuleBased(RuleBasedSegment {
+                    id: *seg_id,
+                    rules,
+                }));
             } else if snapshot.list_segment(&id_str).is_some() {
-                // Check LRU first.
-                if let Some(map) = self
-                    .membership_cache
-                    .get(&context.context_type, &context.key)
-                {
-                    if *map.get(&id_str).unwrap_or(&false) {
-                        resolved.insert(seg_id);
-                    }
-                } else {
-                    // LRU miss — need to fetch.
-                    list_ids_to_fetch.push(id_str);
-                }
+                list_segment_ids.push(id_str);
             }
         }
 
-        // Second pass: batch-fetch any list-segment IDs not in LRU.
-        if !list_ids_to_fetch.is_empty() {
-            let ctx_key: ContextKey = (context.context_type.clone(), context.key.clone());
+        // ── Resolve list-segment membership for every context in the
+        //    bundle, via the LRU + on-demand REST fetcher. Aggregates into
+        //    a single ListMembershipIndex consumed by evaluate_flag. ─────
+        let memberships = self
+            .resolve_list_memberships(&req.contexts, &list_segment_ids)
+            .await;
+
+        // ── Convert proto FeatureFlag → core Flag and call evaluate_flag ─
+        let Some(core_flag) = convert_proto_flag_to_core(proto_flag) else {
+            // Conversion failed (e.g. unknown rule output) — return the
+            // proto-side default variant for every context. This branch
+            // mirrors the prior `Output::None` skip path in the legacy
+            // evaluate_inner.
+            let (default_key, default_value) = default_variant(proto_flag);
+            return req
+                .contexts
+                .iter()
+                .enumerate()
+                .map(|(idx, ctx)| {
+                    let event = build_event(
+                        &req.flag_key,
+                        &flag_id_str,
+                        &default_key,
+                        EvalOutcome::DefaultRule.as_str(),
+                        "",
+                        want_trace,
+                        ctx,
+                    );
+                    self.event_queue.send(event);
+                    EvalResult {
+                        flag_key: req.flag_key.clone(),
+                        variant_key: default_key.clone(),
+                        variant_value: default_value.clone(),
+                        outcome: EvalOutcome::DefaultRule,
+                        context_index: idx,
+                        trace: None,
+                    }
+                })
+                .collect();
+        };
+
+        let core_results = evaluate_flag(
+            &core_flag,
+            &req.contexts,
+            &rule_based_segments,
+            &memberships,
+            env_id,
+            project_id,
+            trace,
+        );
+
+        // ── Map core results → SDK results, emit one event per entry ────
+        core_results
+            .into_iter()
+            .enumerate()
+            .map(|(idx, core_res)| {
+                let outcome = match core_res.outcome {
+                    CoreEvalOutcome::RuleMatch { rule_index } => {
+                        EvalOutcome::Matched { rule_index }
+                    }
+                    CoreEvalOutcome::DefaultFallthrough => EvalOutcome::DefaultRule,
+                    CoreEvalOutcome::DefaultRuleDistribution => {
+                        EvalOutcome::DefaultRuleDistribution
+                    }
+                    CoreEvalOutcome::FlagDisabled => EvalOutcome::Disabled,
+                };
+                let variant_value_json = core_variant_value_to_json(&core_res.variant_value);
+                let matched_rule_id = core_res
+                    .trace
+                    .as_ref()
+                    .and_then(|t| t.fired_rule_id.as_ref().map(|r| r.to_string()))
+                    .unwrap_or_default();
+                let ctx = req
+                    .contexts
+                    .get(idx)
+                    .expect("evaluate_flag returns one result per context");
+                let event = build_event(
+                    &req.flag_key,
+                    &flag_id_str,
+                    &core_res.variant_key,
+                    outcome.as_str(),
+                    &matched_rule_id,
+                    want_trace,
+                    ctx,
+                );
+                self.event_queue.send(event);
+                EvalResult {
+                    flag_key: req.flag_key.clone(),
+                    variant_key: core_res.variant_key,
+                    variant_value: variant_value_json,
+                    outcome,
+                    context_index: idx,
+                    trace: core_res.trace,
+                }
+            })
+            .collect()
+    }
+
+    /// Resolve list-segment memberships for the request's context bundle.
+    ///
+    /// For each `(context_type, context_key)` in `contexts`, consults the
+    /// LRU first; on miss, batch-fetches via the SDK's existing
+    /// [`MembershipBatchFetcher`] and writes the result into the LRU.
+    /// The returned [`ListMembershipIndex`] is keyed by `(type, key)` so
+    /// `evaluate_flag` can fold it into its segment-resolution loop.
+    async fn resolve_list_memberships(
+        &self,
+        contexts: &[Context],
+        list_segment_ids: &[String],
+    ) -> ListMembershipIndex {
+        let mut index = ListMembershipIndex::new();
+        if list_segment_ids.is_empty() || contexts.is_empty() {
+            return index;
+        }
+
+        // Collect (context_type, context_key) tuples that miss the LRU and
+        // must be batch-fetched. Pre-populate the index from any LRU hits
+        // we find along the way.
+        let mut on_miss: Vec<ContextKey> = Vec::new();
+        for ctx in contexts {
+            if let Some(map) = self.membership_cache.get(&ctx.context_type, &ctx.key) {
+                let mut set: HashSet<SegmentId> = HashSet::new();
+                for id_str in list_segment_ids {
+                    if *map.get(id_str).unwrap_or(&false)
+                        && let Ok(uuid) = Uuid::parse_str(id_str)
+                    {
+                        set.insert(SegmentId::from_uuid(uuid));
+                    }
+                }
+                index.insert(ctx.context_type.clone(), ctx.key.clone(), set);
+            } else {
+                on_miss.push((ctx.context_type.clone(), ctx.key.clone()));
+            }
+        }
+
+        if !on_miss.is_empty() {
             match self
                 .membership_fetcher
-                .fetch(vec![ctx_key.clone()], list_ids_to_fetch.clone())
+                .fetch(on_miss.clone(), list_segment_ids.to_vec())
                 .await
             {
-                Ok(mut maps) if !maps.is_empty() => {
-                    let membership = maps.remove(0);
-                    // Populate resolved set from fetched memberships.
-                    for id_str in &list_ids_to_fetch {
-                        if *membership.get(id_str).unwrap_or(&false)
-                            && let Ok(uuid) = Uuid::parse_str(id_str)
-                        {
-                            resolved.insert(SegmentId::from_uuid(uuid));
+                Ok(maps) => {
+                    for ((ctx_type, ctx_key), membership) in on_miss.iter().zip(maps) {
+                        let mut set: HashSet<SegmentId> = HashSet::new();
+                        for id_str in list_segment_ids {
+                            if *membership.get(id_str).unwrap_or(&false)
+                                && let Ok(uuid) = Uuid::parse_str(id_str)
+                            {
+                                set.insert(SegmentId::from_uuid(uuid));
+                            }
                         }
+                        index.insert(ctx_type.clone(), ctx_key.clone(), set);
+                        // Populate LRU for future evaluations.
+                        self.membership_cache.insert(ctx_type, ctx_key, membership);
                     }
-                    // Insert into LRU for future evaluations.
-                    self.membership_cache
-                        .insert(&context.context_type, &context.key, membership);
                 }
-                Ok(_) => {}
                 Err(e) => {
                     warn!(
                         error = %e,
-                        context_type = context.context_type,
-                        context_key = context.key,
                         "on-demand list-segment fetch failed; treating as non-member"
                     );
+                    // Leave missing contexts absent from the index — the
+                    // engine treats absent entries as "no list segments
+                    // matched" (equivalent to an empty set).
                 }
             }
         }
 
-        resolved
+        index
     }
 }
 
@@ -1039,55 +1130,317 @@ fn proto_variant_value_to_json(v: &stitchd_proto::flags::v1::VariantValue) -> se
     }
 }
 
-/// Compute percentage allocation variant key.
-///
-/// Replicates the hash algorithm from `stitchd-core::hashing::calculate_allocation`:
-/// `hash(flag_key + env_id + sorted_targets)`, mapped to bucket 0–999.
-fn compute_allocation(
-    alloc: &stitchd_proto::flags::v1::PercentageAllocation,
-    context: &Context,
-    env_id: &str,
-    flag_key: &str,
-) -> String {
-    // Build target values, sorted by context_type for determinism.
-    let mut specs: Vec<(&String, &stitchd_proto::flags::v1::ContextHashSpec)> =
-        alloc.context_hash_specs.iter().collect();
-    specs.sort_by_key(|(k, _)| k.as_str());
+// ── Proto → core conversion (Phase 6) ────────────────────────────────────────
+//
+// The SDK's `DefinitionSnapshot` stores the proto `FeatureFlag` as-is — the
+// unified evaluation path needs a `stitchd_core::flag::Flag` instead. The
+// helpers below do that conversion lazily on the evaluation hot path.
+//
+// A future SDK refresh may pre-convert at snapshot-load time; until then the
+// per-evaluation conversion is fine — `FeatureFlag` is small (variants +
+// rules) and conversion is allocation-only (no parsing of large JSON
+// payloads beyond the rule_payload bytes that the existing path already
+// deserialises).
 
-    let mut target_values: Vec<String> = Vec::new();
-    for (ctx_type, spec) in specs {
-        // Only apply this spec if the request context matches the type.
-        if context.context_type != *ctx_type {
-            continue;
+/// Convert a proto [`FeatureFlag`] to a core [`Flag`] suitable for
+/// [`evaluate_flag`].
+///
+/// Returns `None` when conversion can't proceed (e.g. malformed rule
+/// payload, unknown rule output). The caller falls back to returning the
+/// flag's default variant for every context — consistent with the prior
+/// behaviour of the legacy `evaluate_inner`.
+///
+/// Note: the proto `FeatureFlag` does NOT (yet) carry
+/// `default_rule_distribution` — that field lives only on the admin RPCs
+/// and is sealed for Phase 6. The conversion sets
+/// `record.default_rule_distribution = None`; once the proto SDK service
+/// ships the field (separate track), this helper will be updated to
+/// populate it from the wire.
+fn convert_proto_flag_to_core(proto: &FeatureFlag) -> Option<Flag> {
+    // ── Variants ──────────────────────────────────────────────────────────
+    let variants: Vec<CoreVariant> = proto
+        .variants
+        .iter()
+        .filter_map(|v| {
+            let value = proto_variant_value_to_core(v.value.as_ref()?)?;
+            Some(CoreVariant {
+                id: VariantId::new(),
+                key: v.key.clone(),
+                value,
+            })
+        })
+        .collect();
+
+    // Map variant_key → VariantId so rule outputs (which are keyed by
+    // string) can be re-bound to the core `VariantId` shape.
+    let variant_id_by_key: HashMap<String, VariantId> =
+        variants.iter().map(|v| (v.key.clone(), v.id)).collect();
+
+    // ── Flag key + value_type ────────────────────────────────────────────
+    let flag_key = FlagKey::new(proto.key.clone()).ok()?;
+    let value_type = proto_value_type_to_core(proto.value_type);
+
+    // ── default_variant_id ────────────────────────────────────────────────
+    let default_variant_id = if proto.default_variant_key.is_empty() {
+        None
+    } else {
+        variant_id_by_key.get(&proto.default_variant_key).copied()
+    };
+
+    // ── Flag id ──────────────────────────────────────────────────────────
+    let flag_id = Uuid::parse_str(&proto.flag_id)
+        .map(FlagId::from_uuid)
+        .unwrap_or_else(|_| FlagId::new());
+
+    // ── Rules ────────────────────────────────────────────────────────────
+    let mut rules: Vec<CoreFlagRule> = Vec::with_capacity(proto.rules.len());
+    for (i, proto_rule) in proto.rules.iter().enumerate() {
+        if let Some(core_rule) =
+            convert_proto_flag_rule_to_core(flag_id, i as i32, proto_rule, &variant_id_by_key)
+        {
+            rules.push(core_rule);
         }
-        if spec.parameter_names.is_empty() {
-            target_values.push(format!("{}{}", ctx_type, context.key));
+    }
+
+    // ── Assemble FlagRecord ──────────────────────────────────────────────
+    let record = FlagRecord {
+        id: flag_id,
+        project_id: ProjectId::new(),
+        key: flag_key,
+        name: proto.name.clone(),
+        description: proto.description.clone(),
+        value_type,
+        enabled: proto.enabled,
+        default_variant_id,
+        // The SDK proto wire does NOT carry `default_rule_distribution`
+        // yet (sealed Phase 3 scope). The SDK starts with `None`; the core
+        // engine's default-rule-distribution path is exercised when the
+        // caller constructs a `Flag` directly (e.g. in tests). Once the
+        // SDK proto ships the field, this slot will populate from the
+        // wire and the SDK gains the feature automatically per Task 8.
+        default_rule_distribution: None,
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+        deleted_at: if proto.archived {
+            Some(Utc::now())
         } else {
-            for param in &spec.parameter_names {
-                if let Some(val) = context.parameters.get(param) {
-                    target_values.push(format!("{}{}{}", ctx_type, param, val));
+            None
+        },
+        version: proto.version as i64,
+    };
+
+    Some(Flag {
+        record,
+        hashing_config: vec![],
+        rules,
+        variants,
+    })
+}
+
+/// Convert a proto [`ProtoFlagRule`] to a core [`CoreFlagRule`].
+///
+/// Returns `None` when the rule's condition or output can't be parsed.
+/// Variant-keyed outputs are bound to the variant's `VariantId` via the
+/// supplied `variant_id_by_key` map.
+fn convert_proto_flag_rule_to_core(
+    flag_id: FlagId,
+    rule_index: i32,
+    proto: &ProtoFlagRule,
+    variant_id_by_key: &HashMap<String, VariantId>,
+) -> Option<CoreFlagRule> {
+    let condition: ConditionExpr = serde_json::from_slice(&proto.rule_payload).ok()?;
+
+    let output = match &proto.output {
+        Some(ProtoOutput::VariantKey(key)) => {
+            let vid = variant_id_by_key.get(key).copied()?;
+            RuleOutput::Variant(vid)
+        }
+        Some(ProtoOutput::Allocation(alloc)) => proto_allocation_to_core(alloc, variant_id_by_key)?,
+        None => return None,
+    };
+
+    let rule_id = Uuid::parse_str(&proto.rule_id)
+        .map(RuleId::from_uuid)
+        .unwrap_or_else(|_| RuleId::new());
+    let name = if proto.name.is_empty() {
+        None
+    } else {
+        Some(proto.name.clone())
+    };
+
+    Some(CoreFlagRule {
+        flag_id,
+        rule_index,
+        rule: Rule {
+            id: rule_id,
+            name,
+            condition,
+            output,
+        },
+    })
+}
+
+/// Convert a proto [`PercentageAllocation`] to a core
+/// [`RuleOutput::Percentage`].
+///
+/// Phase 3 of `flag_eval_unify_20260522` added `hash_inputs` (ordered selector
+/// list) alongside the legacy `context_hash_specs` map; this helper prefers
+/// the new field when present and falls back to the legacy map for
+/// back-compat. The fallback uses canonical-sort semantics
+/// (`context_type ASC, parameter ASC within type`) matching the PG
+/// migration backfill so bucket assignments remain stable across the
+/// dual-schema state.
+fn proto_allocation_to_core(
+    alloc: &PercentageAllocation,
+    variant_id_by_key: &HashMap<String, VariantId>,
+) -> Option<RuleOutput> {
+    let spec = proto_to_core_hash_input_spec(alloc);
+    // `RuleOutput::Percentage` keeps the legacy `Vec<PercentageTarget>`
+    // shape — convert through that bridge until Phase 5/6 cuts over storage.
+    let targets = hash_input_spec_to_targets(&spec);
+
+    let weights = alloc
+        .buckets
+        .iter()
+        .filter_map(|b| {
+            let vid = variant_id_by_key.get(&b.variant_key).copied()?;
+            Some((vid, b.weight_milli))
+        })
+        .collect();
+
+    Some(RuleOutput::Percentage { targets, weights })
+}
+
+/// Read the canonical [`HashInputSpec`] out of a proto
+/// [`PercentageAllocation`].
+///
+/// Prefer the new `hash_inputs` field; fall back to canonical-sort of the
+/// legacy `context_hash_specs` map. Public to the SDK module so the
+/// future test fixtures + integration tests can validate the proto wire
+/// shape without going through `evaluate_flag`.
+pub(crate) fn proto_to_core_hash_input_spec(alloc: &PercentageAllocation) -> HashInputSpec {
+    if !alloc.hash_inputs.is_empty() {
+        let selectors: Vec<HashSelector> = alloc
+            .hash_inputs
+            .iter()
+            .filter_map(|sel| match &sel.selector {
+                Some(ProtoHashSelectorOneof::ContextKey(ck)) => Some(HashSelector::ContextKey {
+                    context_type: ck.context_type.clone(),
+                }),
+                Some(ProtoHashSelectorOneof::ContextParameter(cp)) => {
+                    Some(HashSelector::ContextParameter {
+                        context_type: cp.context_type.clone(),
+                        parameter: cp.parameter.clone(),
+                    })
                 }
+                None => None,
+            })
+            .collect();
+        return HashInputSpec::new(selectors);
+    }
+
+    // Legacy-only path: canonical sort (context_type ASC, parameter ASC
+    // within type). Mirrors `crates/stitchd-db/migrations/20260522000001_...`
+    // backfill so legacy fixtures + dual-schema state stay byte-equivalent.
+    let mut entries: Vec<(&String, &Vec<String>)> = alloc
+        .context_hash_specs
+        .iter()
+        .map(|(k, v)| (k, &v.parameter_names))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    let mut selectors: Vec<HashSelector> = Vec::new();
+    for (ctx_type, params) in entries {
+        if params.is_empty() {
+            selectors.push(HashSelector::ContextKey {
+                context_type: ctx_type.clone(),
+            });
+        } else {
+            let mut sorted_params: Vec<&String> = params.iter().collect();
+            sorted_params.sort();
+            for param in sorted_params {
+                selectors.push(HashSelector::ContextParameter {
+                    context_type: ctx_type.clone(),
+                    parameter: param.clone(),
+                });
             }
         }
     }
+    HashInputSpec::new(selectors)
+}
 
-    let percentage = calculate_allocation(flag_key, env_id, &target_values);
-    let bucket = ((percentage * 10.0).floor() as u32).min(999);
+/// Bridge: [`HashInputSpec`] → `Vec<PercentageTarget>` for the
+/// `RuleOutput::Percentage` shape (which still carries the legacy target
+/// type). Mirrors `engine::hash_input_spec_from_targets` but in the
+/// opposite direction.
+fn hash_input_spec_to_targets(spec: &HashInputSpec) -> Vec<PercentageTarget> {
+    spec.selectors
+        .iter()
+        .map(|s| match s {
+            HashSelector::ContextKey { context_type } => PercentageTarget {
+                context_type: context_type.clone(),
+                field: TargetField::Key,
+            },
+            HashSelector::ContextParameter {
+                context_type,
+                parameter,
+            } => PercentageTarget {
+                context_type: context_type.clone(),
+                field: TargetField::Parameter(parameter.clone()),
+            },
+        })
+        .collect()
+}
 
-    let mut cumulative: u32 = 0;
-    for b in &alloc.buckets {
-        cumulative += b.weight_milli;
-        if bucket < cumulative {
-            return b.variant_key.clone();
-        }
+/// Convert a proto `VariantValue` to a core [`CoreVariantValue`].
+fn proto_variant_value_to_core(
+    v: &stitchd_proto::flags::v1::VariantValue,
+) -> Option<CoreVariantValue> {
+    use stitchd_proto::flags::v1::variant_value::Value;
+    match &v.value {
+        Some(Value::BoolValue(b)) => Some(CoreVariantValue::BoolValue(*b)),
+        Some(Value::IntValue(i)) => Some(CoreVariantValue::IntValue(*i)),
+        Some(Value::DoubleValue(d)) => Some(CoreVariantValue::DoubleValue(*d)),
+        Some(Value::StringValue(s)) => Some(CoreVariantValue::StrValue(s.clone())),
+        Some(Value::JsonValue(s)) => serde_json::from_str(s)
+            .ok()
+            .map(CoreVariantValue::JsonValue),
+        None => None,
     }
+}
 
-    // Fallback: first bucket (handles rounding edge cases)
-    alloc
-        .buckets
-        .first()
-        .map(|b| b.variant_key.clone())
-        .unwrap_or_default()
+/// Convert a core [`CoreVariantValue`] to a `serde_json::Value` for the
+/// SDK's public `EvalResult.variant_value` shape.
+fn core_variant_value_to_json(v: &CoreVariantValue) -> serde_json::Value {
+    match v {
+        CoreVariantValue::BoolValue(b) => serde_json::Value::Bool(*b),
+        CoreVariantValue::IntValue(i) => serde_json::json!(i),
+        CoreVariantValue::DoubleValue(d) => serde_json::json!(d),
+        CoreVariantValue::StrValue(s) => serde_json::Value::String(s.clone()),
+        CoreVariantValue::JsonValue(j) => j.clone(),
+    }
+}
+
+/// Convert a proto `FlagValueType` (int repr) to a core [`FlagValueType`].
+fn proto_value_type_to_core(vt: i32) -> FlagValueType {
+    use stitchd_proto::flags::v1::FlagValueType as Proto;
+    match Proto::try_from(vt).unwrap_or(Proto::Bool) {
+        Proto::Bool => FlagValueType::Bool,
+        Proto::Int => FlagValueType::Int,
+        Proto::Double => FlagValueType::Double,
+        Proto::String => FlagValueType::Str,
+        Proto::Json => FlagValueType::Json,
+        Proto::Unspecified => FlagValueType::Bool,
+    }
+}
+
+/// Parse the snapshot's environment-id string into a core [`EnvironmentId`].
+/// Returns a freshly-minted ID when the snapshot has an empty / malformed
+/// string (test fixtures + bare snapshots from `DefinitionSnapshot::default()`).
+fn parse_env_id(env_id_str: &str) -> EnvironmentId {
+    Uuid::parse_str(env_id_str)
+        .map(EnvironmentId::from_uuid)
+        .unwrap_or_else(|_| EnvironmentId::new())
 }
 
 /// Find the flag_id UUID for a given flag_key in the snapshot.
@@ -1428,10 +1781,7 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
         let results = client
-            .evaluate(&[EvalRequest {
-                flag_key: "no-such-flag".into(),
-                context: ctx,
-            }])
+            .evaluate(&[EvalRequest::single("no-such-flag", ctx)], TraceLevel::Off)
             .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].outcome, EvalOutcome::FlagNotFound);
@@ -1454,10 +1804,7 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
         let results = client
-            .evaluate(&[EvalRequest {
-                flag_key: "feature-x".into(),
-                context: ctx,
-            }])
+            .evaluate(&[EvalRequest::single("feature-x", ctx)], TraceLevel::Off)
             .await;
         assert_eq!(results[0].outcome, EvalOutcome::Disabled);
         assert_eq!(results[0].variant_key, "false");
@@ -1479,10 +1826,7 @@ mod tests {
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
         let results = client
-            .evaluate(&[EvalRequest {
-                flag_key: "show-banner".into(),
-                context: ctx,
-            }])
+            .evaluate(&[EvalRequest::single("show-banner", ctx)], TraceLevel::Off)
             .await;
         assert_eq!(results[0].outcome, EvalOutcome::DefaultRule);
         assert_eq!(results[0].variant_key, "true");
@@ -1524,10 +1868,10 @@ mod tests {
         let ctx_pro =
             Context::new("user", "alice").with_parameter("plan", CoreParam::Str("pro".into()));
         let res = client
-            .evaluate(&[EvalRequest {
-                flag_key: "checkout-flow".into(),
-                context: ctx_pro,
-            }])
+            .evaluate(
+                &[EvalRequest::single("checkout-flow", ctx_pro)],
+                TraceLevel::Off,
+            )
             .await;
         assert_eq!(res[0].outcome, EvalOutcome::Matched { rule_index: 0 });
         assert_eq!(res[0].variant_key, "new-checkout");
@@ -1535,10 +1879,10 @@ mod tests {
         // Context WITHOUT plan → no match, default
         let ctx_free = Context::new("user", "bob");
         let res2 = client
-            .evaluate(&[EvalRequest {
-                flag_key: "checkout-flow".into(),
-                context: ctx_free,
-            }])
+            .evaluate(
+                &[EvalRequest::single("checkout-flow", ctx_free)],
+                TraceLevel::Off,
+            )
             .await;
         assert_eq!(res2[0].outcome, EvalOutcome::DefaultRule);
         assert_eq!(res2[0].variant_key, "old-checkout");
@@ -1601,10 +1945,10 @@ mod tests {
         let ctx_pro =
             Context::new("user", "alice").with_parameter("plan", CoreParam::Str("pro".into()));
         let res = client
-            .evaluate(&[EvalRequest {
-                flag_key: "feature-flag".into(),
-                context: ctx_pro,
-            }])
+            .evaluate(
+                &[EvalRequest::single("feature-flag", ctx_pro)],
+                TraceLevel::Off,
+            )
             .await;
         assert_eq!(res[0].outcome, EvalOutcome::Matched { rule_index: 0 });
         assert_eq!(res[0].variant_key, "treatment");
@@ -1612,10 +1956,10 @@ mod tests {
         // free user → not member → control
         let ctx_free = Context::new("user", "bob");
         let res2 = client
-            .evaluate(&[EvalRequest {
-                flag_key: "feature-flag".into(),
-                context: ctx_free,
-            }])
+            .evaluate(
+                &[EvalRequest::single("feature-flag", ctx_free)],
+                TraceLevel::Off,
+            )
             .await;
         assert_eq!(res2[0].outcome, EvalOutcome::DefaultRule);
         assert_eq!(res2[0].variant_key, "control");
@@ -1670,10 +2014,7 @@ mod tests {
 
         let ctx = Context::new("user", "alice");
         let res = client
-            .evaluate(&[EvalRequest {
-                flag_key: "new-ui".into(),
-                context: ctx,
-            }])
+            .evaluate(&[EvalRequest::single("new-ui", ctx)], TraceLevel::Off)
             .await;
 
         assert_eq!(res[0].outcome, EvalOutcome::Matched { rule_index: 0 });
@@ -1733,10 +2074,7 @@ mod tests {
 
         let ctx = Context::new("user", "alice");
         let res = client
-            .evaluate(&[EvalRequest {
-                flag_key: "vip-feature".into(),
-                context: ctx,
-            }])
+            .evaluate(&[EvalRequest::single("vip-feature", ctx)], TraceLevel::Off)
             .await;
 
         // Fetch should have been called once
@@ -1802,19 +2140,19 @@ mod tests {
 
         // First call → miss → fetch
         client
-            .evaluate(&[EvalRequest {
-                flag_key: "vip-feature".into(),
-                context: ctx(),
-            }])
+            .evaluate(
+                &[EvalRequest::single("vip-feature", ctx())],
+                TraceLevel::Off,
+            )
             .await;
         assert_eq!(recording_fetcher.call_count(), 1);
 
         // Second call → LRU hit → no fetch
         client
-            .evaluate(&[EvalRequest {
-                flag_key: "vip-feature".into(),
-                context: ctx(),
-            }])
+            .evaluate(
+                &[EvalRequest::single("vip-feature", ctx())],
+                TraceLevel::Off,
+            )
             .await;
         assert_eq!(
             recording_fetcher.call_count(),
@@ -1823,10 +2161,10 @@ mod tests {
         );
     }
 
-    // ── Task 8: evaluate — reasoning trace ───────────────────────────────────
+    // ── Phase 6: evaluate(TraceLevel::Full) carries EvaluationTrace ─────────
 
     #[tokio::test]
-    async fn evaluate_with_reasoning_includes_trace() {
+    async fn evaluate_full_trace_includes_evaluation_trace() {
         let cond = ConditionExpr::Leaf(Condition::Eq {
             context_type: "user".into(),
             param: "plan".into(),
@@ -1852,7 +2190,7 @@ mod tests {
             rule_segments: vec![],
             list_segments: vec![],
             server_timestamp_ms: 0,
-            environment_id: "env-1".into(),
+            environment_id: "00000000-0000-0000-0000-000000000001".into(),
             event_definitions: vec![],
         });
         let client = sdk_client_with_snapshot(snap);
@@ -1860,35 +2198,214 @@ mod tests {
             Context::new("user", "alice").with_parameter("plan", CoreParam::Str("pro".into()));
 
         let results = client
-            .evaluate_with_reasoning(&[EvalRequest {
-                flag_key: "upgrade-cta".into(),
-                context: ctx,
-            }])
+            .evaluate(&[EvalRequest::single("upgrade-cta", ctx)], TraceLevel::Full)
             .await;
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert_eq!(r.variant_key, "treatment");
         assert_eq!(r.outcome, EvalOutcome::Matched { rule_index: 0 });
-        assert_eq!(r.reasoning.matched_rule_index, Some(0));
-        assert_eq!(
-            r.reasoning.matched_rule_name.as_deref(),
-            Some("pro-user-rule")
-        );
+        let trace = r.trace.as_ref().expect("Full trace level → Some(trace)");
+        assert_eq!(trace.fired_rule_name.as_deref(), Some("pro-user-rule"));
+        assert_eq!(trace.rule_traces.len(), 1);
     }
 
     #[tokio::test]
-    async fn evaluate_with_reasoning_flag_not_found_trace() {
+    async fn evaluate_full_trace_for_flag_not_found_has_no_trace() {
+        // Phase 6: when the flag is missing, the SDK short-circuits before
+        // calling `evaluate_flag`, so no rich trace is constructed. The
+        // result's `trace` is `None` even at TraceLevel::Full — the caller
+        // distinguishes the missing-flag path from the rule-fired path via
+        // the `outcome` field.
         let snap = DefinitionSnapshot::default();
         let client = sdk_client_with_snapshot(snap);
         let ctx = Context::new("user", "alice");
         let results = client
-            .evaluate_with_reasoning(&[EvalRequest {
-                flag_key: "nonexistent".into(),
-                context: ctx,
-            }])
+            .evaluate(&[EvalRequest::single("nonexistent", ctx)], TraceLevel::Full)
             .await;
-        assert_eq!(results[0].reasoning.outcome, EvalOutcome::FlagNotFound);
-        assert!(results[0].reasoning.matched_rule_index.is_none());
+        assert_eq!(results[0].outcome, EvalOutcome::FlagNotFound);
+        assert!(results[0].trace.is_none());
+    }
+
+    // ── Phase 6 Task 1: EvalRequest accepts a multi-context bundle ──────────
+    //
+    // Demonstrates the new public shape: `contexts: Vec<Context>` instead of
+    // `context: Context`. The same call applies a percentage rule that mixes
+    // selectors across the bundle (key + parameter on distinct context
+    // types), but here we only check the shape — see
+    // `evaluate_cross_context_hash_selectors_match_core` below for the
+    // hashing-correctness test (Phase 6 Task 4).
+    #[tokio::test]
+    async fn eval_request_accepts_multi_context_bundle() {
+        let flag = simple_bool_flag("multi-ctx-flag");
+        let snap = DefinitionSnapshot::from_proto(SyncDefinitionsResponse {
+            flags: vec![flag],
+            rule_segments: vec![],
+            list_segments: vec![],
+            server_timestamp_ms: 0,
+            environment_id: "00000000-0000-0000-0000-000000000001".into(),
+            event_definitions: vec![],
+        });
+        let client = sdk_client_with_snapshot(snap);
+
+        let user =
+            Context::new("user", "alice").with_parameter("plan", CoreParam::Str("pro".into()));
+        let device =
+            Context::new("device", "iphone-12").with_parameter("os", CoreParam::Str("ios".into()));
+        let app = Context::new("application", "v2");
+
+        let results = client
+            .evaluate(
+                &[EvalRequest {
+                    flag_key: "multi-ctx-flag".into(),
+                    contexts: vec![user, device, app],
+                }],
+                TraceLevel::Off,
+            )
+            .await;
+
+        // One result per context in the bundle (core's `evaluate_flag`
+        // returns one result per subject context). All three are
+        // independent invocations of the same flag's default rule.
+        assert_eq!(results.len(), 3, "one result per context in the bundle");
+        for (i, r) in results.iter().enumerate() {
+            assert_eq!(r.flag_key, "multi-ctx-flag");
+            assert_eq!(r.outcome, EvalOutcome::DefaultRule);
+            assert_eq!(r.context_index, i);
+            assert_eq!(r.variant_key, "true");
+        }
+    }
+
+    // ── Phase 6 Task 4: SDK-side cross-context hashing test ─────────────────
+    //
+    // EvalRequest carries a user + device + application bundle. The
+    // percentage rule mixes selectors across contexts (`user.key`,
+    // `user.params.tier`, `device.params.os`). The SDK's `evaluate` path
+    // must match the core engine's bucket assignment for the same bundle
+    // when called via `evaluate_flag` directly.
+    #[tokio::test]
+    async fn evaluate_cross_context_hash_selectors_match_core() {
+        use stitchd_proto::flags::v1::flag_rule::Output as POut;
+        use stitchd_proto::flags::v1::{
+            AllocationBucket, ContextHashSpec, ContextKeySelector as ProtoCtxKeySel,
+            ContextParameterSelector as ProtoCtxParamSel, HashSelector as ProtoHashSelMsg,
+            PercentageAllocation, hash_selector::Selector as ProtoSelOneof,
+        };
+
+        // Build a flag with a single percentage rule that hashes on
+        // user.key + user.params.tier + device.params.os.
+        let alloc = PercentageAllocation {
+            context_hash_specs: HashMap::new(),
+            buckets: vec![
+                AllocationBucket {
+                    variant_key: "control".into(),
+                    weight_milli: 500,
+                },
+                AllocationBucket {
+                    variant_key: "treatment".into(),
+                    weight_milli: 500,
+                },
+            ],
+            hash_inputs: vec![
+                ProtoHashSelMsg {
+                    selector: Some(ProtoSelOneof::ContextKey(ProtoCtxKeySel {
+                        context_type: "user".into(),
+                    })),
+                },
+                ProtoHashSelMsg {
+                    selector: Some(ProtoSelOneof::ContextParameter(ProtoCtxParamSel {
+                        context_type: "user".into(),
+                        parameter: "tier".into(),
+                    })),
+                },
+                ProtoHashSelMsg {
+                    selector: Some(ProtoSelOneof::ContextParameter(ProtoCtxParamSel {
+                        context_type: "device".into(),
+                        parameter: "os".into(),
+                    })),
+                },
+            ],
+        };
+
+        let proto_rule = ProtoFlagRule {
+            rule_payload: serde_json::to_vec(&ConditionExpr::And(vec![])).unwrap(),
+            output: Some(POut::Allocation(alloc)),
+            name: "rollout".into(),
+            rule_id: String::new(),
+        };
+        let _ = ContextHashSpec::default(); // silence the unused import on the new path
+
+        let flag = FeatureFlag {
+            key: "cross-ctx-flag".into(),
+            enabled: true,
+            variants: vec![
+                string_variant("control", "off"),
+                string_variant("treatment", "on"),
+            ],
+            default_variant_key: "control".into(),
+            rules: vec![proto_rule],
+            ..Default::default()
+        };
+        let env_uuid = "00000000-0000-0000-0000-000000000001";
+        let snap = DefinitionSnapshot::from_proto(SyncDefinitionsResponse {
+            flags: vec![flag.clone()],
+            rule_segments: vec![],
+            list_segments: vec![],
+            server_timestamp_ms: 0,
+            environment_id: env_uuid.into(),
+            event_definitions: vec![],
+        });
+        let client = sdk_client_with_snapshot(snap);
+
+        // Build a multi-context bundle.
+        let user =
+            Context::new("user", "alice").with_parameter("tier", CoreParam::Str("gold".into()));
+        let device =
+            Context::new("device", "iphone-12").with_parameter("os", CoreParam::Str("ios".into()));
+        let app = Context::new("application", "v2");
+        let bundle = vec![user, device, app];
+
+        let sdk_results = client
+            .evaluate(
+                &[EvalRequest {
+                    flag_key: "cross-ctx-flag".into(),
+                    contexts: bundle.clone(),
+                }],
+                TraceLevel::Full,
+            )
+            .await;
+
+        // The same bundle, fed directly into core's evaluate_flag, must
+        // produce the same variant for each context.
+        let core_flag = convert_proto_flag_to_core(&flag).expect("convert");
+        let env_id = parse_env_id(env_uuid);
+        let core_results = evaluate_flag(
+            &core_flag,
+            &bundle,
+            &[],
+            &ListMembershipIndex::new(),
+            env_id,
+            ProjectId::new(),
+            TraceLevel::Full,
+        );
+
+        assert_eq!(sdk_results.len(), core_results.len());
+        for (sdk_r, core_r) in sdk_results.iter().zip(core_results.iter()) {
+            assert_eq!(
+                sdk_r.variant_key, core_r.variant_key,
+                "SDK + core variant must match for cross-context hash"
+            );
+            assert!(
+                sdk_r.outcome == EvalOutcome::Matched { rule_index: 0 },
+                "rule must fire (And([]) is vacuously true)"
+            );
+        }
+
+        // The two variants the bucket may resolve to. The exact value is
+        // deterministic but we don't pin it here — the contract is that
+        // SDK + core agree.
+        assert!(
+            sdk_results[0].variant_key == "control" || sdk_results[0].variant_key == "treatment"
+        );
     }
 
     // ── Task 9: shutdown ─────────────────────────────────────────────────────
@@ -1958,18 +2475,20 @@ mod tests {
 
         assert_eq!(client.event_queue.len(), 0);
         client
-            .evaluate(&[
-                EvalRequest {
-                    flag_key: "test-flag".into(),
-                    context: ctx.clone(),
-                },
-                EvalRequest {
-                    flag_key: "test-flag".into(),
-                    context: ctx,
-                },
-            ])
+            .evaluate(
+                &[
+                    EvalRequest::single("test-flag", ctx.clone()),
+                    EvalRequest::single("test-flag", ctx),
+                ],
+                TraceLevel::Off,
+            )
             .await;
-        assert_eq!(client.event_queue.len(), 2, "one event per EvalRequest");
+        // Each single-context EvalRequest yields one EvalResult → one event.
+        assert_eq!(
+            client.event_queue.len(),
+            2,
+            "one event per (request, context) pair"
+        );
     }
 
     // ── Phase 5 Task 5.2: track() + is_event_registered ─────────────────────

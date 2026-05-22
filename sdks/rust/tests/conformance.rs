@@ -33,7 +33,7 @@ use stitchd_sdk_rust::client::testing;
 use stitchd_sdk_rust::lru::MembershipMap;
 use stitchd_sdk_rust::refresh::MembershipBatchFetcher;
 use stitchd_sdk_rust::snapshot::DefinitionSnapshot;
-use stitchd_sdk_rust::{EvalOutcome, EvalRequest, SdkError};
+use stitchd_sdk_rust::{EvalOutcome, EvalRequest, SdkError, TraceLevel};
 
 // ============================================================================
 // Fixture serde types
@@ -544,10 +544,7 @@ fn load_scenario(dir: &Path) -> Scenario {
     // Convert eval requests.
     let requests: Vec<EvalRequest> = fixture_reqs
         .iter()
-        .map(|r| EvalRequest {
-            flag_key: r.flag_key.clone(),
-            context: convert_context(&r.context),
-        })
+        .map(|r| EvalRequest::single(r.flag_key.clone(), convert_context(&r.context)))
         .collect();
 
     // LRU preseed.
@@ -640,7 +637,7 @@ async fn run_scenario(scenario_dir: &Path, scenario_name: &str) {
     let client =
         testing::sdk_client_with_snapshot_and_lru(scenario.snapshot, fetcher, scenario.preseed_lru);
 
-    let results = client.evaluate(&scenario.requests).await;
+    let results = client.evaluate(&scenario.requests, TraceLevel::Off).await;
 
     assert_eq!(
         results.len(),
