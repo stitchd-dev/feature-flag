@@ -57,25 +57,24 @@ const MODEL_OPTIONS = [
 ]
 
 /**
- * Phase 10 augments `AdminFlagResponse` with two fields the gateway will
- * surface once Phase 11 cleanup wires them through. They're optional so the
- * UI degrades gracefully on the current shape.
+ * Per-flag shape consumed by this modal. Adds the Phase 1
+ * `default_rule_distribution` field which the gateway emits but which is
+ * scoped to specific endpoints — keep it optional so the typing degrades
+ * gracefully when omitted. `locked_by_experiment_id` lives on
+ * `AdminFlagResponse` (feature-flag-1p6) and is inherited via `extends`.
  */
 interface ExpFlagShape extends AdminFlagResponse {
   /** Phase 1 default-rule percentage distribution; `null` when only the
    * single-variant default is configured. */
   default_rule_distribution?: RolloutDistribution | null
-  /** Identifies the active experiment that's currently locking the flag.
-   * Surfaces in the EditFlagDefaultRule UI; not load-bearing here. */
-  locked_by_experiment_id?: string | null
 }
 
-/** Augments the Phase-7 `RuleJson` shape with the optional `rule_id` field
- *  the gateway will surface once `feature_flag_rules.id` is exposed in
- *  `AdminFlagJson.rules`. Falls back to a synthetic id derived from array
- *  index until that lands. */
+/** Per-rule shape consumed by the rule picker. The gateway surfaces
+ *  `feature_flag_rules.id` as `rule_id` and the rule's optional UI label as
+ *  `name` (feature-flag-1p6); both fields are required reads, no synthesised
+ *  fallbacks. */
 interface RuleWithId {
-  rule_id?: string
+  rule_id: string
   name?: string | null
   output: unknown
 }
@@ -174,8 +173,8 @@ function FlagPicker({
  * `components/`, so we use the native HTML attribute — matches the
  * pattern in `RuleCard.tsx`).
  *
- * The synthetic `default_rule` row carries `rule_id === null`; selecting
- * it flips `targets_default_rule = true` and clears `flag_rule_id`.
+ * The picker injects a virtual `default_rule` row carrying `rule_id === null`;
+ * selecting it flips `targets_default_rule = true` and clears `flag_rule_id`.
  */
 function RulePicker({
   options,
@@ -687,32 +686,18 @@ interface Props {
 }
 
 /**
- * Synthesise rule-id-augmented rule rows from the flag's `AdminFlagJson.rules`
- * shape. The gateway doesn't surface `feature_flag_rules.id` today (see Phase
- * 11 cleanup follow-up), so we fall back to the array index — the modal sends
- * a synthetic id back to the gateway which will treat unknown UUIDs as a
- * `UnknownFlagRule` error. The picker still surfaces the correct disabled
- * tooltip + behaviour; once the rule_id is in the response, the submit body
- * lines up automatically.
+ * Project the flag's `AdminFlagJson.rules` into the shape the rule picker
+ * consumes. The gateway now surfaces `feature_flag_rules.id` as `rule_id` and
+ * the rule's UI label as `name` (feature-flag-1p6); we read both directly and
+ * pass them through.
  */
 function ruleListFromFlag(flag: ExpFlagShape | null): RuleWithId[] {
   if (!flag) return []
-  return flag.rules.map((r, idx) => {
-    // The admin RuleJson doesn't currently surface `rule_id` or `name`
-    // (Phase 11 cleanup adds them — see follow-up issue). Read defensively
-    // off the loose shape so we degrade rather than crash.
-    const loose = r as { rule_id?: string; name?: string | null }
-    return {
-      // Use the surfaced UUID if available; fall back to a placeholder UUID
-      // built from the index (zero-padded) so the picker still has a stable
-      // key. The schema's UUID regex accepts this shape.
-      rule_id:
-        loose.rule_id ??
-        `00000000-0000-0000-0000-${String(idx + 1).padStart(12, '0')}`,
-      name: loose.name ?? null,
-      output: r.output,
-    }
-  })
+  return flag.rules.map((r) => ({
+    rule_id: r.rule_id,
+    name: r.name ?? null,
+    output: r.output,
+  }))
 }
 
 export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
@@ -860,7 +845,7 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
 
   const rulePickerOptions: RulePickerOption[] = filterEligibleRules(
     ruleListFromFlag(activeFlag).map((r) => ({
-      rule_id: r.rule_id ?? '',
+      rule_id: r.rule_id,
       name: r.name ?? undefined,
       output: r.output,
     })),

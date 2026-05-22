@@ -98,6 +98,14 @@ export interface VariantJson {
 }
 
 export interface RuleJson {
+  /**
+   * UUID of the underlying `feature_flag_rules.id` row.
+   * Surfaced by the gateway so admin flows (notably experiment creation) can
+   * bind to a real rule UUID instead of fabricating index-derived placeholders.
+   */
+  rule_id: string
+  /** Optional human-readable label set by the user; ignored by the evaluator. */
+  name?: string
   /** ConditionExpr serde JSON — see ruleTypes.ts for the full type */
   condition: unknown
   /** Gateway output JSON — `{variant_key: "..."}` or `{allocation: [...]}` */
@@ -123,6 +131,12 @@ export interface AdminFlagResponse {
   default_variant_key: string | null
   created_at: string | null
   updated_at: string | null
+  /**
+   * UUID of the experiment currently locking this flag (running or paused).
+   * Omitted by the gateway when the flag is not locked. Lets the admin UI
+   * render the lock badge proactively instead of after a failing save round-trip.
+   */
+  locked_by_experiment_id?: string
 }
 
 // ── Experiment results / exposures / timeseries types (Phase 7) ──────────────
