@@ -70,6 +70,7 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 | Events Module — full admin UI + SDK ingestion + per-env quota | ✅ Complete |
 | Metrics Layer — composable definitions (aggregation/ratio/funnel) + experiment cutover | ✅ Complete |
 | **Experimentation as a whole — complete UI + Backend with eval-log-based first-exposure attribution, whole-flag lock, per-context-type stats, default-rule experiments, Frequentist + Bayesian + CUPED + SRM + Guardrails** | ✅ Complete |
+| Flag-Evaluation Unification — single `stitchd-core::evaluation::evaluate_flag` orchestrator drives preview + SDK; canonical `hash_inputs` selector list (cross-context Key + Parameter mixing) end-to-end through Admin UI → REST → PG → preview AND snapshot → SDK | ✅ Complete |
 
 ## Modules
 
@@ -85,6 +86,8 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 - States: enabled (default rule + custom rules) / disabled
 - Output: specific variant OR percentage allocation (0.1% granularity)
   hash(targeted context keys/params, flag key, project id, environment)
+- **Unified evaluation orchestrator (post-`flag_eval_unify_20260522`):** every variant assignment — preview path, SDK path, default-rule fallthrough, and default-rule distribution — funnels through the SOLE `stitchd-core::evaluation::evaluate_flag(...)` entry point. It owns rule iteration, percentage allocation, default-rule fallthrough, and trace emission. `evaluate_preview` is a thin wrapper that calls it with `TraceLevel::Full`; the Rust SDK's `evaluate(...)` calls it with the caller-requested trace level. There is no per-caller orchestration loop anywhere else in the codebase — the only legitimate path to a variant assignment goes through this function.
+- **Cross-context percentage hashing:** a rule's percentage allocation carries an ordered `hash_inputs: Vec<HashSelector>` list. Each selector is either `ContextKey { context_type }` (hash the `key` field of the named context) or `ContextParameter { context_type, parameter }` (hash a named parameter of the named context). Selectors mix freely across context types — a single rule can hash on `user.key + user.params.tier + device.params.os + application.key`. Authored once in the Admin UI's `HashInputSelectorList`, persisted to PG as a JSONB column, sent over proto and REST in declaration order, and consumed by `evaluate_flag` via the `HashInputSpec` resolver. The hash algorithm and bucket math (Murmur3 → 0–999) remain unchanged.
 - **Evaluate-Preview:** `POST /flags/{key}/evaluate-preview` accepts a mock context and returns
   the evaluated variant plus a full rule trace (which rule matched, why), rollout debug info,
   and OR/AND missing-context resolution details — used by the Admin UI "Test" panel
@@ -130,7 +133,7 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 
 The admin console (`admin/`) is a React 19 + Vite SPA with full feature parity:
 
-- **Flags:** Create/edit/archive flags; variant management; rule builder (AND/OR/NOT condition trees, segment picker, percentage rollout); Evaluate-Preview "Test" panel with rule trace output
+- **Flags:** Create/edit/archive flags; variant management; rule builder (AND/OR/NOT condition trees, segment picker, percentage rollout). Percentage-rollout outputs (both per-rule allocations and the flag-level default-rule distribution) authored via the `HashInputSelectorList` component — ordered list of cross-context selectors with drag + keyboard reorder, live worked-example banner, context-type + parameter autocomplete sourced from the registry. Evaluate-Preview "Test" panel with rule trace output
 - **Segments:** Rule-based (condition expression builder) + list-based (context-typed include/exclude key lists); full CRUD; segment picker in flag rule builder
 - **Events:** Full CRUD (`/v1/events*`) — register key + name + metric_type + optional JSON schema; archive (soft-delete); EditEventModal exposes name/metric_type/description/schema (event_key is immutable). EventDetail page surfaces recent firings, 14-day sparkline, the TestEventWidget (admin-auth `POST /v1/admin/events/track`), the back-link "Metrics referencing this event", and "Experiments depending on this event".
 - **Metrics:** Full CRUD (`/v1/metrics*`) — kind picker (Aggregation/Ratio/Funnel), event-key autocomplete bound to registered events (strict — unknown keys flagged inline), aggregator + on_field + JsonLogic where_clause for aggregations, numerator/denominator dropdowns for ratios, FieldArray steps for funnels. Detail page calls `POST /v1/metrics/{id}/preview` for the ClickHouse-backed sparkline.
@@ -141,7 +144,8 @@ The admin console (`admin/`) is a React 19 + Vite SPA with full feature parity:
 
 ## Server-Side SDK (Rust — initial)
 - `SdkClient::init(config)` blocks until first definition sync via gRPC, then polls at a configurable interval.
-- Flag evaluation (`evaluate()`) is in-process: rule-based segments evaluated locally; list-based segments resolved via REST lookup or optional LFU cache.
+- Flag evaluation (`evaluate(&[EvalRequest], TraceLevel)`) is in-process: it delegates straight to `stitchd-core::evaluation::evaluate_flag`, so the SDK shares the exact orchestration the gateway's preview endpoint uses — same rule iteration, same cross-context hashing, same default-rule-distribution support. Each `EvalRequest` carries `flag_key` + `contexts: Vec<Context>`; multi-context bundles drive cross-context percentage hashing identically across SDK and preview.
+- Rule-based segments evaluated locally; list-based segments resolved via REST lookup or optional LFU cache.
 - Optional LFU membership cache pre-warms list-segment lookups for frequently-evaluated contexts (batch REST refresh on each poll cycle).
 - Client-side SDKs (browser/mobile) and server-sent events are out of scope for the initial implementation.
 - Future: streaming layer for server-pushed flag updates; direct event submission via SDK key.

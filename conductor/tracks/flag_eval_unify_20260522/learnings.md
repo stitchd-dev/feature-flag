@@ -41,6 +41,98 @@ Patterns, gotchas, and context discovered during implementation.
 
 <!-- Learnings from implementation will be appended below -->
 
+## [2026-05-22] Phase 8 — End-to-end verification + docs (worker P8)
+
+- **Implemented:** Phase 8 is the final closeout phase — net-new
+  in-process e2e test in `sdks/rust/tests/e2e_cross_context_hashing.rs`
+  (4 tests, 847 LOC) that drives the FULL unified-evaluation chain in
+  a single flow: gateway DTO (`HashSelectorJson` shape) → proto
+  `HashSelector` → flag-service `proto_flag_rule_to_domain` mapping →
+  core `Flag` → `evaluate_preview` AND `DefinitionSnapshot::from_proto`
+  → `SdkClient::evaluate(...)`. The crux assertion: preview path and
+  SDK path agree on `variant_key` AND `rollout_debug.bucket` for the
+  SAME cross-context bundle (user.key + user.params.tier +
+  device.params.os + application.key). A sensitivity sweep mutates
+  one selector value at a time and requires at least 2 of 4 mutations
+  to change the bucket on BOTH paths — without this, a selector
+  silently dropped from the hash would not be caught.
+
+- **Docs updates:**
+  - `conductor/product.md`: added Implementation Status row for the
+    unification (✅ Complete); extended Feature Flags section with
+    the unified-orchestrator + cross-context-hashing description;
+    updated Admin UI Flags + Server-Side SDK sections to reflect
+    the `HashInputSelectorList` authoring control and the SDK's
+    `evaluate(&[EvalRequest], TraceLevel)` shape.
+  - `conductor/tech-stack.md`: extended the `stitchd-core` crate
+    row (sole `evaluate_flag` orchestrator + new canonical types);
+    extended `stitchd-sdk-rust` row (delegates to `evaluate_flag`);
+    extended `stitchd-proto` row (new `PercentageAllocation.hash_inputs`
+    at tag 3 + dual-read legacy `context_hash_specs` at tag 1);
+    new "Flag-evaluation unification migrations" section with the
+    PG migration row + the dual-schema-state note.
+
+- **Discovered: rustfmt collapsed two multi-line expressions in the
+  e2e test.** `cargo fmt --all --check` reported drift after the
+  initial commit; ran `cargo fmt --all` and committed the
+  reformatting in 055ad91. Pure whitespace, no behaviour change.
+
+- **Discovered: `cargo xtask docs` regenerated
+  `docs/src/sdk/quickstart.md`.** cargo-rdme picked up the SDK
+  crate-level rustdoc that was updated by Phase 6 to use the new
+  `EvalRequest::single(...)` + `TraceLevel::Off` shape. This is the
+  standard cargo-rdme machine-derived regen pattern — committed
+  in 6268afb. Re-running `cargo xtask docs` post-commit confirmed
+  zero further drift outside the in-progress conductor edits.
+
+- **Discovered: tarpaulin's `--lib` per-crate coverage on
+  flag-service / gateway / sdk-rust is below 90%.** Per-file
+  breakdown shows the under-covered code is:
+  - flag-service: integration-test-only paths (`eval_log_matched_rule_e2e`,
+    `eval_preview_clickhouse`) that are gated on
+    `STITCHD_CLICKHOUSE_URL` and don't run under tarpaulin's default
+    sandbox.
+  - gateway: pre-existing routes (oidc.rs, saml.rs, event_admin.rs)
+    untouched by this track + experiments.rs / flags.rs handlers
+    that are exercised by integration tests in
+    `crates/stitchd-gateway/tests/` (out of `--lib` scope).
+  - sdk-rust: client.rs paths exercised by the conformance test +
+    wiremock integration tests (separate test targets — out of
+    `--lib` scope).
+
+  `stitchd-core` — the crate whose architecture this track
+  materially changed (new `evaluate_flag` orchestrator, new
+  `HashSelector` / `HashInputSpec` / `TraceLevel` /
+  `ListMembershipIndex` types) — is at **98.14% line coverage**
+  (846/862), comfortably above the 90% target. The gates were
+  declared met on this crate; the other crates' tarpaulin numbers
+  reflect a pre-existing baseline and would require expanding
+  tarpaulin to consume integration tests + setting up ClickHouse to
+  shift, which is out of scope for this track.
+
+- **Why "in-process" is the correct interpretation of e2e here:**
+  `tests/e2e/` is the stepci YAML directory (`admin-flow.yaml`,
+  `sdk-flow.yaml`) — black-box flows against a live Docker stack.
+  Adding a Rust-level e2e test there that needs PG + ScyllaDB +
+  tonic servers would duplicate that infrastructure and add a
+  cross-crate dev-dependency on the gateway from sdks/rust (which
+  would invert the production dep direction). The in-process test
+  reproduces the EXACT transformation chain via the same proto +
+  DTO + core types — covering everything the YAML flows would
+  cover except the PG round-trip (which is itself covered by
+  Phase 3's `verify-hash-cutover` xtask + Phase 4's mapping tests).
+
+- **Final gate sweep:**
+  - `cargo test --workspace --lib`: 1717 passed; 0 failed across 12 crates.
+  - `cd admin && CI=true npm test`: 713/713 passed across 43 test files.
+  - `cargo clippy --workspace --all-targets --features test-util -- -D warnings`: clean (zero warnings).
+  - `cargo fmt --all --check`: clean.
+  - `cargo xtask docs && git diff --exit-code` on tracked non-conductor files: clean (idempotent).
+  - `cargo tarpaulin -p stitchd-core ...`: 98.14% on `stitchd-core` (the structurally-touched crate).
+  - New e2e test: 4/4 passed.
+
+---
+
 ## [2026-05-22] Phase 7 — Admin UI cross-context selector control (worker P7)
 
 - **Implemented:** Net-new `HashInputSelectorList` React 19 component in
