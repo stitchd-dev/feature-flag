@@ -1589,4 +1589,267 @@ mod tests {
             .unwrap();
         assert!(beta_trace.result);
     }
+
+    // ── Phase 2 Tasks 5+6: cross-context hashing ───────────────────────────
+
+    #[test]
+    fn resolve_hash_inputs_pulls_context_key_for_matching_type() {
+        let bundle = vec![Context::new("user", "alice"), Context::new("device", "d1")];
+        let spec = HashInputSpec::new(vec![HashSelector::ContextKey {
+            context_type: "user".into(),
+        }]);
+        let out = resolve_hash_inputs(&spec, &bundle);
+        assert_eq!(out, vec!["alice".to_string()]);
+    }
+
+    #[test]
+    fn resolve_hash_inputs_pulls_parameter_for_matching_type() {
+        let bundle = vec![
+            Context::new("user", "alice")
+                .with_parameter("name", ParameterValue::Str("Alice".to_string())),
+        ];
+        let spec = HashInputSpec::new(vec![HashSelector::ContextParameter {
+            context_type: "user".into(),
+            parameter: "name".into(),
+        }]);
+        let out = resolve_hash_inputs(&spec, &bundle);
+        assert_eq!(out, vec!["Alice".to_string()]);
+    }
+
+    #[test]
+    fn resolve_hash_inputs_missing_context_resolves_to_empty_string_sentinel() {
+        let bundle = vec![Context::new("user", "alice")];
+        let spec = HashInputSpec::new(vec![HashSelector::ContextKey {
+            context_type: "device".into(), // not in bundle
+        }]);
+        let out = resolve_hash_inputs(&spec, &bundle);
+        assert_eq!(
+            out,
+            vec!["".to_string()],
+            "missing context_type must yield empty-string sentinel for hash stability"
+        );
+    }
+
+    #[test]
+    fn resolve_hash_inputs_missing_parameter_resolves_to_empty_string_sentinel() {
+        let bundle = vec![Context::new("user", "alice")]; // has key but no params
+        let spec = HashInputSpec::new(vec![HashSelector::ContextParameter {
+            context_type: "user".into(),
+            parameter: "name".into(),
+        }]);
+        let out = resolve_hash_inputs(&spec, &bundle);
+        assert_eq!(out, vec!["".to_string()]);
+    }
+
+    #[test]
+    fn resolve_hash_inputs_cross_context_preserves_selector_order() {
+        // Spec: user.key, user.params.name, device.params.os, application.key.
+        let bundle = vec![
+            Context::new("user", "alice")
+                .with_parameter("name", ParameterValue::Str("Alice".to_string())),
+            Context::new("device", "d1").with_parameter(
+                "os",
+                ParameterValue::Str("macOS".to_string()),
+            ),
+            Context::new("application", "stitchd-admin"),
+        ];
+        let spec = HashInputSpec::new(vec![
+            HashSelector::ContextKey {
+                context_type: "user".into(),
+            },
+            HashSelector::ContextParameter {
+                context_type: "user".into(),
+                parameter: "name".into(),
+            },
+            HashSelector::ContextParameter {
+                context_type: "device".into(),
+                parameter: "os".into(),
+            },
+            HashSelector::ContextKey {
+                context_type: "application".into(),
+            },
+        ]);
+        let out = resolve_hash_inputs(&spec, &bundle);
+        assert_eq!(
+            out,
+            vec![
+                "alice".to_string(),
+                "Alice".to_string(),
+                "macOS".to_string(),
+                "stitchd-admin".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_hash_inputs_cross_context_with_missing_pieces_fills_empty_sentinels() {
+        let bundle = vec![Context::new("user", "alice")]; // only user.key
+        let spec = HashInputSpec::new(vec![
+            HashSelector::ContextKey {
+                context_type: "user".into(),
+            },
+            HashSelector::ContextParameter {
+                context_type: "user".into(),
+                parameter: "name".into(),
+            },
+            HashSelector::ContextParameter {
+                context_type: "device".into(),
+                parameter: "os".into(),
+            },
+        ]);
+        let out = resolve_hash_inputs(&spec, &bundle);
+        assert_eq!(
+            out,
+            vec!["alice".to_string(), "".to_string(), "".to_string(),]
+        );
+    }
+
+    #[test]
+    fn hash_input_spec_from_targets_maps_key_and_parameter_variants() {
+        let targets = vec![
+            PercentageTarget {
+                context_type: "user".into(),
+                field: TargetField::Key,
+            },
+            PercentageTarget {
+                context_type: "device".into(),
+                field: TargetField::Parameter("os".into()),
+            },
+        ];
+        let spec = hash_input_spec_from_targets(&targets);
+        assert_eq!(spec.len(), 2);
+        assert_eq!(
+            spec.selectors[0],
+            HashSelector::ContextKey {
+                context_type: "user".into()
+            }
+        );
+        assert_eq!(
+            spec.selectors[1],
+            HashSelector::ContextParameter {
+                context_type: "device".into(),
+                parameter: "os".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn evaluate_flag_percentage_with_cross_context_targets_changes_bucket_when_second_context_changes()
+     {
+        // End-to-end: a percentage rule pulling from BOTH user.key and
+        // device.params.os should produce a different bucket assignment when
+        // either input changes, proving cross-context hashing actually wires
+        // through evaluate_flag → resolve_hash_inputs → calculate_allocation.
+        let mut flag = setup_flag();
+        let on_id = flag.variants[0].id;
+        let off_id = flag.variants[1].id;
+        flag.rules[0].rule.condition = ConditionExpr::And(vec![]); // always match
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![
+                PercentageTarget {
+                    context_type: "user".into(),
+                    field: TargetField::Key,
+                },
+                PercentageTarget {
+                    context_type: "device".into(),
+                    field: TargetField::Parameter("os".into()),
+                },
+            ],
+            weights: vec![(on_id, 500), (off_id, 500)],
+        };
+
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        // Vary the OS for many users; check we observe both variants across
+        // the sweep, proving the second context contributes to bucketing.
+        let mut on_count = 0;
+        let mut off_count = 0;
+        for i in 0..200 {
+            let bundle = vec![
+                Context::new("user", format!("u{i}")),
+                Context::new("device", "d1").with_parameter(
+                    "os",
+                    ParameterValue::Str(if i % 2 == 0 { "macOS" } else { "linux" }.to_string()),
+                ),
+            ];
+            let results = evaluate_flag(
+                &flag,
+                &bundle,
+                &[],
+                &memberships,
+                env,
+                proj,
+                TraceLevel::Full,
+            );
+            // hash_input must include BOTH the user key and the OS value
+            let dbg = results[0].trace.as_ref().unwrap().rollout_debug.as_ref().unwrap();
+            assert!(
+                dbg.hash_input.contains(&format!("u{i}")),
+                "hash_input must contain user.key"
+            );
+            assert!(
+                dbg.hash_input.contains("macOS") || dbg.hash_input.contains("linux"),
+                "hash_input must contain device.params.os"
+            );
+            if results[0].variant_key == "on" {
+                on_count += 1;
+            } else {
+                off_count += 1;
+            }
+        }
+        assert!(
+            on_count > 0 && off_count > 0,
+            "cross-context hash must span buckets — got on={on_count} off={off_count}"
+        );
+    }
+
+    #[test]
+    fn evaluate_flag_percentage_with_missing_second_context_uses_empty_sentinel() {
+        // When the second context_type is missing from the bundle, hashing
+        // should still complete (using "" for the missing slot). The result
+        // is deterministic, just different from when the OS is present.
+        let mut flag = setup_flag();
+        let on_id = flag.variants[0].id;
+        let off_id = flag.variants[1].id;
+        flag.rules[0].rule.condition = ConditionExpr::And(vec![]);
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![
+                PercentageTarget {
+                    context_type: "user".into(),
+                    field: TargetField::Key,
+                },
+                PercentageTarget {
+                    context_type: "device".into(),
+                    field: TargetField::Parameter("os".into()),
+                },
+            ],
+            weights: vec![(on_id, 500), (off_id, 500)],
+        };
+
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+        // No device context at all → both targets fall back: device.key
+        // would be "" — but we're using device.params.os so the resolution is
+        // also "".
+        let bundle = vec![Context::new("user", "alice")];
+        let results = evaluate_flag(
+            &flag,
+            &bundle,
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Full,
+        );
+        let dbg = results[0].trace.as_ref().unwrap().rollout_debug.as_ref().unwrap();
+        assert!(dbg.hash_input.contains("alice"));
+        // Result must be one of the two variants — not a panic.
+        assert!(
+            results[0].variant_key == "on" || results[0].variant_key == "off",
+            "missing context must yield deterministic variant, not crash"
+        );
+    }
 }

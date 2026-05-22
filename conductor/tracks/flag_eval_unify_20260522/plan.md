@@ -45,10 +45,10 @@ Define the canonical types — every later phase consumes them.
       (OR/AND missing-context resolution), per-result `RolloutDebug`
       (hash_input, bucket, variant_ranges).
 - [x] Task 4: Implement trace generation gated by `TraceLevel::Full`.
-- [ ] Task 5: Write failing tests for cross-context hashing — selectors
+- [x] Task 5: Write failing tests for cross-context hashing — selectors
       drawing from multiple context_types, mixing `Key` and `Parameter`.
       Include missing-context and missing-parameter sentinel-empty cases.
-- [ ] Task 6: Implement hash-input resolution from `HashInputSpec` +
+- [x] Task 6: Implement hash-input resolution from `HashInputSpec` +
       context bundle; preserve current empty-string sentinel semantics.
 - [ ] Task 7: Reduce `crates/stitchd-core/src/evaluation/preview.rs` to a
       thin wrapper over `evaluate_flag(trace=Full)`, or delete it. No
