@@ -40,6 +40,10 @@ message ExperimentIteration {
   // cutover replaced the previous `metric_keys` (event-key strings).
   repeated string metric_ids       = 6;
   double          traffic_allocation = 7;
+  // Snapshot of analysis unit context types at iteration start.
+  // Surfaced to the admin Iterations tab so per-iteration context-type
+  // badges render correctly without an extra round-trip.
+  repeated string unit_context_types = 8;
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────
@@ -164,10 +168,18 @@ message TransitionExperimentRequest {
 message ListIterationsRequest {
   string environment_id = 1;
   string experiment_id  = 2;
+  // 0-based row offset for paginated listing. Default = 0.
+  uint64 offset         = 3;
+  // Maximum rows to return. `0` means "no limit" — the service returns the
+  // full list (back-compat for stats-service callers that don't paginate).
+  uint64 limit          = 4;
 }
 
 message ListIterationsResponse {
   repeated ExperimentIteration iterations = 1;
+  // Total iterations available for the experiment, regardless of pagination
+  // window. Equal to `iterations.len()` when `limit == 0`.
+  uint64 total = 2;
 }
 
 // ─── Stats-service–facing messages ───────────────────────────────────────────

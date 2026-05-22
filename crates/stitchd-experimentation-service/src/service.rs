@@ -63,6 +63,7 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         ended_at_ms: i.ended_at.map_or(0, |t| t.timestamp_millis()),
         metric_ids: i.metric_ids.iter().map(ToString::to_string).collect(),
         traffic_allocation: i.traffic_allocation,
+        unit_context_types: i.unit_context_types.clone(),
     }
 }
 
@@ -466,7 +467,12 @@ impl ExperimentationService for ExperimentationServiceImpl {
         Ok(Response::new(core_to_proto(&updated)))
     }
 
-    /// List all iterations for an experiment.
+    /// List iterations for an experiment, optionally paginated.
+    ///
+    /// `limit == 0` returns the full list (used by stats-service which doesn't
+    /// paginate); any non-zero limit clamps to `[offset, offset + limit)`.
+    /// `total` is always populated with the unpaginated count so callers can
+    /// drive UI pagination.
     #[instrument(skip(self))]
     async fn list_iterations(
         &self,
@@ -483,9 +489,22 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .await
             .map_err(repo_err_to_status)?;
 
+        let total = iterations.len() as u64;
+        let window: Vec<_> = if req.limit == 0 {
+            iterations.iter().map(iteration_to_proto).collect()
+        } else {
+            iterations
+                .iter()
+                .skip(usize::try_from(req.offset).unwrap_or(usize::MAX))
+                .take(usize::try_from(req.limit).unwrap_or(usize::MAX))
+                .map(iteration_to_proto)
+                .collect()
+        };
+
         metrics::counter!("experimentation_service.list_iterations.ok").increment(1);
         Ok(Response::new(ListIterationsResponse {
-            iterations: iterations.iter().map(iteration_to_proto).collect(),
+            iterations: window,
+            total,
         }))
     }
 
