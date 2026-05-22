@@ -82,10 +82,15 @@ jobs:
         run: cargo sqlx prepare --workspace --check -- --all-targets
 
   # ── 3. Linting ─────────────────────────────────────────────────────────────
+  # Clippy depends on every upstream gate: fmt (formatting must be clean first
+  # since clippy will not run on unformatted code in some configurations),
+  # sqlx-check (offline cache must cover all queries before clippy compiles
+  # them), and contract-check (catches REST contract drift cheap before clippy
+  # spends 5+ minutes compiling).
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
-    needs: sqlx-check
+    needs: [fmt, sqlx-check, contract-check]
     steps:
       - uses: actions/checkout@v4
 
@@ -126,6 +131,11 @@ jobs:
   coverage:
     name: Coverage (≥90%)
     runs-on: ubuntu-latest
+    # Coverage is the heavy job (runs the entire test suite with instrumentation
+    # + uploads to Codecov, ~6–10 min on a clean cache). Gate it behind every
+    # cheaper check so we don't burn runner minutes when fmt / sqlx-check /
+    # contract-check / clippy will reject the change anyway.
+    needs: [fmt, sqlx-check, contract-check, clippy]
     env:
       STITCHD_DATABASE_URL: postgres://postgres:postgres@localhost:5432/stitchd_test
       # `#[sqlx::test]` reads the plain `DATABASE_URL` env var, not the
@@ -291,6 +301,9 @@ jobs:
   docs-build:
     name: Docs Build (idempotent + link-check)
     runs-on: ubuntu-latest
+    # Docs is the last gate — runs only after the test suite + coverage have
+    # signed off. Avoids spending xtask runtime on a tree that fails earlier.
+    needs: coverage
     steps:
       - uses: actions/checkout@v4
 
@@ -302,11 +315,16 @@ jobs:
 
       - name: Install xtask-managed CLI tools
         # xtask auto-installs missing tools via `cargo install` at runtime, but
-        # installing them as a separate step makes failures easy to read and
-        # benefits from `Swatinem/rust-cache` over multiple PR runs.
+        # pre-installing them as a separate step makes failures easy to read,
+        # benefits from `Swatinem/rust-cache` across PR runs, and lets us pin
+        # cargo-rdme. The unpinned `cargo-rdme` recipe in taiki-e's registry
+        # has resolved to versions that segfault on this workspace's analytics-
+        # service crate (observed in the docs_refresh_20260522 archive run).
+        # Pinning to ^1.5 matches the version the xtask was built against and
+        # matches `[package.metadata.xtask-tools]` in crates/xtask/Cargo.toml.
         uses: taiki-e/install-action@v2
         with:
-          tool: mdbook,mdbook-mermaid,cargo-rdme
+          tool: mdbook,mdbook-mermaid,cargo-rdme@1.5
 
       - name: Build docs (also runs internal-link check)
         run: cargo run --manifest-path crates/xtask/Cargo.toml -- docs

@@ -115,7 +115,10 @@ fn docs() -> Result<()> {
 /// - Anchors are NOT verified (mdbook's heading-to-id mapping is non-trivial).
 fn check_internal_links(root: &Path) -> Result<()> {
     let src_dir = root.join("docs/src");
-    println!("Checking internal markdown links under {}", src_dir.display());
+    println!(
+        "Checking internal markdown links under {}",
+        src_dir.display()
+    );
 
     let mut md_files: Vec<PathBuf> = Vec::new();
     collect_markdown_files(&src_dir, &mut md_files)?;
@@ -155,8 +158,8 @@ fn check_internal_links(root: &Path) -> Result<()> {
 }
 
 fn collect_markdown_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(dir)
-        .with_context(|| format!("failed to read dir {}", dir.display()))?
+    for entry in
+        std::fs::read_dir(dir).with_context(|| format!("failed to read dir {}", dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
@@ -1031,7 +1034,10 @@ fn parse_env_var_chain(context: &str, source: &str) -> (Option<String>, bool) {
             let end_rel = after
                 .find(|c: char| !c.is_ascii_digit() && c != '_')
                 .unwrap_or(after.len());
-            let lit: String = after[..end_rel].chars().filter(|c| c.is_ascii_digit()).collect();
+            let lit: String = after[..end_rel]
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .collect();
             if !lit.is_empty() {
                 return (Some(lit), required);
             }
@@ -1396,13 +1402,7 @@ fn ensure_cargo_subcommand(crate_name: &str, version: &str) -> Result<()> {
     }
     println!("Installing {crate_name}@{version} via `cargo install`…");
     let status = Command::new("cargo")
-        .args([
-            "install",
-            "--locked",
-            "--version",
-            version,
-            crate_name,
-        ])
+        .args(["install", "--locked", "--version", version, crate_name])
         .status()
         .with_context(|| format!("failed to run `cargo install {crate_name}`"))?;
     anyhow::ensure!(
