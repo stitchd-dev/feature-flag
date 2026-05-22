@@ -61,6 +61,123 @@ pub struct HashingConfigItem {
     pub order: i32,
 }
 
+/// JSON wire shape mirroring `stitchd_core::evaluation::types::HashSelector`.
+///
+/// `#[serde(tag = "kind", rename_all = "snake_case")]` matches the core
+/// type's representation so the gateway DTO and core type round-trip
+/// directly through `serde_json::to_value` if a caller needs to.
+///
+/// Wire form:
+/// ```json
+/// {"kind": "context_key", "context_type": "user"}
+/// {"kind": "context_parameter", "context_type": "device", "parameter": "os"}
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HashSelectorJson {
+    /// Hash the `key` of the named context type.
+    ContextKey {
+        /// Context type whose `key` is hashed (e.g. "user").
+        context_type: String,
+    },
+    /// Hash a named parameter of the named context type.
+    ContextParameter {
+        /// Context type to look up (e.g. "device").
+        context_type: String,
+        /// Parameter name within that context (e.g. "os").
+        parameter: String,
+    },
+}
+
+impl HashSelectorJson {
+    /// Convert the JSON DTO into a proto `HashSelector`.
+    fn to_proto(&self) -> stitchd_proto::flags::v1::HashSelector {
+        use stitchd_proto::flags::v1::{
+            ContextKeySelector, ContextParameterSelector, HashSelector as ProtoSelector,
+            hash_selector::Selector,
+        };
+        let inner = match self {
+            HashSelectorJson::ContextKey { context_type } => {
+                Selector::ContextKey(ContextKeySelector {
+                    context_type: context_type.clone(),
+                })
+            }
+            HashSelectorJson::ContextParameter {
+                context_type,
+                parameter,
+            } => Selector::ContextParameter(ContextParameterSelector {
+                context_type: context_type.clone(),
+                parameter: parameter.clone(),
+            }),
+        };
+        ProtoSelector {
+            selector: Some(inner),
+        }
+    }
+
+    /// Reconstruct a JSON DTO from a proto `HashSelector`. Returns `None`
+    /// when the oneof is empty (legacy / corrupted payload).
+    fn from_proto(p: &stitchd_proto::flags::v1::HashSelector) -> Option<Self> {
+        use stitchd_proto::flags::v1::hash_selector::Selector;
+        match p.selector.as_ref()? {
+            Selector::ContextKey(s) => Some(Self::ContextKey {
+                context_type: s.context_type.clone(),
+            }),
+            Selector::ContextParameter(s) => Some(Self::ContextParameter {
+                context_type: s.context_type.clone(),
+                parameter: s.parameter.clone(),
+            }),
+        }
+    }
+
+    /// Stable identity used by duplicate-detection: `(context_type, field)`
+    /// where `field` is either `"__key__"` (for ContextKey) or the parameter
+    /// name (for ContextParameter). The reserved `__key__` sentinel can never
+    /// collide with a real parameter name (validated separately).
+    fn identity(&self) -> (String, String) {
+        match self {
+            Self::ContextKey { context_type } => (context_type.clone(), "__key__".to_string()),
+            Self::ContextParameter {
+                context_type,
+                parameter,
+            } => (context_type.clone(), parameter.clone()),
+        }
+    }
+}
+
+/// Validate a `hash_inputs` array per FR-8 of `flag_eval_unify_20260522`:
+///
+/// 1. Non-empty.
+/// 2. No two selectors share the same `(context_type, field)` identity.
+/// 3. `ContextParameter` selectors require a non-empty `parameter`.
+///
+/// Returns a human-readable error message when invalid; `Ok(())` otherwise.
+pub fn validate_hash_inputs(selectors: &[HashSelectorJson]) -> Result<(), String> {
+    if selectors.is_empty() {
+        return Err("hash_inputs must not be empty".to_string());
+    }
+    let mut seen = std::collections::HashSet::new();
+    for selector in selectors {
+        if let HashSelectorJson::ContextParameter { parameter, .. } = selector {
+            if parameter.is_empty() {
+                return Err(
+                    "hash_inputs: context_parameter selector requires a non-empty `parameter`"
+                        .to_string(),
+                );
+            }
+        }
+        let id = selector.identity();
+        if !seen.insert(id.clone()) {
+            return Err(format!(
+                "hash_inputs: duplicate selector for context_type=`{}` field=`{}`",
+                id.0,
+                if id.1 == "__key__" { "<key>" } else { &id.1 }
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateHashingBody {
     pub configs: Vec<HashingConfigItem>,
@@ -184,22 +301,81 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
     let output = match &r.output {
         Some(Output::VariantKey(k)) => serde_json::json!({ "variant_key": k }),
         Some(Output::Allocation(alloc)) => {
-            // Serialise context_hash_specs → hash_targets array for the UI.
-            // Each entry becomes { context_type, field } where field is "key"
-            // (empty parameter_names) or the parameter name.
+            // Phase 4 of flag_eval_unify_20260522: surface BOTH the new
+            // `hash_inputs` selector list AND the legacy `hash_targets`
+            // array. Prefer the new field as the authoritative source when
+            // populated; synthesise it from the legacy `context_hash_specs`
+            // map otherwise (so newly-fetched legacy data round-trips).
+            let hash_inputs_json: Vec<serde_json::Value> = if !alloc.hash_inputs.is_empty() {
+                alloc
+                    .hash_inputs
+                    .iter()
+                    .filter_map(HashSelectorJson::from_proto)
+                    .filter_map(|sel| serde_json::to_value(&sel).ok())
+                    .collect()
+            } else {
+                // Synthesise from the legacy map. Iteration order over a
+                // HashMap is non-deterministic; sort by `context_type` for
+                // stable output (the legacy field stays around as a
+                // best-effort representation until Phase 5/6 retires it).
+                let mut sorted: Vec<_> = alloc.context_hash_specs.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(b.0));
+                let mut out = Vec::new();
+                for (ctx_type, spec) in sorted {
+                    if spec.parameter_names.is_empty() {
+                        out.push(serde_json::json!({
+                            "kind": "context_key",
+                            "context_type": ctx_type
+                        }));
+                    } else {
+                        for param in &spec.parameter_names {
+                            out.push(serde_json::json!({
+                                "kind": "context_parameter",
+                                "context_type": ctx_type,
+                                "parameter": param
+                            }));
+                        }
+                    }
+                }
+                out
+            };
+
+            // Legacy `hash_targets` projection — same UI shape as before.
             let mut hash_targets: Vec<serde_json::Value> = Vec::new();
-            for (ctx_type, spec) in &alloc.context_hash_specs {
-                if spec.parameter_names.is_empty() {
-                    hash_targets.push(serde_json::json!({
-                        "context_type": ctx_type,
-                        "field": "key"
-                    }));
-                } else {
-                    for param in &spec.parameter_names {
+            // Prefer the new ordered list when present; fall back to the
+            // (sorted) legacy map otherwise.
+            if !alloc.hash_inputs.is_empty() {
+                for sel in &alloc.hash_inputs {
+                    use stitchd_proto::flags::v1::hash_selector::Selector;
+                    if let Some(inner) = sel.selector.as_ref() {
+                        match inner {
+                            Selector::ContextKey(s) => hash_targets.push(serde_json::json!({
+                                "context_type": s.context_type,
+                                "field": "key"
+                            })),
+                            Selector::ContextParameter(s) => hash_targets.push(serde_json::json!({
+                                "context_type": s.context_type,
+                                "field": s.parameter
+                            })),
+                        }
+                    }
+                }
+            } else {
+                let mut sorted: Vec<_> = alloc.context_hash_specs.iter().collect();
+                sorted.sort_by(|a, b| a.0.cmp(b.0));
+                for (ctx_type, spec) in sorted {
+                    if spec.parameter_names.is_empty() {
                         hash_targets.push(serde_json::json!({
                             "context_type": ctx_type,
-                            "field": param
+                            "field": "key"
                         }));
+                    } else {
+                        for param in &spec.parameter_names {
+                            hash_targets.push(serde_json::json!({
+                                "context_type": ctx_type,
+                                "field": param
+                            }));
+                        }
                     }
                 }
             }
@@ -212,7 +388,13 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
                 .iter()
                 .map(|b| serde_json::json!({ "variant_key": b.variant_key, "weight_milli": b.weight_milli }))
                 .collect();
-            serde_json::json!({ "allocation": { "hash_targets": hash_targets, "buckets": buckets } })
+            serde_json::json!({
+                "allocation": {
+                    "hash_inputs": hash_inputs_json,
+                    "hash_targets": hash_targets,
+                    "buckets": buckets
+                }
+            })
         }
         None => serde_json::Value::Null,
     };
@@ -756,7 +938,13 @@ pub struct RuleBody {
     pub condition: serde_json::Value,
     /// Output:
     /// - `{"variant_key": "..."}`
-    /// - `{"allocation": {"hash_targets": [{"context_type": "user", "field": "key"}], "buckets": [...]}}`
+    /// - `{"allocation": {"hash_inputs": [{"kind":"context_key","context_type":"user"}], "buckets": [...]}}`
+    ///
+    /// The new `hash_inputs` selector list (Phase 4 of
+    /// `flag_eval_unify_20260522`) is the preferred wire shape. The legacy
+    /// `hash_targets` array remains accepted on input for backwards
+    /// compatibility but is no longer the authoritative source — see
+    /// `extract_hash_inputs_from_allocation`.
     pub output: serde_json::Value,
 }
 
@@ -767,26 +955,136 @@ pub struct ReplaceRulesBody {
     pub version: u64,
 }
 
-fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::FlagRule {
-    use stitchd_proto::flags::v1::{
-        AllocationBucket, ContextHashSpec, PercentageAllocation, flag_rule::Output,
-    };
+/// Extract `hash_inputs` from a rule's `allocation` JSON value.
+///
+/// Recognises two shapes (in order of preference):
+/// 1. `"hash_inputs": [{"kind": "context_key", ...}, ...]` — the new
+///    Phase 4 (`flag_eval_unify_20260522`) wire shape.
+/// 2. `"hash_targets": [{"context_type": "user", "field": "key"}, ...]` —
+///    legacy shape used by the admin UI before Phase 4. Each `field == "key"`
+///    becomes a `ContextKey` selector; otherwise the value is treated as a
+///    parameter name on the named context type.
+///
+/// Returns `None` when neither field is present; the caller decides whether
+/// to default (legacy behaviour: `user.key`) or 400.
+fn extract_hash_inputs_from_allocation(alloc: &serde_json::Value) -> Option<Vec<HashSelectorJson>> {
+    if let Some(arr) = alloc.get("hash_inputs").and_then(|v| v.as_array()) {
+        let mut out = Vec::with_capacity(arr.len());
+        for item in arr {
+            let selector: HashSelectorJson = serde_json::from_value(item.clone()).ok()?;
+            out.push(selector);
+        }
+        return Some(out);
+    }
+    if let Some(targets) = alloc.get("hash_targets").and_then(|v| v.as_array()) {
+        let mut out = Vec::with_capacity(targets.len());
+        for target in targets {
+            let ctx_type = target
+                .get("context_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("user")
+                .to_string();
+            let field = target
+                .get("field")
+                .and_then(|v| v.as_str())
+                .unwrap_or("key");
+            out.push(if field == "key" {
+                HashSelectorJson::ContextKey {
+                    context_type: ctx_type,
+                }
+            } else {
+                HashSelectorJson::ContextParameter {
+                    context_type: ctx_type,
+                    parameter: field.to_string(),
+                }
+            });
+        }
+        return Some(out);
+    }
+    None
+}
+
+/// Synthesise the legacy `context_hash_specs` map from an ordered
+/// `hash_inputs` list. The map preserves the (lossy) shape that pre-Phase-4
+/// consumers expect: each context_type has a `parameter_names` list, where
+/// an empty list means "hash the context key".
+///
+/// **Hash stability caveat:** A round-trip through `context_hash_specs` does
+/// NOT preserve selector ordering — the map's iteration order is
+/// canonically `context_type ASC`, parameters in insertion order. Hash
+/// stability is preserved ONLY when the original `hash_inputs` is already
+/// in canonical order. Phase 5/6 readers MUST prefer `hash_inputs` when
+/// non-empty.
+fn synthesise_context_hash_specs(
+    selectors: &[HashSelectorJson],
+) -> std::collections::HashMap<String, stitchd_proto::flags::v1::ContextHashSpec> {
+    use stitchd_proto::flags::v1::ContextHashSpec;
+    let mut map: std::collections::HashMap<String, ContextHashSpec> =
+        std::collections::HashMap::new();
+    for sel in selectors {
+        match sel {
+            HashSelectorJson::ContextKey { context_type } => {
+                map.entry(context_type.clone())
+                    .or_insert_with(|| ContextHashSpec {
+                        parameter_names: Vec::new(),
+                    });
+            }
+            HashSelectorJson::ContextParameter {
+                context_type,
+                parameter,
+            } => {
+                let entry = map
+                    .entry(context_type.clone())
+                    .or_insert_with(|| ContextHashSpec {
+                        parameter_names: Vec::new(),
+                    });
+                entry.parameter_names.push(parameter.clone());
+            }
+        }
+    }
+    map
+}
+
+/// Convert a single `RuleBody` JSON to its proto representation. Validates
+/// `hash_inputs` before populating the proto. Returns a structured error
+/// when validation fails so the caller can map to HTTP 400.
+fn rule_body_to_proto(
+    r: RuleBody,
+    index: usize,
+) -> Result<stitchd_proto::flags::v1::FlagRule, String> {
+    use stitchd_proto::flags::v1::{AllocationBucket, PercentageAllocation, flag_rule::Output};
 
     let rule_payload = serde_json::to_vec(&r.condition).unwrap_or_default();
 
     let output = if let Some(key) = r.output.get("variant_key").and_then(|v| v.as_str()) {
         Some(Output::VariantKey(key.to_string()))
     } else if let Some(alloc_val) = r.output.get("allocation") {
-        // New format: { "allocation": { "hash_targets": [...], "buckets": [...] } }
-        // Legacy format: { "allocation": [...] }  (bare array — treated as user.key)
-        let (hash_targets_val, buckets_val) = if alloc_val.is_array() {
-            (None, alloc_val)
-        } else {
+        // Legacy bare-array shape: `{"allocation": [...]}` — treated as user.key.
+        let (selectors, buckets_val) = if alloc_val.is_array() {
             (
-                alloc_val.get("hash_targets"),
-                alloc_val.get("buckets").unwrap_or(&serde_json::Value::Null),
+                vec![HashSelectorJson::ContextKey {
+                    context_type: "user".to_string(),
+                }],
+                alloc_val.clone(),
             )
+        } else {
+            let buckets_val = alloc_val
+                .get("buckets")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            // Prefer `hash_inputs` when present; fall back to `hash_targets`
+            // (legacy admin UI shape). If neither is present, default to
+            // single `user.key` selector (preserves pre-Phase-4 behaviour).
+            let selectors = extract_hash_inputs_from_allocation(alloc_val).unwrap_or_else(|| {
+                vec![HashSelectorJson::ContextKey {
+                    context_type: "user".to_string(),
+                }]
+            });
+            (selectors, buckets_val)
         };
+
+        // Validate the selector list (FR-8 of flag_eval_unify_20260522).
+        validate_hash_inputs(&selectors).map_err(|e| format!("rule[{index}]: {e}"))?;
 
         let buckets: Vec<AllocationBucket> = buckets_val
             .as_array()
@@ -800,59 +1098,29 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
             })
             .collect();
 
-        // Build context_hash_specs from hash_targets array.
-        // Each target: { context_type, field } where field=="key" → empty parameter_names.
-        let mut context_hash_specs: std::collections::HashMap<String, ContextHashSpec> =
-            std::collections::HashMap::new();
-        if let Some(targets) = hash_targets_val.and_then(|v| v.as_array()) {
-            for target in targets {
-                let ctx_type = target
-                    .get("context_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("user");
-                let field = target
-                    .get("field")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("key");
-                let spec = context_hash_specs
-                    .entry(ctx_type.to_string())
-                    .or_insert_with(|| ContextHashSpec {
-                        parameter_names: Vec::new(),
-                    });
-                if field != "key" {
-                    spec.parameter_names.push(field.to_string());
-                }
-            }
-        }
-        // Default to user.key when no targets provided.
-        if context_hash_specs.is_empty() {
-            context_hash_specs.insert(
-                "user".to_string(),
-                ContextHashSpec {
-                    parameter_names: Vec::new(),
-                },
-            );
-        }
+        // Dual-populate the proto: `hash_inputs` is the authoritative new
+        // shape; `context_hash_specs` is synthesised from it for the
+        // backwards-compat window. Phase 5/6 producer cutover removes the
+        // legacy map.
+        let proto_hash_inputs: Vec<_> = selectors.iter().map(HashSelectorJson::to_proto).collect();
+        let context_hash_specs = synthesise_context_hash_specs(&selectors);
 
         Some(Output::Allocation(PercentageAllocation {
             context_hash_specs,
             buckets,
-            // Phase 3 of flag_eval_unify_20260522 added the new selector
-            // list alongside the legacy map. Producer cutover is in Phase
-            // 5/6; the field stays empty here for now.
-            hash_inputs: Vec::new(),
+            hash_inputs: proto_hash_inputs,
         }))
     } else {
         None
     };
 
     let _ = index; // index tracked by the caller for logging if needed
-    stitchd_proto::flags::v1::FlagRule {
+    Ok(stitchd_proto::flags::v1::FlagRule {
         rule_payload,
         output,
         name: r.name.unwrap_or_default(),
         rule_id: r.rule_id.unwrap_or_default(),
-    }
+    })
 }
 
 /// `PUT /v1/projects/{project_id}/flags/{flag_id}/rules`
@@ -878,6 +1146,18 @@ pub async fn update_rules(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<ReplaceRulesBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    // Validate the rule list BEFORE touching the upstream. `hash_inputs` and
+    // legacy `hash_targets` shapes both run through `validate_hash_inputs`.
+    // Validation errors surface as HTTP 400 (Phase 4 / FR-8 of
+    // `flag_eval_unify_20260522`).
+    let proto_rules: Vec<_> = body
+        .rules
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| rule_body_to_proto(r, i))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(GatewayError::BadRequest)?;
+
     // Fetch current flag to carry over metadata.
     let get_req = tonic::Request::new(GetFlagRequest {
         environment_id: String::new(),
@@ -890,13 +1170,6 @@ pub async fn update_rules(
         .await
         .map_err(GatewayError::from)?
         .into_inner();
-
-    let proto_rules = body
-        .rules
-        .into_iter()
-        .enumerate()
-        .map(|(i, r)| rule_body_to_proto(r, i))
-        .collect();
 
     let flag = FeatureFlag {
         key: flag_key,
@@ -1014,6 +1287,15 @@ pub struct SetDefaultRuleDistributionBody {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct DefaultRuleDistributionBody {
     pub allocations: Vec<DefaultRuleAllocationBody>,
+    /// Optional ordered selector list driving the default-rule percentage
+    /// hash. Mirrors the `hash_inputs` field on percentage-allocation rule
+    /// outputs. When omitted, the server falls back to the flag's
+    /// `default_rule_hash_inputs` column (Phase 5/6 wiring); for now, the
+    /// gateway validates the shape but does not yet plumb it through the
+    /// `SetDefaultRuleDistribution` RPC (proto-level cutover lands in
+    /// Phase 5/6 of `flag_eval_unify_20260522`).
+    #[serde(default)]
+    pub hash_inputs: Option<Vec<HashSelectorJson>>,
 }
 
 /// Response body — echoes the updated flag and its new version.
@@ -1052,6 +1334,17 @@ pub async fn set_default_rule_distribution(
     Json(body): Json<SetDefaultRuleDistributionBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
     use stitchd_proto::flags::v1::{DefaultRuleAllocation, SetDefaultRuleDistributionRequest};
+
+    // Validate the optional `hash_inputs` selector list BEFORE touching the
+    // upstream. Phase 4 / FR-8 of `flag_eval_unify_20260522`. (The proto-
+    // level plumbing of `hash_inputs` through `SetDefaultRuleDistribution`
+    // lands in Phase 5/6 — for now the gateway validates the shape and
+    // discards it.)
+    if let Some(dist) = body.distribution.as_ref() {
+        if let Some(selectors) = dist.hash_inputs.as_ref() {
+            validate_hash_inputs(selectors).map_err(GatewayError::BadRequest)?;
+        }
+    }
 
     let allocations: Vec<DefaultRuleAllocation> = body
         .distribution
