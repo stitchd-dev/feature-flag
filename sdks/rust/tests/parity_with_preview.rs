@@ -496,3 +496,76 @@ async fn parity_default_rule_distribution_via_core_engine() {
         count_treatment
     );
 }
+
+/// Phase 6 Task 8 — SDK inherits `default_rule_distribution` automatically
+/// via core.
+///
+/// Direct verification that the core engine's hash-based assignment is the
+/// path the SDK's `evaluate()` will exercise when the proto wire eventually
+/// carries `default_rule_distribution`. Sanity-checks two contracts the SDK
+/// inherits:
+///
+/// 1. The returned variant is one of the distribution's listed variants —
+///    never the fallback `default_variant_id` alone.
+/// 2. The hash assignment is stable for the same `(flag_key, env_id,
+///    bundle)` — the same context bundle always lands on the same variant.
+#[test]
+fn default_rule_distribution_assigns_listed_variant_not_fallback() {
+    let (_proto, core) = default_rule_distribution_corpus();
+
+    let bundle_alice = [Context::new("user", "alice")];
+    let bundle_bob = [Context::new("user", "bob")];
+
+    let res1 = evaluate_flag(
+        &core,
+        &bundle_alice,
+        &[],
+        &ListMembershipIndex::new(),
+        env_id(),
+        ProjectId::new(),
+        TraceLevel::Off,
+    );
+    let res2 = evaluate_flag(
+        &core,
+        &bundle_alice,
+        &[],
+        &ListMembershipIndex::new(),
+        env_id(),
+        ProjectId::new(),
+        TraceLevel::Off,
+    );
+    let res_bob = evaluate_flag(
+        &core,
+        &bundle_bob,
+        &[],
+        &ListMembershipIndex::new(),
+        env_id(),
+        ProjectId::new(),
+        TraceLevel::Off,
+    );
+
+    assert_eq!(res1.len(), 1);
+    assert_eq!(res2.len(), 1);
+    assert_eq!(res_bob.len(), 1);
+
+    // Distributed variant — one of the two listed.
+    for r in res1.iter().chain(res_bob.iter()) {
+        assert!(
+            r.variant_key == "control" || r.variant_key == "treatment",
+            "default_rule_distribution must assign a listed variant; got {:?}",
+            r.variant_key
+        );
+        assert!(
+            matches!(r.outcome, CoreEvalOutcome::DefaultRuleDistribution),
+            "outcome must be DefaultRuleDistribution; got {:?}",
+            r.outcome
+        );
+    }
+
+    // Hash stability — alice always gets the same variant across repeated
+    // evaluations of the same flag + env + bundle.
+    assert_eq!(
+        res1[0].variant_key, res2[0].variant_key,
+        "alice's bucket assignment must be stable across calls"
+    );
+}
