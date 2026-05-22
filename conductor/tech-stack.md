@@ -15,10 +15,10 @@ The system is decomposed into seven Cargo workspace crates, each a standalone gR
 | `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from ClickHouse `experiment_results` table; experiments now reference `metric_ids` (cutover migration `20260520000002`) | Binary |
 | `stitchd-stats-service` | Scheduled stats computation (60-min interval); gRPC-only consumer; writes pre-aggregated results to ClickHouse `experiment_results`. Exposes pure query builders under `queries::{aggregation, ratio, funnel, preview}` (experiment-scoped vs day-bucketed preview); shared `jsonlogic_to_sql` translator for metric `where_clause` filters | Binary |
 | `stitchd-event-writer` | ClickHouse event ingestion and migration helpers (library; replaces retired `stitchd-events` crate name) | Library |
-| `stitchd-sdk-rust` | Server-side Rust SDK — in-process flag evaluation (library; naming convention: `stitchd-sdk-{lang}`) | Library |
-| `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types | Library |
+| `stitchd-sdk-rust` | Server-side Rust SDK — in-process flag evaluation via `SdkClient::evaluate(&[EvalRequest], TraceLevel)`, which delegates to `stitchd-core::evaluation::evaluate_flag` (library; naming convention: `stitchd-sdk-{lang}`) | Library |
+| `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types. Hosts the SOLE flag-evaluation orchestrator `evaluation::evaluate_flag(...)` (post-`flag_eval_unify_20260522`) — preview path + SDK path both delegate here. Owns the canonical `HashSelector` / `HashInputSpec` / `TraceLevel` / `ListMembershipIndex` / `EvalOutcome` / `EvaluationTrace` / `FlagEvaluationResult` types | Library |
 | `stitchd-db` | Database access layer (sqlx repositories + ClickHouse) | Library |
-| `stitchd-proto` | Protobuf definitions and generated tonic stubs for all services | Library |
+| `stitchd-proto` | Protobuf definitions and generated tonic stubs for all services. `flags.v1.PercentageAllocation` carries the canonical `hash_inputs: repeated HashSelector` at tag 3 (post-`flag_eval_unify_20260522`); the legacy `context_hash_specs map<string, ContextHashSpec>` at tag 1 stays for dual-read compatibility during the cutover. `HashSelector` is a `oneof { ContextKeySelector, ContextParameterSelector }` | Library |
 | `xtask` | Build tool: mdBook docs generation, tool installation | Binary |
 
 Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous monolith) has been removed. The `stitchd-events` crate was renamed to `stitchd-event-writer` as part of the `boundaries_20260518` refactor; all references to the old name are retired.
@@ -238,6 +238,18 @@ CH migrations (under `stitchd-event-writer/migrations/`):
 | `20260521000003_experiment_assignments_mv.sql` | Create `experiment_assignments` table + `experiment_assignments_mv` materialized view |
 | `20260521000004_backfill_experiment_assignments.sql` | One-shot 90-day backfill from `flag_evaluation_log` via the dictionary |
 | `20260521000005_experiment_results_context_type.sql` | Add `context_type LowCardinality(String) DEFAULT 'user'` to `experiment_results` (per-context-type stats) |
+
+### Flag-evaluation unification migrations (`flag_eval_unify_20260522`)
+
+PG migrations:
+
+| Migration | Change |
+|---|---|
+| `20260522000001_hash_input_spec_cutover.sql` | Add nullable JSONB columns `hash_inputs` (on per-rule percentage allocations in `feature_flag_rules.rule_def`) and `default_rule_hash_inputs` (on `feature_flags.default_rule_distribution`) carrying the canonical `Vec<HashSelector>` selector list. Legacy `rule_def.output.Percentage.targets` array is retained for dual-read fallback during the cutover; `cargo xtask verify-hash-cutover` audits stability of bucket assignment when both shapes are present |
+
+**Dual-schema state during cutover:**
+- Proto `flags.v1.PercentageAllocation` carries `hash_inputs: repeated HashSelector` (tag 3 — canonical) AND legacy `context_hash_specs: map<string, ContextHashSpec>` (tag 1 — dual-read). Mapping prefers `hash_inputs` when non-empty; falls back to a canonical sort of `context_hash_specs` (context_type ASC, parameters ASC within type) otherwise.
+- PG percentage-rule rows carry the new `hash_inputs` JSONB column AND the legacy `rule_def.output.Percentage.targets` array. Repositories dual-write both shapes; consumers prefer `hash_inputs`.
 
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
