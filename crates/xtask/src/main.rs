@@ -27,9 +27,13 @@ fn main() -> Result<()> {
             eprintln!("Usage: cargo xtask <task>");
             eprintln!();
             eprintln!("Tasks:");
-            eprintln!("  docs                  Regenerate all documentation and build the mdBook site");
+            eprintln!(
+                "  docs                  Regenerate all documentation and build the mdBook site"
+            );
             eprintln!("  scylla-migrate        Apply pending ScyllaDB CQL migrations");
-            eprintln!("  verify-hash-cutover   Re-hash the percentage-rule cutover corpus and report drift");
+            eprintln!(
+                "  verify-hash-cutover   Re-hash the percentage-rule cutover corpus and report drift"
+            );
             std::process::exit(1);
         }
     }

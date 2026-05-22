@@ -37,7 +37,10 @@ pub fn run() -> Result<()> {
     let mut report = Report::default();
 
     for pair in &corpus.pairs {
-        let new_hash_inputs = canonical_sort(&pair.legacy_context_hash_specs, &pair.legacy_insertion_order);
+        let new_hash_inputs = canonical_sort(
+            &pair.legacy_context_hash_specs,
+            &pair.legacy_insertion_order,
+        );
         if new_hash_inputs != pair.expected_new_hash_inputs {
             report.fixture_drift.push(pair.name.clone());
             eprintln!(
@@ -238,7 +241,10 @@ fn print_summary(report: &Report) {
     println!();
     println!("─── verify-hash-cutover summary ───");
     println!("  identical buckets:        {}", report.identical);
-    println!("  operator-review entries:  {}", report.operator_review.len());
+    println!(
+        "  operator-review entries:  {}",
+        report.operator_review.len()
+    );
     println!("  fixture-drift pairs:      {}", report.fixture_drift.len());
 
     if !report.operator_review.is_empty() {
@@ -254,7 +260,9 @@ fn print_summary(report: &Report) {
 
     if !report.fixture_drift.is_empty() {
         println!();
-        println!("Fixture-drift pairs (corpus `expected_new_hash_inputs` no longer matches the canonical-sort emitter):");
+        println!(
+            "Fixture-drift pairs (corpus `expected_new_hash_inputs` no longer matches the canonical-sort emitter):"
+        );
         for name in &report.fixture_drift {
             println!("  • {name}");
         }
@@ -299,9 +307,15 @@ mod tests {
 
         let out = canonical_sort(&specs, &["device".into(), "user".into()]);
         assert_eq!(out.len(), 3);
-        assert!(matches!(out[0], HashSelectorJson::ContextParameter { ref context_type, ref parameter } if context_type == "device" && parameter == "browser"));
-        assert!(matches!(out[1], HashSelectorJson::ContextParameter { ref context_type, ref parameter } if context_type == "device" && parameter == "os"));
-        assert!(matches!(out[2], HashSelectorJson::ContextKey { ref context_type } if context_type == "user"));
+        assert!(
+            matches!(out[0], HashSelectorJson::ContextParameter { ref context_type, ref parameter } if context_type == "device" && parameter == "browser")
+        );
+        assert!(
+            matches!(out[1], HashSelectorJson::ContextParameter { ref context_type, ref parameter } if context_type == "device" && parameter == "os")
+        );
+        assert!(
+            matches!(out[2], HashSelectorJson::ContextKey { ref context_type } if context_type == "user")
+        );
     }
 
     #[test]

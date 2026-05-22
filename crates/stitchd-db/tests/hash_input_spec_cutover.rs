@@ -45,6 +45,13 @@ struct LegacyContextHashSpec {
     parameter_names: Vec<String>,
 }
 
+/// One sample context entry in the corpus: `(context_type, key, [(param_name, value)])`.
+type SampleCtx = (
+    &'static str,
+    &'static str,
+    Vec<(&'static str, &'static str)>,
+);
+
 /// One row in the frozen pre-migration corpus.
 #[derive(Debug, Clone)]
 struct LegacyCorpusRow {
@@ -53,9 +60,8 @@ struct LegacyCorpusRow {
     /// The legacy map plus an explicit *insertion* order — modelling what an
     /// upstream caller serialised before this migration existed.
     context_hash_specs: Vec<(String, LegacyContextHashSpec)>,
-    /// Sample context bundle to hash against. Each tuple is
-    /// `(context_type, context_key, params)`.
-    sample_contexts: Vec<(&'static str, &'static str, Vec<(&'static str, &'static str)>)>,
+    /// Sample context bundle to hash against.
+    sample_contexts: Vec<SampleCtx>,
     /// `(flag_key, env_id)` used to seed `calculate_allocation`.
     flag_key: &'static str,
     env_id: &'static str,
@@ -102,7 +108,7 @@ fn canonical_sort_to_hash_inputs(
 /// preview path's existing hashing logic in `stitchd-core::evaluation::preview`.
 fn target_values_from_legacy_insertion_order(
     specs: &[(String, LegacyContextHashSpec)],
-    sample_contexts: &[(&str, &str, Vec<(&str, &str)>)],
+    sample_contexts: &[SampleCtx],
 ) -> Vec<String> {
     let mut values = Vec::new();
     for (ctx_type, spec) in specs {
@@ -130,7 +136,7 @@ fn target_values_from_legacy_insertion_order(
 /// `stitchd-core` once Phase 2 lands.
 fn target_values_from_hash_inputs(
     hash_inputs: &[serde_json::Value],
-    sample_contexts: &[(&str, &str, Vec<(&str, &str)>)],
+    sample_contexts: &[SampleCtx],
 ) -> Vec<String> {
     let mut values = Vec::new();
     for sel in hash_inputs {
@@ -228,16 +234,8 @@ fn corpus() -> Vec<LegacyCorpusRow> {
                 ),
             ],
             sample_contexts: vec![
-                (
-                    "user",
-                    "alice",
-                    vec![],
-                ),
-                (
-                    "device",
-                    "d-001",
-                    vec![("os", "ios")],
-                ),
+                ("user", "alice", vec![]),
+                ("device", "d-001", vec![("os", "ios")]),
             ],
             flag_key: "flag-3",
             env_id: "env-prod",
@@ -329,7 +327,11 @@ fn bucket_parity_when_canonical_sort_matches_legacy_insertion_order() {
     // (context_type ASC + parameter ASC within type) MUST produce identical
     // buckets under both schemas — this is the hash-stability invariant
     // (NFR-4 in the spec).
-    let canonical_named = ["user_key_only", "user_single_param", "three_contexts_CANONICAL"];
+    let canonical_named = [
+        "user_key_only",
+        "user_single_param",
+        "three_contexts_CANONICAL",
+    ];
     let mut checked = 0;
     for row in corpus() {
         if !canonical_named.contains(&row.name) {
@@ -340,10 +342,8 @@ fn bucket_parity_when_canonical_sort_matches_legacy_insertion_order() {
         for ctx in &row.sample_contexts {
             // Hash against the same single-context bundle for both shapes.
             let bundle = vec![ctx.clone()];
-            let legacy_values = target_values_from_legacy_insertion_order(
-                &row.context_hash_specs,
-                &bundle,
-            );
+            let legacy_values =
+                target_values_from_legacy_insertion_order(&row.context_hash_specs, &bundle);
             let new_values = target_values_from_hash_inputs(&hash_inputs, &bundle);
             let legacy_bucket = bucket_for(row.flag_key, row.env_id, &legacy_values);
             let new_bucket = bucket_for(row.flag_key, row.env_id, &new_values);
@@ -355,7 +355,10 @@ fn bucket_parity_when_canonical_sort_matches_legacy_insertion_order() {
         }
         checked += 1;
     }
-    assert!(checked >= 2, "expected at least two canonical-order corpus rows; got {checked}");
+    assert!(
+        checked >= 2,
+        "expected at least two canonical-order corpus rows; got {checked}"
+    );
 }
 
 #[test]
@@ -372,10 +375,8 @@ fn operator_review_report_surfaces_noncanonical_rows() {
         // Build per-bundle bucket pairs.
         for ctx_bundle_seed in &row.sample_contexts {
             let bundle = vec![ctx_bundle_seed.clone()];
-            let legacy_values = target_values_from_legacy_insertion_order(
-                &row.context_hash_specs,
-                &bundle,
-            );
+            let legacy_values =
+                target_values_from_legacy_insertion_order(&row.context_hash_specs, &bundle);
             let new_values = target_values_from_hash_inputs(&hash_inputs, &bundle);
             let legacy_bucket = bucket_for(row.flag_key, row.env_id, &legacy_values);
             let new_bucket = bucket_for(row.flag_key, row.env_id, &new_values);
@@ -391,7 +392,9 @@ fn operator_review_report_surfaces_noncanonical_rows() {
     // We expect at least one non-canonical row in the corpus so the operator
     // pathway is genuinely exercised.
     if nonmatching == 0 {
-        eprintln!("[operator-review] no non-canonical buckets in current corpus — re-check corpus design");
+        eprintln!(
+            "[operator-review] no non-canonical buckets in current corpus — re-check corpus design"
+        );
     } else {
         eprintln!(
             "[operator-review] {nonmatching} bucket reshuffles surfaced — operator sign-off required:\n{}",
@@ -480,7 +483,10 @@ async fn feature_flag_rules_hash_inputs_is_jsonb_nullable(pool: sqlx::PgPool) {
     .expect("schema query failed");
 
     assert_eq!(row.0, "jsonb");
-    assert_eq!(row.1, "YES", "hash_inputs must be NULL-able for legacy rows");
+    assert_eq!(
+        row.1, "YES",
+        "hash_inputs must be NULL-able for legacy rows"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -519,7 +525,10 @@ async fn legacy_rule_def_column_is_preserved(pool: sqlx::PgPool) {
     .await
     .expect("schema query failed");
 
-    assert!(row.0, "legacy rule_def column must survive Phase 3 migration");
+    assert!(
+        row.0,
+        "legacy rule_def column must survive Phase 3 migration"
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
