@@ -40,11 +40,11 @@ Define the canonical types — every later phase consumes them.
       evaluation via existing `SegmentEvaluator`, list-segment membership
       lookup via `ListMembershipIndex`, percentage allocation, default-rule
       fallthrough — `TraceLevel::Off` only.
-- [ ] Task 3: Write failing tests for `TraceLevel::Full` output: per-rule
+- [x] Task 3: Write failing tests for `TraceLevel::Full` output: per-rule
       `RuleTrace` (matched / no-match / skipped), per-condition `ConditionTrace`
       (OR/AND missing-context resolution), per-result `RolloutDebug`
       (hash_input, bucket, variant_ranges).
-- [ ] Task 4: Implement trace generation gated by `TraceLevel::Full`.
+- [x] Task 4: Implement trace generation gated by `TraceLevel::Full`.
 - [ ] Task 5: Write failing tests for cross-context hashing — selectors
       drawing from multiple context_types, mixing `Key` and `Parameter`.
       Include missing-context and missing-parameter sentinel-empty cases.

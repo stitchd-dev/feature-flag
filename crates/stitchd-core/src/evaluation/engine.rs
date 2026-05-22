@@ -1294,4 +1294,299 @@ mod tests {
         assert_eq!(results[0].variant_key, "on");
         assert_eq!(results[1].variant_key, "on");
     }
+
+    // ── Phase 2 Task 3: TraceLevel::Full output ────────────────────────────
+
+    #[test]
+    fn evaluate_flag_full_trace_disabled_emits_empty_rule_traces() {
+        let mut flag = setup_flag();
+        flag.record.enabled = false;
+        let ctx = Context::new("user", "u1");
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Full,
+        );
+
+        let trace = results[0]
+            .trace
+            .as_ref()
+            .expect("Full trace must produce Some(EvaluationTrace) even for disabled flag");
+        assert!(trace.rule_traces.is_empty());
+        assert!(trace.rollout_debug.is_none());
+        assert!(trace.fired_rule_id.is_none());
+        assert!(trace.fired_rule_name.is_none());
+    }
+
+    #[test]
+    fn evaluate_flag_full_trace_rule_match_populates_rule_trace_and_ids() {
+        let flag = setup_flag(); // single rule matches when user.beta == true
+        let expected_rule_id = flag.rules[0].rule.id;
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Full,
+        );
+
+        let trace = results[0].trace.as_ref().unwrap();
+        assert_eq!(trace.rule_traces.len(), 1);
+        let rt = &trace.rule_traces[0];
+        assert_eq!(rt.rule_index, 0);
+        assert!(matches!(
+            rt.outcome,
+            crate::evaluation::preview::RuleOutcome::Match
+        ));
+        assert_eq!(rt.conditions.len(), 1);
+        assert!(rt.conditions[0].result);
+        assert_eq!(rt.conditions[0].predicate, "user.beta == true");
+        assert_eq!(trace.fired_rule_id, Some(expected_rule_id));
+    }
+
+    #[test]
+    fn evaluate_flag_full_trace_no_match_populates_per_leaf_conditions() {
+        // Regression: bug-wub — no-match rules must still surface per-leaf
+        // ConditionTrace entries so the UI can show which leaf failed.
+        let flag = setup_flag();
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false));
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Full,
+        );
+
+        let trace = results[0].trace.as_ref().unwrap();
+        assert_eq!(trace.rule_traces.len(), 1);
+        let rt = &trace.rule_traces[0];
+        assert!(matches!(
+            rt.outcome,
+            crate::evaluation::preview::RuleOutcome::NoMatch
+        ));
+        // Per-leaf condition trace is populated even though the rule didn't fire.
+        assert_eq!(rt.conditions.len(), 1);
+        assert!(!rt.conditions[0].result);
+    }
+
+    #[test]
+    fn evaluate_flag_full_trace_skipped_rule_after_first_match() {
+        use crate::rule_engine::condition::Condition;
+
+        let mut flag = setup_flag();
+        let flag_id = flag.record.id;
+        let on_id = flag.variants[0].id;
+        // Add an always-true rule AFTER the existing one — should be Skipped.
+        flag.rules.push(FlagRule {
+            flag_id,
+            rule_index: 1,
+            rule: Rule {
+                id: RuleId::new(),
+                name: Some("always".to_string()),
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Variant(on_id),
+            },
+        });
+        // Make rule 0 fire.
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Full,
+        );
+        let trace = results[0].trace.as_ref().unwrap();
+        assert_eq!(trace.rule_traces.len(), 2);
+        assert!(matches!(
+            trace.rule_traces[0].outcome,
+            crate::evaluation::preview::RuleOutcome::Match
+        ));
+        assert!(matches!(
+            trace.rule_traces[1].outcome,
+            crate::evaluation::preview::RuleOutcome::Skipped
+        ));
+        // Skipped rule must NOT emit per-leaf conditions (hot-path: avoid
+        // doing the per-leaf walk once we've decided a rule is skipped).
+        assert!(trace.rule_traces[1].conditions.is_empty());
+        // Silence unused warning for unused Condition import.
+        let _ = std::marker::PhantomData::<Condition>;
+    }
+
+    #[test]
+    fn evaluate_flag_full_trace_percentage_rule_populates_rollout_debug() {
+        use crate::rule_engine::condition::Condition;
+        let mut flag = setup_flag();
+        let on_id = flag.variants[0].id;
+        let off_id = flag.variants[1].id;
+        flag.rules[0].rule.condition = ConditionExpr::And(vec![]); // always match
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "user".to_string(),
+                field: TargetField::Key,
+            }],
+            weights: vec![(on_id, 500), (off_id, 500)],
+        };
+
+        let ctx = Context::new("user", "u1");
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Full,
+        );
+        let trace = results[0].trace.as_ref().unwrap();
+        let dbg = trace
+            .rollout_debug
+            .as_ref()
+            .expect("percentage rule must produce rollout_debug");
+        assert!(!dbg.hash_input.is_empty());
+        assert!(dbg.bucket < 1000);
+        assert_eq!(dbg.variant_ranges.len(), 2);
+        assert_eq!(dbg.variant_ranges[0].from, 0);
+        assert_eq!(dbg.variant_ranges[0].to, 499);
+        assert_eq!(dbg.variant_ranges[1].from, 500);
+        assert_eq!(dbg.variant_ranges[1].to, 999);
+        // Silence unused Condition import.
+        let _ = std::marker::PhantomData::<Condition>;
+    }
+
+    #[test]
+    fn evaluate_flag_full_trace_default_rule_distribution_populates_rollout_debug() {
+        use crate::rollout::{RolloutAllocation, RolloutDistribution};
+        let mut flag = setup_flag();
+        flag.rules.clear();
+        flag.record.default_rule_distribution = Some(RolloutDistribution {
+            allocations: vec![
+                RolloutAllocation {
+                    variant_key: "on".to_string(),
+                    percentage: 30.0,
+                },
+                RolloutAllocation {
+                    variant_key: "off".to_string(),
+                    percentage: 70.0,
+                },
+            ],
+        });
+        let ctx = Context::new("user", "alice");
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Full,
+        );
+        let trace = results[0].trace.as_ref().unwrap();
+        // No custom rules → empty rule_traces.
+        assert!(trace.rule_traces.is_empty());
+        // Default-rule distribution path populates rollout_debug.
+        let dbg = trace
+            .rollout_debug
+            .as_ref()
+            .expect("default-rule distribution must produce rollout_debug");
+        assert_eq!(dbg.variant_ranges.len(), 2);
+        assert_eq!(dbg.variant_ranges[0].variant_key, "on");
+        assert_eq!(dbg.variant_ranges[0].from, 0);
+        // 30% → bucket 0..=299
+        assert_eq!(dbg.variant_ranges[0].to, 299);
+        assert_eq!(dbg.variant_ranges[1].variant_key, "off");
+        assert_eq!(dbg.variant_ranges[1].from, 300);
+    }
+
+    #[test]
+    fn evaluate_flag_full_trace_or_with_missing_context_resolves_to_false_leaf() {
+        // OR / AND missing-context resolution: when a leaf references a
+        // context_type not present in the bundle, eval_leaf treats the
+        // missing context as "no match" — the leaf trace must surface result=false.
+        use crate::rule_engine::condition::Condition;
+        let mut flag = setup_flag();
+        let on_id = flag.variants[0].id;
+        flag.rules[0].rule.condition = ConditionExpr::Or(vec![
+            ConditionExpr::Leaf(Condition::Eq {
+                context_type: "org".to_string(), // missing
+                param: "tier".to_string(),
+                value: ParameterValue::Str("enterprise".to_string()),
+            }),
+            ConditionExpr::Leaf(Condition::Eq {
+                context_type: "user".to_string(),
+                param: "beta".to_string(),
+                value: ParameterValue::Bool(true),
+            }),
+        ]);
+        flag.rules[0].rule.output = RuleOutput::Variant(on_id);
+
+        // beta=true → OR resolves true via second arm.
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Full,
+        );
+        let trace = results[0].trace.as_ref().unwrap();
+        let rt = &trace.rule_traces[0];
+        assert_eq!(rt.conditions.len(), 2);
+        // First leaf: org.tier == enterprise → missing context resolves false.
+        let org_trace = rt
+            .conditions
+            .iter()
+            .find(|c| c.predicate.contains("org"))
+            .expect("missing-context leaf must still appear in trace");
+        assert!(!org_trace.result, "missing context resolves to false leaf");
+        // Second leaf: user.beta == true → matched.
+        let beta_trace = rt
+            .conditions
+            .iter()
+            .find(|c| c.predicate.contains("beta"))
+            .unwrap();
+        assert!(beta_trace.result);
+    }
 }
