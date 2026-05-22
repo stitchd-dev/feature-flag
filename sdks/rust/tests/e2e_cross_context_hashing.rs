@@ -583,10 +583,14 @@ async fn cross_context_hashing_preview_and_sdk_agree_end_to_end() {
         .with_context(bundle[2].clone());
 
     let preview_results = evaluate_preview(&core_flag, &[eval_ctx], &[], env_id(), &[]);
+    // Bug fix `feature-flag-utp`: preview emits ONE ContextPreviewResult
+    // PER SUB-CONTEXT in the bundle (user + device + application → 3
+    // results). All three results share the SAME rule outcome and
+    // hash_input because they evaluate against the SAME bundle.
     assert_eq!(
         preview_results.len(),
-        1,
-        "preview produces one result per EvaluationContext"
+        bundle.len(),
+        "preview produces one result per sub-context in the bundle"
     );
     let preview_result = &preview_results[0];
 

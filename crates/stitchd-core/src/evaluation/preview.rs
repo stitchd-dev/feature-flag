@@ -109,57 +109,79 @@ pub fn evaluate_preview(
 ) -> Vec<ContextPreviewResult> {
     // Phase 2 of `flag_eval_unify_20260522`: delegate to the unified core
     // entry point. Each `EvaluationContext` here corresponds to one
-    // independent bundle; we call `evaluate_flag` once per bundle, take its
-    // first FlagEvaluationResult (one per bundle since each EvaluationContext
-    // collapses to one result for the preview API), and remap the result
-    // shape to the per-context preview payload expected by the flag-service
-    // RPC.
+    // independent bundle.
+    //
+    // Bug fix `feature-flag-utp` (cross-context hashing in preview): when
+    // a single `EvaluationContext` carries N sub-contexts (the common
+    // multi-context preview shape — user + device + application), we emit
+    // ONE `ContextPreviewResult` PER SUB-CONTEXT, sharing the SAME bundle
+    // for rule evaluation + percentage hashing. The previous behaviour
+    // collapsed a multi-sub-context bundle into a single result (taking
+    // only the first per-context entry from `evaluate_flag`), which
+    // silently dropped the other sub-contexts from the UI's view; worse,
+    // some upstream callers worked around that by splitting the incoming
+    // flat list into N single-sub-context bundles, which destroyed the
+    // cross-context relationship entirely (each result's `hash_input` then
+    // resolved only against its own sub-context).
+    //
+    // The new contract: one result per sub-context, `context_index` is the
+    // GLOBAL sub-context index across all input `EvaluationContext`s (so
+    // gateways and callers can map results back to their flat input list
+    // shape without an extra step). For a single-sub-context EC the
+    // behaviour is identical to before.
     //
     // `project_id` is reserved for future hash-salt extensions; today the
     // hashing salt is `(flag_key, env_id, target_values)`, so we pass a
     // synthetic ProjectId (the flag's project).
     let project_id = flag.record.project_id;
 
-    evaluation_contexts
-        .iter()
-        .enumerate()
-        .map(|(idx, ec)| {
-            // Build a per-bundle ListMembershipIndex from the caller-supplied
-            // pre-resolved memberships (aligned by EvaluationContext index).
-            // The set applies to the WHOLE bundle for that index, so we
-            // register it under EVERY (context_type, context_key) tuple in
-            // the bundle — the engine's `for ctx in bundle` lookup loop will
-            // then merge it into the resolved segment set regardless of
-            // which context the flag rule references.
-            let mut memberships = ListMembershipIndex::new();
-            if let Some(extra) = pre_resolved_list_memberships.get(idx)
-                && !extra.is_empty()
-            {
-                for ctx in &ec.contexts {
-                    memberships.insert(ctx.context_type.clone(), ctx.key.clone(), extra.clone());
-                }
+    let mut out: Vec<ContextPreviewResult> = Vec::new();
+    let mut global_idx: usize = 0;
+    for (ec_idx, ec) in evaluation_contexts.iter().enumerate() {
+        // Build a per-bundle ListMembershipIndex from the caller-supplied
+        // pre-resolved memberships (aligned by EvaluationContext index).
+        // The set applies to the WHOLE bundle for that index, so we
+        // register it under EVERY (context_type, context_key) tuple in
+        // the bundle — the engine's `for ctx in bundle` lookup loop will
+        // then merge it into the resolved segment set regardless of
+        // which context the flag rule references.
+        let mut memberships = ListMembershipIndex::new();
+        if let Some(extra) = pre_resolved_list_memberships.get(ec_idx)
+            && !extra.is_empty()
+        {
+            for ctx in &ec.contexts {
+                memberships.insert(ctx.context_type.clone(), ctx.key.clone(), extra.clone());
             }
+        }
 
-            let results = evaluate_flag(
-                flag,
-                &ec.contexts,
-                segment_definitions,
-                &memberships,
-                env_id,
-                project_id,
-                TraceLevel::Full,
-            );
+        if ec.contexts.is_empty() {
+            // Empty bundle — emit a single empty result that mirrors the
+            // disabled-flag default. Matches the pre-fix behaviour for
+            // empty inputs so existing callers see no change.
+            out.push(from_flag_eval_result(flag, None, global_idx));
+            global_idx += 1;
+            continue;
+        }
 
-            // For preview semantics: one ContextPreviewResult per
-            // EvaluationContext. Take the first per-context result from
-            // evaluate_flag (each bundle context produces an entry, all
-            // identical for the same bundle since rule eval uses the full
-            // bundle). If the bundle is empty (no contexts), emit an empty
-            // result that mirrors the disabled-flag default.
-            let first = results.into_iter().next();
-            from_flag_eval_result(flag, first, idx)
-        })
-        .collect()
+        let results = evaluate_flag(
+            flag,
+            &ec.contexts,
+            segment_definitions,
+            &memberships,
+            env_id,
+            project_id,
+            TraceLevel::Full,
+        );
+
+        // One ContextPreviewResult per sub-context in this bundle. All
+        // entries share the same bundle for hashing/rule eval, so their
+        // rollout_debug.hash_input is identical (cross-context hashing).
+        for r in results {
+            out.push(from_flag_eval_result(flag, Some(r), global_idx));
+            global_idx += 1;
+        }
+    }
+    out
 }
 
 /// Remap a `FlagEvaluationResult` (core type) into a `ContextPreviewResult`

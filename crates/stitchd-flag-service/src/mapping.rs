@@ -210,6 +210,60 @@ pub fn validate_proto_hash_inputs(selectors: &[ProtoHashSelector]) -> Result<(),
     Ok(())
 }
 
+/// Validate a rule's `ConditionExpr` payload against shape-level traps that
+/// the gateway / UI guard against but a non-gateway gRPC client (or a UI
+/// regression) could still submit. Bug fix `feature-flag-yrj`: an empty
+/// WHEN clause must not silently round-trip as a literal
+/// `Eq { param: "", value: "" }` leaf that never matches.
+///
+/// Returns `Err` with the first violation message. Walk is recursive across
+/// `And`, `Or`, and `Not` combinators; segment / cross-flag / numeric / string
+/// leaves are passed through unchanged.
+///
+/// # Errors
+/// Returns a [`String`] describing the first validation failure.
+pub fn validate_proto_rule_condition(rule_payload: &[u8]) -> Result<(), String> {
+    use stitchd_core::context::ParameterValue;
+    use stitchd_core::rule_engine::condition::Condition;
+    use stitchd_core::rule_engine::types::ConditionExpr;
+
+    // An empty rule_payload is legal (the UI's "Default rule" tab serialises
+    // the catch-all sentinel as `And: []`). Anything that fails to
+    // deserialise is rejected — the upstream `proto_flag_rule_to_domain`
+    // would skip the rule silently otherwise.
+    if rule_payload.is_empty() {
+        return Ok(());
+    }
+    let expr: ConditionExpr = serde_json::from_slice(rule_payload)
+        .map_err(|e| format!("rule_payload is not a valid ConditionExpr: {e}"))?;
+
+    fn walk(expr: &ConditionExpr) -> Result<(), String> {
+        match expr {
+            ConditionExpr::Leaf(Condition::Eq { param, value, .. }) => {
+                let empty_value = matches!(value, ParameterValue::Str(s) if s.is_empty());
+                if param.is_empty() && empty_value {
+                    return Err(
+                        "invalid_condition: WHEN clause has empty attribute/value — \
+                         remove or fill the condition"
+                            .to_string(),
+                    );
+                }
+                Ok(())
+            }
+            ConditionExpr::Leaf(_) => Ok(()),
+            ConditionExpr::And(items) | ConditionExpr::Or(items) => {
+                for item in items {
+                    walk(item)?;
+                }
+                Ok(())
+            }
+            ConditionExpr::Not(inner) => walk(inner),
+        }
+    }
+
+    walk(&expr)
+}
+
 /// Convert a proto [`ProtoHashSelector`] to a domain [`PercentageTarget`].
 ///
 /// Returns `None` if the oneof field is unset (corrupted / legacy data).
@@ -825,6 +879,72 @@ mod tests {
         assert!(matches!(targets[1].field, TargetField::Parameter(ref p) if p == "a"));
         assert_eq!(targets[2].context_type, "b");
         assert!(matches!(targets[2].field, TargetField::Parameter(ref p) if p == "z"));
+    }
+
+    // ── feature-flag-yrj — empty-WHEN rejection ────────────────────────
+
+    #[test]
+    fn validate_proto_rule_condition_rejects_empty_eq_leaf() {
+        use stitchd_core::context::ParameterValue;
+        use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_core::rule_engine::types::ConditionExpr;
+
+        let expr = ConditionExpr::Leaf(Condition::Eq {
+            context_type: "user".to_string(),
+            param: String::new(),
+            value: ParameterValue::Str(String::new()),
+        });
+        let payload = serde_json::to_vec(&expr).unwrap();
+        let err = validate_proto_rule_condition(&payload)
+            .expect_err("empty-attr empty-value Eq leaf must be rejected");
+        assert!(
+            err.contains("invalid_condition"),
+            "expected invalid_condition sentinel; got `{err}`"
+        );
+    }
+
+    #[test]
+    fn validate_proto_rule_condition_rejects_empty_eq_leaf_inside_and() {
+        use stitchd_core::context::ParameterValue;
+        use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_core::rule_engine::types::ConditionExpr;
+
+        let bad_leaf = ConditionExpr::Leaf(Condition::Eq {
+            context_type: "user".to_string(),
+            param: String::new(),
+            value: ParameterValue::Str(String::new()),
+        });
+        let expr = ConditionExpr::And(vec![bad_leaf]);
+        let payload = serde_json::to_vec(&expr).unwrap();
+        let err = validate_proto_rule_condition(&payload)
+            .expect_err("nested empty Eq leaf must be rejected");
+        assert!(err.contains("invalid_condition"));
+    }
+
+    #[test]
+    fn validate_proto_rule_condition_accepts_empty_payload_and_and_sentinel() {
+        // Empty rule_payload (legal — the UI emits this for the catch-all
+        // rule pre-fix) AND the `And: []` sentinel must both pass.
+        use stitchd_core::rule_engine::types::ConditionExpr;
+
+        validate_proto_rule_condition(&[]).expect("empty payload is legal");
+        let sentinel = serde_json::to_vec(&ConditionExpr::And(vec![])).unwrap();
+        validate_proto_rule_condition(&sentinel).expect("And: [] sentinel is legal");
+    }
+
+    #[test]
+    fn validate_proto_rule_condition_accepts_fully_populated_eq() {
+        use stitchd_core::context::ParameterValue;
+        use stitchd_core::rule_engine::condition::Condition;
+        use stitchd_core::rule_engine::types::ConditionExpr;
+
+        let expr = ConditionExpr::Leaf(Condition::Eq {
+            context_type: "user".to_string(),
+            param: "tier".to_string(),
+            value: ParameterValue::Str("gold".to_string()),
+        });
+        let payload = serde_json::to_vec(&expr).unwrap();
+        validate_proto_rule_condition(&payload).expect("populated Eq leaf is legal");
     }
 
     #[test]

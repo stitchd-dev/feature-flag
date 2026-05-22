@@ -453,37 +453,67 @@ fn baseline_cross_context_hash() {
     let (flag, contexts) = corpus_cross_context_hash();
     let results = evaluate_preview(&flag, &contexts, &[], env_id(), &[]);
 
-    assert_eq!(results.len(), 1);
-    let r = &results[0];
-    assert_eq!(r.fired_rule_index, Some(0));
-    assert_eq!(r.fired_rule_name, Some("cross-rollout".to_string()));
-    assert_eq!(r.fired_rule_id, Some(rule_id(0xC5)));
-
-    let debug = r
-        .rollout_debug
-        .as_ref()
-        .expect("percentage rule must populate rollout_debug");
+    // Bug fix `feature-flag-utp`: a single EvaluationContext with N
+    // sub-contexts emits N results (one per sub-context), all sharing the
+    // SAME bundle for cross-context hashing. The corpus bundle has three
+    // sub-contexts (user, device, application) → three results.
+    assert_eq!(
+        results.len(),
+        3,
+        "expected one result per sub-context in the bundle"
+    );
 
     // The hash input must include all three selectors in declaration order:
     // user.key="alice", device.params.os="ios", application.key="app-1".
     let expected_hash_input = format!("cross-ctx{}aliceiosapp-1", env_id());
-    assert_eq!(debug.hash_input, expected_hash_input);
 
-    // Variant ranges are 0..=499 (on) and 500..=999 (off).
-    assert_eq!(debug.variant_ranges.len(), 2);
-    assert_eq!(debug.variant_ranges[0].variant_key, "on");
-    assert_eq!(debug.variant_ranges[0].from, 0);
-    assert_eq!(debug.variant_ranges[0].to, 499);
-    assert_eq!(debug.variant_ranges[1].variant_key, "off");
-    assert_eq!(debug.variant_ranges[1].from, 500);
-    assert_eq!(debug.variant_ranges[1].to, 999);
+    let first = &results[0];
+    let first_debug = first
+        .rollout_debug
+        .as_ref()
+        .expect("percentage rule must populate rollout_debug");
+    assert_eq!(first_debug.hash_input, expected_hash_input);
 
-    // Bucket determinism: the chosen variant must agree with the bucket /
-    // range boundaries.
-    if debug.bucket <= 499 {
-        assert_eq!(r.variant_key, "on");
-    } else {
-        assert_eq!(r.variant_key, "off");
+    // Every per-sub-context result shares the SAME hash_input, bucket, and
+    // variant_key — that's the cross-context-hash contract.
+    for (i, r) in results.iter().enumerate() {
+        assert_eq!(r.fired_rule_index, Some(0), "result[{i}]");
+        assert_eq!(
+            r.fired_rule_name,
+            Some("cross-rollout".to_string()),
+            "result[{i}]"
+        );
+        assert_eq!(r.fired_rule_id, Some(rule_id(0xC5)), "result[{i}]");
+
+        let debug = r
+            .rollout_debug
+            .as_ref()
+            .unwrap_or_else(|| panic!("result[{i}]: percentage rule must populate rollout_debug"));
+
+        assert_eq!(debug.hash_input, expected_hash_input, "result[{i}]");
+        assert_eq!(
+            debug.bucket, first_debug.bucket,
+            "result[{i}]: bucket must match first"
+        );
+
+        // Variant ranges are 0..=499 (on) and 500..=999 (off).
+        assert_eq!(debug.variant_ranges.len(), 2);
+        assert_eq!(debug.variant_ranges[0].variant_key, "on");
+        assert_eq!(debug.variant_ranges[0].from, 0);
+        assert_eq!(debug.variant_ranges[0].to, 499);
+        assert_eq!(debug.variant_ranges[1].variant_key, "off");
+        assert_eq!(debug.variant_ranges[1].from, 500);
+        assert_eq!(debug.variant_ranges[1].to, 999);
+
+        if debug.bucket <= 499 {
+            assert_eq!(r.variant_key, "on", "result[{i}]");
+        } else {
+            assert_eq!(r.variant_key, "off", "result[{i}]");
+        }
+        assert_eq!(
+            r.variant_key, first.variant_key,
+            "result[{i}]: variant_key must match first (cross-context hash)"
+        );
     }
 }
 
