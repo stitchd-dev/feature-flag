@@ -399,6 +399,11 @@ fn convert_flag(f: &FixtureFlag) -> (FeatureFlag, Option<usize>) {
         .map(|r| {
             let cond = fixture_condition_to_expr(&r.condition);
             FlagRule {
+                // Conformance fixtures don't carry a stable rule_id; the
+                // SDK only uses it for admin-side metadata (Phase 7 of
+                // experimentation_full_20260521). Empty string is fine
+                // for in-process eval.
+                rule_id: String::new(),
                 rule_payload: serde_json::to_vec(&cond).expect("ConditionExpr must serialize"),
                 output: Some(variant_assignment_to_output(&r.variant_assignment)),
                 name: r.rule_name.clone(),
@@ -414,6 +419,7 @@ fn convert_flag(f: &FixtureFlag) -> (FeatureFlag, Option<usize>) {
             let catch_all = ConditionExpr::And(vec![]);
             let idx = rules.len();
             rules.push(FlagRule {
+                rule_id: String::new(),
                 rule_payload: serde_json::to_vec(&catch_all).expect("And([]) must serialize"),
                 output: Some(ProtoOutput::Allocation(build_percentage_allocation(
                     percentage_rollout,

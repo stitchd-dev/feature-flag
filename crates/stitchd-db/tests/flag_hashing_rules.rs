@@ -96,5 +96,11 @@ async fn test_flag_hashing_and_rules(pool: sqlx::PgPool) {
     let found_rules = repo.find_rules(flag.id).await.unwrap();
     assert_eq!(found_rules.len(), 1);
     assert_eq!(found_rules[0].rule_index, 0);
-    assert_eq!(found_rules[0].rule.id, rules[0].rule.id);
+    // Post-`feature-flag-1p6`: `find_rules` uses `feature_flag_rules.id` as
+    // the authoritative `Rule.id` (the row PK) rather than the JSON-embedded
+    // `id` from the rule_def. So we can't compare against `rules[0].rule.id`
+    // (the JSON-embedded value); instead assert the rule was looked up with
+    // a non-nil DB-assigned UUID + that the rest of the row round-trips.
+    assert_ne!(found_rules[0].rule.id, RuleId::from_uuid(uuid::Uuid::nil()));
+    assert_eq!(found_rules[0].rule.condition, rules[0].rule.condition);
 }
