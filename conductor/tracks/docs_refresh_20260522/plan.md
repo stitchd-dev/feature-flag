@@ -11,8 +11,8 @@ rewritten doc resolves to a live symbol (grep audit).
 
 - [x] Task 1.1: Audit doc inventory — produce table of every `.md` under `docs/src/`,
       every `crates/*/README.md`, every reference doc (README.md, CONTRIBUTING if present),
-      tagged `auto-generated | narrative | orphan | shared-readme`.
-- [ ] Task 1.2: Delete orphaned `docs/src/internal/*` subtree
+      tagged `auto-generated | narrative | orphan | shared-readme`. [c29f2f9]
+- [x] Task 1.2: Delete orphaned `docs/src/internal/*` subtree
       (auth/, events-experimentation/, flag-segmentation/ — confirmed NOT in `SUMMARY.md`).
       Verify with `grep -r "docs/src/internal" docs/` → no references remain.
 - [ ] Task 1.3: Decide fate of `docs/openapi-pre-decomposition.json` and
