@@ -196,8 +196,17 @@ cargo fmt --all
 # Lint (mirrors CI — all warnings are errors)
 cargo clippy --workspace --all-targets -- -D warnings
 
-# Build docs site (protoc-gen-doc → OpenAPI → rustdoc → mdbook)
+# Build docs site (gRPC pages → OpenAPI → env-vars → crate-READMEs →
+# Quickstart → mdbook → rustdoc → internal-link check)
 cargo run --manifest-path crates/xtask/Cargo.toml -- docs
+
+# `cargo xtask docs` is idempotent — a second run produces zero diff.
+# CI enforces this via `cargo xtask docs && git diff --exit-code`.
+# If you hand-edit a generator-owned file (anything under docs/src/grpc/
+# except README.md, docs/src/deployment/env-vars.md, docs/src/sdk/quickstart.md,
+# docs/src/api/openapi.json, or crates/*/README.md), CI will fail until
+# the edit is moved into the source-of-truth (proto, //! preamble, env-var
+# declaration, lib.rs Quickstart section).
 ```
 
 ### Admin UI (Frontend — `admin/` directory)
@@ -233,6 +242,11 @@ cargo test --workspace
 # uncached, causing CI (`SQLX_OFFLINE=true`) to fail with
 # `no cached data for this query`.
 SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --tests
+
+# After modifying a //! preamble, env-var, or .proto — regenerate doc
+# artifacts and confirm zero drift (this is what CI runs):
+cargo run --manifest-path crates/xtask/Cargo.toml -- docs
+git diff --exit-code
 ```
 
 ### CI Environment Notes

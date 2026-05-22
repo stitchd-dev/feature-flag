@@ -55,11 +55,15 @@ rewritten doc resolves to a live symbol (grep audit).
       Steps now: grpc-docs → openapi → env-vars → crate-readmes → extract-quickstart →
       mdbook-build → sdk-rustdoc-copy → link-check. (Fixed pre-existing ordering bug:
       sdk-rustdoc must run AFTER mdbook-build because mdbook wipes `docs/book/` on rebuild.)
-- [ ] Task 2.5: Add xtask self-test — `cargo xtask docs` runs twice; second run must produce
+- [x] Task 2.5: Add xtask self-test — `cargo xtask docs` runs twice; second run must produce
       `git status --porcelain` = empty. Document this assertion in the xtask README and
-      workflow.md "Daily Development" section.
-- [ ] Task 2.6: Conductor - User Manual Verification 'Extend xtask Generators'
-      (Protocol in workflow.md)
+      workflow.md "Daily Development" section. Documented in both files; CI gate to land
+      in Task 4.1.
+- [x] Task 2.6: Conductor - User Manual Verification 'Extend xtask Generators'
+      (Protocol in workflow.md) — autonomous mode: verified inline via end-to-end xtask
+      runs. Gates: clippy clean; 35 env-vars + 13 crate READMEs + 14 grpc + openapi.json
+      + quickstart.md all regenerate idempotently; 39-file internal-link check passes;
+      deliberate-breakage test confirms the link checker catches broken links.
 
 ## Phase 3: Narrative-Prose Rewrites (Parallel by Topic)
 <!-- execution: parallel -->
