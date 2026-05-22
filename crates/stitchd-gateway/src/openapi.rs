@@ -120,6 +120,14 @@ use utoipa::{
             crate::routes::flags::DefaultRuleDistributionBody,
             crate::routes::flags::SetDefaultRuleDistributionBody,
             crate::routes::flags::SetDefaultRuleDistributionResponseJson,
+            // Phase 4 (flag_eval_unify_20260522) — rule CRUD DTOs.
+            crate::routes::flags::HashSelectorJson,
+            crate::routes::flags::RuleBody,
+            crate::routes::flags::ReplaceRulesBody,
+            crate::routes::flags::RuleJson,
+            crate::routes::flags::VariantBody,
+            crate::routes::flags::VariantJson,
+            crate::routes::flags::AdminFlagJson,
             // Segments
             crate::routes::segments::SegmentCreateRequest,
             crate::routes::segments::SegmentUpdateRequest,

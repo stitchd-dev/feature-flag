@@ -179,11 +179,13 @@ export function ConditionExprEditor({
 // ─── OutputEditor ─────────────────────────────────────────────────────────────
 
 export function OutputEditor({
-  output, variants, onChange,
+  output, variants, onChange, envId,
 }: {
   output: RuleOutputJson
   variants: string[]
   onChange: (o: RuleOutputJson) => void
+  /** Environment ID — threaded to the percentage editor for context autocomplete. */
+  envId?: string | null
 }) {
   const isVariant = isVariantOutput(output)
   const radioName = `output-${localId()}`
@@ -192,12 +194,12 @@ export function OutputEditor({
     <div>
       <div style={{ display: 'flex', gap: 16, marginBottom: 10 }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="radio" name={radioName} checked={isVariant}
+          <input type="radio" name={radioName} value="variant" checked={isVariant}
             onChange={() => onChange({ variant_key: variants[0] ?? '' })} />
           Serve variant
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-          <input type="radio" name={radioName} checked={!isVariant}
+          <input type="radio" name={radioName} value="allocation" checked={!isVariant}
             onChange={() => onChange({ allocation: defaultAllocationOutput(variants) })} />
           Percentage rollout
         </label>
@@ -214,6 +216,7 @@ export function OutputEditor({
           value={(output as { allocation: AllocationOutput }).allocation}
           variants={variants}
           onChange={(alloc) => onChange({ allocation: alloc })}
+          envId={envId}
         />
       )}
     </div>
@@ -295,6 +298,7 @@ export function RuleCard({ index, name, condition, output, variants, onChange, o
             output={output}
             variants={variants}
             onChange={(o) => onChange(condition, o)}
+            envId={envId}
           />
         </div>
       )}

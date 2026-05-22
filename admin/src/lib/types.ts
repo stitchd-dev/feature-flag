@@ -274,4 +274,13 @@ export interface RolloutAllocation {
 
 export interface RolloutDistribution {
   allocations: RolloutAllocation[]
+  /**
+   * Ordered selector list driving the default-rule percentage hash.
+   * Mirrors the gateway's `DefaultRuleDistributionBody.hash_inputs` (Phase 4
+   * of `flag_eval_unify_20260522`). When omitted, the server falls back to
+   * the flag's `default_rule_hash_inputs` column (the legacy single-input
+   * default). The wire shape mirrors `HashSelectorJson` 1:1 — see
+   * `admin/src/lib/hashInputTypes.ts`.
+   */
+  hash_inputs?: import('./hashInputTypes').HashSelector[]
 }

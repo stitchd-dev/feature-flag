@@ -22,6 +22,174 @@ mod compilation_tests {
         let _: Option<flags::v1::FlagRule> = None;
     }
 
+    // ── Phase 3 of flag_eval_unify_20260522 — new hash-input schema ────────────
+
+    #[test]
+    fn hash_selector_message_types_accessible() {
+        // The new oneof-bearing message plus its two variants must be
+        // reachable from the generated module.
+        let _: Option<flags::v1::HashSelector> = None;
+        let _: Option<flags::v1::ContextKeySelector> = None;
+        let _: Option<flags::v1::ContextParameterSelector> = None;
+    }
+
+    #[test]
+    fn percentage_allocation_hash_inputs_field_exists_and_defaults_empty() {
+        // `prost`'s generated struct must include the new repeated field at
+        // its declared tag. Default-constructed instances start with an empty
+        // vec — exercising both the field name and the default path.
+        let alloc = flags::v1::PercentageAllocation::default();
+        assert!(alloc.hash_inputs.is_empty());
+        assert!(alloc.context_hash_specs.is_empty());
+    }
+
+    #[test]
+    fn hash_selector_oneof_context_key_round_trip() {
+        use flags::v1::hash_selector::Selector;
+        use prost::Message;
+
+        let original = flags::v1::HashSelector {
+            selector: Some(Selector::ContextKey(flags::v1::ContextKeySelector {
+                context_type: "user".to_string(),
+            })),
+        };
+        let mut buf = Vec::new();
+        original.encode(&mut buf).expect("encode");
+        let decoded = flags::v1::HashSelector::decode(&buf[..]).expect("decode");
+
+        match decoded.selector {
+            Some(Selector::ContextKey(sel)) => assert_eq!(sel.context_type, "user"),
+            other => panic!("expected ContextKey variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hash_selector_oneof_context_parameter_round_trip() {
+        use flags::v1::hash_selector::Selector;
+        use prost::Message;
+
+        let original = flags::v1::HashSelector {
+            selector: Some(Selector::ContextParameter(
+                flags::v1::ContextParameterSelector {
+                    context_type: "device".to_string(),
+                    parameter: "os".to_string(),
+                },
+            )),
+        };
+        let mut buf = Vec::new();
+        original.encode(&mut buf).expect("encode");
+        let decoded = flags::v1::HashSelector::decode(&buf[..]).expect("decode");
+
+        match decoded.selector {
+            Some(Selector::ContextParameter(sel)) => {
+                assert_eq!(sel.context_type, "device");
+                assert_eq!(sel.parameter, "os");
+            }
+            other => panic!("expected ContextParameter variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn percentage_allocation_round_trip_with_dual_schema_state() {
+        use flags::v1::hash_selector::Selector;
+        use prost::Message;
+
+        // Build a PercentageAllocation carrying BOTH legacy and new fields —
+        // this models the Phase-3 dual-schema state the producer side will
+        // continue to emit until Phase 5/6 retires the legacy map.
+        let mut legacy: std::collections::HashMap<String, flags::v1::ContextHashSpec> =
+            std::collections::HashMap::new();
+        legacy.insert(
+            "user".to_string(),
+            flags::v1::ContextHashSpec {
+                parameter_names: vec!["plan".to_string()],
+            },
+        );
+
+        let new_inputs = vec![
+            flags::v1::HashSelector {
+                selector: Some(Selector::ContextKey(flags::v1::ContextKeySelector {
+                    context_type: "application".to_string(),
+                })),
+            },
+            flags::v1::HashSelector {
+                selector: Some(Selector::ContextParameter(
+                    flags::v1::ContextParameterSelector {
+                        context_type: "user".to_string(),
+                        parameter: "plan".to_string(),
+                    },
+                )),
+            },
+        ];
+
+        let original = flags::v1::PercentageAllocation {
+            context_hash_specs: legacy,
+            buckets: vec![flags::v1::AllocationBucket {
+                variant_key: "on".to_string(),
+                weight_milli: 1000,
+            }],
+            hash_inputs: new_inputs,
+        };
+
+        let mut buf = Vec::new();
+        original.encode(&mut buf).expect("encode");
+        let decoded = flags::v1::PercentageAllocation::decode(&buf[..]).expect("decode");
+
+        // Both schemas round-trip identically.
+        assert_eq!(decoded.context_hash_specs.len(), 1);
+        assert_eq!(
+            decoded
+                .context_hash_specs
+                .get("user")
+                .map(|s| s.parameter_names.as_slice()),
+            Some(&["plan".to_string()][..])
+        );
+        assert_eq!(decoded.hash_inputs.len(), 2);
+        match &decoded.hash_inputs[0].selector {
+            Some(Selector::ContextKey(s)) => assert_eq!(s.context_type, "application"),
+            other => panic!("hash_inputs[0] unexpected: {other:?}"),
+        }
+        match &decoded.hash_inputs[1].selector {
+            Some(Selector::ContextParameter(s)) => {
+                assert_eq!(s.context_type, "user");
+                assert_eq!(s.parameter, "plan");
+            }
+            other => panic!("hash_inputs[1] unexpected: {other:?}"),
+        }
+        assert_eq!(decoded.buckets.len(), 1);
+    }
+
+    #[test]
+    fn percentage_allocation_legacy_only_payload_decodes_with_empty_hash_inputs() {
+        // Wire forward-compatibility: an older sender that hasn't migrated yet
+        // emits `context_hash_specs` + `buckets` but NO `hash_inputs`. The
+        // newer receiver must decode that payload cleanly with
+        // `hash_inputs == []`.
+        use prost::Message;
+
+        let mut legacy: std::collections::HashMap<String, flags::v1::ContextHashSpec> =
+            std::collections::HashMap::new();
+        legacy.insert(
+            "user".to_string(),
+            flags::v1::ContextHashSpec {
+                parameter_names: vec![],
+            },
+        );
+        let sender = flags::v1::PercentageAllocation {
+            context_hash_specs: legacy,
+            buckets: vec![flags::v1::AllocationBucket {
+                variant_key: "treatment".to_string(),
+                weight_milli: 1000,
+            }],
+            hash_inputs: vec![],
+        };
+        let mut buf = Vec::new();
+        sender.encode(&mut buf).expect("encode");
+        let decoded = flags::v1::PercentageAllocation::decode(&buf[..]).expect("decode");
+        assert!(decoded.hash_inputs.is_empty());
+        assert_eq!(decoded.context_hash_specs.len(), 1);
+    }
+
     #[test]
     fn segment_types_accessible() {
         let _: Option<segments::v1::RuleSegment> = None;

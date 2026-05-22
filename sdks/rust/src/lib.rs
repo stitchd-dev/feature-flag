@@ -15,7 +15,7 @@
 //!
 //! ```no_run
 //! use std::time::Duration;
-//! use stitchd_sdk_rust::{EvalRequest, SdkClient, SdkConfig};
+//! use stitchd_sdk_rust::{EvalRequest, SdkClient, SdkConfig, TraceLevel};
 //! use stitchd_core::context::Context;
 //!
 //! #[tokio::main]
@@ -32,13 +32,16 @@
 //!     // spawns the three background tasks (poll, LRU refresh, event flush).
 //!     let client = SdkClient::init(config).await?;
 //!
-//!     // Evaluate a flag for a `(context_type, key)` tuple.
+//!     // Evaluate a flag for a `(context_type, key)` tuple. Each `EvalRequest`
+//!     // carries a context BUNDLE (`contexts: Vec<Context>`) — supply every
+//!     // context type referenced by the flag's rules and/or its
+//!     // percentage-hash selectors.
 //!     let context = Context::new("user", "alice");
 //!     let results = client
-//!         .evaluate(&[EvalRequest {
-//!             flag_key: "checkout-flow".to_string(),
-//!             context,
-//!         }])
+//!         .evaluate(
+//!             &[EvalRequest::single("checkout-flow", context)],
+//!             TraceLevel::Off,
+//!         )
 //!         .await;
 //!     println!("variant = {}", results[0].variant_key);
 //!
@@ -70,9 +73,11 @@ pub mod polling;
 pub mod refresh;
 pub mod snapshot;
 
-pub use client::{
-    EvalOutcome, EvalRequest, EvalResult, EvalResultWithReasoning, ReasoningTrace, SdkClient,
-};
+pub use client::{EvalOutcome, EvalRequest, EvalResult, SdkClient};
+// Re-export the core trace types so callers of the unified
+// `evaluate(&[EvalRequest], TraceLevel)` (Phase 6 of
+// `flag_eval_unify_20260522`) can pattern-match on the rich trace bundle
+// without depending on `stitchd-core` directly.
 pub use config::SdkConfig;
 pub use error::{SdkError, TrackError};
 pub use event_buffer::{
@@ -83,3 +88,4 @@ pub use lru::{ContextKey, MembershipCache, MembershipMap};
 pub use polling::{DefinitionFetcher, PollTask};
 pub use refresh::{MembershipBatchFetcher, RefreshTask};
 pub use snapshot::{DefinitionSnapshot, DefinitionStore, EventValueType};
+pub use stitchd_core::evaluation::{EvaluationTrace, TraceLevel};

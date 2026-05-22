@@ -72,5 +72,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Unify Feature-Flag Variant Evaluation (Service Preview + SDK) with Canonical Cross-Context Percentage-Hash Schema
+## [x] Track: Unify Feature-Flag Variant Evaluation (Service Preview + SDK) with Canonical Cross-Context Percentage-Hash Schema
 *Link: [./conductor/tracks/flag_eval_unify_20260522/](./conductor/tracks/flag_eval_unify_20260522/)*

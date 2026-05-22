@@ -18,6 +18,7 @@ use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tracing_subscriber::{EnvFilter, fmt};
 
+use stitchd_core::util::grpc_connect::connect_with_retry_default;
 use stitchd_db::{PgAuditLogger, PgExperimentRepository, PgStatsScheduleRepository};
 use stitchd_experimentation_service::{
     analytics_client::AnalyticsClient, exposure_reader::ClickHouseExposureReader,
@@ -61,9 +62,12 @@ async fn main() -> anyhow::Result<()> {
     let analytics_addr = std::env::var("STITCHD_ANALYTICS_SERVICE_GRPC_URL")
         .unwrap_or_else(|_| "http://localhost:50054".to_string());
 
-    let analytics_client = AnalyticsClient::connect(analytics_addr.clone())
-        .await
-        .context("connect to Analytics Service")?;
+    let analytics_client = connect_with_retry_default("Analytics Service", &analytics_addr, || {
+        let addr = analytics_addr.clone();
+        async move { AnalyticsClient::connect(addr).await }
+    })
+    .await
+    .context("connect to Analytics Service")?;
     tracing::info!(addr = %analytics_addr, "Connected to Analytics Service");
 
     // ── Flag Service client ───────────────────────────────────────────────────

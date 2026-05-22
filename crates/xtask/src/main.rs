@@ -1,27 +1,39 @@
 //! `xtask` — workspace utility commands invoked via `cargo xtask <task>`.
 //!
-//! Implements two tasks:
+//! Implements three tasks:
 //! - `docs` — regenerate gRPC reference, OpenAPI JSON, env-vars table, SDK rustdoc, and
 //!   the mdBook site under `docs/book/`. Idempotent: running twice produces no diff.
 //! - `scylla-migrate` — apply pending CQL migrations from
 //!   `crates/stitchd-db/scylla-migrations/` against the configured ScyllaDB cluster.
+//! - `verify-hash-cutover` — re-hash a frozen corpus of `(legacy
+//!   context_hash_specs, new hash_inputs)` pairs and report bucket-identical vs.
+//!   operator-review-required percentages. See Phase 3 of
+//!   `conductor/tracks/flag_eval_unify_20260522/`.
 
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod verify_hash_cutover;
+
 fn main() -> Result<()> {
     let task = std::env::args().nth(1);
     match task.as_deref() {
         Some("docs") => docs(),
         Some("scylla-migrate") => scylla_migrate(),
+        Some("verify-hash-cutover") => verify_hash_cutover::run(),
         _ => {
             eprintln!("Usage: cargo xtask <task>");
             eprintln!();
             eprintln!("Tasks:");
-            eprintln!("  docs            Regenerate all documentation and build the mdBook site");
-            eprintln!("  scylla-migrate  Apply pending ScyllaDB CQL migrations");
+            eprintln!(
+                "  docs                  Regenerate all documentation and build the mdBook site"
+            );
+            eprintln!("  scylla-migrate        Apply pending ScyllaDB CQL migrations");
+            eprintln!(
+                "  verify-hash-cutover   Re-hash the percentage-rule cutover corpus and report drift"
+            );
             std::process::exit(1);
         }
     }

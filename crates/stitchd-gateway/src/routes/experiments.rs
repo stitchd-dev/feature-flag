@@ -1489,6 +1489,9 @@ mod tests {
                     variant_key: "on".to_string(),
                     weight_milli: 1000,
                 }],
+                // Phase 3 of flag_eval_unify_20260522 added `hash_inputs`
+                // alongside the legacy map. Test fixture uses neither.
+                hash_inputs: Vec::new(),
             })),
             ..Default::default()
         }

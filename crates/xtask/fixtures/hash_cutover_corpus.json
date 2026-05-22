@@ -1,0 +1,93 @@
+{
+  "_about": "Frozen corpus for `cargo xtask verify-hash-cutover`. Each pair simulates an existing percentage-rule payload (legacy `context_hash_specs` map ordering) plus the expected canonical-sorted `hash_inputs` list and a sample context bundle the verifier re-hashes against. Mirrors `crates/stitchd-db/tests/hash_input_spec_cutover.rs` so the same coverage exists at the binary level.",
+  "_canonical_sort": "context_type ASC, then parameter ASC within each context_type. Selectors with no parameters resolve to ContextKey; selectors with parameter_names emit one ContextParameter per name.",
+  "flag_key": "verify-cutover-flag",
+  "env_id": "env-prod",
+  "pairs": [
+    {
+      "name": "user_key_only_CANONICAL",
+      "legacy_context_hash_specs": {
+        "user": { "parameter_names": [] }
+      },
+      "legacy_insertion_order": ["user"],
+      "expected_new_hash_inputs": [
+        { "kind": "context_key", "context_type": "user" }
+      ],
+      "sample_contexts": [
+        { "context_type": "user", "key": "alice", "parameters": {} },
+        { "context_type": "user", "key": "bob",   "parameters": {} },
+        { "context_type": "user", "key": "carol", "parameters": {} }
+      ]
+    },
+    {
+      "name": "user_plan_param_CANONICAL",
+      "legacy_context_hash_specs": {
+        "user": { "parameter_names": ["plan"] }
+      },
+      "legacy_insertion_order": ["user"],
+      "expected_new_hash_inputs": [
+        { "kind": "context_parameter", "context_type": "user", "parameter": "plan" }
+      ],
+      "sample_contexts": [
+        { "context_type": "user", "key": "alice", "parameters": { "plan": "pro" } },
+        { "context_type": "user", "key": "bob",   "parameters": { "plan": "free" } }
+      ]
+    },
+    {
+      "name": "three_contexts_CANONICAL",
+      "legacy_context_hash_specs": {
+        "application": { "parameter_names": [] },
+        "device":      { "parameter_names": ["os"] },
+        "user":        { "parameter_names": [] }
+      },
+      "legacy_insertion_order": ["application", "device", "user"],
+      "expected_new_hash_inputs": [
+        { "kind": "context_key",       "context_type": "application" },
+        { "kind": "context_parameter", "context_type": "device",      "parameter": "os" },
+        { "kind": "context_key",       "context_type": "user" }
+      ],
+      "sample_contexts": [
+        {
+          "context_type": "user", "key": "alice",
+          "parameters": {}
+        }
+      ]
+    },
+    {
+      "name": "device_then_user_NONCANONICAL",
+      "legacy_context_hash_specs": {
+        "device": { "parameter_names": ["os"] },
+        "user":   { "parameter_names": [] }
+      },
+      "legacy_insertion_order": ["device", "user"],
+      "expected_new_hash_inputs": [
+        { "kind": "context_parameter", "context_type": "device", "parameter": "os" },
+        { "kind": "context_key",       "context_type": "user" }
+      ],
+      "sample_contexts": [
+        {
+          "context_type": "user", "key": "alice",
+          "parameters": {}
+        }
+      ]
+    },
+    {
+      "name": "multi_param_NONCANONICAL_params",
+      "legacy_context_hash_specs": {
+        "user": { "parameter_names": ["name", "country", "plan"] }
+      },
+      "legacy_insertion_order": ["user"],
+      "expected_new_hash_inputs": [
+        { "kind": "context_parameter", "context_type": "user", "parameter": "country" },
+        { "kind": "context_parameter", "context_type": "user", "parameter": "name" },
+        { "kind": "context_parameter", "context_type": "user", "parameter": "plan" }
+      ],
+      "sample_contexts": [
+        {
+          "context_type": "user", "key": "alice",
+          "parameters": { "name": "Alice", "country": "US", "plan": "pro" }
+        }
+      ]
+    }
+  ]
+}
