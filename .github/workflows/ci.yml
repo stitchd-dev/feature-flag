@@ -83,7 +83,10 @@ jobs:
         run: sqlx migrate run --source crates/stitchd-db/migrations
 
       - name: Verify SQLx offline cache is current (all targets incl. tests)
-        run: cargo sqlx prepare --workspace --check -- --all-targets
+        # --features stitchd-sdk-rust/test-util is required so test targets
+        # that import client::testing (e.g. e2e_cross_context_hashing.rs,
+        # parity_with_preview.rs) compile under --all-targets.
+        run: cargo sqlx prepare --workspace --check -- --all-targets --features stitchd-sdk-rust/test-util
 
   # ── 3. Linting ─────────────────────────────────────────────────────────────
   # Clippy depends on every upstream gate: fmt (formatting must be clean first
