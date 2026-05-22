@@ -158,6 +158,9 @@ export function SeedUser() {
             key={mode}
             initialValues={{ ...initialValues, mode }}
             validationSchema={userInviteSchema}
+            validateOnMount={false}
+            validateOnBlur
+            validateOnChange
             onSubmit={handleSubmit}
           >
             <Form style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
