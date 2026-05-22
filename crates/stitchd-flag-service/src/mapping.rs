@@ -195,6 +195,12 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
             Some(Output::Allocation(PercentageAllocation {
                 context_hash_specs,
                 buckets,
+                // Phase 3 of flag_eval_unify_20260522 added the new
+                // `hash_inputs` selector list alongside the legacy
+                // `context_hash_specs` map. Phase 5/6 migrates the producer
+                // here; until then, the new field stays empty (callers still
+                // read the legacy map).
+                hash_inputs: Vec::new(),
             }))
         }
     };

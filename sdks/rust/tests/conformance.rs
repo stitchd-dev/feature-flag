@@ -365,6 +365,9 @@ fn build_percentage_allocation(rollout: &FixturePercentageRollout) -> Percentage
     PercentageAllocation {
         context_hash_specs,
         buckets,
+        // Phase 3 of flag_eval_unify_20260522 added `hash_inputs` alongside
+        // the legacy map. Conformance fixture still drives via the map.
+        hash_inputs: Vec::new(),
     }
 }
 
