@@ -85,6 +85,9 @@ pub struct IterationJson {
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
     pub traffic_allocation: f64,
+    /// Snapshot of `unit_context_types` at iteration start. Used by the admin
+    /// Iterations tab to render per-iteration context-type badges.
+    pub unit_context_types: Vec<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -269,6 +272,7 @@ fn iteration_to_json(i: &ExperimentIteration) -> IterationJson {
         started_at_ms: i.started_at_ms,
         ended_at_ms: i.ended_at_ms,
         traffic_allocation: i.traffic_allocation,
+        unit_context_types: i.unit_context_types.clone(),
     }
 }
 
@@ -750,7 +754,20 @@ pub async fn transition_experiment(
     Ok(Json(experiment_to_json(&resp.into_inner())))
 }
 
+/// Query parameters for `GET /experiments/{id}/iterations` — standard
+/// `page` + `per_page` pagination (same shape as `GET /experiments` and
+/// `GET /experiments/{id}/exposures`).
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListIterationsQuery {
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
+}
+
 /// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/iterations`
+///
+/// Paginated list of past + active iterations for an experiment. Drives the
+/// admin Iterations tab which renders one row per iteration with the snapshot
+/// `unit_context_types` and start/end timestamps.
 #[utoipa::path(
     get,
     path = "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
@@ -758,9 +775,11 @@ pub async fn transition_experiment(
     params(
         ("environment_id" = String, Path, description = "Environment ID"),
         ("experiment_id" = String, Path, description = "Experiment ID"),
+        ("page" = Option<u32>, Query, description = "1-based page number"),
+        ("per_page" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
     ),
     responses(
-        (status = 200, description = "Experiment iterations", body = Vec<IterationJson>),
+        (status = 200, description = "Paginated experiment iterations"),
         (status = 401, description = "Unauthorized"),
         (status = 502, description = "Experimentation service unavailable"),
     ),
@@ -769,23 +788,31 @@ pub async fn transition_experiment(
 pub async fn list_iterations(
     State(state): State<Arc<GatewayState>>,
     Path((environment_id, experiment_id)): Path<(String, String)>,
+    Query(query): Query<ListIterationsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let page = query.pagination.effective_page();
+    let per_page = query.pagination.effective_per_page();
+    let offset = u64::from(page.saturating_sub(1)) * u64::from(per_page);
+    let limit = u64::from(per_page);
+
     let req = tonic::Request::new(ListIterationsRequest {
         environment_id,
         experiment_id,
+        offset,
+        limit,
     });
     let mut client = state.experimentation_client.lock().await;
     let resp = client
         .list_iterations(req)
         .await
         .map_err(GatewayError::from)?;
-    let iterations: Vec<IterationJson> = resp
-        .into_inner()
-        .iterations
-        .iter()
-        .map(iteration_to_json)
-        .collect();
-    Ok(Json(iterations))
+    let inner = resp.into_inner();
+    let iterations: Vec<IterationJson> = inner.iterations.iter().map(iteration_to_json).collect();
+    Ok(Json(PaginatedResponse::new(
+        iterations,
+        inner.total,
+        &query.pagination,
+    )))
 }
 
 /// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/results`
@@ -1274,6 +1301,30 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn list_iterations_accepts_pagination_query_params() {
+        // Confirms the route binds the `page` + `per_page` query params and
+        // hands them to the experimentation client without rejecting the
+        // request as a 400. The stub channel is lazy, so we accept the same
+        // 200/502 outcomes as the unparameterised test.
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/experiments/exp-1/iterations?page=2&per_page=25")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
     #[test]
     fn status_from_str_maps_known_values() {
         assert_eq!(status_from_str("active"), ExperimentStatus::Active);
@@ -1311,6 +1362,7 @@ mod tests {
             started_at_ms: 1000,
             ended_at_ms: 2000,
             traffic_allocation: 0.5,
+            unit_context_types: vec!["user".to_string(), "account".to_string()],
             ..Default::default()
         };
         let j = iteration_to_json(&i);
@@ -1319,6 +1371,7 @@ mod tests {
         assert_eq!(j.iteration_number, 2);
         assert_eq!(j.started_at_ms, 1000);
         assert_eq!(j.ended_at_ms, 2000);
+        assert_eq!(j.unit_context_types, vec!["user", "account"]);
     }
 
     #[tokio::test]
