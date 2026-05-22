@@ -74,7 +74,7 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Weekly ClickHouse partition key:** Use `toMonday(event_date)` as the partition expression to get weekly partitions keyed to Mondays. Combine with `TTL toMonday(event_date) + INTERVAL 52 WEEK` for year-length retention windows. (from: db_optim_20260516, archived 2026-05-16)
 
 ---
-Last refreshed: 2026-05-19
+Last refreshed: 2026-05-22 (post experimentation_full_20260521 archive — added 10 patterns under "Experimentation Patterns" at the bottom)
 
 ## Frontend (Admin UI) Patterns
 

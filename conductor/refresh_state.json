@@ -1,30 +1,29 @@
 {
-  "last_refreshed": "2026-05-20T20:30:00Z",
+  "last_refreshed": "2026-05-22T03:55:00Z",
   "scope": "all",
+  "previous_refresh": "2026-05-20T20:30:00Z",
   "changes": {
-    "product.md": [
-      "Renumbered modules — old §3 Experimentation split into §3 Events / §4 Metrics / §5 Experimentation (was conflated as one section); §4 Rule Engine → §6",
-      "Events: documented multi-context flat-map shape ({type: key}), metric_type classifier (6 variants — count/conversion/revenue/duration/numeric/custom), optional JSON schema validation on definitions, archive (soft-delete) semantics with HTTP 410 on archived",
-      "Metrics: new section documenting the composable primitives (Aggregation/Ratio/Funnel) with JsonLogic where_clause filters, ClickHouse-backed preview pipeline (days clamped [1,90], default 7), bidirectional UI back-link (event ↔ metric), goal_direction semantics",
-      "Experimentation: cutover from raw event_key → metric_ids columns on experiments + experiment_iterations; TriggerRecompute event-driven recompute",
-      "Admin UI: split out Events and Metrics into their own bullets (were buried in the catch-all 'Experiments / Events / Environments...' bullet) — documented full surface including event-key autocomplete in metric form, EventDetail back-link, TestEventWidget admin path"
-    ],
-    "tech-stack.md": [
-      "analytics-service row: added metric-definition CRUD + ClickHouse-backed preview (dispatch_preview_query) responsibilities",
-      "experimentation-service row: noted experiments now reference metric_ids (cutover migration 20260520000002)",
-      "stats-service row: noted new queries::preview builder module + shared jsonlogic_to_sql translator",
-      "PG migration table: added 5 events_metrics migrations (drop_experiment_results, metric_definitions, experiment_metrics_cutover, experiment_iterations_metric_ids, event_definitions_admin_fields)",
-      "ClickHouse schema table: annotated events_v2 row with full column shape (contexts Array(Tuple(String,String)), nullable typed value columns, properties Map, timestamp + occurred_at)",
-      "Bumped 'as of' date from 2026-05-19 to 2026-05-20"
-    ],
     "workflow.md": [
-      "Bumped refresh date from 2026-05-19 to 2026-05-20 — no process changes (standard worker-wave + worktree workflow held across 8 phases / 73 commits without amendments)"
+      "`cargo sqlx prepare` invocation now includes `-- --tests` — without it, test-only `sqlx::query!`/`sqlx::query_scalar!` macros are silently skipped from the offline cache, which broke CI on the experimentation_full_20260521 merge (12 'no cached data for this query' errors in stitchd-db/tests/experiment.rs). Long-form comment added inline explaining why.",
+      "Added a 'File-ownership boundary in worker prompts' subsection under Parallel Sub-Agent Workflow — 14 parallel workers across the experimentation_full track produced zero source-file merge conflicts because each worker prompt explicitly listed owned + forbidden files.",
+      "Added 'Beads close gotcha (`--no-auto` doesn't reliably persist)' note — closures may silently re-open; use plain `bd close` and `--force` on phantom-dep errors."
     ],
     "patterns.md": [
-      "Already updated 2026-05-20 during /conductor-archive run — 6 patterns elevated from events_metrics_20260519 learnings (serde discriminator + protobuf oneof alignment; tonic-trait-RPCs-break-impl; toFloat64OrNull only accepts String; clickhouse-rs positional binds; proto field deprecation `reserved`; Count metric_type as occurrence marker)"
+      "Refresh marker updated to 2026-05-22.",
+      "10 patterns under 'Experimentation Patterns' section added by Phase 11 of the experimentation_full_20260521 track (already present pre-refresh — refresh just acknowledges them)."
     ],
-    "refresh_state.json": [
-      "Bumped last_refreshed to 2026-05-20T20:30:00Z; updated changes map for this refresh"
+    "product.md": [
+      "Already updated by Phase 11 worker — Implementation Status table now includes the new experimentation row (bolded). Refresh confirms; no further changes."
+    ],
+    "tech-stack.md": [
+      "Already updated by Phase 11 worker — ClickHouse Schema section gains `experiment_assignments` + `experiment_assignments_mv` + `experiment_iterations_active` dictionary; `flag_evaluation_log_v2` row mentions the new `targeting_on` + `matched_rule_id` columns. Refresh confirms; no further changes."
     ]
-  }
+  },
+  "tracks_completed_since_last_refresh": [
+    "experimentation_full_20260521 (11 phases + 3 P2 bug fixes: feature-flag-buc, feature-flag-11d, feature-flag-1p6) — merged at e9617f5, ARRAY JOIN refactor pushed in 480ccf3"
+  ],
+  "follow_up_drift_notes": [
+    "feature-flag-502 (wisp, closed): CI sqlx-prepare drift — fix shipped in 480ccf3.",
+    "No Beads-vs-Conductor drift detected: all 56 child stories + 11 phase milestones + epic (feature-flag-dak) are CLOSED. No orphans."
+  ]
 }

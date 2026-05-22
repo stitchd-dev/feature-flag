@@ -1,5 +1,5 @@
 # Project Workflow
-<!-- Last refreshed: 2026-05-20 (post events_metrics_20260519 merge — no process changes; the standard worker-wave + worktree workflow held up cleanly across 8 phases / 73 commits) -->
+<!-- Last refreshed: 2026-05-22 (post experimentation_full_20260521 merge — added `-- --tests` to the sqlx prepare command after a CI failure proved test-only queries were silently being skipped from the offline cache; also added a Beads gotcha + a parallel-worker file-ownership pre-check note) -->
 
 ## Guiding Principles
 
@@ -225,8 +225,14 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
-# After adding new sqlx::query! macros — regenerate offline cache
-SQLX_OFFLINE=false cargo sqlx prepare --workspace
+# After adding new sqlx::query!/sqlx::query_scalar! macros — regenerate
+# the offline cache. The `-- --tests` flag is REQUIRED: by default `cargo
+# sqlx prepare` runs `cargo check` (not `cargo check --tests`), which
+# skips every macro in `#[cfg(test)]` code and the `tests/` directory.
+# Forgetting `-- --tests` silently leaves new test-only queries
+# uncached, causing CI (`SQLX_OFFLINE=true`) to fail with
+# `no cached data for this query`.
+SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --tests
 ```
 
 ### CI Environment Notes
@@ -430,6 +436,16 @@ After every wave, the orchestrator verifies that every worker's beads task state
 ### Parallel trait reconciliation
 
 When two workers define overlapping traits for the same domain (e.g. a handler-side and a repo-side worker both write a "canonical" trait), the **repo-side worker owns the trait** — it controls storage semantics. Handler-side types and method signatures are aligned to the repo-side definition during merge integration. Use the proto schema as the natural alignment point for cross-service type disagreements (add shared fields to the message; renumber if needed).
+
+### File-ownership boundary in worker prompts
+
+Before spawning parallel workers, write the **file-ownership table** explicitly into each worker prompt. List the files THIS worker owns + the files the SIBLING worker(s) own — with a hard "NEVER edit files outside the worktree, especially X/Y/Z" rule. The 11-phase `experimentation_full_20260521` track ran 14 parallel workers (Phases 2+3, 5+6, 9+10, plus three bug-fix workers in parallel) with **zero merge conflicts on source files** — only `learnings.md` ever conflicted (both workers append). The cost of writing the boundary table is one minute; the savings on merge are large.
+
+When a worker's "natural" scope inevitably touches a sibling's file (e.g. a wider integration commit), make that ONE file an explicit shared seam in BOTH prompts (e.g. "you both edit `service.rs::new(...)` — keep your additions small + adjacent"). Phase 8's `FlagServiceImpl::new(...)` was such a seam and survived.
+
+### Beads close gotcha (`--no-auto` doesn't reliably persist)
+
+Workers should close their tasks with plain `bd close <id>` and `--force` when needed (phantom dep on a still-open sibling phase). The conductor-implement protocol's `--no-auto` directive is unreliable in current Beads — closures may silently re-open. Documented in `conductor/patterns.md` for the "Experimentation Patterns" section.
 
 ## Continuous Improvement
 
