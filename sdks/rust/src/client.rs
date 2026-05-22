@@ -1189,6 +1189,7 @@ mod tests {
             rule_payload: serde_json::to_vec(&condition).unwrap(),
             output: Some(Output::VariantKey(variant_key.to_string())),
             name: String::new(),
+            rule_id: String::new(),
         }
     }
 

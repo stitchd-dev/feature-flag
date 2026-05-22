@@ -59,6 +59,10 @@ message FlagRule {
   }
   // Optional human-readable label. Ignored by the evaluator; UI metadata only.
   string name = 4;
+  // UUID of the underlying `feature_flag_rules.id` row. Admin-only metadata —
+  // empty in SDK sync responses. Used by the admin UI (e.g. experiment
+  // creation) to bind to a specific rule without faking placeholder UUIDs.
+  string rule_id = 5;
 }
 
 // --- Feature flag ---
@@ -88,6 +92,11 @@ message FeatureFlag {
   int64          created_at_ms      = 11; // epoch milliseconds
   int64          updated_at_ms      = 12; // epoch milliseconds
   bool           archived           = 13; // true when soft-deleted
+  // UUID of the experiment currently locking this flag (running or paused),
+  // or the empty string when the flag is not locked. Admin-only — empty in
+  // SDK sync responses. Lets the admin UI surface the lock badge before the
+  // user attempts a save and gets a 409.
+  string         locked_by_experiment_id = 14;
 }
 
 // --- SDK sync service ---

@@ -117,11 +117,23 @@ pub fn proto_flag_rule_to_domain(
     } else {
         Some(proto.name.clone())
     };
+    // Preserve the rule's existing UUID when the client round-trips it back
+    // (e.g. an admin UI re-submits a flag's rules). When absent, mint a fresh
+    // one — the DB row's `id` column will overwrite it on read anyway, but a
+    // valid UUID keeps the serialised `rule_def` self-consistent.
+    let rule_id = if proto.rule_id.is_empty() {
+        RuleId::new()
+    } else {
+        match uuid::Uuid::parse_str(&proto.rule_id) {
+            Ok(u) => RuleId::from_uuid(u),
+            Err(_) => RuleId::new(),
+        }
+    };
     Some(stitchd_core::flag::FlagRule {
         flag_id,
         rule_index,
         rule: Rule {
-            id: RuleId::new(),
+            id: rule_id,
             name,
             condition,
             output,
@@ -191,6 +203,10 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
         rule_payload,
         output,
         name: fr.rule.name.clone().unwrap_or_default(),
+        // Surface the rule's row-PK UUID so admin clients (notably the
+        // experiment-create flow) can bind to a real rule without faking
+        // index-derived placeholders.
+        rule_id: fr.rule.id.to_string(),
     }
 }
 
@@ -235,6 +251,9 @@ pub fn build_feature_flag_proto(
         created_at_ms: record.created_at.timestamp_millis(),
         updated_at_ms: record.updated_at.timestamp_millis(),
         archived: record.deleted_at.is_some(),
+        // Populated by callers that resolve the lock state (admin RPCs).
+        // SDK paths leave this empty.
+        locked_by_experiment_id: String::new(),
     }
 }
 
@@ -368,6 +387,54 @@ mod tests {
             proto.output,
             Some(stitchd_proto::flags::v1::flag_rule::Output::VariantKey(ref k)) if k == "control"
         ));
+    }
+
+    #[test]
+    fn flag_rule_proto_carries_rule_id_and_name() {
+        let vid = make_variant_id();
+        let mut key_map = HashMap::new();
+        key_map.insert(vid, "v".to_string());
+
+        let rule_id = RuleId::new();
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: FlagId::new(),
+            rule_index: 0,
+            rule: Rule {
+                id: rule_id,
+                name: Some("named-rule".to_string()),
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Variant(vid),
+            },
+        };
+
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        assert_eq!(proto.rule_id, rule_id.to_string());
+        assert_eq!(proto.name, "named-rule");
+    }
+
+    #[test]
+    fn proto_flag_rule_round_trips_rule_id() {
+        let vid = make_variant_id();
+        let key_map: HashMap<VariantId, String> = [(vid, "on".to_string())].into_iter().collect();
+        let variant_map: HashMap<String, VariantId> =
+            [("on".to_string(), vid)].into_iter().collect();
+
+        let rule_id = RuleId::new();
+        let original = stitchd_core::flag::FlagRule {
+            flag_id: FlagId::new(),
+            rule_index: 0,
+            rule: Rule {
+                id: rule_id,
+                name: Some("n".to_string()),
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Variant(vid),
+            },
+        };
+
+        let proto = domain_flag_rule_to_proto(&original, &key_map);
+        let back = proto_flag_rule_to_domain(original.flag_id, 0, &proto, &variant_map)
+            .expect("round-trip");
+        assert_eq!(back.rule.id, rule_id, "rule_id must round-trip");
     }
 
     #[test]
