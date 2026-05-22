@@ -1,0 +1,13 @@
+{
+  "track_id": "docs_refresh_20260522",
+  "type": "chore",
+  "status": "new",
+  "priority": "low",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-22T05:17:55Z",
+  "updated_at": "2026-05-22T05:17:55Z",
+  "description": "Docs refresh & autogeneration pipeline — bulk-replace stale mdBook narrative pages against current code, extend cargo xtask docs with env-vars + cargo-rdme + link-check generators, delete orphan docs/src/internal/* subtree, wire idempotency into CI",
+  "git_branch": "track/docs_refresh_20260522",
+  "worktree_path": ".worktrees/docs_refresh_20260522"
+}

@@ -64,4 +64,14 @@ This file tracks all major tracks for the project.
 - experimentation_full_20260521 (Experimentation — Complete UI + Backend with eval-log-based first-exposure attribution (rule-scoped, context-type-scoped); whole-flag lock while running; default-rule percentage distribution; Frequentist/Bayesian/CUPED/SRM/Guardrails math; per-context-type result views)
 -->
 
+---
+
+## [ ] Track: Docs Refresh & Autogeneration Pipeline
+*Link: [./conductor/tracks/docs_refresh_20260522/](./conductor/tracks/docs_refresh_20260522/)*
+
+Bulk-replace stale mdBook narrative pages against current code, extend `cargo xtask docs`
+with env-vars + cargo-rdme + link-check generators, delete orphan `docs/src/internal/*`
+subtree, wire idempotency into CI. Phase 3 (narrative rewrites) runs as 5 parallel workers
+by topic (introduction+architecture / gateway / deployment / sdk / experimentation).
+
 
