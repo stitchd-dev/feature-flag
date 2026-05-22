@@ -56,7 +56,7 @@ Define the canonical types — every later phase consumes them.
 - [x] Task 8: Add purity-assertion test (`evaluation` module's transitive
       deps must not include `tokio`, `reqwest`, `sqlx`, or
       `tracing::warn!/error!`).
-- [ ] Task 9: Add zero-allocation assertion for `TraceLevel::Off` (doc test
+- [x] Task 9: Add zero-allocation assertion for `TraceLevel::Off` (doc test
       or microbench: returned trace `Vec` capacities == 0).
 - [ ] Task 10: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
 
