@@ -68,33 +68,33 @@ rewritten doc resolves to a live symbol (grep audit).
 ## Phase 3: Narrative-Prose Rewrites (Parallel by Topic)
 <!-- execution: parallel -->
 
-- [ ] Task 3.1: Topic A — Introduction + Architecture
+- [x] Task 3.1: Topic A — Introduction + Architecture
       <!-- files: docs/src/introduction.md, docs/src/architecture/README.md, docs/src/architecture/multi-tenancy.md, docs/src/architecture/evaluation-flow.md, docs/src/architecture/data-stores.md, docs/src/architecture/events.md, docs/src/architecture/metrics.md, docs/src/architecture/service-flows.md -->
       Rewrite each against current code (microservice decomposition, ScyllaDB segments,
       events+metrics composable primitives, experimentation default-rule attribution).
       Acceptance: grep every code reference (struct/handler/proto/CLI flag) and confirm it
       resolves; mermaid diagrams reflect actual service topology.
-- [ ] Task 3.2: Topic B — Gateway pages
+- [x] Task 3.2: Topic B — Gateway pages
       <!-- files: docs/src/gateway/overview.md, docs/src/gateway/sdk-api.md, docs/src/gateway/admin-api.md, docs/src/gateway/grpc.md, docs/src/gateway/openapi.md -->
       Rewrite to reflect current axum routes + JWT/SDK-key auth model + lean architecture
       (analytics-service split, event-service retirement). `openapi.md` stays a stub that
       points at the generator output.
-- [ ] Task 3.3: Topic C — Deployment
+- [x] Task 3.3: Topic C — Deployment
       <!-- files: docs/src/deployment/README.md, docs/src/deployment/postgres.md, docs/src/deployment/clickhouse.md, docs/src/deployment/scylladb.md, docs/src/deployment/sdk-keys.md -->
       Rewrite each against current `docker-compose.yml`, `crates/stitchd-db/migrations/`,
       current ClickHouse schema (`experiment_assignments`, `flag_evaluation_log_v2` with new
       columns), and current ScyllaDB CQL migrations. NOTE: `env-vars.md` is now generated
       (Task 2.1) — do NOT touch it here.
-- [ ] Task 3.4: Topic D — SDK
+- [x] Task 3.4: Topic D — SDK
       <!-- files: docs/src/sdk/README.md -->
       Rewrite SDK landing page against `sdks/rust/src/lib.rs` current API. NOTE:
       `quickstart.md` is already auto-extracted from `sdks/rust/src/lib.rs` `//!` docs
       — confirm the Quickstart section in `lib.rs` is up-to-date instead.
-- [ ] Task 3.5: Topic E — Experimentation spot-check
+- [x] Task 3.5: Topic E — Experimentation spot-check
       <!-- files: docs/src/experimentation/index.md, docs/src/experimentation/attribution.md, docs/src/experimentation/default-rule-experiments.md -->
       Already written May 22 by Phase 11 of the experimentation_full track. Spot-check
       against current code; only edit if drift found.
-- [ ] Task 3.6: Conductor - User Manual Verification 'Narrative-Prose Rewrites'
+- [x] Task 3.6: Conductor - User Manual Verification 'Narrative-Prose Rewrites'
       (Protocol in workflow.md)
 
 ## Phase 4: CI Integration + Final Verification

@@ -16,9 +16,9 @@
 //!
 //! Three concrete transport impls live here alongside `SdkClient`:
 //!
-//! - [`GrpcDefinitionFetcher`] — calls `SdkService::SyncDefinitions` via tonic.
-//! - [`HttpMembershipFetcher`] — calls `POST /v1/sdk/segments/list:batch` via reqwest.
-//! - [`HttpEventSink`] — calls `POST /v1/sdk/events:batch` via reqwest.
+//! - `GrpcDefinitionFetcher` — calls `SdkService::SyncDefinitions` via tonic.
+//! - `HttpMembershipFetcher` — calls `POST /v1/sdk/segments/list:batch` via reqwest.
+//! - `HttpEventSink` — calls `POST /v1/sdk/events:batch` via reqwest.
 //!
 //! They are `pub(crate)` to let integration tests inject stubs; the stable
 //! public API is `SdkClient::init(SdkConfig)`.
