@@ -122,6 +122,61 @@ Patterns, gotchas, and context discovered during implementation.
 
 ---
 
+## [2026-05-22] Phase 3 — Proto + PG schema migration (Worker P3)
+
+- **Implemented:**
+  - `crates/stitchd-db/migrations/20260522000001_hash_input_spec_cutover.sql` —
+    new JSONB columns `feature_flag_rules.hash_inputs` and
+    `feature_flags.default_rule_hash_inputs`. Backfill of `hash_inputs` from
+    existing `rule_def->'output'->'Percentage'->'targets'` using canonical sort
+    (`context_type ASC, parameter ASC within type`). Legacy `rule_def` and
+    `default_rule_distribution` columns preserved — dual-schema state for Phase
+    5/6 to clean up.
+  - `crates/stitchd-db/tests/hash_input_spec_cutover.rs` — frozen-corpus +
+    canonical-sort + bucket-parity tests (pure-Rust portion) plus `#[sqlx::test]`
+    schema assertions + a backfill round-trip test.
+  - `proto/flags/v1/flag_sync.proto` — added new `HashSelector` /
+    `ContextKeySelector` / `ContextParameterSelector` messages + new
+    `PercentageAllocation.hash_inputs` repeated field at tag 3. Legacy
+    `context_hash_specs` map at tag 1 retained.
+  - `crates/xtask/src/main.rs` — added new `verify-hash-cutover` subcommand;
+    `crates/xtask/fixtures/hash_cutover_corpus.json` fixture file.
+- **Deliberate scope split with sibling worker P2 (Phase 2 / Phase 5/6):**
+  Repo-layer cutover (reading/writing the new column from `PgFlagRepository`)
+  is deferred to Phase 5/6. This phase only lands the schema + proto wire
+  expansion. Both columns exist NULL-able; existing code paths continue to
+  use `rule_def`.
+- **Caveat — struct-literal compile break in `mapping.rs`:** Adding the new
+  `hash_inputs` repeated field to `PercentageAllocation` broke three
+  struct-literal init sites that name every field explicitly. Two are in
+  `crates/stitchd-gateway/src/` (my scope) — patched to add
+  `hash_inputs: vec![]`. The third is `crates/stitchd-flag-service/src/mapping.rs`
+  — explicitly out-of-scope per the worker prompt, BUT the workspace will not
+  compile without a minimum touch. I added the same `hash_inputs: vec![]`
+  one-line field to the literal. This change is functionally inert (empty
+  vec = legacy field is the only source of percentage-rule data, exactly the
+  dual-schema contract). No merge conflict risk against P2: P2 owns
+  `stitchd-core/**` and never touches mapping.rs.
+- **Gotchas:**
+  - `RuleOutput` in `stitchd-core::rule_engine::types` uses default external
+    serde tagging — `Percentage` rules serialize as
+    `{"Percentage": {"targets": [...], "weights": [...]}}`. The backfill SQL
+    relies on this exact shape (`rule_def->'output'->'Percentage'->'targets'`).
+  - PG `jsonb_array_elements` returns objects-with-`value`-column, NOT plain
+    values — use `t.value->>'context_type'` not `t->>'context_type'`.
+  - sqlx test runner needs `r#"..."#` (NOT `r"..."` + `\"` escape) for SQL
+    strings containing literal double-quoted JSONB literals like
+    `'"Key"'::jsonb`.
+- **Migration test design:** The "frozen corpus" is a Rust unit-test corpus,
+  not a PG-side fixture. This makes the canonical-sort + bucket-parity logic
+  testable without a running DB — only the schema-assertion subset needs PG.
+  Operator-review reporting (rows where canonical sort ≠ legacy insertion
+  order) is via `eprintln!` rather than assertion-failure — the test surfaces
+  the deltas without breaking the build.
+- **Commits:** 38aacbe, 9ef7dcd, d19a57f, a6ba403, fb68a1e, 64d5579, dd16f44
+
+---
+
 ## [2026-05-22] Phase 1 — Foundation Types
 
 - **Implemented:** New `crates/stitchd-core/src/evaluation/types.rs` module with `HashSelector`, `HashInputSpec`, `TraceLevel`, `ListMembershipIndex`, `EvalOutcome`, `EvaluationTrace`, `FlagEvaluationResult`. Added `evaluate_flag` signature with `todo!()` body in `evaluation/engine.rs`. Phase 1 implementation requires no behavioural change — Phase 2 ports the body.

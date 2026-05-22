@@ -837,6 +837,10 @@ fn rule_body_to_proto(r: RuleBody, index: usize) -> stitchd_proto::flags::v1::Fl
         Some(Output::Allocation(PercentageAllocation {
             context_hash_specs,
             buckets,
+            // Phase 3 of flag_eval_unify_20260522 added the new selector
+            // list alongside the legacy map. Producer cutover is in Phase
+            // 5/6; the field stays empty here for now.
+            hash_inputs: Vec::new(),
         }))
     } else {
         None

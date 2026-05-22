@@ -12,6 +12,13 @@ path = "src/main.rs"
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 stitchd-db = { path = "../stitchd-db" }
+# Phase 3 of flag_eval_unify_20260522: `verify-hash-cutover` subcommand
+# re-hashes legacy + new percentage-rule shapes against a fixture corpus,
+# pulling `calculate_allocation` from stitchd-core. serde_json reads the
+# fixture file.
+stitchd-core = { path = "../stitchd-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # mdbook and mdbook-mermaid are invoked as subprocesses.
 # xtask auto-installs them via `cargo install` if absent from PATH.

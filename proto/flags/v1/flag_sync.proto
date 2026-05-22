@@ -35,15 +35,51 @@ message AllocationBucket {
 // Percentage allocation: deterministic hash over context keys/params.
 // hash(targeted_keys, flag_key, project_id, environment_id) mod 100_000
 message PercentageAllocation {
-  // Context types and their parameter names to include in the hash.
+  // [LEGACY] Context types and their parameter names to include in the hash.
   // An empty parameter list means use the context key only.
+  //
+  // Retained for backwards compatibility during the dual-schema cutover of
+  // `flag_eval_unify_20260522` (Phase 3 added the new `hash_inputs` field
+  // below; Phase 5/6 removes this field once every caller has migrated).
+  // New code MUST prefer `hash_inputs` — it preserves selector ordering and
+  // supports cross-context hashing (multiple context types in a single
+  // selector list, each contributing a key or named parameter).
   map<string, ContextHashSpec> context_hash_specs = 1;
   repeated AllocationBucket   buckets             = 2;
+  // [NEW — Phase 3 of flag_eval_unify_20260522] Ordered selector list.
+  // Selector order is significant for hash stability. Each selector resolves
+  // either to a context's `key` (HashSelector.context_key) or to a named
+  // parameter on a context (HashSelector.context_parameter). Empty list is
+  // invalid at the API boundary; the server-side validator rejects it. See
+  // `stitchd-core::evaluation::types::HashInputSpec` for the canonical
+  // domain representation.
+  repeated HashSelector hash_inputs = 3;
 }
 
 message ContextHashSpec {
   // If empty, only the context `key` is hashed.
   repeated string parameter_names = 1;
+}
+
+// One contributor to the percentage-allocation hash input. Mirrors the
+// `stitchd-core::evaluation::types::HashSelector` enum; serde and prost
+// representations stay aligned so the gateway DTO conversions are trivial.
+message HashSelector {
+  oneof selector {
+    // Hash the `key` of the named context type.
+    ContextKeySelector context_key = 1;
+    // Hash a specific parameter of the named context type.
+    ContextParameterSelector context_parameter = 2;
+  }
+}
+
+message ContextKeySelector {
+  string context_type = 1;
+}
+
+message ContextParameterSelector {
+  string context_type = 1;
+  string parameter    = 2;
 }
 
 // --- Rules (skeleton; full rule types added in core track) ---
