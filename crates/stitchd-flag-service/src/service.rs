@@ -677,9 +677,8 @@ impl FlagService for FlagServiceImpl {
                 // in the list (mid-list always-true rules are legitimate
                 // unconditional matches that the operator authored on
                 // purpose).
-                let strip_trailing_catch_all = !flag_proto.rules.is_empty()
-                    && flag_proto.default_variant_key.is_empty()
-                    && {
+                let strip_trailing_catch_all =
+                    !flag_proto.rules.is_empty() && flag_proto.default_variant_key.is_empty() && {
                         let last = flag_proto.rules.last().expect("rules non-empty");
                         // Empty rule_payload is treated as the catch-all
                         // sentinel by the engine (`ConditionExpr::And(vec![])`
@@ -752,8 +751,7 @@ impl FlagService for FlagServiceImpl {
                                     percentage: f64::from(b.weight_milli) / 10.0,
                                 })
                                 .collect();
-                            let dist =
-                                stitchd_core::rollout::RolloutDistribution { allocations };
+                            let dist = stitchd_core::rollout::RolloutDistribution { allocations };
                             // Only adopt the distribution if it validates;
                             // otherwise leave the record alone (the strict
                             // pre-existing validators on
