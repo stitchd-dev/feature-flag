@@ -74,14 +74,212 @@ fn docs() -> Result<()> {
     generate_env_vars(&root)?;
     // Step 4: Regenerate every crate-level README.md from its `//!` rustdoc
     generate_crate_readmes(&root)?;
-    // Step 5: Build rustdoc for stitchd-sdk-rust and copy into docs/
-    generate_sdk_rustdoc(&root)?;
+    // Step 5: extract SDK Quickstart from sdks/rust/src/lib.rs //! into docs/src/sdk/.
+    //   (This populates a docs/src/-side file that mdbook then renders. Separate from
+    //   step 7's `cargo doc` + `docs/book/rustdoc/` copy, which must run AFTER mdbook
+    //   build because mdbook wipes `docs/book/` on each rebuild.)
+    extract_sdk_quickstart(&root)?;
 
     // Step 6: build the mdBook site
     mdbook_build(&root)?;
 
+    // Step 7: Build SDK rustdoc and copy into docs/book/rustdoc/. Runs AFTER mdbook
+    // build because mdbook wipes docs/book/ on rebuild; copying before mdbook would
+    // be deleted before the link-checker (step 8) ran.
+    generate_sdk_rustdoc(&root)?;
+
+    // Step 8: verify every internal markdown link resolves (in-tree, no network).
+    // Implemented in xtask rather than as an mdbook-linkcheck backend because the
+    // mdbook-linkcheck 0.7 binary is incompatible with mdbook 0.5.x (RenderContext
+    // schema drift). See note in docs/book.toml.
+    check_internal_links(&root)?;
+
     println!("✓ Documentation built at docs/book/");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Step 7: internal-link check (post-mdbook-build)
+// ---------------------------------------------------------------------------
+
+/// Walk every `.md` under `docs/src/` for relative-path markdown links and verify
+/// each target exists. Reports all broken links, then returns an error if any were
+/// found (so `cargo xtask docs` exits non-zero in CI).
+///
+/// Scope:
+/// - Checks `[text](path)` and `[text](path#anchor)` and reference-style `[text]: path`.
+/// - Resolves paths relative to the linking `.md`'s parent directory.
+/// - Skips URL schemes (`http:`, `https:`, `mailto:`, `data:`) and bare `#anchor` links.
+/// - Treats links to `.html` as if they were the corresponding `.md` (mdbook rewrites
+///   on output).
+/// - Anchors are NOT verified (mdbook's heading-to-id mapping is non-trivial).
+fn check_internal_links(root: &Path) -> Result<()> {
+    let src_dir = root.join("docs/src");
+    println!("Checking internal markdown links under {}", src_dir.display());
+
+    let mut md_files: Vec<PathBuf> = Vec::new();
+    collect_markdown_files(&src_dir, &mut md_files)?;
+    md_files.sort();
+
+    let mut broken: Vec<(PathBuf, String, PathBuf)> = Vec::new();
+    for md in &md_files {
+        let content = std::fs::read_to_string(md)
+            .with_context(|| format!("failed to read {}", md.display()))?;
+        for link in extract_relative_links(&content) {
+            let resolved = resolve_link_target(md, &link);
+            let target_for_check = strip_anchor_and_normalize(&resolved);
+            if !link_target_ok(root, &target_for_check) {
+                broken.push((md.clone(), link, target_for_check));
+            }
+        }
+    }
+
+    if !broken.is_empty() {
+        eprintln!("\n✗ {} broken internal link(s) found:\n", broken.len());
+        for (src, link, target) in &broken {
+            eprintln!(
+                "  • {}\n    → link `{}` resolves to non-existent {}\n",
+                src.strip_prefix(root).unwrap_or(src).display(),
+                link,
+                target.display(),
+            );
+        }
+        anyhow::bail!("{} broken internal link(s)", broken.len());
+    }
+
+    println!(
+        "✓ Internal-link check passed ({} files scanned)",
+        md_files.len()
+    );
+    Ok(())
+}
+
+fn collect_markdown_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read dir {}", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            collect_markdown_files(&path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// Extract all relative-path link destinations from a markdown source. Returns the
+/// raw destination string (path + optional anchor). Skips URL schemes and bare anchors.
+fn extract_relative_links(content: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let bytes = content.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Inline link: `[text](dest)` — find `](`.
+        if let Some(close_text) = content[i..].find("](") {
+            let abs = i + close_text + 2;
+            // Find the closing `)` for this link. Bail on whitespace/newline since
+            // mdbook doesn't allow them in destinations without escaping.
+            if let Some(close_dest) = content[abs..].find([')', '\n', ' ']) {
+                if content.as_bytes().get(abs + close_dest) == Some(&b')') {
+                    let dest = &content[abs..abs + close_dest];
+                    if is_relative_link(dest) {
+                        out.push(dest.to_string());
+                    }
+                }
+                i = abs + close_dest;
+                continue;
+            }
+        }
+        break;
+    }
+
+    // Reference-style: lines like `[label]: dest`
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[')
+            && let Some(close) = trimmed.find("]: ")
+        {
+            let dest = trimmed[close + 3..].split_whitespace().next().unwrap_or("");
+            if is_relative_link(dest) {
+                out.push(dest.to_string());
+            }
+        }
+    }
+
+    out
+}
+
+fn is_relative_link(dest: &str) -> bool {
+    let d = dest.trim();
+    if d.is_empty() {
+        return false;
+    }
+    if d.starts_with('#') {
+        return false;
+    }
+    for scheme in ["http://", "https://", "mailto:", "data:", "tel:", "ftp:"] {
+        if d.starts_with(scheme) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Resolve a relative-path link against the linking file's parent dir.
+fn resolve_link_target(from_md: &Path, link: &str) -> PathBuf {
+    let parent = from_md.parent().unwrap_or(Path::new(""));
+    parent.join(link)
+}
+
+/// Strip the `#anchor` suffix (and `?query` if any), then normalize `./` and `../`
+/// components. Preserves a leading `/` for absolute paths.
+fn strip_anchor_and_normalize(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy().to_string();
+    let no_anchor = s.split('#').next().unwrap_or(&s);
+    let no_query = no_anchor.split('?').next().unwrap_or(no_anchor);
+    let is_absolute = no_query.starts_with('/');
+
+    let mut components: Vec<&str> = Vec::new();
+    for part in no_query.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                components.pop();
+            }
+            other => components.push(other),
+        }
+    }
+    let joined = components.join("/");
+    PathBuf::from(if is_absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    })
+}
+
+/// Decide whether a link target should be considered "resolved". A link is OK if:
+/// - The exact path exists (file or directory)
+/// - For `.html` links: the corresponding rendered file under `docs/book/` exists
+///   (rustdoc cross-refs from `src/sdk/README.md` use `../rustdoc/index.html` which
+///   only materialises after `mdbook build` + the SDK rustdoc copy step)
+/// - For paths under `docs/src/grpc/`: the file is allowed to be absent at scan
+///   time if the path matches a known auto-generated proto-md pattern; but in
+///   practice we always run xtask in order so the grpc/* files exist by step 7.
+fn link_target_ok(root: &Path, target: &Path) -> bool {
+    if target.exists() {
+        return true;
+    }
+    // For `.html` links, try the corresponding rendered file under docs/book/.
+    let s = target.to_string_lossy();
+    if let Some(rel) = s.strip_prefix(&format!("{}/docs/src/", root.display())) {
+        let book_path = root.join("docs/book").join(rel);
+        if book_path.exists() {
+            return true;
+        }
+    }
+    false
 }
 
 /// All workspace crates that should have a `cargo-rdme`-generated README.md, by
@@ -1079,17 +1277,24 @@ fn generate_sdk_rustdoc(root: &Path) -> Result<()> {
         .context("failed to run `cargo doc`")?;
     anyhow::ensure!(status.success(), "`cargo doc` exited with {status}");
 
-    // Copy target/doc/stitchd_sdk_rust → docs/book/rustdoc/
+    // Copy target/doc/stitchd_sdk_rust → docs/book/rustdoc/. Caller runs us AFTER
+    // mdbook build so this directory survives the mdbook clean step.
     let src = root.join("target/doc/stitchd_sdk_rust");
     if src.exists() {
+        // Wipe any prior copy to keep this step idempotent.
+        if out_dir.exists() {
+            std::fs::remove_dir_all(&out_dir).ok();
+        }
         copy_dir_all(&src, &out_dir)
             .with_context(|| format!("failed to copy rustdoc from {}", src.display()))?;
     }
 
-    // Extract the # Quickstart section from lib.rs module doc → quickstart.md
-    extract_quickstart(root)?;
-
     Ok(())
+}
+
+/// Wrapper to keep the `docs()` step list readable. Delegates to [`extract_quickstart`].
+fn extract_sdk_quickstart(root: &Path) -> Result<()> {
+    extract_quickstart(root)
 }
 
 /// Extract the `# Quickstart` section from `sdks/rust/src/lib.rs` module docs

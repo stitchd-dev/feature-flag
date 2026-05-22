@@ -44,11 +44,17 @@ rewritten doc resolves to a live symbol (grep audit).
       Verify each `crates/*/README.md` regenerates cleanly with zero diff on second run. [5cd046d]
       Created 2 new READMEs (analytics-service, stats-service); all 13 crate READMEs
       idempotent on 2nd xtask run.
-- [ ] Task 2.3: Add `mdbook-linkcheck` (or equivalent — could be a custom in-xtask
+- [x] Task 2.3: Add `mdbook-linkcheck` (or equivalent — could be a custom in-xtask
       walker) integration. Wire into xtask's `mdbook_build` step so broken internal links
-      fail the build.
-- [ ] Task 2.4: Update `cargo xtask docs` orchestration — add the three new steps in order
+      fail the build. CHOSE custom in-xtask walker (`check_internal_links()`): mdbook-
+      linkcheck 0.7 is incompatible with mdbook 0.5.x (RenderContext schema drift).
+      Runs as a post-mdbook-build step; checks `[text](dest)` + reference-style links;
+      remaps `.html` → `docs/book/`-side for rustdoc cross-refs.
+- [x] Task 2.4: Update `cargo xtask docs` orchestration — add the three new steps in order
       (env-vars → crate-rdme → link-check after mdbook build). Update the usage banner.
+      Steps now: grpc-docs → openapi → env-vars → crate-readmes → extract-quickstart →
+      mdbook-build → sdk-rustdoc-copy → link-check. (Fixed pre-existing ordering bug:
+      sdk-rustdoc must run AFTER mdbook-build because mdbook wipes `docs/book/` on rebuild.)
 - [ ] Task 2.5: Add xtask self-test — `cargo xtask docs` runs twice; second run must produce
       `git status --porcelain` = empty. Document this assertion in the xtask README and
       workflow.md "Daily Development" section.
