@@ -684,7 +684,7 @@ impl FlagService for FlagServiceImpl {
                         // sentinel by the engine (`ConditionExpr::And(vec![])`
                         // is the deserialised form, but the UI may submit
                         // either). Also handle the explicit `And: []`.
-                        let is_catch_all_cond = last.rule_payload.is_empty()
+                        last.rule_payload.is_empty()
                             || serde_json::from_slice::<
                                 stitchd_core::rule_engine::types::ConditionExpr,
                             >(&last.rule_payload)
@@ -695,8 +695,7 @@ impl FlagService for FlagServiceImpl {
                                         if v.is_empty()
                                 )
                             })
-                            .unwrap_or(false);
-                        is_catch_all_cond
+                            .unwrap_or(false)
                     };
 
                 if strip_trailing_catch_all {
