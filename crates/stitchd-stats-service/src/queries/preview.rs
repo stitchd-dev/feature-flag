@@ -36,9 +36,11 @@
 //!        a.variant_key  AS variant_key,
 //!        <kind-specific value expression> AS value
 //! FROM events_v2 AS e
+//! ARRAY JOIN e.contexts AS ctx_pair
 //! INNER JOIN experiment_assignments AS a
 //!     ON e.env_id = a.env_id
-//!    AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)
+//!    AND ctx_pair.1 = a.context_type
+//!    AND ctx_pair.2 = a.context_key
 //! WHERE a.env_id = toUUID(?)
 //!   AND a.experiment_id = toUUID(?)
 //!   AND a.iteration_id  = toUUID(?)
@@ -48,6 +50,9 @@
 //! GROUP BY day_ts, a.context_type, a.variant_key
 //! ORDER BY day_ts ASC, a.context_type, a.variant_key
 //! ```
+//!
+//! (ARRAY JOIN + equi-join — not `arrayExists(...)` inside `JOIN ON`,
+//! which CH 24's new analyzer rejects. See [`super::aggregation`].)
 //!
 //! The caller is responsible for zero-filling missing days in Rust (the
 //! SQL returns only days that actually saw events).
@@ -391,6 +396,12 @@ pub fn build_experiment_preview_aggregation_query(
     // Coerce aggregator output to Nullable(Float64) so the wire shape
     // matches the PreviewRow's `value: Option<f64>` (uniform with the
     // standalone preview path).
+    //
+    // ARRAY JOIN + equi-join — mirrors the Phase 11 E2E pattern and the
+    // experiment-scoped aggregation builder. CH 24's new analyzer
+    // rejects `arrayExists(...)` inside `JOIN ON`; see
+    // [`super::aggregation`] for the full rationale. Bind order is
+    // unchanged.
     let sql = format!(
         "SELECT\n    \
             toUnixTimestamp(toStartOfDay(e.occurred_at, 'UTC')) AS day_ts,\n    \
@@ -398,9 +409,11 @@ pub fn build_experiment_preview_aggregation_query(
             a.variant_key AS variant_key,\n    \
             CAST({agg_expr} AS Nullable(Float64)) AS value\n\
         FROM events_v2 AS e\n\
+        ARRAY JOIN e.contexts AS ctx_pair\n\
         INNER JOIN experiment_assignments AS a\n    \
             ON e.env_id = a.env_id\n   \
-            AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)\n\
+            AND ctx_pair.1 = a.context_type\n   \
+            AND ctx_pair.2 = a.context_key\n\
         WHERE a.env_id = toUUID({env_ph})\n  \
           AND a.experiment_id = toUUID({exp_ph})\n  \
           AND a.iteration_id = toUUID({iter_ph})\n  \
@@ -739,10 +752,23 @@ mod tests {
             q.sql
         );
         assert!(
-            q.sql.contains(
-                "AND arrayExists(t -> t.1 = a.context_type AND t.2 = a.context_key, e.contexts)"
-            ),
-            "join predicate via arrayExists missing, got:\n{}",
+            q.sql.contains("ARRAY JOIN e.contexts AS ctx_pair"),
+            "must ARRAY JOIN e.contexts (CH 24 rejects arrayExists in JOIN ON), got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("ctx_pair.1 = a.context_type"),
+            "join predicate must equi-join ctx_pair.1 to a.context_type, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("ctx_pair.2 = a.context_key"),
+            "join predicate must equi-join ctx_pair.2 to a.context_key, got:\n{}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains("arrayExists"),
+            "no arrayExists in JOIN ON; got:\n{}",
             q.sql
         );
         assert!(
@@ -802,9 +828,9 @@ mod tests {
         let q =
             build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
                 .unwrap();
-        assert!(!q.sql.contains("arrayExists(t -> t.1 = 'experiment'"));
-        assert!(!q.sql.contains("t.1 = 'iteration'"));
-        assert!(!q.sql.contains("t.1 = 'variant'"));
+        assert!(!q.sql.contains("'experiment'"));
+        assert!(!q.sql.contains("'iteration'"));
+        assert!(!q.sql.contains("'variant'"));
     }
 
     #[test]
