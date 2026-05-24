@@ -394,7 +394,6 @@ impl ManagementService for ManagementServiceImpl {
             .map_err(map_repo_err)?;
         project.name = r.name.trim().to_string();
         project.updated_at = Utc::now();
-        project.version += 1;
         self.project_repo
             .update(&project)
             .await
@@ -457,7 +456,6 @@ impl ManagementService for ManagementServiceImpl {
             .map_err(map_repo_err)?;
         env.name = r.name.trim().to_string();
         env.updated_at = Utc::now();
-        env.version += 1;
         self.env_repo.update(&env).await.map_err(map_repo_err)?;
         Ok(Response::new(RenameEnvironmentResponse {}))
     }
