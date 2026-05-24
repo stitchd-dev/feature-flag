@@ -18,10 +18,10 @@ pub struct StatsConfig {
     /// Port for the gRPC server (`STITCHD_STATS_SERVICE_GRPC_PORT`, default: 50056).
     pub grpc_port: u16,
     /// gRPC endpoint for experimentation-service
-    /// (`STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL`, default: `http://localhost:50054`).
+    /// (`STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL`, default: `http://localhost:50055`).
     pub experimentation_service_grpc_url: String,
     /// gRPC endpoint for analytics-service
-    /// (`STITCHD_ANALYTICS_SERVICE_GRPC_URL`, default: `http://localhost:50055`).
+    /// (`STITCHD_ANALYTICS_SERVICE_GRPC_URL`, default: `http://localhost:50054`).
     pub analytics_service_grpc_url: String,
 }
 
@@ -58,10 +58,10 @@ impl StatsConfig {
 
         let experimentation_service_grpc_url =
             std::env::var("STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL")
-                .unwrap_or_else(|_| "http://localhost:50054".to_string());
+                .unwrap_or_else(|_| "http://localhost:50055".to_string());
 
         let analytics_service_grpc_url = std::env::var("STITCHD_ANALYTICS_SERVICE_GRPC_URL")
-            .unwrap_or_else(|_| "http://localhost:50055".to_string());
+            .unwrap_or_else(|_| "http://localhost:50054".to_string());
 
         Ok(Self {
             database_url,
@@ -212,7 +212,7 @@ mod tests {
         let config = StatsConfig::from_env().unwrap();
         assert_eq!(
             config.experimentation_service_grpc_url,
-            "http://localhost:50054"
+            "http://localhost:50055"
         );
     }
 
@@ -245,7 +245,7 @@ mod tests {
             std::env::remove_var("STITCHD_ANALYTICS_SERVICE_GRPC_URL");
         }
         let config = StatsConfig::from_env().unwrap();
-        assert_eq!(config.analytics_service_grpc_url, "http://localhost:50055");
+        assert_eq!(config.analytics_service_grpc_url, "http://localhost:50054");
     }
 
     #[test]
