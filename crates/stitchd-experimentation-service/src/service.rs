@@ -136,9 +136,9 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
         environment_id: e.environment_id.to_string(),
         name: e.name.clone(),
         description: e.description.clone().unwrap_or_default(),
-        flag_key: String::new(), // flag_key not stored on Experiment; filled by caller if known
+        flag_key: e.flag_key.clone().unwrap_or_default(),
         status: core_status_to_proto(e.status),
-        variant_keys: vec![],
+        variant_keys: e.variant_keys.clone(),
         created_at_ms: e.created_at.timestamp_millis(),
         updated_at_ms: e.updated_at.timestamp_millis(),
         version: u64::try_from(e.version).unwrap_or(1),
@@ -156,6 +156,7 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
             .map(|id| id.to_string())
             .collect(),
         pre_period_days: e.pre_period_days,
+        metric_ids: e.metric_ids.iter().map(|id| id.to_string()).collect(),
     }
 }
 
@@ -301,6 +302,8 @@ impl ExperimentationService for ExperimentationServiceImpl {
             id: ExperimentId::new(),
             environment_id: env_id,
             flag_id,
+            flag_key: None,
+            variant_keys: vec![],
             flag_rule_id,
             targets_default_rule: proto_exp.targets_default_rule,
             name: proto_exp.name.clone(),
@@ -1081,6 +1084,8 @@ mod tests {
             id: ExperimentId::new(),
             environment_id: env_id,
             flag_id: stitchd_core::id::FlagId::new(),
+            flag_key: None,
+            variant_keys: vec![],
             flag_rule_id: Some(RuleId::new()),
             targets_default_rule: false,
             name: "Test Experiment".to_string(),

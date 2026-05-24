@@ -32,6 +32,8 @@ message Experiment {
   repeated string  unit_context_types   = 14;
   repeated string  guardrail_metric_ids = 15;
   uint32           pre_period_days      = 16;
+  // Metric definition UUIDs attached to this experiment.
+  repeated string  metric_ids           = 17;
 }
 
 // ─── Iteration (a single run of an experiment) ────────────────────────────────

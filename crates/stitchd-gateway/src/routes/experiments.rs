@@ -99,11 +99,29 @@ pub struct IterationJson {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ExperimentJson {
     pub id: String,
+    /// Alias for `id` — experiments are addressed by UUID; kept for UI compat.
+    pub key: String,
+    pub environment_id: String,
     pub name: String,
     pub description: String,
     pub flag_key: String,
     pub status: String,
+    pub model: String,
     pub variant_keys: Vec<String>,
+    /// Number of variants (derived from `variant_keys.len()`).
+    pub variants: u32,
+    /// Metric definition UUIDs attached to this experiment. Empty until the
+    /// experimentation-service proto carries metric_ids (Phase 7 gap).
+    pub metric_ids: Vec<String>,
+    /// ISO-8601 UTC timestamp; derived from the proto `created_at_ms` field.
+    pub created_at: String,
+    /// ISO-8601 UTC timestamp; derived from the proto `updated_at_ms` field.
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    pub unit_context_types: Vec<String>,
 }
 
 /// Per-variant result row — used in both `variants` and `guardrails` buckets
@@ -193,22 +211,42 @@ pub struct ExperimentResultsJson {
 fn experiment_status_str(status: i32) -> String {
     match ExperimentStatus::try_from(status).unwrap_or(ExperimentStatus::Unspecified) {
         ExperimentStatus::Draft => "draft",
-        ExperimentStatus::Active => "active",
+        ExperimentStatus::Active => "running",
         ExperimentStatus::Paused => "paused",
-        ExperimentStatus::Concluded => "concluded",
-        ExperimentStatus::Unspecified => "unspecified",
+        ExperimentStatus::Concluded => "stopped",
+        ExperimentStatus::Unspecified => "draft",
     }
     .to_string()
 }
 
+fn ms_to_iso(ms: i64) -> String {
+    use std::time::{Duration, UNIX_EPOCH};
+    let secs = (ms / 1000) as u64;
+    let nanos = ((ms % 1000) * 1_000_000) as u32;
+    let t = UNIX_EPOCH + Duration::new(secs, nanos);
+    let d = chrono::DateTime::<chrono::Utc>::from(t);
+    d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
 fn experiment_to_json(e: &Experiment) -> ExperimentJson {
+    let variants = e.variant_keys.len() as u32;
     ExperimentJson {
         id: e.id.clone(),
+        key: e.id.clone(),
+        environment_id: e.environment_id.clone(),
         name: e.name.clone(),
         description: e.description.clone(),
         flag_key: e.flag_key.clone(),
         status: experiment_status_str(e.status),
+        model: "frequentist".to_string(),
         variant_keys: e.variant_keys.clone(),
+        variants,
+        metric_ids: e.metric_ids.clone(),
+        created_at: ms_to_iso(e.created_at_ms),
+        updated_at: ms_to_iso(e.updated_at_ms),
+        started_at: None,
+        ended_at: None,
+        unit_context_types: e.unit_context_types.clone(),
     }
 }
 
@@ -285,9 +323,9 @@ fn iteration_to_json(i: &ExperimentIteration) -> IterationJson {
 fn status_from_str(s: &str) -> ExperimentStatus {
     match s.to_lowercase().as_str() {
         "draft" => ExperimentStatus::Draft,
-        "active" => ExperimentStatus::Active,
+        "active" | "running" => ExperimentStatus::Active,
         "paused" => ExperimentStatus::Paused,
-        "concluded" => ExperimentStatus::Concluded,
+        "concluded" | "stopped" | "completed" => ExperimentStatus::Concluded,
         _ => ExperimentStatus::Unspecified,
     }
 }
