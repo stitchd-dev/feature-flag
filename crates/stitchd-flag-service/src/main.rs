@@ -109,6 +109,10 @@ async fn main() -> anyhow::Result<()> {
             .with_password(ch_password),
     );
 
+    stitchd_event_writer::migrations::run(&ch_client)
+        .await
+        .expect("Failed to run ClickHouse migrations");
+
     // ── gRPC Server ────────────────────────────────────────────────────────────
     let port: u16 = std::env::var("STITCHD_FLAG_SERVICE_GRPC_PORT")
         .ok()

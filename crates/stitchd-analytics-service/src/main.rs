@@ -51,6 +51,10 @@ async fn main() -> anyhow::Result<()> {
         ch_client = ch_client.with_password(password);
     }
 
+    stitchd_event_writer::migrations::run(&ch_client)
+        .await
+        .context("Failed to run ClickHouse migrations")?;
+
     let pg_pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(10)
         .connect(&cfg.database_url)
