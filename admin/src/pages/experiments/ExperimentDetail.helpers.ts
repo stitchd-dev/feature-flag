@@ -77,20 +77,24 @@ export function pickContextTypeResult(
 export function findControlRow(
   variants: VariantResultJson[],
 ): VariantResultJson | null {
-  // Frequentist convention: control row has `p_value === null` and
-  // `expected_lift === null` and `prob_to_beat_control === null`. Use that as
-  // the primary signal; fall back to first row when no row matches.
-  const ctrl = variants.find(
-    (v) => v.p_value === null && v.expected_lift === null,
-  )
+  // Frequentist convention: control row has `p_value === null`.
+  // Fall back to first row when no row matches.
+  const ctrl = variants.find((v) => v.p_value === null)
   return ctrl ?? variants[0] ?? null
 }
 
-/** Returns the row flagged `is_winner`, or null when none exists yet. */
+/**
+ * Returns the variant row with the best lift that is statistically significant
+ * (p < 0.05 for frequentist). Returns null when no winner exists yet.
+ */
 export function findWinnerRow(
   variants: VariantResultJson[],
 ): VariantResultJson | null {
-  return variants.find((v) => v.is_winner) ?? null
+  return (
+    variants
+      .filter((v) => v.p_value != null && v.p_value < 0.05)
+      .sort((a, b) => Math.abs(b.lift) - Math.abs(a.lift))[0] ?? null
+  )
 }
 
 // ── Formatters ───────────────────────────────────────────────────────────────
@@ -140,14 +144,14 @@ export function buildExperimentDisplay(
   let confidence = 0
   if (winner) {
     if (useBayesian) {
-      confidence = asConfidencePercent(winner.prob_to_beat_control)
+      confidence = winner.p_value != null ? asConfidencePercent(1 - winner.p_value) : 0
     } else if (winner.p_value != null) {
       confidence = asConfidencePercent(1 - winner.p_value)
     }
   }
 
   const totalSamples = variantRows.reduce(
-    (acc, v) => acc + (v.sample_size ?? 0),
+    (acc, v) => acc + (v.participant_count ?? 0),
     0,
   )
 
@@ -162,7 +166,7 @@ export function buildExperimentDisplay(
   return {
     variants: exp?.variants ?? (variantRows.length > 0 ? variantRows.length : 2),
     model: exp?.model ?? 'frequentist',
-    lift: formatLift(winner?.expected_lift ?? null),
+    lift: formatLift(winner?.lift ?? null),
     confidence,
     samples: formatSamples(totalSamples > 0 ? totalSamples : null),
     remaining,

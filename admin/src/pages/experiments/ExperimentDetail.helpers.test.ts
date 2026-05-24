@@ -30,34 +30,26 @@ import type { ExperimentSummary } from '../../lib/api'
 
 const CONTROL_ROW: VariantResultJson = {
   variant_key: 'control',
-  assigned_count: 1000,
-  mean: 0.1,
-  sample_size: 1000,
+  participant_count: 1000,
   p_value: null,
-  ci_lower: 0.09,
-  ci_upper: 0.11,
-  prob_to_beat_control: null,
-  expected_lift: null,
-  is_winner: false,
+  lift: 0,
+  direction_violation: false,
+  context_type: 'user',
 }
 
 const WINNER_ROW: VariantResultJson = {
   variant_key: 'variant-a',
-  assigned_count: 1000,
-  mean: 0.12,
-  sample_size: 1000,
+  participant_count: 1000,
   p_value: 0.012,
-  ci_lower: 0.105,
-  ci_upper: 0.135,
-  prob_to_beat_control: 0.95,
-  expected_lift: 0.04,
-  is_winner: true,
+  lift: 0.04,
+  direction_violation: false,
+  context_type: 'user',
 }
 
 const EXP_SUMMARY: ExperimentSummary = {
-  experiment_id: 'exp-1',
+  id: 'exp-1',
+  key: 'exp-1',
   environment_id: 'env-1',
-  key: 'checkout-v2',
   name: 'Checkout V2',
   description: 'desc',
   flag_key: 'checkout-flag',
@@ -65,10 +57,12 @@ const EXP_SUMMARY: ExperimentSummary = {
   model: 'frequentist',
   metric_ids: ['metric-1'],
   variants: 2,
+  variant_keys: ['control', 'variant-a'],
   started_at: '2026-05-01T00:00:00Z',
   ended_at: null,
   created_at: '2026-05-01T00:00:00Z',
   updated_at: '2026-05-01T00:00:00Z',
+  unit_context_types: ['user'],
 }
 
 function buildResults(blocks: ExperimentResults['results_by_context_type']): ExperimentResults {
@@ -86,7 +80,7 @@ const FULL_RESULTS = buildResults({
     guardrails: [],
   },
   account: {
-    variants: [CONTROL_ROW, { ...WINNER_ROW, is_winner: false, p_value: 0.4, expected_lift: 0.01, prob_to_beat_control: 0.6 }],
+    variants: [CONTROL_ROW, { ...WINNER_ROW, p_value: 0.4, lift: 0.01 }],
     srm: { per_variant: [], overall_chi_sq_p: 0.5, health: 'green' },
     guardrails: [],
   },
@@ -124,7 +118,7 @@ describe('pickContextTypeResult', () => {
 // ── findControlRow + findWinnerRow ───────────────────────────────────────────
 
 describe('findControlRow', () => {
-  it('returns the row with null p_value + null expected_lift', () => {
+  it('returns the row with null p_value', () => {
     const ctrl = findControlRow([CONTROL_ROW, WINNER_ROW])
     expect(ctrl?.variant_key).toBe('control')
   })
@@ -135,17 +129,17 @@ describe('findControlRow', () => {
 
   it('returns the first row when none match the control predicate', () => {
     // Two non-control rows — fallback to first.
-    const rows = [WINNER_ROW, { ...WINNER_ROW, variant_key: 'variant-b', is_winner: false }]
+    const rows = [WINNER_ROW, { ...WINNER_ROW, variant_key: 'variant-b' }]
     expect(findControlRow(rows)?.variant_key).toBe('variant-a')
   })
 })
 
 describe('findWinnerRow', () => {
-  it('returns the row flagged is_winner', () => {
+  it('returns the significant variant with the largest lift', () => {
     expect(findWinnerRow([CONTROL_ROW, WINNER_ROW])?.variant_key).toBe('variant-a')
   })
 
-  it('returns null when no winner is flagged', () => {
+  it('returns null when no variant is statistically significant', () => {
     expect(findWinnerRow([CONTROL_ROW])).toBeNull()
   })
 })
@@ -235,12 +229,13 @@ describe('buildExperimentDisplay', () => {
     expect(d.remaining).toBe('ready')
   })
 
-  it('reports bayesian confidence = prob_to_beat_control when useBayesian=true', () => {
+  it('reports bayesian confidence from p-value when useBayesian=true', () => {
     const d = buildExperimentDisplay(EXP_SUMMARY, FULL_RESULTS, 'user', true)
-    expect(d.confidence).toBe(95) // prob_to_beat_control = 0.95
+    // winner p_value = 0.012 → confidence = round((1-0.012)*100) = 99
+    expect(d.confidence).toBe(99)
   })
 
-  it('sums sample_size across variant rows', () => {
+  it('sums participant_count across variant rows', () => {
     const d = buildExperimentDisplay(EXP_SUMMARY, FULL_RESULTS, 'user', false)
     expect(d.samples).toBe('2,000') // 1000 control + 1000 winner
   })
@@ -253,7 +248,7 @@ describe('buildExperimentDisplay', () => {
   it('reports "running" when there is data but no winner yet', () => {
     const partial = buildResults({
       user: {
-        variants: [CONTROL_ROW, { ...WINNER_ROW, is_winner: false }],
+        variants: [CONTROL_ROW, { ...WINNER_ROW, p_value: 0.4 }],
         srm: { per_variant: [], overall_chi_sq_p: 0.5, health: 'green' },
         guardrails: [],
       },

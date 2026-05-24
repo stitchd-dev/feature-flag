@@ -465,7 +465,7 @@ function ExperimentDetailBody({
 
   // Picked block — used to drive samples accurately when results are present.
   const picked = pickContextTypeResult(apiResults, activeContextType)
-  const sampleCount = picked?.block.variants.reduce((a, v) => a + (v.sample_size ?? 0), 0) ?? 0
+  const sampleCount = picked?.block.variants.reduce((a, v) => a + (v.participant_count ?? 0), 0) ?? 0
 
   const displayName = apiExp.name
   const displayKey = apiExp.key

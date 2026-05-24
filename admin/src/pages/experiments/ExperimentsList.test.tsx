@@ -26,9 +26,9 @@ import {
 import type { ExperimentResponse } from '../../lib/types'
 
 const baseExp: ExperimentResponse = {
-  experiment_id: 'exp-1',
-  environment_id: 'env-1',
+  id: 'exp-1',
   key: 'exp-1',
+  environment_id: 'env-1',
   name: 'Exp 1',
   description: '',
   flag_key: 'flag-1',
@@ -37,6 +37,7 @@ const baseExp: ExperimentResponse = {
   model: 'bayesian',
   metric_ids: ['metric-1'],
   variants: 2,
+  variant_keys: ['control', 'treatment'],
   started_at: '2026-01-01T00:00:00Z',
   ended_at: null,
   scheduled_end_at: null,
@@ -147,7 +148,7 @@ describe('pickExposureContextType', () => {
   })
 
   it('defaults to "user" when none declared', () => {
-    expect(pickExposureContextType({ ...baseExp, unit_context_types: undefined })).toBe('user')
+    expect(pickExposureContextType({ ...baseExp, unit_context_types: [] })).toBe('user')
   })
 })
 

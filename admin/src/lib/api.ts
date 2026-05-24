@@ -564,24 +564,29 @@ export async function createSegmentInEnv(
 // ─── Experiments ──────────────────────────────────────────────────────────────
 
 export interface ExperimentSummary {
-  experiment_id: string
-  environment_id: string
+  /** UUID. The API returns this as `id`; `key` is an alias equal to `id`. */
+  id: string
+  /** Alias for `id` returned by the gateway for UI back-compat. */
   key: string
+  environment_id: string
   name: string
   description: string
   flag_key: string
   status: string
   model: string
   /**
-   * UUIDs referencing `metric_definitions` rows. Phase 7 cutover replaced
-   * the legacy `primary_metric: string` (free-form event key).
+   * UUIDs referencing `metric_definitions` rows. Empty until the
+   * experimentation-service proto carries metric_ids (Phase 7 gap).
    */
   metric_ids: string[]
+  /** Number of variants (derived from variant_keys.length on the backend). */
   variants: number
+  variant_keys: string[]
   started_at: string | null
   ended_at: string | null
   created_at: string
   updated_at: string
+  unit_context_types: string[]
 }
 
 export async function listExperiments(

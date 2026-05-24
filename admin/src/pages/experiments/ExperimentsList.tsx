@@ -305,9 +305,9 @@ export function ExperimentsList() {
                       const primaryLabel = resolvePrimaryMetricLabel(e, metricLookup)
                       return (
                         <tr
-                          key={e.key}
+                          key={e.id ?? e.key}
                           className="row-clickable"
-                          onClick={() => navigate(`/org/${orgId}/experiments/${e.key}`)}
+                          onClick={() => navigate(`/org/${orgId}/experiments/${e.id ?? e.key}`)}
                         >
                           <td>
                             <div style={{ fontWeight: 600 }}>{e.name}</div>

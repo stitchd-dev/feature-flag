@@ -84,41 +84,29 @@ afterEach(() => {
 
 const CONTROL: VariantResultJson = {
   variant_key: 'control',
-  assigned_count: 1000,
-  mean: 0.10,
-  sample_size: 1000,
+  participant_count: 1000,
   p_value: null,
-  ci_lower: 0.09,
-  ci_upper: 0.11,
-  prob_to_beat_control: null,
-  expected_lift: null,
-  is_winner: false,
+  lift: 0,
+  direction_violation: false,
+  context_type: 'user',
 }
 
 const TREATMENT_A: VariantResultJson = {
   variant_key: 'variant-a',
-  assigned_count: 1000,
-  mean: 0.12,
-  sample_size: 1000,
+  participant_count: 1000,
   p_value: 0.012,
-  ci_lower: 0.105,
-  ci_upper: 0.135,
-  prob_to_beat_control: 0.95,
-  expected_lift: 0.04, // +4.0% lift
-  is_winner: true,
+  lift: 0.04, // +4.0% lift
+  direction_violation: false,
+  context_type: 'user',
 }
 
 const TREATMENT_B: VariantResultJson = {
   variant_key: 'variant-b',
-  assigned_count: 1000,
-  mean: 0.115,
-  sample_size: 1000,
+  participant_count: 1000,
   p_value: 0.18,
-  ci_lower: 0.10,
-  ci_upper: 0.13,
-  prob_to_beat_control: 0.62,
-  expected_lift: 0.02,
-  is_winner: false,
+  lift: 0.02,
+  direction_violation: false,
+  context_type: 'user',
 }
 
 function buildResults(
@@ -239,8 +227,7 @@ describe('Results (component)', () => {
     // Mirror fixture: variant-a has -4% lift, decrease direction → winner.
     const decreasingWinner: VariantResultJson = {
       ...TREATMENT_A,
-      expected_lift: -0.04,
-      is_winner: true,
+      lift: -0.04,
     }
     const results = buildResults([CONTROL, decreasingWinner])
     const html = renderToString(
@@ -311,10 +298,8 @@ describe('Results (component)', () => {
         metricNames={['conversion']}
       />,
     )
-    // Bayesian view shows P(beats control) and credible interval markers
+    // Bayesian view shows P(beats control) column header
     expect(html).toMatch(/P\(/) // P(...
-    // The winning variant's prob_to_beat_control = 0.95 → "95%"
-    expect(html).toMatch(/95%/)
   })
 
   it('renders an empty-state when results has no rows for the active context', () => {

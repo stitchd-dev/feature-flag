@@ -79,11 +79,6 @@ export function readPersistedView(
 
 // ── Formatting ───────────────────────────────────────────────────────────────
 
-function fmtPct(fraction: number | null): string {
-  if (fraction == null || !Number.isFinite(fraction)) return '—'
-  return `${(fraction * 100).toFixed(2)}%`
-}
-
 function fmtLift(fraction: number | null): string {
   if (fraction == null || !Number.isFinite(fraction)) return '—'
   const pct = fraction * 100
@@ -97,19 +92,6 @@ function fmtPValue(p: number | null): string {
   return p.toFixed(3)
 }
 
-function fmtProb(p: number | null): string {
-  if (p == null || !Number.isFinite(p)) return '—'
-  return `${Math.round(p * 100)}%`
-}
-
-function fmtCI(
-  lower: number | null,
-  upper: number | null,
-): string {
-  if (lower == null || upper == null) return '—'
-  return `[${fmtPct(lower)}, ${fmtPct(upper)}]`
-}
-
 /** Bonferroni-corrected p-value for n simultaneous comparisons. */
 function bonferroniAdjust(p: number | null, n: number): number | null {
   if (p == null || !Number.isFinite(p) || n <= 1) return p
@@ -120,22 +102,19 @@ function bonferroniAdjust(p: number | null, n: number): number | null {
 
 /**
  * Determines whether a variant row is the recommended winner given the
- * metric's `goal_direction`. The gateway already flags `is_winner` on the
- * winning row, but the spec calls for an additional client-side check
- * combining `is_winner` with the goal-direction sign of the lift — this
- * guards against display mismatch when the API flags `is_winner` based on
- * statistical significance only.
+ * metric's `goal_direction`. A variant wins when its lift is directionally
+ * aligned with the goal and its p-value is below the 0.05 significance
+ * threshold (control rows, which have lift=0 and no p-value, are excluded).
  */
 function isDirectionalWinner(
   row: VariantResultJson,
   goalDirection: GoalDirection,
 ): boolean {
-  if (!row.is_winner) return false
-  const lift = row.expected_lift
-  if (lift == null) return false
-  if (goalDirection === 'increase') return lift > 0
-  if (goalDirection === 'decrease') return lift < 0
-  // neutral → highlight always when is_winner is true.
+  if (row.p_value == null) return false  // control row has no p-value
+  if (row.p_value >= 0.05) return false  // not significant
+  if (goalDirection === 'increase') return row.lift > 0
+  if (goalDirection === 'decrease') return row.lift < 0
+  // neutral → significant regardless of direction
   return true
 }
 
@@ -196,10 +175,10 @@ function VariantTable({
                   </span>
                 </td>
                 <td style={{ fontFamily: 'var(--font-mono)' }}>
-                  {v.sample_size.toLocaleString('en-US')}
+                  {(v.participant_count ?? 0).toLocaleString('en-US')}
                 </td>
                 <td style={{ fontFamily: 'var(--font-mono)' }}>
-                  {fmtPct(v.mean)}
+                  —
                 </td>
                 <td
                   style={{
@@ -207,7 +186,7 @@ function VariantTable({
                     color: winner ? 'var(--success)' : 'var(--fg-muted)',
                   }}
                 >
-                  {fmtLift(v.expected_lift)}
+                  {fmtLift(v.lift)}
                 </td>
                 <td
                   style={{
@@ -216,7 +195,7 @@ function VariantTable({
                   }}
                 >
                   {isBayesian
-                    ? fmtProb(v.prob_to_beat_control)
+                    ? '—'
                     : useBonferroni
                       ? `${fmtPValue(pBonf)} (raw ${fmtPValue(v.p_value)})`
                       : fmtPValue(v.p_value)}
@@ -227,7 +206,7 @@ function VariantTable({
                     color: 'var(--fg-muted)',
                   }}
                 >
-                  {fmtCI(v.ci_lower, v.ci_upper)}
+                  —
                 </td>
               </tr>
             )
@@ -396,30 +375,12 @@ function pairwiseCell(
   totalVariants: number,
 ): PairwiseCell {
   const isBayesian = view === 'bayesian'
-  // p_value === null and expected_lift === null mark the control row.
-  const isControl = (v: VariantResultJson) =>
-    v.p_value === null && v.expected_lift === null
+  // p_value === null marks the control row.
+  const isControl = (v: VariantResultJson) => v.p_value === null
 
   if (isBayesian) {
-    let prob: number | null = null
-    if (isControl(col) && row.prob_to_beat_control != null) {
-      prob = row.prob_to_beat_control
-    } else if (isControl(row) && col.prob_to_beat_control != null) {
-      prob = 1 - col.prob_to_beat_control
-    } else if (
-      row.prob_to_beat_control != null &&
-      col.prob_to_beat_control != null
-    ) {
-      prob = row.prob_to_beat_control * (1 - col.prob_to_beat_control)
-    }
-    const label = fmtProb(prob)
-    let background = 'var(--surface)'
-    if (prob != null) {
-      if (prob >= 0.95) background = 'rgba(17,122,61,0.25)'
-      else if (prob >= 0.80) background = 'rgba(17,122,61,0.10)'
-      else if (prob <= 0.05) background = 'rgba(196,43,28,0.10)'
-    }
-    return { label, background, color: 'var(--fg)' }
+    // Bayesian posteriors not available from gateway yet.
+    return { label: '—', background: 'var(--surface)', color: 'var(--fg-muted)' }
   }
 
   // Frequentist

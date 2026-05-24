@@ -62,32 +62,32 @@ export interface UpdateSegmentRequest {
 // ── Experiment domain types ───────────────────────────────────────────────────
 
 export interface ExperimentResponse {
-  experiment_id: string
-  environment_id: string
+  /** UUID returned as `id` by the gateway. */
+  id: string
+  /** Alias for `id` (gateway provides both for back-compat). */
   key: string
+  environment_id: string
   name: string
   description: string
   flag_key: string
-  /** Flag UUID (Phase 10 — surfaced for the list filter; optional until
-   *  gateway surfaces it everywhere). */
+  /** Flag UUID (optional until gateway surfaces it everywhere). */
   flag_id?: string
-  status: string // "draft" | "running" | "stopped" | "completed"
+  status: string // "draft" | "active" | "paused" | "concluded"
   model: string // "frequentist" | "bayesian"
   /**
    * UUIDs referencing `metric_definitions` rows attached to this experiment.
-   * Phase 7 cutover replaced the legacy `primary_metric: string` (free-form
-   * event key). The first entry is conventionally treated as primary; the
-   * remainder as secondaries.
+   * Empty until the experimentation-service proto carries metric_ids.
    */
   metric_ids: string[]
+  /** Number of variants (derived from variant_keys.length on the backend). */
   variants: number
+  variant_keys: string[]
   started_at: string | null
   ended_at: string | null
   /** Optional ISO-8601 scheduled end. UI uses this to compute "days remaining"
    *  on the experiments list. */
   scheduled_end_at?: string | null
-  /** Optional list of context types declared on the experiment. */
-  unit_context_types?: string[]
+  unit_context_types: string[]
   created_at: string
   updated_at: string
 }
@@ -160,22 +160,17 @@ export interface AdminFlagResponse {
 export interface VariantResultJson {
   variant_key: string
   /** Number of unique contexts assigned to this variant. */
-  assigned_count: number
-  /** Mean of the primary metric across all assigned contexts (or null when no data). */
-  mean: number | null
-  /** Sample size (events used in the computation). */
-  sample_size: number
-  /** Frequentist: two-sided p-value vs control (null for the control row itself). */
+  participant_count: number
+  /** Frequentist: two-sided p-value vs control (null / absent for the control row). */
   p_value: number | null
-  /** Frequentist: 95% confidence interval bounds for the mean estimate. */
-  ci_lower: number | null
-  ci_upper: number | null
-  /** Bayesian: posterior probability that this variant beats control. */
-  prob_to_beat_control: number | null
-  /** Relative lift vs control (null for the control row, expressed as a fraction). */
-  expected_lift: number | null
-  /** True when this variant is the recommended winner per `goal_direction`. */
-  is_winner: boolean
+  /** Multiple-comparison-corrected p-value (Bonferroni); absent for single-metric runs. */
+  p_value_corrected?: number | null
+  /** Observed treatment − control lift. `0.0` for the control row. */
+  lift: number
+  /** True when this row violates the metric's goal_direction (guardrail rows only). */
+  direction_violation: boolean
+  /** Attribution unit context type ("user", "account", …). */
+  context_type: string
 }
 
 /** Per-variant SRM (Sample Ratio Mismatch) row. */
