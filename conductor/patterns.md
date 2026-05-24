@@ -74,7 +74,7 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Weekly ClickHouse partition key:** Use `toMonday(event_date)` as the partition expression to get weekly partitions keyed to Mondays. Combine with `TTL toMonday(event_date) + INTERVAL 52 WEEK` for year-length retention windows. (from: db_optim_20260516, archived 2026-05-16)
 
 ---
-Last refreshed: 2026-05-22 (post experimentation_full_20260521 archive — added 10 patterns under "Experimentation Patterns" at the bottom)
+Last refreshed: 2026-05-24 (post integration_bugfix_20260524 archive — added 3 patterns under "Integration Bug Hunt Patterns")
 
 ## Frontend (Admin UI) Patterns
 
@@ -165,6 +165,12 @@ Last refreshed: 2026-05-22 (post experimentation_full_20260521 archive — added
 - **Beads `bd close --no-auto` doesn't reliably persist phantom-dep closures — use plain `bd close`:** During parallel-wave development, `--no-auto` may leave the dependency edge in a state where re-running `bd ready` re-claims the just-closed task. Use plain `bd close <id>` and add `--force` only when the issue has a phantom dependency that's already been satisfied (e.g. on cleanup at end of phase). (from: experimentation_full_20260521, 2026-05-22)
 - **Per-flag (not per-rule) uniqueness for active-experiment lock:** When the lock model is whole-flag-while-running (vs. per-rule), the PG partial unique index must move with it: `idx_experiments_one_active_per_flag` on `(flag_id) WHERE status IN ('running','paused')`. The `UniqueViolation { field }` returned by sqlx then reports `flag_id` instead of `flag_rule_id` — test assertions on the field name must update. (from: experimentation_full_20260521, 2026-05-22)
 - **CH `arrayExists()` in JOIN ON breaks under both analyzers — use ARRAY JOIN first:** ClickHouse 24's legacy analyzer rejects `INNER JOIN ... ON arrayExists(...)` with `INVALID_JOIN_ON_EXPRESSION`; the new (experimental, future-default) analyzer accepts it but loses joined-table column qualification (`Not found column __table2.context_type`). Restate as `ARRAY JOIN contexts AS t` to unfold the array, then a plain equi-join on the unfolded columns. Same semantics, works under both analyzers. (from: experimentation_full_20260521, 2026-05-22)
+
+## Integration Bug Hunt Patterns
+
+- **`variants` table has no `created_at`:** The `variants` table schema is `(id UUID, flag_id UUID, key TEXT, value TEXT)` only — no `created_at`, `deleted_at`, or `order`. Any `ARRAY_AGG` that needs a stable order must use `ORDER BY v.id`. To denormalize variant keys onto an experiment query: `COALESCE((SELECT ARRAY_AGG(v.key ORDER BY v.id) FROM variants v WHERE v.flag_id = e.flag_id), '{}') AS variant_keys`. (from: integration_bugfix_20260524, archived 2026-05-24)
+- **Proto `ExperimentStatus` enum name ≠ DB/UI status string:** Proto `ExperimentStatus::Active` (ordinal 2) maps to core `Running`, which the DB and UI represent as `"running"` — NOT `"active"`. Similarly `Concluded` → `"stopped"`. Gateway `experiment_status_str()` and `status_from_str()` must map to the DB values (`draft/running/paused/stopped`), never to proto enum names. Reverse mapping must accept both forms: `"active" | "running" => ExperimentStatus::Active`. (from: integration_bugfix_20260524, archived 2026-05-24)
+- **`evaluate_preview` and Rust SDK share the same core function:** Both call `stitchd-core::evaluation::evaluate_flag` with the same `hash_inputs` contract. If they return different variants for the same context input, the bug is in how `hash_inputs` selectors are serialized/deserialized between REST/proto and the core function — NOT in the core evaluation logic itself. (from: integration_bugfix_20260524, archived 2026-05-24)
 
 ## Docs Autogeneration Patterns
 
