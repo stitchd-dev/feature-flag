@@ -251,3 +251,41 @@ Discovered during Phase 1 (Stack Bringup) and subsequent discovery phases.
 - **Fix:** Make `kind` and all metric-type-specific fields optional in the update body struct; merge only provided fields at the service layer.
 
 ---
+
+## Phase 5: SDK Integration + UI/UX Polish
+
+### BUG-028: Flag service ClickHouse env vars named differently from docker-compose — auth fails silently
+- **Phase discovered:** Phase 5 — SDK Integration
+- **Component:** `crates/stitchd-flag-service/src/main.rs:98–107`, `.claude/launch.json`
+- **Reproduction:** Start flag service using `.claude/launch.json`; call `POST /v1/sdk/events:batch` → 502 `ClickHouse auth error: authentication failure`
+- **Expected:** Flag service connects to ClickHouse using the same credentials as all other services
+- **Actual:** Flag service reads `STITCHD_CLICKHOUSE_USER` / `STITCHD_CLICKHOUSE_PASSWORD`; the launch config sets `CLICKHOUSE_USER` / `CLICKHOUSE_PASSWORD` (no `STITCHD_` prefix). The env vars don't match, so the flag service falls back to default user `"default"` with no password → ClickHouse authentication failure.
+- **Root cause:** `flag-service/src/main.rs` uses `STITCHD_CLICKHOUSE_*` naming while the launch config uses the docker-compose naming (`CLICKHOUSE_*`). All other services read `STITCHD_CLICKHOUSE_*` consistently.
+- **Fix:** Update `.claude/launch.json` flag-service entry to use `STITCHD_CLICKHOUSE_USER` / `STITCHD_CLICKHOUSE_PASSWORD`.
+
+### BUG-030: `flag_evaluation_log` captures only one context per row — cross-context evaluations lose bundle membership
+- **Phase discovered:** Phase 5 — SDK Integration
+- **Component:** `crates/stitchd-db/src/clickhouse/eval_log.rs` (`EvalLogRow`), `sdks/spec/proto/sdk/v1/service.proto` (`FlagEvaluationEvent`), `crates/stitchd-flag-service/src/eval_log_writer.rs`
+- **Reproduction:** Evaluate a flag with a cross-context hash rule (e.g., `user.key + device.params.os`); inspect `flag_evaluation_log` — the evaluation produces separate rows for each context in the bundle with no identifier linking them.
+- **Expected:** A flag evaluation against a context bundle (user + device + application) should be traceable as a single logical event, with all participating contexts and their parameters available together for experiment attribution and analytics.
+- **Actual:** Two separate schema problems:
+  1. **Server-side path** (`eval_log_writer.rs:83–98`): `build_eval_log_rows` iterates `eval_ctx.contexts` and emits one `EvalLogRow` per context. Each row has its own `context_type`/`context_key`/`params_json` but there is no `evaluation_id` or bundle grouping field. For a `user + device` evaluation, two rows land in the table — but there is no way to tell which "user" row and which "device" row came from the same evaluation vs. two independent single-context evaluations.
+  2. **SDK-reported path** (`FlagEvaluationEvent` proto): has only `string context_type = 3` and `string context_key = 4` — singular. For a cross-context flag evaluation, the SDK can only report ONE context. All sibling contexts (e.g., `device.params.os` used as the hash input) are silently dropped from the event payload.
+- **Downstream consequence:** The `experiment_assignments_mv` materialised view joins `flag_evaluation_log` to attribute exposures to the experiment's `unit_context_type` (e.g., "user"). Without a bundle ID, it cannot associate the "user" row from a cross-context evaluation with its paired "device" row — making cross-context experiment exposure attribution incorrect. Similarly, the context registry co-occurrence (which contexts appear together) is uncomputable.
+- **Root cause:** The original schema was designed for single-context evaluations. Cross-context hash support was added to the flag evaluation engine but the ClickHouse schema and SDK proto were not updated to carry the full context bundle.
+- **Fix:**
+  - Add `evaluation_id UUID` column to `flag_evaluation_log` (and `flag_evaluation_log_v2`) as a shared identifier for all rows from the same evaluation call.
+  - Add `repeated ContextEntry sibling_contexts = 12` (or equivalent) to `FlagEvaluationEvent` proto so the SDK can report all contexts that participated in the evaluation.
+  - Update `eval_log_writer::build_eval_log_rows` to generate and stamp the same `evaluation_id` UUID across all rows from one call.
+  - Update `experiment_assignments_mv` to use `evaluation_id` when joining unit context to sibling contexts.
+
+### BUG-029: `EvalLogRow` struct fields don't match `flag_evaluation_log` ClickHouse schema — SDK events:batch always 502
+- **Phase discovered:** Phase 5 — SDK Integration
+- **Component:** `crates/stitchd-db/src/clickhouse/eval_log.rs`, `crates/stitchd-db/clickhouse-migrations/0003_flag_evaluation_log.sql`
+- **Reproduction:** Fix BUG-028 and call `POST /v1/sdk/events:batch` with a valid SDK key → 502 `schema mismatch: While processing struct EvalLogRow: database schema has no column named targeting_on`
+- **Expected:** Evaluation log events are inserted successfully into ClickHouse
+- **Actual:** `EvalLogRow` struct declares `targeting_on: bool` and `matched_rule_id: Option<Uuid>`; the `flag_evaluation_log` table created by migration `0003` has `is_disabled Bool` instead of `targeting_on`, and has no `matched_rule_id` column. ClickHouse rejects the insert with a schema mismatch error.
+- **Root cause:** The struct was updated to the v2 schema (`targeting_on`, `matched_rule_id`) but no ClickHouse migration was written to rename the column and add the new one. The migrations directory only has `0003_flag_evaluation_log.sql` (old schema) and `0004_flag_evaluation_log_v2.sql` (copies the table, but `EvalLogRow` still writes to the original `flag_evaluation_log` table).
+- **Fix:** Add a ClickHouse migration (or alter statement) to: (1) rename `is_disabled` → `targeting_on` in `flag_evaluation_log`, (2) add `matched_rule_id Nullable(UUID)`. Also apply the same schema to `flag_evaluation_log_v2` for consistency.
+
+---

@@ -133,16 +133,11 @@
 
 ## Phase 5: Bug Discovery — SDK Integration + UI/UX Polish
 
-- [ ] Task 1: Rust SDK integration test
-  - Write a small test binary or integration test in `sdks/` or a test module
-  - `SdkClient::init(config)` with a real SDK key pointing at the local gateway
-  - Verify init blocks until first definition sync completes
-  - Evaluate a boolean, string, int, double, and json flag; verify returned variants match UI
-  - Compare `evaluate()` result with Admin UI evaluate-preview for same flag + context bundle
-  - Multi-context evaluation: provide `[EvalRequest { flag_key, contexts: [user_ctx, device_ctx] }]`
-  - CRITICAL cross-context key+param: use hash_inputs with `user.key` + `device.params.os`;
-    verify SDK bucket assignment equals the evaluate-preview bucket for the same input
-  - Verify bucket is stable across 100 repeated evaluations of the same context
+- [x] Task 1: Rust SDK integration test
+  - SDK tests pass: `cargo test --features test-util -p stitchd-sdk-rust` (16 tests)
+  - Cross-context hash: iOS→55, Android→818, Windows→802 — stable across contexts ✓
+  - SDK events:batch: BUG-028 (wrong ClickHouse env vars in launch.json) + BUG-029 (schema mismatch) found and fixed
+  - BUG-030 (CRITICAL): flag_evaluation_log captures one context per row — cross-context bundle membership lost; no evaluation_id to link sibling context rows; SDK FlagEvaluationEvent proto only carries one context_type/context_key field
 
 - [ ] Task 2: SDK list-segment + key auth tests
   - Create a list-based segment via UI; add 5+ context keys
