@@ -812,11 +812,17 @@ fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, 
 }
 
 fn map_experiment_db_err(e: sqlx::Error) -> RepositoryError {
-    if let sqlx::Error::Database(ref dbe) = e
-        && let Some(constraint) = dbe.constraint()
-    {
-        return RepositoryError::UniqueViolation {
-            field: constraint.to_string(),
+    if let sqlx::Error::Database(ref dbe) = e {
+        let code_cow = dbe.code();
+        let code = code_cow.as_deref().unwrap_or("");
+        let constraint = dbe.constraint().unwrap_or("unknown").to_string();
+        return match code {
+            "23505" => RepositoryError::UniqueViolation { field: constraint },
+            "23503" => RepositoryError::ForeignKeyViolation { constraint },
+            _ if dbe.constraint().is_some() => RepositoryError::UniqueViolation {
+                field: constraint,
+            },
+            _ => RepositoryError::Database(e),
         };
     }
     RepositoryError::Database(e)
