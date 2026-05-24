@@ -288,4 +288,37 @@ Discovered during Phase 1 (Stack Bringup) and subsequent discovery phases.
 - **Root cause:** The struct was updated to the v2 schema (`targeting_on`, `matched_rule_id`) but no ClickHouse migration was written to rename the column and add the new one. The migrations directory only has `0003_flag_evaluation_log.sql` (old schema) and `0004_flag_evaluation_log_v2.sql` (copies the table, but `EvalLogRow` still writes to the original `flag_evaluation_log` table).
 - **Fix:** Add a ClickHouse migration (or alter statement) to: (1) rename `is_disabled` → `targeting_on` in `flag_evaluation_log`, (2) add `matched_rule_id Nullable(UUID)`. Also apply the same schema to `flag_evaluation_log_v2` for consistency.
 
+### BUG-031: Dashboard welcome heading and sidebar breadcrumb show raw org UUID instead of org name
+- **Phase discovered:** Phase 5 — UI/UX Polish
+- **Component:** `admin/src/pages/Dashboard.tsx` (welcome heading), `admin/src/shell/Sidebar.tsx` (org breadcrumb)
+- **Reproduction:** Log in as any org user; observe the dashboard welcome heading and the org label in the sidebar top section
+- **Expected:** Both locations display the human-readable org name (e.g., "Acme Corp")
+- **Actual:** Both show the raw org UUID (e.g., `02e6f3b1-4a2d-…`). The JWT `org_id` claim is rendered directly without resolving it to a display name. The sidebar fetches the user's profile but not the org detail.
+- **Root cause:** The dashboard and sidebar components read `org_id` from the auth session but never call `GET /v1/management/orgs/{org_id}` (or a cached store slice) to retrieve `org_name`. The org name is available in the management API response but is never stored in client-side auth state.
+- **Fix:** On login / org switch, fetch and cache the org detail (at minimum `name`). Populate it into the auth store; read `auth.org.name` in the dashboard welcome heading and sidebar org label instead of `auth.org_id`.
+
+### BUG-032: Preview tab "Evaluate" button accepts empty context without validation — shows "(no key) —" result
+- **Phase discovered:** Phase 5 — UI/UX Polish
+- **Component:** `admin/src/pages/flags/FlagDetail.tsx` (Preview/Evaluate panel)
+- **Reproduction:** Open any flag's Preview tab; leave the context `_type` and `key` fields blank; click "Evaluate"
+- **Expected:** Inline validation error under the `_type` and `key` fields; "Evaluate" button disabled or rejected until both fields are populated
+- **Actual:** The request is sent with `_type: ""` and `key: ""`; the server returns a (default) result; the UI renders it as "(no key) —" in the result row. There is no client-side guard requiring a non-empty context type and key before evaluation.
+- **Fix:** Add required-field validation to the Preview panel context form: both `_type` and `key` must be non-empty before the Evaluate button is enabled (or show inline errors on submit).
+
+### BUG-033: `display_name` is not validated as required on user creation — sidebar shows "Org User" for users created without a name
+- **Phase discovered:** Phase 5 — UI/UX Polish
+- **Component:** `crates/stitchd-gateway/src/routes/management.rs` (`CreateUserBody`), `admin/src/shell/Sidebar.tsx`
+- **Reproduction:** Create a user omitting the `display_name` field (or sending `"display_name": ""`); log in as that user; observe the sidebar name label
+- **Expected:** Either (a) `display_name` is required and the server returns 400 when absent/blank, or (b) the sidebar falls back to the user's email address
+- **Actual:** `CreateUserBody.display_name` is `String` (not `Option<String>`) and has no `min_length` validation — sending `""` passes server-side checks. The sidebar renders `display_name` directly; a blank `display_name` shows "Org User" (the hardcoded fallback), not the user's email. This makes it impossible to distinguish multiple users without display names.
+- **Fix:** Either (a) validate `display_name` as non-empty in the gateway handler, or (b) update the sidebar fallback to use `email` when `display_name` is blank.
+
+### BUG-034: Flags/Segments/Experiments filter with no matching results shows a blank content area instead of an empty-state message
+- **Phase discovered:** Phase 5 — UI/UX Polish
+- **Component:** `admin/src/pages/flags/FlagList.tsx`, `admin/src/pages/segments/SegmentList.tsx`, `admin/src/pages/experiments/ExperimentList.tsx`
+- **Reproduction:** On any list page with data, type a search term that matches nothing (e.g., "zzz") into the filter/search box
+- **Expected:** A visible "No results found" (or similar) empty-state message with a suggestion to clear the filter
+- **Actual:** The list area is completely blank — no rows, no message, no visual feedback. Users cannot tell whether the filter is working or the page is broken.
+- **Fix:** Add an empty-state component that renders when the filtered result set is empty. Include a "Clear filter" action link.
+
 ---

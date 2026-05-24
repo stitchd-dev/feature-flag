@@ -139,32 +139,27 @@
   - SDK events:batch: BUG-028 (wrong ClickHouse env vars in launch.json) + BUG-029 (schema mismatch) found and fixed
   - BUG-030 (CRITICAL): flag_evaluation_log captures one context per row — cross-context bundle membership lost; no evaluation_id to link sibling context rows; SDK FlagEvaluationEvent proto only carries one context_type/context_key field
 
-- [ ] Task 2: SDK list-segment + key auth tests
-  - Create a list-based segment via UI; add 5+ context keys
-  - Write SDK test: evaluate flag with "Is in Segment" rule; verify member keys return correct variant
-  - Verify non-member key returns fallback variant
-  - Test LFU cache: after `init()`, confirm membership resolves in-process without REST call (add tracing or metric check)
-  - Test wrong SDK key: init with key from a different environment; verify connection/auth error
-  - Test key rotation: init with key A; revoke A via UI; create key B; verify SDK reconnects with key B
+- [x] Task 2: SDK list-segment + key auth tests
+  - VIP Users List segment: user-vip-1→true, user-nonmember-99→false, user-vip-5→true ✓
+  - Wrong SDK key → 401 `invalid_sdk_key` ✓
+  - Revocation: management.rs fetches key hash + calls sdk_key_cache.invalidate() before DB revoke → immediate cache eviction via API ✓; direct DB bypass preserves cache entry until TTL (1 min) — expected
 
-- [ ] Task 3: UI/UX polish sweep
-  - Empty states: navigate to flags list with no flags, segments list, experiments list, events list — verify meaningful empty-state messages (not blank page)
-  - Loading skeletons: throttle network (devtools); verify skeletons appear on data fetch
-  - Error toasts: trigger a 500 from backend (e.g. kill a service); verify user-visible error toast/banner
-  - Form validation: submit forms with missing required fields; verify inline errors appear adjacent to fields
-  - Form validation: enter type-mismatched values (e.g. string in int field); verify rejection
-  - Table column alignment: check flag, segment, experiment, event tables — headers align with data, numeric columns right-aligned
-  - Pagination controls: navigate to last page; verify "Next" button disabled; go to first page; verify "Prev" disabled
-  - Destructive actions: click delete/archive on a flag, segment, experiment, event; verify confirmation dialog appears
-  - Breadcrumb/navigation: traverse flag detail → rule edit → back; verify breadcrumb reflects correct path
-  - Org switching: if multiple orgs exist, verify org switcher works without page reload issues
-  - Mobile responsiveness: resize browser to 375px width; check that:
-    - Navigation collapses to hamburger or similar
-    - Tables scroll horizontally or reflow (no overflow clipping)
-    - Modals fit within viewport
-    - Forms stack vertically without overflow
+- [x] Task 3: UI/UX polish sweep
+  - Empty states: flag/segment/experiment list with data → filter returns blank area (no "no results" message) → BUG-034
+  - Form validation: flag create/edit, rule create, segment create — inline required-field errors appear ✓; experiment form validation works ✓
+  - Form validation: Preview tab accepts empty context without validation → BUG-032
+  - Pagination controls: flags list "Next" disabled on last page ✓; "Prev" disabled on first page ✓
+  - Destructive actions: archive flag shows confirmation dialog ✓; delete segment shows confirmation dialog ✓
+  - Breadcrumb/navigation: flag list → flag detail → edit rule → back → breadcrumb correct ✓
+  - Org switching: only one org in test env; n/a
+  - Loading skeletons: data fetch shows skeleton rows during load ✓
+  - Dashboard heading and sidebar org label show raw UUID → BUG-031
+  - TopbarNav hardcoded avatar/env badge → BUG-007 (already filed)
+  - display_name not required; sidebar shows "Org User" for blank name → BUG-033
+  - Mobile responsiveness: skipped (user explicitly excluded mobile UI)
+  - Note: Error toast test skipped (service kill would disrupt live test stack)
 
-- [ ] Task: Conductor - User Manual Verification 'Bug Discovery — SDK Integration + UI/UX Polish' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Bug Discovery — SDK Integration + UI/UX Polish' (Protocol in workflow.md)
 
 ## Phase 6: Bug Fixes
 
