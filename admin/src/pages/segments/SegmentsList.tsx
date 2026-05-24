@@ -117,6 +117,17 @@ export function SegmentsList() {
               </div>
             )}
 
+            {segments.length > 0 && filtered.length === 0 && (
+              <div className="card">
+                <EmptyState
+                  icon={<I.search size={20} />}
+                  title="No results"
+                  desc="No segments match the current filter."
+                  action={<button className="btn" onClick={() => setSearch('')}>Clear filter</button>}
+                />
+              </div>
+            )}
+
             {segments.length > 0 && (
               <div className="card">
                 <table className="table" style={{ marginBottom: 0 }}>

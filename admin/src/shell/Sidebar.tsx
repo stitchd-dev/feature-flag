@@ -5,6 +5,7 @@ import { OrgSwitcher } from './OrgSwitcher'
 import { ProjectPicker } from './ProjectPicker'
 import { EnvSwitcher } from './EnvSwitcher'
 import { auth } from '../lib/auth'
+import { useOrgContext } from '../context/OrgContext'
 
 const SUPERADMIN_NAV = [
   { id: 'orgs', path: '/superadmin/orgs', label: 'Organisations', icon: 'home' },
@@ -125,7 +126,7 @@ export function Sidebar({ onCmdK }: SidebarProps) {
       <div className="sidebar-footer">
         <div className="user-avatar">{(() => { const s = auth.getSession(); return s ? s.userId.slice(0, 2).toUpperCase() : '??' })()}</div>
         <div className="user-meta">
-          <div className="user-name">{auth.isSystem() ? 'Super Admin' : 'Org User'}</div>
+          <div className="user-name">{auth.isSystem() ? 'Super Admin' : (auth.getSession()?.email ?? 'Org User')}</div>
           <div className="user-email" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{auth.getSession()?.userId ?? '—'}</div>
         </div>
         <button className="icon-btn" title="Sign out" onClick={() => { auth.clearSession(); window.location.href = '/login' }}><I.lock size={14} /></button>
@@ -138,12 +139,21 @@ export function TopbarNav() {
   const navigate = useNavigate()
   const location = useLocation()
   const { orgId } = useParams<{ orgId: string }>()
+  const { envId, environments } = useOrgContext()
 
   const isOrgSection = location.pathname.startsWith('/org/')
   const activeOrgId = isOrgSection ? orgId : undefined
 
   const navItems = activeOrgId ? getOrgNav(activeOrgId) : SUPERADMIN_NAV
   const adminItems = activeOrgId ? getOrgAdmin(activeOrgId) : []
+
+  const currentEnv = environments.find((e) => e.environment_id === envId) ?? environments[0]
+  const envLabel = currentEnv?.environment_name ?? 'No env'
+
+  const session = auth.getSession()
+  const userAbbr = session?.email
+    ? session.email.slice(0, 2).toUpperCase()
+    : (session?.userId.slice(0, 2).toUpperCase() ?? '??')
 
   function isActive(path: string) {
     if (activeOrgId && path === `/org/${activeOrgId}`) return location.pathname === `/org/${activeOrgId}`
@@ -175,8 +185,8 @@ export function TopbarNav() {
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span className="badge"><span className="env-dot" style={{ width: 6, height: 6 }} />production</span>
-        <div className="user-avatar">PR</div>
+        <span className="badge"><span className="env-dot" style={{ width: 6, height: 6 }} />{envLabel}</span>
+        <div className="user-avatar">{userAbbr}</div>
       </div>
     </div>
   )

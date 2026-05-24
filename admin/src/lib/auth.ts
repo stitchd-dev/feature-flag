@@ -14,6 +14,7 @@ export interface Session {
   orgId: string
   isSystem: boolean
   userId: string
+  email?: string
   roles: string[]
   permissions: string[]
 }
@@ -84,6 +85,11 @@ export const auth = {
     return Array.isArray(payload['permissions'])
       ? (payload['permissions'] as string[])
       : []
+  },
+
+  decodeEmail: (token: string): string | undefined => {
+    const payload = decodeJwtPayload(token)
+    return typeof payload['email'] === 'string' ? payload['email'] : undefined
   },
 
   // Org history for the org switcher
