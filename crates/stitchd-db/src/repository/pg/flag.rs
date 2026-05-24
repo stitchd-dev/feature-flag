@@ -488,6 +488,34 @@ impl FlagRepository for PgFlagRepository {
         }
     }
 
+    async fn find_by_key_any(
+        &self,
+        key: &FlagKey,
+        project_id: ProjectId,
+    ) -> Result<FlagRecord, RepositoryError> {
+        let row = sqlx::query(
+            r"
+            SELECT id, project_id, key, name, description, value_type, enabled,
+                   default_variant_id, default_rule_distribution,
+                   created_at, updated_at, deleted_at, version
+            FROM feature_flags
+            WHERE key = $1 AND project_id = $2
+            ",
+        )
+        .bind(key.as_str())
+        .bind(project_id.as_uuid())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::RowNotFound => RepositoryError::NotFound {
+                id: format!("{key}@{project_id}"),
+            },
+            other => RepositoryError::Database(other),
+        })?;
+
+        assemble_flag_from_row(&row)
+    }
+
     async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError> {
         let result = sqlx::query(
             r"
@@ -511,6 +539,36 @@ impl FlagRepository for PgFlagRepository {
                 "flag",
                 id.as_uuid(),
                 "soft_delete",
+                serde_json::json!({}),
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn soft_restore(&self, id: FlagId) -> Result<(), RepositoryError> {
+        let result = sqlx::query(
+            r"
+            UPDATE feature_flags
+            SET deleted_at = NULL, updated_at = NOW(), version = version + 1
+            WHERE id = $1 AND deleted_at IS NOT NULL
+            ",
+        )
+        .bind(id.as_uuid())
+        .execute(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        if result.rows_affected() == 0 {
+            return Err(RepositoryError::NotFound { id: id.to_string() });
+        }
+
+        self.audit
+            .log(
+                None,
+                "flag",
+                id.as_uuid(),
+                "soft_restore",
                 serde_json::json!({}),
             )
             .await?;

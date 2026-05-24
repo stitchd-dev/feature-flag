@@ -37,6 +37,7 @@ enum MutationKind {
   MUTATION_KIND_UPDATE      = 2;
   MUTATION_KIND_DELETE      = 3;
   MUTATION_KIND_ARCHIVE     = 4;
+  MUTATION_KIND_RESTORE     = 5;
 }
 
 message MutateFlagRequest {

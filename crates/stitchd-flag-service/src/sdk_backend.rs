@@ -493,7 +493,17 @@ mod tests {
         async fn update(&self, _record: &FlagRecord) -> Result<FlagRecord, RepositoryError> {
             unimplemented!()
         }
+        async fn find_by_key_any(
+            &self,
+            _key: &FlagKey,
+            _project_id: ProjectId,
+        ) -> Result<FlagRecord, RepositoryError> {
+            unimplemented!()
+        }
         async fn soft_delete(&self, _id: FlagId) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_restore(&self, _id: FlagId) -> Result<(), RepositoryError> {
             unimplemented!()
         }
         async fn find_hashing_config(

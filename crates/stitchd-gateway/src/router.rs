@@ -317,6 +317,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             post(flags::archive_flag),
         )
         .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/restore",
+            post(flags::restore_flag),
+        )
+        .route(
             "/v1/projects/{project_id}/flags/{flag_id}/variants",
             put(flags::update_variants),
         )

@@ -737,6 +737,12 @@ pub async fn update_flag(
         description: body.description.unwrap_or_default(),
         enabled: current_enabled,
         default_variant_key: body.default_variant_key.unwrap_or_default(),
+        value_type: body
+            .value_type
+            .as_deref()
+            .map(parse_value_type)
+            .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Unspecified)
+            as i32,
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
@@ -825,6 +831,34 @@ pub async fn archive_flag(
         environment_id: String::new(),
         project_id,
         kind: MutationKind::Archive as i32,
+        flag: Some(flag),
+        version: body.version.unwrap_or(0),
+    });
+    let mut client = state.flag_client.lock().await;
+    let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
+    Ok(Json(flag_json))
+}
+
+/// `POST /v1/projects/{project_id}/flags/{flag_id}/restore`
+pub async fn restore_flag(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<FlagMutateRequest>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let flag = FeatureFlag {
+        key: flag_key,
+        ..Default::default()
+    };
+    let req = tonic::Request::new(MutateFlagRequest {
+        environment_id: String::new(),
+        project_id,
+        kind: MutationKind::Restore as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
     });
@@ -1693,6 +1727,10 @@ pub fn test_router(_client: Arc<GatewayState>, state: Arc<GatewayState>) -> axum
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/archive",
             post(archive_flag),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/restore",
+            post(restore_flag),
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/variants",

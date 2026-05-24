@@ -139,7 +139,8 @@ pub struct CreateMetricBody {
 /// `PATCH /v1/metrics/{id}` request body.
 ///
 /// `expected_version` is required for optimistic locking — a mismatch is
-/// returned as `409 Conflict`.
+/// returned as `409 Conflict`. All other fields are optional — omit `kind`
+/// to keep the existing metric kind unchanged.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateMetricBody {
     pub expected_version: i64,
@@ -147,10 +148,9 @@ pub struct UpdateMetricBody {
     pub name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
-    /// Required on update (the analytics-service requires the kind in every
-    /// PATCH so the kind-specific validator can run).
-    #[serde(flatten)]
-    pub kind: MetricKindBody,
+    /// Optional kind update — omit to preserve existing kind.
+    #[serde(flatten, default)]
+    pub kind: Option<MetricKindBody>,
     #[serde(default)]
     pub goal_direction: Option<String>,
 }
@@ -545,7 +545,7 @@ pub async fn update_metric(
         name: body.name,
         description: body.description,
         goal_direction: body.goal_direction,
-        kind: Some(kind_body_to_update_proto(body.kind)),
+        kind: body.kind.map(kind_body_to_update_proto),
     });
     let mut client = state.analytics_client.lock().await;
     let resp = client.update_metric(rpc).await.map_err(status_to_gw_err)?;
