@@ -32,9 +32,9 @@ use stitchd_core::auth::CryptoKey;
 use stitchd_db::PgAuthProviderRepository;
 use stitchd_db::{
     AuthUserRepository, OrgMembershipRepository, OrganisationRepository, PgAuditLogger,
-    PgAuthUserRepository, PgEnvironmentRepository, PgOrgMembershipRepository,
-    PgOrganisationRepository, PgProjectRepository, PgRefreshTokenRepository, PgSdkKeyRepository,
-    RefreshTokenRepository,
+    PgAuthUserRepository, PgContextRegistryRepository, PgEnvironmentRepository,
+    PgOrgMembershipRepository, PgOrganisationRepository, PgProjectRepository,
+    PgRefreshTokenRepository, PgSdkKeyRepository, RefreshTokenRepository,
 };
 use stitchd_proto::{
     auth::v1::{
@@ -115,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
         refresh_repo.clone(),
     );
     let sdk_key_cache = SdkKeyCache::new();
+    let context_registry = Arc::new(PgContextRegistryRepository::new(pool.clone()));
     let mgmt_service = ManagementServiceImpl::new(
         org_repo,
         project_repo,
@@ -123,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
         auth_user_repo.clone(),
         membership_repo.clone(),
         sdk_key_cache,
+        context_registry,
     );
     let auth_provider_service = AuthProviderServiceImpl::new(
         auth_provider_repo.clone(),

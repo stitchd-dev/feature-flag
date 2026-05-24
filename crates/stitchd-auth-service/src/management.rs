@@ -15,8 +15,9 @@ use stitchd_core::{
     tenant::{Environment, Organisation, Project, SdkKey},
 };
 use stitchd_db::{
-    AuthUserRepository, EnvironmentRepository, OrgMembershipRepository, OrganisationRepository,
-    ProjectRepository, RepositoryError, SdkKeyRepository,
+    AuthUserRepository, ContextRegistryRepository, EnvironmentRepository,
+    OrgMembershipRepository, OrganisationRepository, ProjectRepository, RepositoryError,
+    SdkKeyRepository,
 };
 use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateEnvironmentResponse, CreateOrgRequest, CreateOrgResponse,
@@ -44,6 +45,7 @@ pub struct ManagementServiceImpl {
     user_repo: Arc<dyn AuthUserRepository>,
     membership_repo: Arc<dyn OrgMembershipRepository>,
     sdk_key_cache: SdkKeyCache,
+    context_registry: Arc<dyn ContextRegistryRepository>,
 }
 
 impl ManagementServiceImpl {
@@ -57,6 +59,7 @@ impl ManagementServiceImpl {
         user_repo: Arc<dyn AuthUserRepository>,
         membership_repo: Arc<dyn OrgMembershipRepository>,
         sdk_key_cache: SdkKeyCache,
+        context_registry: Arc<dyn ContextRegistryRepository>,
     ) -> Self {
         Self {
             org_repo,
@@ -66,6 +69,7 @@ impl ManagementServiceImpl {
             user_repo,
             membership_repo,
             sdk_key_cache,
+            context_registry,
         }
     }
 }
@@ -261,6 +265,13 @@ impl ManagementService for ManagementServiceImpl {
             version: 1,
         };
         self.env_repo.create(&env).await.map_err(map_repo_err)?;
+        // Seed default context types so experiment creation works immediately.
+        for ctx_type in ["user", "device", "account"] {
+            let _ = self
+                .context_registry
+                .upsert_context_type(env.id, ctx_type)
+                .await;
+        }
         Ok(Response::new(CreateEnvironmentResponse {
             environment_id: env.id.to_string(),
             environment_name: env.name,
@@ -863,6 +874,48 @@ mod tests {
         }
     }
 
+    struct StubContextRegistryRepo;
+
+    #[tonic::async_trait]
+    impl ContextRegistryRepository for StubContextRegistryRepo {
+        async fn upsert_context_type(
+            &self,
+            _: EnvironmentId,
+            _: &str,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn upsert_param(
+            &self,
+            _: EnvironmentId,
+            _: &str,
+            _: &str,
+            _: stitchd_core::context::InferredType,
+            _: bool,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn list_types(
+            &self,
+            _: EnvironmentId,
+        ) -> Result<Vec<stitchd_core::context::ContextTypeRecord>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_params(
+            &self,
+            _: EnvironmentId,
+            _: &str,
+        ) -> Result<Vec<stitchd_core::context::ContextParamRecord>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn purge_stale(
+            &self,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+    }
+
     // ── Helper ───────────────────────────────────────────────────────────────
 
     fn make_svc(
@@ -878,6 +931,7 @@ mod tests {
             Arc::new(StubUserRepo),
             Arc::new(StubMembershipRepo),
             crate::sdk_key_cache::SdkKeyCache::new(),
+            Arc::new(StubContextRegistryRepo),
         )
     }
 
