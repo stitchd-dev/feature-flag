@@ -99,12 +99,14 @@ message DeleteEnvironmentResponse {}
 
 message CreateSdkKeyRequest {
   string environment_id = 1;
+  string name           = 2;
 }
 
 message CreateSdkKeyResponse {
   string sdk_key_id  = 1;
   // The raw key — only returned on creation, never stored in plaintext.
   string raw_key     = 2;
+  string name        = 3;
 }
 
 message ListSdkKeysRequest {
@@ -118,6 +120,7 @@ message SdkKeySummary {
   bool   is_active     = 2;
   string created_at    = 3;
   string revoked_at    = 4;
+  string name          = 5;
 }
 
 message ListSdkKeysResponse {

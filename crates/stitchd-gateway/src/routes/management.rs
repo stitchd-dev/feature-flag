@@ -49,6 +49,7 @@ pub struct EnvJson {
 pub struct SdkKeyJson {
     pub sdk_key_id: String,
     pub raw_key: String,
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -146,12 +147,19 @@ pub async fn create_environment(
     ))
 }
 
+#[derive(Debug, Deserialize, ToSchema, Default)]
+pub struct CreateSdkKeyBody {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 /// `POST /v1/management/environments/{environment_id}/sdk-keys`
 #[utoipa::path(
     post,
     path = "/v1/management/environments/{environment_id}/sdk-keys",
     tag = "management",
     params(("environment_id" = String, Path, description = "Environment ID")),
+    request_body(content = CreateSdkKeyBody),
     responses(
         (status = 201, description = "SDK key created", body = SdkKeyJson),
         (status = 401, description = "Unauthorized"),
@@ -163,8 +171,10 @@ pub async fn create_environment(
 pub async fn create_sdk_key(
     State(state): State<Arc<GatewayState>>,
     Path(environment_id): Path<String>,
+    body: Option<Json<CreateSdkKeyBody>>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(CreateSdkKeyRequest { environment_id });
+    let name = body.map(|b| b.0.name.unwrap_or_default()).unwrap_or_default();
+    let req = tonic::Request::new(CreateSdkKeyRequest { environment_id, name });
     let mut client = state.management_client.lock().await;
     let resp = client
         .create_sdk_key(req)
@@ -176,6 +186,7 @@ pub async fn create_sdk_key(
         Json(SdkKeyJson {
             sdk_key_id: r.sdk_key_id,
             raw_key: r.raw_key,
+            name: r.name,
         }),
     ))
 }
@@ -254,6 +265,7 @@ pub struct ListEnvironmentsJson {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SdkKeySummaryJson {
     pub sdk_key_id: String,
+    pub name: String,
     pub is_active: bool,
     pub created_at: String,
     pub revoked_at: Option<String>,
@@ -407,6 +419,7 @@ pub async fn list_sdk_keys(
         .into_iter()
         .map(|k| SdkKeySummaryJson {
             sdk_key_id: k.sdk_key_id,
+            name: k.name,
             is_active: k.is_active,
             created_at: k.created_at,
             revoked_at: if k.revoked_at.is_empty() {

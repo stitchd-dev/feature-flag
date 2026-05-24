@@ -1615,6 +1615,7 @@ mod tests {
                     id: SdkKeyId::new(),
                     environment_id: env_id,
                     key_hash,
+                    name: String::new(),
                     is_active: true,
                     created_at: chrono::Utc::now(),
                     revoked_at: None,

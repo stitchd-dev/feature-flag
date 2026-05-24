@@ -610,6 +610,7 @@ mod tests {
             id: SdkKeyId::new(),
             environment_id: env_id,
             key_hash: crate::sdk_key::hash_sdk_key(raw_key),
+            name: String::new(),
             is_active: true,
             created_at: Utc::now(),
             revoked_at: None,

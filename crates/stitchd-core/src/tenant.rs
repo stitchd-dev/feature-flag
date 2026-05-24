@@ -85,6 +85,8 @@ pub struct SdkKey {
     pub environment_id: EnvironmentId,
     /// Bcrypt/Argon2 hash of the raw key. The raw key is never stored.
     pub key_hash: String,
+    /// Human-readable label for the key (optional, defaults to "").
+    pub name: String,
     /// Whether the key is currently usable for authentication.
     pub is_active: bool,
     /// When this key was created.
@@ -121,6 +123,7 @@ mod tests {
             id: SdkKeyId::new(),
             environment_id: EnvironmentId::new(),
             key_hash: "hash".to_string(),
+            name: String::new(),
             is_active,
             created_at: Utc::now(),
             revoked_at: None,

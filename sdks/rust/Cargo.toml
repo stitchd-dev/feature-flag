@@ -58,6 +58,14 @@ test-util = []
 name = "conformance"
 required-features = ["test-util"]
 
+[[test]]
+name = "parity_with_preview"
+required-features = ["test-util"]
+
+[[test]]
+name = "e2e_cross_context_hashing"
+required-features = ["test-util"]
+
 [dev-dependencies]
 # Integration tests stub out the gateway with wiremock + tonic mock services.
 wiremock = { workspace = true }

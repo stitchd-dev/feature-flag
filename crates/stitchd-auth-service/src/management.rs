@@ -294,6 +294,7 @@ impl ManagementService for ManagementServiceImpl {
             id: SdkKeyId::new(),
             environment_id: env_id,
             key_hash,
+            name: r.name,
             is_active: true,
             created_at: Utc::now(),
             revoked_at: None,
@@ -305,6 +306,7 @@ impl ManagementService for ManagementServiceImpl {
         Ok(Response::new(CreateSdkKeyResponse {
             sdk_key_id: sdk_key.id.to_string(),
             raw_key,
+            name: sdk_key.name,
         }))
     }
 
@@ -507,6 +509,7 @@ impl ManagementService for ManagementServiceImpl {
             .into_iter()
             .map(|k| SdkKeySummary {
                 sdk_key_id: k.id.to_string(),
+                name: k.name,
                 is_active: k.is_active,
                 created_at: k.created_at.to_rfc3339(),
                 revoked_at: k.revoked_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
@@ -965,6 +968,7 @@ mod tests {
             id: SdkKeyId::new(),
             environment_id: env_id,
             key_hash: uuid::Uuid::new_v4().to_string(),
+            name: String::new(),
             is_active: active,
             created_at: Utc::now(),
             revoked_at: None,
