@@ -314,6 +314,7 @@ async fn different_rule_on_same_flag_does_not_attribute() {
         context_key: "alice".to_string(),
         params_json: "{}".to_string(),
         matched_rule_id: Some(seed.rule_b), // wrong rule
+        evaluation_id: uuid::Uuid::new_v4(),
     };
     insert_eval_log_rows(&client, &[row])
         .await
@@ -354,6 +355,7 @@ async fn out_of_scope_context_type_does_not_attribute() {
         context_key: "acme".to_string(),
         params_json: "{}".to_string(),
         matched_rule_id: Some(seed.rule_a),
+        evaluation_id: uuid::Uuid::new_v4(),
     };
     insert_eval_log_rows(&client, &[row])
         .await
@@ -394,6 +396,7 @@ async fn default_rule_bound_experiment_attributes_on_null_matched_rule() {
         context_key: "dave".to_string(),
         params_json: "{}".to_string(),
         matched_rule_id: None, // default-rule fallthrough
+        evaluation_id: uuid::Uuid::new_v4(),
     };
     insert_eval_log_rows(&client, &[row])
         .await

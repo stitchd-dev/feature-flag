@@ -67,14 +67,22 @@ impl ExperimentRepository for PgExperimentRepository {
         let row = sqlx::query(
             r"
             SELECT
-                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
-                hypothesis, status, metric_ids, guardrail_metric_ids,
-                traffic_allocation::float8 AS traffic_allocation,
-                min_sample_size, pre_period_days, unit_context_types,
-                scheduled_start_at, scheduled_end_at,
-                version, created_at, updated_at, deleted_at
-            FROM experiments
-            WHERE id = $1 AND deleted_at IS NULL
+                e.id, e.env_id, e.flag_id, e.flag_rule_id, e.targets_default_rule,
+                e.name, e.description, e.hypothesis, e.status,
+                e.metric_ids, e.guardrail_metric_ids,
+                e.traffic_allocation::float8 AS traffic_allocation,
+                e.min_sample_size, e.pre_period_days, e.unit_context_types,
+                e.scheduled_start_at, e.scheduled_end_at,
+                e.version, e.created_at, e.updated_at, e.deleted_at,
+                f.key AS flag_key,
+                COALESCE((
+                    SELECT ARRAY_AGG(v.key ORDER BY v.id)
+                    FROM variants v
+                    WHERE v.flag_id = e.flag_id
+                ), '{}') AS variant_keys
+            FROM experiments e
+            LEFT JOIN feature_flags f ON f.id = e.flag_id AND f.deleted_at IS NULL
+            WHERE e.id = $1 AND e.deleted_at IS NULL
             ",
         )
         .bind(id.as_uuid())
@@ -94,15 +102,23 @@ impl ExperimentRepository for PgExperimentRepository {
         let rows = sqlx::query(
             r"
             SELECT
-                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
-                hypothesis, status, metric_ids, guardrail_metric_ids,
-                traffic_allocation::float8 AS traffic_allocation,
-                min_sample_size, pre_period_days, unit_context_types,
-                scheduled_start_at, scheduled_end_at,
-                version, created_at, updated_at, deleted_at
-            FROM experiments
-            WHERE env_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at
+                e.id, e.env_id, e.flag_id, e.flag_rule_id, e.targets_default_rule,
+                e.name, e.description, e.hypothesis, e.status,
+                e.metric_ids, e.guardrail_metric_ids,
+                e.traffic_allocation::float8 AS traffic_allocation,
+                e.min_sample_size, e.pre_period_days, e.unit_context_types,
+                e.scheduled_start_at, e.scheduled_end_at,
+                e.version, e.created_at, e.updated_at, e.deleted_at,
+                f.key AS flag_key,
+                COALESCE((
+                    SELECT ARRAY_AGG(v.key ORDER BY v.id)
+                    FROM variants v
+                    WHERE v.flag_id = e.flag_id
+                ), '{}') AS variant_keys
+            FROM experiments e
+            LEFT JOIN feature_flags f ON f.id = e.flag_id AND f.deleted_at IS NULL
+            WHERE e.env_id = $1 AND e.deleted_at IS NULL
+            ORDER BY e.created_at
             ",
         )
         .bind(env_id.as_uuid())
@@ -133,16 +149,24 @@ impl ExperimentRepository for PgExperimentRepository {
         let rows = sqlx::query(
             r"
             SELECT
-                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
-                hypothesis, status, metric_ids, guardrail_metric_ids,
-                traffic_allocation::float8 AS traffic_allocation,
-                min_sample_size, pre_period_days, unit_context_types,
-                scheduled_start_at, scheduled_end_at,
-                version, created_at, updated_at, deleted_at,
+                e.id, e.env_id, e.flag_id, e.flag_rule_id, e.targets_default_rule,
+                e.name, e.description, e.hypothesis, e.status,
+                e.metric_ids, e.guardrail_metric_ids,
+                e.traffic_allocation::float8 AS traffic_allocation,
+                e.min_sample_size, e.pre_period_days, e.unit_context_types,
+                e.scheduled_start_at, e.scheduled_end_at,
+                e.version, e.created_at, e.updated_at, e.deleted_at,
+                f.key AS flag_key,
+                COALESCE((
+                    SELECT ARRAY_AGG(v.key ORDER BY v.id)
+                    FROM variants v
+                    WHERE v.flag_id = e.flag_id
+                ), '{}') AS variant_keys,
                 COUNT(*) OVER() AS total_count
-            FROM experiments
-            WHERE env_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at
+            FROM experiments e
+            LEFT JOIN feature_flags f ON f.id = e.flag_id AND f.deleted_at IS NULL
+            WHERE e.env_id = $1 AND e.deleted_at IS NULL
+            ORDER BY e.created_at
             LIMIT $2 OFFSET $3
             ",
         )
@@ -747,11 +771,16 @@ fn row_to_experiment(row: &sqlx::postgres::PgRow) -> Experiment {
     let guardrail_uuids: Vec<uuid::Uuid> = row.get("guardrail_metric_ids");
     let status_str: &str = row.get("status");
     let flag_rule_uuid: Option<uuid::Uuid> = row.get("flag_rule_id");
+    // flag_key / variant_keys are populated when the query JOINs on feature_flags/variants.
+    let flag_key: Option<String> = row.try_get("flag_key").ok();
+    let variant_keys: Vec<String> = row.try_get("variant_keys").unwrap_or_default();
 
     Experiment {
         id: ExperimentId::from_uuid(row.get("id")),
         environment_id: EnvironmentId::from_uuid(row.get("env_id")),
         flag_id: FlagId::from_uuid(row.get("flag_id")),
+        flag_key,
+        variant_keys,
         flag_rule_id: flag_rule_uuid.map(RuleId::from_uuid),
         targets_default_rule: row.get("targets_default_rule"),
         name: row.get("name"),
@@ -812,11 +841,17 @@ fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, 
 }
 
 fn map_experiment_db_err(e: sqlx::Error) -> RepositoryError {
-    if let sqlx::Error::Database(ref dbe) = e
-        && let Some(constraint) = dbe.constraint()
-    {
-        return RepositoryError::UniqueViolation {
-            field: constraint.to_string(),
+    if let sqlx::Error::Database(ref dbe) = e {
+        let code_cow = dbe.code();
+        let code = code_cow.as_deref().unwrap_or("");
+        let constraint = dbe.constraint().unwrap_or("unknown").to_string();
+        return match code {
+            "23505" => RepositoryError::UniqueViolation { field: constraint },
+            "23503" => RepositoryError::ForeignKeyViolation { constraint },
+            _ if dbe.constraint().is_some() => {
+                RepositoryError::UniqueViolation { field: constraint }
+            }
+            _ => RepositoryError::Database(e),
         };
     }
     RepositoryError::Database(e)

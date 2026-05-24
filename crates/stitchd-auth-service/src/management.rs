@@ -15,8 +15,8 @@ use stitchd_core::{
     tenant::{Environment, Organisation, Project, SdkKey},
 };
 use stitchd_db::{
-    AuthUserRepository, EnvironmentRepository, OrgMembershipRepository, OrganisationRepository,
-    ProjectRepository, RepositoryError, SdkKeyRepository,
+    AuthUserRepository, ContextRegistryRepository, EnvironmentRepository, OrgMembershipRepository,
+    OrganisationRepository, ProjectRepository, RepositoryError, SdkKeyRepository,
 };
 use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateEnvironmentResponse, CreateOrgRequest, CreateOrgResponse,
@@ -44,10 +44,12 @@ pub struct ManagementServiceImpl {
     user_repo: Arc<dyn AuthUserRepository>,
     membership_repo: Arc<dyn OrgMembershipRepository>,
     sdk_key_cache: SdkKeyCache,
+    context_registry: Arc<dyn ContextRegistryRepository>,
 }
 
 impl ManagementServiceImpl {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     /// Create a new [`ManagementServiceImpl`].
     pub fn new(
         org_repo: Arc<dyn OrganisationRepository>,
@@ -57,6 +59,7 @@ impl ManagementServiceImpl {
         user_repo: Arc<dyn AuthUserRepository>,
         membership_repo: Arc<dyn OrgMembershipRepository>,
         sdk_key_cache: SdkKeyCache,
+        context_registry: Arc<dyn ContextRegistryRepository>,
     ) -> Self {
         Self {
             org_repo,
@@ -66,6 +69,7 @@ impl ManagementServiceImpl {
             user_repo,
             membership_repo,
             sdk_key_cache,
+            context_registry,
         }
     }
 }
@@ -166,9 +170,10 @@ impl ManagementService for ManagementServiceImpl {
 
         Ok(Response::new(CreateOrgResponse {
             org_id: org.id.to_string(),
-            org_name: org.name,
+            org_name: org.name.clone(),
             project_id: default_project.id.to_string(),
             project_name: default_project.name,
+            created_at: org.created_at.to_rfc3339(),
         }))
     }
 
@@ -261,6 +266,13 @@ impl ManagementService for ManagementServiceImpl {
             version: 1,
         };
         self.env_repo.create(&env).await.map_err(map_repo_err)?;
+        // Seed default context types so experiment creation works immediately.
+        for ctx_type in ["user", "device", "account"] {
+            let _ = self
+                .context_registry
+                .upsert_context_type(env.id, ctx_type)
+                .await;
+        }
         Ok(Response::new(CreateEnvironmentResponse {
             environment_id: env.id.to_string(),
             environment_name: env.name,
@@ -282,6 +294,7 @@ impl ManagementService for ManagementServiceImpl {
             id: SdkKeyId::new(),
             environment_id: env_id,
             key_hash,
+            name: r.name,
             is_active: true,
             created_at: Utc::now(),
             revoked_at: None,
@@ -293,6 +306,7 @@ impl ManagementService for ManagementServiceImpl {
         Ok(Response::new(CreateSdkKeyResponse {
             sdk_key_id: sdk_key.id.to_string(),
             raw_key,
+            name: sdk_key.name,
         }))
     }
 
@@ -394,7 +408,6 @@ impl ManagementService for ManagementServiceImpl {
             .map_err(map_repo_err)?;
         project.name = r.name.trim().to_string();
         project.updated_at = Utc::now();
-        project.version += 1;
         self.project_repo
             .update(&project)
             .await
@@ -457,7 +470,6 @@ impl ManagementService for ManagementServiceImpl {
             .map_err(map_repo_err)?;
         env.name = r.name.trim().to_string();
         env.updated_at = Utc::now();
-        env.version += 1;
         self.env_repo.update(&env).await.map_err(map_repo_err)?;
         Ok(Response::new(RenameEnvironmentResponse {}))
     }
@@ -497,6 +509,7 @@ impl ManagementService for ManagementServiceImpl {
             .into_iter()
             .map(|k| SdkKeySummary {
                 sdk_key_id: k.id.to_string(),
+                name: k.name,
                 is_active: k.is_active,
                 created_at: k.created_at.to_rfc3339(),
                 revoked_at: k.revoked_at.map(|t| t.to_rfc3339()).unwrap_or_default(),
@@ -865,6 +878,48 @@ mod tests {
         }
     }
 
+    struct StubContextRegistryRepo;
+
+    #[tonic::async_trait]
+    impl ContextRegistryRepository for StubContextRegistryRepo {
+        async fn upsert_context_type(
+            &self,
+            _: EnvironmentId,
+            _: &str,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn upsert_param(
+            &self,
+            _: EnvironmentId,
+            _: &str,
+            _: &str,
+            _: stitchd_core::context::InferredType,
+            _: bool,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn list_types(
+            &self,
+            _: EnvironmentId,
+        ) -> Result<Vec<stitchd_core::context::ContextTypeRecord>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_params(
+            &self,
+            _: EnvironmentId,
+            _: &str,
+        ) -> Result<Vec<stitchd_core::context::ContextParamRecord>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn purge_stale(
+            &self,
+            _: chrono::DateTime<chrono::Utc>,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+    }
+
     // ── Helper ───────────────────────────────────────────────────────────────
 
     fn make_svc(
@@ -880,6 +935,7 @@ mod tests {
             Arc::new(StubUserRepo),
             Arc::new(StubMembershipRepo),
             crate::sdk_key_cache::SdkKeyCache::new(),
+            Arc::new(StubContextRegistryRepo),
         )
     }
 
@@ -912,6 +968,7 @@ mod tests {
             id: SdkKeyId::new(),
             environment_id: env_id,
             key_hash: uuid::Uuid::new_v4().to_string(),
+            name: String::new(),
             is_active: active,
             created_at: Utc::now(),
             revoked_at: None,

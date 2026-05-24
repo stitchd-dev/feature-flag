@@ -35,7 +35,9 @@ pub struct FlagMutateRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub enabled: Option<bool>,
-    /// Value type: "bool" | "int" | "double" | "string" | "json"
+    /// Value type: "bool" | "int" | "double" | "string" | "json".
+    /// Accepts both `value_type` and `flag_type` for consistency with list responses.
+    #[serde(alias = "flag_type")]
     pub value_type: Option<String>,
     pub variants: Option<Vec<VariantBody>>,
     #[schema(value_type = Object, nullable = true)]
@@ -712,12 +714,35 @@ pub async fn update_flag(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<FlagMutateRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    // When `enabled` is omitted, preserve the current value by fetching first.
+    let current_enabled = if body.enabled.is_none() {
+        let get_req = tonic::Request::new(GetFlagRequest {
+            environment_id: String::new(),
+            project_id: project_id.clone(),
+            flag_key: flag_key.clone(),
+        });
+        let mut client = state.flag_client.lock().await;
+        client
+            .get_flag(get_req)
+            .await
+            .ok()
+            .map(|r| r.into_inner().enabled)
+            .unwrap_or(true)
+    } else {
+        body.enabled.unwrap_or(true)
+    };
     let flag = FeatureFlag {
         key: flag_key,
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
-        enabled: body.enabled.unwrap_or(false),
+        enabled: current_enabled,
         default_variant_key: body.default_variant_key.unwrap_or_default(),
+        value_type: body
+            .value_type
+            .as_deref()
+            .map(parse_value_type)
+            .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Unspecified)
+            as i32,
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
@@ -806,6 +831,34 @@ pub async fn archive_flag(
         environment_id: String::new(),
         project_id,
         kind: MutationKind::Archive as i32,
+        flag: Some(flag),
+        version: body.version.unwrap_or(0),
+    });
+    let mut client = state.flag_client.lock().await;
+    let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let flag_json = inner
+        .flag
+        .as_ref()
+        .map(flag_to_admin_json)
+        .unwrap_or_else(|| flag_to_admin_json(&FeatureFlag::default()));
+    Ok(Json(flag_json))
+}
+
+/// `POST /v1/projects/{project_id}/flags/{flag_id}/restore`
+pub async fn restore_flag(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<FlagMutateRequest>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let flag = FeatureFlag {
+        key: flag_key,
+        ..Default::default()
+    };
+    let req = tonic::Request::new(MutateFlagRequest {
+        environment_id: String::new(),
+        project_id,
+        kind: MutationKind::Restore as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
     });
@@ -1674,6 +1727,10 @@ pub fn test_router(_client: Arc<GatewayState>, state: Arc<GatewayState>) -> axum
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/archive",
             post(archive_flag),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/restore",
+            post(restore_flag),
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/variants",

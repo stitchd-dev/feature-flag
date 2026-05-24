@@ -290,8 +290,18 @@ pub trait FlagRepository: Send + Sync {
         flag: &stitchd_core::flag::FlagRecord,
     ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError>;
 
+    /// Fetch a flag by its string key within a project, including archived flags.
+    async fn find_by_key_any(
+        &self,
+        key: &FlagKey,
+        project_id: ProjectId,
+    ) -> Result<stitchd_core::flag::FlagRecord, RepositoryError>;
+
     /// Soft-delete a flag.
     async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError>;
+
+    /// Restore a soft-deleted (archived) flag.
+    async fn soft_restore(&self, id: FlagId) -> Result<(), RepositoryError>;
 
     /// Fetch the hashing configuration for a flag.
     async fn find_hashing_config(

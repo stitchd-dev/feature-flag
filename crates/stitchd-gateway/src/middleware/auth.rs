@@ -132,6 +132,35 @@ pub async fn require_non_system_org(req: Request, next: Next) -> Response {
     }
 }
 
+/// Middleware that enforces write-access permissions on mutating routes.
+///
+/// Checks that the caller's `RbacContext.permissions` contains at least one
+/// write-capable permission (any action that modifies state). Returns 403 for
+/// read-only roles such as `org_member`.
+pub async fn require_write_permission(req: Request, next: Next) -> Response {
+    match req.extensions().get::<RbacContext>() {
+        Some(ctx) if ctx.permissions.iter().any(|p| is_write_action(p)) => next.run(req).await,
+        Some(_) => (
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({ "error": "write access required" })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({ "error": "missing credentials" })),
+        )
+            .into_response(),
+    }
+}
+
+fn is_write_action(p: &str) -> bool {
+    p.ends_with(":write")
+        || p.ends_with(":create")
+        || p.ends_with(":delete")
+        || p.ends_with(":rename")
+        || p.ends_with(":revoke")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +336,83 @@ mod tests {
             ..Default::default()
         });
         assert!(rbac_context(&req).is_some());
+    }
+
+    fn req_with_permissions(perms: Vec<&str>) -> Request<axum::body::Body> {
+        let mut req = Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(RbacContext {
+            permissions: perms.iter().map(|p| p.to_string()).collect(),
+            ..Default::default()
+        });
+        req
+    }
+
+    #[test]
+    fn is_write_action_recognises_write_suffixes() {
+        for perm in [
+            "flag:write",
+            "env:create",
+            "env:delete",
+            "env:rename",
+            "sdk_key:revoke",
+        ] {
+            assert!(is_write_action(perm), "{perm} should be write");
+        }
+    }
+
+    #[test]
+    fn is_write_action_ignores_read_permissions() {
+        for perm in ["flag:read", "metric:read", "segment:read"] {
+            assert!(
+                !is_write_action(perm),
+                "{perm} should not be write"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn require_write_permission_blocks_read_only_caller() {
+        use axum::{Router, middleware::from_fn, routing::get};
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .layer(from_fn(require_write_permission));
+
+        let req = req_with_permissions(vec!["flag:read", "segment:read"]);
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn require_write_permission_allows_write_caller() {
+        use axum::{Router, middleware::from_fn, routing::get};
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .layer(from_fn(require_write_permission));
+
+        let req = req_with_permissions(vec!["flag:read", "flag:write"]);
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn require_write_permission_missing_context_returns_401() {
+        use axum::{Router, middleware::from_fn, routing::get};
+        use tower::ServiceExt;
+
+        let app = Router::new()
+            .route("/", get(|| async { axum::http::StatusCode::OK }))
+            .layer(from_fn(require_write_permission));
+
+        let req = req_no_auth();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

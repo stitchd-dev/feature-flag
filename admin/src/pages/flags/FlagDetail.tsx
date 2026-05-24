@@ -783,7 +783,7 @@ export function FlagDetail() {
       {showArchiveConfirm && (
         <ConfirmDialog
           title="Archive flag?"
-          message={`Flag "${flag.key}" will be archived and excluded from evaluations. You can restore it with ?include_archived=true.`}
+          message={`Flag "${flag.key}" will be archived and excluded from evaluations. You can restore it via the Restore action on the flag detail page.`}
           confirmLabel="Archive"
           confirmDanger
           onConfirm={archiveFlag}

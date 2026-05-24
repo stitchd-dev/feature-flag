@@ -257,6 +257,7 @@ fn eval_row(
         context_key: context_key.to_string(),
         params_json: "{}".to_string(),
         matched_rule_id,
+        evaluation_id: uuid::Uuid::new_v4(),
     }
 }
 
@@ -404,6 +405,7 @@ async fn unrelated_eval_rows_filtered_by_dict_has() {
         context_key: "ghost".to_string(),
         params_json: "{}".to_string(),
         matched_rule_id: Some(Uuid::new_v4()),
+        evaluation_id: Uuid::new_v4(),
     };
     insert_eval_log_rows(&client, &[stray])
         .await

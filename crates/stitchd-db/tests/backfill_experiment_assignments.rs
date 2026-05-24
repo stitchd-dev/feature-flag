@@ -213,6 +213,7 @@ fn eval_row(
         context_key: context_key.to_string(),
         params_json: "{}".to_string(),
         matched_rule_id,
+        evaluation_id: uuid::Uuid::new_v4(),
     }
 }
 

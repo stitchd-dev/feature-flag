@@ -269,6 +269,17 @@ export function FlagsList() {
               </div>
             )}
 
+            {flags.length > 0 && filtered.length === 0 && (
+              <div className="card">
+                <EmptyState
+                  icon={<I.search size={20} />}
+                  title="No results"
+                  desc="No flags match the current filter. Try adjusting your search or filters."
+                  action={<button className="btn" onClick={() => { setSearch(''); }}>Clear filter</button>}
+                />
+              </div>
+            )}
+
             {layout === 'table' && flags.length > 0 && (
               <div className="card">
                 <div className="table-wrap">

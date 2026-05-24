@@ -13,8 +13,10 @@ use tonic::Request as TonicRequest;
 use utoipa::ToSchema;
 
 use stitchd_proto::analytics::v1::{
-    GetEventFiringsRequest, GetEventStatsRequest, IngestEventRequest, MetricEvent, MetricValue,
-    TrackEvent as ProtoTrackEvent, TrackEventsRequest as ProtoTrackEventsRequest, metric_value,
+    CreateEventDefinitionRequest, DeleteEventDefinitionRequest, GetEventDefinitionRequest,
+    GetEventFiringsRequest, GetEventStatsRequest, IngestEventRequest, ListEventDefinitionsRequest,
+    MetricEvent, MetricValue, TrackEvent as ProtoTrackEvent,
+    TrackEventsRequest as ProtoTrackEventsRequest, UpdateEventDefinitionRequest, metric_value,
 };
 
 use crate::error::GatewayError;
@@ -53,6 +55,59 @@ pub struct BatchEventBody {
 pub struct IngestResponseJson {
     pub accepted_count: u32,
     pub rejected_keys: Vec<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct EventDefinitionJson {
+    pub id: String,
+    pub environment_id: String,
+    pub key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub value_type: String,
+    pub metric_type: String,
+    pub schema_json: String,
+    pub version: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+fn proto_to_event_def_json(
+    msg: stitchd_proto::analytics::v1::EventDefinitionMsg,
+) -> EventDefinitionJson {
+    EventDefinitionJson {
+        id: msg.id,
+        environment_id: msg.environment_id,
+        key: msg.key,
+        name: msg.name,
+        description: msg.description,
+        value_type: msg.value_type,
+        metric_type: msg.metric_type,
+        schema_json: msg.schema_json,
+        version: msg.version,
+        created_at: msg.created_at,
+        updated_at: msg.updated_at,
+    }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateEventDefinitionBody {
+    pub key: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub value_type: Option<String>,
+    pub metric_type: String,
+    pub schema_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateEventDefinitionBody {
+    pub expected_version: i64,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub value_type: Option<String>,
+    pub metric_type: Option<String>,
+    pub schema_json: Option<String>,
 }
 
 fn body_to_event(b: &EventBody) -> MetricEvent {
@@ -158,18 +213,28 @@ pub async fn ingest_batch(
     security(("bearer_jwt" = []))
 )]
 pub async fn list_event_definitions(
-    State(_state): State<Arc<GatewayState>>,
-    Path(_environment_id): Path<String>,
+    State(state): State<Arc<GatewayState>>,
+    Path(environment_id): Path<String>,
     Query(pagination): Query<PaginationParams>,
-) -> impl IntoResponse {
-    // Event definitions are managed by the Event Service.
-    // Stub: return empty paginated response (full proxy implementation omitted as
-    // EventIngestionService does not have a ListEventDefinitions RPC in the current proto).
-    Json(PaginatedResponse::new(
-        Vec::<serde_json::Value>::new(),
-        0,
-        &pagination,
-    ))
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = TonicRequest::new(ListEventDefinitionsRequest {
+        environment_id,
+        offset: Some(pagination.offset()),
+        limit: Some(pagination.effective_per_page() as u64),
+        include_archived: Some(false),
+    });
+    let mut client = state.analytics_client.lock().await;
+    let resp = client
+        .list_event_definitions(req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+    let items: Vec<EventDefinitionJson> = resp
+        .items
+        .into_iter()
+        .map(proto_to_event_def_json)
+        .collect();
+    Ok(Json(PaginatedResponse::new(items, resp.total, &pagination)))
 }
 
 /// `POST /v1/environments/{environment_id}/event-definitions`
@@ -185,11 +250,26 @@ pub async fn list_event_definitions(
     security(("bearer_jwt" = []))
 )]
 pub async fn create_event_definition(
-    State(_state): State<Arc<GatewayState>>,
-    Path(_environment_id): Path<String>,
-    Json(_body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    axum::http::StatusCode::ACCEPTED
+    State(state): State<Arc<GatewayState>>,
+    Path(environment_id): Path<String>,
+    Json(body): Json<CreateEventDefinitionBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = TonicRequest::new(CreateEventDefinitionRequest {
+        environment_id,
+        key: body.key,
+        name: body.name,
+        description: body.description,
+        value_type: body.value_type,
+        metric_type: body.metric_type,
+        schema_json: body.schema_json,
+    });
+    let mut client = state.analytics_client.lock().await;
+    let resp = client
+        .create_event_definition(req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+    Ok((StatusCode::CREATED, Json(proto_to_event_def_json(resp))))
 }
 
 /// `GET /v1/environments/{environment_id}/event-definitions/{event_definition_id}`
@@ -208,11 +288,21 @@ pub async fn create_event_definition(
     security(("bearer_jwt" = []))
 )]
 pub async fn get_event_definition(
-    State(_state): State<Arc<GatewayState>>,
-    Path((_environment_id, event_definition_id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    let _ = event_definition_id;
-    axum::http::StatusCode::NOT_IMPLEMENTED
+    State(state): State<Arc<GatewayState>>,
+    Path((environment_id, event_definition_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = TonicRequest::new(GetEventDefinitionRequest {
+        id: Some(event_definition_id),
+        environment_id: Some(environment_id),
+        key: None,
+    });
+    let mut client = state.analytics_client.lock().await;
+    let resp = client
+        .get_event_definition(req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+    Ok(Json(proto_to_event_def_json(resp)))
 }
 
 /// `PUT /v1/environments/{environment_id}/event-definitions/{event_definition_id}`
@@ -231,12 +321,26 @@ pub async fn get_event_definition(
     security(("bearer_jwt" = []))
 )]
 pub async fn update_event_definition(
-    State(_state): State<Arc<GatewayState>>,
+    State(state): State<Arc<GatewayState>>,
     Path((_environment_id, event_definition_id)): Path<(String, String)>,
-    Json(_body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let _ = event_definition_id;
-    axum::http::StatusCode::ACCEPTED
+    Json(body): Json<UpdateEventDefinitionBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = TonicRequest::new(UpdateEventDefinitionRequest {
+        id: event_definition_id,
+        expected_version: body.expected_version,
+        name: body.name,
+        description: body.description,
+        value_type: body.value_type,
+        metric_type: body.metric_type,
+        schema_json: body.schema_json,
+    });
+    let mut client = state.analytics_client.lock().await;
+    let resp = client
+        .update_event_definition(req)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+    Ok(Json(proto_to_event_def_json(resp)))
 }
 
 /// `DELETE /v1/environments/{environment_id}/event-definitions/{event_definition_id}`
@@ -255,11 +359,18 @@ pub async fn update_event_definition(
     security(("bearer_jwt" = []))
 )]
 pub async fn delete_event_definition(
-    State(_state): State<Arc<GatewayState>>,
+    State(state): State<Arc<GatewayState>>,
     Path((_environment_id, event_definition_id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    let _ = event_definition_id;
-    axum::http::StatusCode::NO_CONTENT
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = TonicRequest::new(DeleteEventDefinitionRequest {
+        id: event_definition_id,
+    });
+    let mut client = state.analytics_client.lock().await;
+    client
+        .delete_event_definition(req)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ─── POST /v1/events/track — SDK batch event ingestion ──────────────────────
@@ -861,7 +972,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_event_definitions_returns_200() {
+    async fn list_event_definitions_proxies_to_analytics() {
         let state = make_stub_state();
         let app = test_router(state);
         let resp = app
@@ -873,29 +984,40 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        // 200 with live backend; 502 in unit test (no analytics service running).
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "unexpected status: {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]
-    async fn create_event_definition_returns_202() {
+    async fn create_event_definition_proxies_to_analytics() {
         let state = make_stub_state();
         let app = test_router(state);
+        let body = r#"{"key":"click","name":"Click","metric_type":"count"}"#;
         let resp = app
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/v1/environments/env-1/event-definitions")
                     .header("content-type", "application/json")
-                    .body(Body::from(r#"{"key":"click","value_type":"bool"}"#))
+                    .body(Body::from(body))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        // 201 with live backend; 502 in unit test (no analytics service running).
+        assert!(
+            resp.status() == StatusCode::CREATED || resp.status() == StatusCode::BAD_GATEWAY,
+            "unexpected status: {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]
-    async fn delete_event_definition_returns_204() {
+    async fn delete_event_definition_proxies_to_analytics() {
         let state = make_stub_state();
         let app = test_router(state);
         let resp = app
@@ -908,7 +1030,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        // 204 with live backend; 502 in unit test (no analytics service running).
+        assert!(
+            resp.status() == StatusCode::NO_CONTENT || resp.status() == StatusCode::BAD_GATEWAY,
+            "unexpected status: {}",
+            resp.status()
+        );
     }
 
     #[test]

@@ -44,7 +44,8 @@ export function LoginPage() {
         const isSystem = auth.decodeIsSystem(res.access_token)
         const roles = auth.decodeRoles(res.access_token)
         const permissions = auth.decodePermissions(res.access_token)
-        auth.setSession({ token: res.access_token, refreshToken: res.refresh_token, orgId: res.org_id, isSystem, userId: res.user_id, roles, permissions })
+        const email = auth.decodeEmail(res.access_token)
+        auth.setSession({ token: res.access_token, refreshToken: res.refresh_token, orgId: res.org_id, isSystem, userId: res.user_id, email, roles, permissions })
         let orgs: Awaited<ReturnType<typeof listUserOrgs>> = []
         try {
           orgs = await listUserOrgs()
@@ -60,7 +61,8 @@ export function LoginPage() {
           // org appearing here is a legitimate non-system membership.
           navigate(orgs.length > 0 ? '/choose-context' : '/superadmin')
         } else {
-          auth.addOrgToHistory({ orgId: res.org_id, orgName: res.org_id })
+          const orgEntry = orgs.find((o) => o.org_id === res.org_id)
+          auth.addOrgToHistory({ orgId: res.org_id, orgName: orgEntry?.org_name ?? res.org_id })
           navigate(`/org/${res.org_id}`)
         }
       } else if (method === 'oidc') {

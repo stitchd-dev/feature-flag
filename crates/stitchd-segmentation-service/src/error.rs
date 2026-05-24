@@ -38,7 +38,7 @@ pub enum SegmentationServiceError {
 impl From<RepositoryError> for SegmentationServiceError {
     fn from(e: RepositoryError) -> Self {
         match e {
-            RepositoryError::NotFound { id } => Self::NotFound(id),
+            RepositoryError::NotFound { id } => Self::NotFound(format!("segment {id} not found")),
             RepositoryError::VersionConflict { expected, actual } => {
                 Self::VersionConflict { expected, actual }
             }

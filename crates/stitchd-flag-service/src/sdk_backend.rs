@@ -378,18 +378,23 @@ fn event_to_row(ev: FlagEvaluationEvent, env_id: EnvironmentId) -> Result<EvalLo
         }
     };
 
+    // SDK events carry a single context per event (proto limitation; see BUG-030).
+    // Each SDK-reported event therefore maps to exactly one row — evaluation_id
+    // is freshly generated here. When the SDK proto is updated to carry an
+    // `evaluation_id` field (BUG-030 follow-up), this should use that value
+    // instead so cross-context bundle rows can be linked.
     Ok(EvalLogRow {
         env_id: env_id.as_uuid(),
         flag_id,
         flag_key: ev.flag_key,
         variant_key: ev.variant_key,
-        // Inverted from the previous `is_disabled = ev.outcome == "disabled"`.
         targeting_on,
         evaluated_at,
         context_type: ev.context_type,
         context_key: ev.context_key,
         params_json,
         matched_rule_id,
+        evaluation_id: uuid::Uuid::new_v4(),
     })
 }
 
@@ -488,7 +493,17 @@ mod tests {
         async fn update(&self, _record: &FlagRecord) -> Result<FlagRecord, RepositoryError> {
             unimplemented!()
         }
+        async fn find_by_key_any(
+            &self,
+            _key: &FlagKey,
+            _project_id: ProjectId,
+        ) -> Result<FlagRecord, RepositoryError> {
+            unimplemented!()
+        }
         async fn soft_delete(&self, _id: FlagId) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_restore(&self, _id: FlagId) -> Result<(), RepositoryError> {
             unimplemented!()
         }
         async fn find_hashing_config(

@@ -49,6 +49,7 @@ async fn eval_log_rows_appear_in_clickhouse() {
     let flag_key = format!("test-flag-{}", &env_id.to_string()[..8]);
     let now = Utc::now();
 
+    let bundle_eval_id = Uuid::new_v4();
     let rows = vec![
         EvalLogRow {
             env_id,
@@ -61,6 +62,7 @@ async fn eval_log_rows_appear_in_clickhouse() {
             context_key: "alice".to_string(),
             params_json: r#"{"plan":"pro","email":"********"}"#.to_string(),
             matched_rule_id: None,
+            evaluation_id: bundle_eval_id,
         },
         EvalLogRow {
             env_id,
@@ -73,6 +75,7 @@ async fn eval_log_rows_appear_in_clickhouse() {
             context_key: "acme".to_string(),
             params_json: r#"{"tier":"enterprise"}"#.to_string(),
             matched_rule_id: None,
+            evaluation_id: bundle_eval_id,
         },
     ];
 
@@ -135,6 +138,7 @@ async fn eval_log_n_contexts_produces_n_rows() {
             context_key: format!("user-{i}"),
             params_json: r#"{}"#.to_string(),
             matched_rule_id: None,
+            evaluation_id: Uuid::new_v4(),
         })
         .collect();
 

@@ -413,7 +413,10 @@ export function PreviewTab({ flagId }: PreviewTabProps) {
     }
   }
 
-  const canEvaluate = !jsonError && !loading
+  const hasValidContext = mode === 'form'
+    ? formContexts.some((c) => c._type.trim() !== '' && c.key.trim() !== '')
+    : (() => { const { contexts } = parseContextsJson(jsonText); return contexts.some((c) => c._type.trim() !== '' && c.key.trim() !== '') })()
+  const canEvaluate = !jsonError && !loading && hasValidContext
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

@@ -282,6 +282,17 @@ export function ExperimentsList() {
               </div>
             )}
 
+            {experiments.length > 0 && filtered.length === 0 && (
+              <div className="card">
+                <EmptyState
+                  icon={<I.search size={20} />}
+                  title="No results"
+                  desc="No experiments match the current filter."
+                  action={<button className="btn" onClick={() => { setSearch(''); setStatusFilter('all'); setFlagFilter(null) }}>Clear filter</button>}
+                />
+              </div>
+            )}
+
             {experiments.length > 0 && (
               <div className="card">
                 <table className="table">

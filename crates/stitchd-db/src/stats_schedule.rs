@@ -321,6 +321,8 @@ mod tests {
             id: ExperimentId::new(),
             environment_id: env_id,
             flag_id,
+            flag_key: None,
+            variant_keys: vec![],
             flag_rule_id: Some(flag_rule_id),
             targets_default_rule: false,
             name: "Sched Test Experiment".into(),

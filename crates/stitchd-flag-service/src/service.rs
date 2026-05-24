@@ -356,9 +356,9 @@ impl FlagService for FlagServiceImpl {
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
         let record = if let Some(pid) = project_id {
-            // Admin path: direct project-scoped lookup.
+            // Admin path: include archived so the UI can show/restore them.
             self.flag_repo
-                .find_by_key(&flag_key, pid)
+                .find_by_key_any(&flag_key, pid)
                 .await
                 .map_err(FlagServiceError::from)
                 .map_err(Status::from)?
@@ -638,6 +638,12 @@ impl FlagService for FlagServiceImpl {
                 if !flag_proto.description.is_empty() {
                     record.description = flag_proto.description.clone();
                 }
+                if flag_proto.value_type != 0 {
+                    record.value_type = proto_value_type_to_domain(
+                        stitchd_proto::flags::v1::FlagValueType::try_from(flag_proto.value_type)
+                            .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Unspecified),
+                    );
+                }
                 // Resolve default_variant_key → variant ID when provided.
                 if !flag_proto.default_variant_key.is_empty() {
                     let variants_for_lookup = self
@@ -911,10 +917,42 @@ impl FlagService for FlagServiceImpl {
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
 
-                let proto = mapping::build_feature_flag_proto(&record, vec![], &[]);
+                let mut proto = mapping::build_feature_flag_proto(&record, vec![], &[]);
+                proto.archived = true;
                 Ok(Response::new(MutateFlagResponse {
                     flag: Some(proto),
                     version: stored_version,
+                }))
+            }
+            MutationKind::Restore => {
+                let flags = self
+                    .flag_repo
+                    .list_by_project_all(project_id.ok_or_else(|| {
+                        Status::invalid_argument("project_id required for restore")
+                    })?)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                let record = flags
+                    .into_iter()
+                    .find(|f| f.key.as_str() == flag_proto.key.as_str())
+                    .ok_or_else(|| {
+                        Status::not_found(format!("flag '{}' not found", flag_proto.key))
+                    })?;
+
+                self.flag_repo
+                    .soft_restore(record.id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                #[allow(clippy::cast_sign_loss)]
+                let version = (record.version + 1) as u64;
+                let proto = mapping::build_feature_flag_proto(&record, vec![], &[]);
+                Ok(Response::new(MutateFlagResponse {
+                    flag: Some(proto),
+                    version,
                 }))
             }
             MutationKind::Unspecified => {
@@ -1406,7 +1444,32 @@ mod tests {
             })
         }
 
+        async fn find_by_key_any(
+            &self,
+            key: &FlagKey,
+            _project_id: ProjectId,
+        ) -> Result<FlagRecord, RepositoryError> {
+            self.flags
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|f| f.key.as_str() == key.as_str())
+                .cloned()
+                .ok_or(RepositoryError::NotFound {
+                    id: key.to_string(),
+                })
+        }
+
         async fn soft_delete(&self, id: FlagId) -> Result<(), RepositoryError> {
+            let flags = self.flags.lock().unwrap();
+            if flags.iter().any(|f| f.id == id) {
+                Ok(())
+            } else {
+                Err(RepositoryError::NotFound { id: id.to_string() })
+            }
+        }
+
+        async fn soft_restore(&self, id: FlagId) -> Result<(), RepositoryError> {
             let flags = self.flags.lock().unwrap();
             if flags.iter().any(|f| f.id == id) {
                 Ok(())
@@ -1552,6 +1615,7 @@ mod tests {
                     id: SdkKeyId::new(),
                     environment_id: env_id,
                     key_hash,
+                    name: String::new(),
                     is_active: true,
                     created_at: chrono::Utc::now(),
                     revoked_at: None,

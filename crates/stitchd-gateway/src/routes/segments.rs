@@ -300,6 +300,33 @@ pub async fn create_segment(
     ))
 }
 
+/// `GET /v1/environments/{environment_id}/segments` — list all segments for an environment.
+pub async fn list_segments_in_env(
+    State(state): State<Arc<GatewayState>>,
+    Path(environment_id): Path<String>,
+    Query(pagination): Query<PaginationParams>,
+    req: axum::extract::Request,
+) -> Result<impl IntoResponse, GatewayError> {
+    require_permission(&req, "segment:read")?;
+    let rpc = tonic::Request::new(ListAdminSegmentsRequest {
+        environment_id,
+        page: pagination.effective_page(),
+        per_page: pagination.effective_per_page(),
+    });
+    let mut client = state.segmentation_client.lock().await;
+    let inner = client
+        .list_admin_segments(rpc)
+        .await
+        .map_err(GatewayError::from)?
+        .into_inner();
+    let items: Vec<AdminSegmentJson> = inner.segments.iter().map(proto_to_admin_json).collect();
+    Ok(Json(PaginatedResponse::new(
+        items,
+        inner.total,
+        &pagination,
+    )))
+}
+
 /// `POST /v1/environments/{environment_id}/segments` — create a new segment scoped to an environment.
 #[utoipa::path(
     post,

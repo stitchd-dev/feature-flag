@@ -20,7 +20,9 @@ use axum::{
 };
 use metrics_exporter_prometheus::PrometheusHandle;
 
-use crate::middleware::auth::{auth_middleware, require_non_system_org, require_system_org};
+use crate::middleware::auth::{
+    auth_middleware, require_non_system_org, require_system_org, require_write_permission,
+};
 use crate::middleware::event_quota::{build_limiter_from_env, event_quota_middleware};
 use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
@@ -98,10 +100,32 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         ));
 
     // ── Management routes (JWT + non-system-org check) ────────────────────────
-    let mgmt_routes = Router::new()
+    // Read and write routes are split so that require_write_permission is only
+    // applied to mutating endpoints, while read-only callers (org_member role)
+    // retain access to GET routes.
+    let mgmt_read = Router::new()
         .route(
             "/v1/management/orgs/{org_id}/projects",
-            get(management::list_projects).post(management::create_project),
+            get(management::list_projects),
+        )
+        .route(
+            "/v1/management/projects/{project_id}/environments",
+            get(management::list_environments),
+        )
+        .route(
+            "/v1/management/environments/{environment_id}/sdk-keys",
+            get(management::list_sdk_keys),
+        )
+        .route(
+            "/v1/management/orgs/{org_id}/users",
+            get(management::list_org_users),
+        )
+        .with_state(Arc::clone(&state));
+
+    let mgmt_write = Router::new()
+        .route(
+            "/v1/management/orgs/{org_id}/projects",
+            post(management::create_project),
         )
         .route(
             "/v1/management/projects/{project_id}",
@@ -109,7 +133,7 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         )
         .route(
             "/v1/management/projects/{project_id}/environments",
-            get(management::list_environments).post(management::create_environment),
+            post(management::create_environment),
         )
         .route(
             "/v1/management/environments/{environment_id}",
@@ -117,7 +141,7 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         )
         .route(
             "/v1/management/environments/{environment_id}/sdk-keys",
-            get(management::list_sdk_keys).post(management::create_sdk_key),
+            post(management::create_sdk_key),
         )
         .route(
             "/v1/management/environments/{environment_id}/sdk-keys/{sdk_key_id}",
@@ -127,7 +151,15 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/management/orgs/{org_id}/users",
             post(management::create_user),
         )
+        .route(
+            "/v1/management/orgs/{org_id}/users/{user_id}",
+            delete(management::remove_org_user),
+        )
         .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn(require_write_permission));
+
+    let mgmt_routes = mgmt_read
+        .merge(mgmt_write)
         .layer(middleware::from_fn(require_non_system_org))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&auth_client),
@@ -171,21 +203,122 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         ));
 
     // ── JWT-authenticated resource routes ─────────────────────────────────────
-    let resource_routes = Router::new()
+    // Split into read-only and write sub-routers so that require_write_permission
+    // gates only mutating endpoints. Read-only callers (org_member) retain full
+    // read access.
+    let resource_read = Router::new()
         // Auth context
         .route("/v1/auth/me/permissions", get(auth::get_my_permissions))
-        // Flags
+        // Flags — read
         .route(
             "/v1/projects/{project_id}/flags",
-            get(flags::list_flags).post(flags::create_flag),
+            get(flags::list_flags),
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}",
-            get(flags::get_flag).put(flags::update_flag).delete(flags::delete_flag),
+            get(flags::get_flag),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/eval-stats",
+            get(eval_stats::get_eval_stats),
+        )
+        // evaluate-preview uses POST but is read-only in semantics (no state change)
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/evaluate-preview",
+            post(flags::evaluate_preview),
+        )
+        // Segments — read
+        .route(
+            "/v1/segments",
+            get(segments::list_segments),
+        )
+        .route(
+            "/v1/segments/{segment_id}",
+            get(segments::get_segment),
+        )
+        .route(
+            "/v1/segments/{segment_id}/entries/lookup",
+            get(segments::lookup_segment_entry),
+        )
+        .route(
+            "/v1/environments/{environment_id}/segments",
+            get(segments::list_segments_in_env),
+        )
+        // Events — read
+        .route(
+            "/v1/environments/{environment_id}/event-definitions",
+            get(events::list_event_definitions),
+        )
+        .route(
+            "/v1/environments/{environment_id}/event-definitions/{event_definition_id}",
+            get(events::get_event_definition),
+        )
+        .route("/v1/events/{event_key}/firings", get(events::get_event_firings))
+        .route("/v1/events/{event_key}/stats", get(events::get_event_stats))
+        .route("/v1/events", get(event_admin::list_events))
+        .route("/v1/events/{event_key}", get(event_admin::get_event))
+        // Metrics — read + preview (preview is POST but read-only semantics)
+        .route("/v1/metrics", get(metrics::list_metrics))
+        .route("/v1/metrics/{id}", get(metrics::get_metric))
+        .route("/v1/metrics/{id}/preview", post(metrics::preview_metric))
+        // Experiments — read
+        .route(
+            "/v1/environments/{environment_id}/experiments",
+            get(experiments::list_experiments),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}",
+            get(experiments::get_experiment),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/results",
+            get(experiments::get_results),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
+            get(experiments::list_iterations),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
+            get(experiments::list_exposures),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/timeseries",
+            get(stats::get_timeseries),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute/{job_id}",
+            get(stats::get_recompute_job_status),
+        )
+        // Context intelligence — read
+        .route(
+            "/v1/environments/{environment_id}/context-types",
+            get(context_intel::list_context_types),
+        )
+        .route(
+            "/v1/environments/{environment_id}/context-types/{context_type}/params",
+            get(context_intel::list_context_params),
+        )
+        .route("/v1/jobs/{job_id}", get(stats::get_job_status))
+        .with_state(Arc::clone(&state));
+
+    let resource_write = Router::new()
+        // Flags — write
+        .route(
+            "/v1/projects/{project_id}/flags",
+            post(flags::create_flag),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}",
+            put(flags::update_flag).delete(flags::delete_flag),
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/archive",
             post(flags::archive_flag),
+        )
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/restore",
+            post(flags::restore_flag),
         )
         .route(
             "/v1/projects/{project_id}/flags/{flag_id}/variants",
@@ -203,22 +336,14 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/projects/{project_id}/flags/{flag_id}/hashing",
             put(flags::update_flag_hashing),
         )
-        .route(
-            "/v1/projects/{project_id}/flags/{flag_id}/evaluate-preview",
-            post(flags::evaluate_preview),
-        )
-        .route(
-            "/v1/projects/{project_id}/flags/{flag_id}/eval-stats",
-            get(eval_stats::get_eval_stats),
-        )
-        // Segments (admin CRUD — env-id as query param for list, path param for env-scoped create)
+        // Segments — write
         .route(
             "/v1/segments",
-            get(segments::list_segments).post(segments::create_segment),
+            post(segments::create_segment),
         )
         .route(
             "/v1/segments/{segment_id}",
-            get(segments::get_segment).put(segments::update_segment).delete(segments::delete_segment),
+            put(segments::update_segment).delete(segments::delete_segment),
         )
         .route(
             "/v1/environments/{environment_id}/segments",
@@ -228,130 +353,68 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/segments/{segment_id}/entries",
             post(segments::patch_segment_entries),
         )
-        .route(
-            "/v1/segments/{segment_id}/entries/lookup",
-            get(segments::lookup_segment_entry),
-        )
-        // Events
+        // Events — write
         .route(
             "/v1/environments/{environment_id}/event-definitions",
-            get(events::list_event_definitions).post(events::create_event_definition),
+            post(events::create_event_definition),
         )
         .route(
             "/v1/environments/{environment_id}/event-definitions/{event_definition_id}",
-            get(events::get_event_definition)
-                .put(events::update_event_definition)
-                .delete(events::delete_event_definition),
+            put(events::update_event_definition).delete(events::delete_event_definition),
         )
-        // EventDetail page — recent firings + daily-count sparkline.
-        .route(
-            "/v1/events/{event_key}/firings",
-            get(events::get_event_firings),
-        )
-        .route(
-            "/v1/events/{event_key}/stats",
-            get(events::get_event_stats),
-        )
-        // Admin event-definition CRUD — closed feature-flag-wr4. The admin UI's
-        // EventsList/CreateEventModal/EditEventModal/ArchiveEventModal use these.
-        // env_id flows as a query param (matches the /v1/metrics pattern).
-        .route(
-            "/v1/events",
-            get(event_admin::list_events).post(event_admin::create_event),
-        )
-        .route(
-            "/v1/events/{event_key}",
-            get(event_admin::get_event)
-                .patch(event_admin::update_event)
-                .delete(event_admin::delete_event),
-        )
-        // Admin-auth path for /v1/events/track — used by the test-event widget
-        // on EventDetail. env_id is lifted from RbacContext; analytics-service
-        // is told the events are admin-fired via `properties["_test"] = "true"`.
-        // Lives on the JWT tier (NOT SDK-auth) so the admin browser session can
-        // call it without an x-sdk-key. Skips the per-env event-quota — admin
-        // actions are rare and don't need rate-limiting.
+        // Admin-auth event track — write (fires test events from admin UI)
         .route(
             "/v1/admin/events/track",
             post(events::track_events_admin).layer(DefaultBodyLimit::max(
                 events::TRACK_EVENTS_BODY_LIMIT_BYTES,
             )),
         )
-        // Metrics (admin CRUD + preview) — env_id is a query param on list;
-        // path params identify a specific metric.
         .route(
-            "/v1/metrics",
-            get(metrics::list_metrics).post(metrics::create_metric),
+            "/v1/events",
+            post(event_admin::create_event),
         )
+        .route(
+            "/v1/events/{event_key}",
+            patch(event_admin::update_event).delete(event_admin::delete_event),
+        )
+        // Metrics — write
+        .route("/v1/metrics", post(metrics::create_metric))
         .route(
             "/v1/metrics/{id}",
-            get(metrics::get_metric)
-                .patch(metrics::update_metric)
-                .delete(metrics::delete_metric),
+            patch(metrics::update_metric).delete(metrics::delete_metric),
         )
-        .route(
-            "/v1/metrics/{id}/preview",
-            post(metrics::preview_metric),
-        )
-        // Experiments
+        // Experiments — write
         .route(
             "/v1/environments/{environment_id}/experiments",
-            get(experiments::list_experiments).post(experiments::create_experiment),
+            post(experiments::create_experiment),
         )
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}",
-            get(experiments::get_experiment)
-                .patch(experiments::update_experiment)
-                .delete(experiments::delete_experiment),
-        )
-        .route(
-            "/v1/environments/{environment_id}/experiments/{experiment_id}/results",
-            get(experiments::get_results),
+            patch(experiments::update_experiment).delete(experiments::delete_experiment),
         )
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/transitions",
             post(experiments::transition_experiment),
         )
         .route(
-            "/v1/environments/{environment_id}/experiments/{experiment_id}/iterations",
-            get(experiments::list_iterations),
-        )
-        .route(
-            "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
-            get(experiments::list_exposures),
-        )
-        .route(
-            "/v1/environments/{environment_id}/experiments/{experiment_id}/timeseries",
-            get(stats::get_timeseries),
-        )
-        .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute",
             post(stats::trigger_recompute_env_scoped),
         )
-        .route(
-            "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute/{job_id}",
-            get(stats::get_recompute_job_status),
-        )
-        // Context intelligence
-        .route(
-            "/v1/environments/{environment_id}/context-types",
-            get(context_intel::list_context_types),
-        )
-        .route(
-            "/v1/environments/{environment_id}/context-types/{context_type}/params",
-            get(context_intel::list_context_params),
-        )
-        // Stats recompute
+        // Stats recompute — write (triggers a compute job)
         .route(
             "/v1/experiments/{experiment_id}/recompute",
             post(stats::trigger_recompute),
         )
-        .route("/v1/jobs/{job_id}", get(stats::get_job_status))
         .with_state(Arc::clone(&state))
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&auth_client),
-            auth_middleware,
-        ));
+        .layer(middleware::from_fn(require_write_permission));
+
+    let resource_routes =
+        resource_read
+            .merge(resource_write)
+            .layer(middleware::from_fn_with_state(
+                Arc::clone(&auth_client),
+                auth_middleware,
+            ));
 
     // ── Auth-provider management + org-scoped OIDC (JWT + non-system-org) ───
     let auth_provider_routes = Router::new()

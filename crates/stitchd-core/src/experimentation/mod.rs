@@ -118,6 +118,12 @@ pub struct Experiment {
     /// parent of `flag_rule_id` (when rule-bound) or chosen directly
     /// (when `targets_default_rule == true`).
     pub flag_id: FlagId,
+    /// Human-readable key of the bound flag (resolved via JOIN; `None` when
+    /// not available, e.g. when constructed from partial data).
+    pub flag_key: Option<String>,
+    /// Variant keys for the bound flag (resolved via JOIN on the variants
+    /// table; empty when not populated, e.g. in test fixtures or partial data).
+    pub variant_keys: Vec<String>,
     /// The flag rule this experiment is bound to, or `None` when the
     /// experiment binds to the flag's default-rule fall-through.
     pub flag_rule_id: Option<RuleId>,
@@ -414,6 +420,8 @@ mod tests {
             id: ExperimentId::new(),
             environment_id: EnvironmentId::new(),
             flag_id: FlagId::new(),
+            flag_key: None,
+            variant_keys: vec![],
             flag_rule_id: Some(RuleId::new()),
             targets_default_rule: false,
             name: "My Experiment".to_string(),

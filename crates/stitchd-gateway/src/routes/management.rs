@@ -12,8 +12,9 @@ use utoipa::ToSchema;
 
 use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateProjectRequest, CreateSdkKeyRequest, CreateUserRequest,
-    DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest, ListProjectsRequest,
-    ListSdkKeysRequest, RenameEnvironmentRequest, RenameProjectRequest, RevokeSdkKeyRequest,
+    DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest, ListOrgUsersRequest,
+    ListProjectsRequest, ListSdkKeysRequest, RemoveOrgUserRequest, RenameEnvironmentRequest,
+    RenameProjectRequest, RevokeSdkKeyRequest,
 };
 
 use crate::error::GatewayError;
@@ -48,6 +49,7 @@ pub struct EnvJson {
 pub struct SdkKeyJson {
     pub sdk_key_id: String,
     pub raw_key: String,
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -145,12 +147,19 @@ pub async fn create_environment(
     ))
 }
 
+#[derive(Debug, Deserialize, ToSchema, Default)]
+pub struct CreateSdkKeyBody {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 /// `POST /v1/management/environments/{environment_id}/sdk-keys`
 #[utoipa::path(
     post,
     path = "/v1/management/environments/{environment_id}/sdk-keys",
     tag = "management",
     params(("environment_id" = String, Path, description = "Environment ID")),
+    request_body(content = CreateSdkKeyBody),
     responses(
         (status = 201, description = "SDK key created", body = SdkKeyJson),
         (status = 401, description = "Unauthorized"),
@@ -162,8 +171,15 @@ pub async fn create_environment(
 pub async fn create_sdk_key(
     State(state): State<Arc<GatewayState>>,
     Path(environment_id): Path<String>,
+    body: Option<Json<CreateSdkKeyBody>>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(CreateSdkKeyRequest { environment_id });
+    let name = body
+        .map(|b| b.0.name.unwrap_or_default())
+        .unwrap_or_default();
+    let req = tonic::Request::new(CreateSdkKeyRequest {
+        environment_id,
+        name,
+    });
     let mut client = state.management_client.lock().await;
     let resp = client
         .create_sdk_key(req)
@@ -175,6 +191,7 @@ pub async fn create_sdk_key(
         Json(SdkKeyJson {
             sdk_key_id: r.sdk_key_id,
             raw_key: r.raw_key,
+            name: r.name,
         }),
     ))
 }
@@ -253,6 +270,7 @@ pub struct ListEnvironmentsJson {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct SdkKeySummaryJson {
     pub sdk_key_id: String,
+    pub name: String,
     pub is_active: bool,
     pub created_at: String,
     pub revoked_at: Option<String>,
@@ -406,6 +424,7 @@ pub async fn list_sdk_keys(
         .into_iter()
         .map(|k| SdkKeySummaryJson {
             sdk_key_id: k.sdk_key_id,
+            name: k.name,
             is_active: k.is_active,
             created_at: k.created_at,
             revoked_at: if k.revoked_at.is_empty() {
@@ -422,6 +441,22 @@ pub async fn list_sdk_keys(
     )))
 }
 
+/// Query parameters for listing org users.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListOrgUsersQuery {
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrgUserJson {
+    pub user_id: String,
+    pub email: String,
+    pub display_name: String,
+    pub role: String,
+    pub created_at: String,
+}
+
 /// `DELETE /v1/management/environments/{environment_id}/sdk-keys/{sdk_key_id}`
 pub async fn revoke_sdk_key(
     State(state): State<Arc<GatewayState>>,
@@ -436,11 +471,60 @@ pub async fn revoke_sdk_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// `GET /v1/management/orgs/{org_id}/users`
+pub async fn list_org_users(
+    State(state): State<Arc<GatewayState>>,
+    Path(org_id): Path<String>,
+    Query(query): Query<ListOrgUsersQuery>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(ListOrgUsersRequest {
+        org_id,
+        page: query.pagination.effective_page(),
+        per_page: query.pagination.effective_per_page(),
+    });
+    let mut client = state.management_client.lock().await;
+    let resp = client
+        .list_org_users(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let users: Vec<OrgUserJson> = inner
+        .users
+        .into_iter()
+        .map(|u| OrgUserJson {
+            user_id: u.user_id,
+            email: u.email,
+            display_name: u.display_name,
+            role: u.role,
+            created_at: u.created_at,
+        })
+        .collect();
+    Ok(Json(PaginatedResponse::new(
+        users,
+        inner.total,
+        &query.pagination,
+    )))
+}
+
+/// `DELETE /v1/management/orgs/{org_id}/users/{user_id}`
+pub async fn remove_org_user(
+    State(state): State<Arc<GatewayState>>,
+    Path((org_id, user_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(RemoveOrgUserRequest { org_id, user_id });
+    let mut client = state.management_client.lock().await;
+    client
+        .remove_org_user(req)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
-    use axum::routing::{delete, get, patch, post};
+    use axum::routing::{delete, get, patch};
     axum::Router::new()
         .route(
             "/v1/management/orgs/{org_id}/projects",
@@ -466,7 +550,14 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
             "/v1/management/environments/{environment_id}/sdk-keys/{sdk_key_id}",
             delete(revoke_sdk_key),
         )
-        .route("/v1/management/orgs/{org_id}/users", post(create_user))
+        .route(
+            "/v1/management/orgs/{org_id}/users",
+            get(list_org_users).post(create_user),
+        )
+        .route(
+            "/v1/management/orgs/{org_id}/users/{user_id}",
+            delete(remove_org_user),
+        )
         .with_state(state)
 }
 
