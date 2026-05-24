@@ -28,8 +28,8 @@ impl PgSdkKeyRepository {
     }
 }
 
-fn row_to_sdk_key(row: &sqlx::postgres::PgRow) -> Result<SdkKey, RepositoryError> {
-    Ok(SdkKey {
+fn row_to_sdk_key(row: &sqlx::postgres::PgRow) -> SdkKey {
+    SdkKey {
         id: SdkKeyId::from_uuid(row.get("id")),
         environment_id: EnvironmentId::from_uuid(row.get("environment_id")),
         key_hash: row.get("key_hash"),
@@ -37,7 +37,7 @@ fn row_to_sdk_key(row: &sqlx::postgres::PgRow) -> Result<SdkKey, RepositoryError
         is_active: row.get("is_active"),
         created_at: row.get("created_at"),
         revoked_at: row.get("revoked_at"),
-    })
+    }
 }
 
 #[async_trait]
@@ -58,7 +58,7 @@ impl SdkKeyRepository for PgSdkKeyRepository {
             other => RepositoryError::Database(other),
         })?;
 
-        row_to_sdk_key(&row)
+        Ok(row_to_sdk_key(&row))
     }
 
     async fn list_by_environment(
@@ -78,7 +78,7 @@ impl SdkKeyRepository for PgSdkKeyRepository {
         .await
         .map_err(RepositoryError::Database)?;
 
-        rows.iter().map(row_to_sdk_key).collect()
+        Ok(rows.iter().map(row_to_sdk_key).collect())
     }
 
     async fn list_by_environment_paginated(
@@ -119,7 +119,7 @@ impl SdkKeyRepository for PgSdkKeyRepository {
             result
         });
 
-        let keys = rows.iter().map(row_to_sdk_key).collect::<Result<Vec<_>, _>>()?;
+        let keys: Vec<SdkKey> = rows.iter().map(row_to_sdk_key).collect();
         Ok((keys, total))
     }
 
@@ -184,7 +184,7 @@ impl SdkKeyRepository for PgSdkKeyRepository {
         .await
         .map_err(RepositoryError::Database)?;
 
-        rows.iter().map(row_to_sdk_key).collect()
+        Ok(rows.iter().map(row_to_sdk_key).collect())
     }
 
     async fn find_active_by_hash(&self, key_hash: &str) -> Result<SdkKey, RepositoryError> {
@@ -204,7 +204,7 @@ impl SdkKeyRepository for PgSdkKeyRepository {
             id: "<sdk_key_by_hash>".to_string(),
         })?;
 
-        row_to_sdk_key(&row)
+        Ok(row_to_sdk_key(&row))
     }
 
     async fn revoke(&self, id: SdkKeyId) -> Result<(), RepositoryError> {

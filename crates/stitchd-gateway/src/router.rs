@@ -408,12 +408,13 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_write_permission));
 
-    let resource_routes = resource_read
-        .merge(resource_write)
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&auth_client),
-            auth_middleware,
-        ));
+    let resource_routes =
+        resource_read
+            .merge(resource_write)
+            .layer(middleware::from_fn_with_state(
+                Arc::clone(&auth_client),
+                auth_middleware,
+            ));
 
     // ── Auth-provider management + org-scoped OIDC (JWT + non-system-org) ───
     let auth_provider_routes = Router::new()

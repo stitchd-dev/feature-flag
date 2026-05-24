@@ -729,7 +729,7 @@ pub async fn update_flag(
             .map(|r| r.into_inner().enabled)
             .unwrap_or(true)
     } else {
-        body.enabled.unwrap()
+        body.enabled.unwrap_or(true)
     };
     let flag = FeatureFlag {
         key: flag_key,

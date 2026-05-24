@@ -12,9 +12,9 @@ use utoipa::ToSchema;
 
 use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateProjectRequest, CreateSdkKeyRequest, CreateUserRequest,
-    DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest,
-    ListOrgUsersRequest, ListProjectsRequest, ListSdkKeysRequest, RenameEnvironmentRequest,
-    RenameProjectRequest, RemoveOrgUserRequest, RevokeSdkKeyRequest,
+    DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest, ListOrgUsersRequest,
+    ListProjectsRequest, ListSdkKeysRequest, RemoveOrgUserRequest, RenameEnvironmentRequest,
+    RenameProjectRequest, RevokeSdkKeyRequest,
 };
 
 use crate::error::GatewayError;
@@ -173,8 +173,13 @@ pub async fn create_sdk_key(
     Path(environment_id): Path<String>,
     body: Option<Json<CreateSdkKeyBody>>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let name = body.map(|b| b.0.name.unwrap_or_default()).unwrap_or_default();
-    let req = tonic::Request::new(CreateSdkKeyRequest { environment_id, name });
+    let name = body
+        .map(|b| b.0.name.unwrap_or_default())
+        .unwrap_or_default();
+    let req = tonic::Request::new(CreateSdkKeyRequest {
+        environment_id,
+        name,
+    });
     let mut client = state.management_client.lock().await;
     let resp = client
         .create_sdk_key(req)
@@ -478,7 +483,10 @@ pub async fn list_org_users(
         per_page: query.pagination.effective_per_page(),
     });
     let mut client = state.management_client.lock().await;
-    let resp = client.list_org_users(req).await.map_err(GatewayError::from)?;
+    let resp = client
+        .list_org_users(req)
+        .await
+        .map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     let users: Vec<OrgUserJson> = inner
         .users
@@ -491,7 +499,11 @@ pub async fn list_org_users(
             created_at: u.created_at,
         })
         .collect();
-    Ok(Json(PaginatedResponse::new(users, inner.total, &query.pagination)))
+    Ok(Json(PaginatedResponse::new(
+        users,
+        inner.total,
+        &query.pagination,
+    )))
 }
 
 /// `DELETE /v1/management/orgs/{org_id}/users/{user_id}`
@@ -501,7 +513,10 @@ pub async fn remove_org_user(
 ) -> Result<impl IntoResponse, GatewayError> {
     let req = tonic::Request::new(RemoveOrgUserRequest { org_id, user_id });
     let mut client = state.management_client.lock().await;
-    client.remove_org_user(req).await.map_err(GatewayError::from)?;
+    client
+        .remove_org_user(req)
+        .await
+        .map_err(GatewayError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

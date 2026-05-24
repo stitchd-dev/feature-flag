@@ -819,9 +819,9 @@ fn map_experiment_db_err(e: sqlx::Error) -> RepositoryError {
         return match code {
             "23505" => RepositoryError::UniqueViolation { field: constraint },
             "23503" => RepositoryError::ForeignKeyViolation { constraint },
-            _ if dbe.constraint().is_some() => RepositoryError::UniqueViolation {
-                field: constraint,
-            },
+            _ if dbe.constraint().is_some() => {
+                RepositoryError::UniqueViolation { field: constraint }
+            }
             _ => RepositoryError::Database(e),
         };
     }

@@ -229,7 +229,11 @@ pub async fn list_event_definitions(
         .await
         .map_err(GatewayError::from)?
         .into_inner();
-    let items: Vec<EventDefinitionJson> = resp.items.into_iter().map(proto_to_event_def_json).collect();
+    let items: Vec<EventDefinitionJson> = resp
+        .items
+        .into_iter()
+        .map(proto_to_event_def_json)
+        .collect();
     Ok(Json(PaginatedResponse::new(items, resp.total, &pagination)))
 }
 

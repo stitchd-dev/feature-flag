@@ -15,9 +15,8 @@ use stitchd_core::{
     tenant::{Environment, Organisation, Project, SdkKey},
 };
 use stitchd_db::{
-    AuthUserRepository, ContextRegistryRepository, EnvironmentRepository,
-    OrgMembershipRepository, OrganisationRepository, ProjectRepository, RepositoryError,
-    SdkKeyRepository,
+    AuthUserRepository, ContextRegistryRepository, EnvironmentRepository, OrgMembershipRepository,
+    OrganisationRepository, ProjectRepository, RepositoryError, SdkKeyRepository,
 };
 use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateEnvironmentResponse, CreateOrgRequest, CreateOrgResponse,
@@ -50,6 +49,7 @@ pub struct ManagementServiceImpl {
 
 impl ManagementServiceImpl {
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     /// Create a new [`ManagementServiceImpl`].
     pub fn new(
         org_repo: Arc<dyn OrganisationRepository>,

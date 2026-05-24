@@ -320,7 +320,11 @@ pub async fn list_segments_in_env(
         .map_err(GatewayError::from)?
         .into_inner();
     let items: Vec<AdminSegmentJson> = inner.segments.iter().map(proto_to_admin_json).collect();
-    Ok(Json(PaginatedResponse::new(items, inner.total, &pagination)))
+    Ok(Json(PaginatedResponse::new(
+        items,
+        inner.total,
+        &pagination,
+    )))
 }
 
 /// `POST /v1/environments/{environment_id}/segments` — create a new segment scoped to an environment.

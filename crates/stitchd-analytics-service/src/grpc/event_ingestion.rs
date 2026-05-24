@@ -208,6 +208,7 @@ mod tests {
                     id: SdkKeyId::new(),
                     environment_id: env_id,
                     key_hash,
+                    name: String::new(),
                     created_at: now,
                     revoked_at: None,
                     is_active: true,

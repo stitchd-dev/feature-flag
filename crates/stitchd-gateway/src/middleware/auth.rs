@@ -139,7 +139,7 @@ pub async fn require_non_system_org(req: Request, next: Next) -> Response {
 /// read-only roles such as `org_member`.
 pub async fn require_write_permission(req: Request, next: Next) -> Response {
     match req.extensions().get::<RbacContext>() {
-        Some(ctx) if ctx.permissions.iter().any(is_write_action) => next.run(req).await,
+        Some(ctx) if ctx.permissions.iter().any(|p| is_write_action(p)) => next.run(req).await,
         Some(_) => (
             StatusCode::FORBIDDEN,
             axum::Json(serde_json::json!({ "error": "write access required" })),
@@ -153,7 +153,7 @@ pub async fn require_write_permission(req: Request, next: Next) -> Response {
     }
 }
 
-fn is_write_action(p: &String) -> bool {
+fn is_write_action(p: &str) -> bool {
     p.ends_with(":write")
         || p.ends_with(":create")
         || p.ends_with(":delete")
@@ -352,15 +352,24 @@ mod tests {
 
     #[test]
     fn is_write_action_recognises_write_suffixes() {
-        for perm in ["flag:write", "env:create", "env:delete", "env:rename", "sdk_key:revoke"] {
-            assert!(is_write_action(&perm.to_string()), "{perm} should be write");
+        for perm in [
+            "flag:write",
+            "env:create",
+            "env:delete",
+            "env:rename",
+            "sdk_key:revoke",
+        ] {
+            assert!(is_write_action(perm), "{perm} should be write");
         }
     }
 
     #[test]
     fn is_write_action_ignores_read_permissions() {
         for perm in ["flag:read", "metric:read", "segment:read"] {
-            assert!(!is_write_action(&perm.to_string()), "{perm} should not be write");
+            assert!(
+                !is_write_action(perm),
+                "{perm} should not be write"
+            );
         }
     }
 
