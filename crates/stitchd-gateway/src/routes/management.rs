@@ -12,8 +12,9 @@ use utoipa::ToSchema;
 
 use stitchd_proto::management::v1::{
     CreateEnvironmentRequest, CreateProjectRequest, CreateSdkKeyRequest, CreateUserRequest,
-    DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest, ListProjectsRequest,
-    ListSdkKeysRequest, RenameEnvironmentRequest, RenameProjectRequest, RevokeSdkKeyRequest,
+    DeleteEnvironmentRequest, DeleteProjectRequest, ListEnvironmentsRequest,
+    ListOrgUsersRequest, ListProjectsRequest, ListSdkKeysRequest, RenameEnvironmentRequest,
+    RenameProjectRequest, RemoveOrgUserRequest, RevokeSdkKeyRequest,
 };
 
 use crate::error::GatewayError;
@@ -422,6 +423,22 @@ pub async fn list_sdk_keys(
     )))
 }
 
+/// Query parameters for listing org users.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ListOrgUsersQuery {
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct OrgUserJson {
+    pub user_id: String,
+    pub email: String,
+    pub display_name: String,
+    pub role: String,
+    pub created_at: String,
+}
+
 /// `DELETE /v1/management/environments/{environment_id}/sdk-keys/{sdk_key_id}`
 pub async fn revoke_sdk_key(
     State(state): State<Arc<GatewayState>>,
@@ -433,6 +450,45 @@ pub async fn revoke_sdk_key(
         .revoke_sdk_key(req)
         .await
         .map_err(GatewayError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /v1/management/orgs/{org_id}/users`
+pub async fn list_org_users(
+    State(state): State<Arc<GatewayState>>,
+    Path(org_id): Path<String>,
+    Query(query): Query<ListOrgUsersQuery>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(ListOrgUsersRequest {
+        org_id,
+        page: query.pagination.effective_page(),
+        per_page: query.pagination.effective_per_page(),
+    });
+    let mut client = state.management_client.lock().await;
+    let resp = client.list_org_users(req).await.map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let users: Vec<OrgUserJson> = inner
+        .users
+        .into_iter()
+        .map(|u| OrgUserJson {
+            user_id: u.user_id,
+            email: u.email,
+            display_name: u.display_name,
+            role: u.role,
+            created_at: u.created_at,
+        })
+        .collect();
+    Ok(Json(PaginatedResponse::new(users, inner.total, &query.pagination)))
+}
+
+/// `DELETE /v1/management/orgs/{org_id}/users/{user_id}`
+pub async fn remove_org_user(
+    State(state): State<Arc<GatewayState>>,
+    Path((org_id, user_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(RemoveOrgUserRequest { org_id, user_id });
+    let mut client = state.management_client.lock().await;
+    client.remove_org_user(req).await.map_err(GatewayError::from)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -466,7 +522,14 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
             "/v1/management/environments/{environment_id}/sdk-keys/{sdk_key_id}",
             delete(revoke_sdk_key),
         )
-        .route("/v1/management/orgs/{org_id}/users", post(create_user))
+        .route(
+            "/v1/management/orgs/{org_id}/users",
+            get(list_org_users).post(create_user),
+        )
+        .route(
+            "/v1/management/orgs/{org_id}/users/{user_id}",
+            delete(remove_org_user),
+        )
         .with_state(state)
 }
 

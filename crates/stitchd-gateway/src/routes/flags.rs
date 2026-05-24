@@ -35,7 +35,9 @@ pub struct FlagMutateRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub enabled: Option<bool>,
-    /// Value type: "bool" | "int" | "double" | "string" | "json"
+    /// Value type: "bool" | "int" | "double" | "string" | "json".
+    /// Accepts both `value_type` and `flag_type` for consistency with list responses.
+    #[serde(alias = "flag_type")]
     pub value_type: Option<String>,
     pub variants: Option<Vec<VariantBody>>,
     #[schema(value_type = Object, nullable = true)]
@@ -712,11 +714,28 @@ pub async fn update_flag(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<FlagMutateRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    // When `enabled` is omitted, preserve the current value by fetching first.
+    let current_enabled = if body.enabled.is_none() {
+        let get_req = tonic::Request::new(GetFlagRequest {
+            environment_id: String::new(),
+            project_id: project_id.clone(),
+            flag_key: flag_key.clone(),
+        });
+        let mut client = state.flag_client.lock().await;
+        client
+            .get_flag(get_req)
+            .await
+            .ok()
+            .map(|r| r.into_inner().enabled)
+            .unwrap_or(true)
+    } else {
+        body.enabled.unwrap()
+    };
     let flag = FeatureFlag {
         key: flag_key,
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
-        enabled: body.enabled.unwrap_or(false),
+        enabled: current_enabled,
         default_variant_key: body.default_variant_key.unwrap_or_default(),
         ..Default::default()
     };

@@ -116,6 +116,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/management/environments/{environment_id}/sdk-keys",
             get(management::list_sdk_keys),
         )
+        .route(
+            "/v1/management/orgs/{org_id}/users",
+            get(management::list_org_users),
+        )
         .with_state(Arc::clone(&state));
 
     let mgmt_write = Router::new()
@@ -146,6 +150,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         .route(
             "/v1/management/orgs/{org_id}/users",
             post(management::create_user),
+        )
+        .route(
+            "/v1/management/orgs/{org_id}/users/{user_id}",
+            delete(management::remove_org_user),
         )
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_write_permission));
