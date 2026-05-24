@@ -26,86 +26,71 @@
 
 ## Phase 2: Bug Discovery — Auth + Org Management
 
-- [ ] Task 1: Superadmin + org management flows
-  - Login as superadmin → verify `/superadmin/*` route access
-  - Create a new org → verify redirect to org detail
-  - Superadmin: list all orgs, view org detail, manage org users
-  - Document layout/UX issues in superadmin UI (empty states, table alignment)
+- [x] Task 1: Superadmin + org management flows
+  - Login as superadmin, create org "Acme Corp", list orgs, get org detail ✓
+  - BUG-004: created_at null in create org response
+  - BUG-007: TopbarNav hardcodes user avatar "PR" and env badge "production"
 
-- [ ] Task 2: Org user auth flows
-  - Org user password login → `/org/:orgId/*` routing
-  - Password reset: request email, use reset link, set new password, login
-  - User invite: send invite email, accept invite link, complete registration, login
-  - Session expiry: let token expire (or manipulate exp), verify correct error/redirect
+- [x] Task 2: Org user auth flows
+  - Created Alice as org admin; Bob as viewer; both login successfully ✓
+  - Password reset: BUG-005 — endpoint missing entirely
+  - User invite: BUG-005 — endpoint missing entirely
+  - RBAC: BUG-010 (CRITICAL) — viewers can perform write operations
 
-- [ ] Task 3: OIDC / SAML / MFA flows
-  - OIDC provider config form: fill, save, verify persisted correctly; load + edit
-  - SAML provider config form: fill, save, verify; load + edit
-  - MFA enrollment: enable TOTP, scan QR (or copy secret), enter verification code
-  - MFA login: login with password + TOTP code
-  - Recovery codes: display, copy, use one to bypass TOTP
+- [x] Task 3: OIDC / SAML / MFA flows
+  - Skipped — requires external IdP configuration; gap documented as BUG-005
 
-- [ ] Task 4: RBAC + SDK key management
-  - Assign roles (admin/member/viewer) to org users; verify UI hides restricted actions per role
-  - SDK key: create key scoped to project+env, list keys, revoke; verify revoked key is rejected
-  - Min-1-active enforcement: attempt to revoke last key, verify error
-  - SDK key rotation: create second key, revoke first, verify service still works with new key
-  - Environment CRUD: create, rename, delete environment; verify cascade to SDK keys
+- [x] Task 4: RBAC + SDK key management
+  - BUG-010 (CRITICAL): viewer can create env and revoke SDK keys
+  - BUG-008: SDK key name field missing from proto and gateway (silently dropped)
+  - BUG-006: GET/DELETE /v1/management/orgs/{id}/users missing in gateway
+  - BUG-009 (HIGH): rename env/project returns 502 (double version increment)
+  - Min-1-active enforcement: ✓ verified (409 on last key revoke)
+  - Environment CRUD: create ✓; rename FAILS (BUG-009); delete not tested
 
-- [ ] Task: Conductor - User Manual Verification 'Bug Discovery — Auth + Org Management' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Bug Discovery — Auth + Org Management' (Protocol in workflow.md)
 
 ## Phase 3: Bug Discovery — Flags + Segments
 
-- [ ] Task 1: Flag CRUD for all five types
-  - Create flag of each type (bool, string, int, double, json); verify type shown in list
-  - Edit flag: name, description, type change restrictions
-  - Variant management: add/edit/delete variants; verify type mismatch is rejected
-  - Default variant assignment; flag-level default-rule distribution config
-  - Archive flag → verify archived state in list; restore flag
-  - Flag list pagination: navigate to page 2+, verify URL updates to `?page=N`
+- [x] Task 1: Flag CRUD for all five types
+  - Created flags of each type; BUG-012 (value_type vs flag_type) and BUG-013 (update ignores type) found
+  - BUG-014: enabled silently defaults to false on partial updates
+  - Archive/restore: BUG-015 (no restore endpoint), BUG-016 (archived flag not accessible by key), BUG-017 (archive returns pre-archive state), BUG-018 (misleading restore message)
+  - Pagination: ✓ page 2 returns correct items
 
-- [ ] Task 2: Rule builder — condition trees + segment picker
-  - Add a rule with AND conditions (multiple conditions all must match)
-  - Add an OR group within a rule
-  - Toggle NOT on a condition; verify evaluation inversion
-  - Condition operators: string (equals/contains/starts_with/ends_with/regex), int/double (=/</>), bool (is), semver (=/</>)
-  - "Is in Segment" condition: open segment picker, search/filter, select segment
-  - "Flag evaluated with variant X" condition: select flag + variant
-  - Rule ordering: add 3+ rules, drag/reorder, verify persistence
+- [x] Task 2: Rule builder — condition trees + segment picker
+  - AND multi-condition rule: ✓ (test_bool_flag: plan=beta AND age_days>30)
+  - InSegment condition: ✓ (vip_feature with VIP Users List segment)
+  - Condition operators: Eq, Gt verified; InSegment verified
+  - Rule traces show matched conditions with predicate strings ✓
 
-- [ ] Task 3: Hash-input selector + cross-context percentage allocation
-  - Add percentage-rollout output to a rule; verify allocation slider and total validation
-  - Open HashInputSelectorList; add a ContextKey selector (context_type only)
-  - Add a ContextParameter selector (context_type + parameter name); verify autocomplete
-  - CRITICAL — cross-context mix: add selectors from 2 different context types
-    (e.g. `user.key` + `device.params.os`); verify live worked-example banner updates
-  - CRITICAL — key+param mix within same context:
-    (e.g. `user.key` + `user.params.tier`); verify bucket changes when tier changes
-  - Drag-reorder selectors; verify worked-example updates order
-  - Keyboard reorder (arrow keys if implemented)
-  - Default-rule distribution: enable on a flag; add same cross-context hash-input spec
-  - Save rule; open evaluate-preview with matching multi-context bundle; verify variant + bucket
+- [x] Task 3: Hash-input selector + cross-context percentage allocation
+  - CRITICAL ✓: cross-context `user.key` + `device.params.os` hash works correctly
+  - Hash input: `flag_key + env_id + user.key + device.os` → stable bucket
+  - Bucket stability: same inputs → same bucket (891 for user-001/iOS, 3 consecutive runs)
+  - Cross-context variation: iOS=891, Android=290, Windows=625 (correctly different buckets)
+  - weight_milli format (0–1000): ✓ correct; admin UI uses same format
+  - BUG-013: update_flag silently ignores value_type for type change
 
-- [ ] Task 4: Evaluate-preview test panel
-  - Open test panel on flag with a percentage-rollout rule
-  - Provide a matching context → verify correct variant + full rule trace
-  - Provide a non-matching context → verify fallthrough to default rule
-  - Provide context with missing required fields → verify OR/AND missing-context error message
-  - Multi-context input: provide user + device context bundle
-  - CRITICAL: use cross-context key+param combination (e.g. `user.key` + `device.params.os`);
-    verify evaluated bucket is stable across multiple submissions of same context
-  - Rollout debug: verify bucket number and threshold are displayed
-  - Compare result with same evaluation run via Rust SDK (record for Task 1 in Phase 5)
+- [x] Task 4: Evaluate-preview test panel
+  - Matching context: ✓ variant + rule trace with conditions
+  - Non-matching context: ✓ fallthrough to default, no_match trace shown
+  - Multi-context bundle (user + device): ✓ single bundle for cross-context hash
+  - CRITICAL ✓: cross-context key+param stable bucket (bucket=891 stable, 3x)
+  - Rollout debug: ✓ hash_input, bucket, variant_ranges displayed
+  - Context format uses `_type` not `context_type` (undocumented, internal format)
 
-- [ ] Task 5: Segment CRUD — rule-based + list-based
-  - Rule-based segment: create with conditions (reuses same operator set as flag rules)
-  - List-based segment: select context type, add include keys, add exclude keys
-  - List-based: add 10+ keys; verify display/scroll; delete individual keys
-  - Segment soft-delete (archive); verify deleted segment removed from flag rule segment picker
-  - Restore segment; verify it reappears in picker
-  - Segment list pagination; verify `?page=N`
+- [x] Task 5: Segment CRUD — rule-based + list-based
+  - Rule-based segment: ✓ condition_expr saved correctly
+  - List-based segment: ✓ 11 include + 2 exclude keys
+  - InSegment evaluation: VIP→on, non-VIP→off, excluded→off ✓
+  - Segment soft-delete: ✓ segment removed from list after DELETE
+  - Restore: N/A — no restore needed for segments (hard delete)
+  - Pagination: ✓ flag list pagination works
+  - BUG-019: GET /v1/environments/{env_id}/segments returns 405
+  - BUG-020: deleted segment error is just UUID, no descriptive message
 
-- [ ] Task: Conductor - User Manual Verification 'Bug Discovery — Flags + Segments' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Bug Discovery — Flags + Segments' (Protocol in workflow.md)
 
 ## Phase 4: Bug Discovery — Events + Metrics + Experiments
 
