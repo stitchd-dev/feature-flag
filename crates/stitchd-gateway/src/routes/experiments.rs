@@ -1094,13 +1094,13 @@ mod tests {
     fn experiment_status_str_active() {
         assert_eq!(
             experiment_status_str(ExperimentStatus::Active as i32),
-            "active"
+            "running"
         );
     }
 
     #[test]
     fn experiment_status_str_unspecified() {
-        assert_eq!(experiment_status_str(0), "unspecified");
+        assert_eq!(experiment_status_str(0), "draft");
     }
 
     #[test]
@@ -1212,7 +1212,7 @@ mod tests {
         };
         let j = experiment_to_json(&e);
         assert_eq!(j.id, "exp-1");
-        assert_eq!(j.status, "active");
+        assert_eq!(j.status, "running");
         assert_eq!(j.variant_keys.len(), 2);
     }
 

@@ -85,7 +85,7 @@ _35 variables discovered across the workspace._
 
 | Variable | Default | Required |
 |----------|---------|----------|
-| `STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL` | `http://localhost:50054` | no (has default) |
+| `STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL` | `http://localhost:50055` | no (has default) |
 | `STITCHD_STATS_SCHEDULER_INTERVAL_SECS` | `3600` | no (has default) |
 | `STITCHD_STATS_SERVICE_GRPC_PORT` | `50056` | no (has default) |
 | `STITCHD_STATS_SERVICE_HTTP_PORT` | `9200` | no (has default) |

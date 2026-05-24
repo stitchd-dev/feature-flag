@@ -366,10 +366,7 @@ mod tests {
     #[test]
     fn is_write_action_ignores_read_permissions() {
         for perm in ["flag:read", "metric:read", "segment:read"] {
-            assert!(
-                !is_write_action(perm),
-                "{perm} should not be write"
-            );
+            assert!(!is_write_action(perm), "{perm} should not be write");
         }
     }
 

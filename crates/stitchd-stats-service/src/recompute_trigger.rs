@@ -283,6 +283,8 @@ mod tests {
             id: ExperimentId::new(),
             environment_id: env_id,
             flag_id: stitchd_core::id::FlagId::new(),
+            flag_key: None,
+            variant_keys: vec![],
             flag_rule_id: Some(RuleId::new()),
             targets_default_rule: false,
             name: "exp".into(),
