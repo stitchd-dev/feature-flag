@@ -1,0 +1,13 @@
+{
+  "track_id": "integration_bugfix_20260524",
+  "type": "bug",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-24T00:00:00Z",
+  "updated_at": "2026-05-24T00:00:00Z",
+  "description": "Comprehensive integration bug-hunt: run all functional use cases against a live stack (UI + 6 gRPC services + gateway in-process, Docker databases only), document all bugs found, then fix by severity. Covers auth, flags+segments (incl. cross-context key+param hash-input combinations), events+metrics+experiments, Rust SDK parity, and UI/UX polish.",
+  "git_branch": "track/integration_bugfix_20260524",
+  "worktree_path": ".worktrees/integration_bugfix_20260524"
+}
