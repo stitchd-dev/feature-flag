@@ -185,3 +185,69 @@ Discovered during Phase 1 (Stack Bringup) and subsequent discovery phases.
 - **Fix:** Update the error message in the segment service / gateway error mapping to include "segment not found" or similar descriptive text.
 
 ---
+
+## Phase 4: Events + Metrics + Experiments
+
+### BUG-021: Event definitions REST surface is entirely unimplemented (all stubs)
+- **Phase discovered:** Phase 4 — Events + Metrics + Experiments
+- **Component:** `crates/stitchd-gateway/src/routes/events.rs` (lines 160–263)
+- **Reproduction:** Any call to event definition endpoints: `GET /v1/environments/{env_id}/event-definitions` returns empty list; `POST` returns 202 with no body; `GET /{id}` returns 501; `PUT /{id}` returns 202; `DELETE /{id}` returns 204 (fake success)
+- **Expected:** Full CRUD — create event definition persists to PostgreSQL; read returns it; delete removes it; events can be fired against registered keys
+- **Actual:** All five handlers are stubs. `create_event_definition` returns `StatusCode::ACCEPTED` without reading the body. `list_event_definitions` returns a hardcoded empty paginated response. `get_event_definition` returns 501 Not Implemented. `update_event_definition` and `delete_event_definition` return 202/204 silently.
+- **Root cause:** Gateway handlers in `events.rs` were scaffolded but never wired to the analytics service's gRPC RPCs. The `EventDefinitionRepository` in `stitchd-db` is fully implemented (PostgreSQL-backed), and the proto contains the RPCs — only the gateway proxy calls are missing.
+- **Fix:** Replace each stub handler with a proper gRPC proxy call to the analytics service.
+
+### BUG-022: `events_v2` ClickHouse migration missing — table was never created
+- **Phase discovered:** Phase 4 — Events + Metrics + Experiments
+- **Component:** `crates/stitchd-db/clickhouse-migrations/` (directory)
+- **Reproduction:** Run `SHOW TABLES` against the ClickHouse `stitchd` database — `events_v2` table absent. Any attempt to ingest events via SDK or preview metrics fails.
+- **Expected:** `events_v2` table exists after migrations run (matching `EventV2Row` struct schema: `env_id UUID`, `contexts Array(Tuple(String, String))`, `metric_key String`, nullable value cols, `timestamp/occurred_at DateTime64`, `properties Array(Tuple(String, String))`)
+- **Actual:** Migration directory contains only 4 files: `0001_events.sql` (creates old `events` table with incompatible schema), `0002_experiment_assignments.sql`, `0003_flag_evaluation_log.sql`, `0004_flag_evaluation_log_v2.sql`. No migration creates `events_v2`. The analytics service (ingestion, event_query, metric aggregation) and stats service all reference `events_v2`. The comment in `ingestion.rs` references a migration `20260520000001_events_v2_properties` that does not exist on disk.
+- **Root cause:** The migration creating `events_v2` was written and referenced in code comments but never committed to the migrations directory.
+- **Fix:** Add a migration file `0005_events_v2.sql` creating the `events_v2` table with the schema matching `EventV2Row`. **Workaround applied:** Table created manually in the test environment via `curl`.
+
+### BUG-023: Metric preview endpoint fails — analytics service queries `events_v2` which didn't exist
+- **Phase discovered:** Phase 4 — Events + Metrics + Experiments
+- **Component:** `crates/stitchd-analytics-service/src/grpc/metric.rs` (aggregation query), root cause is BUG-022
+- **Reproduction:** `GET /v1/analytics/environments/{env_id}/metrics/{metric_id}/preview` → 502 `DB::Exception: ... Unknown table identifier 'events_v2'`
+- **Expected:** Metric preview returns 7-day ClickHouse sparkline data (empty for new metrics, not an error)
+- **Actual:** ClickHouse returns table-not-found error because `events_v2` doesn't exist. After BUG-022 workaround (creating the table), metric preview returns an empty timeseries for new metrics as expected.
+- **Root cause:** Missing `events_v2` table (BUG-022). Secondary note: `clickhouse_query.rs` in `stitchd-stats-service` still queries the old `FROM events` table (dead code path, but would also fail).
+- **Fix:** Fix BUG-022.
+
+### BUG-024: Experiment creation blocked by empty context type registry — stats-service context_refresher queries ClickHouse tables that didn't exist
+- **Phase discovered:** Phase 4 — Events + Metrics + Experiments
+- **Component:** `crates/stitchd-gateway/src/routes/experiments.rs` (validate_experiment_binding), `crates/stitchd-stats-service/src/context_refresher.rs`
+- **Reproduction:** `POST /v1/environments/{env_id}/experiments` with `unit_context_types: ["user"]` → 502 `{"error":"unknown_context_type","message":"context type 'user' is not registered for this environment"}`
+- **Expected:** Common context types (`user`, `device`, `account`) are pre-registered or auto-registered on first evaluation
+- **Actual:** Context type registry in PostgreSQL is empty. The `context_refresher` in stats-service polls ClickHouse `flag_evaluation_log_v2` every 15 minutes to populate the registry. Until evaluations have occurred AND been processed, no context types are registered and experiment creation is always blocked.
+- **Root cause:** (1) ClickHouse tables didn't exist (BUG-022), so no evaluations could be recorded; (2) even with tables present, a 15-minute polling cycle means new environments can't create experiments without a manual seed or a shorter poll cycle. **Workaround applied:** Seeded context types directly in PostgreSQL.
+- **Fix:** (a) Seed default context types (`user`, `device`, `account`) on environment creation, or (b) allow `unit_context_types` values that aren't pre-registered if they follow a naming convention.
+
+### BUG-025: Experiment creation always fails — `Experiment` proto missing binding fields; service uses random placeholder UUIDs
+- **Phase discovered:** Phase 4 — Events + Metrics + Experiments
+- **Component:** `crates/stitchd-experimentation-service/src/service.rs:266–292`, `proto/experiments/v1/experimentation_service.proto`
+- **Reproduction:** `POST /v1/environments/{env_id}/experiments` with valid `flag_id`, `flag_rule_id`, `unit_context_types`, etc. → 502 `{"error":"unique violation on: experiments_flag_rule_id_fkey"}`
+- **Expected:** Experiment created and stored with the provided binding fields
+- **Actual:** The `Experiment` proto has no fields for `flag_id`, `flag_rule_id`, `targets_default_rule`, `unit_context_types`, `guardrail_metric_ids`, or `pre_period_days`. The gateway validates and accepts these in the request body but drops them all when constructing the proto. The experimentation service's `create_experiment` handler (with a comment "placeholder values land here. Phase 3 extends the proto schema…") inserts `flag_id: FlagId::new()` and `flag_rule_id: Some(RuleId::new())` — random UUIDs that fail the foreign key constraints on `experiments_flag_id_fkey` / `experiments_flag_rule_id_fkey`.
+- **Root cause:** Proto schema and service handler were intentionally deferred ("Phase 3") but never implemented.
+- **Fix:** Add `flag_id`, `flag_rule_id`, `targets_default_rule`, `unit_context_types`, `guardrail_metric_ids`, `pre_period_days` to the `Experiment` proto; update gateway to populate them; update service handler to use them.
+
+### BUG-026: `map_experiment_db_err` misclassifies all DB constraint violations as unique violations
+- **Phase discovered:** Phase 4 — Events + Metrics + Experiments
+- **Component:** `crates/stitchd-db/src/repository/pg/experiment.rs:814–822`
+- **Reproduction:** Any DB constraint violation during experiment INSERT — FK, check, or unique — reports as `{"error":"unique violation on: <constraint_name>"}` regardless of actual constraint type
+- **Expected:** Foreign key violations → `{"error":"referenced entity does not exist: <constraint>"}`, check violations → appropriate error, unique violations → `{"error":"unique violation on: <field>"}`
+- **Actual:** `map_experiment_db_err` checks only `dbe.constraint()` (the constraint name) and always maps to `RepositoryError::UniqueViolation`. Specifically: FK violation on `experiments_flag_rule_id_fkey` is reported as "unique violation on: experiments_flag_rule_id_fkey", mixing up error semantics and leaking internal constraint names.
+- **Root cause:** Function uses a single `if let` that ignores the SQL error code (SQLSTATE 23505/23503/23514).
+- **Fix:** Check `dbe.code()` before the constraint name: `"23505"` → `UniqueViolation`, `"23503"` → `ForeignKeyViolation`, others → `Database`.
+
+### BUG-027: `PATCH /v1/metrics/{id}` requires full metric body — partial update (e.g. rename only) is not supported
+- **Phase discovered:** Phase 4 — Events + Metrics + Experiments
+- **Component:** `crates/stitchd-gateway/src/routes/metrics.rs` (update_metric handler)
+- **Reproduction:** `PATCH /v1/metrics/{id}` with `{"name":"new name","expected_version":1}` → 400 `{"error":"invalid request body: missing field 'kind'"}`
+- **Expected:** PATCH semantics — only include fields to change; omitted fields retain current values
+- **Actual:** Handler deserializes a `CreateMetricBody`-equivalent struct where `kind` (and its associated aggregation/ratio/funnel sub-fields) is required even for simple name or description changes.
+- **Fix:** Make `kind` and all metric-type-specific fields optional in the update body struct; merge only provided fields at the service layer.
+
+---

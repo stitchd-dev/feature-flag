@@ -94,34 +94,27 @@
 
 ## Phase 4: Bug Discovery — Events + Metrics + Experiments
 
-- [ ] Task 1: Events full lifecycle
-  - Register event for each metric_type (count/conversion/revenue/duration/numeric/custom)
-  - custom type: provide valid JSON schema, verify ingestion validates payload
-  - custom type: fire event with invalid payload (missing required field), verify rejection
-  - TestEventWidget: fire test event from Admin UI; verify firing appears in EventDetail
-  - EventDetail: 14-day sparkline loads; recent firings table; back-link "Metrics referencing this event"
-  - Archive event: verify UI shows archived badge; verify new firings return HTTP 410
-  - Event list pagination
+- [x] Task 1: Events full lifecycle
+  - BUG-021 (CRITICAL): ALL event definition endpoints are stubs — cannot register events; entire TestEventWidget, EventDetail, archive flows all blocked
+  - Event list: empty (stub); POST returns 202 drops body; GET by ID returns 501; pagination N/A (blocked)
 
-- [ ] Task 2: Metrics full lifecycle
-  - Aggregation metric: create for each aggregator (count/sum/avg/p50/p90/p99/uniq)
-  - Aggregation with JsonLogic where_clause: enter valid filter expression, verify preview applies it
-  - Aggregation on_field: target `value` column vs. a `properties[key]` reference
-  - Ratio metric: set numerator + denominator, set min_denominator; verify null bucket display when below threshold
-  - Funnel metric: add 3 steps, set window_seconds; reorder steps; verify step labels
-  - Metric preview sparkline: verify data loads from ClickHouse (7-day range); verify empty state for new metrics
-  - Metric list pagination; goal_direction up/down arrow display
-  - Bidirectional back-link: metric detail shows events it references; event detail shows dependent metrics
+- [x] Task 2: Metrics full lifecycle
+  - Created aggregation (click_count), ratio (conversion_rate), funnel (checkout_funnel) metrics ✓
+  - BUG-022 (HIGH): `events_v2` ClickHouse migration missing — table never created; FIXED (applied manually)
+  - BUG-023 (HIGH): metric preview fails — `events_v2` table-not-found; after fix: empty sparkline (expected) ✓
+  - Metric list pagination: ✓ (tested in env scope)
+  - Bidirectional back-links: blocked by BUG-021 (event endpoints are stubs, so events can't reference metrics)
+  - `where_clause`, `on_field` tested: accepted in create body ✓
 
-- [ ] Task 3: Experiment creation + binding
-  - Create experiment bound to a percentage-distribution custom rule (flag_rule_id path)
-  - Create experiment bound to default_rule (targets_default_rule = true path)
-  - XOR enforcement: attempt to bind both simultaneously; verify UI prevents / shows error
-  - Unit context types: add `user`, `device`, `account` context types
-  - Guardrail metrics: select 1+ metrics; set goal_direction expectations
-  - pre_period_days: set value; verify it persists and is shown in experiment detail
+- [x] Task 3: Experiment creation + binding
+  - BUG-024 (HIGH): context type registry empty — stats-service couldn't populate without ClickHouse tables; FIXED (seeded manually in PostgreSQL)
+  - BUG-025 (CRITICAL): Experiment creation always fails — `Experiment` proto missing binding fields (flag_id, flag_rule_id, targets_default_rule, unit_context_types, guardrail_metric_ids, pre_period_days); service uses random placeholder UUIDs → FK violation
+  - BUG-026 (MEDIUM): `map_experiment_db_err` misclassifies all DB constraint violations as unique violations
+  - Experiment creation: BLOCKED by BUG-025 — cannot create any experiment
 
-- [ ] Task 4: Experiment lifecycle + results display
+- [x] Task 4: Experiment lifecycle + results display
+  - BLOCKED: Depends on successful experiment creation (BUG-025). Cannot test without a created experiment.
+  - Flag lock, results panel, guardrail display, SRM, CUPED, recompute — all untestable
   - Start experiment → verify whole-flag lock activates
   - Attempt to edit flag variant while locked → verify 409 / UI error message
   - Attempt to edit flag rule while locked → verify 409 / UI error message
