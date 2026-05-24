@@ -163,21 +163,21 @@
 
 ## Phase 6: Bug Fixes
 
-- [ ] Task 1: Fix critical severity bugs (from bugs.md)
+- [x] Task 1: Fix critical severity bugs (from bugs.md) (435630c)
   - For each critical bug: implement code fix, write targeted test, smoke-check on live stack
   - Run `cargo test -p <affected_crate>` after each backend fix
   - Run `npm run lint` + `node_modules/.bin/tsc --noEmit` after each frontend fix
 
-- [ ] Task 2: Fix high severity bugs (from bugs.md)
+- [x] Task 2: Fix high severity bugs (from bugs.md) (5e49d00, de5a233, afc4a43)
   - Same fix protocol as Task 1; critical must be complete before starting high
 
-- [ ] Task 3: Fix medium severity bugs (from bugs.md)
+- [x] Task 3: Fix medium severity bugs (from bugs.md) (5e49d00, de5a233, afc4a43)
   - Same fix protocol; targeted test where warranted
 
-- [ ] Task 4: Fix low severity bugs (from bugs.md)
+- [x] Task 4: Fix low severity bugs (from bugs.md) (4b01e11)
   - Fix and smoke-check; test only where behaviour change is non-trivial
 
-- [ ] Task 5: Regenerate sqlx offline cache + full CI gate run
+- [x] Task 5: Regenerate sqlx offline cache + full CI gate run (1c6e426)
   - `SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --tests`
   - `cargo fmt --all --check`
   - `cargo clippy --workspace --all-targets -- -D warnings`
