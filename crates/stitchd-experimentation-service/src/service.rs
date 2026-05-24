@@ -142,6 +142,20 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
         created_at_ms: e.created_at.timestamp_millis(),
         updated_at_ms: e.updated_at.timestamp_millis(),
         version: u64::try_from(e.version).unwrap_or(1),
+        flag_id: e.flag_id.to_string(),
+        flag_rule_id: e
+            .flag_rule_id
+            .as_ref()
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        targets_default_rule: e.targets_default_rule,
+        unit_context_types: e.unit_context_types.clone(),
+        guardrail_metric_ids: e
+            .guardrail_metric_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect(),
+        pre_period_days: e.pre_period_days,
     }
 }
 
@@ -258,17 +272,37 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .map_err(|_| Status::invalid_argument("invalid environment_id UUID"))?;
         let env_id = EnvironmentId::from_uuid(env_uuid);
 
+        let flag_id = uuid::Uuid::parse_str(&proto_exp.flag_id)
+            .map(stitchd_core::id::FlagId::from_uuid)
+            .map_err(|_| Status::invalid_argument("invalid flag_id UUID"))?;
+
+        let flag_rule_id = if proto_exp.flag_rule_id.is_empty() {
+            None
+        } else {
+            Some(
+                uuid::Uuid::parse_str(&proto_exp.flag_rule_id)
+                    .map(stitchd_core::id::RuleId::from_uuid)
+                    .map_err(|_| Status::invalid_argument("invalid flag_rule_id UUID"))?,
+            )
+        };
+
+        let guardrail_metric_ids = proto_exp
+            .guardrail_metric_ids
+            .iter()
+            .map(|s| {
+                uuid::Uuid::parse_str(s)
+                    .map(stitchd_core::id::MetricId::from_uuid)
+                    .map_err(|_| Status::invalid_argument("invalid guardrail_metric_id UUID"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         let now = Utc::now();
-        // Proto layer doesn't yet carry the new attribution fields; placeholder
-        // values land here. Phase 3 (Gateway API Surface) extends the proto
-        // schema with flag_id/targets_default_rule/guardrails/pre_period_days/
-        // unit_context_types and switches gateway validators on accordingly.
         let experiment = Experiment {
             id: ExperimentId::new(),
             environment_id: env_id,
-            flag_id: stitchd_core::id::FlagId::new(),
-            flag_rule_id: Some(stitchd_core::id::RuleId::new()),
-            targets_default_rule: false,
+            flag_id,
+            flag_rule_id,
+            targets_default_rule: proto_exp.targets_default_rule,
             name: proto_exp.name.clone(),
             description: if proto_exp.description.is_empty() {
                 None
@@ -277,11 +311,15 @@ impl ExperimentationService for ExperimentationServiceImpl {
             },
             hypothesis: None,
             metric_ids: vec![],
-            guardrail_metric_ids: vec![],
+            guardrail_metric_ids,
             traffic_allocation: 100.0,
             min_sample_size: None,
-            pre_period_days: 0,
-            unit_context_types: vec!["user".to_string()],
+            pre_period_days: proto_exp.pre_period_days,
+            unit_context_types: if proto_exp.unit_context_types.is_empty() {
+                vec!["user".to_string()]
+            } else {
+                proto_exp.unit_context_types.clone()
+            },
             scheduled_start_at: None,
             scheduled_end_at: None,
             status: ExperimentStatus::Draft,
@@ -1503,16 +1541,8 @@ mod tests {
         let (env_id, _) = env_uuid();
         let svc = make_service(env_id);
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
-            id: String::new(),
             environment_id: "not-a-uuid".to_string(),
-            name: "Test".to_string(),
-            description: String::new(),
-            flag_key: String::new(),
-            status: 0,
-            variant_keys: vec![],
-            created_at_ms: 0,
-            updated_at_ms: 0,
-            version: 0,
+            ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
             experiment: Some(proto_exp),
@@ -1527,16 +1557,11 @@ mod tests {
         let (env_id, env_id_str) = env_uuid();
         let svc = make_service(env_id);
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
-            id: String::new(),
             environment_id: env_id_str.clone(),
             name: "My Experiment".to_string(),
             description: "Testing".to_string(),
-            flag_key: String::new(),
-            status: 0,
-            variant_keys: vec![],
-            created_at_ms: 0,
-            updated_at_ms: 0,
-            version: 0,
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
             experiment: Some(proto_exp),
@@ -1558,16 +1583,10 @@ mod tests {
         );
         let env_id = EnvironmentId::new();
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
-            id: String::new(),
             environment_id: env_id.to_string(),
             name: "Fail".to_string(),
-            description: String::new(),
-            flag_key: String::new(),
-            status: 0,
-            variant_keys: vec![],
-            created_at_ms: 0,
-            updated_at_ms: 0,
-            version: 0,
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
             experiment: Some(proto_exp),
@@ -1903,17 +1922,13 @@ mod tests {
         let (env_id, env_id_str) = env_uuid();
         let svc = make_service(env_id); // flag_client = None
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
-            id: String::new(),
             environment_id: env_id_str.clone(),
             name: "Active Experiment".to_string(),
-            description: String::new(),
             flag_key: "my-flag".to_string(),
+            flag_id: uuid::Uuid::new_v4().to_string(),
             // ACTIVE status
             status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
-            variant_keys: vec![],
-            created_at_ms: 0,
-            updated_at_ms: 0,
-            version: 0,
+            ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
             experiment: Some(proto_exp),
@@ -1928,16 +1943,12 @@ mod tests {
         let (env_id, env_id_str) = env_uuid();
         let svc = make_service(env_id);
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
-            id: String::new(),
             environment_id: env_id_str.clone(),
             name: "Active No Key".to_string(),
-            description: String::new(),
-            flag_key: String::new(), // empty key → skip verification
+            flag_id: uuid::Uuid::new_v4().to_string(),
+            // empty flag_key → skip flag verification
             status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
-            variant_keys: vec![],
-            created_at_ms: 0,
-            updated_at_ms: 0,
-            version: 0,
+            ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
             experiment: Some(proto_exp),

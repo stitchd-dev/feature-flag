@@ -15,16 +15,23 @@ enum ExperimentStatus {
 // ─── Experiment definition ────────────────────────────────────────────────────
 
 message Experiment {
-  string           id             = 1;
-  string           environment_id = 2;
-  string           name           = 3;
-  string           description    = 4;
-  string           flag_key       = 5;
-  ExperimentStatus status         = 6;
-  repeated string  variant_keys   = 7;
-  int64            created_at_ms  = 8;
-  int64            updated_at_ms  = 9;
-  uint64           version        = 10;
+  string           id                   = 1;
+  string           environment_id       = 2;
+  string           name                 = 3;
+  string           description          = 4;
+  string           flag_key             = 5;
+  ExperimentStatus status               = 6;
+  repeated string  variant_keys         = 7;
+  int64            created_at_ms        = 8;
+  int64            updated_at_ms        = 9;
+  uint64           version              = 10;
+  // Binding fields (previously missing — BUG-025)
+  string           flag_id              = 11;
+  string           flag_rule_id         = 12;  // empty string = targets_default_rule
+  bool             targets_default_rule = 13;
+  repeated string  unit_context_types   = 14;
+  repeated string  guardrail_metric_ids = 15;
+  uint32           pre_period_days      = 16;
 }
 
 // ─── Iteration (a single run of an experiment) ────────────────────────────────

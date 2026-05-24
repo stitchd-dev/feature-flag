@@ -55,6 +55,12 @@ pub struct CreateExperimentBody {
     /// environment.
     #[serde(default)]
     pub unit_context_types: Vec<String>,
+    /// Optional metric UUIDs to treat as guardrails (direction-violation alerts).
+    #[serde(default)]
+    pub guardrail_metric_ids: Vec<String>,
+    /// CUPED pre-period window in days; `0` disables variance reduction.
+    #[serde(default)]
+    pub pre_period_days: u32,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -314,13 +320,15 @@ pub(crate) struct ExperimentBindingInputs {
     pub unit_context_types: Vec<String>,
 }
 
-/// Validate the four binding invariants from spec §2. Returns
-/// `Err(GatewayError::ExperimentBindingInvalid)` (HTTP 422) on the first
-/// violation; success is a no-op.
+/// Validate the four binding invariants from spec §2. Returns the resolved
+/// `flag_id` string on success, or `Err(GatewayError::ExperimentBindingInvalid)`
+/// (HTTP 422) on the first violation.
 ///
 /// `flag_lookup` is a closure injected by the caller so tests can stub it
 /// without spinning up a full mock FlagService. In production it calls
 /// `state.flag_client.get_flag(...)` to retrieve the flag + its rules.
+/// The closure is always called (for both `flag_rule_id` and
+/// `targets_default_rule` cases) so the gateway can obtain `flag_id`.
 ///
 /// `context_types_lookup` is similarly injected; in production it calls
 /// `state.analytics_client.list_context_types(...)`.
@@ -328,7 +336,7 @@ pub(crate) async fn validate_experiment_binding<F, FFut, G, GFut>(
     inputs: &ExperimentBindingInputs,
     flag_lookup: F,
     context_types_lookup: G,
-) -> Result<(), GatewayError>
+) -> Result<String, GatewayError>
 where
     F: FnOnce(String, String) -> FFut,
     FFut:
@@ -373,26 +381,23 @@ where
         }
     }
 
+    // ── Flag lookup — always fetch the flag to obtain its UUID (flag_id) and
+    // validate the rule kind when `flag_rule_id` is set.
+    let flag_key =
+        inputs
+            .flag_key
+            .clone()
+            .ok_or_else(|| GatewayError::ExperimentBindingInvalid {
+                code: "missing_flag_key",
+                message: "flag_key is required".to_string(),
+            })?;
+    let flag = flag_lookup(inputs.environment_id.clone(), flag_key)
+        .await
+        .map_err(GatewayError::from)?;
+
     // ── Rule kind — when bound to a flag rule, the rule's output must be a
     // percentage rollout (Allocation).
-    if let Some(rule_id) = &inputs.flag_rule_id {
-        let flag_key =
-            inputs
-                .flag_key
-                .clone()
-                .ok_or_else(|| GatewayError::ExperimentBindingInvalid {
-                    code: "invalid_rule_kind",
-                    message: "flag_key is required when flag_rule_id is set".to_string(),
-                })?;
-        let flag = flag_lookup(inputs.environment_id.clone(), flag_key)
-            .await
-            .map_err(GatewayError::from)?;
-        // The proto FlagRule doesn't carry its own UUID today; we use rule
-        // index (1-based) or skip the per-rule match if rule_id parses to a
-        // non-index string. The substantive constraint is "at least one rule
-        // is a percentage rollout AND the bound rule is one of them" — which
-        // can be tightened in Phase 7 when the proto carries rule IDs.
-        let _ = rule_id; // index/UUID tightening deferred to Phase 7
+    if inputs.flag_rule_id.is_some() {
         let any_percentage_rule = flag.rules.iter().any(|r| {
             matches!(
                 r.output,
@@ -411,7 +416,7 @@ where
     //    accept `targets_default_rule = true` here, deferring the
     //    default_rule_distribution presence check to Task 7.5.
 
-    Ok(())
+    Ok(flag.flag_id)
 }
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
@@ -482,7 +487,7 @@ pub async fn create_experiment(
         targets_default_rule: body.targets_default_rule,
         unit_context_types: body.unit_context_types.clone(),
     };
-    validate_experiment_binding(
+    let flag_id = validate_experiment_binding(
         &inputs,
         |env_id, flag_key| {
             let state = Arc::clone(&state);
@@ -530,9 +535,15 @@ pub async fn create_experiment(
         environment_id,
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
-        flag_key: body.flag_key.unwrap_or_default(),
+        flag_key: body.flag_key.clone().unwrap_or_default(),
         variant_keys: body.variant_keys.unwrap_or_default(),
         status: ExperimentStatus::Draft as i32,
+        flag_id,
+        flag_rule_id: body.flag_rule_id.unwrap_or_default(),
+        targets_default_rule: body.targets_default_rule,
+        unit_context_types: body.unit_context_types,
+        guardrail_metric_ids: body.guardrail_metric_ids,
+        pre_period_days: body.pre_period_days,
         ..Default::default()
     };
     let req = tonic::Request::new(CreateExperimentRequest {
