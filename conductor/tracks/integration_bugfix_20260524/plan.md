@@ -129,7 +129,7 @@
   - On-demand recompute: click recompute button; verify `last_computed_at` updates
   - Stop experiment → verify whole-flag lock lifts; verify flag edits succeed again
 
-- [ ] Task: Conductor - User Manual Verification 'Bug Discovery — Events + Metrics + Experiments' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Bug Discovery — Events + Metrics + Experiments' (Protocol in workflow.md)
 
 ## Phase 5: Bug Discovery — SDK Integration + UI/UX Polish
 
@@ -186,4 +186,5 @@
   - `npm run lint`
   - All gates must pass before this phase is considered complete
 
-- [ ] Task: Conductor - User Manual Verification 'Bug Fixes' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Bug Fixes' (Protocol in workflow.md)
+  - Experiment detail page end-to-end verified: results table renders with correct variant_keys, status, metrics (a1f7973, b001e95)
