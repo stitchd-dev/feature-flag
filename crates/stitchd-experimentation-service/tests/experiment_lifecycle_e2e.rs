@@ -376,6 +376,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             context_key: "alice".to_string(),
             params_json: "{}".to_string(),
             matched_rule_id: None,
+            evaluation_id: uuid::Uuid::new_v4(),
         },
         // (b) user/bob — default-rule fallthrough, targeting_on -> attributes
         EvalLogRow {
@@ -389,6 +390,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             context_key: "bob".to_string(),
             params_json: "{}".to_string(),
             matched_rule_id: None,
+            evaluation_id: uuid::Uuid::new_v4(),
         },
         // (c) account/acme — default-rule fallthrough, targeting_on -> attributes
         EvalLogRow {
@@ -402,6 +404,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             context_key: "acme".to_string(),
             params_json: "{}".to_string(),
             matched_rule_id: None,
+            evaluation_id: uuid::Uuid::new_v4(),
         },
         // (d) user/alice — RE-EXPOSURE with a different variant -> ITT keeps (a)
         EvalLogRow {
@@ -415,6 +418,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             context_key: "alice".to_string(),
             params_json: "{}".to_string(),
             matched_rule_id: None,
+            evaluation_id: uuid::Uuid::new_v4(),
         },
         // (e) user/eve — targeting_on=false (disabled flag) -> filtered
         EvalLogRow {
@@ -428,6 +432,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             context_key: "eve".to_string(),
             params_json: "{}".to_string(),
             matched_rule_id: None,
+            evaluation_id: uuid::Uuid::new_v4(),
         },
         // (f) session/s99 — out-of-scope context_type -> filtered
         EvalLogRow {
@@ -441,6 +446,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             context_key: "s99".to_string(),
             params_json: "{}".to_string(),
             matched_rule_id: None,
+            evaluation_id: uuid::Uuid::new_v4(),
         },
         // (g) user/mallory — matched the wrong rule -> filtered (default-rule
         //     experiment only attributes NULL matched_rule_id)
@@ -455,6 +461,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             context_key: "mallory".to_string(),
             params_json: "{}".to_string(),
             matched_rule_id: Some(seed.other_rule),
+            evaluation_id: uuid::Uuid::new_v4(),
         },
     ];
     insert_eval_log_rows(&client, &rows)

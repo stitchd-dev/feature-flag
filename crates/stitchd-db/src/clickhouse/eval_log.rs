@@ -48,6 +48,15 @@ pub struct EvalLogRow {
     /// to scope exposures to the experiment's bound rule (or default-rule).
     #[serde(with = "clickhouse::serde::uuid::option")]
     pub matched_rule_id: Option<Uuid>,
+    /// Groups all context rows produced from the same evaluation call.
+    ///
+    /// When a flag is evaluated against a multi-context bundle (e.g. `user` +
+    /// `device`), one row is emitted per context type. All sibling rows from
+    /// the same call share this UUID so that downstream queries can reconstruct
+    /// the full bundle (e.g. `experiment_assignments_mv` joining the unit
+    /// context to its paired device context for cross-context experiments).
+    #[serde(with = "clickhouse::serde::uuid")]
+    pub evaluation_id: Uuid,
 }
 
 // ── Write ────────────────────────────────────────────────────────────────────
@@ -92,6 +101,7 @@ mod tests {
             context_key: "alice".into(),
             params_json: params_json.into(),
             matched_rule_id: None,
+            evaluation_id: Uuid::new_v4(),
         }
     }
 

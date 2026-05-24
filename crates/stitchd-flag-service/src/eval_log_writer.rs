@@ -59,8 +59,12 @@ pub fn spawn_eval_log_write(
 
 /// Build `EvalLogRow`s from `(context, variant_key, matched_rule_id)` tuples.
 ///
-/// One row per `Context` in each `EvaluationContext`. Private parameter values
-/// are replaced with `"********"`; keys are preserved.
+/// One row per `Context` in each `EvaluationContext`. All rows produced from
+/// the same `EvaluationContext` (i.e. the same flag evaluation call against a
+/// context bundle) share the same randomly-generated `evaluation_id` UUID so
+/// that downstream queries can reconstruct the full bundle.
+///
+/// Private parameter values are replaced with `"********"`; keys are preserved.
 ///
 /// `matched_rule_id` is taken from the input tuple. When `targeting_on = false`
 /// the value is forced to `None` — no rule evaluation runs when the flag's
@@ -77,6 +81,9 @@ pub fn build_eval_log_rows(
 ) -> Vec<EvalLogRow> {
     let mut rows = Vec::new();
     for (eval_ctx, variant_key, matched_rule_id) in contexts_with_variants {
+        // One evaluation_id per EvaluationContext bundle so sibling context
+        // rows (user + device + etc.) can be grouped later.
+        let evaluation_id = Uuid::new_v4();
         // Defensive: enforce the invariant — no rule evaluation runs when
         // targeting is off, so `matched_rule_id` MUST be None in that case.
         let matched_rule_id = if targeting_on { *matched_rule_id } else { None };
@@ -93,6 +100,7 @@ pub fn build_eval_log_rows(
                 context_key: ctx.key.clone(),
                 params_json,
                 matched_rule_id,
+                evaluation_id,
             });
         }
     }
@@ -162,6 +170,54 @@ mod tests {
         assert_eq!(rows[0].context_key, "alice");
         assert_eq!(rows[1].context_type, "org");
         assert_eq!(rows[1].context_key, "acme");
+    }
+
+    #[test]
+    fn sibling_context_rows_share_evaluation_id() {
+        // BUG-030: all rows from the same EvaluationContext bundle must share
+        // a single evaluation_id so cross-context bundle attribution works.
+        let (env_id, flag_id) = nil_ids();
+        let ec = eval_ctx(vec![
+            Context::new("user", "alice"),
+            Context::new("device", "iphone-42"),
+        ]);
+        let rows = build_eval_log_rows(
+            env_id,
+            flag_id,
+            "cross-ctx-flag",
+            true,
+            Utc::now(),
+            &[(ec, "on".to_string(), None)],
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].evaluation_id, rows[1].evaluation_id,
+            "sibling context rows from the same evaluation bundle must share evaluation_id"
+        );
+    }
+
+    #[test]
+    fn distinct_evaluations_get_distinct_evaluation_ids() {
+        // Two separate EvaluationContexts (e.g. two users) must not share an evaluation_id.
+        let (env_id, flag_id) = nil_ids();
+        let ec1 = eval_ctx(vec![Context::new("user", "alice")]);
+        let ec2 = eval_ctx(vec![Context::new("user", "bob")]);
+        let rows = build_eval_log_rows(
+            env_id,
+            flag_id,
+            "flag",
+            true,
+            Utc::now(),
+            &[
+                (ec1, "on".to_string(), None),
+                (ec2, "off".to_string(), None),
+            ],
+        );
+        assert_eq!(rows.len(), 2);
+        assert_ne!(
+            rows[0].evaluation_id, rows[1].evaluation_id,
+            "distinct evaluations must have distinct evaluation_ids"
+        );
     }
 
     #[test]
