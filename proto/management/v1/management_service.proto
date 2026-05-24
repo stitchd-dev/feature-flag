@@ -14,6 +14,7 @@ message CreateOrgResponse {
   // The default project auto-created with the org.
   string project_id    = 3;
   string project_name  = 4;
+  string created_at    = 5;
 }
 
 // ─── Project ──────────────────────────────────────────────────────────────────

@@ -114,7 +114,7 @@ pub async fn create_org(
         Json(OrgJson {
             org_id: r.org_id,
             org_name: r.org_name,
-            created_at: None,
+            created_at: Some(r.created_at),
         }),
     ))
 }

@@ -496,7 +496,7 @@ pub async fn remove_org_user(
 
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
-    use axum::routing::{delete, get, patch, post};
+    use axum::routing::{delete, get, patch};
     axum::Router::new()
         .route(
             "/v1/management/orgs/{org_id}/projects",

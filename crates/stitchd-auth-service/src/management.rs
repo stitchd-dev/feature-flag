@@ -170,9 +170,10 @@ impl ManagementService for ManagementServiceImpl {
 
         Ok(Response::new(CreateOrgResponse {
             org_id: org.id.to_string(),
-            org_name: org.name,
+            org_name: org.name.clone(),
             project_id: default_project.id.to_string(),
             project_name: default_project.name,
+            created_at: org.created_at.to_rfc3339(),
         }))
     }
 

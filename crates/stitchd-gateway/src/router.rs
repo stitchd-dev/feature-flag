@@ -240,6 +240,10 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/segments/{segment_id}/entries/lookup",
             get(segments::lookup_segment_entry),
         )
+        .route(
+            "/v1/environments/{environment_id}/segments",
+            get(segments::list_segments_in_env),
+        )
         // Events — read
         .route(
             "/v1/environments/{environment_id}/event-definitions",
