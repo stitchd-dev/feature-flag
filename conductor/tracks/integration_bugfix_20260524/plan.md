@@ -2,32 +2,27 @@
 
 ## Phase 1: Infrastructure & Full-Stack Bringup
 
-- [ ] Task 1: Start Docker databases
+- [x] Task 1: Start Docker databases
   - `docker compose up postgres clickhouse scylladb -d --wait`
   - Run DB migrations: `cargo sqlx migrate run --source crates/stitchd-db/migrations`
   - Verify all three databases are healthy (check container logs + health status)
 
-- [ ] Task 2: Build and start all backend services in-process
+- [x] Task 2: Build and start all backend services in-process (b644d80)
   - `cargo build --workspace`
   - Start processes: stitchd-auth-service, stitchd-flag-service, stitchd-segmentation-service, stitchd-analytics-service, stitchd-experimentation-service, stitchd-stats-service, stitchd-gateway
   - Each service uses env vars for gRPC port, DB URLs, metrics port (see tech-stack.md for naming)
   - Verify gateway responds at `http://localhost:8080/health` (or equivalent)
   - Any service that panics or refuses to start is recorded as a critical bug
+  - BUG-001: STITCHD_AUTH_ENCRYPTION_KEY missing from docker-compose.yml → fixed
+  - BUG-002: stats-service default gRPC ports swapped → fixed (b644d80)
+  - BUG-003: context_refresher queries stale table → fixed (a7bc8f5)
 
-- [ ] Task 3: Start Admin UI and initialise bugs.md
-  - `cd admin && npm install && npm run dev`
-  - Verify UI loads at http://localhost:5173 (Vite default)
-  - Verify `/api` proxy routes correctly to gateway on :8080
-  - Create `bugs.md` in `conductor/tracks/integration_bugfix_20260524/` with template:
-    ```
-    # Bugs: integration_bugfix_20260524
-    ## Critical
-    ## High
-    ## Medium
-    ## Low
-    ```
+- [x] Task 3: Start Admin UI and initialise bugs.md (a7bc8f5)
+  - `cd admin && npm run dev` → running at http://localhost:5174/
+  - Admin UI loads; `/api` proxy confirmed working (JWT login via proxy)
+  - bugs.md created with BUG-001, BUG-002, BUG-003
 
-- [ ] Task: Conductor - User Manual Verification 'Infrastructure & Full-Stack Bringup' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Infrastructure & Full-Stack Bringup' (Protocol in workflow.md)
 
 ## Phase 2: Bug Discovery — Auth + Org Management
 
