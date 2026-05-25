@@ -998,7 +998,6 @@ fn extract_hash_inputs_from_allocation(alloc: &serde_json::Value) -> Option<Vec<
     None
 }
 
-
 /// Convert a single `RuleBody` JSON to its proto representation. Validates
 /// `hash_inputs` before populating the proto. Returns a structured error
 /// when validation fails so the caller can map to HTTP 400.
