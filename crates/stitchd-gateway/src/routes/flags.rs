@@ -1382,13 +1382,10 @@ pub struct RuleTraceJson {
     pub rule_index: usize,
     pub rule_name: Option<String>,
     pub outcome: String,
-    pub conditions: Vec<ConditionTraceJson>,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ConditionTraceJson {
-    pub predicate: String,
-    pub result: bool,
+    /// Full condition tree (AND / OR / NOT / Leaf). `null` for skipped rules
+    /// and the implicit catch-all that has no explicit conditions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition_tree: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1512,86 +1509,83 @@ pub async fn evaluate_preview(
         })
         .collect();
 
-    let results: Vec<PreviewResultJson> = raw_results
-        .into_iter()
-        .map(|v| {
-            let context_index = v["context_index"].as_u64().unwrap_or(0) as usize;
-            // Extract context_key from the flat sub-context list at the
-            // matching global index. Falls back to empty for out-of-range
-            // (defensive — should not happen).
-            let context_key = flat_subcontexts
-                .get(context_index)
-                .and_then(|c| c["key"].as_str())
-                .unwrap_or("")
-                .to_string();
-            let variant_key = v["variant_key"].as_str().unwrap_or("").to_string();
-            let variant_value = v["variant_value"].clone();
-            let fired_rule_index = v["fired_rule_index"].as_u64().map(|n| n as usize);
-            let fired_rule_name = v["fired_rule_name"].as_str().map(str::to_string);
-            let rule_traces = v["rule_traces"]
-                .as_array()
-                .map(|arr| {
-                    arr.iter()
-                        .map(|t| RuleTraceJson {
-                            rule_index: t["rule_index"].as_u64().unwrap_or(0) as usize,
-                            rule_name: t["rule_name"].as_str().map(str::to_string),
-                            outcome: t["outcome"].as_str().unwrap_or("no_match").to_string(),
-                            conditions: t["conditions"]
-                                .as_array()
-                                .map(|cs| {
-                                    cs.iter()
-                                        .map(|c| ConditionTraceJson {
-                                            predicate: c["predicate"]
-                                                .as_str()
-                                                .unwrap_or("")
-                                                .to_string(),
-                                            result: c["result"].as_bool().unwrap_or(false),
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let rollout_debug = v.get("rollout_debug").and_then(|rd| {
-                if rd.is_null() {
-                    None
-                } else {
-                    Some(RolloutDebugJson {
-                        hash_input: rd["hash_input"].as_str().unwrap_or("").to_string(),
-                        bucket: rd["bucket"].as_u64().unwrap_or(0) as u32,
-                        variant_ranges: rd["variant_ranges"]
-                            .as_array()
-                            .map(|arr| {
-                                arr.iter()
-                                    .map(|r| VariantRangeJson {
-                                        variant_key: r["variant_key"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        from: r["from"].as_u64().unwrap_or(0) as u32,
-                                        to: r["to"].as_u64().unwrap_or(0) as u32,
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default(),
+    // The entire input is ONE evaluation bundle — take the first result only.
+    // All sub-contexts share the same rule evaluation so subsequent results
+    // would be identical; exposing them as multiple rows was confusing.
+    let parse_result = |v: &serde_json::Value| -> PreviewResultJson {
+        let context_index = v["context_index"].as_u64().unwrap_or(0) as usize;
+        let context_key = flat_subcontexts
+            .get(context_index)
+            .and_then(|c| c["key"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let variant_key = v["variant_key"].as_str().unwrap_or("").to_string();
+        let variant_value = v["variant_value"].clone();
+        let fired_rule_index = v["fired_rule_index"].as_u64().map(|n| n as usize);
+        let fired_rule_name = v["fired_rule_name"].as_str().map(str::to_string);
+        let rule_traces = v["rule_traces"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|t| RuleTraceJson {
+                        rule_index: t["rule_index"].as_u64().unwrap_or(0) as usize,
+                        rule_name: t["rule_name"].as_str().map(str::to_string),
+                        outcome: t["outcome"].as_str().unwrap_or("no_match").to_string(),
+                        // Pass the condition_tree through as-is (already a
+                        // tagged ConditionNode JSON from the core).
+                        condition_tree: {
+                            let ct = &t["condition_tree"];
+                            if ct.is_null() || ct.is_object() && ct.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+                                None
+                            } else if ct.is_object() {
+                                Some(ct.clone())
+                            } else {
+                                None
+                            }
+                        },
                     })
-                }
-            });
-            PreviewResultJson {
-                context_index,
-                context_key,
-                variant_key,
-                variant_value,
-                disabled: !flag_enabled,
-                fired_rule_index,
-                fired_rule_name,
-                rule_traces,
-                rollout_debug,
+                    .collect()
+            })
+            .unwrap_or_default();
+        let rollout_debug = v.get("rollout_debug").and_then(|rd| {
+            if rd.is_null() {
+                None
+            } else {
+                Some(RolloutDebugJson {
+                    hash_input: rd["hash_input"].as_str().unwrap_or("").to_string(),
+                    bucket: rd["bucket"].as_u64().unwrap_or(0) as u32,
+                    variant_ranges: rd["variant_ranges"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|r| VariantRangeJson {
+                                    variant_key: r["variant_key"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    from: r["from"].as_u64().unwrap_or(0) as u32,
+                                    to: r["to"].as_u64().unwrap_or(0) as u32,
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                })
             }
-        })
-        .collect();
+        });
+        PreviewResultJson {
+            context_index,
+            context_key,
+            variant_key,
+            variant_value,
+            disabled: !flag_enabled,
+            fired_rule_index,
+            fired_rule_name,
+            rule_traces,
+            rollout_debug,
+        }
+    };
+
+    let results: Vec<PreviewResultJson> = raw_results.iter().map(parse_result).collect();
 
     Ok((
         StatusCode::OK,

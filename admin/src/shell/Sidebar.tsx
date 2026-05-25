@@ -5,7 +5,7 @@ import { OrgSwitcher } from './OrgSwitcher'
 import { ProjectPicker } from './ProjectPicker'
 import { EnvSwitcher } from './EnvSwitcher'
 import { auth } from '../lib/auth'
-import { useOrgContext } from '../context/OrgContext'
+import { useOptionalOrgContext } from '../context/OrgContext'
 
 const SUPERADMIN_NAV = [
   { id: 'orgs', path: '/superadmin/orgs', label: 'Organisations', icon: 'home' },
@@ -124,11 +124,24 @@ export function Sidebar({ onCmdK }: SidebarProps) {
       )}
 
       <div className="sidebar-footer">
-        <div className="user-avatar">{(() => { const s = auth.getSession(); return s ? s.userId.slice(0, 2).toUpperCase() : '??' })()}</div>
-        <div className="user-meta">
-          <div className="user-name">{auth.isSystem() ? 'Super Admin' : (auth.getSession()?.email ?? 'Org User')}</div>
-          <div className="user-email" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{auth.getSession()?.userId ?? '—'}</div>
-        </div>
+        {(() => {
+          const s = auth.getSession()
+          const isSystem = auth.isSystem()
+          const email = s?.email ?? null
+          const avatarInitials = isSystem ? 'SA' : (email ? email.slice(0, 2).toUpperCase() : (s?.userId.slice(0, 2).toUpperCase() ?? '??'))
+          const rawName = s?.name && s.name.length > 0 ? s.name : null
+          const derived = email ? (email.split('@')[0].charAt(0).toUpperCase() + email.split('@')[0].slice(1)) : 'Org User'
+          const displayName = isSystem ? 'Super Admin' : (rawName ?? derived)
+          return (
+            <>
+              <div className="user-avatar">{avatarInitials}</div>
+              <div className="user-meta">
+                <div className="user-name">{displayName}</div>
+                <div className="user-email" style={{ fontFamily: 'var(--font-mono)', fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{email ?? '—'}</div>
+              </div>
+            </>
+          )
+        })()}
         <button className="icon-btn" title="Sign out" onClick={() => { auth.clearSession(); window.location.href = '/login' }}><I.lock size={14} /></button>
       </div>
     </aside>
@@ -139,7 +152,9 @@ export function TopbarNav() {
   const navigate = useNavigate()
   const location = useLocation()
   const { orgId } = useParams<{ orgId: string }>()
-  const { envId, environments } = useOrgContext()
+  const orgCtx = useOptionalOrgContext()
+  const envId = orgCtx?.envId ?? null
+  const environments = orgCtx?.environments ?? []
 
   const isOrgSection = location.pathname.startsWith('/org/')
   const activeOrgId = isOrgSection ? orgId : undefined

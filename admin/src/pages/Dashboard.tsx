@@ -39,10 +39,13 @@ export function Dashboard() {
   const [flagsCount, setFlagsCount] = useState<number | null>(null)
   const [flagsLoading, setFlagsLoading] = useState(false)
 
-  // Resolve a friendly org name from local org-history (set on switch/login).
+  // Resolve a friendly org name: check history first, then org list, then fall back to ID.
   const orgName = (() => {
-    const history = auth.getOrgHistory()
-    return history.find((h) => h.orgId === orgId)?.orgName ?? orgId ?? '—'
+    const fromHistory = auth.getOrgHistory().find((h) => h.orgId === orgId)?.orgName
+    if (fromHistory) return fromHistory
+    const fromList = auth.getOrgs().find((o) => o.org_id === orgId)?.org_name
+    if (fromList) return fromList
+    return orgId ?? '—'
   })()
 
   const currentProject = projects.find((p) => p.project_id === projectId) ?? null

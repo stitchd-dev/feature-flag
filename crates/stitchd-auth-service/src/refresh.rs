@@ -77,6 +77,7 @@ pub async fn refresh_token(
         user.id,
         membership.org_id,
         &user.email,
+        &user.display_name,
         membership.role,
         org.is_system,
         &user.token_secret,

@@ -47,12 +47,15 @@ export function ChooseContext() {
       const isSystem = auth.decodeIsSystem(res.access_token)
       const roles = auth.decodeRoles(res.access_token)
       const permissions = auth.decodePermissions(res.access_token)
+      const name = auth.decodeName(res.access_token)
       auth.setSession({
         token: res.access_token,
         refreshToken: res.refresh_token,
         orgId: res.org_id,
         isSystem,
         userId: session!.userId,
+        email: session!.email,
+        name,
         roles,
         permissions,
       })

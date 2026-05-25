@@ -10,7 +10,7 @@ use crate::segment::{SegmentDefinition, SegmentEvaluator};
 use crate::variants::VariantValue;
 use std::collections::{HashMap, HashSet};
 
-use super::preview::{RolloutDebug, RuleOutcome, RuleTrace, VariantRange, trace_conditions};
+use super::preview::{RolloutDebug, RuleOutcome, RuleTrace, VariantRange, build_condition_tree};
 use super::types::{
     EvalOutcome, EvaluationTrace, FlagEvaluationResult, HashInputSpec, HashSelector,
     ListMembershipIndex, TraceLevel,
@@ -194,7 +194,7 @@ fn evaluate_one(
                     rule_index: i,
                     rule_name: rule.name.clone(),
                     outcome: RuleOutcome::Skipped,
-                    conditions: Vec::new(),
+                    condition_tree: None,
                 });
             }
             continue;
@@ -276,24 +276,23 @@ fn evaluate_one(
             fired_rule_id = Some(rule.id);
 
             if want_trace {
-                let conditions = trace_conditions(&rule.condition, &input);
+                let condition_tree = Some(build_condition_tree(&rule.condition, &input));
                 rule_traces.push(RuleTrace {
                     rule_index: i,
                     rule_name: rule.name.clone(),
                     outcome: RuleOutcome::Match,
-                    conditions,
+                    condition_tree,
                 });
             }
         } else if want_trace {
-            // Bug-wub regression: capture per-leaf conditions even for
-            // non-matching rules so the preview UI can surface which leaf
-            // failed.
-            let conditions = trace_conditions(&rule.condition, &input);
+            // Capture the full condition tree even for non-matching rules so
+            // the preview UI can show exactly which sub-conditions failed.
+            let condition_tree = Some(build_condition_tree(&rule.condition, &input));
             rule_traces.push(RuleTrace {
                 rule_index: i,
                 rule_name: rule.name.clone(),
                 outcome: RuleOutcome::NoMatch,
-                conditions,
+                condition_tree,
             });
         }
     }
@@ -1363,9 +1362,12 @@ mod tests {
             rt.outcome,
             crate::evaluation::preview::RuleOutcome::Match
         ));
-        assert_eq!(rt.conditions.len(), 1);
-        assert!(rt.conditions[0].result);
-        assert_eq!(rt.conditions[0].predicate, "user.beta == true");
+        let leaf = match rt.condition_tree.as_ref().unwrap() {
+            crate::evaluation::preview::ConditionNode::Leaf { predicate, result } => (predicate.as_str(), *result),
+            other => panic!("expected Leaf, got {:?}", other),
+        };
+        assert!(leaf.1, "condition result should be true");
+        assert_eq!(leaf.0, "user.beta == true");
         assert_eq!(trace.fired_rule_id, Some(expected_rule_id));
     }
 
@@ -1396,9 +1398,12 @@ mod tests {
             rt.outcome,
             crate::evaluation::preview::RuleOutcome::NoMatch
         ));
-        // Per-leaf condition trace is populated even though the rule didn't fire.
-        assert_eq!(rt.conditions.len(), 1);
-        assert!(!rt.conditions[0].result);
+        // condition_tree is populated even though the rule didn't fire.
+        let leaf = match rt.condition_tree.as_ref().unwrap() {
+            crate::evaluation::preview::ConditionNode::Leaf { result, .. } => *result,
+            other => panic!("expected Leaf, got {:?}", other),
+        };
+        assert!(!leaf, "beta == true should be false");
     }
 
     #[test]
@@ -1444,9 +1449,9 @@ mod tests {
             trace.rule_traces[1].outcome,
             crate::evaluation::preview::RuleOutcome::Skipped
         ));
-        // Skipped rule must NOT emit per-leaf conditions (hot-path: avoid
-        // doing the per-leaf walk once we've decided a rule is skipped).
-        assert!(trace.rule_traces[1].conditions.is_empty());
+        // Skipped rule must have no condition_tree (hot-path: avoid
+        // doing the tree walk once we've decided a rule is skipped).
+        assert!(trace.rule_traces[1].condition_tree.is_none());
         // Silence unused warning for unused Condition import.
         let _ = std::marker::PhantomData::<Condition>;
     }
@@ -1583,21 +1588,24 @@ mod tests {
         );
         let trace = results[0].trace.as_ref().unwrap();
         let rt = &trace.rule_traces[0];
-        assert_eq!(rt.conditions.len(), 2);
+        let children = match rt.condition_tree.as_ref().unwrap() {
+            crate::evaluation::preview::ConditionNode::And { children, .. }
+            | crate::evaluation::preview::ConditionNode::Or  { children, .. } => children,
+            other => panic!("expected And/Or node, got {:?}", other),
+        };
+        assert_eq!(children.len(), 2);
+        let find_leaf = |pred: &str| -> bool {
+            children.iter().find_map(|n| {
+                if let crate::evaluation::preview::ConditionNode::Leaf { predicate, result } = n {
+                    if predicate.contains(pred) { return Some(*result) }
+                }
+                None
+            }).unwrap_or_else(|| panic!("{pred} leaf not found"))
+        };
         // First leaf: org.tier == enterprise → missing context resolves false.
-        let org_trace = rt
-            .conditions
-            .iter()
-            .find(|c| c.predicate.contains("org"))
-            .expect("missing-context leaf must still appear in trace");
-        assert!(!org_trace.result, "missing context resolves to false leaf");
+        assert!(!find_leaf("org"), "missing context resolves to false leaf");
         // Second leaf: user.beta == true → matched.
-        let beta_trace = rt
-            .conditions
-            .iter()
-            .find(|c| c.predicate.contains("beta"))
-            .unwrap();
-        assert!(beta_trace.result);
+        assert!(find_leaf("beta"));
     }
 
     // ── Phase 2 Tasks 5+6: cross-context hashing ───────────────────────────

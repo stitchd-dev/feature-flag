@@ -217,6 +217,7 @@ mod tests {
             user.id,
             org_id,
             &user.email,
+            &user.display_name,
             OrgRole::OrgMember,
             false,
             &user.token_secret,

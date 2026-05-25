@@ -146,6 +146,37 @@ ENGINE = MergeTree()
 ORDER BY (env_id, experiment_id, variant_key, metric_key, iteration_id);
 
 -- =============================================================================
+-- DICTIONARIES (must precede any Materialized View that references them)
+-- =============================================================================
+
+-- Active experiment iterations keyed on (env_id, flag_id, matched_rule_id, context_type).
+-- Sourced from PG view v_experiment_iterations_active; refreshed every 30-60 seconds.
+CREATE DICTIONARY IF NOT EXISTS experiment_iterations_active
+(
+    env_id          UUID,
+    flag_id         UUID,
+    matched_rule_id Nullable(UUID),
+    context_type    String,
+    iteration_id    UUID,
+    experiment_id   UUID,
+    iteration_number Int32,
+    started_at      DateTime64(3, 'UTC'),
+    ended_at        Nullable(DateTime64(3, 'UTC'))
+)
+PRIMARY KEY env_id, flag_id, matched_rule_id, context_type
+SOURCE(POSTGRESQL(
+    port 5432
+    host 'host.docker.internal'
+    user 'stitchd'
+    password 'stitchd'
+    db 'stitchd'
+    table 'public.v_experiment_iterations_active'
+    invalidate_query 'SELECT updated_at FROM public.experiment_iterations_active_audit WHERE id = 1'
+))
+LIFETIME(MIN 30 MAX 60)
+LAYOUT(COMPLEX_KEY_HASHED());
+
+-- =============================================================================
 -- MATERIALIZED VIEWS
 -- =============================================================================
 
@@ -210,34 +241,3 @@ FROM flag_evaluation_log AS e
 WHERE e.targeting_on = true
   AND dictHas('experiment_iterations_active',
               (e.env_id, e.flag_id, e.matched_rule_id, e.context_type));
-
--- =============================================================================
--- DICTIONARIES
--- =============================================================================
-
--- Active experiment iterations keyed on (env_id, flag_id, matched_rule_id, context_type).
--- Sourced from PG view v_experiment_iterations_active; refreshed every 30-60 seconds.
-CREATE DICTIONARY IF NOT EXISTS experiment_iterations_active
-(
-    env_id          UUID,
-    flag_id         UUID,
-    matched_rule_id Nullable(UUID),
-    context_type    String,
-    iteration_id    UUID,
-    experiment_id   UUID,
-    iteration_number Int32,
-    started_at      DateTime64(3, 'UTC'),
-    ended_at        Nullable(DateTime64(3, 'UTC'))
-)
-PRIMARY KEY env_id, flag_id, matched_rule_id, context_type
-SOURCE(POSTGRESQL(
-    port 5432
-    host 'host.docker.internal'
-    user 'stitchd'
-    password 'stitchd'
-    db 'stitchd'
-    table 'public.v_experiment_iterations_active'
-    invalidate_query 'SELECT updated_at FROM public.experiment_iterations_active_audit WHERE id = 1'
-))
-LIFETIME(MIN 30 MAX 60)
-LAYOUT(COMPLEX_KEY_HASHED());

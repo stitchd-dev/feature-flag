@@ -17,7 +17,7 @@ pub fn evaluate_leaf(
             value,
         } => {
             let actual = lookup_param(input, context_type, param)?;
-            Ok(actual == value)
+            Ok(actual == *value)
         }
         Condition::Ne {
             context_type,
@@ -25,7 +25,7 @@ pub fn evaluate_leaf(
             value,
         } => {
             let actual = lookup_param(input, context_type, param)?;
-            Ok(actual != value)
+            Ok(actual != *value)
         }
 
         // ── Numeric Comparisons ───────────────────────────────────────────
@@ -35,7 +35,7 @@ pub fn evaluate_leaf(
             value,
         } => {
             let actual = lookup_param(input, context_type, param)?;
-            numeric_cmp(actual, value, param, |o| o.is_lt())
+            numeric_cmp(&actual, value, param, |o| o.is_lt())
         }
         Condition::Lte {
             context_type,
@@ -43,7 +43,7 @@ pub fn evaluate_leaf(
             value,
         } => {
             let actual = lookup_param(input, context_type, param)?;
-            numeric_cmp(actual, value, param, |o| o.is_le())
+            numeric_cmp(&actual, value, param, |o| o.is_le())
         }
         Condition::Gt {
             context_type,
@@ -51,7 +51,7 @@ pub fn evaluate_leaf(
             value,
         } => {
             let actual = lookup_param(input, context_type, param)?;
-            numeric_cmp(actual, value, param, |o| o.is_gt())
+            numeric_cmp(&actual, value, param, |o| o.is_gt())
         }
         Condition::Gte {
             context_type,
@@ -59,7 +59,7 @@ pub fn evaluate_leaf(
             value,
         } => {
             let actual = lookup_param(input, context_type, param)?;
-            numeric_cmp(actual, value, param, |o| o.is_ge())
+            numeric_cmp(&actual, value, param, |o| o.is_ge())
         }
 
         // ── String Operators ──────────────────────────────────────────────
@@ -96,7 +96,7 @@ pub fn evaluate_leaf(
         } => {
             let actual = lookup_semver(input, context_type, param)?;
             let req = parse_semver_req(&format!(">={version}"), param)?;
-            Ok(req.matches(actual))
+            Ok(req.matches(&actual))
         }
         Condition::SemverTilde {
             context_type,
@@ -105,7 +105,7 @@ pub fn evaluate_leaf(
         } => {
             let actual = lookup_semver(input, context_type, param)?;
             let req = parse_semver_req(&format!("~{version}"), param)?;
-            Ok(req.matches(actual))
+            Ok(req.matches(&actual))
         }
         Condition::SemverCaret {
             context_type,
@@ -114,7 +114,7 @@ pub fn evaluate_leaf(
         } => {
             let actual = lookup_semver(input, context_type, param)?;
             let req = parse_semver_req(&format!("^{version}"), param)?;
-            Ok(req.matches(actual))
+            Ok(req.matches(&actual))
         }
 
         // ── Segment Membership ────────────────────────────────────────────
@@ -132,51 +132,60 @@ pub fn evaluate_leaf(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Look up a parameter value from the named context.
-fn lookup_param<'a>(
-    input: &'a EvaluationInput<'_>,
+///
+/// The virtual parameter `"key"` maps to the context's top-level `key` field,
+/// allowing rule conditions to match against the context key directly (e.g.
+/// `user.key == "alice"`).
+fn lookup_param(
+    input: &EvaluationInput<'_>,
     context_type: &str,
     param: &str,
-) -> Result<&'a ParameterValue, RuleEngineError> {
+) -> Result<ParameterValue, RuleEngineError> {
     let ctx = input
         .find_context(context_type)
         .ok_or_else(|| RuleEngineError::MissingContext {
             context_type: context_type.to_owned(),
         })?;
+    // "key" is a virtual parameter that resolves to the context's identity key.
+    if param == "key" {
+        return Ok(ParameterValue::Str(ctx.key.clone()));
+    }
     ctx.parameters
         .get(param)
+        .cloned()
         .ok_or_else(|| RuleEngineError::MissingParameter {
             param: param.to_owned(),
         })
 }
 
 /// Look up a parameter and assert it is `ParameterValue::Str`.
-fn lookup_str<'a>(
-    input: &'a EvaluationInput<'_>,
+fn lookup_str(
+    input: &EvaluationInput<'_>,
     context_type: &str,
     param: &str,
-) -> Result<&'a str, RuleEngineError> {
+) -> Result<String, RuleEngineError> {
     match lookup_param(input, context_type, param)? {
-        ParameterValue::Str(s) => Ok(s.as_str()),
+        ParameterValue::Str(s) => Ok(s),
         other => Err(RuleEngineError::TypeMismatch {
             param: param.to_owned(),
             expected: "Str",
-            actual: param_value_type_name(other),
+            actual: param_value_type_name(&other),
         }),
     }
 }
 
 /// Look up a parameter and assert it is `ParameterValue::SemVer`.
-fn lookup_semver<'a>(
-    input: &'a EvaluationInput<'_>,
+fn lookup_semver(
+    input: &EvaluationInput<'_>,
     context_type: &str,
     param: &str,
-) -> Result<&'a Version, RuleEngineError> {
+) -> Result<Version, RuleEngineError> {
     match lookup_param(input, context_type, param)? {
         ParameterValue::SemVer(v) => Ok(v),
         other => Err(RuleEngineError::TypeMismatch {
             param: param.to_owned(),
             expected: "SemVer",
-            actual: param_value_type_name(other),
+            actual: param_value_type_name(&other),
         }),
     }
 }
@@ -618,6 +627,41 @@ mod tests {
             evaluate_leaf(&cond, &input_with(&ctx)),
             Err(RuleEngineError::TypeMismatch { .. })
         ));
+    }
+
+    // ── Virtual "key" parameter ───────────────────────────────────────────
+
+    #[test]
+    fn key_eq_matches_context_key() {
+        let ctx = [Context::new("user", "alice")];
+        let cond = Condition::Eq {
+            context_type: "user".into(),
+            param: "key".into(),
+            value: ParameterValue::Str("alice".into()),
+        };
+        assert_eq!(evaluate_leaf(&cond, &input_with(&ctx)), Ok(true));
+    }
+
+    #[test]
+    fn key_eq_no_match() {
+        let ctx = [Context::new("user", "alice")];
+        let cond = Condition::Eq {
+            context_type: "user".into(),
+            param: "key".into(),
+            value: ParameterValue::Str("bob".into()),
+        };
+        assert_eq!(evaluate_leaf(&cond, &input_with(&ctx)), Ok(false));
+    }
+
+    #[test]
+    fn key_contains_match() {
+        let ctx = [Context::new("org", "acme-corp")];
+        let cond = Condition::Contains {
+            context_type: "org".into(),
+            param: "key".into(),
+            substr: "acme".into(),
+        };
+        assert_eq!(evaluate_leaf(&cond, &input_with(&ctx)), Ok(true));
     }
 
     // ── Segment Membership ────────────────────────────────────────────────────

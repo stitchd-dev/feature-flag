@@ -45,7 +45,8 @@ export function LoginPage() {
         const roles = auth.decodeRoles(res.access_token)
         const permissions = auth.decodePermissions(res.access_token)
         const email = auth.decodeEmail(res.access_token)
-        auth.setSession({ token: res.access_token, refreshToken: res.refresh_token, orgId: res.org_id, isSystem, userId: res.user_id, email, roles, permissions })
+        const name = auth.decodeName(res.access_token)
+        auth.setSession({ token: res.access_token, refreshToken: res.refresh_token, orgId: res.org_id, isSystem, userId: res.user_id, email, name, roles, permissions })
         let orgs: Awaited<ReturnType<typeof listUserOrgs>> = []
         try {
           orgs = await listUserOrgs()

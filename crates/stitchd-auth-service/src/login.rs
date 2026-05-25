@@ -72,6 +72,7 @@ pub async fn login_with_password(
         user.id,
         membership.org_id,
         &user.email,
+        &user.display_name,
         membership.role,
         org.is_system,
         &user.token_secret,

@@ -257,6 +257,7 @@ impl OidcLoginService for OidcLoginServiceImpl {
             user.id,
             membership.org_id,
             &user.email,
+            &user.display_name,
             membership.role,
             false,
             &user.token_secret,

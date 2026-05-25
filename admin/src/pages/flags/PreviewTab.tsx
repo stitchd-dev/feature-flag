@@ -17,15 +17,16 @@ export interface ContextCard {
   params: ContextParam[]
 }
 
-interface ConditionTrace {
-  predicate: string
-  result: boolean
-}
+/** Recursive condition evaluation node — mirrors ConditionExpr from the rule engine. */
+type ConditionNode =
+  | { kind: 'leaf'; predicate: string; result: boolean }
+  | { kind: 'and' | 'or'; result: boolean; children: ConditionNode[] }
+  | { kind: 'not'; result: boolean; child: ConditionNode }
 
 interface RuleTrace {
   rule_name: string | null
   outcome: 'match' | 'no_match' | 'skipped'
-  conditions: ConditionTrace[]
+  condition_tree?: ConditionNode | null
 }
 
 interface VariantRange {
@@ -99,41 +100,191 @@ const DEFAULT_JSON = JSON.stringify([{ _type: '', key: '', parameters: {} }], nu
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function RuleTraceRow({ trace, isCatchAll }: { trace: RuleTrace; isCatchAll: boolean }) {
-  const [open, setOpen] = useState(false)
-  // Fallback label: the last rule is always the always-true catch-all (see
-  // `isCatchAll` in `lib/ruleTypes.ts`), so render it as "Default rule"
-  // rather than the generic "Unnamed rule" used for user-authored rules.
-  const fallbackName = isCatchAll ? 'Default rule' : 'Unnamed rule'
+// ── Recursive condition tree renderer ────────────────────────────────────────
+
+/** Render a single condition leaf as a colored pill. */
+function LeafPill({ predicate, result }: { predicate: string; result: boolean }) {
   return (
-    <div style={{ borderLeft: '2px solid var(--border-faint)', paddingLeft: 10, marginBottom: 6 }}>
-      <button
-        onClick={() => setOpen((o) => !o)}
-        style={{
-          background: 'none', border: 'none', cursor: 'pointer', padding: 0,
-          display: 'flex', alignItems: 'center', gap: 6, fontSize: 12,
-          color: trace.outcome === 'match' ? 'var(--success, #22c55e)' : 'var(--fg-muted)',
-        }}
-      >
-        <span>{trace.outcome === 'match' ? '✓' : '✗'}</span>
-        <span>{trace.rule_name ?? fallbackName}</span>
-        <span style={{ opacity: 0.5 }}>{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {trace.conditions.map((c, i) => (
-            <div key={i} style={{ fontSize: 11, display: 'flex', gap: 6, color: 'var(--fg-muted)' }}>
-              <span style={{ color: c.result ? 'var(--success, #22c55e)' : 'var(--danger)' }}>
-                {c.result ? '✓' : '✗'}
-              </span>
-              <span>{c.predicate}</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <span style={{
+        fontSize: 11, fontWeight: 700, width: 12, flexShrink: 0,
+        color: result ? 'var(--success, #22c55e)' : 'var(--danger)',
+      }}>
+        {result ? '✓' : '✗'}
+      </span>
+      <code style={{
+        fontSize: 11, padding: '2px 7px', borderRadius: 4,
+        background: result ? 'var(--success-bg, #f0fdf4)' : 'var(--danger-bg, #fee2e2)',
+        color: result ? 'var(--success-fg, #166534)' : 'var(--danger-fg, #991b1b)',
+        border: `1px solid ${result ? 'var(--success-border, #86efac)' : 'var(--danger-border, #fca5a5)'}`,
+      }}>
+        {predicate}
+      </code>
+    </div>
+  )
+}
+
+/** Recursively render a ConditionNode tree (AND / OR / NOT / Leaf). */
+function ConditionTree({ node, depth = 0 }: { node: ConditionNode; depth?: number }) {
+  if (node.kind === 'leaf') {
+    return <LeafPill predicate={node.predicate} result={node.result} />
+  }
+
+  if (node.kind === 'not') {
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+          <span style={{
+            fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3,
+            background: 'var(--bg-sunken)', color: 'var(--fg-muted)',
+            border: '1px solid var(--border)',
+          }}>NOT</span>
+          <span style={{ fontSize: 11, color: node.result ? 'var(--success, #22c55e)' : 'var(--danger)', fontWeight: 600 }}>
+            {node.result ? '✓' : '✗'}
+          </span>
+        </div>
+        <div style={{ marginLeft: 12, paddingLeft: 10, borderLeft: '2px solid var(--border-faint)' }}>
+          <ConditionTree node={node.child} depth={depth + 1} />
+        </div>
+      </div>
+    )
+  }
+
+  // AND / OR group — use inter-item separators so the operator is visible
+  // between every pair of siblings at every nesting level.
+  const isOr = node.kind === 'or'
+  const label = isOr ? 'OR' : 'AND'
+
+  // Separator colours: OR gets a blue accent, AND stays neutral grey.
+  const sepBg     = isOr ? 'var(--accent-subtle, #eff6ff)'    : 'var(--bg-sunken)'
+  const sepColor  = isOr ? 'var(--accent, #3b82f6)'           : 'var(--fg-muted)'
+  const sepBorder = isOr ? 'var(--accent-border, #bfdbfe)'    : 'var(--border)'
+  // Left-border for nested groups mirrors the separator colour.
+  const leftBorder = isOr ? '2px solid var(--accent-border, #bfdbfe)' : '2px solid var(--border-faint)'
+
+  const children = (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {node.children.map((child, i) => (
+        <div key={i}>
+          {/* Inter-item separator — shown BETWEEN siblings, never before the first */}
+          {i > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', padding: '4px 0' }}>
+              <span style={{
+                fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 3,
+                background: sepBg, color: sepColor, border: `1px solid ${sepBorder}`,
+                letterSpacing: '0.04em',
+              }}>{label}</span>
             </div>
-          ))}
-          {trace.conditions.length === 0 && (
-            <div style={{ fontSize: 11, color: 'var(--fg-muted)', fontStyle: 'italic' }}>No conditions</div>
           )}
+          <ConditionTree node={child} depth={depth + 1} />
+        </div>
+      ))}
+    </div>
+  )
+
+  // Top-level group: render flat — the separators alone make the operator obvious.
+  if (depth === 0) return children
+
+  // Nested group: wrap in an indented bordered container so the scope is clear.
+  return (
+    <div style={{ marginLeft: 6, paddingLeft: 10, borderLeft: leftBorder }}>
+      {children}
+    </div>
+  )
+}
+
+/** One rule row — always expanded, with recursive condition tree. */
+function RuleRow({
+  trace,
+  index,
+  isCatchAll,
+  firedVariant,
+}: {
+  trace: RuleTrace
+  index: number
+  isCatchAll: boolean
+  firedVariant: string | null
+}) {
+  const matched = trace.outcome === 'match'
+  const skipped = trace.outcome === 'skipped'
+  const name = trace.rule_name ?? (isCatchAll ? 'Default rule' : `Rule ${index + 1}`)
+  const hasTree = !!trace.condition_tree
+
+  return (
+    <div style={{
+      borderRadius: 6,
+      border: `1px solid ${matched ? 'var(--success-border, #86efac)' : 'var(--border)'}`,
+      overflow: 'hidden',
+      opacity: skipped ? 0.45 : 1,
+    }}>
+      {/* Rule header */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '7px 12px',
+        background: matched ? 'var(--success-bg, #f0fdf4)' : 'var(--surface)',
+        borderBottom: hasTree ? '1px solid var(--border-faint)' : 'none',
+      }}>
+        <span style={{
+          width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+          background: matched ? 'var(--success, #22c55e)' : 'var(--bg-sunken)',
+          color: matched ? '#fff' : 'var(--fg-muted)',
+          fontSize: 10, fontWeight: 700,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          {matched ? '✓' : index + 1}
+        </span>
+
+        <span style={{ fontSize: 12, fontWeight: matched ? 600 : 400, flex: 1, color: matched ? 'var(--fg)' : 'var(--fg-muted)' }}>
+          {name}
+        </span>
+
+        {matched && (
+          <span style={{
+            fontSize: 11, padding: '1px 8px', borderRadius: 10, fontWeight: 600,
+            background: 'var(--success, #22c55e)', color: '#fff',
+          }}>
+            matched → {firedVariant ?? 'on'}
+          </span>
+        )}
+        {trace.outcome === 'no_match' && (
+          <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>no match</span>
+        )}
+        {skipped && (
+          <span style={{ fontSize: 11, color: 'var(--fg-subtle)' }}>skipped</span>
+        )}
+      </div>
+
+      {/* Condition tree — always expanded */}
+      {hasTree && (
+        <div style={{ padding: '8px 12px 10px 40px' }}>
+          <ConditionTree node={trace.condition_tree!} />
         </div>
       )}
+
+      {/* Catch-all / skipped with no conditions */}
+      {!hasTree && !skipped && (
+        <div style={{ padding: '6px 12px 8px 40px', fontSize: 11, color: 'var(--fg-subtle)', fontStyle: 'italic' }}>
+          catch-all — applies to all remaining contexts
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Full rule evaluation tree for one context. */
+function ContextRuleTree({ result }: { result: ContextResult }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {result.rule_traces.map((trace, i) => (
+        <RuleRow
+          key={i}
+          trace={trace}
+          index={i}
+          isCatchAll={i === result.rule_traces.length - 1}
+          firedVariant={trace.outcome === 'match' ? (result.variant_key ?? null) : null}
+        />
+      ))}
+      {result.rollout_debug && <RolloutDebugPanel debug={result.rollout_debug} />}
     </div>
   )
 }
@@ -161,56 +312,47 @@ function RolloutDebugPanel({ debug }: { debug: RolloutDebug }) {
   )
 }
 
-function ContextResultCard({ result }: { result: ContextResult }) {
+/** Unified result panel — one card regardless of how many contexts were evaluated. */
+function EvaluationResults({ results }: { results: ContextResult[] }) {
+  const single = results.length === 1
+
   return (
-    <div style={{
-      border: '1px solid var(--border)',
-      borderRadius: 6,
-      overflow: 'hidden',
-    }}>
-      <div style={{
-        padding: '10px 14px',
-        background: 'var(--surface)',
-        borderBottom: '1px solid var(--border-faint)',
-        display: 'flex', alignItems: 'center', gap: 10,
-      }}>
-        <span style={{ fontSize: 12, color: 'var(--fg-muted)', fontFamily: 'monospace' }}>
-          {result.context_key || '(no key)'}
-        </span>
-        {result.disabled ? (
-          <span style={{
-            fontSize: 11, padding: '1px 7px', borderRadius: 10,
-            background: 'var(--fg-muted)', color: 'var(--bg)', opacity: 0.7,
-          }}>disabled</span>
-        ) : (
-          <span style={{
-            fontSize: 11, padding: '1px 7px', borderRadius: 10,
-            background: 'var(--accent)', color: '#fff',
-          }}>{result.variant_key ?? 'default'}</span>
-        )}
-        {result.fired_rule_name && (
-          <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>via {result.fired_rule_name}</span>
-        )}
-      </div>
-      <div style={{ padding: '10px 14px' }}>
-        {result.disabled && (
+    <div className="card">
+      {results.map((result, ri) => (
+        <div key={ri}>
+          {/* ── Context header ── */}
           <div style={{
-            marginBottom: 8, padding: '6px 10px', borderRadius: 4,
-            background: 'var(--warning-bg, #fef3c7)', color: 'var(--warning-fg, #92400e)',
-            fontSize: 12,
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: single ? '12px 16px 10px' : ri === 0 ? '12px 16px 10px' : '14px 16px 10px',
+            borderTop: ri > 0 ? '1px solid var(--border)' : 'none',
           }}>
-            Flag is disabled — default rule applied
+            <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)' }}>
+              {result.context_key || '(no key)'}
+            </span>
+            {result.disabled ? (
+              <span style={{
+                fontSize: 11, padding: '1px 8px', borderRadius: 10,
+                background: 'var(--fg-muted)', color: 'var(--bg)', opacity: 0.7,
+              }}>disabled</span>
+            ) : (
+              <span style={{
+                fontSize: 11, padding: '1px 8px', borderRadius: 10, fontWeight: 600,
+                background: 'var(--accent)', color: '#fff',
+              }}>{result.variant_key ?? 'default'}</span>
+            )}
+            {result.disabled && (
+              <span style={{ fontSize: 11, color: 'var(--warning, #d97706)' }}>
+                flag disabled — default rule applied
+              </span>
+            )}
           </div>
-        )}
-        {result.rule_traces.map((trace, i) => (
-          <RuleTraceRow
-            key={i}
-            trace={trace}
-            isCatchAll={i === result.rule_traces.length - 1}
-          />
-        ))}
-        {result.rollout_debug && <RolloutDebugPanel debug={result.rollout_debug} />}
-      </div>
+
+          {/* ── Rule tree ── */}
+          <div style={{ padding: '0 16px 14px' }}>
+            <ContextRuleTree result={result} />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -462,10 +604,16 @@ export function PreviewTab({ flagId }: PreviewTabProps) {
           <button
             className="btn primary"
             disabled={!canEvaluate}
+            title={!hasValidContext ? 'Fill in _type and key for at least one context' : undefined}
             onClick={evaluate}
           >
             {loading ? 'Evaluating…' : 'Evaluate'}
           </button>
+          {!hasValidContext && !jsonError && (
+            <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
+              Set <code>_type</code> and <code>key</code> on at least one context to evaluate
+            </span>
+          )}
           {stale && results !== null && (
             <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>Results may be stale</span>
           )}
@@ -489,11 +637,7 @@ export function PreviewTab({ flagId }: PreviewTabProps) {
       )}
 
       {results !== null && results.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {results.map((r, i) => (
-            <ContextResultCard key={i} result={r} />
-          ))}
-        </div>
+        <EvaluationResults results={results} />
       )}
     </div>
   )

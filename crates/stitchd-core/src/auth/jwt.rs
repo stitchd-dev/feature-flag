@@ -25,6 +25,10 @@ pub struct AccessTokenClaims {
     pub org_id: String,
     /// User's email address.
     pub email: String,
+    /// User's display name. Defaults to empty string for tokens issued before
+    /// this field was added.
+    #[serde(default)]
+    pub name: String,
     /// User's role within the organisation.
     pub org_role: OrgRole,
     /// `true` when the token was issued for a user in the platform System org.
@@ -49,6 +53,7 @@ impl JwtEngine {
         user_id: UserId,
         org_id: OrganisationId,
         email: &str,
+        name: &str,
         org_role: OrgRole,
         is_system: bool,
         token_secret: &uuid::Uuid,
@@ -58,6 +63,7 @@ impl JwtEngine {
             sub: user_id.to_string(),
             org_id: org_id.to_string(),
             email: email.to_owned(),
+            name: name.to_owned(),
             org_role,
             is_system,
             iat: now,
@@ -136,6 +142,7 @@ mod tests {
             user_id,
             org_id,
             "alice@example.com",
+            "Alice",
             OrgRole::OrgAdmin,
             false,
             &secret,
@@ -162,6 +169,7 @@ mod tests {
             sub: user_id.to_string(),
             org_id: org_id.to_string(),
             email: "bob@example.com".to_owned(),
+            name: "Bob".to_owned(),
             org_role: OrgRole::OrgMember,
             is_system: false,
             iat: 1_000_000,
@@ -185,6 +193,7 @@ mod tests {
             user_id,
             org_id,
             "carol@example.com",
+            "Carol",
             OrgRole::OrgMember,
             false,
             &secret,
@@ -207,6 +216,7 @@ mod tests {
             user_id,
             org_id,
             "dave@example.com",
+            "Dave",
             OrgRole::OrgAdmin,
             false,
             &original_secret,
@@ -233,6 +243,7 @@ mod tests {
             user_id,
             org_id,
             "eve@example.com",
+            "Eve",
             OrgRole::OrgMember,
             false,
             &secret,

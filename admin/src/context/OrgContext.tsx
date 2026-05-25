@@ -93,3 +93,8 @@ export function useOrgContext(): OrgContextValue {
   if (!ctx) throw new Error('useOrgContext must be used inside OrgProvider')
   return ctx
 }
+
+/** Returns null when used outside OrgProvider (e.g. superadmin shell). */
+export function useOptionalOrgContext(): OrgContextValue | null {
+  return useContext(OrgContext)
+}

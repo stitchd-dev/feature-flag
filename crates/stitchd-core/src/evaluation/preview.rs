@@ -27,10 +27,31 @@ use super::types::{EvalOutcome, ListMembershipIndex, TraceLevel};
 
 // ── Output types ──────────────────────────────────────────────────────────────
 
+/// A node in the condition evaluation tree, mirroring the `ConditionExpr`
+/// shape so the admin UI can render AND / OR / NOT groups exactly as they
+/// appear in the rule builder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConditionTrace {
-    pub predicate: String,
-    pub result: bool,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ConditionNode {
+    /// Terminal condition (a single predicate).
+    Leaf { predicate: String, result: bool },
+    /// All children must be true (short-circuits on first false).
+    And  { result: bool, children: Vec<ConditionNode> },
+    /// At least one child must be true (short-circuits on first true).
+    Or   { result: bool, children: Vec<ConditionNode> },
+    /// Negation of the single child.
+    Not  { result: bool, child: Box<ConditionNode> },
+}
+
+impl ConditionNode {
+    pub fn result(&self) -> bool {
+        match self {
+            Self::Leaf { result, .. }
+            | Self::And  { result, .. }
+            | Self::Or   { result, .. }
+            | Self::Not  { result, .. } => *result,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +67,9 @@ pub struct RuleTrace {
     pub rule_index: usize,
     pub rule_name: Option<String>,
     pub outcome: RuleOutcome,
-    pub conditions: Vec<ConditionTrace>,
+    /// Full condition tree — `None` for the catch-all (no explicit conditions).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub condition_tree: Option<ConditionNode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,7 +186,7 @@ pub fn evaluate_preview(
             continue;
         }
 
-        let results = evaluate_flag(
+        let mut results = evaluate_flag(
             flag,
             &ec.contexts,
             segment_definitions,
@@ -173,13 +196,14 @@ pub fn evaluate_preview(
             TraceLevel::Full,
         );
 
-        // One ContextPreviewResult per sub-context in this bundle. All
-        // entries share the same bundle for hashing/rule eval, so their
-        // rollout_debug.hash_input is identical (cross-context hashing).
-        for r in results {
-            out.push(from_flag_eval_result(flag, Some(r), global_idx));
-            global_idx += 1;
-        }
+        // The entire flat list is ONE evaluation bundle — emit a single
+        // ContextPreviewResult for it. All sub-contexts share the same
+        // rule evaluation and hashing, so taking the first result is
+        // correct. Callers that pass N sub-contexts as one bundle should
+        // see one unified result, not N redundant rows.
+        let primary = results.drain(..).next();
+        out.push(from_flag_eval_result(flag, primary, global_idx));
+        global_idx += 1;
     }
     out
 }
@@ -239,36 +263,33 @@ fn from_flag_eval_result(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Recursively collect leaf-condition traces from an expression tree.
-pub(super) fn trace_conditions(
+/// Recursively build a `ConditionNode` tree from a `ConditionExpr`, preserving
+/// the AND / OR / NOT group structure so the admin UI can mirror it.
+pub(super) fn build_condition_tree(
     expr: &ConditionExpr,
     input: &EvaluationInput<'_>,
-) -> Vec<ConditionTrace> {
-    let mut out = Vec::new();
-    collect_leaf_traces(expr, input, &mut out);
-    out
-}
-
-fn collect_leaf_traces(
-    expr: &ConditionExpr,
-    input: &EvaluationInput<'_>,
-    out: &mut Vec<ConditionTrace>,
-) {
+) -> ConditionNode {
     match expr {
         ConditionExpr::Leaf(cond) => {
             let result = evaluate_leaf(cond, input).unwrap_or(false);
-            out.push(ConditionTrace {
-                predicate: condition_to_predicate(cond),
-                result,
-            });
+            ConditionNode::Leaf { predicate: condition_to_predicate(cond), result }
         }
-        ConditionExpr::And(children) | ConditionExpr::Or(children) => {
-            for child in children {
-                collect_leaf_traces(child, input, out);
-            }
+        ConditionExpr::And(children) => {
+            let child_nodes: Vec<ConditionNode> =
+                children.iter().map(|c| build_condition_tree(c, input)).collect();
+            let result = child_nodes.iter().all(|n| n.result());
+            ConditionNode::And { result, children: child_nodes }
+        }
+        ConditionExpr::Or(children) => {
+            let child_nodes: Vec<ConditionNode> =
+                children.iter().map(|c| build_condition_tree(c, input)).collect();
+            let result = child_nodes.iter().any(|n| n.result());
+            ConditionNode::Or { result, children: child_nodes }
         }
         ConditionExpr::Not(inner) => {
-            collect_leaf_traces(inner, input, out);
+            let child = build_condition_tree(inner, input);
+            let result = !child.result();
+            ConditionNode::Not { result, child: Box::new(child) }
         }
     }
 }
@@ -496,12 +517,12 @@ mod tests {
         assert_eq!(r.fired_rule_index, Some(0));
         assert_eq!(r.fired_rule_name, Some("beta users".to_string()));
         assert!(matches!(r.rule_traces[0].outcome, RuleOutcome::Match));
-        assert_eq!(r.rule_traces[0].conditions.len(), 1);
-        assert!(r.rule_traces[0].conditions[0].result);
-        assert_eq!(
-            r.rule_traces[0].conditions[0].predicate,
-            "user.beta == true"
-        );
+        let leaf = match r.rule_traces[0].condition_tree.as_ref().unwrap() {
+            ConditionNode::Leaf { predicate, result } => (predicate.as_str(), *result),
+            other => panic!("expected Leaf, got {:?}", other),
+        };
+        assert!(leaf.1, "condition result should be true");
+        assert_eq!(leaf.0, "user.beta == true");
     }
 
     // ── No match → default variant ────────────────────────────────────────────
@@ -871,7 +892,7 @@ mod tests {
         assert_eq!(results[0].variant_key, "off");
     }
 
-    // ── collect_leaf_traces with AND / NOT ────────────────────────────────────
+    // ── build_condition_tree with AND / NOT ───────────────────────────────────
 
     #[test]
     fn trace_conditions_handles_and_and_not_expressions() {
@@ -907,8 +928,12 @@ mod tests {
         let results = evaluate_preview(&flag, &[ec], &[], env_id(), &[]);
         let r = &results[0];
         assert_eq!(r.variant_key, "on");
-        // Both leaf conditions should appear in traces for the fired rule.
-        assert_eq!(r.rule_traces[0].conditions.len(), 2);
+        // The AND group should contain both leaf conditions.
+        let children = match r.rule_traces[0].condition_tree.as_ref().unwrap() {
+            ConditionNode::And { children, .. } => children,
+            other => panic!("expected And node, got {:?}", other),
+        };
+        assert_eq!(children.len(), 2, "AND group must have two children");
     }
 
     // ── percentage rollout with Parameter hashing field ───────────────────────
@@ -994,10 +1019,10 @@ mod tests {
         assert_eq!(results[1].fired_rule_index, None);
     }
 
-    // ── Regression: bug wub — conditions populated for non-matching rules ───────
+    // ── Regression: bug wub — condition_tree populated for non-matching rules ────
     //
-    // Before the fix, rule_traces[*].conditions was empty for no_match rules.
-    // After the fix, every leaf in the rule's condition tree appears in conditions.
+    // Before the fix, rule_traces[*].condition_tree was None for no_match rules.
+    // After the fix, every rule emits its full condition tree regardless of outcome.
 
     #[test]
     fn no_match_rule_conditions_are_populated() {
@@ -1038,29 +1063,26 @@ mod tests {
         assert_eq!(r.variant_key, "off", "rule should not match");
         assert!(matches!(r.rule_traces[0].outcome, RuleOutcome::NoMatch));
 
-        // Both leaves must now appear in conditions even though the rule didn't match.
-        assert_eq!(
-            r.rule_traces[0].conditions.len(),
-            2,
-            "no_match rule must emit per-leaf ConditionTrace entries"
-        );
-        // country == US → true; beta == true → false
-        let country_trace = r.rule_traces[0]
-            .conditions
-            .iter()
-            .find(|c| c.predicate.contains("country"))
-            .expect("country leaf must be traced");
-        assert!(country_trace.result, "country == US should be true");
+        // The condition_tree must be present even though the rule didn't match.
+        let children = match r.rule_traces[0].condition_tree.as_ref().unwrap() {
+            ConditionNode::And { children, .. } => children,
+            other => panic!("expected And node, got {:?}", other),
+        };
+        assert_eq!(children.len(), 2, "AND group must have two leaf children");
 
-        let beta_trace = r.rule_traces[0]
-            .conditions
-            .iter()
-            .find(|c| c.predicate.contains("beta"))
-            .expect("beta leaf must be traced");
-        assert!(
-            !beta_trace.result,
-            "beta == true should be false for this context"
-        );
+        // country == US → true; beta == true → false
+        let find_leaf = |pred: &str| -> (bool, String) {
+            children.iter().find_map(|n| {
+                if let ConditionNode::Leaf { predicate, result } = n {
+                    if predicate.contains(pred) { return Some((*result, predicate.clone())) }
+                }
+                None
+            }).unwrap_or_else(|| panic!("{pred} leaf not found"))
+        };
+        let (country_result, _) = find_leaf("country");
+        assert!(country_result, "country == US should be true");
+        let (beta_result, _) = find_leaf("beta");
+        assert!(!beta_result, "beta == true should be false for this context");
     }
 
     // ── Phase 2 Task 2.2: default_rule_distribution in preview ──────────────
