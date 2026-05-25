@@ -73,13 +73,10 @@ fn row_to_event_definition(
         }
     };
     let key: String = row.try_get("key").map_err(RepositoryError::Database)?;
-    let name: Option<String> = row.try_get("name").map_err(RepositoryError::Database)?;
     Ok(EventDefinition {
         id: EventDefinitionId::from_uuid(id),
         environment_id: EnvironmentId::from_uuid(env_id),
-        // Backfill: if `name` is null (legacy row), surface `key` so the
-        // admin UI doesn't render empty cells.
-        name: name.unwrap_or_else(|| key.clone()),
+        name: row.try_get("name").map_err(RepositoryError::Database)?,
         description: row
             .try_get("description")
             .map_err(RepositoryError::Database)?,

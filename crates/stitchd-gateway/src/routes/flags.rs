@@ -303,87 +303,28 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
     let output = match &r.output {
         Some(Output::VariantKey(k)) => serde_json::json!({ "variant_key": k }),
         Some(Output::Allocation(alloc)) => {
-            // Phase 4 of flag_eval_unify_20260522: surface BOTH the new
-            // `hash_inputs` selector list AND the legacy `hash_targets`
-            // array. Prefer the new field as the authoritative source when
-            // populated; synthesise it from the legacy `context_hash_specs`
-            // map otherwise (so newly-fetched legacy data round-trips).
-            let hash_inputs_json: Vec<serde_json::Value> = if !alloc.hash_inputs.is_empty() {
-                alloc
-                    .hash_inputs
-                    .iter()
-                    .filter_map(HashSelectorJson::from_proto)
-                    .filter_map(|sel| serde_json::to_value(&sel).ok())
-                    .collect()
-            } else {
-                // Synthesise from the legacy map. Iteration order over a
-                // HashMap is non-deterministic; sort by `context_type` for
-                // stable output (the legacy field stays around as a
-                // best-effort representation until Phase 5/6 retires it).
-                let mut sorted: Vec<_> = alloc.context_hash_specs.iter().collect();
-                sorted.sort_by(|a, b| a.0.cmp(b.0));
-                let mut out = Vec::new();
-                for (ctx_type, spec) in sorted {
-                    if spec.parameter_names.is_empty() {
-                        out.push(serde_json::json!({
-                            "kind": "context_key",
-                            "context_type": ctx_type
-                        }));
-                    } else {
-                        for param in &spec.parameter_names {
-                            out.push(serde_json::json!({
-                                "kind": "context_parameter",
-                                "context_type": ctx_type,
-                                "parameter": param
-                            }));
-                        }
-                    }
-                }
-                out
-            };
+            let hash_inputs_json: Vec<serde_json::Value> = alloc
+                .hash_inputs
+                .iter()
+                .filter_map(HashSelectorJson::from_proto)
+                .filter_map(|sel| serde_json::to_value(&sel).ok())
+                .collect();
 
-            // Legacy `hash_targets` projection — same UI shape as before.
             let mut hash_targets: Vec<serde_json::Value> = Vec::new();
-            // Prefer the new ordered list when present; fall back to the
-            // (sorted) legacy map otherwise.
-            if !alloc.hash_inputs.is_empty() {
-                for sel in &alloc.hash_inputs {
-                    use stitchd_proto::flags::v1::hash_selector::Selector;
-                    if let Some(inner) = sel.selector.as_ref() {
-                        match inner {
-                            Selector::ContextKey(s) => hash_targets.push(serde_json::json!({
-                                "context_type": s.context_type,
-                                "field": "key"
-                            })),
-                            Selector::ContextParameter(s) => hash_targets.push(serde_json::json!({
-                                "context_type": s.context_type,
-                                "field": s.parameter
-                            })),
-                        }
-                    }
-                }
-            } else {
-                let mut sorted: Vec<_> = alloc.context_hash_specs.iter().collect();
-                sorted.sort_by(|a, b| a.0.cmp(b.0));
-                for (ctx_type, spec) in sorted {
-                    if spec.parameter_names.is_empty() {
-                        hash_targets.push(serde_json::json!({
-                            "context_type": ctx_type,
+            for sel in &alloc.hash_inputs {
+                use stitchd_proto::flags::v1::hash_selector::Selector;
+                if let Some(inner) = sel.selector.as_ref() {
+                    match inner {
+                        Selector::ContextKey(s) => hash_targets.push(serde_json::json!({
+                            "context_type": s.context_type,
                             "field": "key"
-                        }));
-                    } else {
-                        for param in &spec.parameter_names {
-                            hash_targets.push(serde_json::json!({
-                                "context_type": ctx_type,
-                                "field": param
-                            }));
-                        }
+                        })),
+                        Selector::ContextParameter(s) => hash_targets.push(serde_json::json!({
+                            "context_type": s.context_type,
+                            "field": s.parameter
+                        })),
                     }
                 }
-            }
-            // Default to user.key when no targets are stored (legacy data).
-            if hash_targets.is_empty() {
-                hash_targets.push(serde_json::json!({ "context_type": "user", "field": "key" }));
             }
             let buckets: Vec<_> = alloc
                 .buckets
@@ -1057,46 +998,6 @@ fn extract_hash_inputs_from_allocation(alloc: &serde_json::Value) -> Option<Vec<
     None
 }
 
-/// Synthesise the legacy `context_hash_specs` map from an ordered
-/// `hash_inputs` list. The map preserves the (lossy) shape that pre-Phase-4
-/// consumers expect: each context_type has a `parameter_names` list, where
-/// an empty list means "hash the context key".
-///
-/// **Hash stability caveat:** A round-trip through `context_hash_specs` does
-/// NOT preserve selector ordering — the map's iteration order is
-/// canonically `context_type ASC`, parameters in insertion order. Hash
-/// stability is preserved ONLY when the original `hash_inputs` is already
-/// in canonical order. Phase 5/6 readers MUST prefer `hash_inputs` when
-/// non-empty.
-fn synthesise_context_hash_specs(
-    selectors: &[HashSelectorJson],
-) -> std::collections::HashMap<String, stitchd_proto::flags::v1::ContextHashSpec> {
-    use stitchd_proto::flags::v1::ContextHashSpec;
-    let mut map: std::collections::HashMap<String, ContextHashSpec> =
-        std::collections::HashMap::new();
-    for sel in selectors {
-        match sel {
-            HashSelectorJson::ContextKey { context_type } => {
-                map.entry(context_type.clone())
-                    .or_insert_with(|| ContextHashSpec {
-                        parameter_names: Vec::new(),
-                    });
-            }
-            HashSelectorJson::ContextParameter {
-                context_type,
-                parameter,
-            } => {
-                let entry = map
-                    .entry(context_type.clone())
-                    .or_insert_with(|| ContextHashSpec {
-                        parameter_names: Vec::new(),
-                    });
-                entry.parameter_names.push(parameter.clone());
-            }
-        }
-    }
-    map
-}
 
 /// Convert a single `RuleBody` JSON to its proto representation. Validates
 /// `hash_inputs` before populating the proto. Returns a structured error
@@ -1151,15 +1052,10 @@ fn rule_body_to_proto(
             })
             .collect();
 
-        // Dual-populate the proto: `hash_inputs` is the authoritative new
-        // shape; `context_hash_specs` is synthesised from it for the
-        // backwards-compat window. Phase 5/6 producer cutover removes the
-        // legacy map.
         let proto_hash_inputs: Vec<_> = selectors.iter().map(HashSelectorJson::to_proto).collect();
-        let context_hash_specs = synthesise_context_hash_specs(&selectors);
 
         Some(Output::Allocation(PercentageAllocation {
-            context_hash_specs,
+            context_hash_specs: Default::default(),
             buckets,
             hash_inputs: proto_hash_inputs,
         }))

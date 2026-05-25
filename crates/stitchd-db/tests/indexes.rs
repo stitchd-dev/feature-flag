@@ -396,7 +396,7 @@ async fn find_rules_batch_returns_rules_for_all_ids(pool: sqlx::PgPool) {
         };
         seg_ids.push(seg.id);
         repo.create(&seg).await.unwrap();
-        repo.upsert_rules(seg.id, &[rule]).await.unwrap();
+        repo.set_condition_expr(seg.id, Some(&serde_json::to_value(&rule.condition).unwrap())).await.unwrap();
     }
 
     let results = repo.find_rules_batch(&seg_ids).await.unwrap();

@@ -863,9 +863,13 @@ async fn mutate_create(
             let rules: Vec<stitchd_core::rule_engine::types::Rule> =
                 serde_json::from_slice(&r.rule_payload)
                     .map_err(|e| Status::invalid_argument(format!("invalid rule payload: {e}")))?;
-            repo.upsert_rules(seg.id, &rules)
-                .await
-                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
+            if let Some(first_rule) = rules.first() {
+                let expr_json = serde_json::to_value(&first_rule.condition)
+                    .map_err(|e| Status::internal(format!("condition serialisation: {e}")))?;
+                repo.set_condition_expr(seg.id, Some(&expr_json))
+                    .await
+                    .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
+            }
             let proto = segment_to_rule_proto(&seg, &rules).map_err(Status::from)?;
             Ok(Response::new(MutateSegmentResponse {
                 segment: Some(mutate_segment_response::Segment::RuleSegment(proto)),
@@ -914,9 +918,13 @@ async fn mutate_update(
             let rules: Vec<stitchd_core::rule_engine::types::Rule> =
                 serde_json::from_slice(&r.rule_payload)
                     .map_err(|e| Status::invalid_argument(format!("invalid rule payload: {e}")))?;
-            repo.upsert_rules(updated.id, &rules)
-                .await
-                .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
+            if let Some(first_rule) = rules.first() {
+                let expr_json = serde_json::to_value(&first_rule.condition)
+                    .map_err(|e| Status::internal(format!("condition serialisation: {e}")))?;
+                repo.set_condition_expr(updated.id, Some(&expr_json))
+                    .await
+                    .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
+            }
             let proto = segment_to_rule_proto(&updated, &rules).map_err(Status::from)?;
             Ok(Response::new(MutateSegmentResponse {
                 segment: Some(mutate_segment_response::Segment::RuleSegment(proto)),
