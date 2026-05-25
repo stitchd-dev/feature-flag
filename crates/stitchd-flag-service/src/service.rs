@@ -1217,7 +1217,7 @@ impl FlagService for FlagServiceImpl {
                     .iter()
                     .map(|a| stitchd_core::rollout::RolloutAllocation {
                         variant_key: a.variant_key.clone(),
-                        percentage: a.percentage,
+                        percentage_bp: (a.percentage * 100.0).round() as u32,
                     })
                     .collect(),
             };

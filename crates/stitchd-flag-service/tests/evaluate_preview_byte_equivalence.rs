@@ -219,11 +219,11 @@ fn corpus_default_rule_distribution() -> (Flag, Vec<EvaluationContext>) {
         allocations: vec![
             RolloutAllocation {
                 variant_key: "on".to_string(),
-                percentage: 60.0,
+                percentage_bp: 6000,
             },
             RolloutAllocation {
                 variant_key: "off".to_string(),
-                percentage: 40.0,
+                percentage_bp: 4000,
             },
         ],
     });

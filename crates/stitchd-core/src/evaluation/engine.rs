@@ -222,7 +222,7 @@ fn evaluate_one(
                     let flag_key = flag.record.key.as_str();
                     let env_str = environment_id.to_string();
                     let percentage = calculate_allocation(flag_key, &env_str, &target_values);
-                    let bucket = ((percentage * 10.0).floor() as u32).min(999);
+                    let bucket = percentage / 10;
 
                     // Build per-variant ranges + identify winning bucket.
                     let (variant_ranges, hash_input_str) = if want_trace {
@@ -313,17 +313,17 @@ fn evaluate_one(
         let percentage = calculate_allocation(flag_key, &env_str, &target_values);
 
         if want_trace {
-            let bucket = ((percentage * 10.0).floor() as u32).min(999);
+            let bucket = percentage / 10;
             let mut hi = format!("{flag_key}{env_str}");
             for t in &target_values {
                 hi.push_str(t);
             }
             let mut variant_ranges: Vec<VariantRange> = Vec::new();
-            let mut cumulative_pct: f64 = 0.0;
+            let mut cumulative_bp: u32 = 0;
             for alloc in &dist.allocations {
-                let from = (cumulative_pct * 10.0).floor() as u32;
-                cumulative_pct += alloc.percentage;
-                let to = ((cumulative_pct * 10.0).floor() as u32).saturating_sub(1);
+                let from = cumulative_bp / 10;
+                cumulative_bp += alloc.percentage_bp;
+                let to = (cumulative_bp / 10).saturating_sub(1);
                 variant_ranges.push(VariantRange {
                     variant_key: alloc.variant_key.clone(),
                     from,
@@ -499,8 +499,8 @@ impl FlagEvaluator {
                         &target_values,
                     );
 
-                    // Map 0.0-100.0 to 0-999 bucket
-                    let bucket = ((percentage * 10.0).floor() as u32).min(999);
+                    // Map basis points [0, 9999] to 0-999 bucket (weights use 1000-bucket scale)
+                    let bucket = percentage / 10;
 
                     let mut cumulative_weight = 0;
                     for (variant_id, weight) in weights {
@@ -966,11 +966,11 @@ mod tests {
             allocations: vec![
                 RolloutAllocation {
                     variant_key: "on".to_string(),
-                    percentage: 50.0,
+                    percentage_bp: 5000,
                 },
                 RolloutAllocation {
                     variant_key: "off".to_string(),
-                    percentage: 50.0,
+                    percentage_bp: 5000,
                 },
             ],
         };
@@ -1019,7 +1019,7 @@ mod tests {
         let dist = RolloutDistribution {
             allocations: vec![RolloutAllocation {
                 variant_key: "nonexistent".to_string(),
-                percentage: 100.0,
+                percentage_bp: 10000,
             }],
         };
         let flag = flag_with_default_rule_distribution(Some(dist), vec![]);
@@ -1040,11 +1040,11 @@ mod tests {
             allocations: vec![
                 RolloutAllocation {
                     variant_key: "on".to_string(),
-                    percentage: 0.001,
+                    percentage_bp: 1,
                 },
                 RolloutAllocation {
                     variant_key: "off".to_string(),
-                    percentage: 99.999,
+                    percentage_bp: 9999,
                 },
             ],
         };
@@ -1069,7 +1069,7 @@ mod tests {
         let dist = RolloutDistribution {
             allocations: vec![RolloutAllocation {
                 variant_key: "on".to_string(),
-                percentage: 100.0,
+                percentage_bp: 10000,
             }],
         };
         let mut f = flag_with_default_rule_distribution(Some(dist), vec![]);
@@ -1207,11 +1207,11 @@ mod tests {
             allocations: vec![
                 RolloutAllocation {
                     variant_key: "on".to_string(),
-                    percentage: 50.0,
+                    percentage_bp: 5000,
                 },
                 RolloutAllocation {
                     variant_key: "off".to_string(),
-                    percentage: 50.0,
+                    percentage_bp: 5000,
                 },
             ],
         });
@@ -1505,11 +1505,11 @@ mod tests {
             allocations: vec![
                 RolloutAllocation {
                     variant_key: "on".to_string(),
-                    percentage: 30.0,
+                    percentage_bp: 3000,
                 },
                 RolloutAllocation {
                     variant_key: "off".to_string(),
-                    percentage: 70.0,
+                    percentage_bp: 7000,
                 },
             ],
         });
