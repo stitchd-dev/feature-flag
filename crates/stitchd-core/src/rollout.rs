@@ -21,7 +21,9 @@ pub enum RolloutDistributionError {
     #[error("rollout distribution must have at least one allocation")]
     Empty,
     /// One of the basis-point values was outside `(0, 10_000]`.
-    #[error("allocation percentage_bp {percentage_bp} for variant {variant_key} must be in (0, 10000]")]
+    #[error(
+        "allocation percentage_bp {percentage_bp} for variant {variant_key} must be in (0, 10000]"
+    )]
     PercentageOutOfRange {
         /// The variant key whose basis-point value is out of range.
         variant_key: String,
@@ -147,7 +149,10 @@ mod tests {
         let dist = RolloutDistribution {
             allocations: vec![alloc_bp("a", 4000), alloc_bp("b", 3000)],
         };
-        assert!(matches!(dist.validate(), Err(RolloutDistributionError::SumMismatch { actual: 7000 })));
+        assert!(matches!(
+            dist.validate(),
+            Err(RolloutDistributionError::SumMismatch { actual: 7000 })
+        ));
     }
 
     #[test]
@@ -345,7 +350,9 @@ mod tests {
 
     #[test]
     fn assign_variant_empty_distribution_returns_none() {
-        let dist = RolloutDistribution { allocations: vec![] };
+        let dist = RolloutDistribution {
+            allocations: vec![],
+        };
         assert_eq!(dist.assign_variant_key(0), None);
     }
 }

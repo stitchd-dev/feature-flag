@@ -24,7 +24,6 @@ use stitchd_core::flag::{FlagHashingConfig, FlagRecord, FlagRule, Variant};
 use stitchd_core::id::{
     EnvironmentId, EventDefinitionId, FlagId, FlagKey, ProjectId, SegmentId, VariantId,
 };
-use stitchd_core::rule_engine::types::Rule;
 use stitchd_core::segment::{RuleBasedSegment, Segment};
 use stitchd_db::{
     ContextMembership, EventDefinitionRepository, FlagRepository, ListSegmentSummary,

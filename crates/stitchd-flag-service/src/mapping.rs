@@ -72,9 +72,7 @@ pub fn proto_flag_rule_to_domain(
     proto: &ProtoFlagRule,
     variant_map: &HashMap<String, VariantId>,
 ) -> Option<stitchd_core::flag::FlagRule> {
-    use stitchd_core::rule_engine::types::{
-        ConditionExpr, PercentageTarget, Rule, RuleOutput,
-    };
+    use stitchd_core::rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput};
     use stitchd_proto::flags::v1::flag_rule::Output;
 
     let condition: ConditionExpr = serde_json::from_slice(&proto.rule_payload).ok()?;
@@ -390,6 +388,7 @@ mod tests {
         rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField},
         variants::{FlagValueType as DomainFVT, VariantValue},
     };
+    use stitchd_proto::flags::v1::ContextHashSpec;
 
     fn make_variant_id() -> VariantId {
         VariantId::new()
@@ -784,7 +783,9 @@ mod tests {
         let mut legacy_map = HashMap::new();
         legacy_map.insert(
             "user".to_string(),
-            ContextHashSpec { parameter_names: vec![] },
+            ContextHashSpec {
+                parameter_names: vec![],
+            },
         );
 
         let proto = ProtoFlagRule {
@@ -811,7 +812,10 @@ mod tests {
         let RuleOutput::Percentage { targets, .. } = domain.rule.output else {
             panic!("expected Percentage output");
         };
-        assert!(targets.is_empty(), "context_hash_specs fallback is removed; empty hash_inputs → empty targets");
+        assert!(
+            targets.is_empty(),
+            "context_hash_specs fallback is removed; empty hash_inputs → empty targets"
+        );
     }
 
     // ── feature-flag-yrj — empty-WHEN rejection ────────────────────────

@@ -88,7 +88,11 @@ mod tests {
             let bp: u32 = calculate_allocation("flag", "env", &[i.to_string()]);
             seen.insert(bp);
         }
-        assert!(seen.len() > 900, "expected varied distribution, got {} unique values", seen.len());
+        assert!(
+            seen.len() > 900,
+            "expected varied distribution, got {} unique values",
+            seen.len()
+        );
     }
 
     #[test]
