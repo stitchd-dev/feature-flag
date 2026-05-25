@@ -1,0 +1,13 @@
+{
+  "track_id": "schema_cutover_20260525",
+  "type": "chore",
+  "status": "new",
+  "priority": "high",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-25T00:00:00Z",
+  "updated_at": "2026-05-25T00:00:00Z",
+  "description": "Schema hard cutover: collapse 44 Postgres + 14 ClickHouse + 5 ScyllaDB migrations into single V1 baselines; retire segment_rules table, hash_inputs dual-write, and flag_evaluation_log_v2 dead reference; move two JSONB columns to Postgres composite types; migrate rollout percentages to u32 basis points (0.01% precision).",
+  "git_branch": "track/schema_cutover_20260525",
+  "worktree_path": ".worktrees/schema_cutover_20260525"
+}

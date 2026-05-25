@@ -2,6 +2,11 @@
 
 This file tracks all major tracks for the project.
 
+---
+
+## [ ] Track: Schema Hard Cutover — V1 Baseline + Legacy Cleanup
+*Link: [./conductor/tracks/schema_cutover_20260525/](./conductor/tracks/schema_cutover_20260525/)*
+
 <!-- Archived:
 - scaffold_20260411 (Workspace Scaffold & Project Foundation)
 - domain_20260411 (Core Domain Model & Database Schema)
