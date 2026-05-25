@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use sqlx::{PgPool, Row as _, types::Json};
+use sqlx::{PgPool, Row as _};
 use uuid::Uuid;
 
 use stitchd_core::{
@@ -392,26 +392,8 @@ impl SegmentRepository for PgSegmentRepository {
             return Err(RepositoryError::NotFound { id: id.to_string() });
         }
 
-        let mut rules: Vec<Rule> = sqlx::query!(
-            r#"
-            SELECT rule_def as "rule_def: Json<Rule>"
-            FROM segment_rules
-            WHERE segment_id = $1
-            ORDER BY rule_index ASC
-            "#,
-            id as SegmentId
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(RepositoryError::Database)?
-        .into_iter()
-        .map(|r| r.rule_def.0)
-        .collect();
-
-        // If no legacy segment_rules rows exist, fall back to the condition_expr column.
-        // The UI condition builder stores a single ConditionExpr there instead of rows.
-        if rules.is_empty()
-            && let Ok(Some(expr_json)) = self.get_condition_expr(id).await
+        let mut rules = Vec::new();
+        if let Ok(Some(expr_json)) = self.get_condition_expr(id).await
             && let Ok(expr) = serde_json::from_value::<ConditionExpr>(expr_json)
         {
             rules.push(Rule {
@@ -423,58 +405,6 @@ impl SegmentRepository for PgSegmentRepository {
         }
 
         Ok(RuleBasedSegment { id, rules })
-    }
-
-    async fn upsert_rules(&self, id: SegmentId, rules: &[Rule]) -> Result<(), RepositoryError> {
-        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
-
-        // Delete existing rules for this segment
-        sqlx::query!(
-            r#"DELETE FROM segment_rules WHERE segment_id = $1"#,
-            id as SegmentId
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        // Insert new rules
-        for (i, rule) in rules.iter().enumerate() {
-            sqlx::query!(
-                r#"
-                INSERT INTO segment_rules (segment_id, rule_index, rule_def)
-                VALUES ($1, $2, $3)
-                "#,
-                id as SegmentId,
-                i32::try_from(i).unwrap_or(i32::MAX),
-                Json(rule) as _
-            )
-            .execute(&mut *tx)
-            .await
-            .map_err(RepositoryError::Database)?;
-        }
-
-        // Update segment updated_at and version
-        sqlx::query!(
-            r#"UPDATE segments SET updated_at = NOW(), version = version + 1 WHERE id = $1"#,
-            id as SegmentId
-        )
-        .execute(&mut *tx)
-        .await
-        .map_err(RepositoryError::Database)?;
-
-        tx.commit().await.map_err(RepositoryError::Database)?;
-
-        self.audit
-            .log(
-                None,
-                "segment",
-                id.as_uuid(),
-                "upsert_rules",
-                serde_json::json!({ "rule_count": rules.len() }),
-            )
-            .await?;
-
-        Ok(())
     }
 
     async fn set_list_entries(
@@ -592,14 +522,8 @@ impl SegmentRepository for PgSegmentRepository {
             .map(stitchd_core::id::SegmentId::as_uuid)
             .collect();
 
-        // Load all segment_rules rows for these IDs in one query.
-        let rule_rows = sqlx::query(
-            r"
-            SELECT segment_id, rule_def
-            FROM segment_rules
-            WHERE segment_id = ANY($1)
-            ORDER BY segment_id, rule_index
-            ",
+        let rows = sqlx::query(
+            r"SELECT id, condition_expr FROM segments WHERE id = ANY($1) AND condition_expr IS NOT NULL",
         )
         .bind(&uuids)
         .fetch_all(&self.pool)
@@ -607,47 +531,17 @@ impl SegmentRepository for PgSegmentRepository {
         .map_err(RepositoryError::Database)?;
 
         let mut rules_by_id: HashMap<SegmentId, Vec<Rule>> = HashMap::new();
-        for row in rule_rows {
-            let seg_uuid: uuid::Uuid = row.get("segment_id");
+        for row in rows {
+            let seg_uuid: uuid::Uuid = row.get("id");
             let seg_id = SegmentId::from_uuid(seg_uuid);
-            let rule_json: serde_json::Value = row.get("rule_def");
-            if let Ok(rule) = serde_json::from_value::<Rule>(rule_json) {
-                rules_by_id.entry(seg_id).or_default().push(rule);
-            }
-        }
-
-        // For any IDs with no segment_rules rows, fall back to condition_expr.
-        let ids_needing_fallback: Vec<SegmentId> = ids
-            .iter()
-            .copied()
-            .filter(|id| !rules_by_id.contains_key(id))
-            .collect();
-
-        if !ids_needing_fallback.is_empty() {
-            let fallback_uuids: Vec<uuid::Uuid> = ids_needing_fallback
-                .iter()
-                .map(stitchd_core::id::SegmentId::as_uuid)
-                .collect();
-            let fallback_rows = sqlx::query(
-                r"SELECT id, condition_expr FROM segments WHERE id = ANY($1) AND condition_expr IS NOT NULL",
-            )
-            .bind(&fallback_uuids)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(RepositoryError::Database)?;
-
-            for row in fallback_rows {
-                let seg_uuid: uuid::Uuid = row.get("id");
-                let seg_id = SegmentId::from_uuid(seg_uuid);
-                let expr_json: serde_json::Value = row.get("condition_expr");
-                if let Ok(expr) = serde_json::from_value::<ConditionExpr>(expr_json) {
-                    rules_by_id.entry(seg_id).or_default().push(Rule {
-                        id: RuleId::new(),
-                        name: None,
-                        condition: expr,
-                        output: RuleOutput::Variant(VariantId::new()),
-                    });
-                }
+            let expr_json: serde_json::Value = row.get("condition_expr");
+            if let Ok(expr) = serde_json::from_value::<ConditionExpr>(expr_json) {
+                rules_by_id.entry(seg_id).or_default().push(Rule {
+                    id: RuleId::new(),
+                    name: None,
+                    condition: expr,
+                    output: RuleOutput::Variant(VariantId::new()),
+                });
             }
         }
 

@@ -243,19 +243,6 @@ pub mod tests {
                 .ok_or_else(|| RepositoryError::NotFound { id: id.to_string() })
         }
 
-        async fn upsert_rules(
-            &self,
-            id: SegmentId,
-            rules: &[stitchd_core::rule_engine::types::Rule],
-        ) -> Result<(), RepositoryError> {
-            let def = RuleBasedSegment {
-                id,
-                rules: rules.to_vec(),
-            };
-            self.rule_defs.lock().unwrap().insert(id, def);
-            Ok(())
-        }
-
         async fn set_list_entries(
             &self,
             id: SegmentId,

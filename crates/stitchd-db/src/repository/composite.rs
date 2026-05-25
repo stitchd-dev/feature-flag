@@ -99,14 +99,6 @@ impl SegmentRepository for CompositeSegmentRepository {
         self.pg.find_with_rules(id).await
     }
 
-    async fn upsert_rules(
-        &self,
-        id: SegmentId,
-        rules: &[stitchd_core::rule_engine::types::Rule],
-    ) -> Result<(), RepositoryError> {
-        self.pg.upsert_rules(id, rules).await
-    }
-
     async fn get_condition_expr(
         &self,
         id: SegmentId,

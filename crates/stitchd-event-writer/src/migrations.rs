@@ -23,60 +23,10 @@ pub enum MigrationError {
 }
 
 /// An embedded migration: (filename, SQL content).
-static MIGRATIONS: &[(&str, &str)] = &[
-    (
-        "20260419000001_events",
-        include_str!("../migrations/20260419000001_events.sql"),
-    ),
-    (
-        "20260419000002_metric_definitions",
-        include_str!("../migrations/20260419000002_metric_definitions.sql"),
-    ),
-    (
-        "20260419000003_events_count_mv",
-        include_str!("../migrations/20260419000003_events_count_mv.sql"),
-    ),
-    (
-        "20260419000004_events_numeric_mv",
-        include_str!("../migrations/20260419000004_events_numeric_mv.sql"),
-    ),
-    (
-        "20260516000005_events_experiment_daily_mv",
-        include_str!("../migrations/20260516000005_events_experiment_daily_mv.sql"),
-    ),
-    (
-        "20260516000006_events_experiment_daily_backfill",
-        include_str!("../migrations/20260516000006_events_experiment_daily_backfill.sql"),
-    ),
-    (
-        "20260516000007_events_v2",
-        include_str!("../migrations/20260516000007_events_v2.sql"),
-    ),
-    (
-        "20260520000001_events_v2_properties",
-        include_str!("../migrations/20260520000001_events_v2_properties.sql"),
-    ),
-    (
-        "20260521000001_flag_eval_log_matched_rule",
-        include_str!("../migrations/20260521000001_flag_eval_log_matched_rule.sql"),
-    ),
-    (
-        "20260521000002_experiment_iterations_active_dict",
-        include_str!("../migrations/20260521000002_experiment_iterations_active_dict.sql"),
-    ),
-    (
-        "20260521000003_experiment_assignments_mv",
-        include_str!("../migrations/20260521000003_experiment_assignments_mv.sql"),
-    ),
-    (
-        "20260521000004_backfill_experiment_assignments",
-        include_str!("../migrations/20260521000004_backfill_experiment_assignments.sql"),
-    ),
-    (
-        "20260521000005_experiment_results_context_type",
-        include_str!("../migrations/20260521000005_experiment_results_context_type.sql"),
-    ),
-];
+static MIGRATIONS: &[(&str, &str)] = &[(
+    "20260525000001_v1_baseline",
+    include_str!("../migrations/20260525000001_v1_baseline.sql"),
+)];
 
 /// Apply all pending ClickHouse migrations.
 ///

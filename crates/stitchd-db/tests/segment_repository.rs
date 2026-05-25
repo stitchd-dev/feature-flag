@@ -76,15 +76,20 @@ async fn test_rule_based_segment_repository(pool: sqlx::PgPool) {
     };
     repo.create(&segment).await.unwrap();
 
-    let rules = vec![Rule {
+    let rules = [Rule {
         id: RuleId::new(),
         name: None,
         condition: ConditionExpr::And(vec![]),
         output: RuleOutput::Variant(VariantId::new()),
     }];
 
-    // 1. Upsert rules
-    repo.upsert_rules(segment_id, &rules).await.unwrap();
+    // 1. Set condition expr
+    repo.set_condition_expr(
+        segment_id,
+        Some(&serde_json::to_value(&rules[0].condition).unwrap()),
+    )
+    .await
+    .unwrap();
 
     // 2. Find with rules
     let found = repo.find_with_rules(segment_id).await.unwrap();
@@ -92,13 +97,18 @@ async fn test_rule_based_segment_repository(pool: sqlx::PgPool) {
     assert_eq!(found.rules[0].id, rules[0].id);
 
     // 3. Second upsert replaces
-    let new_rules = vec![Rule {
+    let new_rules = [Rule {
         id: RuleId::new(),
         name: None,
         condition: ConditionExpr::Or(vec![]),
         output: RuleOutput::Variant(VariantId::new()),
     }];
-    repo.upsert_rules(segment_id, &new_rules).await.unwrap();
+    repo.set_condition_expr(
+        segment_id,
+        Some(&serde_json::to_value(&new_rules[0].condition).unwrap()),
+    )
+    .await
+    .unwrap();
     let found2 = repo.find_with_rules(segment_id).await.unwrap();
     assert_eq!(found2.rules.len(), 1);
     assert_eq!(found2.rules[0].id, new_rules[0].id);

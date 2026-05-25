@@ -122,7 +122,7 @@ impl EvalLogSource for ClickHouseEvalLogSource {
             .query(&format!(
                 r"
                 SELECT DISTINCT env_id, context_type, params_json
-                FROM flag_evaluation_log_v2
+                FROM flag_evaluation_log
                 WHERE evaluated_at >= fromUnixTimestamp64Milli({since_ms})
                 "
             ))

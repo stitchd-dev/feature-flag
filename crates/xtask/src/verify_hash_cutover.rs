@@ -217,8 +217,7 @@ fn target_values_new(hash_inputs: &[HashSelectorJson], ctx: &SampleContext) -> V
 }
 
 fn bucket_for(flag_key: &str, env_id: &str, target_values: &[String]) -> u32 {
-    let percentage = calculate_allocation(flag_key, env_id, target_values);
-    ((percentage * 10.0).floor() as u32).min(999)
+    calculate_allocation(flag_key, env_id, target_values) / 10
 }
 
 // ── Report ───────────────────────────────────────────────────────────────────

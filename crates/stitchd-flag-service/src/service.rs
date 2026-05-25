@@ -741,19 +741,16 @@ impl FlagService for FlagServiceImpl {
                             if !alloc.buckets.is_empty() =>
                         {
                             // Percentage catch-all → `default_rule_distribution`.
-                            // Convert weight_milli (0..=1000) → percentage
-                            // (0.0..=100.0) preserving operator intent. Sum
-                            // is normalised to 100.0 by RolloutDistribution::validate
-                            // downstream; if validation fails we leave the
-                            // record's default fields alone and let the rule
-                            // persist as-is (best-effort defense-in-depth,
-                            // not strict normalisation).
+                            // Convert weight_milli (0..=1000) → basis points
+                            // (0..=10_000). Sum is validated by
+                            // RolloutDistribution::validate downstream; if
+                            // validation fails we leave the record alone.
                             let allocations: Vec<stitchd_core::rollout::RolloutAllocation> = alloc
                                 .buckets
                                 .iter()
                                 .map(|b| stitchd_core::rollout::RolloutAllocation {
                                     variant_key: b.variant_key.clone(),
-                                    percentage: f64::from(b.weight_milli) / 10.0,
+                                    percentage_bp: b.weight_milli * 10,
                                 })
                                 .collect();
                             let dist = stitchd_core::rollout::RolloutDistribution { allocations };
@@ -1217,7 +1214,7 @@ impl FlagService for FlagServiceImpl {
                     .iter()
                     .map(|a| stitchd_core::rollout::RolloutAllocation {
                         variant_key: a.variant_key.clone(),
-                        percentage: a.percentage,
+                        percentage_bp: (a.percentage * 100.0).round() as u32,
                     })
                     .collect(),
             };
@@ -1728,13 +1725,6 @@ mod tests {
             id: stitchd_core::id::SegmentId,
         ) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
-        }
-        async fn upsert_rules(
-            &self,
-            _id: stitchd_core::id::SegmentId,
-            _rules: &[stitchd_core::rule_engine::types::Rule],
-        ) -> Result<(), RepositoryError> {
-            Ok(())
         }
         async fn set_list_entries(
             &self,
@@ -2657,13 +2647,6 @@ mod tests {
             id: stitchd_core::id::SegmentId,
         ) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError> {
             Err(RepositoryError::NotFound { id: id.to_string() })
-        }
-        async fn upsert_rules(
-            &self,
-            _id: stitchd_core::id::SegmentId,
-            _rules: &[stitchd_core::rule_engine::types::Rule],
-        ) -> Result<(), RepositoryError> {
-            Ok(())
         }
         async fn set_list_entries(
             &self,

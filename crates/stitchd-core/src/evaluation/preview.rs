@@ -1075,11 +1075,11 @@ mod tests {
             allocations: vec![
                 RolloutAllocation {
                     variant_key: "on".to_string(),
-                    percentage: 50.0,
+                    percentage_bp: 5000,
                 },
                 RolloutAllocation {
                     variant_key: "off".to_string(),
-                    percentage: 50.0,
+                    percentage_bp: 5000,
                 },
             ],
         });
@@ -1124,7 +1124,7 @@ mod tests {
         flag.record.default_rule_distribution = Some(RolloutDistribution {
             allocations: vec![RolloutAllocation {
                 variant_key: "nonexistent".to_string(),
-                percentage: 100.0,
+                percentage_bp: 10000,
             }],
         });
 
@@ -1146,7 +1146,7 @@ mod tests {
         flag.record.default_rule_distribution = Some(RolloutDistribution {
             allocations: vec![RolloutAllocation {
                 variant_key: "off".to_string(),
-                percentage: 100.0,
+                percentage_bp: 10000,
             }],
         });
 
@@ -1164,7 +1164,7 @@ mod tests {
         flag.record.default_rule_distribution = Some(RolloutDistribution {
             allocations: vec![RolloutAllocation {
                 variant_key: "on".to_string(),
-                percentage: 100.0,
+                percentage_bp: 10000,
             }],
         });
         let ec = EvaluationContext::new().with_context(Context::new("user", "alice"));

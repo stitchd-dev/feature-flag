@@ -628,13 +628,6 @@ mod tests {
         async fn update(&self, _s: &Segment) -> Result<Segment, RepositoryError> {
             unimplemented!()
         }
-        async fn upsert_rules(
-            &self,
-            _id: SegmentId,
-            _rules: &[stitchd_core::rule_engine::types::Rule],
-        ) -> Result<(), RepositoryError> {
-            unimplemented!()
-        }
         async fn set_list_entries(
             &self,
             _id: SegmentId,

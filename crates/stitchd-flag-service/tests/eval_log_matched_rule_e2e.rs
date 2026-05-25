@@ -24,7 +24,6 @@ use stitchd_core::flag::{FlagHashingConfig, FlagRecord, FlagRule, Variant};
 use stitchd_core::id::{
     EnvironmentId, EventDefinitionId, FlagId, FlagKey, ProjectId, SegmentId, VariantId,
 };
-use stitchd_core::rule_engine::types::Rule;
 use stitchd_core::segment::{RuleBasedSegment, Segment};
 use stitchd_db::{
     ContextMembership, EventDefinitionRepository, FlagRepository, ListSegmentSummary,
@@ -207,9 +206,6 @@ impl SegmentRepository for StubSegmentRepo {
         unimplemented!()
     }
     async fn update(&self, _s: &Segment) -> Result<Segment, RepositoryError> {
-        unimplemented!()
-    }
-    async fn upsert_rules(&self, _id: SegmentId, _rules: &[Rule]) -> Result<(), RepositoryError> {
         unimplemented!()
     }
     async fn set_list_entries(

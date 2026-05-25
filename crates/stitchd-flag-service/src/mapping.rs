@@ -5,11 +5,11 @@ use std::hash::BuildHasher;
 
 use stitchd_core::{
     id::{FlagId, RuleId, VariantId},
-    rule_engine::types::{RuleOutput, TargetField},
+    rule_engine::types::RuleOutput,
     variants::VariantValue,
 };
 use stitchd_proto::flags::v1::{
-    AllocationBucket, ContextHashSpec, ContextKeySelector, ContextParameterSelector, FeatureFlag,
+    AllocationBucket, ContextKeySelector, ContextParameterSelector, FeatureFlag,
     FlagRule as ProtoFlagRule, FlagValueType as ProtoFlagValueType,
     HashSelector as ProtoHashSelector, PercentageAllocation, Variant as ProtoVariant,
     VariantValue as ProtoVariantValue, hash_selector::Selector as ProtoSelectorInner,
@@ -72,9 +72,7 @@ pub fn proto_flag_rule_to_domain(
     proto: &ProtoFlagRule,
     variant_map: &HashMap<String, VariantId>,
 ) -> Option<stitchd_core::flag::FlagRule> {
-    use stitchd_core::rule_engine::types::{
-        ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField,
-    };
+    use stitchd_core::rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput};
     use stitchd_proto::flags::v1::flag_rule::Output;
 
     let condition: ConditionExpr = serde_json::from_slice(&proto.rule_payload).ok()?;
@@ -85,43 +83,11 @@ pub fn proto_flag_rule_to_domain(
             RuleOutput::Variant(vid)
         }
         Some(Output::Allocation(alloc)) => {
-            // Phase 4 of flag_eval_unify_20260522: prefer `hash_inputs`
-            // (ordered, new shape) when present. Fall back to canonically
-            // sorting the legacy `context_hash_specs` map (context_type
-            // ASC; parameters ASC within type) so pre-migration data
-            // continues to hash to the same bucket whenever the map's
-            // canonical order matches the producer's original insertion
-            // order. Operator-review of mismatches is the
-            // `cargo xtask verify-hash-cutover` job.
-            let targets: Vec<PercentageTarget> = if !alloc.hash_inputs.is_empty() {
-                alloc
-                    .hash_inputs
-                    .iter()
-                    .filter_map(proto_hash_selector_to_target)
-                    .collect()
-            } else {
-                let mut sorted: Vec<_> = alloc.context_hash_specs.iter().collect();
-                sorted.sort_by(|a, b| a.0.cmp(b.0));
-                let mut out = Vec::new();
-                for (ctx_type, spec) in sorted {
-                    if spec.parameter_names.is_empty() {
-                        out.push(PercentageTarget {
-                            context_type: ctx_type.clone(),
-                            field: TargetField::Key,
-                        });
-                    } else {
-                        let mut params = spec.parameter_names.clone();
-                        params.sort();
-                        for param in params {
-                            out.push(PercentageTarget {
-                                context_type: ctx_type.clone(),
-                                field: TargetField::Parameter(param),
-                            });
-                        }
-                    }
-                }
-                out
-            };
+            let targets: Vec<PercentageTarget> = alloc
+                .hash_inputs
+                .iter()
+                .filter_map(proto_hash_selector_to_target)
+                .collect();
             let weights = alloc
                 .buckets
                 .iter()
@@ -337,26 +303,8 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
             Some(Output::VariantKey(key))
         }
         RuleOutput::Percentage { targets, weights } => {
-            // Phase 4 of flag_eval_unify_20260522: dual-populate the proto.
-            // - `hash_inputs` is the authoritative new field — built
-            //   straight from the ordered domain `targets`.
-            // - `context_hash_specs` is synthesised from the same targets
-            //   so pre-Phase-4 readers continue to work for the dual-
-            //   schema window (Phase 5/6 retires the legacy field).
             let hash_inputs: Vec<ProtoHashSelector> =
                 targets.iter().map(target_to_proto_hash_selector).collect();
-
-            let mut context_hash_specs: HashMap<String, ContextHashSpec> = HashMap::new();
-            for target in targets {
-                let spec = context_hash_specs
-                    .entry(target.context_type.clone())
-                    .or_insert_with(|| ContextHashSpec {
-                        parameter_names: Vec::new(),
-                    });
-                if let TargetField::Parameter(name) = &target.field {
-                    spec.parameter_names.push(name.clone());
-                }
-            }
 
             let buckets = weights
                 .iter()
@@ -367,7 +315,7 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
                 .collect();
 
             Some(Output::Allocation(PercentageAllocation {
-                context_hash_specs,
+                context_hash_specs: HashMap::new(),
                 buckets,
                 hash_inputs,
             }))
@@ -440,6 +388,7 @@ mod tests {
         rule_engine::types::{ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField},
         variants::{FlagValueType as DomainFVT, VariantValue},
     };
+    use stitchd_proto::flags::v1::ContextHashSpec;
 
     fn make_variant_id() -> VariantId {
         VariantId::new()
@@ -660,7 +609,7 @@ mod tests {
 
         let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
         if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = proto.output {
-            assert!(alloc.context_hash_specs.contains_key("user"));
+            assert!(alloc.context_hash_specs.is_empty());
             assert_eq!(alloc.buckets.len(), 1);
             assert_eq!(alloc.buckets[0].variant_key, "treatment");
             assert_eq!(alloc.buckets[0].weight_milli, 1000);
@@ -694,18 +643,18 @@ mod tests {
 
         let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
         if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = proto.output {
-            let spec = alloc.context_hash_specs.get("user").unwrap();
-            assert!(spec.parameter_names.contains(&"user_id".to_string()));
+            assert!(alloc.context_hash_specs.is_empty());
+            assert_eq!(alloc.hash_inputs.len(), 1);
         } else {
             panic!("expected Allocation output");
         }
     }
 
     #[test]
-    fn domain_percentage_dual_writes_hash_inputs_and_legacy_map() {
-        // Phase 4 of flag_eval_unify_20260522: every domain-to-proto
-        // conversion of `RuleOutput::Percentage` populates BOTH new and
-        // legacy proto fields.
+    fn domain_percentage_populates_hash_inputs_and_clears_legacy_map() {
+        // Phase 5/6 cutover: domain-to-proto conversion of
+        // `RuleOutput::Percentage` populates only `hash_inputs`; the legacy
+        // `context_hash_specs` map is always empty.
         let vid = make_variant_id();
         let mut key_map = HashMap::new();
         key_map.insert(vid, "t".to_string());
@@ -754,15 +703,14 @@ mod tests {
             }
             _ => panic!("expected ContextParameter"),
         }
-        // Legacy field also populated.
-        assert!(alloc.context_hash_specs.contains_key("user"));
-        assert!(alloc.context_hash_specs.contains_key("device"));
+        // Legacy field must be empty after cutover.
+        assert!(alloc.context_hash_specs.is_empty());
     }
 
     #[test]
-    fn proto_to_domain_prefers_hash_inputs_over_legacy_map() {
-        // When both proto fields are populated, the new `hash_inputs`
-        // ordered list wins — selector order is preserved end-to-end.
+    fn proto_to_domain_reads_hash_inputs_preserving_order() {
+        // `hash_inputs` is the sole authoritative field; selector order is
+        // preserved end-to-end. `context_hash_specs` is ignored.
         let vid = make_variant_id();
         let variant_map: HashMap<String, VariantId> =
             [("t".to_string(), vid)].into_iter().collect();
@@ -825,23 +773,16 @@ mod tests {
     }
 
     #[test]
-    fn proto_to_domain_legacy_map_uses_canonical_sort() {
-        // When only the legacy `context_hash_specs` map is populated (no
-        // `hash_inputs`), conversion walks the map in
-        // `context_type ASC, parameter ASC` order.
+    fn proto_to_domain_empty_hash_inputs_yields_empty_targets() {
+        // After context_hash_specs fallback removal, a proto with only the
+        // legacy map and no hash_inputs produces an empty targets vec.
         let vid = make_variant_id();
         let variant_map: HashMap<String, VariantId> =
             [("t".to_string(), vid)].into_iter().collect();
 
         let mut legacy_map = HashMap::new();
         legacy_map.insert(
-            "b".to_string(),
-            ContextHashSpec {
-                parameter_names: vec!["z".to_string(), "a".to_string()],
-            },
-        );
-        legacy_map.insert(
-            "a".to_string(),
+            "user".to_string(),
             ContextHashSpec {
                 parameter_names: vec![],
             },
@@ -859,7 +800,7 @@ mod tests {
                         variant_key: "t".to_string(),
                         weight_milli: 1000,
                     }],
-                    hash_inputs: vec![], // legacy-only payload
+                    hash_inputs: vec![],
                 },
             )),
             name: String::new(),
@@ -871,14 +812,10 @@ mod tests {
         let RuleOutput::Percentage { targets, .. } = domain.rule.output else {
             panic!("expected Percentage output");
         };
-        // a.key, b.a, b.z — canonical ASC sort.
-        assert_eq!(targets.len(), 3);
-        assert_eq!(targets[0].context_type, "a");
-        assert!(matches!(targets[0].field, TargetField::Key));
-        assert_eq!(targets[1].context_type, "b");
-        assert!(matches!(targets[1].field, TargetField::Parameter(ref p) if p == "a"));
-        assert_eq!(targets[2].context_type, "b");
-        assert!(matches!(targets[2].field, TargetField::Parameter(ref p) if p == "z"));
+        assert!(
+            targets.is_empty(),
+            "context_hash_specs fallback is removed; empty hash_inputs → empty targets"
+        );
     }
 
     // ── feature-flag-yrj — empty-WHEN rejection ────────────────────────

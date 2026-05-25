@@ -168,8 +168,8 @@ fn target_values_from_hash_inputs(
 }
 
 fn bucket_for(flag_key: &str, env_id: &str, target_values: &[String]) -> u32 {
-    let percentage = calculate_allocation(flag_key, env_id, target_values);
-    ((percentage * 10.0).floor() as u32).min(999)
+    // calculate_allocation returns basis points (0..=9999); divide by 10 → bucket (0..=999)
+    (calculate_allocation(flag_key, env_id, target_values) / 10).min(999)
 }
 
 /// Returns the frozen pre-migration corpus.

@@ -409,13 +409,6 @@ pub trait SegmentRepository: Send + Sync {
         id: SegmentId,
     ) -> Result<stitchd_core::segment::RuleBasedSegment, RepositoryError>;
 
-    /// Upsert rule definitions for a segment (replaces all existing rules).
-    async fn upsert_rules(
-        &self,
-        id: SegmentId,
-        rules: &[stitchd_core::rule_engine::types::Rule],
-    ) -> Result<(), RepositoryError>;
-
     /// Replace list entries for a specific context type within a segment (generation-swap).
     ///
     /// Atomically flips the active generation pointer after writing all new entries.
@@ -529,7 +522,7 @@ pub trait SegmentRepository: Send + Sync {
     /// Fetch rule definitions for multiple rule-based segments in one query.
     ///
     /// Returns a map from segment ID to its assembled [`RuleBasedSegment`].
-    /// Segments with no `segment_rules` rows fall back to the `condition_expr` column.
+    /// Reads exclusively from the `condition_expr` column.
     async fn find_rules_batch(
         &self,
         ids: &[SegmentId],
