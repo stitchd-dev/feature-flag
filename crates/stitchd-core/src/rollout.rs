@@ -7,15 +7,12 @@
 //!
 //! Validation rules (enforced by [`RolloutDistribution::validate`]):
 //! * `allocations` non-empty
-//! * every `percentage` in the half-open range `(0.0, 100.0]`
+//! * every `percentage_bp` in the range `(0, 10_000]` (1 = 0.01%, 10000 = 100%)
 //! * `variant_key` is unique across all allocations
-//! * the sum of all percentages equals `100.0 ± 0.01`
+//! * the sum of all `percentage_bp` values equals exactly `10_000`
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
-/// Tolerance for the percentage-sum equality check.
-const SUM_TOLERANCE: f64 = 0.01;
 
 /// Reasons a [`RolloutDistribution`] may fail validation.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -23,13 +20,13 @@ pub enum RolloutDistributionError {
     /// At least one allocation is required.
     #[error("rollout distribution must have at least one allocation")]
     Empty,
-    /// One of the percentages was outside `(0.0, 100.0]`.
-    #[error("allocation percentage {percentage} for variant {variant_key} must be in (0, 100]")]
+    /// One of the basis-point values was outside `(0, 10_000]`.
+    #[error("allocation percentage_bp {percentage_bp} for variant {variant_key} must be in (0, 10000]")]
     PercentageOutOfRange {
-        /// The variant key whose percentage is out of range.
+        /// The variant key whose basis-point value is out of range.
         variant_key: String,
-        /// The bad value.
-        percentage: f64,
+        /// The bad value in basis points.
+        percentage_bp: u32,
     },
     /// The same variant key appeared more than once.
     #[error("duplicate variant_key {variant_key} in rollout distribution")]
@@ -37,11 +34,11 @@ pub enum RolloutDistributionError {
         /// The duplicated variant key.
         variant_key: String,
     },
-    /// The sum of percentages did not equal 100.
-    #[error("allocation percentages must sum to 100 (got {actual})")]
+    /// The sum of basis-point values did not equal 10_000.
+    #[error("allocation basis points must sum to 10000 (got {actual})")]
     SumMismatch {
         /// The observed sum.
-        actual: f64,
+        actual: u32,
     },
 }
 
@@ -51,8 +48,8 @@ pub enum RolloutDistributionError {
 pub struct RolloutAllocation {
     /// The variant key this allocation routes traffic to.
     pub variant_key: String,
-    /// Percentage of traffic routed to this variant (in `(0, 100]`).
-    pub percentage: f64,
+    /// Basis points of traffic routed to this variant (1 = 0.01%, 10000 = 100%).
+    pub percentage_bp: u32,
 }
 
 /// A complete percentage distribution over variants used for the
@@ -65,37 +62,25 @@ pub struct RolloutDistribution {
 }
 
 impl RolloutDistribution {
-    /// Assign a variant from this distribution given a hashed percentage in
-    /// `[0.0, 100.0)`.
+    /// Assign a variant given a basis-point bucket in `[0, 9999]` from
+    /// [`crate::hashing::calculate_allocation`].
     ///
-    /// Walks the allocations in declaration order, accumulating percentages
-    /// until the running cumulative total exceeds `percentage`. Returns the
-    /// `variant_key` of the matching allocation.
+    /// Walks allocations in declaration order, accumulating `percentage_bp`
+    /// values until the running total exceeds `bp`. Returns the `variant_key`
+    /// of the matching bucket.
     ///
-    /// **Hash input convention.** The caller is responsible for producing
-    /// `percentage` via the same hashing primitive used by the
-    /// `rule_engine::percentage` module — i.e. `calculate_allocation(flag_key,
-    /// env_id_str, &target_values)` — so default-rule and percentage-rule
-    /// rollouts share cohort assignment for the same context.
-    ///
-    /// Returns `None` only on a fully malformed distribution (validate()
-    /// failed but caller persisted anyway). For a validated distribution this
-    /// always returns `Some`.
+    /// Returns `None` only on an empty (invalid) distribution.
     #[must_use]
-    pub fn assign_variant_key(&self, percentage: f64) -> Option<&str> {
-        // Clamp percentage to [0.0, 100.0); calculate_allocation already
-        // returns values in this range but be defensive.
-        let pct = percentage.clamp(0.0, 100.0 - f64::EPSILON);
-        let mut cumulative = 0.0_f64;
+    pub fn assign_variant_key(&self, bp: u32) -> Option<&str> {
+        let mut cumulative: u32 = 0;
         for alloc in &self.allocations {
-            cumulative += alloc.percentage;
-            if pct < cumulative {
+            cumulative += alloc.percentage_bp;
+            if bp < cumulative {
                 return Some(alloc.variant_key.as_str());
             }
         }
-        // Fall-through guard: with a validated sum of ~100.0 this is only
-        // reachable if the input percentage is at the upper bound; return the
-        // last allocation.
+        // Fall-through guard: reachable only when bp == 9999 and cumulative
+        // sum is exactly 10000 (validated). Return last allocation.
         self.allocations.last().map(|a| a.variant_key.as_str())
     }
 
@@ -113,13 +98,13 @@ impl RolloutDistribution {
 
         let mut seen: std::collections::HashSet<&str> =
             std::collections::HashSet::with_capacity(self.allocations.len());
-        let mut sum = 0.0_f64;
+        let mut sum: u32 = 0;
 
         for alloc in &self.allocations {
-            if !(alloc.percentage > 0.0 && alloc.percentage <= 100.0) {
+            if alloc.percentage_bp == 0 || alloc.percentage_bp > 10_000 {
                 return Err(RolloutDistributionError::PercentageOutOfRange {
                     variant_key: alloc.variant_key.clone(),
-                    percentage: alloc.percentage,
+                    percentage_bp: alloc.percentage_bp,
                 });
             }
             if !seen.insert(alloc.variant_key.as_str()) {
@@ -127,10 +112,10 @@ impl RolloutDistribution {
                     variant_key: alloc.variant_key.clone(),
                 });
             }
-            sum += alloc.percentage;
+            sum += alloc.percentage_bp;
         }
 
-        if (sum - 100.0).abs() > SUM_TOLERANCE {
+        if sum != 10_000 {
             return Err(RolloutDistributionError::SumMismatch { actual: sum });
         }
 
@@ -141,15 +126,6 @@ impl RolloutDistribution {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn alloc(key: &str, pct: f64) -> RolloutAllocation {
-        RolloutAllocation {
-            variant_key: key.to_string(),
-            percentage: pct,
-        }
-    }
-
-    // ── Basis-point contract (Red — these fail until Task 1.3 lands) ────────
 
     fn alloc_bp(key: &str, bp: u32) -> RolloutAllocation {
         RolloutAllocation {
@@ -256,15 +232,20 @@ mod tests {
     #[test]
     fn validate_accepts_balanced_two_variant_distribution() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("control", 50.0), alloc("treatment", 50.0)],
+            allocations: vec![alloc_bp("control", 5000), alloc_bp("treatment", 5000)],
         };
         assert!(dist.validate().is_ok());
     }
 
     #[test]
-    fn validate_accepts_within_tolerance_sum() {
+    fn validate_accepts_three_way_distribution() {
+        // 3333 + 3333 + 3334 = 10000
         let dist = RolloutDistribution {
-            allocations: vec![alloc("a", 33.33), alloc("b", 33.33), alloc("c", 33.34)],
+            allocations: vec![
+                alloc_bp("a", 3333),
+                alloc_bp("b", 3333),
+                alloc_bp("c", 3334),
+            ],
         };
         assert!(dist.validate().is_ok());
     }
@@ -272,7 +253,7 @@ mod tests {
     #[test]
     fn validate_accepts_single_full_allocation() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("only", 100.0)],
+            allocations: vec![alloc_bp("only", 10000)],
         };
         assert!(dist.validate().is_ok());
     }
@@ -286,42 +267,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_zero_percentage() {
-        let dist = RolloutDistribution {
-            allocations: vec![alloc("a", 0.0), alloc("b", 100.0)],
-        };
-        assert!(matches!(
-            dist.validate(),
-            Err(RolloutDistributionError::PercentageOutOfRange { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_rejects_negative_percentage() {
-        let dist = RolloutDistribution {
-            allocations: vec![alloc("a", -1.0), alloc("b", 101.0)],
-        };
-        assert!(matches!(
-            dist.validate(),
-            Err(RolloutDistributionError::PercentageOutOfRange { .. })
-        ));
-    }
-
-    #[test]
-    fn validate_rejects_over_100_percentage() {
-        let dist = RolloutDistribution {
-            allocations: vec![alloc("a", 101.0)],
-        };
-        assert!(matches!(
-            dist.validate(),
-            Err(RolloutDistributionError::PercentageOutOfRange { .. })
-        ));
-    }
-
-    #[test]
     fn validate_rejects_duplicate_variant_key() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("dup", 50.0), alloc("dup", 50.0)],
+            allocations: vec![alloc_bp("dup", 5000), alloc_bp("dup", 5000)],
         };
         assert!(matches!(
             dist.validate(),
@@ -330,109 +278,74 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_sum_below_100() {
+    fn validate_rejects_sum_below_10000() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("a", 30.0), alloc("b", 30.0)],
+            allocations: vec![alloc_bp("a", 3000), alloc_bp("b", 3000)],
         };
         assert!(matches!(
             dist.validate(),
-            Err(RolloutDistributionError::SumMismatch { .. })
+            Err(RolloutDistributionError::SumMismatch { actual: 6000 })
         ));
     }
 
     #[test]
-    fn validate_rejects_sum_above_100() {
+    fn validate_rejects_sum_above_10000() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("a", 60.0), alloc("b", 60.0)],
+            allocations: vec![alloc_bp("a", 6000), alloc_bp("b", 6000)],
         };
         assert!(matches!(
             dist.validate(),
-            Err(RolloutDistributionError::SumMismatch { .. })
+            Err(RolloutDistributionError::SumMismatch { actual: 12000 })
         ));
     }
 
     #[test]
-    fn validate_treats_tolerance_as_strict_boundary() {
-        // 100 + 0.02 > tolerance → must fail.
+    fn assign_variant_returns_first_allocation_for_low_bp() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("a", 50.0), alloc("b", 50.02)],
+            allocations: vec![alloc_bp("control", 5000), alloc_bp("treatment", 5000)],
         };
-        assert!(matches!(
-            dist.validate(),
-            Err(RolloutDistributionError::SumMismatch { .. })
-        ));
-    }
-
-    // ── assign_variant_key (Phase 2 Task 2.2) ───────────────────────────────
-
-    #[test]
-    fn assign_variant_returns_first_allocation_for_low_percentage() {
-        let dist = RolloutDistribution {
-            allocations: vec![alloc("control", 50.0), alloc("treatment", 50.0)],
-        };
-        assert_eq!(dist.assign_variant_key(0.0), Some("control"));
-        assert_eq!(dist.assign_variant_key(25.0), Some("control"));
-        assert_eq!(dist.assign_variant_key(49.999), Some("control"));
+        assert_eq!(dist.assign_variant_key(0), Some("control"));
+        assert_eq!(dist.assign_variant_key(2500), Some("control"));
+        assert_eq!(dist.assign_variant_key(4999), Some("control"));
     }
 
     #[test]
-    fn assign_variant_returns_second_allocation_at_boundary_and_above() {
+    fn assign_variant_returns_second_allocation_at_boundary() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("control", 50.0), alloc("treatment", 50.0)],
+            allocations: vec![alloc_bp("control", 5000), alloc_bp("treatment", 5000)],
         };
-        assert_eq!(dist.assign_variant_key(50.0), Some("treatment"));
-        assert_eq!(dist.assign_variant_key(75.0), Some("treatment"));
-        assert_eq!(dist.assign_variant_key(99.999), Some("treatment"));
+        assert_eq!(dist.assign_variant_key(5000), Some("treatment"));
+        assert_eq!(dist.assign_variant_key(7500), Some("treatment"));
+        assert_eq!(dist.assign_variant_key(9999), Some("treatment"));
     }
 
     #[test]
     fn assign_variant_walks_three_way_distribution() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("a", 33.3), alloc("b", 33.3), alloc("c", 33.4)],
+            allocations: vec![
+                alloc_bp("a", 3333),
+                alloc_bp("b", 3333),
+                alloc_bp("c", 3334),
+            ],
         };
-        assert_eq!(dist.assign_variant_key(10.0), Some("a"));
-        assert_eq!(dist.assign_variant_key(40.0), Some("b"));
-        assert_eq!(dist.assign_variant_key(70.0), Some("c"));
+        assert_eq!(dist.assign_variant_key(1000), Some("a"));
+        assert_eq!(dist.assign_variant_key(4000), Some("b"));
+        assert_eq!(dist.assign_variant_key(7000), Some("c"));
     }
 
     #[test]
     fn assign_variant_handles_single_allocation() {
         let dist = RolloutDistribution {
-            allocations: vec![alloc("only", 100.0)],
+            allocations: vec![alloc_bp("only", 10000)],
         };
-        assert_eq!(dist.assign_variant_key(0.0), Some("only"));
-        assert_eq!(dist.assign_variant_key(50.0), Some("only"));
-        assert_eq!(dist.assign_variant_key(99.999), Some("only"));
+        assert_eq!(dist.assign_variant_key(0), Some("only"));
+        assert_eq!(dist.assign_variant_key(5000), Some("only"));
+        assert_eq!(dist.assign_variant_key(9999), Some("only"));
     }
 
     #[test]
     fn assign_variant_empty_distribution_returns_none() {
-        // Defensive: an unvalidated empty distribution can't assign.
-        // In practice, validate() would have rejected it before persistence.
-        let dist = RolloutDistribution {
-            allocations: vec![],
-        };
-        assert_eq!(dist.assign_variant_key(0.0), None);
-    }
-
-    #[test]
-    fn assign_variant_distribution_is_balanced_over_inputs() {
-        // Statistical sanity: 50/50 over evenly-spaced inputs in [0, 100)
-        // produces an approximately balanced split.
-        let dist = RolloutDistribution {
-            allocations: vec![alloc("a", 50.0), alloc("b", 50.0)],
-        };
-        let mut a_count = 0;
-        let mut b_count = 0;
-        for i in 0..1000 {
-            let pct = (i as f64) / 10.0; // 0.0, 0.1, 0.2, ..., 99.9
-            match dist.assign_variant_key(pct) {
-                Some("a") => a_count += 1,
-                Some("b") => b_count += 1,
-                _ => panic!("unexpected output"),
-            }
-        }
-        assert_eq!(a_count, 500);
-        assert_eq!(b_count, 500);
+        let dist = RolloutDistribution { allocations: vec![] };
+        assert_eq!(dist.assign_variant_key(0), None);
     }
 }
