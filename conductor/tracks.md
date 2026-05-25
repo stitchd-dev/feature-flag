@@ -4,10 +4,8 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [x] Track: Schema Hard Cutover — V1 Baseline + Legacy Cleanup
-*Link: [./conductor/tracks/schema_cutover_20260525/](./conductor/tracks/schema_cutover_20260525/)*
-
 <!-- Archived:
+- schema_cutover_20260525 (Schema Hard Cutover — V1 Baseline + Legacy Cleanup) — merged 2026-05-25
 - scaffold_20260411 (Workspace Scaffold & Project Foundation)
 - domain_20260411 (Core Domain Model & Database Schema)
 - rule_engine_20260412 (Rule Engine)
