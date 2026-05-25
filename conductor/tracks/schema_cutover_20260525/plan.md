@@ -15,12 +15,12 @@ on the final type shape.
   - `calculate_allocation_returns_u32` in `hashing.rs` tests
   - Basis-point boundary cases: 1 (0.01%), 10000 (100%)
 
-- [ ] Task 1.2: Implement — `crates/stitchd-core/src/hashing.rs`
+- [x] Task 1.2: Implement — `crates/stitchd-core/src/hashing.rs` (fec3bf8)
   - Change `compute_raw_percentage`: `(hash % 100_000) as f64 / 1000.0`
     → `(hash % 10_000) as u32`
   - Change `calculate_allocation` return type `f64` → `u32`
 
-- [ ] Task 1.3: Implement — `crates/stitchd-core/src/rollout.rs`
+- [x] Task 1.3: Implement — `crates/stitchd-core/src/rollout.rs` (fec3bf8)
   - `RolloutAllocation.percentage: f64` → `percentage_bp: u32`
   - `assign_variant_key(&self, percentage: f64)` → `assign_variant_key(&self, percentage_bp: u32)`
   - `validate()`: range check `(0, 10_000]`, sum check `== 10_000` (exact)
@@ -28,16 +28,16 @@ on the final type shape.
   - Update all `#[error(...)]` messages to use basis points
   - Update all existing tests: multiply old `f64` values × 100 (50.0 → 5000)
 
-- [ ] Task 1.4: Implement — `crates/stitchd-core/src/evaluation/engine.rs`
+- [x] Task 1.4: Implement — `crates/stitchd-core/src/evaluation/engine.rs` (6f4783a)
   - Update 4 `calculate_allocation` call sites (return value is now `u32`)
   - Update 2 `assign_variant_key` call sites (argument is now `u32`)
 
-- [ ] Task 1.5: Implement — `crates/xtask/src/verify_hash_cutover.rs`
+- [x] Task 1.5: Implement — `crates/xtask/src/verify_hash_cutover.rs` (6f4783a)
   - Update `calculate_allocation` call and any percentage comparisons
 
-- [ ] Task 1.6: Green — `cargo test -p stitchd-core` passes
+- [x] Task 1.6: Green — `cargo test -p stitchd-core` passes (544 tests, 0 failures)
 
-- [ ] Task 1.7: Conductor - User Manual Verification 'Phase 1: Rollout Precision' (Protocol in workflow.md)
+- [x] Task 1.7: Conductor - User Manual Verification 'Phase 1: Rollout Precision' (Protocol in workflow.md) — 544 tests pass, pure Rust change, no UI surface
 
 ---
 
