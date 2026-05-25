@@ -63,6 +63,33 @@ mod tests {
         assert!(unique.len() > 950); // Should be very unique for 1000 inputs
     }
 
+    // ── Basis-point contract (Red — these fail until Task 1.2 lands) ────────
+
+    #[test]
+    fn calculate_allocation_returns_u32_in_bp_range() {
+        // calculate_allocation must return u32 in [0, 9999]
+        let bp: u32 = calculate_allocation("my-flag", "env-abc", &["user-1".to_string()]);
+        assert!(bp < 10_000, "basis-point value must be < 10000, got {bp}");
+    }
+
+    #[test]
+    fn calculate_allocation_is_deterministic_as_u32() {
+        let v1: u32 = calculate_allocation("flag", "env", &["ctx".to_string()]);
+        let v2: u32 = calculate_allocation("flag", "env", &["ctx".to_string()]);
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn calculate_allocation_covers_bp_range() {
+        // 1000 distinct inputs should produce varied u32 outputs across [0, 9999]
+        let mut seen = std::collections::HashSet::new();
+        for i in 0..1000u32 {
+            let bp: u32 = calculate_allocation("flag", "env", &[i.to_string()]);
+            seen.insert(bp);
+        }
+        assert!(seen.len() > 900, "expected varied distribution, got {} unique values", seen.len());
+    }
+
     #[test]
     fn test_different_inputs_produce_different_hashes() {
         let val1 = ParameterValue::Str("user-1".to_string());

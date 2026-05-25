@@ -149,6 +149,110 @@ mod tests {
         }
     }
 
+    // ── Basis-point contract (Red — these fail until Task 1.3 lands) ────────
+
+    fn alloc_bp(key: &str, bp: u32) -> RolloutAllocation {
+        RolloutAllocation {
+            variant_key: key.to_string(),
+            percentage_bp: bp,
+        }
+    }
+
+    #[test]
+    fn validate_accepts_50_50_bp() {
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("control", 5000), alloc_bp("treatment", 5000)],
+        };
+        assert!(dist.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_sum_not_10000() {
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("a", 4000), alloc_bp("b", 3000)],
+        };
+        assert!(matches!(dist.validate(), Err(RolloutDistributionError::SumMismatch { actual: 7000 })));
+    }
+
+    #[test]
+    fn validate_accepts_minimum_bp() {
+        // 1 bp = 0.01%; 9999 + 1 = 10000
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("main", 9999), alloc_bp("canary", 1)],
+        };
+        assert!(dist.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_full_single_allocation_bp() {
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("only", 10000)],
+        };
+        assert!(dist.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_zero_bp() {
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("a", 0), alloc_bp("b", 10000)],
+        };
+        assert!(matches!(
+            dist.validate(),
+            Err(RolloutDistributionError::PercentageOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_over_10000_bp() {
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("only", 10001)],
+        };
+        assert!(matches!(
+            dist.validate(),
+            Err(RolloutDistributionError::PercentageOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn assign_variant_key_takes_u32() {
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("control", 5000), alloc_bp("treatment", 5000)],
+        };
+        let bp: u32 = 2500;
+        assert_eq!(dist.assign_variant_key(bp), Some("control"));
+        let bp2: u32 = 7500;
+        assert_eq!(dist.assign_variant_key(bp2), Some("treatment"));
+    }
+
+    #[test]
+    fn assign_variant_key_boundary_bp() {
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("a", 3000), alloc_bp("b", 7000)],
+        };
+        // exactly at boundary: 3000 → first bucket ends, second begins
+        assert_eq!(dist.assign_variant_key(2999_u32), Some("a"));
+        assert_eq!(dist.assign_variant_key(3000_u32), Some("b"));
+        assert_eq!(dist.assign_variant_key(9999_u32), Some("b"));
+    }
+
+    #[test]
+    fn assign_variant_balanced_over_bp_range() {
+        let dist = RolloutDistribution {
+            allocations: vec![alloc_bp("a", 5000), alloc_bp("b", 5000)],
+        };
+        let mut a = 0u32;
+        let mut b = 0u32;
+        for i in 0u32..10_000 {
+            match dist.assign_variant_key(i) {
+                Some("a") => a += 1,
+                Some("b") => b += 1,
+                _ => panic!("unexpected variant"),
+            }
+        }
+        assert_eq!(a, 5000);
+        assert_eq!(b, 5000);
+    }
+
     #[test]
     fn validate_accepts_balanced_two_variant_distribution() {
         let dist = RolloutDistribution {

@@ -7,7 +7,7 @@ points (1 = 0.01%) instead of `f64` percentage. This is a pure Rust change;
 no DB migration yet. Must land first — later phases and the SQL baseline depend
 on the final type shape.
 
-- [ ] Task 1.1: Tests (Red) — write failing unit tests for the new `u32` basis-point
+- [x] Task 1.1: Tests (Red) — write failing unit tests for the new `u32` basis-point
   contract in `crates/stitchd-core/src/rollout.rs`:
   - `validate_accepts_50_50_bp` (5000 + 5000 = 10000)
   - `validate_rejects_sum_not_10000`
