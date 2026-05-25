@@ -46,24 +46,24 @@ on the final type shape.
 **Scope:** Four independent Rust-only removals. No DB changes. Can be done in
 any order within this phase.
 
-- [ ] Task 2.1: `flag_evaluation_log_v2` fix (C3) — simplest change, do first
+- [x] Task 2.1: `flag_evaluation_log_v2` fix (C3) — simplest change, do first (d1ba671)
   - `crates/stitchd-stats-service/src/context_refresher.rs:125`:
     `flag_evaluation_log_v2` → `flag_evaluation_log`
   - Confirm no other references to `_v2` remain in Rust source
 
-- [ ] Task 2.2: `event_definitions.name` nullable removal (D1)
+- [x] Task 2.2: `event_definitions.name` nullable removal (D1) (d1ba671)
   - `crates/stitchd-db/src/repository/pg/event_definition.rs:82`:
     remove `name.unwrap_or_else(|| key.clone())`; field becomes `String`
   - Adjust `SELECT_COLS` / struct mapping if `name` was `Option<String>`
   - Run `cargo test -p stitchd-db` to confirm no breakage
 
-- [ ] Task 2.3: Tests (Red) — `hash_inputs` cutover (C1)
+- [x] Task 2.3: Tests (Red) — `hash_inputs` cutover (C1) (d1ba671)
   - Write test asserting `context_hash_specs` is empty on the proto output
     for a percentage rule (verifies the dual-write is removed)
   - Write test asserting fallback branch is unreachable (e.g., a rule with
     empty `hash_inputs` and non-empty `context_hash_specs` panics or returns error)
 
-- [ ] Task 2.4: Implement — `hash_inputs` cutover (C1)
+- [x] Task 2.4: Implement — `hash_inputs` cutover (C1) (d1ba671)
   - `crates/stitchd-flag-service/src/mapping.rs`:
     - Remove `context_hash_specs` population block (lines 349–370)
     - Remove `context_hash_specs` fallback read branch (lines 103–113)
@@ -72,12 +72,12 @@ any order within this phase.
     - Remove `context_hash_specs` fallback reconstruction block
   - `cargo test -p stitchd-flag-service -p stitchd-gateway` passes
 
-- [ ] Task 2.5: Tests (Red) — `segment_rules` retirement (C2)
+- [x] Task 2.5: Tests (Red) — `segment_rules` retirement (C2) (d1ba671)
   - In `crates/stitchd-db/tests/`, write integration test asserting:
     - `find_with_rules` reads exclusively from `condition_expr`
     - `upsert_rules` method no longer exists on the trait (compile-time check)
 
-- [ ] Task 2.6: Implement — `segment_rules` retirement (C2)
+- [x] Task 2.6: Implement — `segment_rules` retirement (C2) (d1ba671)
   - `crates/stitchd-db/src/repository/pg/segment.rs`:
     - Remove `find_with_rules` `segment_rules`-first path (lines 389–423);
       body becomes a direct `get_condition_expr` call
@@ -89,7 +89,7 @@ any order within this phase.
   - Remove `SegmentRule` domain struct if unreferenced
   - `cargo test -p stitchd-db -p stitchd-segmentation-service` passes
 
-- [ ] Task 2.7: Conductor - User Manual Verification 'Phase 2: Legacy Code Removal' (Protocol in workflow.md)
+- [x] Task 2.7: Conductor - User Manual Verification 'Phase 2: Legacy Code Removal' — workspace compiles clean, 15 files changed, 421 deletions (d1ba671)
 
 ---
 
