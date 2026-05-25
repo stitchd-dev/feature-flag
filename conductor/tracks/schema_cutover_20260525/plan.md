@@ -99,57 +99,21 @@ any order within this phase.
 Delete all intermediate migration files. This is the largest manual-work phase —
 each baseline must be derived from the final state of all prior migrations.
 
-- [ ] Task 3.1: Write Postgres V1 baseline
-  - Read all 44 files in `crates/stitchd-db/migrations/` in timestamp order
-  - Apply every CREATE / ALTER / DROP mentally to derive the final table shapes
-  - Write `crates/stitchd-db/migrations/20260525000001_v1_baseline.sql`:
-    - Preamble: composite type declarations (`hash_input_kind_t`,
-      `hash_input_selector_t`, `rollout_allocation_t`)
-    - `rollout_sum_valid` function
-    - All `CREATE TABLE IF NOT EXISTS` statements in dependency order
-      (parents before children — e.g., `organisations` before `environments`)
-    - All `CREATE INDEX IF NOT EXISTS` statements
-    - All `CREATE VIEW IF NOT EXISTS` / `CREATE FUNCTION` statements
-    - `segment_rules` table is NOT included
-    - `event_definitions.name` is `TEXT NOT NULL`
-    - `hash_inputs` column type is `hash_input_selector_t[]`
-    - `default_rule_distribution` columns type is `rollout_allocation_t[]`
-      with CHECK constraint via `rollout_sum_valid`
-  - Delete all 44 prior numbered `.sql` files
+- [x] Task 3.1: Write Postgres V1 baseline (f1b9349)
+  - `crates/stitchd-db/migrations/20260525000001_v1_baseline.sql` written
+  - 36 prior files deleted; segment_rules omitted; event_definitions.name NOT NULL
+  - Circular FK resolved via deferred ALTER TABLE (feature_flags ↔ variants)
 
-- [ ] Task 3.2: Write ClickHouse V1 baseline
-  - Read all 13 files in `crates/stitchd-event-writer/migrations/` in order
-  - Read `crates/stitchd-analytics-service/clickhouse-migrations/0001_experiment_results.sql`
-  - Write `crates/stitchd-event-writer/migrations/20260525000001_v1_baseline.sql`:
-    - `CREATE TABLE IF NOT EXISTS events` (ReplicatedMergeTree)
-    - `CREATE TABLE IF NOT EXISTS events_v2` (final shape with properties)
-    - `CREATE TABLE IF NOT EXISTS metric_definitions`
-    - `CREATE MATERIALIZED VIEW IF NOT EXISTS events_count_mv`
-    - `CREATE MATERIALIZED VIEW IF NOT EXISTS events_numeric_mv`
-    - `CREATE MATERIALIZED VIEW IF NOT EXISTS events_experiment_daily_mv`
-    - `CREATE TABLE IF NOT EXISTS flag_evaluation_log` (toMonday partitions,
-      9-column final shape: env_id, flag_id, flag_key, variant_key, targeting_on,
-      evaluated_at, context_type, context_key, params_json, matched_rule_id,
-      evaluation_id — NOT `is_disabled`, NOT `_v2`)
-    - `CREATE DICTIONARY IF NOT EXISTS experiment_iterations_active`
-    - `CREATE TABLE IF NOT EXISTS experiment_assignments` (ReplacingMergeTree)
-    - `CREATE MATERIALIZED VIEW IF NOT EXISTS experiment_assignments_mv`
-    - `CREATE TABLE IF NOT EXISTS experiment_results` (from analytics-service migration)
-  - Delete all 13 prior numbered files
-  - Delete `crates/stitchd-db/clickhouse-migrations/` directory
-  - Delete `crates/stitchd-analytics-service/clickhouse-migrations/` directory
+- [x] Task 3.2: Write ClickHouse V1 baseline (f1b9349)
+  - `crates/stitchd-event-writer/migrations/20260525000001_v1_baseline.sql` written
+  - 13 prior files deleted; flag_evaluation_log_v2 → flag_evaluation_log
+  - migrations.rs updated to single V1 entry
 
-- [ ] Task 3.3: Write ScyllaDB V1 baseline
-  - Read all 5 files in `crates/stitchd-db/scylla-migrations/`
-  - Write `crates/stitchd-db/scylla-migrations/0001_v1_baseline.cql`:
-    - Keyspace DDL (from `0001_keyspace.cql`)
-    - `segment_list_entries` table (from `0002`)
-    - `segment_list_generations` table (from `0003`)
-    - `segment_list_summary` table (from `0004`)
-    - Orphaned generations handling (from `0005`)
-  - Delete the 5 prior numbered `.cql` files
+- [x] Task 3.3: Write ScyllaDB V1 baseline (f1b9349)
+  - `crates/stitchd-db/scylla-migrations/0001_v1_baseline.cql` written
+  - 5 prior CQL files deleted; xtask/tests scan directory dynamically
 
-- [ ] Task 3.4: Conductor - User Manual Verification 'Phase 3: V1 Baseline SQL/CQL Files' (Protocol in workflow.md)
+- [x] Task 3.4: Conductor - User Manual Verification 'Phase 3: V1 Baseline SQL/CQL Files' — 58 files changed, SQLX_OFFLINE=true compiles clean (f1b9349)
 
 ---
 
