@@ -24,8 +24,8 @@ pub enum RuleEngineError {
     #[error("cyclic flag dependency detected, involved flags: {involved:?}")]
     CyclicFlagDependency { involved: Vec<FlagId> },
 
-    /// Percentage weights do not sum to 1000 (tenths-of-a-percent).
-    #[error("percentage weights must sum to 1000 (tenths-of-a-percent)")]
+    /// Percentage weights do not sum to 10000 (basis points).
+    #[error("percentage weights must sum to 10000 (basis points)")]
     InvalidWeights,
 
     /// A percentage rule has no targets to hash on.
@@ -84,7 +84,7 @@ mod tests {
         let err = RuleEngineError::InvalidWeights;
         assert_eq!(
             err.to_string(),
-            "percentage weights must sum to 1000 (tenths-of-a-percent)"
+            "percentage weights must sum to 10000 (basis points)"
         );
     }
 

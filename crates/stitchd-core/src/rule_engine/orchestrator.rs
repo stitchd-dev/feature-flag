@@ -273,7 +273,7 @@ mod tests {
                     context_type: "user".into(),
                     field: crate::rule_engine::types::TargetField::Key,
                 }],
-                weights: vec![(v1, 500), (v2, 500)],
+                weights: vec![(v1, 5000), (v2, 5000)],
             },
         };
 

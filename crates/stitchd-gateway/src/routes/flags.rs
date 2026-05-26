@@ -329,7 +329,7 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
             let buckets: Vec<_> = alloc
                 .buckets
                 .iter()
-                .map(|b| serde_json::json!({ "variant_key": b.variant_key, "weight_milli": b.weight_milli }))
+                .map(|b| serde_json::json!({ "variant_key": b.variant_key, "weight_bp": b.weight_bp }))
                 .collect();
             serde_json::json!({
                 "allocation": {
@@ -1046,7 +1046,7 @@ fn rule_body_to_proto(
             .filter_map(|b| {
                 Some(AllocationBucket {
                     variant_key: b.get("variant_key")?.as_str()?.to_string(),
-                    weight_milli: b.get("weight_milli")?.as_u64()? as u32,
+                    weight_bp: b.get("weight_bp")?.as_u64()? as u32,
                 })
             })
             .collect();
@@ -1989,8 +1989,8 @@ mod tests {
                             {"kind":"context_parameter","context_type":"device","parameter":"os"}
                         ],
                         "buckets": [
-                            {"variant_key":"on","weight_milli":500},
-                            {"variant_key":"off","weight_milli":500}
+                            {"variant_key":"on","weight_bp":5000},
+                            {"variant_key":"off","weight_bp":5000}
                         ]
                     }
                 }
@@ -2013,7 +2013,7 @@ mod tests {
                 "output": {
                     "allocation": {
                         "hash_inputs": [],
-                        "buckets": [{"variant_key":"on","weight_milli":1000}]
+                        "buckets": [{"variant_key":"on","weight_bp":10000}]
                     }
                 }
             }],
@@ -2038,7 +2038,7 @@ mod tests {
                             {"kind":"context_key","context_type":"user"},
                             {"kind":"context_key","context_type":"user"}
                         ],
-                        "buckets": [{"variant_key":"on","weight_milli":1000}]
+                        "buckets": [{"variant_key":"on","weight_bp":10000}]
                     }
                 }
             }],
@@ -2063,7 +2063,7 @@ mod tests {
                             {"kind":"context_parameter","context_type":"user","parameter":"plan"},
                             {"kind":"context_parameter","context_type":"user","parameter":"plan"}
                         ],
-                        "buckets": [{"variant_key":"on","weight_milli":1000}]
+                        "buckets": [{"variant_key":"on","weight_bp":10000}]
                     }
                 }
             }],
@@ -2088,7 +2088,7 @@ mod tests {
                         "hash_inputs": [
                             {"kind":"context_parameter","context_type":"user","parameter":""}
                         ],
-                        "buckets": [{"variant_key":"on","weight_milli":1000}]
+                        "buckets": [{"variant_key":"on","weight_bp":10000}]
                     }
                 }
             }],

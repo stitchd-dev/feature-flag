@@ -237,11 +237,11 @@ fn build_proto_flag(hash_inputs: &[HashSelectorJson]) -> FeatureFlag {
         buckets: vec![
             AllocationBucket {
                 variant_key: "on".to_string(),
-                weight_milli: 500,
+                weight_bp: 5000,
             },
             AllocationBucket {
                 variant_key: "off".to_string(),
-                weight_milli: 500,
+                weight_bp: 5000,
             },
         ],
         hash_inputs: hash_inputs.iter().map(HashSelectorJson::to_proto).collect(),
@@ -415,7 +415,7 @@ mod stitchd_flag_service_mapping {
                     .iter()
                     .filter_map(|b| {
                         let vid = variant_map.get(&b.variant_key).copied()?;
-                        Some((vid, b.weight_milli))
+                        Some((vid, b.weight_bp))
                     })
                     .collect();
                 RuleOutput::Percentage { targets, weights }

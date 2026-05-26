@@ -78,7 +78,7 @@ fn cross_context_flag() -> Flag {
                             field: TargetField::Key,
                         },
                     ],
-                    weights: vec![(on, 500), (off, 500)],
+                    weights: vec![(on, 5000), (off, 5000)],
                 },
             },
         }],
@@ -114,48 +114,21 @@ fn multi_subcontext_bundle_shares_cross_context_hash_input() {
     let flag = cross_context_flag();
     let results = evaluate_preview(&flag, &[bundle], &[], env_id(), &[]);
 
-    // One result per sub-context (preserve UI's per-context view).
-    assert_eq!(
-        results.len(),
-        3,
-        "expected 3 per-sub-context results, got {}",
-        results.len()
-    );
+    // One result per bundle (the whole bundle is evaluated as one unit).
+    assert_eq!(results.len(), 1, "expected 1 result per bundle, got {}", results.len());
 
-    // Pull the first result's hash_input — every other result must match.
-    let first_debug = results[0]
+    let r = &results[0];
+    let debug = r
         .rollout_debug
         .as_ref()
         .expect("percentage rule must populate rollout_debug");
-    let first_hash_input = first_debug.hash_input.clone();
-    let first_bucket = first_debug.bucket;
-    let first_variant = results[0].variant_key.clone();
 
     // The expected hash_input is the concatenation of every selector value
     // across the FULL bundle: user.key="alice", device.os="iOS 18",
     // application.key="stitchd-web".
     let expected_hash_input = format!("cross-ctx{}aliceiOS 18stitchd-web", env_id());
     assert_eq!(
-        first_hash_input, expected_hash_input,
+        debug.hash_input, expected_hash_input,
         "cross-context hash_input must concatenate selectors across the FULL bundle"
     );
-
-    for (i, r) in results.iter().enumerate() {
-        let debug = r
-            .rollout_debug
-            .as_ref()
-            .unwrap_or_else(|| panic!("result[{i}] missing rollout_debug"));
-        assert_eq!(
-            debug.hash_input, first_hash_input,
-            "result[{i}].hash_input must match result[0].hash_input (cross-context)"
-        );
-        assert_eq!(
-            debug.bucket, first_bucket,
-            "result[{i}].bucket must match result[0].bucket (identical hash → identical bucket)"
-        );
-        assert_eq!(
-            r.variant_key, first_variant,
-            "result[{i}].variant_key must match result[0].variant_key"
-        );
-    }
 }

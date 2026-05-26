@@ -307,7 +307,7 @@ function CatchAllReadOnly({ output }: { output: RuleOutputJson }) {
         {buckets.map((b) => (
           <span key={b.variant_key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span className="badge accent">{b.variant_key}</span>
-            <span>{(b.weight_milli / 10).toFixed(1)}%</span>
+            <span>{(b.weight_bp / 100).toFixed(1)}%</span>
           </span>
         ))}
       </div>

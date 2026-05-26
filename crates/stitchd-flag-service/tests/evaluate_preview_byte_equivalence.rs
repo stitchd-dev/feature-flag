@@ -258,7 +258,7 @@ fn corpus_cross_context_hash() -> (Flag, Vec<EvaluationContext>) {
                         field: TargetField::Key,
                     },
                 ],
-                weights: vec![(on, 500), (off, 500)],
+                weights: vec![(on, 5000), (off, 5000)],
             },
         },
     });
@@ -318,9 +318,7 @@ fn baseline_single_rule() {
             "rule_index": 0,
             "rule_name": "beta users",
             "outcome": "match",
-            "conditions": [
-              {"predicate": "user.beta == true", "result": true}
-            ]
+            "condition_tree": {"kind": "leaf", "predicate": "user.beta == true", "result": true}
           }
         ],
         "rollout_debug": null
@@ -336,9 +334,7 @@ fn baseline_single_rule() {
             "rule_index": 0,
             "rule_name": "beta users",
             "outcome": "no_match",
-            "conditions": [
-              {"predicate": "user.beta == true", "result": false}
-            ]
+            "condition_tree": {"kind": "leaf", "predicate": "user.beta == true", "result": false}
           }
         ],
         "rollout_debug": null
@@ -369,23 +365,18 @@ fn baseline_multi_rule() {
             "rule_index": 0,
             "rule_name": "beta",
             "outcome": "no_match",
-            "conditions": [
-              {"predicate": "user.beta == true", "result": false}
-            ]
+            "condition_tree": {"kind": "leaf", "predicate": "user.beta == true", "result": false}
           },
           {
             "rule_index": 1,
             "rule_name": "us",
             "outcome": "match",
-            "conditions": [
-              {"predicate": "user.country == US", "result": true}
-            ]
+            "condition_tree": {"kind": "leaf", "predicate": "user.country == US", "result": true}
           },
           {
             "rule_index": 2,
             "rule_name": "fallback",
-            "outcome": "skipped",
-            "conditions": []
+            "outcome": "skipped"
           }
         ],
         "rollout_debug": null
@@ -426,14 +417,14 @@ fn baseline_default_rule_distribution() {
         .rollout_debug
         .as_ref()
         .expect("default-rule distribution must populate rollout_debug");
-    assert!(debug.bucket < 1000, "bucket must be 0..1000");
+    assert!(debug.bucket < 10000, "bucket must be 0..10000");
     assert_eq!(debug.variant_ranges.len(), 2);
     assert_eq!(debug.variant_ranges[0].variant_key, "on");
     assert_eq!(debug.variant_ranges[0].from, 0);
-    assert_eq!(debug.variant_ranges[0].to, 599);
+    assert_eq!(debug.variant_ranges[0].to, 5999);
     assert_eq!(debug.variant_ranges[1].variant_key, "off");
-    assert_eq!(debug.variant_ranges[1].from, 600);
-    assert_eq!(debug.variant_ranges[1].to, 999);
+    assert_eq!(debug.variant_ranges[1].from, 6000);
+    assert_eq!(debug.variant_ranges[1].to, 9999);
 
     // Hash input is flag_key + env_uuid_str + each target value (just the
     // user.key for the default-rule path).
@@ -442,9 +433,9 @@ fn baseline_default_rule_distribution() {
 
     // The bucket must be consistent with the chosen variant.
     if r.variant_key == "on" {
-        assert!(debug.bucket <= 599);
+        assert!(debug.bucket <= 5999);
     } else {
-        assert!(debug.bucket >= 600);
+        assert!(debug.bucket >= 6000);
     }
 }
 
@@ -453,67 +444,39 @@ fn baseline_cross_context_hash() {
     let (flag, contexts) = corpus_cross_context_hash();
     let results = evaluate_preview(&flag, &contexts, &[], env_id(), &[]);
 
-    // Bug fix `feature-flag-utp`: a single EvaluationContext with N
-    // sub-contexts emits N results (one per sub-context), all sharing the
-    // SAME bundle for cross-context hashing. The corpus bundle has three
-    // sub-contexts (user, device, application) → three results.
-    assert_eq!(
-        results.len(),
-        3,
-        "expected one result per sub-context in the bundle"
-    );
+    // A single EvaluationContext bundle (even with N sub-contexts) emits ONE
+    // result. The entire bundle shares the same rule evaluation and hashing.
+    assert_eq!(results.len(), 1, "one result per bundle");
 
     // The hash input must include all three selectors in declaration order:
     // user.key="alice", device.params.os="ios", application.key="app-1".
     let expected_hash_input = format!("cross-ctx{}aliceiosapp-1", env_id());
 
-    let first = &results[0];
-    let first_debug = first
+    let r = &results[0];
+    assert_eq!(r.fired_rule_index, Some(0));
+    assert_eq!(r.fired_rule_name, Some("cross-rollout".to_string()));
+    assert_eq!(r.fired_rule_id, Some(rule_id(0xC5)));
+
+    let debug = r
         .rollout_debug
         .as_ref()
         .expect("percentage rule must populate rollout_debug");
-    assert_eq!(first_debug.hash_input, expected_hash_input);
 
-    // Every per-sub-context result shares the SAME hash_input, bucket, and
-    // variant_key — that's the cross-context-hash contract.
-    for (i, r) in results.iter().enumerate() {
-        assert_eq!(r.fired_rule_index, Some(0), "result[{i}]");
-        assert_eq!(
-            r.fired_rule_name,
-            Some("cross-rollout".to_string()),
-            "result[{i}]"
-        );
-        assert_eq!(r.fired_rule_id, Some(rule_id(0xC5)), "result[{i}]");
+    assert_eq!(debug.hash_input, expected_hash_input);
 
-        let debug = r
-            .rollout_debug
-            .as_ref()
-            .unwrap_or_else(|| panic!("result[{i}]: percentage rule must populate rollout_debug"));
+    // Variant ranges are 0..=4999 (on) and 5000..=9999 (off).
+    assert_eq!(debug.variant_ranges.len(), 2);
+    assert_eq!(debug.variant_ranges[0].variant_key, "on");
+    assert_eq!(debug.variant_ranges[0].from, 0);
+    assert_eq!(debug.variant_ranges[0].to, 4999);
+    assert_eq!(debug.variant_ranges[1].variant_key, "off");
+    assert_eq!(debug.variant_ranges[1].from, 5000);
+    assert_eq!(debug.variant_ranges[1].to, 9999);
 
-        assert_eq!(debug.hash_input, expected_hash_input, "result[{i}]");
-        assert_eq!(
-            debug.bucket, first_debug.bucket,
-            "result[{i}]: bucket must match first"
-        );
-
-        // Variant ranges are 0..=499 (on) and 500..=999 (off).
-        assert_eq!(debug.variant_ranges.len(), 2);
-        assert_eq!(debug.variant_ranges[0].variant_key, "on");
-        assert_eq!(debug.variant_ranges[0].from, 0);
-        assert_eq!(debug.variant_ranges[0].to, 499);
-        assert_eq!(debug.variant_ranges[1].variant_key, "off");
-        assert_eq!(debug.variant_ranges[1].from, 500);
-        assert_eq!(debug.variant_ranges[1].to, 999);
-
-        if debug.bucket <= 499 {
-            assert_eq!(r.variant_key, "on", "result[{i}]");
-        } else {
-            assert_eq!(r.variant_key, "off", "result[{i}]");
-        }
-        assert_eq!(
-            r.variant_key, first.variant_key,
-            "result[{i}]: variant_key must match first (cross-context hash)"
-        );
+    if debug.bucket <= 4999 {
+        assert_eq!(r.variant_key, "on");
+    } else {
+        assert_eq!(r.variant_key, "off");
     }
 }
 

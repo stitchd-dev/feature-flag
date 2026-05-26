@@ -44,8 +44,8 @@ fn resolve_one(
 ///
 /// # Arguments
 /// - `targets` — one or more percentage targets (must be non-empty)
-/// - `weights` — `(VariantId, weight)` pairs; weights are tenths-of-a-percent
-///   and must sum to 1000
+/// - `weights` — `(VariantId, weight)` pairs; weights are basis points
+///   and must sum to 10000
 /// - `input` — evaluation input for context lookup
 /// - `flag_key` — used as part of the stable hash salt
 /// - `project_id` — stable salt component
@@ -63,7 +63,7 @@ pub fn allocate_percentage(
     }
 
     let total: u32 = weights.iter().map(|(_, w)| w).sum();
-    if total != 1000 {
+    if total != 10000 {
         return Err(RuleEngineError::InvalidWeights);
     }
 
@@ -89,15 +89,15 @@ pub fn allocate_percentage(
         }
     }
 
-    // Unreachable when weights sum to 1000 and bucket is in [0, 1000).
+    // Unreachable when weights sum to 10000 and bucket is in [0, 10000).
     unreachable!("bucket {bucket} not covered by cumulative weights summing to {total}")
 }
 
-/// Compute SipHash-1-3 of `input` and return `hash mod 1000`.
+/// Compute SipHash-1-3 of `input` and return `hash mod 10000`.
 fn siphash_bucket(input: &str) -> u32 {
     let mut hasher = SipHasher13::new();
     input.hash(&mut hasher);
-    (hasher.finish() % 1000) as u32
+    (hasher.finish() % 10000) as u32
 }
 
 #[cfg(test)]
@@ -120,7 +120,7 @@ mod tests {
     }
 
     fn fifty_fifty(v1: VariantId, v2: VariantId) -> Vec<(VariantId, u32)> {
-        vec![(v1, 500), (v2, 500)]
+        vec![(v1, 5000), (v2, 5000)]
     }
 
     // ── resolve_targets ───────────────────────────────────────────────────────
@@ -189,7 +189,7 @@ mod tests {
         let input = EvaluationInput::new(&ctx);
         let v = VariantId::new();
         let (fk, pid, eid) = env();
-        let result = allocate_percentage(&[], &[(v, 1000)], &input, &fk, pid, eid);
+        let result = allocate_percentage(&[], &[(v, 10000)], &input, &fk, pid, eid);
         assert_eq!(result, Err(RuleEngineError::EmptyPercentageTargets));
     }
 
@@ -203,7 +203,7 @@ mod tests {
             field: TargetField::Key,
         }];
         let (fk, pid, eid) = env();
-        let result = allocate_percentage(&targets, &[(v, 999)], &input, &fk, pid, eid);
+        let result = allocate_percentage(&targets, &[(v, 9999)], &input, &fk, pid, eid);
         assert_eq!(result, Err(RuleEngineError::InvalidWeights));
     }
 

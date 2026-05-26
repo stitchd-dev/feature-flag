@@ -25,7 +25,7 @@ interface Props {
 export function PercentageRolloutEditor({ value, variants, onChange, envId }: Props) {
   const { hash_inputs, buckets } = value
   const sum = allocationSum(buckets)
-  const remaining = 1000 - sum
+  const remaining = 10000 - sum
 
   // Compute Yup errors for the inputs list — surfaced inline on the row.
   const { arrayError, rowErrors } = useMemo(
@@ -47,14 +47,14 @@ export function PercentageRolloutEditor({ value, variants, onChange, envId }: Pr
   }
 
   function setWeight(i: number, pct: number) {
-    const milli = Math.round(pct * 10)
-    const next = buckets.map((b, j) => j === i ? { ...b, weight_milli: milli } : b)
+    const bp = Math.round(pct * 100)
+    const next = buckets.map((b, j) => j === i ? { ...b, weight_bp: bp } : b)
     onChange({ ...value, buckets: next })
   }
 
   function addRow() {
     const key = variants.find((v) => !buckets.some((b) => b.variant_key === v)) ?? (variants[0] ?? '')
-    onChange({ ...value, buckets: [...buckets, { variant_key: key, weight_milli: 0 }] })
+    onChange({ ...value, buckets: [...buckets, { variant_key: key, weight_bp: 0 }] })
   }
 
   function removeRow(i: number) {
@@ -63,9 +63,9 @@ export function PercentageRolloutEditor({ value, variants, onChange, envId }: Pr
 
   function distributeEvenly() {
     if (buckets.length === 0) return
-    const each = Math.floor(1000 / buckets.length)
-    const leftover = 1000 - each * buckets.length
-    onChange({ ...value, buckets: buckets.map((b, i) => ({ ...b, weight_milli: each + (i === 0 ? leftover : 0) })) })
+    const each = Math.floor(10000 / buckets.length)
+    const leftover = 10000 - each * buckets.length
+    onChange({ ...value, buckets: buckets.map((b, i) => ({ ...b, weight_bp: each + (i === 0 ? leftover : 0) })) })
   }
 
   return (
@@ -96,7 +96,7 @@ export function PercentageRolloutEditor({ value, variants, onChange, envId }: Pr
               type="number" min={0} max={100} step={0.1}
               className="input"
               style={{ width: 80, fontFamily: 'var(--font-mono)', textAlign: 'right' }}
-              value={(b.weight_milli / 10).toFixed(1)}
+              value={(b.weight_bp / 100).toFixed(1)}
               onChange={(e) => setWeight(i, parseFloat(e.target.value) || 0)}
             />
             <span style={{ fontSize: 12, color: 'var(--fg-muted)', width: 14 }}>%</span>
@@ -114,10 +114,10 @@ export function PercentageRolloutEditor({ value, variants, onChange, envId }: Pr
         )}
         <span style={{
           marginLeft: 'auto', fontSize: 11, fontFamily: 'var(--font-mono)',
-          color: sum === 1000 ? 'var(--success)' : 'var(--danger)',
+          color: sum === 10000 ? 'var(--success)' : 'var(--danger)',
           fontWeight: 600,
         }}>
-          {(sum / 10).toFixed(1)}%{sum !== 1000 && ` (${remaining > 0 ? '+' : ''}${(remaining / 10).toFixed(1)}%)`}
+          {(sum / 100).toFixed(1)}%{sum !== 10000 && ` (${remaining > 0 ? '+' : ''}${(remaining / 100).toFixed(1)}%)`}
         </span>
       </div>
     </div>

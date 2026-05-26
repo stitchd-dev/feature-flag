@@ -87,11 +87,11 @@ fn cross_context_corpus() -> (FeatureFlag, Flag) {
         buckets: vec![
             AllocationBucket {
                 variant_key: "control".into(),
-                weight_milli: 500,
+                weight_bp: 5000,
             },
             AllocationBucket {
                 variant_key: "treatment".into(),
-                weight_milli: 500,
+                weight_bp: 5000,
             },
         ],
         hash_inputs: vec![
@@ -167,7 +167,7 @@ fn cross_context_corpus() -> (FeatureFlag, Flag) {
                     field: stitchd_core::rule_engine::types::TargetField::Parameter("os".into()),
                 },
             ],
-            weights: vec![(control_id, 500), (treatment_id, 500)],
+            weights: vec![(control_id, 5000), (treatment_id, 5000)],
         },
     };
     let core = Flag {

@@ -28,8 +28,8 @@ message Variant {
 message AllocationBucket {
   // Variant key this bucket maps to.
   string variant_key  = 1;
-  // Weight in units of 0.1% (e.g. 1000 = 100.0%, 500 = 50.0%).
-  uint32 weight_milli = 2;
+  // Weight in basis points (e.g. 10000 = 100.0%, 5000 = 50.0%).
+  uint32 weight_bp = 2;
 }
 
 // Percentage allocation: deterministic hash over context keys/params.

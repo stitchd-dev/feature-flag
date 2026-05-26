@@ -93,7 +93,7 @@ pub fn proto_flag_rule_to_domain(
                 .iter()
                 .filter_map(|b| {
                     let vid = variant_map.get(&b.variant_key).copied()?;
-                    Some((vid, b.weight_milli))
+                    Some((vid, b.weight_bp))
                 })
                 .collect();
             RuleOutput::Percentage { targets, weights }
@@ -310,7 +310,7 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
                 .iter()
                 .map(|(vid, weight)| AllocationBucket {
                     variant_key: variant_key_map.get(vid).cloned().unwrap_or_default(),
-                    weight_milli: *weight,
+                    weight_bp: *weight,
                 })
                 .collect();
 
@@ -355,10 +355,43 @@ pub fn build_feature_flag_proto(
         .map(domain_variant_to_proto)
         .collect::<Vec<_>>();
 
-    let proto_rules = flag_rules
+    let mut proto_rules = flag_rules
         .iter()
         .map(|fr| domain_flag_rule_to_proto(fr, &variant_key_map))
         .collect::<Vec<_>>();
+
+    // Reconstitute the catch-all percentage allocation as a trailing And:[]
+    // rule so the admin UI can read it back and re-submit it unchanged.
+    if let Some(dist) = &record.default_rule_distribution {
+        let buckets = dist
+            .allocations
+            .iter()
+            .map(|a| AllocationBucket {
+                variant_key: a.variant_key.clone(),
+                weight_bp: a.percentage_bp,
+            })
+            .collect();
+        let hash_inputs = vec![ProtoHashSelector {
+            selector: Some(ProtoSelectorInner::ContextKey(ContextKeySelector {
+                context_type: "user".to_string(),
+            })),
+        }];
+        let catch_all_condition =
+            serde_json::to_vec(&stitchd_core::rule_engine::types::ConditionExpr::And(vec![]))
+                .unwrap_or_default();
+        proto_rules.push(ProtoFlagRule {
+            rule_payload: catch_all_condition,
+            output: Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(
+                PercentageAllocation {
+                    context_hash_specs: Default::default(),
+                    buckets,
+                    hash_inputs,
+                },
+            )),
+            name: String::new(),
+            rule_id: String::new(),
+        });
+    }
 
     FeatureFlag {
         key: record.key.to_string(),
@@ -602,7 +635,7 @@ mod tests {
                         context_type: "user".to_string(),
                         field: TargetField::Key,
                     }],
-                    weights: vec![(vid, 1000)],
+                    weights: vec![(vid, 10000)],
                 },
             },
         };
@@ -612,7 +645,7 @@ mod tests {
             assert!(alloc.context_hash_specs.is_empty());
             assert_eq!(alloc.buckets.len(), 1);
             assert_eq!(alloc.buckets[0].variant_key, "treatment");
-            assert_eq!(alloc.buckets[0].weight_milli, 1000);
+            assert_eq!(alloc.buckets[0].weight_bp, 10000);
         } else {
             panic!("expected Allocation output");
         }
@@ -636,7 +669,7 @@ mod tests {
                         context_type: "user".to_string(),
                         field: TargetField::Parameter("user_id".to_string()),
                     }],
-                    weights: vec![(vid, 500)],
+                    weights: vec![(vid, 5000)],
                 },
             },
         };
@@ -677,7 +710,7 @@ mod tests {
                             field: TargetField::Parameter("os".to_string()),
                         },
                     ],
-                    weights: vec![(vid, 1000)],
+                    weights: vec![(vid, 10000)],
                 },
             },
         };
@@ -733,7 +766,7 @@ mod tests {
                     context_hash_specs: legacy_map,
                     buckets: vec![AllocationBucket {
                         variant_key: "t".to_string(),
-                        weight_milli: 1000,
+                        weight_bp: 10000,
                     }],
                     hash_inputs: vec![
                         ProtoHashSelector {
@@ -798,7 +831,7 @@ mod tests {
                     context_hash_specs: legacy_map,
                     buckets: vec![AllocationBucket {
                         variant_key: "t".to_string(),
-                        weight_milli: 1000,
+                        weight_bp: 10000,
                     }],
                     hash_inputs: vec![],
                 },

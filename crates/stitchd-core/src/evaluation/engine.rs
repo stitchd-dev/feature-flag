@@ -221,8 +221,7 @@ fn evaluate_one(
 
                     let flag_key = flag.record.key.as_str();
                     let env_str = environment_id.to_string();
-                    let percentage = calculate_allocation(flag_key, &env_str, &target_values);
-                    let bucket = percentage / 10;
+                    let bucket = calculate_allocation(flag_key, &env_str, &target_values);
 
                     // Build per-variant ranges + identify winning bucket.
                     let (variant_ranges, hash_input_str) = if want_trace {
@@ -309,10 +308,9 @@ fn evaluate_one(
         let target_values: Vec<String> = bundle.iter().map(|c| c.key.clone()).collect();
         let flag_key = flag.record.key.as_str();
         let env_str = environment_id.to_string();
-        let percentage = calculate_allocation(flag_key, &env_str, &target_values);
+        let bucket = calculate_allocation(flag_key, &env_str, &target_values);
 
         if want_trace {
-            let bucket = percentage / 10;
             let mut hi = format!("{flag_key}{env_str}");
             for t in &target_values {
                 hi.push_str(t);
@@ -320,9 +318,9 @@ fn evaluate_one(
             let mut variant_ranges: Vec<VariantRange> = Vec::new();
             let mut cumulative_bp: u32 = 0;
             for alloc in &dist.allocations {
-                let from = cumulative_bp / 10;
+                let from = cumulative_bp;
                 cumulative_bp += alloc.percentage_bp;
-                let to = (cumulative_bp / 10).saturating_sub(1);
+                let to = cumulative_bp.saturating_sub(1);
                 variant_ranges.push(VariantRange {
                     variant_key: alloc.variant_key.clone(),
                     from,
@@ -336,7 +334,7 @@ fn evaluate_one(
             });
         }
 
-        if let Some(variant_key) = dist.assign_variant_key(percentage) {
+        if let Some(variant_key) = dist.assign_variant_key(bucket) {
             if let Some(v) = flag.get_variant_by_key(variant_key) {
                 result_variant_key = v.key.clone();
                 result_variant_value = v.value.clone();
@@ -492,14 +490,11 @@ impl FlagEvaluator {
                         target_values.push(val);
                     }
 
-                    let percentage = calculate_allocation(
+                    let bucket = calculate_allocation(
                         flag.record.key.as_str(),
                         &environment_id.to_string(),
                         &target_values,
                     );
-
-                    // Map basis points [0, 9999] to 0-999 bucket (weights use 1000-bucket scale)
-                    let bucket = percentage / 10;
 
                     let mut cumulative_weight = 0;
                     for (variant_id, weight) in weights {
@@ -536,13 +531,13 @@ impl FlagEvaluator {
             // canonical convention.
             let target_values: Vec<String> =
                 context.contexts.iter().map(|c| c.key.clone()).collect();
-            let percentage = calculate_allocation(
+            let bucket = calculate_allocation(
                 flag.record.key.as_str(),
                 &environment_id.to_string(),
                 &target_values,
             );
 
-            if let Some(variant_key) = dist.assign_variant_key(percentage) {
+            if let Some(variant_key) = dist.assign_variant_key(bucket) {
                 if let Some(v) = flag.get_variant_by_key(variant_key) {
                     return Ok(v);
                 }
@@ -716,7 +711,7 @@ mod tests {
                 context_type: "user".to_string(),
                 field: TargetField::Key,
             }],
-            weights: vec![(v1_id, 500), (v2_id, 500)],
+            weights: vec![(v1_id, 5000), (v2_id, 5000)],
         };
 
         let segments = HashSet::new();
@@ -816,7 +811,7 @@ mod tests {
                 context_type: "org".to_string(), // missing context
                 field: TargetField::Key,
             }],
-            weights: vec![(v1_id, 500), (v2_id, 500)],
+            weights: vec![(v1_id, 5000), (v2_id, 5000)],
         };
 
         // Provide user context but NOT org context
@@ -851,7 +846,7 @@ mod tests {
                 context_type: "user".to_string(),
                 field: TargetField::Parameter("nonexistent_param".to_string()),
             }],
-            weights: vec![(v1_id, 500), (v2_id, 500)],
+            weights: vec![(v1_id, 5000), (v2_id, 5000)],
         };
 
         let context = EvaluationContext::new().with_context(
@@ -880,7 +875,7 @@ mod tests {
             param: "beta".to_string(),
             value: ParameterValue::Bool(true),
         });
-        // Only 1 weight covering bucket 0..500; bucket 500..999 uncovered
+        // Only 1 weight covering bucket 0; buckets 1..9999 uncovered
         flag.rules[0].rule.output = RuleOutput::Percentage {
             targets: vec![PercentageTarget {
                 context_type: "user".to_string(),
@@ -929,7 +924,7 @@ mod tests {
                 context_type: "user".to_string(),
                 field: TargetField::Key,
             }],
-            weights: vec![(nonexistent, 1000)],
+            weights: vec![(nonexistent, 10000)],
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1097,7 +1092,7 @@ mod tests {
                 context_type: "user".to_string(),
                 field: TargetField::Parameter("beta".to_string()),
             }],
-            weights: vec![(v1_id, 500), (v2_id, 500)],
+            weights: vec![(v1_id, 5000), (v2_id, 5000)],
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1468,7 +1463,7 @@ mod tests {
                 context_type: "user".to_string(),
                 field: TargetField::Key,
             }],
-            weights: vec![(on_id, 500), (off_id, 500)],
+            weights: vec![(on_id, 5000), (off_id, 5000)],
         };
 
         let ctx = Context::new("user", "u1");
@@ -1491,12 +1486,12 @@ mod tests {
             .as_ref()
             .expect("percentage rule must produce rollout_debug");
         assert!(!dbg.hash_input.is_empty());
-        assert!(dbg.bucket < 1000);
+        assert!(dbg.bucket < 10000);
         assert_eq!(dbg.variant_ranges.len(), 2);
         assert_eq!(dbg.variant_ranges[0].from, 0);
-        assert_eq!(dbg.variant_ranges[0].to, 499);
-        assert_eq!(dbg.variant_ranges[1].from, 500);
-        assert_eq!(dbg.variant_ranges[1].to, 999);
+        assert_eq!(dbg.variant_ranges[0].to, 4999);
+        assert_eq!(dbg.variant_ranges[1].from, 5000);
+        assert_eq!(dbg.variant_ranges[1].to, 9999);
         // Silence unused Condition import.
         let _ = std::marker::PhantomData::<Condition>;
     }
@@ -1543,10 +1538,10 @@ mod tests {
         assert_eq!(dbg.variant_ranges.len(), 2);
         assert_eq!(dbg.variant_ranges[0].variant_key, "on");
         assert_eq!(dbg.variant_ranges[0].from, 0);
-        // 30% → bucket 0..=299
-        assert_eq!(dbg.variant_ranges[0].to, 299);
+        // 30% → bucket 0..=2999
+        assert_eq!(dbg.variant_ranges[0].to, 2999);
         assert_eq!(dbg.variant_ranges[1].variant_key, "off");
-        assert_eq!(dbg.variant_ranges[1].from, 300);
+        assert_eq!(dbg.variant_ranges[1].from, 3000);
     }
 
     #[test]
@@ -1771,7 +1766,7 @@ mod tests {
                     field: TargetField::Parameter("os".into()),
                 },
             ],
-            weights: vec![(on_id, 500), (off_id, 500)],
+            weights: vec![(on_id, 5000), (off_id, 5000)],
         };
 
         let memberships = ListMembershipIndex::new();
@@ -1863,7 +1858,7 @@ mod tests {
                         context_type: "user".into(),
                         field: TargetField::Key,
                     }],
-                    weights: vec![(on_id, 500), (off_id, 500)],
+                    weights: vec![(on_id, 5000), (off_id, 5000)],
                 },
             },
         });
@@ -1967,7 +1962,7 @@ mod tests {
                     field: TargetField::Parameter("os".into()),
                 },
             ],
-            weights: vec![(on_id, 500), (off_id, 500)],
+            weights: vec![(on_id, 5000), (off_id, 5000)],
         };
 
         let memberships = ListMembershipIndex::new();

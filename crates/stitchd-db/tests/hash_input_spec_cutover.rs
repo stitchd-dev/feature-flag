@@ -168,8 +168,8 @@ fn target_values_from_hash_inputs(
 }
 
 fn bucket_for(flag_key: &str, env_id: &str, target_values: &[String]) -> u32 {
-    // calculate_allocation returns basis points (0..=9999); divide by 10 → bucket (0..=999)
-    (calculate_allocation(flag_key, env_id, target_values) / 10).min(999)
+    // calculate_allocation returns basis points (0..=9999)
+    calculate_allocation(flag_key, env_id, target_values).min(9999)
 }
 
 /// Returns the frozen pre-migration corpus.
@@ -595,7 +595,7 @@ async fn backfill_produces_canonical_sorted_hash_inputs(pool: sqlx::PgPool) {
                     { "context_type": "device", "field": { "Parameter": "os" } },
                     { "context_type": "device", "field": { "Parameter": "browser" } }
                 ],
-                "weights": [[variant_id.to_string(), 1000]]
+                "weights": [[variant_id.to_string(), 10000]]
             }
         }
     });

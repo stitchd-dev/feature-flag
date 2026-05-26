@@ -69,7 +69,7 @@ describe('isVariantOutput', () => {
       allocation: {
         hash_inputs: [{ kind: 'context_key', context_type: 'user' }],
         hash_targets: [{ context_type: 'user', field: 'key' }],
-        buckets: [{ variant_key: 'on', weight_milli: 1000 }],
+        buckets: [{ variant_key: 'on', weight_bp: 10000 }],
       },
     }
     expect(isVariantOutput(o)).toBe(false)
@@ -81,21 +81,21 @@ describe('allocationSum', () => {
     expect(allocationSum([])).toBe(0)
   })
 
-  it('sums weight_milli values', () => {
+  it('sums weight_bp values', () => {
     const buckets: AllocationBucket[] = [
-      { variant_key: 'on', weight_milli: 700 },
-      { variant_key: 'off', weight_milli: 300 },
+      { variant_key: 'on', weight_bp: 7000 },
+      { variant_key: 'off', weight_bp: 3000 },
     ]
-    expect(allocationSum(buckets)).toBe(1000)
+    expect(allocationSum(buckets)).toBe(10000)
   })
 
   it('detects invalid totals', () => {
     const buckets: AllocationBucket[] = [
-      { variant_key: 'a', weight_milli: 500 },
-      { variant_key: 'b', weight_milli: 400 },
+      { variant_key: 'a', weight_bp: 5000 },
+      { variant_key: 'b', weight_bp: 4000 },
     ]
-    expect(allocationSum(buckets)).toBe(900)
-    expect(allocationSum(buckets)).not.toBe(1000)
+    expect(allocationSum(buckets)).toBe(9000)
+    expect(allocationSum(buckets)).not.toBe(10000)
   })
 })
 
@@ -220,7 +220,7 @@ describe('hashTargetsFromInputs / hashInputsFromTargets', () => {
 
 describe('normalizeOutput — Phase 7 backwards compatibility', () => {
   it('upgrades a bare-array legacy allocation to hash_inputs', () => {
-    const raw = { allocation: [{ variant_key: 'on', weight_milli: 1000 }] }
+    const raw = { allocation: [{ variant_key: 'on', weight_bp: 10000 }] }
     const out = normalizeOutput(raw)
     expect(isVariantOutput(out)).toBe(false)
     const a = (out as { allocation: AllocationOutput }).allocation
@@ -243,8 +243,8 @@ describe('normalizeOutput — Phase 7 backwards compatibility', () => {
         ],
         hash_targets: [], // server-derived; UI re-derives on every change
         buckets: [
-          { variant_key: 'on', weight_milli: 500 },
-          { variant_key: 'off', weight_milli: 500 },
+          { variant_key: 'on', weight_bp: 5000 },
+          { variant_key: 'off', weight_bp: 5000 },
         ],
       },
     }
@@ -266,7 +266,7 @@ describe('normalizeOutput — Phase 7 backwards compatibility', () => {
           { context_type: 'user', field: 'key' },
           { context_type: 'org', field: 'tier' },
         ],
-        buckets: [{ variant_key: 'on', weight_milli: 1000 }],
+        buckets: [{ variant_key: 'on', weight_bp: 10000 }],
       },
     }
     const out = normalizeOutput(raw)

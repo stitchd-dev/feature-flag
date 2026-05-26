@@ -1304,7 +1304,7 @@ fn proto_allocation_to_core(
         .iter()
         .filter_map(|b| {
             let vid = variant_id_by_key.get(&b.variant_key).copied()?;
-            Some((vid, b.weight_milli))
+            Some((vid, b.weight_bp))
         })
         .collect();
 
@@ -2298,11 +2298,11 @@ mod tests {
             buckets: vec![
                 AllocationBucket {
                     variant_key: "control".into(),
-                    weight_milli: 500,
+                    weight_bp: 5000,
                 },
                 AllocationBucket {
                     variant_key: "treatment".into(),
-                    weight_milli: 500,
+                    weight_bp: 5000,
                 },
             ],
             hash_inputs: vec![

@@ -61,7 +61,7 @@ pub enum RuleOutput {
     Percentage {
         /// At least one target is required; values are hashed in declaration order.
         targets: Vec<PercentageTarget>,
-        /// `(variant_id, weight)` pairs; weights are tenths-of-a-percent and must sum to 1000.
+        /// `(variant_id, weight)` pairs; weights are basis points and must sum to 10000.
         weights: Vec<(VariantId, u32)>,
     },
 }

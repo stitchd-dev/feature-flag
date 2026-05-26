@@ -669,7 +669,7 @@ mod tests {
                         context_type: "user".to_string(),
                         field: TargetField::Key,
                     }],
-                    weights: vec![(on_id, 500), (off_id, 500)],
+                    weights: vec![(on_id, 5000), (off_id, 5000)],
                 },
             },
         });
@@ -681,12 +681,12 @@ mod tests {
         assert!(r.rollout_debug.is_some());
         let debug = r.rollout_debug.as_ref().unwrap();
         assert!(!debug.hash_input.is_empty());
-        assert!(debug.bucket < 1000);
+        assert!(debug.bucket < 10000);
         assert_eq!(debug.variant_ranges.len(), 2);
         assert_eq!(debug.variant_ranges[0].from, 0);
-        assert_eq!(debug.variant_ranges[0].to, 499);
-        assert_eq!(debug.variant_ranges[1].from, 500);
-        assert_eq!(debug.variant_ranges[1].to, 999);
+        assert_eq!(debug.variant_ranges[0].to, 4999);
+        assert_eq!(debug.variant_ranges[1].from, 5000);
+        assert_eq!(debug.variant_ranges[1].to, 9999);
     }
 
     // ── Multiple contexts → one result per context ────────────────────────────
@@ -953,7 +953,7 @@ mod tests {
                         context_type: "user".to_string(),
                         field: TargetField::Parameter("account_id".to_string()),
                     }],
-                    weights: vec![(on_id, 500), (off_id, 500)],
+                    weights: vec![(on_id, 5000), (off_id, 5000)],
                 },
             },
         });

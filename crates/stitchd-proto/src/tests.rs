@@ -126,7 +126,7 @@ mod compilation_tests {
             context_hash_specs: legacy,
             buckets: vec![flags::v1::AllocationBucket {
                 variant_key: "on".to_string(),
-                weight_milli: 1000,
+                weight_bp: 10000,
             }],
             hash_inputs: new_inputs,
         };
@@ -179,7 +179,7 @@ mod compilation_tests {
             context_hash_specs: legacy,
             buckets: vec![flags::v1::AllocationBucket {
                 variant_key: "treatment".to_string(),
-                weight_milli: 1000,
+                weight_bp: 10000,
             }],
             hash_inputs: vec![],
         };

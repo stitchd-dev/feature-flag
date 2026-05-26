@@ -41,8 +41,8 @@ export type ConditionExpr =
 
 export interface AllocationBucket {
   variant_key: string
-  /** Tenths of a percent (0–1000). 1000 = 100 %. */
-  weight_milli: number
+  /** Basis points (0–10000). 10000 = 100 %. */
+  weight_bp: number
 }
 
 /**
@@ -194,22 +194,22 @@ export function isVariantOutput(o: RuleOutputJson): o is { variant_key: string }
   return 'variant_key' in o
 }
 
-/** Sum of weight_milli values in an allocation output. Should equal 1000. */
+/** Sum of weight_bp values in an allocation output. Should equal 10000. */
 export function allocationSum(buckets: AllocationBucket[]): number {
-  return buckets.reduce((s, b) => s + b.weight_milli, 0)
+  return buckets.reduce((s, b) => s + b.weight_bp, 0)
 }
 
 /** Build a default AllocationOutput for the given variant list. */
 export function defaultAllocationOutput(variants: string[]): AllocationOutput {
-  const each = Math.floor(1000 / Math.max(variants.length, 1))
-  const leftover = 1000 - each * variants.length
+  const each = Math.floor(10000 / Math.max(variants.length, 1))
+  const leftover = 10000 - each * variants.length
   const inputs: HashSelector[] = [{ kind: 'context_key', context_type: 'user' }]
   return {
     hash_inputs: inputs,
     hash_targets: hashTargetsFromInputs(inputs),
     buckets: variants.map((v, i) => ({
       variant_key: v,
-      weight_milli: each + (i === 0 ? leftover : 0),
+      weight_bp: each + (i === 0 ? leftover : 0),
     })),
   }
 }

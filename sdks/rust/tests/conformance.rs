@@ -359,7 +359,7 @@ fn build_percentage_allocation(rollout: &FixturePercentageRollout) -> Percentage
         .iter()
         .map(|w| AllocationBucket {
             variant_key: w.variant_key.clone(),
-            weight_milli: w.weight,
+            weight_bp: w.weight,
         })
         .collect();
     PercentageAllocation {

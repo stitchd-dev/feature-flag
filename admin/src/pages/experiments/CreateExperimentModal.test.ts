@@ -292,7 +292,7 @@ describe('isPercentageRolloutRule', () => {
     expect(
       isPercentageRolloutRule({
         allocation: {
-          buckets: [{ variant_key: 'a', weight_milli: 500 }],
+          buckets: [{ variant_key: 'a', weight_bp: 5000 }],
         },
       }),
     ).toBe(true)
@@ -317,13 +317,13 @@ describe('filterEligibleRules', () => {
     {
       rule_id: 'r1',
       name: 'percentage A',
-      output: { allocation: { buckets: [{ variant_key: 'a', weight_milli: 500 }] } },
+      output: { allocation: { buckets: [{ variant_key: 'a', weight_bp: 5000 }] } },
     },
     { rule_id: 'r2', name: 'specific variant', output: { variant_key: 'control' } },
     {
       rule_id: 'r3',
       name: null,
-      output: { allocation: { buckets: [{ variant_key: 'b', weight_milli: 1000 }] } },
+      output: { allocation: { buckets: [{ variant_key: 'b', weight_bp: 10000 }] } },
     },
   ]
 
