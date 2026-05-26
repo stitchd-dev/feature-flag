@@ -444,8 +444,48 @@ function TargetingPanel({
 
 // ─── SdkSnippet ───────────────────────────────────────────────────────────────
 
+interface SnippetResult {
+  variant_key: string
+  fired_rule_index: number | null
+  fired_rule_name: string | null
+  disabled: boolean
+  rollout_debug?: { bucket: number } | null
+}
+
 function SdkSnippet({ flag }: { flag: AdminFlagResponse }) {
+  const { projectId } = useOrgContext()
   const typeMap: Record<string, string> = { bool: 'bool', string: 'String', double: 'f64', int: 'i64', json: 'serde_json::Value' }
+
+  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<SnippetResult | null>(null)
+  const [evalError, setEvalError] = useState<string | null>(null)
+
+  async function runEval() {
+    setLoading(true)
+    setEvalError(null)
+    try {
+      const { data } = await api.post<{ results: SnippetResult[] }>(
+        `/v1/projects/${projectId}/flags/${flag.key}/evaluate-preview`,
+        { contexts: [{ _type: 'user', key: 'u_8421', parameters: { country: 'US', plan: 'pro' } }] },
+      )
+      setResult(data.results[0] ?? null)
+    } catch (err: unknown) {
+      setEvalError(err instanceof Error ? err.message : 'Request failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function getRuleLabel(): string {
+    if (!result) return ''
+    if (result.disabled) return 'flag disabled'
+    if (result.fired_rule_index !== null) {
+      const name = result.fired_rule_name ? ` (${result.fired_rule_name})` : ''
+      return `matched rule #${result.fired_rule_index + 1}${name}`
+    }
+    return result.rollout_debug != null ? 'default rule (rollout)' : 'default rule'
+  }
+
   return (
     <div className="split-2">
       <div className="card">
@@ -465,7 +505,12 @@ let value = client.evaluate::<${typeMap[flag.flag_type] ?? flag.flag_type}>(
         </div>
       </div>
       <div className="card">
-        <div className="card-header"><div className="card-title">Test evaluation</div><button className="btn primary sm"><I.play size={12} /> Run</button></div>
+        <div className="card-header">
+          <div className="card-title">Test evaluation</div>
+          <button className="btn primary sm" onClick={runEval} disabled={loading}>
+            <I.play size={12} /> {loading ? 'Running…' : 'Run'}
+          </button>
+        </div>
         <div className="card-body">
           <label className="label">Context</label>
           <pre className="code" style={{ marginBottom: 12 }}>{`{
@@ -476,13 +521,25 @@ let value = client.evaluate::<${typeMap[flag.flag_type] ?? flag.flag_type}>(
     "plan": "pro"
   }
 }`}</pre>
-          <div style={{ padding: 12, background: 'var(--success-bg)', border: '1px solid rgba(17,122,61,0.25)', borderRadius: 6 }}>
-            <div style={{ fontSize: 11, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Result</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 700 }}>{flag.variants[0]?.key ?? '—'}</span>
-              <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>matched rule #1 · evaluated in 0.4ms</span>
+          {evalError && (
+            <div style={{ padding: '8px 12px', background: 'var(--danger-bg, #fee2e2)', color: 'var(--danger)', borderRadius: 6, fontSize: 12, marginBottom: 8 }}>
+              {evalError}
             </div>
-          </div>
+          )}
+          {result && (
+            <div style={{ padding: 12, background: 'var(--success-bg)', border: '1px solid rgba(17,122,61,0.25)', borderRadius: 6 }}>
+              <div style={{ fontSize: 11, color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>Result</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6 }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 18, fontWeight: 700 }}>{result.variant_key}</span>
+                <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{getRuleLabel()}</span>
+              </div>
+            </div>
+          )}
+          {!result && !evalError && !loading && (
+            <div style={{ fontSize: 12, color: 'var(--fg-muted)', fontStyle: 'italic' }}>
+              Click Run to evaluate with the context above
+            </div>
+          )}
         </div>
       </div>
     </div>

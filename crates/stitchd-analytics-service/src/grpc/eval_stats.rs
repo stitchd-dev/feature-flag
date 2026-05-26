@@ -34,7 +34,7 @@ pub fn build_eval_stats_sql(bucket_fn: &str) -> String {
         SELECT
             toUnixTimestamp({bucket_fn}(evaluated_at, 'UTC')) AS ts,
             variant_key,
-            toUInt8(is_disabled)                              AS is_disabled,
+            toUInt8(NOT targeting_on)                         AS is_disabled,
             COUNT(*)                                          AS count,
             uniq(context_key)                                AS unique_ctx
         FROM flag_evaluation_log
