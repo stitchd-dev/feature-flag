@@ -572,49 +572,12 @@ impl SegmentationService for SegmentationServiceImpl {
                 Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
             })?;
 
-        // Fetch the segment to get its key and environment_id for the membership check.
-        let seg = self
+        let (in_include, in_exclude) = self
             .state
             .segment_repo
-            .find_by_id(segment_id)
+            .lookup_entry_raw(segment_id, "user", &r.key)
             .await
             .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
-
-        // check_list_membership uses the composite: resolve key→ID via PG, check Scylla.
-        // We check both include and exclude lists explicitly.
-        let include_map = self
-            .state
-            .segment_repo
-            .check_list_membership(
-                seg.environment_id,
-                "user", // default context_type for legacy lookup
-                &r.key,
-                std::slice::from_ref(&seg.key),
-            )
-            .await
-            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
-
-        let in_include = *include_map.get(&seg.key).unwrap_or(&false);
-
-        // For exclude: re-use the same path. The composite's check_membership already
-        // returns the net membership (include AND NOT exclude). For the LookupSegmentEntry
-        // response we want the raw in_include / in_exclude bits — but our Scylla schema
-        // stores them as separate list_type entries, so we check "include" directly.
-        // The exclude check requires a direct point read — delegate to the repo.
-        // For now: in_exclude is derived as (not in_include but would be if no exclude).
-        // This is approximate for the admin lookup UX; accuracy is sufficient.
-        let in_exclude = !in_include
-            && self
-                .state
-                .segment_repo
-                .check_list_membership(
-                    seg.environment_id,
-                    "user",
-                    &r.key,
-                    &[format!("__excl__{}", seg.key)], // non-existent key → always false
-                )
-                .await
-                .is_ok_and(|_| false);
 
         Ok(Response::new(LookupSegmentEntryResponse {
             in_include,

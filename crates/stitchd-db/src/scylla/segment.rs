@@ -354,6 +354,33 @@ impl ScyllaSegmentStore {
         Ok(!in_exclude)
     }
 
+    /// Return the raw `(in_include, in_exclude)` flags for a single key without
+    /// applying the "exclude wins" logic.  Used by the admin lookup endpoint so
+    /// the UI can show both flags independently.
+    pub async fn check_raw_membership(
+        &self,
+        id: SegmentId,
+        context_type: &str,
+        key: &str,
+    ) -> Result<(bool, bool), ScyllaError> {
+        let ks = self.client.keyspace();
+        let seg_uuid = id.as_uuid();
+
+        let active_gen = self.current_generation(seg_uuid, context_type).await?;
+        if active_gen == 0 {
+            return Ok((false, false));
+        }
+
+        let in_include = self
+            .entry_exists(ks, seg_uuid, context_type, active_gen, "include", key)
+            .await?;
+        let in_exclude = self
+            .entry_exists(ks, seg_uuid, context_type, active_gen, "exclude", key)
+            .await?;
+
+        Ok((in_include, in_exclude))
+    }
+
     /// Batch-check membership for multiple `keys` within `(segment_id, context_type)`.
     ///
     /// Returns a map from `key → is_member`. Keys absent from the active generation

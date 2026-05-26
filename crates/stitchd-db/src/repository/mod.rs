@@ -479,6 +479,16 @@ pub trait SegmentRepository: Send + Sync {
         segment_keys: &[String],
     ) -> Result<std::collections::HashMap<String, bool>, RepositoryError>;
 
+    /// Return raw `(in_include, in_exclude)` flags for a single key in a list segment.
+    /// Unlike `check_list_membership`, exclude does NOT override include here — both flags
+    /// are returned independently so the admin UI can show the full picture.
+    async fn lookup_entry_raw(
+        &self,
+        segment_id: SegmentId,
+        context_type: &str,
+        key: &str,
+    ) -> Result<(bool, bool), RepositoryError>;
+
     /// Batch check list-segment membership for multiple contexts across multiple segment keys.
     ///
     /// Returns one entry per context, each with a map of `segment_key → is_member`.

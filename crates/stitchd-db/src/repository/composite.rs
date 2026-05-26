@@ -213,6 +213,18 @@ impl SegmentRepository for CompositeSegmentRepository {
         Ok(result)
     }
 
+    async fn lookup_entry_raw(
+        &self,
+        segment_id: SegmentId,
+        context_type: &str,
+        key: &str,
+    ) -> Result<(bool, bool), RepositoryError> {
+        self.scylla
+            .check_raw_membership(segment_id, context_type, key)
+            .await
+            .map_err(RepositoryError::from)
+    }
+
     /// Batch check list-segment membership for multiple contexts × multiple segment keys.
     async fn batch_check_list_membership(
         &self,
