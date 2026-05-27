@@ -104,12 +104,12 @@ export function buildMetricRequestBody(
   switch (values.kind) {
     case 'aggregation': {
       const wc = parseWhereClause(values.where_clause)
-      const requiresField = aggregatorRequiresField(values.aggregator)
       return {
         ...common,
         event_key: values.event_key.trim(),
         aggregator: values.aggregator,
-        on_field: requiresField ? values.on_field.trim() || undefined : undefined,
+        // on_field is optional: send when non-empty, absent = use canonical value columns.
+        on_field: values.on_field.trim() || undefined,
         where_clause: wc.ok ? wc.value : undefined,
       }
     }
@@ -375,7 +375,8 @@ describe('test_create_modal_aggregation_form_validation', () => {
     if (!result.ok) expect(result.errors.event_key).toMatch(/event key/i)
   })
 
-  it('rejects sum without on_field', async () => {
+  it('accepts sum without on_field (on_field is now optional)', async () => {
+    // on_field is optional for all aggregators — absent means "use canonical value columns".
     const result = await validate({
       kind: 'aggregation',
       name: 'Revenue',
@@ -383,8 +384,7 @@ describe('test_create_modal_aggregation_form_validation', () => {
       aggregator: 'sum',
       on_field: '',
     })
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.errors.on_field).toMatch(/field/i)
+    expect(result.ok).toBe(true)
   })
 
   it('accepts count without on_field', async () => {
@@ -398,9 +398,10 @@ describe('test_create_modal_aggregation_form_validation', () => {
     expect(result.ok).toBe(true)
   })
 
-  it('aggregatorRequiresField returns true for sum/avg/p50/p90/p99/uniq', () => {
-    for (const agg of ['sum', 'avg', 'p50', 'p90', 'p99', 'uniq'] as const) {
-      expect(aggregatorRequiresField(agg)).toBe(true)
+  it('aggregatorRequiresField returns false for all aggregators (on_field is always optional)', () => {
+    // on_field is now optional — aggregatorRequiresField is deprecated and always false.
+    for (const agg of ['sum', 'avg', 'p50', 'p90', 'p99', 'uniq', 'count'] as const) {
+      expect(aggregatorRequiresField(agg)).toBe(false)
     }
   })
 
@@ -660,7 +661,7 @@ describe('buildMetricRequestBody', () => {
       aggregator: 'count',
       goal_direction: 'increase',
     })
-    // on_field is omitted for count (server contract)
+    // on_field is omitted when empty (canonical value columns used)
     expect(body.on_field).toBeUndefined()
   })
 

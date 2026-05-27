@@ -28,7 +28,7 @@ export function aggregatorUsesField(agg: string): boolean {
  * @deprecated Use `aggregatorUsesField`. Kept for backward compat — now
  * always returns `false` because `on_field` is optional for all aggregators.
  */
-export function aggregatorRequiresField(_agg: string): boolean {
+export function aggregatorRequiresField(_: string): boolean {
   return false
 }
 

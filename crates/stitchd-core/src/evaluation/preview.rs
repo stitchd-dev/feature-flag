@@ -36,20 +36,29 @@ pub enum ConditionNode {
     /// Terminal condition (a single predicate).
     Leaf { predicate: String, result: bool },
     /// All children must be true (short-circuits on first false).
-    And  { result: bool, children: Vec<ConditionNode> },
+    And {
+        result: bool,
+        children: Vec<ConditionNode>,
+    },
     /// At least one child must be true (short-circuits on first true).
-    Or   { result: bool, children: Vec<ConditionNode> },
+    Or {
+        result: bool,
+        children: Vec<ConditionNode>,
+    },
     /// Negation of the single child.
-    Not  { result: bool, child: Box<ConditionNode> },
+    Not {
+        result: bool,
+        child: Box<ConditionNode>,
+    },
 }
 
 impl ConditionNode {
     pub fn result(&self) -> bool {
         match self {
             Self::Leaf { result, .. }
-            | Self::And  { result, .. }
-            | Self::Or   { result, .. }
-            | Self::Not  { result, .. } => *result,
+            | Self::And { result, .. }
+            | Self::Or { result, .. }
+            | Self::Not { result, .. } => *result,
         }
     }
 }
@@ -272,24 +281,40 @@ pub(super) fn build_condition_tree(
     match expr {
         ConditionExpr::Leaf(cond) => {
             let result = evaluate_leaf(cond, input).unwrap_or(false);
-            ConditionNode::Leaf { predicate: condition_to_predicate(cond), result }
+            ConditionNode::Leaf {
+                predicate: condition_to_predicate(cond),
+                result,
+            }
         }
         ConditionExpr::And(children) => {
-            let child_nodes: Vec<ConditionNode> =
-                children.iter().map(|c| build_condition_tree(c, input)).collect();
+            let child_nodes: Vec<ConditionNode> = children
+                .iter()
+                .map(|c| build_condition_tree(c, input))
+                .collect();
             let result = child_nodes.iter().all(|n| n.result());
-            ConditionNode::And { result, children: child_nodes }
+            ConditionNode::And {
+                result,
+                children: child_nodes,
+            }
         }
         ConditionExpr::Or(children) => {
-            let child_nodes: Vec<ConditionNode> =
-                children.iter().map(|c| build_condition_tree(c, input)).collect();
+            let child_nodes: Vec<ConditionNode> = children
+                .iter()
+                .map(|c| build_condition_tree(c, input))
+                .collect();
             let result = child_nodes.iter().any(|n| n.result());
-            ConditionNode::Or { result, children: child_nodes }
+            ConditionNode::Or {
+                result,
+                children: child_nodes,
+            }
         }
         ConditionExpr::Not(inner) => {
             let child = build_condition_tree(inner, input);
             let result = !child.result();
-            ConditionNode::Not { result, child: Box::new(child) }
+            ConditionNode::Not {
+                result,
+                child: Box::new(child),
+            }
         }
     }
 }
@@ -1072,17 +1097,25 @@ mod tests {
 
         // country == US → true; beta == true → false
         let find_leaf = |pred: &str| -> (bool, String) {
-            children.iter().find_map(|n| {
-                if let ConditionNode::Leaf { predicate, result } = n {
-                    if predicate.contains(pred) { return Some((*result, predicate.clone())) }
-                }
-                None
-            }).unwrap_or_else(|| panic!("{pred} leaf not found"))
+            children
+                .iter()
+                .find_map(|n| {
+                    if let ConditionNode::Leaf { predicate, result } = n
+                        && predicate.contains(pred)
+                    {
+                        return Some((*result, predicate.clone()));
+                    }
+                    None
+                })
+                .unwrap_or_else(|| panic!("{pred} leaf not found"))
         };
         let (country_result, _) = find_leaf("country");
         assert!(country_result, "country == US should be true");
         let (beta_result, _) = find_leaf("beta");
-        assert!(!beta_result, "beta == true should be false for this context");
+        assert!(
+            !beta_result,
+            "beta == true should be false for this context"
+        );
     }
 
     // ── Phase 2 Task 2.2: default_rule_distribution in preview ──────────────

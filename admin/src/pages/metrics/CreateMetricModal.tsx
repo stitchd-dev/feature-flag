@@ -9,7 +9,6 @@ import {
   metricCreateSchema,
   initialMetricValues,
   parseWhereClause,
-  aggregatorRequiresField,
 } from '../../lib/validation/metricSchema'
 import type { MetricFormValues } from '../../lib/validation/metricSchema'
 import { MetricFormFields } from './MetricFormFields'
@@ -37,12 +36,12 @@ function buildCreateBody(values: MetricFormValues, envId: string): Record<string
   switch (values.kind) {
     case 'aggregation': {
       const wc = parseWhereClause(values.where_clause)
-      const requiresField = aggregatorRequiresField(values.aggregator)
       return {
         ...common,
         event_key: values.event_key.trim(),
         aggregator: values.aggregator,
-        on_field: requiresField ? (values.on_field.trim() || undefined) : undefined,
+        // on_field is optional — send it when non-empty; absent = canonical value columns.
+        on_field: values.on_field.trim() || undefined,
         where_clause: wc.ok ? wc.value : undefined,
       }
     }

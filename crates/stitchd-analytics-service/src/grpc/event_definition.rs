@@ -261,8 +261,7 @@ async fn fetch_event_stats(
     rows.into_iter()
         .map(|r| {
             let last_fired_at = if r.last_fired_at_ms > 0 {
-                DateTime::<Utc>::from_timestamp_millis(r.last_fired_at_ms)
-                    .map(|dt| dt.to_rfc3339())
+                DateTime::<Utc>::from_timestamp_millis(r.last_fired_at_ms).map(|dt| dt.to_rfc3339())
             } else {
                 None
             };

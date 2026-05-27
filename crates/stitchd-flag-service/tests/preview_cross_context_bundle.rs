@@ -115,7 +115,12 @@ fn multi_subcontext_bundle_shares_cross_context_hash_input() {
     let results = evaluate_preview(&flag, &[bundle], &[], env_id(), &[]);
 
     // One result per bundle (the whole bundle is evaluated as one unit).
-    assert_eq!(results.len(), 1, "expected 1 result per bundle, got {}", results.len());
+    assert_eq!(
+        results.len(),
+        1,
+        "expected 1 result per bundle, got {}",
+        results.len()
+    );
 
     let r = &results[0];
     let debug = r

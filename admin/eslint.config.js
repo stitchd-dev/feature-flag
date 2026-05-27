@@ -25,6 +25,16 @@ export default defineConfig([
       // Pre-existing: OrgContext exports both component and non-component values.
       // Downgraded from error to warn — tracked for future refactor.
       'react-refresh/only-export-components': 'warn',
+      // Allow `_`-prefixed identifiers as intentionally unused (e.g. deprecated
+      // function parameters that must stay for call-site compat).
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
     },
   },
 ])

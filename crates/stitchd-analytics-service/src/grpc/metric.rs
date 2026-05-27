@@ -1397,10 +1397,7 @@ mod handler_tests {
     }
 
     async fn wait_for_merge(client: &clickhouse::Client) {
-        let _ = client
-            .query("OPTIMIZE TABLE events FINAL")
-            .execute()
-            .await;
+        let _ = client.query("OPTIMIZE TABLE events FINAL").execute().await;
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]

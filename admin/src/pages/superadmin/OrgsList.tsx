@@ -23,7 +23,6 @@ export function OrgsList() {
 
   useEffect(() => {
     const controller = new AbortController()
-    setLoading(true)
     listOrgs(controller.signal)
       .then(setOrgs)
       .catch((err: unknown) => {

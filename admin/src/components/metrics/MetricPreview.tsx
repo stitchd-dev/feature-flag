@@ -188,7 +188,7 @@ export function MetricPreview({ metricId, days = 7 }: Props) {
   const summary = summariseBuckets(state.data.buckets)
   const series = state.data.buckets.map((b) => (Number.isFinite(b.value) ? b.value : 0))
 
-  if (summary.count === 0) {
+  if (!state.data.buckets?.length) {
     return (
       <PreviewCard>
         <div style={mutedHint}>

@@ -1358,7 +1358,9 @@ mod tests {
             crate::evaluation::preview::RuleOutcome::Match
         ));
         let leaf = match rt.condition_tree.as_ref().unwrap() {
-            crate::evaluation::preview::ConditionNode::Leaf { predicate, result } => (predicate.as_str(), *result),
+            crate::evaluation::preview::ConditionNode::Leaf { predicate, result } => {
+                (predicate.as_str(), *result)
+            }
             other => panic!("expected Leaf, got {:?}", other),
         };
         assert!(leaf.1, "condition result should be true");
@@ -1585,17 +1587,22 @@ mod tests {
         let rt = &trace.rule_traces[0];
         let children = match rt.condition_tree.as_ref().unwrap() {
             crate::evaluation::preview::ConditionNode::And { children, .. }
-            | crate::evaluation::preview::ConditionNode::Or  { children, .. } => children,
+            | crate::evaluation::preview::ConditionNode::Or { children, .. } => children,
             other => panic!("expected And/Or node, got {:?}", other),
         };
         assert_eq!(children.len(), 2);
         let find_leaf = |pred: &str| -> bool {
-            children.iter().find_map(|n| {
-                if let crate::evaluation::preview::ConditionNode::Leaf { predicate, result } = n {
-                    if predicate.contains(pred) { return Some(*result) }
-                }
-                None
-            }).unwrap_or_else(|| panic!("{pred} leaf not found"))
+            children
+                .iter()
+                .find_map(|n| {
+                    if let crate::evaluation::preview::ConditionNode::Leaf { predicate, result } = n
+                        && predicate.contains(pred)
+                    {
+                        return Some(*result);
+                    }
+                    None
+                })
+                .unwrap_or_else(|| panic!("{pred} leaf not found"))
         };
         // First leaf: org.tier == enterprise → missing context resolves false.
         assert!(!find_leaf("org"), "missing context resolves to false leaf");

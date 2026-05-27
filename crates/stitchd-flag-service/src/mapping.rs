@@ -376,9 +376,10 @@ pub fn build_feature_flag_proto(
                 context_type: "user".to_string(),
             })),
         }];
-        let catch_all_condition =
-            serde_json::to_vec(&stitchd_core::rule_engine::types::ConditionExpr::And(vec![]))
-                .unwrap_or_default();
+        let catch_all_condition = serde_json::to_vec(
+            &stitchd_core::rule_engine::types::ConditionExpr::And(vec![]),
+        )
+        .unwrap_or_default();
         proto_rules.push(ProtoFlagRule {
             rule_payload: catch_all_condition,
             output: Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(

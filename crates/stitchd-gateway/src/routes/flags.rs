@@ -1535,7 +1535,10 @@ pub async fn evaluate_preview(
                         // tagged ConditionNode JSON from the core).
                         condition_tree: {
                             let ct = &t["condition_tree"];
-                            if ct.is_null() || ct.is_object() && ct.as_object().map(|o| o.is_empty()).unwrap_or(false) {
+                            if ct.is_null()
+                                || ct.is_object()
+                                    && ct.as_object().map(|o| o.is_empty()).unwrap_or(false)
+                            {
                                 None
                             } else if ct.is_object() {
                                 Some(ct.clone())

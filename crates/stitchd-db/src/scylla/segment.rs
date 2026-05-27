@@ -357,6 +357,10 @@ impl ScyllaSegmentStore {
     /// Return the raw `(in_include, in_exclude)` flags for a single key without
     /// applying the "exclude wins" logic.  Used by the admin lookup endpoint so
     /// the UI can show both flags independently.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScyllaError`] if the underlying `ScyllaDB` query fails.
     pub async fn check_raw_membership(
         &self,
         id: SegmentId,

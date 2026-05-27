@@ -1787,6 +1787,14 @@ mod tests {
         ) -> Result<std::collections::HashMap<String, bool>, RepositoryError> {
             Ok(std::collections::HashMap::new())
         }
+        async fn lookup_entry_raw(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _context_type: &str,
+            _key: &str,
+        ) -> Result<(bool, bool), RepositoryError> {
+            Ok((false, false))
+        }
         async fn batch_check_list_membership(
             &self,
             _env_id: EnvironmentId,
@@ -2708,6 +2716,14 @@ mod tests {
             _keys: &[String],
         ) -> Result<std::collections::HashMap<String, bool>, RepositoryError> {
             Ok(std::collections::HashMap::new())
+        }
+        async fn lookup_entry_raw(
+            &self,
+            _id: stitchd_core::id::SegmentId,
+            _context_type: &str,
+            _key: &str,
+        ) -> Result<(bool, bool), RepositoryError> {
+            Ok((false, false))
         }
         async fn batch_check_list_membership(
             &self,

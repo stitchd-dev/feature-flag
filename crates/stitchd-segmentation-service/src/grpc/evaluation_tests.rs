@@ -348,6 +348,15 @@ pub mod tests {
             Ok(result)
         }
 
+        async fn lookup_entry_raw(
+            &self,
+            _id: SegmentId,
+            _context_type: &str,
+            _key: &str,
+        ) -> Result<(bool, bool), RepositoryError> {
+            Ok((false, false))
+        }
+
         async fn batch_check_list_membership(
             &self,
             _environment_id: EnvironmentId,

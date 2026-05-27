@@ -503,10 +503,7 @@ mod tests {
     /// from the same connection. Mirrors the pattern in
     /// `stitchd-event-writer::tests::clickhouse_views`.
     async fn wait_for_merge(client: &clickhouse::Client) {
-        let _ = client
-            .query("OPTIMIZE TABLE events FINAL")
-            .execute()
-            .await;
+        let _ = client.query("OPTIMIZE TABLE events FINAL").execute().await;
     }
 
     #[tokio::test]

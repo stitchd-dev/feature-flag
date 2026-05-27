@@ -256,11 +256,11 @@ fn default_rule_distribution_corpus() -> (FeatureFlag, Flag) {
                 allocations: vec![
                     RolloutAllocation {
                         variant_key: "control".into(),
-                        percentage: 80.0,
+                        percentage_bp: 8_000,
                     },
                     RolloutAllocation {
                         variant_key: "treatment".into(),
-                        percentage: 20.0,
+                        percentage_bp: 2_000,
                     },
                 ],
             }),

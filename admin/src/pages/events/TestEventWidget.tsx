@@ -147,6 +147,15 @@ export function parseTypedValue(raw: string, metricType: string): WireValue | nu
       if (!trimmed) return null
       if (trimmed === 'true') return { bool: true }
       if (trimmed === 'false') return { bool: false }
+      // Objects and arrays: parse as JSON and forward raw — analytics-service
+      // decides the canonical shape downstream.
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          return JSON.parse(trimmed) as WireValue
+        } catch {
+          return null
+        }
+      }
       const n = Number(trimmed)
       if (!Number.isFinite(n)) return null
       return Number.isInteger(n) ? { int: n } : { double: n }
