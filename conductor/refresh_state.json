@@ -1,29 +1,32 @@
 {
-  "last_refreshed": "2026-05-22T03:55:00Z",
+  "last_refreshed": "2026-05-27T15:47:00Z",
   "scope": "all",
-  "previous_refresh": "2026-05-20T20:30:00Z",
+  "previous_refresh": "2026-05-22T03:55:00Z",
   "changes": {
-    "workflow.md": [
-      "`cargo sqlx prepare` invocation now includes `-- --tests` — without it, test-only `sqlx::query!`/`sqlx::query_scalar!` macros are silently skipped from the offline cache, which broke CI on the experimentation_full_20260521 merge (12 'no cached data for this query' errors in stitchd-db/tests/experiment.rs). Long-form comment added inline explaining why.",
-      "Added a 'File-ownership boundary in worker prompts' subsection under Parallel Sub-Agent Workflow — 14 parallel workers across the experimentation_full track produced zero source-file merge conflicts because each worker prompt explicitly listed owned + forbidden files.",
-      "Added 'Beads close gotcha (`--no-auto` doesn't reliably persist)' note — closures may silently re-open; use plain `bd close` and `--force` on phantom-dep errors."
-    ],
-    "patterns.md": [
-      "Refresh marker updated to 2026-05-22.",
-      "10 patterns under 'Experimentation Patterns' section added by Phase 11 of the experimentation_full_20260521 track (already present pre-refresh — refresh just acknowledges them)."
+    "tech-stack.md": [
+      "Updated Postgres, ClickHouse, and ScyllaDB migrations to show they are collapsed into single V1 baselines (schema_cutover_20260525).",
+      "Removed legacy context_hash_specs dual-read references on stitchd-proto.",
+      "Documented u32 basis-point rollout precision for the Language technology layer.",
+      "Renamed ClickHouse table flag_evaluation_log_v2 to flag_evaluation_log."
     ],
     "product.md": [
-      "Already updated by Phase 11 worker — Implementation Status table now includes the new experimentation row (bolded). Refresh confirms; no further changes."
+      "Added the completed schema_cutover_20260525 track to the Implementation Status table."
     ],
-    "tech-stack.md": [
-      "Already updated by Phase 11 worker — ClickHouse Schema section gains `experiment_assignments` + `experiment_assignments_mv` + `experiment_iterations_active` dictionary; `flag_evaluation_log_v2` row mentions the new `targeting_on` + `matched_rule_id` columns. Refresh confirms; no further changes."
+    "workflow.md": [
+      "Documented new CI Environment Notes including Vitest admin-frontend + coverage jobs gating docs-build, and test-util feature check on cargo sqlx prepare."
+    ],
+    "patterns.md": [
+      "Added new Basis Points Rollout Precision pattern under Schema Cutover Patterns."
     ]
   },
   "tracks_completed_since_last_refresh": [
-    "experimentation_full_20260521 (11 phases + 3 P2 bug fixes: feature-flag-buc, feature-flag-11d, feature-flag-1p6) — merged at e9617f5, ARRAY JOIN refactor pushed in 480ccf3"
+    "docs_refresh_20260522",
+    "flag_eval_unify_20260522",
+    "integration_bugfix_20260524",
+    "schema_cutover_20260525"
   ],
   "follow_up_drift_notes": [
-    "feature-flag-502 (wisp, closed): CI sqlx-prepare drift — fix shipped in 480ccf3.",
-    "No Beads-vs-Conductor drift detected: all 56 child stories + 11 phase milestones + epic (feature-flag-dak) are CLOSED. No orphans."
+    "Reference-only ClickHouse migration folders (crates/stitchd-db/clickhouse-migrations/ and crates/stitchd-analytics-service/clickhouse-migrations/) still exist in the codebase; they were not deleted as described in the schema_cutover plan.",
+    "No Beads-vs-Conductor drift detected: all 1,163 issues are CLOSED, and there is no active/open plan."
   ]
 }

@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-05-22 (post experimentation_full_20260521 merge) -->
+<!-- Last refreshed: 2026-05-27 (post schema_cutover_20260525 merge) -->
 
 ## Architecture
 
@@ -18,7 +18,7 @@ The system is decomposed into seven Cargo workspace crates, each a standalone gR
 | `stitchd-sdk-rust` | Server-side Rust SDK — in-process flag evaluation via `SdkClient::evaluate(&[EvalRequest], TraceLevel)`, which delegates to `stitchd-core::evaluation::evaluate_flag` (library; naming convention: `stitchd-sdk-{lang}`) | Library |
 | `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types. Hosts the SOLE flag-evaluation orchestrator `evaluation::evaluate_flag(...)` (post-`flag_eval_unify_20260522`) — preview path + SDK path both delegate here. Owns the canonical `HashSelector` / `HashInputSpec` / `TraceLevel` / `ListMembershipIndex` / `EvalOutcome` / `EvaluationTrace` / `FlagEvaluationResult` types | Library |
 | `stitchd-db` | Database access layer (sqlx repositories + ClickHouse) | Library |
-| `stitchd-proto` | Protobuf definitions and generated tonic stubs for all services. `flags.v1.PercentageAllocation` carries the canonical `hash_inputs: repeated HashSelector` at tag 3 (post-`flag_eval_unify_20260522`); the legacy `context_hash_specs map<string, ContextHashSpec>` at tag 1 stays for dual-read compatibility during the cutover. `HashSelector` is a `oneof { ContextKeySelector, ContextParameterSelector }` | Library |
+| `stitchd-proto` | Protobuf definitions and generated tonic stubs for all services. `flags.v1.PercentageAllocation` carries the canonical `hash_inputs: repeated HashSelector` at tag 3 (post-`flag_eval_unify_20260522`); legacy `context_hash_specs` map at tag 1 is retired | Library |
 | `xtask` | Build tool: mdBook docs generation, tool installation | Binary |
 
 Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous monolith) has been removed. The `stitchd-events` crate was renamed to `stitchd-event-writer` as part of the `boundaries_20260518` refactor; all references to the old name are retired.
@@ -27,7 +27,7 @@ Internal communication is exclusively gRPC (tonic). `stitchd-server` (previous m
 
 | Layer | Technology |
 |---|---|
-| Language | Rust 2024 — workspace MSRV = 1.95 (`workspace.package.rust-version`); both `rust-toolchain.toml` and CI's `dtolnay/rust-toolchain@stable` lines stay on `stable` so toolchain releases pick up automatically |
+| Language | Rust 2024 — workspace MSRV = 1.95 (`workspace.package.rust-version`); both `rust-toolchain.toml` and CI's `dtolnay/rust-toolchain@stable` lines stay on `stable` so toolchain releases pick up automatically; rollout allocations use integer basis points (u32, `percentage_bp` where 10000 = 100%, 0.01% precision) |
 | REST API | Axum 0.8 (in `stitchd-gateway`) |
 | Internal RPC | gRPC (tonic 0.14 + tonic-prost 0.14 + prost 0.14 — codec split since 0.14; `tonic_prost_build::configure()` in build scripts) |
 | Config / Flag Store | PostgreSQL 16+ (sqlx 0.8) — offline cache (`.sqlx/`) for compile-time safety in CI |
@@ -167,89 +167,55 @@ Key invariants:
 
 ## PostgreSQL Index Layer
 
-Added in `db_optim_20260516` (`crates/stitchd-db/migrations/2026051600000{1-4}_*.sql`):
+Defined in Postgres V1 Baseline (`20260525000001_v1_baseline.sql`):
 
-| Migration | Index | Purpose |
-|---|---|---|
-| 000001 | `idx_sdk_keys_key_hash_active` on `(key_hash, is_active)` | Fast SDK key auth lookup |
-| 000002 | 6 partial indexes `WHERE deleted_at IS NULL` on flags, segments, projects, environments, event_definitions, experiments | Soft-delete query pruning |
-| 000003 | `idx_segment_list_entries_covering` on `(segment_id, context_type, list_type, entry_key)` | Covering index for membership checks |
-| 000004 | `idx_context_type/param_registry_last_seen` | Enables efficient purge of stale context registry entries |
+| Index | Purpose |
+|---|---|
+| `idx_sdk_keys_key_hash_active` on `(key_hash, is_active)` | Fast SDK key auth lookup |
+| 6 partial indexes `WHERE deleted_at IS NULL` on flags, segments, projects, environments, event_definitions, experiments | Soft-delete query pruning |
+| `idx_segment_list_entries_covering` on `(segment_id, context_type, list_type, entry_key)` | Covering index for membership checks |
+| `idx_context_type/param_registry_last_seen` | Enables efficient purge of stale context registry entries |
 
 Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a transaction.
 
-### Events + Metrics migrations (`events_metrics_20260519`)
-
-| Migration | Change | Purpose |
-|---|---|---|
-| `20260519000001_drop_experiment_results.sql` | Drop PostgreSQL `experiment_results` table | Source of truth moved to ClickHouse |
-| `20260520000001_metric_definitions.sql` | Create `metric_definitions(id, environment_id, key, name, description, kind TEXT, config JSONB, goal_direction TEXT, version BIGINT, created_at, updated_at, deleted_at)` | Composable metric primitives table |
-| `20260520000002_experiment_metrics_cutover.sql` | Add `metric_ids UUID[]` column to `experiments`; backfill from prior raw `event_key` references | Experiments → metric_ids cutover |
-| `20260520000003_experiment_iterations_metric_ids.sql` | Add `metric_ids UUID[]` to `experiment_iterations` | Per-iteration metric pinning |
-| `20260520000004_event_definitions_admin_fields.sql` | Add `name`, `description`, `metric_type TEXT` CHECK-constrained, `schema JSONB` columns to `event_definitions`; partial index on metric_type | Admin UI surface for event registration + JSON-schema validation |
-
 ## ClickHouse Schema
 
-**Tables and materialized views as of 2026-05-22 (post-`experimentation_full_20260521`):**
+**Tables and materialized views as of 2026-05-27 (post-`schema_cutover_20260525`):**
 
 | Table | Engine | Notes |
 |---|---|---|
 | `events` | MergeTree, monthly partitions | Legacy ingestion table |
-| `events_v2` | MergeTree, weekly `toMonday()` partitions | Optimized partition granularity (migration 000007). `contexts Array(Tuple(String, String))` carries multi-context attribution per firing; `metric_key LowCardinality(String)`, three nullable typed value columns (`value_bool / value_int / value_double`); `properties Map(String, String)`; `timestamp DateTime64(3, 'UTC')` + `occurred_at DateTime64(3, 'UTC')` |
-| `flag_evaluation_log_v2` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log (migration `0004_flag_evaluation_log_v2.sql`). New columns (`experimentation_full_20260521`): `targeting_on Bool` (renamed from `is_disabled`) + `matched_rule_id Nullable(UUID)` — drive `experiment_assignments_mv` row routing |
+| `events_v2` | MergeTree, weekly `toMonday()` partitions | Optimized partition granularity. `contexts Array(Tuple(String, String))` carries multi-context attribution per firing; `metric_key LowCardinality(String)`, three nullable typed value columns (`value_bool / value_int / value_double`); `properties Map(String, String)`; `timestamp DateTime64(3, 'UTC')` + `occurred_at DateTime64(3, 'UTC')` |
+| `flag_evaluation_log` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log. Columns: `env_id`, `flag_id`, `flag_key`, `variant_key`, `targeting_on` (Boolean, true when flag active), `matched_rule_id` (matched rule UUID), `evaluated_at`, `context_type`, `context_key`, `params_json` |
 | `events_experiment_daily` | AggregatingMergeTree | Pre-aggregated experiment stats by `(env_id, experiment_id, variant_key, metric_key, day)` |
 | `events_experiment_daily_mv` | Materialized View | Auto-populates `events_experiment_daily` on `events` insert using `*State` combiners |
-| `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`; replaces the retired PostgreSQL `experiment_results` table (PG drop migration `20260519000001_drop_experiment_results.sql`). `experimentation_full_20260521` migration adds `context_type LowCardinality(String) DEFAULT 'user'` so per-context-type results sit on the same row shape |
-| `experiment_assignments` | ReplacingMergeTree(`_version`) | **NEW** (`experimentation_full_20260521`). First-exposure (ITT) assignments keyed on `(experiment_id, iteration_id, context_type, context_key)`. Inverted version column (`-toUnixTimestamp64Milli(assigned_at)`) so MAX(_version) returns the MIN(assigned_at) — first exposure wins. Monthly partitions, 180-day TTL |
-| `experiment_assignments_mv` | Materialized View | **NEW** (`experimentation_full_20260521`). Watches `flag_evaluation_log` inserts; routes rows where `targeting_on = true AND dictHas('experiment_iterations_active', (env_id, flag_id, matched_rule_id, context_type))` into `experiment_assignments` |
+| `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`. `context_type` column (default 'user') supports per-context-type results |
+| `experiment_assignments` | ReplacingMergeTree(`_version`) | First-exposure (ITT) assignments keyed on `(experiment_id, iteration_id, context_type, context_key)`. Inverted version column (`-toUnixTimestamp64Milli(assigned_at)`) so MAX(_version) returns the MIN(assigned_at) — first exposure wins. Monthly partitions, 180-day TTL |
+| `experiment_assignments_mv` | Materialized View | Watches `flag_evaluation_log` inserts; routes rows where `targeting_on = true AND dictHas('experiment_iterations_active', (env_id, flag_id, matched_rule_id, context_type))` into `experiment_assignments` |
 
 **ClickHouse dictionaries:**
 
 | Dictionary | Source | Keys | Notes |
 |---|---|---|---|
-| `experiment_iterations_active` | PG `experiment_iterations_active` view | `(env_id UUID, flag_id UUID, matched_rule_id Nullable(UUID), context_type String)` | **NEW** (`experimentation_full_20260521`). Returns `(experiment_id UUID, iteration_id UUID)`. `LIFETIME(MIN 300 MAX 600)` + explicit `SYSTEM RELOAD DICTIONARY` on every iteration start/stop. Cardinality bounded by `count(running_experiments) * sum(unit_context_types)` |
+| `experiment_iterations_active` | PG `experiment_iterations_active` view | `(env_id UUID, flag_id UUID, matched_rule_id Nullable(UUID), context_type String)` | PG-backed active experiment iterations view source. Returns `(experiment_id UUID, iteration_id UUID)`. `LIFETIME(MIN 30 MAX 60)` + explicit `SYSTEM RELOAD DICTIONARY` on every iteration start/stop. |
 
 **AggregatingMergeTree invariants:**
 - Insert: use `*State` combiners (`countState()`, `sumState(Float64)`, `uniqState()`)
 - Read: use `*Merge` combiners (`countMerge`, `sumMerge`, `uniqMerge`) in GROUP BY — NOT `finalizeAggregation` (scalar only)
 - `sumState(Nullable(Float64))` mismatches `AggregateFunction(sum, Float64)` — wrap with `ifNull(..., 0.0)`
 
-**ReplacingMergeTree first-exposure pattern (new):**
+**ReplacingMergeTree first-exposure pattern:**
 - `experiment_assignments` uses `ReplacingMergeTree(_version)` where `_version = -toUnixTimestamp64Milli(assigned_at)`. MAX(_version) during merges → MIN(assigned_at) → first-exposure variant wins per `(experiment_id, iteration_id, context_type, context_key)`.
 - Readers MUST use `FINAL` (or `argMin(...)` GROUP BY) to collapse the unmerged window between INSERT and merge.
 - Tests force determinism with `OPTIMIZE TABLE experiment_assignments FINAL` before assertion.
 
-### Experimentation migrations (`experimentation_full_20260521`)
+## Database Migrations (V1 Baselines)
 
-PG migrations:
+All historical migrations (PostgreSQL, ClickHouse, ScyllaDB) were collapsed into single V1 baseline schemas during the `schema_cutover_20260525` track:
 
-| Migration | Change |
-|---|---|
-| `20260521000001_experiment_attribution_fields.sql` | Add `targets_default_rule Boolean`, `guardrail_metric_ids UUID[]`, `pre_period_days Integer`, `unit_context_types text[] NOT NULL DEFAULT '{user}'`, `flag_id UUID NOT NULL` to `experiments`; XOR `CHECK ((flag_rule_id IS NOT NULL AND targets_default_rule = false) OR (flag_rule_id IS NULL AND targets_default_rule = true))`; replace `idx_experiments_one_active_per_rule` with `idx_experiments_one_active_per_flag` |
-| `20260521000002_flag_default_rule_distribution.sql` | Add `default_rule_distribution Jsonb` to `feature_flags` |
-| `20260521000003_experiment_iterations_snapshot.sql` | Add `targets_default_rule`, `unit_context_types`, `default_rule_distribution` snapshot columns to `experiment_iterations` (so restart-with-changes captures the new config) |
-
-CH migrations (under `stitchd-event-writer/migrations/`):
-
-| Migration | Change |
-|---|---|
-| `20260521000001_flag_eval_log_matched_rule.sql` | Add `targeting_on Bool` + `matched_rule_id Nullable(UUID)` to `flag_evaluation_log`. Rename pattern: MATERIALIZE COLUMN → MODIFY COLUMN DEFAULT → DROP COLUMN to break DEFAULT-expression dependency on the old `is_disabled` |
-| `20260521000002_experiment_iterations_active_dict.sql` | Create the `experiment_iterations_active` PG-backed dictionary |
-| `20260521000003_experiment_assignments_mv.sql` | Create `experiment_assignments` table + `experiment_assignments_mv` materialized view |
-| `20260521000004_backfill_experiment_assignments.sql` | One-shot 90-day backfill from `flag_evaluation_log` via the dictionary |
-| `20260521000005_experiment_results_context_type.sql` | Add `context_type LowCardinality(String) DEFAULT 'user'` to `experiment_results` (per-context-type stats) |
-
-### Flag-evaluation unification migrations (`flag_eval_unify_20260522`)
-
-PG migrations:
-
-| Migration | Change |
-|---|---|
-| `20260522000001_hash_input_spec_cutover.sql` | Add nullable JSONB columns `hash_inputs` (on per-rule percentage allocations in `feature_flag_rules.rule_def`) and `default_rule_hash_inputs` (on `feature_flags.default_rule_distribution`) carrying the canonical `Vec<HashSelector>` selector list. Legacy `rule_def.output.Percentage.targets` array is retained for dual-read fallback during the cutover; `cargo xtask verify-hash-cutover` audits stability of bucket assignment when both shapes are present |
-
-**Dual-schema state during cutover:**
-- Proto `flags.v1.PercentageAllocation` carries `hash_inputs: repeated HashSelector` (tag 3 — canonical) AND legacy `context_hash_specs: map<string, ContextHashSpec>` (tag 1 — dual-read). Mapping prefers `hash_inputs` when non-empty; falls back to a canonical sort of `context_hash_specs` (context_type ASC, parameters ASC within type) otherwise.
-- PG percentage-rule rows carry the new `hash_inputs` JSONB column AND the legacy `rule_def.output.Percentage.targets` array. Repositories dual-write both shapes; consumers prefer `hash_inputs`.
+- **PostgreSQL:** Defined in `crates/stitchd-db/migrations/20260525000001_v1_baseline.sql` (plus a partial unique constraint fix in `20260525000002_fix_flag_key_unique_partial.sql`). Retired `segment_rules` table and `context_hash_specs` dual-write columns.
+- **ClickHouse:** Defined in `crates/stitchd-event-writer/migrations/20260525000001_v1_baseline.sql`. Table `flag_evaluation_log_v2` renamed back to `flag_evaluation_log`.
+- **ScyllaDB:** Defined in `crates/stitchd-db/scylla-migrations/0001_v1_baseline.cql`.
 
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments

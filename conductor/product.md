@@ -1,6 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
-<!-- Last refreshed: 2026-05-22 (post experimentation_full_20260521 merge) -->
+<!-- Last refreshed: 2026-05-27 (post schema_cutover_20260525 merge) -->
 
 # Product Guide
 
@@ -71,6 +71,7 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 | Metrics Layer — composable definitions (aggregation/ratio/funnel) + experiment cutover | ✅ Complete |
 | **Experimentation as a whole — complete UI + Backend with eval-log-based first-exposure attribution, whole-flag lock, per-context-type stats, default-rule experiments, Frequentist + Bayesian + CUPED + SRM + Guardrails** | ✅ Complete |
 | Flag-Evaluation Unification — single `stitchd-core::evaluation::evaluate_flag` orchestrator drives preview + SDK; canonical `hash_inputs` selector list (cross-context Key + Parameter mixing) end-to-end through Admin UI → REST → PG → preview AND snapshot → SDK | ✅ Complete |
+| Schema Hard Cutover — collapsed 44 Postgres, 14 ClickHouse, and 5 ScyllaDB migrations into single V1 baselines; retired segment_rules, dual-write hash_inputs, and flag_evaluation_log_v2; migrated rollout percentages to u32 basis points (0.01% precision) | ✅ Complete |
 
 ## Modules
 

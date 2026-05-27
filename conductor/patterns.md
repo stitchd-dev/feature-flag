@@ -74,7 +74,7 @@ Reusable patterns discovered during development. Read this before starting new w
 - **Weekly ClickHouse partition key:** Use `toMonday(event_date)` as the partition expression to get weekly partitions keyed to Mondays. Combine with `TTL toMonday(event_date) + INTERVAL 52 WEEK` for year-length retention windows. (from: db_optim_20260516, archived 2026-05-16)
 
 ---
-Last refreshed: 2026-05-24 (post integration_bugfix_20260524 archive — added 3 patterns under "Integration Bug Hunt Patterns")
+Last refreshed: 2026-05-27 (post schema_cutover_20260525 merge — added basis points rollout pattern under "Schema Cutover Patterns")
 
 ## Frontend (Admin UI) Patterns
 
@@ -193,3 +193,5 @@ Last refreshed: 2026-05-24 (post integration_bugfix_20260524 archive — added 3
 - **Circular FK in Postgres (e.g. parent ↔ child): use deferred ALTER TABLE:** When two tables reference each other (e.g. `feature_flags.default_variant_id → variants(id)` and `variants.flag_id → feature_flags(id)`), create the parent table *without* the back-reference column, create the child table with its FK, then `ALTER TABLE parent ADD COLUMN IF NOT EXISTS back_ref UUID REFERENCES child(id)`. This is the only safe DDL ordering — trying to inline both FKs in CREATE TABLE always fails. (from: schema_cutover_20260525, archived 2026-05-25)
 
 - **Migration baseline synthesis: `IF NOT EXISTS` throughout, drop-aware:** When collapsing N incremental migrations into a single V1 baseline, use `CREATE ... IF NOT EXISTS` on every DDL statement so the baseline is idempotent. More importantly, if a later migration drops an object that an earlier one created, *omit both* from the baseline — fresh deployments never see either. Tables retired by the cutover (e.g. `segment_rules`) must not appear. (from: schema_cutover_20260525, archived 2026-05-25)
+
+- **Basis Points Rollout Precision:** Rollout allocations use integer basis points (`u32` where 1 = 0.01% precision, 10000 = 100%) rather than float percentages (`f64`). This allows exact integer validation (no floating-point epsilon/sum tolerance needed) and matches DB storage directly. (from: schema_cutover_20260525, archived 2026-05-25)

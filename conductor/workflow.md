@@ -1,5 +1,5 @@
 # Project Workflow
-<!-- Last refreshed: 2026-05-22 (post experimentation_full_20260521 merge — added `-- --tests` to the sqlx prepare command after a CI failure proved test-only queries were silently being skipped from the offline cache; also added a Beads gotcha + a parallel-worker file-ownership pre-check note) -->
+<!-- Last refreshed: 2026-05-27 (post schema_cutover_20260525 merge — updated docs-build job dependencies and sqlx-check prepare verification in CI) -->
 
 ## Guiding Principles
 
@@ -251,8 +251,10 @@ git diff --exit-code
 
 ### CI Environment Notes
 - `SQLX_OFFLINE=true` in CI — all `sqlx::query!` macros use the `.sqlx/` offline cache
+- `sqlx-check` job runs `cargo sqlx prepare --workspace --check -- --all-targets --features stitchd-sdk-rust/test-util` to verify cache completeness across all targets and tests.
+- `docs-build` job is gated on both backend `coverage` (cargo-llvm-cov) and vitest `admin-frontend` jobs to prevent regressions from slipping through.
 - CI only starts `postgres` and `clickhouse` containers; the six microservice containers are exercised by E2E Step CI workflows in `tests/e2e/`
-- Coverage threshold: ≥90% per crate (cargo-tarpaulin, uploaded to Codecov per crate flag)
+- Coverage threshold: ≥90% per crate (cargo-tarpaulin/cargo-llvm-cov, uploaded to Codecov per crate flag)
 - `contract-check` job verifies the gateway covers the pre-decomposition OpenAPI surface (`scripts/check_openapi_contract.py`)
 
 ## Testing Requirements
