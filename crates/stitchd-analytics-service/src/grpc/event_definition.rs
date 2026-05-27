@@ -16,9 +16,11 @@
 //! (`InvalidArgument` for shape errors, `AlreadyExists` on duplicate key,
 //! `Aborted` on optimistic-locking conflict).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use tonic::{Request, Response, Status};
 
 use stitchd_core::{
@@ -123,6 +125,10 @@ fn to_proto(def: EventDefinition) -> EventDefinitionMsg {
         created_at: def.created_at.to_rfc3339(),
         updated_at: def.updated_at.to_rfc3339(),
         deleted_at: def.deleted_at.map(|t| t.to_rfc3339()),
+        // Stats are populated post-hoc by `handle_list_event_definitions`;
+        // single-item responses leave these as None.
+        last_fired_at: None,
+        count_24h: None,
     }
 }
 
@@ -212,8 +218,63 @@ pub async fn handle_get_event_definition(
     Ok(Response::new(to_proto(def)))
 }
 
+// ── ClickHouse stat helpers ───────────────────────────────────────────────────
+
+/// One row returned by the "stats per metric_key" ClickHouse query.
+#[derive(clickhouse::Row, Deserialize)]
+struct EventStatRow {
+    metric_key: String,
+    /// Unix-millisecond timestamp of the most recent firing (`max(timestamp)`).
+    /// `toUnixTimestamp64Milli` returns `Int64` in ClickHouse RowBinary.
+    last_fired_at_ms: i64,
+    /// Events fired in the trailing 24 h.
+    /// `countIf` returns `UInt64` in ClickHouse RowBinary.
+    count_24h: u64,
+}
+
+/// Query ClickHouse for `last_fired_at` + `count_24h` per key in this env.
+/// Returns an empty map when ClickHouse is unreachable — we degrade gracefully
+/// (stats show as absent) rather than failing the whole list call.
+async fn fetch_event_stats(
+    ch_client: &Arc<clickhouse::Client>,
+    env_uuid: uuid::Uuid,
+) -> HashMap<String, (Option<String>, Option<i64>)> {
+    let sql = r"
+        SELECT
+            metric_key,
+            toUnixTimestamp64Milli(max(timestamp))             AS last_fired_at_ms,
+            countIf(timestamp >= now() - INTERVAL 24 HOUR)     AS count_24h
+        FROM events
+        WHERE env_id = ?
+        GROUP BY metric_key
+    ";
+    let rows: Vec<EventStatRow> = match ch_client
+        .query(sql)
+        .bind(env_uuid)
+        .fetch_all::<EventStatRow>()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(), // degrade gracefully
+    };
+
+    rows.into_iter()
+        .map(|r| {
+            let last_fired_at = if r.last_fired_at_ms > 0 {
+                DateTime::<Utc>::from_timestamp_millis(r.last_fired_at_ms)
+                    .map(|dt| dt.to_rfc3339())
+            } else {
+                None
+            };
+            // Cast u64 → i64; realistic counts won't overflow i64.
+            (r.metric_key, (last_fired_at, Some(r.count_24h as i64)))
+        })
+        .collect()
+}
+
 pub async fn handle_list_event_definitions(
     repo: &Arc<dyn EventDefinitionRepository>,
+    ch_client: &Arc<clickhouse::Client>,
     request: Request<ListEventDefinitionsRequest>,
 ) -> Result<Response<ListEventDefinitionsResponse>, Status> {
     let r = request.into_inner();
@@ -229,8 +290,24 @@ pub async fn handle_list_event_definitions(
         .list_by_environment_paginated(env_id, offset, limit, include_archived)
         .await
         .map_err(map_repo_err)?;
+
+    // Enrich with ClickHouse usage stats (best-effort — fails open).
+    let stats = fetch_event_stats(ch_client, env_id.as_uuid()).await;
+
+    let proto_items: Vec<EventDefinitionMsg> = items
+        .into_iter()
+        .map(|def| {
+            let mut msg = to_proto(def);
+            if let Some((last_fired_at, count_24h)) = stats.get(&msg.key) {
+                msg.last_fired_at = last_fired_at.clone();
+                msg.count_24h = *count_24h;
+            }
+            msg
+        })
+        .collect();
+
     Ok(Response::new(ListEventDefinitionsResponse {
-        items: items.into_iter().map(to_proto).collect(),
+        items: proto_items,
         total,
         offset,
         limit,

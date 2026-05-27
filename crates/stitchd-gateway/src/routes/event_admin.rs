@@ -93,6 +93,10 @@ pub struct EventJson {
     pub updated_at: String,
     pub deleted_at: Option<String>,
     pub archived: bool,
+    /// RFC-3339 timestamp of the most recent firing (from ClickHouse), or null.
+    pub last_fired_at: Option<String>,
+    /// Number of firings in the trailing 24 h (from ClickHouse), or null.
+    pub count_24h: Option<i64>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -127,6 +131,8 @@ fn proto_to_json(p: EventDefinitionMsg) -> EventJson {
         updated_at: p.updated_at,
         deleted_at: p.deleted_at,
         archived,
+        last_fired_at: p.last_fired_at,
+        count_24h: p.count_24h,
     }
 }
 

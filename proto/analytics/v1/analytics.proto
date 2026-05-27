@@ -278,6 +278,10 @@ message EventDefinitionMsg {
   string          created_at     = 10;
   string          updated_at     = 11;
   optional string deleted_at     = 12;
+  // Usage stats — populated only on list responses (ClickHouse look-ahead).
+  // Absent on single-item get/create/update/delete responses.
+  optional string last_fired_at  = 13;  // RFC-3339 timestamp of most recent firing
+  optional int64  count_24h      = 14;  // number of firings in the trailing 24 h
 }
 
 message CreateEventDefinitionRequest {

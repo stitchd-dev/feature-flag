@@ -262,7 +262,12 @@ impl AnalyticsService for AnalyticsServiceImpl {
         &self,
         request: Request<ListEventDefinitionsRequest>,
     ) -> Result<Response<ListEventDefinitionsResponse>, Status> {
-        handle_list_event_definitions(&self.state.event_def_repo, request).await
+        handle_list_event_definitions(
+            &self.state.event_def_repo,
+            &self.state.ch_client,
+            request,
+        )
+        .await
     }
 
     async fn update_event_definition(
