@@ -566,7 +566,7 @@ pub async fn track_events(
 /// `track_events_admin` (JWT-auth tier, `mark_test=true`). The `mark_test`
 /// flag, when set, stamps `properties["_test"] = "true"` on every event in
 /// the batch — analytics-service propagates the property verbatim onto the
-/// resulting `events_v2` rows so the admin UI can filter test firings out
+/// resulting `events` rows so the admin UI can filter test firings out
 /// of production aggregates.
 ///
 /// Returns a `202 Accepted` JSON response on success, or a `GatewayError`
@@ -812,7 +812,7 @@ pub async fn get_event_stats(
 ///
 /// **Test marker**: every event in the batch is stamped with
 /// `properties["_test"] = "true"` before forwarding. Analytics-service
-/// propagates the property verbatim onto `events_v2` rows; the admin UI can
+/// propagates the property verbatim onto `events` rows; the admin UI can
 /// later filter test events out of production aggregates via
 /// `properties._test = 'true'`.
 ///

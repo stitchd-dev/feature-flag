@@ -59,7 +59,7 @@ pub enum TimeseriesReaderError {
 /// [`stitchd_db::MetricRepository`], finds the latest iteration of the
 /// experiment via [`stitchd_db::ExperimentRepository`], and dispatches the
 /// existing `build_experiment_preview_aggregation_query` builder against
-/// `experiment_assignments + events_v2`.
+/// `experiment_assignments + events`.
 ///
 /// Only Aggregation metrics are supported in this first cut — Ratio + Funnel
 /// raise `InvalidMetricKind`. The admin UI's Timeseries tab is currently

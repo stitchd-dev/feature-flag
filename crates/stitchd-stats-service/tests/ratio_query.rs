@@ -2,7 +2,7 @@
 //! ClickHouse instance.
 //!
 //! These tests exercise `build_ratio_query` end-to-end: write
-//! `experiment_assignments` + `events_v2` fixtures, run the generated
+//! `experiment_assignments` + `events` fixtures, run the generated
 //! SQL, and assert per-(context_type, variant) ratios + the
 //! `min_denominator` insufficient-data semantics.
 //!
@@ -103,13 +103,13 @@ async fn insert_assignments(ch: &Client, rows: &[AssignmentRow]) {
 
 async fn insert_events(ch: &Client, rows: &[EventRow]) {
     let mut insert = ch
-        .insert::<EventRow>("events_v2")
+        .insert::<EventRow>("events")
         .await
-        .expect("prepare events_v2 insert");
+        .expect("prepare events insert");
     for row in rows {
         insert.write(row).await.expect("write event row to CH");
     }
-    insert.end().await.expect("finalize events_v2 insert");
+    insert.end().await.expect("finalize events insert");
 }
 
 async fn execute(ch: &Client, sql: String, binds: Vec<QueryBind>) -> Vec<RatioRow> {

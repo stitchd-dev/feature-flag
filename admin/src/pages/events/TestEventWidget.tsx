@@ -145,11 +145,11 @@ export function parseTypedValue(raw: string, metricType: string): WireValue | nu
     case 'custom': {
       const trimmed = raw.trim()
       if (!trimmed) return null
-      try {
-        return JSON.parse(trimmed) as WireValue
-      } catch {
-        return null
-      }
+      if (trimmed === 'true') return { bool: true }
+      if (trimmed === 'false') return { bool: false }
+      const n = Number(trimmed)
+      if (!Number.isFinite(n)) return null
+      return Number.isInteger(n) ? { int: n } : { double: n }
     }
 
     default:
@@ -244,7 +244,7 @@ function valueFieldLabel(metricType: string): string {
     case 'numeric':
       return 'Value (number)'
     case 'custom':
-      return 'Value (JSON)'
+      return 'Value (scalar)'
     default:
       return 'Value'
   }
@@ -261,7 +261,7 @@ function valueFieldHint(metricType: string): string {
     case 'numeric':
       return 'Sent on the wire as { "double": N }.'
     case 'custom':
-      return 'Free-form JSON forwarded to analytics-service as-is.'
+      return 'Scalar: true/false, integer, or decimal. Use properties for structured metadata.'
     default:
       return ''
   }
@@ -276,7 +276,7 @@ export function TestEventWidget({ eventKey, metricType, environmentId, onSubmitt
   const [collapsed, setCollapsed] = useState(true)
 
   const initialValues: TestEventFormValues = {
-    contexts: [{ context_type: 'user', context_key: '' }],
+    contexts: [{ context_type: 'user', context_key: 'test-user-1' }],
     value: metricType === 'conversion' ? 'true' : '',
     properties: '',
   }
@@ -321,15 +321,16 @@ export function TestEventWidget({ eventKey, metricType, environmentId, onSubmitt
       // widget). Stamps `_test=true` on every event so analytics-service
       // rows are filterable. See feature-flag-gda.
       await api.post('/v1/admin/events/track', body)
-      setStatus({ success: 'Event fired — see firings log above for confirmation.' })
       // Reset only the value/properties fields, keep the context so the admin
-      // can fire a second event quickly.
+      // can fire a second event quickly. setStatus must come AFTER resetForm —
+      // resetForm clears status to undefined, which would wipe the banner.
       resetForm({
         values: {
           ...values,
           properties: '',
         },
       })
+      setStatus({ success: 'Event fired — see firings log above for confirmation.' })
       onSubmitted?.()
     } catch (err: unknown) {
       setStatus({ error: extractErrorMessage(err) })
@@ -402,6 +403,8 @@ export function TestEventWidget({ eventKey, metricType, environmentId, onSubmitt
                   <FieldArray name="contexts">
                     {({ push, remove, form }) => {
                       const rows = (form.values as TestEventFormValues).contexts
+                      const contextsError = typeof form.errors.contexts === 'string' && form.submitCount > 0
+                        ? form.errors.contexts : null
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -455,6 +458,11 @@ export function TestEventWidget({ eventKey, metricType, environmentId, onSubmitt
                               )}
                             </div>
                           ))}
+                          {contextsError && (
+                            <div role="alert" style={{ fontSize: 12, color: 'var(--danger)', marginTop: 2 }}>
+                              {contextsError}
+                            </div>
+                          )}
                         </div>
                       )
                     }}
@@ -473,18 +481,19 @@ export function TestEventWidget({ eventKey, metricType, environmentId, onSubmitt
                       hint={valueFieldHint(metricType)}
                     />
                   ) : metricType === 'custom' ? (
-                    <FormTextarea
+                    <FormField
                       name="value"
                       label={valueFieldLabel(metricType)}
-                      placeholder='{"amount": 42, "currency": "USD"}'
+                      type="text"
+                      placeholder="42"
                       hint={valueFieldHint(metricType)}
-                      style={{ fontFamily: 'var(--font-mono)', fontSize: 12, minHeight: 64 }}
                     />
                   ) : (
                     <FormField
                       name="value"
                       label={valueFieldLabel(metricType)}
-                      type="number"
+                      type="text"
+                      inputMode="decimal"
                       placeholder="0"
                       hint={valueFieldHint(metricType)}
                     />

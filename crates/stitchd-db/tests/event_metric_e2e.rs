@@ -14,7 +14,7 @@
 //!    `metric_ids` at compute time.
 //!
 //! 3. **Event ingestion** — writes events directly to ClickHouse
-//!    `events_v2` (mirroring `EventV2Row` from
+//!    `events` (mirroring `EventV2Row` from
 //!    `stitchd-analytics-service::grpc::ingestion`). This is the pragmatic
 //!    deviation from the original plan: skipping the SDK → gateway →
 //!    analytics-service hops keeps the test focused on the
@@ -83,7 +83,7 @@ fn make_ch_client() -> clickhouse::Client {
         .with_database("stitchd")
 }
 
-/// A single row in `events_v2` — mirrors `EventV2Row` from the
+/// A single row in `events` — mirrors `EventV2Row` from the
 /// analytics-service ingestion path. Replicated locally to avoid pulling
 /// the analytics-service into `stitchd-db`'s dev-deps; the schema is
 /// pinned by the migration in `stitchd-event-writer`.
@@ -422,7 +422,7 @@ fn make_event_row(
 /// Insert a batch of `EventV2Row`s in one CH statement.
 async fn insert_events(client: &clickhouse::Client, rows: &[EventV2Row]) {
     let mut insert = client
-        .insert::<EventV2Row>("events_v2")
+        .insert::<EventV2Row>("events")
         .await
         .expect("insert init");
     for row in rows {
@@ -470,7 +470,7 @@ async fn sdk_fires_events_experiment_reads_via_ratio_metric() {
     let pool = pg_pool().await;
     let ch = make_ch_client();
 
-    // Make sure the ClickHouse `events_v2` table + the `properties` /
+    // Make sure the ClickHouse `events` table + the `properties` /
     // `occurred_at` columns exist before we try to write into it. Idempotent.
     stitchd_event_writer::migrations::run(&ch)
         .await

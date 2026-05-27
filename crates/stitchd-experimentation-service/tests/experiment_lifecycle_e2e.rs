@@ -21,7 +21,7 @@
 //!       experiment only attributes NULL matched_rule_id)
 //!     - re-exposure with a different variant_key  -> ITT semantics keep
 //!       the first variant
-//!  5. Insert `events_v2` rows. Mix:
+//!  5. Insert `events` rows. Mix:
 //!     - pre-assignment events (`occurred_at < assigned_at`) — ITT-filtered.
 //!     - post-assignment events — counted.
 //!  6. `OPTIMIZE TABLE experiment_assignments FINAL` to flush the
@@ -540,8 +540,8 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
     assert_eq!(cells.get(&("user".into(), "control".into())), Some(&1));
     assert_eq!(cells.get(&("user".into(), "treatment".into())), Some(&1));
 
-    // ── 5. Emit events_v2 rows — pre-assignment and post-assignment ───────
-    // Sanity-check the ITT filter at the events_v2 layer with a representative
+    // ── 5. Emit events rows — pre-assignment and post-assignment ───────
+    // Sanity-check the ITT filter at the events layer with a representative
     // metric_key. Pre-assignment events (occurred_at < alice's assigned_at)
     // must be excluded by the stats join.
     let alice_assigned_at = by_key("user", "alice").assigned_at;
@@ -600,17 +600,17 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
         },
     ];
     let mut insert = client
-        .insert::<EventV2Row>("events_v2")
+        .insert::<EventV2Row>("events")
         .await
-        .expect("init events_v2 insert");
+        .expect("init events insert");
     for row in &event_rows {
         insert.write(row).await.expect("write event row");
     }
-    insert.end().await.expect("end events_v2 insert");
+    insert.end().await.expect("end events insert");
 
     // ── 8. Verify per-context-type aggregation via the stats-style join ───
     // Inline the JOIN shape used by stitchd-stats-service::queries::aggregation
-    // — JOIN events_v2 ⨝ experiment_assignments on (env_id, context_type, context_key)
+    // — JOIN events ⨝ experiment_assignments on (env_id, context_type, context_key)
     // via arrayExists(...) — and assert ITT excludes the pre-assignment event.
     let iter_end = Utc::now() + Duration::hours(1);
     // The stats-service query expresses the attribution join with
@@ -634,7 +634,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
                     contexts_tuple.2 AS ctx_key,
                     metric_key,
                     occurred_at
-                FROM events_v2
+                FROM events
                 ARRAY JOIN contexts AS contexts_tuple
                 WHERE env_id = toUUID(?)
                   AND metric_key = ?

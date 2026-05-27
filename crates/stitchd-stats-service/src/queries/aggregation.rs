@@ -1,10 +1,10 @@
 //! Aggregation query builder.
 //!
-//! Produces a `SELECT context_type, variant_key, <agg>(...) FROM events_v2
+//! Produces a `SELECT context_type, variant_key, <agg>(...) FROM events
 //! JOIN experiment_assignments ...` query that:
 //!
-//! - JOINs `events_v2 e` against `experiment_assignments a` on
-//!   `(env_id, context_type, context_key)`. Because `events_v2.contexts`
+//! - JOINs `events e` against `experiment_assignments a` on
+//!   `(env_id, context_type, context_key)`. Because `events.contexts`
 //!   is `Array(Tuple(String, String))`, the events side is first flattened
 //!   via `ARRAY JOIN e.contexts AS ctx_pair`, then equi-joined on the
 //!   tuple's `.1`/`.2` against `a.context_type`/`a.context_key`. (CH 24's
@@ -18,8 +18,8 @@
 //!   time window (`a.assigned_at <= e.occurred_at < iteration_end`) and
 //!   the supplied `variant_keys` allow-list.
 //! - Applies the optional `where_clause` (JsonLogic) as an extra
-//!   predicate against `events_v2.properties Map(String, String)`.
-//! - Reads from raw `events_v2` (not the daily MV) so percentiles,
+//!   predicate against `events.properties Map(String, String)`.
+//! - Reads from raw `events` (not the daily MV) so percentiles,
 //!   custom `on_field`, and property-level filters all stay queryable.
 //!
 //! ## Strict intent-to-treat (ITT)
@@ -155,7 +155,7 @@ pub fn build_aggregation_query(
             a.context_type AS context_type,\n    \
             a.variant_key AS variant_key,\n    \
             toFloat64({agg_expr}) AS metric_value\n\
-        FROM events_v2 AS e\n\
+        FROM events AS e\n\
         ARRAY JOIN e.contexts AS ctx_pair\n\
         INNER JOIN experiment_assignments AS a\n    \
             ON e.env_id = a.env_id\n   \
@@ -188,7 +188,7 @@ pub fn build_aggregation_query(
 /// over strings is the common case.
 ///
 /// All references to property / numeric columns are explicitly qualified
-/// with `e.` since the FROM clause aliases `events_v2` as `e` to disambiguate
+/// with `e.` since the FROM clause aliases `events` as `e` to disambiguate
 /// from the JOINed `experiment_assignments AS a`.
 // `pub(super)` so the sibling `preview` module can reuse the exact same
 // aggregator-to-CH-expression mapping rather than duplicating it. Keeping
@@ -311,8 +311,8 @@ mod tests {
 
         // Verify the JOIN structure is correct.
         assert!(
-            q.sql.contains("FROM events_v2 AS e"),
-            "must read from events_v2 alias e, got:\n{}",
+            q.sql.contains("FROM events AS e"),
+            "must read from events alias e, got:\n{}",
             q.sql
         );
         assert!(
@@ -579,9 +579,9 @@ mod tests {
     }
 
     #[test]
-    fn aggregation_reads_from_events_v2_not_mv() {
+    fn aggregation_reads_from_events_not_mv() {
         // The MV doesn't store percentile / on_field states — the builder
-        // must read from raw events_v2 so all aggregators are queryable.
+        // must read from raw events so all aggregators are queryable.
         let cfg = AggregationConfig {
             event_key: "x".into(),
             aggregator: AggregationOperator::Count,
@@ -590,7 +590,7 @@ mod tests {
         };
         let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
             .unwrap();
-        assert!(q.sql.contains("FROM events_v2"));
+        assert!(q.sql.contains("FROM events"));
         assert!(!q.sql.contains("events_experiment_daily"));
     }
 

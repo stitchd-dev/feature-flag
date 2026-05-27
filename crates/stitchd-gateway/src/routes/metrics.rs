@@ -583,7 +583,7 @@ pub async fn delete_metric(
 
 /// `POST /v1/metrics/{id}/preview` — preview metric over last N days.
 ///
-/// Runs the kind-specific ClickHouse query against `events_v2` and
+/// Runs the kind-specific ClickHouse query against `events` and
 /// returns one bucket per day in the window (zero-filled where the
 /// query returned no row). See
 /// `stitchd_stats_service::queries::preview` for the SQL builders.

@@ -20,7 +20,7 @@
 //! ```sql
 //! SELECT toUnixTimestamp(toStartOfDay(e.timestamp, 'UTC')) AS day_ts,
 //!        <kind-specific value expression>                  AS value
-//! FROM events_v2 AS e
+//! FROM events AS e
 //! WHERE e.env_id = toUUID({env_ph})
 //!   AND e.metric_key = {event_ph}              -- aggregation / funnel
 //!   AND e.timestamp >= now() - toIntervalDay({days_ph})
@@ -35,7 +35,7 @@
 //!        a.context_type AS context_type,
 //!        a.variant_key  AS variant_key,
 //!        <kind-specific value expression> AS value
-//! FROM events_v2 AS e
+//! FROM events AS e
 //! ARRAY JOIN e.contexts AS ctx_pair
 //! INNER JOIN experiment_assignments AS a
 //!     ON e.env_id = a.env_id
@@ -118,7 +118,7 @@ pub fn build_preview_aggregation_query(
     // RowBinary deserialiser hits "tag for enum is not valid" because the
     // null-marker byte expected by `Option<f64>` isn't present for
     // non-nullable columns.
-    // Alias events_v2 as `e` so the shared `render_aggregator` (which
+    // Alias events as `e` so the shared `render_aggregator` (which
     // emits `e.value_double` / `e.properties[...]` to disambiguate from
     // the experiment-scoped JOIN against `experiment_assignments AS a`
     // in `queries::aggregation`) resolves correctly here too. The alias
@@ -129,7 +129,7 @@ pub fn build_preview_aggregation_query(
         "SELECT\n    \
             toUnixTimestamp(toStartOfDay(e.timestamp, 'UTC')) AS day_ts,\n    \
             CAST({agg_expr} AS Nullable(Float64)) AS value\n\
-        FROM events_v2 AS e\n\
+        FROM events AS e\n\
         WHERE e.env_id = toUUID({env_ph})\n  \
           AND e.metric_key = {event_ph}\n  \
           AND e.timestamp >= now() - toIntervalDay({days_ph}){extra_where}\n\
@@ -315,7 +315,7 @@ pub fn build_preview_funnel_query(
                     toUInt32(toUnixTimestamp(timestamp)),\n            \
                     {step_predicates}\n        \
                 ) AS level\n    \
-            FROM events_v2\n    \
+            FROM events\n    \
             WHERE env_id = toUUID({env_ph})\n      \
               AND timestamp >= now() - toIntervalDay({days_ph})\n      \
               AND ({metric_key_filter})\n    \
@@ -408,7 +408,7 @@ pub fn build_experiment_preview_aggregation_query(
             a.context_type AS context_type,\n    \
             a.variant_key AS variant_key,\n    \
             CAST({agg_expr} AS Nullable(Float64)) AS value\n\
-        FROM events_v2 AS e\n\
+        FROM events AS e\n\
         ARRAY JOIN e.contexts AS ctx_pair\n\
         INNER JOIN experiment_assignments AS a\n    \
             ON e.env_id = a.env_id\n   \

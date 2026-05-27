@@ -455,9 +455,9 @@ mod tests {
             .expect("aggregation dispatch should succeed");
 
         // The aggregation builder's SQL always starts with `SELECT`
-        // (no leading CTEs) and references `events_v2`.
+        // (no leading CTEs) and references `events`.
         assert!(q.sql.starts_with("SELECT"), "got SQL: {}", q.sql);
-        assert!(q.sql.contains("FROM events_v2"), "got SQL: {}", q.sql);
+        assert!(q.sql.contains("FROM events"), "got SQL: {}", q.sql);
         // First three binds are env / experiment / iteration scope.
         assert!(q.binds.len() >= 3);
     }

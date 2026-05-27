@@ -1376,7 +1376,7 @@ mod handler_tests {
             occurred_at: i64,
         }
         let mut insert = client
-            .insert::<InsertRow>("events_v2")
+            .insert::<InsertRow>("events")
             .await
             .expect("insert init");
         insert
@@ -1398,7 +1398,7 @@ mod handler_tests {
 
     async fn wait_for_merge(client: &clickhouse::Client) {
         let _ = client
-            .query("OPTIMIZE TABLE events_v2 FINAL")
+            .query("OPTIMIZE TABLE events FINAL")
             .execute()
             .await;
     }

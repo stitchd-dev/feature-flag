@@ -1,6 +1,6 @@
 //! ClickHouse fetch for CUPED pre-period covariates.
 //!
-//! Queries `events_v2` to aggregate a numeric `properties['value']`-style
+//! Queries `events` to aggregate a numeric `properties['value']`-style
 //! signal per `(context_type, context_key)` over a pre-experiment time window.
 //! The result feeds `stitchd_core::experimentation::stats::cuped::apply_cuped`
 //! one observation per assigned context with `x_pre` set from the returned
@@ -130,7 +130,7 @@ pub async fn fetch_pre_period_observations(
                 0.0
               )
             ) AS x_pre
-        FROM events_v2
+        FROM events
         ARRAY JOIN contexts AS ctx
         WHERE env_id = '{env_id_str}'
           AND metric_key = '{metric_key_esc}'

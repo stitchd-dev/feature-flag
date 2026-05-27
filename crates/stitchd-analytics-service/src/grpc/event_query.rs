@@ -1,6 +1,6 @@
 //! Event-firings + stats handlers — back the admin UI's EventDetail + TestEventWidget.
 //!
-//! Both endpoints query the canonical `events_v2` ClickHouse table, scoped by
+//! Both endpoints query the canonical `events` ClickHouse table, scoped by
 //! the trusted `env_id` resolved at the gateway (JWT tier) and the
 //! `event_key` from the URL path. They are read-only — no writes, no PG
 //! lookups; the gateway has already verified the caller is authorised.
@@ -79,7 +79,7 @@ pub fn build_firings_sql() -> &'static str {
         properties,
         toUnixTimestamp64Milli(occurred_at)                      AS occurred_at_ms,
         toUnixTimestamp64Milli(timestamp)                        AS ingested_at_ms
-    FROM events_v2
+    FROM events
     WHERE env_id     = ?
       AND metric_key = ?
     ORDER BY timestamp DESC
@@ -100,7 +100,7 @@ pub fn build_stats_sql() -> &'static str {
         toUnixTimestamp(toStartOfDay(timestamp, 'UTC'))   AS day_ts,
         count()                                           AS count,
         uniq(contexts[1].2)                               AS unique_context_keys
-    FROM events_v2
+    FROM events
     WHERE env_id     = ?
       AND metric_key = ?
       AND timestamp >= now() - toIntervalDay(?)
@@ -350,8 +350,8 @@ mod tests {
     }
 
     #[test]
-    fn firings_sql_reads_events_v2() {
-        assert!(build_firings_sql().contains("FROM events_v2"));
+    fn firings_sql_reads_events() {
+        assert!(build_firings_sql().contains("FROM events"));
     }
 
     #[test]
@@ -450,7 +450,7 @@ mod tests {
             .expect("CH migrations must apply");
     }
 
-    /// Insert a single firing row directly into `events_v2` for testing.
+    /// Insert a single firing row directly into `events` for testing.
     /// `timestamp_ms` is both the broker-side `timestamp` and the wall-clock
     /// `occurred_at` (sufficient for grouping / ordering assertions).
     async fn insert_event(
@@ -479,7 +479,7 @@ mod tests {
         }
 
         let mut insert = client
-            .insert::<InsertRow>("events_v2")
+            .insert::<InsertRow>("events")
             .await
             .expect("insert init");
         insert
@@ -504,7 +504,7 @@ mod tests {
     /// `stitchd-event-writer::tests::clickhouse_views`.
     async fn wait_for_merge(client: &clickhouse::Client) {
         let _ = client
-            .query("OPTIMIZE TABLE events_v2 FINAL")
+            .query("OPTIMIZE TABLE events FINAL")
             .execute()
             .await;
     }
@@ -516,7 +516,7 @@ mod tests {
         let env_id = Uuid::new_v4();
         let now = Utc::now().timestamp_millis();
 
-        // Insert 5 events at increasing timestamps. `events_v2` ORDER BY
+        // Insert 5 events at increasing timestamps. `events` ORDER BY
         // includes timestamp; DESC scan must surface the newest first.
         for i in 0..5 {
             insert_event(

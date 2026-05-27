@@ -33,7 +33,7 @@ import { CreateEventModal } from './CreateEventModal'
 
 const PER_PAGE = 50
 
-const METRIC_TYPES = ['all', 'count', 'conversion', 'revenue', 'duration', 'custom'] as const
+const METRIC_TYPES = ['all', 'count', 'conversion', 'revenue', 'duration', 'numeric', 'custom'] as const
 type MetricTypeFilter = typeof METRIC_TYPES[number]
 
 const STATUS_FILTERS = ['active', 'archived', 'all'] as const

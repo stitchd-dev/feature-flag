@@ -16,7 +16,7 @@
 //!    (rejected events do **not** abort the batch).
 //! 3. Validate the `MetricValue` matches the registered `EventValueType`.
 //! 4. Build an [`EventV2Row`] and accumulate.
-//! 5. After the loop, write all accepted rows to ClickHouse `events_v2` in
+//! 5. After the loop, write all accepted rows to ClickHouse `events` in
 //!    a single batch INSERT.
 //!
 //! Failures from ClickHouse propagate as `tonic::Status::Internal`; per-event
@@ -172,13 +172,13 @@ fn reconstruct_repo_error(arc: &RepositoryError) -> RepositoryError {
 }
 
 // ---------------------------------------------------------------------------
-// Row written to ClickHouse `events_v2`
+// Row written to ClickHouse `events`
 // ---------------------------------------------------------------------------
 
-/// A row in the `events_v2` ClickHouse table.
+/// A row in the `events` ClickHouse table.
 ///
 /// Mirrors the schema added in `events_metrics_20260519` Phase 1 (migration
-/// `20260520000001_events_v2_properties`): the canonical ingestion table now
+/// `20260520000001_events_properties`): the canonical ingestion table now
 /// carries `properties` + `occurred_at` alongside the legacy columns.
 #[derive(Debug, Serialize, clickhouse::Row)]
 pub struct EventV2Row {
@@ -219,7 +219,7 @@ pub struct TrackEventsState {
     pub event_def_repo: Arc<dyn EventDefinitionRepository>,
     /// 60s TTL validation cache.
     pub event_def_cache: EventDefinitionCache,
-    /// ClickHouse client — used to write the batch INSERT into `events_v2`.
+    /// ClickHouse client — used to write the batch INSERT into `events`.
     pub ch_client: Arc<clickhouse::Client>,
 }
 
@@ -347,7 +347,7 @@ fn validate_event(
     })
 }
 
-/// Batch-write accepted rows to `events_v2`. Returns `Status::Internal` on
+/// Batch-write accepted rows to `events`. Returns `Status::Internal` on
 /// any ClickHouse failure — the whole batch is dropped in that case (callers
 /// should retry).
 #[allow(clippy::result_large_err)] // tonic::Status is external; cannot box.
@@ -360,7 +360,7 @@ async fn write_rows_to_clickhouse(
     }
 
     let mut insert = ch_client
-        .insert::<EventV2Row>("events_v2")
+        .insert::<EventV2Row>("events")
         .await
         .map_err(|e| Status::internal(format!("clickhouse insert init failed: {e}")))?;
     for row in rows {
@@ -377,7 +377,7 @@ async fn write_rows_to_clickhouse(
 }
 
 /// Handle a `TrackEvents` RPC — validate each event against PG, write the
-/// accepted batch to ClickHouse `events_v2`.
+/// accepted batch to ClickHouse `events`.
 ///
 /// # Errors
 ///
@@ -663,7 +663,7 @@ mod tests {
 
     async fn count_events_for_env(client: &clickhouse::Client, env_id: EnvironmentId) -> u64 {
         let sql = format!(
-            "SELECT count() FROM events_v2 WHERE env_id = '{}'",
+            "SELECT count() FROM events WHERE env_id = '{}'",
             env_id.as_uuid()
         );
         client.query(&sql).fetch_one::<u64>().await.unwrap_or(0)
@@ -771,7 +771,7 @@ mod tests {
         let count = count_events_for_env(&client, env_id).await;
         assert_eq!(
             count, 3,
-            "expected 3 rows in events_v2 for env {env_id}, got {count}"
+            "expected 3 rows in events for env {env_id}, got {count}"
         );
     }
 
@@ -868,7 +868,7 @@ mod tests {
         let count = count_events_for_env(&client, env_id).await;
         assert_eq!(
             count, 3,
-            "expected 3 valid rows in events_v2 (count-no-value is now accepted)"
+            "expected 3 valid rows in events (count-no-value is now accepted)"
         );
     }
 

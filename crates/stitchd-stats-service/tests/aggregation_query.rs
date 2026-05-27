@@ -8,7 +8,7 @@
 //!   * A running ClickHouse reachable at `STITCHD_CLICKHOUSE_URL`
 //!     (default: `http://localhost:8123`).
 //!   * The Phase 4 migrations applied (so `experiment_assignments` and
-//!     `events_v2` exist with the right schema).
+//!     `events` exist with the right schema).
 //!
 //! The tests are tagged `#[ignore]` so the default `cargo test` run does
 //! not require infrastructure. CI / local runs invoke them with
@@ -104,13 +104,13 @@ async fn insert_assignments(ch: &Client, rows: &[AssignmentRow]) {
 
 async fn insert_events(ch: &Client, rows: &[EventRow]) {
     let mut insert = ch
-        .insert::<EventRow>("events_v2")
+        .insert::<EventRow>("events")
         .await
-        .expect("prepare events_v2 insert");
+        .expect("prepare events insert");
     for row in rows {
         insert.write(row).await.expect("write event row to CH");
     }
-    insert.end().await.expect("finalize events_v2 insert");
+    insert.end().await.expect("finalize events insert");
 }
 
 async fn execute(ch: &Client, sql: String, binds: Vec<QueryBind>) -> Vec<AggregationResultRow> {

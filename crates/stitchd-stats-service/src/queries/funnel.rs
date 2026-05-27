@@ -16,7 +16,7 @@
 //!             toUInt32(toUnixTimestamp(e.occurred_at)),
 //!             e.metric_key = <step_0>, …, e.metric_key = <step_N-1>
 //!         ) AS level
-//!     FROM events_v2 e
+//!     FROM events e
 //!     ARRAY JOIN e.contexts AS ctx_pair
 //!     INNER JOIN experiment_assignments a
 //!         ON e.env_id = a.env_id
@@ -198,7 +198,7 @@ pub fn build_funnel_query(
                     toUInt32(toUnixTimestamp(e.occurred_at)),\n            \
                     {step_predicates}\n        \
                 ) AS level\n    \
-            FROM events_v2 AS e\n    \
+            FROM events AS e\n    \
             ARRAY JOIN e.contexts AS ctx_pair\n    \
             INNER JOIN experiment_assignments AS a\n        \
                 ON e.env_id = a.env_id\n       \
@@ -509,14 +509,14 @@ mod tests {
     }
 
     #[test]
-    fn funnel_reads_from_events_v2_joined_against_assignments() {
+    fn funnel_reads_from_events_joined_against_assignments() {
         let cfg = FunnelConfig {
             steps: vec![step("a"), step("b")],
             window_seconds: 60,
             count_repeats: false,
         };
         let q = build_funnel_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end()).unwrap();
-        assert!(q.sql.contains("FROM events_v2 AS e"));
+        assert!(q.sql.contains("FROM events AS e"));
         assert!(q.sql.contains("ARRAY JOIN e.contexts AS ctx_pair"));
         assert!(q.sql.contains("INNER JOIN experiment_assignments AS a"));
         assert!(q.sql.contains("ctx_pair.1 = a.context_type"));

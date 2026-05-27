@@ -149,7 +149,7 @@ pub(crate) fn push_bind(binds: &mut Vec<QueryBind>, value: QueryBind) -> String 
 /// - `{"and": [<expr1>, <expr2>, …]}`
 /// - `{"or":  [<expr1>, <expr2>, …]}`
 ///
-/// `<field>` is treated as a key in the `events_v2.properties Map` —
+/// `<field>` is treated as a key in the `events.properties Map` —
 /// references are emitted as `properties['<field>']`. Literals are bound
 /// (never inlined) to keep the SQL injection-safe. `<lit>` may be a
 /// number, string or bool — booleans / numbers are coerced to strings
