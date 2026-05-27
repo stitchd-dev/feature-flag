@@ -37,10 +37,15 @@ interface PreviewResponse {
 }
 
 interface BucketSummary {
-  count: number
+  /** Sum of all values across the full window (including today's partial data). */
+  total: number
+  /** Most recent *complete* day's value (yesterday). */
   last: number
+  /** Minimum over complete days only (excludes today). */
   min: number
+  /** Maximum over complete days only (excludes today). */
   max: number
+  /** Mean over complete days only (excludes today so partial data doesn't dilute). */
   mean: number
 }
 
@@ -53,22 +58,31 @@ function safeValue(v: unknown): number {
 }
 
 /**
- * Reduce a buckets array to its summary. Empty array → all zeros (count 0).
+ * Reduce a buckets array to its summary.
+ *
+ * The last bucket is always today (partially complete), so all per-day
+ * stats (last / min / max / mean) are computed over "complete" days only
+ * (everything except the last bucket). `total` sums the full window
+ * including today so it reflects what's actually happened this period.
+ *
  * NaN / undefined / null bucket values are coerced to 0 so the summary
  * never leaks NaN into the UI.
  */
 function summariseBuckets(buckets: PreviewBucket[]): BucketSummary {
   if (!buckets || buckets.length === 0) {
-    return { count: 0, last: 0, min: 0, max: 0, mean: 0 }
+    return { total: 0, last: 0, min: 0, max: 0, mean: 0 }
   }
-  const values = buckets.map((b) => safeValue(b.value))
-  const sum = values.reduce((a, b) => a + b, 0)
+  const all = buckets.map((b) => safeValue(b.value))
+  // Exclude the last bucket (today — always partially complete).
+  const complete = all.length > 1 ? all.slice(0, -1) : all
+  const total = all.reduce((a, b) => a + b, 0)
+  const completeSum = complete.reduce((a, b) => a + b, 0)
   return {
-    count: values.length,
-    last: values[values.length - 1],
-    min: Math.min(...values),
-    max: Math.max(...values),
-    mean: sum / values.length,
+    total,
+    last: complete[complete.length - 1] ?? 0,
+    min: complete.length > 0 ? Math.min(...complete) : 0,
+    max: complete.length > 0 ? Math.max(...complete) : 0,
+    mean: complete.length > 0 ? completeSum / complete.length : 0,
   }
 }
 
@@ -215,11 +229,11 @@ export function MetricPreview({ metricId, days = 7 }: Props) {
       >
         <thead>
           <tr style={{ color: 'var(--fg-muted)', textAlign: 'left' }}>
-            <th style={th}>Last</th>
-            <th style={th}>Min</th>
-            <th style={th}>Max</th>
-            <th style={th}>Mean</th>
-            <th style={th}>Buckets</th>
+            <th style={th} title="Yesterday's value (most recent complete day)">Yesterday</th>
+            <th style={th} title="Minimum over complete days in the window">Min</th>
+            <th style={th} title="Maximum over complete days in the window">Max</th>
+            <th style={th} title="Daily mean over complete days (excludes today)">Mean/day</th>
+            <th style={th} title="Sum of all values in the window (including today)">Total</th>
           </tr>
         </thead>
         <tbody>
@@ -228,7 +242,7 @@ export function MetricPreview({ metricId, days = 7 }: Props) {
             <td style={td}>{fmt(summary.min)}</td>
             <td style={td}>{fmt(summary.max)}</td>
             <td style={td}>{fmt(summary.mean)}</td>
-            <td style={td}>{summary.count}</td>
+            <td style={td}>{fmt(summary.total)}</td>
           </tr>
         </tbody>
       </table>
