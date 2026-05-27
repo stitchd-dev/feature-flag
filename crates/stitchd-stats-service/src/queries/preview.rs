@@ -79,8 +79,6 @@ use super::{
 /// expression flows to both code paths.
 ///
 /// # Errors
-/// - `QueryBuildError::InvalidConfig` when an aggregator requires an
-///   `on_field` and none is set.
 /// - `QueryBuildError::UnsupportedJsonLogic` when the optional
 ///   `where_clause` uses an operator we don't translate.
 pub fn build_preview_aggregation_query(
@@ -88,13 +86,6 @@ pub fn build_preview_aggregation_query(
     env_id: &str,
     days: u32,
 ) -> Result<BuiltQuery, QueryBuildError> {
-    if cfg.aggregator.requires_field() && cfg.on_field.is_none() {
-        return Err(QueryBuildError::InvalidConfig(format!(
-            "aggregator `{:?}` requires an on_field",
-            cfg.aggregator
-        )));
-    }
-
     let mut binds = Vec::new();
 
     let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
@@ -357,8 +348,6 @@ pub fn build_preview_funnel_query(
 ///   6. where_clause literals (last, emitted by `jsonlogic_to_sql`)
 ///
 /// # Errors
-/// - `QueryBuildError::InvalidConfig` when the aggregator requires an
-///   `on_field` and none is set.
 /// - `QueryBuildError::UnsupportedJsonLogic` when the optional
 ///   `where_clause` uses an operator outside the supported subset.
 pub fn build_experiment_preview_aggregation_query(
@@ -368,13 +357,6 @@ pub fn build_experiment_preview_aggregation_query(
     env_id: &str,
     iteration_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, QueryBuildError> {
-    if cfg.aggregator.requires_field() && cfg.on_field.is_none() {
-        return Err(QueryBuildError::InvalidConfig(format!(
-            "aggregator `{:?}` requires an on_field",
-            cfg.aggregator
-        )));
-    }
-
     let mut binds = Vec::new();
 
     let env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
@@ -550,16 +532,25 @@ mod tests {
     }
 
     #[test]
-    fn aggregation_requires_field_for_sum() {
-        // Defensive: sum without on_field rejected at build time.
+    fn aggregation_sum_without_field_uses_canonical_value_columns() {
+        // on_field is optional — sum without it reads from canonical numeric columns.
         let cfg = AggregationConfig {
             event_key: "purchase".into(),
             aggregator: AggregationOperator::Sum,
             on_field: None,
             where_clause: None,
         };
-        let err = build_preview_aggregation_query(&cfg, ENV_ID, 14).unwrap_err();
-        assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
+        let q = build_preview_aggregation_query(&cfg, ENV_ID, 14).unwrap();
+        assert!(
+            q.sql.contains("coalesce(e.value_double"),
+            "sum without on_field should coalesce canonical columns, got: {}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains("properties["),
+            "sum without on_field must NOT read from properties map, got: {}",
+            q.sql
+        );
     }
 
     #[test]
@@ -849,17 +840,22 @@ mod tests {
     }
 
     #[test]
-    fn experiment_preview_aggregation_sum_requires_on_field() {
+    fn experiment_preview_aggregation_sum_without_field_uses_canonical_value_columns() {
+        // on_field is now optional — sum without it uses the canonical numeric columns.
         let cfg = AggregationConfig {
             event_key: "x".into(),
             aggregator: AggregationOperator::Sum,
             on_field: None,
             where_clause: None,
         };
-        let err =
+        let q =
             build_experiment_preview_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, iter_end())
-                .unwrap_err();
-        assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
+                .unwrap();
+        assert!(
+            q.sql.contains("coalesce(e.value_double"),
+            "sum without on_field should coalesce canonical columns, got:\n{}",
+            q.sql
+        );
     }
 
     // ── Placeholder rewriting ────────────────────────────────────────────────

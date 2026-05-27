@@ -12,11 +12,24 @@ export const GOAL_DIRECTIONS = ['increase', 'decrease', 'neutral'] as const
 export type GoalDirection = typeof GOAL_DIRECTIONS[number]
 
 /**
- * `count` ignores `on_field`; everything else needs a field reference.
- * Mirrors `AggregationOperator::requires_field()` in `stitchd-core`.
+ * Whether the given aggregator uses `on_field` at all (i.e. whether to
+ * enable the input in the UI). `count` ignores it; all others can use it
+ * optionally — absent means "aggregate over the event's built-in numeric
+ * value column".
+ *
+ * Note: this does NOT indicate that `on_field` is *required*. It is
+ * always optional for non-count aggregators.
  */
-export function aggregatorRequiresField(agg: string): boolean {
+export function aggregatorUsesField(agg: string): boolean {
   return agg !== 'count' && agg !== ''
+}
+
+/**
+ * @deprecated Use `aggregatorUsesField`. Kept for backward compat — now
+ * always returns `false` because `on_field` is optional for all aggregators.
+ */
+export function aggregatorRequiresField(_agg: string): boolean {
+  return false
 }
 
 /**
@@ -159,15 +172,8 @@ export const metricSchema = Yup.object({
     otherwise: (s) => s,
   }),
 
-  on_field: Yup.string().when(['kind', 'aggregator'], ([kind, agg], schema) => {
-    if (kind === 'aggregation' && aggregatorRequiresField(String(agg))) {
-      return schema
-        .trim()
-        .min(1, 'Field name is required for this aggregator')
-        .required('Field name is required for this aggregator')
-    }
-    return schema
-  }),
+  // on_field is always optional — absent means "use the event's numeric value column".
+  on_field: Yup.string(),
 
   where_clause: Yup.string().test(
     'valid-json',

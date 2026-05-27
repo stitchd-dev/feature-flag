@@ -92,11 +92,18 @@ pub enum AggregationOperator {
 impl AggregationOperator {
     /// Whether this aggregator needs an `on_field` to operate on.
     ///
-    /// `count` ignores fields (it counts rows); everything else needs a
-    /// concrete field reference.
+    /// All aggregators now treat `on_field` as **optional**. When absent (or
+    /// set to a canonical column alias like `"value"` / `"value_double"` /
+    /// `"value_int"`), the stats-service uses the event's built-in numeric
+    /// value columns (`value_double` / `value_int`).  When a non-canonical
+    /// name is supplied it is treated as a `properties[<name>]` map key.
+    ///
+    /// `count` is the only aggregator that truly ignores `on_field`
+    /// (it counts rows regardless). Keeping this method as a stable API
+    /// surface; it now always returns `false`.
     #[must_use]
     pub const fn requires_field(self) -> bool {
-        !matches!(self, Self::Count)
+        false
     }
 }
 
@@ -108,8 +115,15 @@ pub struct AggregationConfig {
     pub event_key: String,
     /// How to aggregate matching rows.
     pub aggregator: AggregationOperator,
-    /// Field name within the event's `properties` map (or the canonical
-    /// `value` column). Required for all aggregators except `Count`.
+    /// Optional field reference for numeric aggregators.
+    ///
+    /// - `None` / `""` / `"value"` / `"value_double"` / `"value_int"` →
+    ///   the stats-service uses the canonical numeric columns
+    ///   (`value_double` then `value_int`).
+    /// - Any other string → treated as a `properties[<name>]` map key
+    ///   (coerced to `Float64` via `toFloat64OrNull`).
+    ///
+    /// `Count` ignores this field entirely.
     pub on_field: Option<String>,
     /// Optional JsonLogic where-clause to filter rows before aggregation.
     /// Stored as raw JSON; the stats-service transforms it to ClickHouse
@@ -119,12 +133,10 @@ pub struct AggregationConfig {
 
 impl AggregationConfig {
     /// Returns `Ok` if the config is well-formed, else a typed error.
+    ///
+    /// `on_field` is now optional for all aggregators — validation no
+    /// longer rejects a missing field.
     pub fn validate(&self) -> Result<(), MetricValidationError> {
-        if self.aggregator.requires_field() && self.on_field.is_none() {
-            return Err(MetricValidationError::AggregationFieldRequired(
-                self.aggregator,
-            ));
-        }
         Ok(())
     }
 }
@@ -227,7 +239,9 @@ mod tests {
     }
 
     #[test]
-    fn non_count_aggregators_require_field() {
+    fn non_count_aggregators_do_not_require_field_either() {
+        // on_field is now optional for ALL aggregators — absent means
+        // "use the canonical numeric value columns".
         for op in [
             AggregationOperator::Sum,
             AggregationOperator::Avg,
@@ -236,7 +250,7 @@ mod tests {
             AggregationOperator::P99,
             AggregationOperator::Uniq,
         ] {
-            assert!(op.requires_field(), "{op:?} should require a field");
+            assert!(!op.requires_field(), "{op:?} should not require a field");
         }
     }
 
@@ -254,17 +268,15 @@ mod tests {
     }
 
     #[test]
-    fn sum_without_field_fails() {
+    fn sum_without_field_validates() {
+        // on_field is now optional — sum without it uses canonical value columns.
         let cfg = AggregationConfig {
             event_key: "purchase".into(),
             aggregator: AggregationOperator::Sum,
             on_field: None,
             where_clause: None,
         };
-        assert_eq!(
-            cfg.validate().unwrap_err(),
-            MetricValidationError::AggregationFieldRequired(AggregationOperator::Sum),
-        );
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

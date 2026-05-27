@@ -76,9 +76,8 @@ use super::{BuiltQuery, QueryBind, QueryBuildError, jsonlogic_to_sql, push_bind}
 /// because the iteration table is in PostgreSQL.
 ///
 /// # Errors
-/// Returns a [`QueryBuildError`] when the config fails a defensive shape
-/// check (e.g. `Sum` without `on_field`) or the `where_clause` JsonLogic
-/// uses an unsupported operator.
+/// Returns a [`QueryBuildError`] when `variant_keys` is empty or the
+/// `where_clause` JsonLogic uses an unsupported operator.
 pub fn build_aggregation_query(
     cfg: &AggregationConfig,
     experiment_id: &str,
@@ -87,14 +86,6 @@ pub fn build_aggregation_query(
     variant_keys: &[&str],
     iteration_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, QueryBuildError> {
-    // Defensive: re-run the kind-specific validator.
-    if cfg.aggregator.requires_field() && cfg.on_field.is_none() {
-        return Err(QueryBuildError::InvalidConfig(format!(
-            "aggregator `{:?}` requires an on_field",
-            cfg.aggregator
-        )));
-    }
-
     if variant_keys.is_empty() {
         return Err(QueryBuildError::InvalidConfig(
             "variant_keys must not be empty".into(),
@@ -218,62 +209,55 @@ fn percentile(cfg: &AggregationConfig, q: &str) -> Result<String, QueryBuildErro
 }
 
 /// Build a `Float64`-valued expression for a numeric aggregator's
-/// operand. Branches on whether `on_field` references the canonical
-/// numeric columns (`value` → already typed) or a `properties[...]`
-/// string (needs `toFloat64OrNull`):
+/// operand.
 ///
-/// - `on_field == "value"`:
+/// `on_field` is now **optional**. The routing logic is:
+///
+/// - `None`, `""`, `"value"`, `"value_double"`, `"value_int"` →
 ///   `ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)`
-///   — both source columns are already numeric, so we skip
-///   `toFloat64OrNull` (which only accepts `String` and rejects
-///   `Float64` at the SQL layer with
-///   `ILLEGAL_TYPE_OF_ARGUMENT`).
+///   — the canonical numeric columns are already typed; `toFloat64OrNull`
+///   would be rejected by ClickHouse with `ILLEGAL_TYPE_OF_ARGUMENT`.
 ///
-/// - `on_field == "<property>"`:
-///   `ifNull(toFloat64OrNull(e.properties['<name>']), 0.0)`
-///   — `properties` is `Map(String, String)`, so `toFloat64OrNull`
-///   is the right coercion.
+/// - Any other string → `ifNull(toFloat64OrNull(e.properties['<name>']), 0.0)`
+///   — `properties` is `Map(String, String)`, so `toFloat64OrNull` is
+///   the right coercion.
 fn numeric_value_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
-    let field = cfg.on_field.as_ref().ok_or_else(|| {
-        QueryBuildError::InvalidConfig(format!(
-            "aggregator `{:?}` requires an on_field",
-            cfg.aggregator
-        ))
-    })?;
-    Ok(if field == "value" {
-        // Canonical numeric columns are already Float64-coercible;
-        // `coalesce(...)` returns Nullable(Float64). Just wrap in ifNull
-        // so the aggregator sees a non-null float.
+    let use_canonical = matches!(
+        cfg.on_field.as_deref(),
+        None | Some("") | Some("value") | Some("value_double") | Some("value_int")
+    );
+    Ok(if use_canonical {
+        // Canonical numeric columns — coalesce returns Nullable(Float64);
+        // ifNull makes it non-nullable for the aggregator.
         "ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)".to_owned()
     } else {
-        // properties[<name>] is String — toFloat64OrNull is correct.
+        let field = cfg.on_field.as_deref().unwrap();
         format!("ifNull(toFloat64OrNull(e.properties['{field}']), 0.0)")
     })
 }
 
 /// Resolve the `on_field` reference to a ClickHouse expression.
 ///
-/// We support two shorthand cases:
+/// `on_field` is now optional.  The routing logic mirrors
+/// `numeric_value_expr`:
 ///
-/// - `value` → reads from the canonical numeric column (one of
-///   `e.value_double` / `e.value_int`). We coalesce to `value_double`
-///   first then cast `value_int` to `Float64` when only the integer
-///   column is populated. This mirrors the MV definition.
-/// - any other name → reads from the `properties Map(String, String)`
-///   column at `e.properties['<name>']`. Numeric coercion happens in the
-///   caller.
+/// - `None` / `""` / `"value"` / `"value_double"` / `"value_int"` →
+///   `coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64)))`.
+///   Numeric coercion is applied by the caller (e.g. `uniq(...)` works
+///   directly on a Nullable Float64).
+/// - Any other string → `e.properties['<name>']` (a `String` map
+///   lookup; callers apply further coercion as needed).
 fn on_field_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
-    let field = cfg.on_field.as_ref().ok_or_else(|| {
-        QueryBuildError::InvalidConfig(format!(
-            "aggregator `{:?}` requires an on_field",
-            cfg.aggregator
-        ))
-    })?;
-    if field == "value" {
-        Ok("coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64)))".to_owned())
+    let use_canonical = matches!(
+        cfg.on_field.as_deref(),
+        None | Some("") | Some("value") | Some("value_double") | Some("value_int")
+    );
+    Ok(if use_canonical {
+        "coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64)))".to_owned()
     } else {
-        Ok(format!("e.properties['{field}']"))
-    }
+        let field = cfg.on_field.as_deref().unwrap();
+        format!("e.properties['{field}']")
+    })
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -553,16 +537,26 @@ mod tests {
     }
 
     #[test]
-    fn aggregation_sum_without_field_returns_error() {
+    fn aggregation_sum_without_field_uses_canonical_value_columns() {
+        // on_field is now optional — sum without it uses canonical value columns.
         let cfg = AggregationConfig {
             event_key: "purchase".into(),
             aggregator: AggregationOperator::Sum,
             on_field: None,
             where_clause: None,
         };
-        let err = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
-            .unwrap_err();
-        assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
+        assert!(
+            q.sql.contains("coalesce(e.value_double"),
+            "sum without on_field should use canonical columns, got:\n{}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains("properties["),
+            "sum without on_field must NOT read from properties map, got:\n{}",
+            q.sql
+        );
     }
 
     #[test]

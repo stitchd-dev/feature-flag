@@ -7,7 +7,7 @@ import { FormTextarea } from '../../components/form/FormTextarea'
 import { FormCheckbox } from '../../components/form/FormCheckbox'
 import { EventKeyField } from '../../components/form/EventKeyField'
 import { api } from '../../lib/api'
-import { AGGREGATORS, aggregatorRequiresField } from '../../lib/validation/metricSchema'
+import { AGGREGATORS, aggregatorUsesField } from '../../lib/validation/metricSchema'
 import type { MetricFormValues } from '../../lib/validation/metricSchema'
 import type { MetricResponse } from './MetricsList'
 
@@ -243,7 +243,8 @@ export function MetricFormFields({ envId, keyReadOnly = false, excludeMetricId }
 
 function AggregationFields() {
   const { values } = useFormikContext<MetricFormValues>()
-  const needsField = aggregatorRequiresField(values.aggregator)
+  // Whether the aggregator makes use of a field at all — count never does.
+  const usesField = aggregatorUsesField(values.aggregator)
   const { keys: eventKeys, loading: eventsLoading, loadError } = useContext(EventKeysContext)
 
   return (
@@ -284,12 +285,12 @@ function AggregationFields() {
       <FormSelect name="aggregator" label="Aggregator" options={AGGREGATOR_OPTIONS} />
       <FormField
         name="on_field"
-        label="On field"
-        placeholder={needsField ? 'e.g. revenue (numeric property)' : 'Not used for count'}
-        disabled={!needsField}
+        label="On field (optional)"
+        placeholder={usesField ? 'e.g. revenue — leave blank for event numeric value' : 'Not used for count'}
+        disabled={!usesField}
         hint={
-          needsField
-            ? 'Numeric property name within the event payload.'
+          usesField
+            ? 'Optional: property name to aggregate. Leave blank to use the event\'s built-in numeric value (value_double / value_int).'
             : 'Field is ignored for count — it just counts matching rows.'
         }
       />
