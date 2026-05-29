@@ -416,6 +416,54 @@ async fn insert_events(client: &clickhouse::Client, rows: &[EventRow]) {
     insert.end().await.expect("insert end");
 }
 
+/// A row in the `experiment_assignments` ClickHouse table.
+///
+/// The post-cutover ratio query attributes events via an ITT join against this
+/// table on `(env_id, context_type, context_key)`, scoped by experiment +
+/// iteration and bounded by `e.occurred_at >= a.assigned_at`. In production the
+/// rows are produced by `experiment_assignments_mv` from eval-log inserts; this
+/// test seeds them directly — the same pragmatic deviation as the direct event
+/// writes (skip the SDK → gateway → eval-log → MV hops, exercise the
+/// query-side attribution).
+#[derive(Debug, serde::Serialize, clickhouse::Row)]
+struct AssignmentRow {
+    #[serde(with = "clickhouse::serde::uuid")]
+    experiment_id: uuid::Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
+    iteration_id: uuid::Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
+    env_id: uuid::Uuid,
+    #[serde(with = "clickhouse::serde::uuid")]
+    flag_id: uuid::Uuid,
+    #[serde(with = "clickhouse::serde::uuid::option")]
+    matched_rule_id: Option<uuid::Uuid>,
+    context_type: String,
+    context_key: String,
+    variant_key: String,
+    assigned_at: i64,
+    #[serde(rename = "_version")]
+    version: i64,
+}
+
+/// Insert assignment rows, then `OPTIMIZE … FINAL` so the `ReplacingMergeTree`
+/// collapses to one row per `(experiment_id, iteration_id, context_type,
+/// context_key)` before the ratio query reads it.
+async fn insert_assignments(client: &clickhouse::Client, rows: &[AssignmentRow]) {
+    let mut insert = client
+        .insert::<AssignmentRow>("experiment_assignments")
+        .await
+        .expect("assignments insert init");
+    for row in rows {
+        insert.write(row).await.expect("assignment row write");
+    }
+    insert.end().await.expect("assignments insert end");
+    client
+        .query("OPTIMIZE TABLE experiment_assignments FINAL")
+        .execute()
+        .await
+        .expect("optimize experiment_assignments");
+}
+
 // ── Query execution ─────────────────────────────────────────────────────────
 
 /// Execute a `BuiltQuery` against ClickHouse, binding values in the order
@@ -504,6 +552,31 @@ async fn sdk_fires_events_experiment_reads_via_ratio_metric() {
         ));
     }
     insert_events(&ch, &rows).await;
+
+    // ── 2b. Seed experiment_assignments (ITT attribution) ─────────────────
+    //
+    // The ratio query attributes events through an INNER JOIN against
+    // `experiment_assignments` (on env_id + context_type + context_key,
+    // scoped by experiment + iteration), keeping only events whose
+    // `occurred_at >= assigned_at`. Every context that fired an event must
+    // therefore have an assignment row to `treatment`, assigned strictly
+    // before the events so the ITT bound keeps them.
+    let assigned_at = now_millis - 60_000; // 1 minute before the events
+    let assignments: Vec<AssignmentRow> = (0..N_CONTEXTS)
+        .map(|i| AssignmentRow {
+            experiment_id: exp_id.as_uuid(),
+            iteration_id: iter_uuid,
+            env_id: env_id.as_uuid(),
+            flag_id: flag_id.as_uuid(),
+            matched_rule_id: Some(flag_rule_id.as_uuid()),
+            context_type: "user".into(),
+            context_key: format!("user-{i}"),
+            variant_key: VARIANT_KEY.into(),
+            assigned_at,
+            version: 1,
+        })
+        .collect();
+    insert_assignments(&ch, &assignments).await;
 
     // ── 3. Build + execute the ratio query via the dispatcher ─────────────
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
