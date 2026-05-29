@@ -444,9 +444,26 @@ fn baseline_cross_context_hash() {
     let (flag, contexts) = corpus_cross_context_hash();
     let results = evaluate_preview(&flag, &contexts, &[], env_id(), &[]);
 
-    // A single EvaluationContext bundle (even with N sub-contexts) emits ONE
-    // result. The entire bundle shares the same rule evaluation and hashing.
-    assert_eq!(results.len(), 1, "one result per bundle");
+    // feature-flag-utp: a bundle with N sub-contexts emits ONE result PER
+    // sub-context (user + device + application → 3). All three evaluate
+    // against the SAME bundle, so they share the same rule outcome, hash
+    // input, and bucket; `context_index` is the global sub-context index.
+    assert_eq!(results.len(), 3, "one result per sub-context in the bundle");
+    for (i, res) in results.iter().enumerate() {
+        assert_eq!(
+            res.context_index, i,
+            "context_index is the global sub-context index"
+        );
+        assert_eq!(
+            res.rollout_debug.as_ref().map(|d| &d.hash_input),
+            results[0].rollout_debug.as_ref().map(|d| &d.hash_input),
+            "all sub-contexts in a bundle share the same cross-context hash input",
+        );
+        assert_eq!(
+            res.variant_key, results[0].variant_key,
+            "shared bundle outcome"
+        );
+    }
 
     // The hash input must include all three selectors in declaration order:
     // user.key="alice", device.params.os="ios", application.key="app-1".

@@ -16,8 +16,8 @@
               {"context_type": "user", "field": "Key"}
             ],
             "weights": [
-              {"variant_key": "control",   "weight": 500},
-              {"variant_key": "treatment", "weight": 500}
+              {"variant_key": "control",   "weight": 5000},
+              {"variant_key": "treatment", "weight": 5000}
             ]
           }
         }

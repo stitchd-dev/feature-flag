@@ -23,6 +23,14 @@ pub fn compute_hash_percentage(
 /// Returns a value in `[0, 9999]` representing basis points (1 = 0.01%).
 /// 10,000 buckets give 0.01% allocation precision.
 ///
+/// The bucket is derived from the canonical `hash % 100_000` reduction — the
+/// same one `compute_hash_percentage` uses — rescaled to basis points by
+/// dividing by 10 (`percent * 100`). This keeps every layer on one hash
+/// reduction: a context that hashes to percentile 51.1% lands in bucket 5110
+/// here and 511 under the legacy 0.1% reference vectors. (The earlier
+/// `hash % 10_000` form was a different modulus, not a finer-grained version
+/// of the same reduction, and silently re-bucketed every context.)
+///
 /// Hash input: `flag_key` + `env_id` + concatenated target values.
 pub fn calculate_allocation(flag_key: &str, env_id: &str, targets: &[String]) -> u32 {
     let mut input = format!("{}{}", flag_key, env_id);
@@ -31,7 +39,7 @@ pub fn calculate_allocation(flag_key: &str, env_id: &str, targets: &[String]) ->
     }
     let mut cursor = Cursor::new(input);
     let hash = murmur3_x64_128(&mut cursor, 0).unwrap_or(0);
-    (hash % 10_000) as u32
+    ((hash % 100_000) / 10) as u32
 }
 
 #[cfg(test)]

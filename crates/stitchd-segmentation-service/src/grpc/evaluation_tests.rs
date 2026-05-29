@@ -350,11 +350,22 @@ pub mod tests {
 
         async fn lookup_entry_raw(
             &self,
-            _id: SegmentId,
-            _context_type: &str,
-            _key: &str,
+            id: SegmentId,
+            context_type: &str,
+            key: &str,
         ) -> Result<(bool, bool), RepositoryError> {
-            Ok((false, false))
+            // include and exclude are reported independently (exclude does not
+            // override include here) — mirrors the PG repo contract so the
+            // admin UI can show the full picture.
+            let defs = self.list_defs.lock().unwrap();
+            let Some(def) = defs.get(&id) else {
+                return Err(RepositoryError::NotFound { id: id.to_string() });
+            };
+            let flags = def.lists.get(context_type).map_or((false, false), |cl| {
+                (cl.include.contains(key), cl.exclude.contains(key))
+            });
+            drop(defs);
+            Ok(flags)
         }
 
         async fn batch_check_list_membership(

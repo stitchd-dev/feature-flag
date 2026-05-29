@@ -195,7 +195,7 @@ pub fn evaluate_preview(
             continue;
         }
 
-        let mut results = evaluate_flag(
+        let results = evaluate_flag(
             flag,
             &ec.contexts,
             segment_definitions,
@@ -205,14 +205,24 @@ pub fn evaluate_preview(
             TraceLevel::Full,
         );
 
-        // The entire flat list is ONE evaluation bundle — emit a single
-        // ContextPreviewResult for it. All sub-contexts share the same
-        // rule evaluation and hashing, so taking the first result is
-        // correct. Callers that pass N sub-contexts as one bundle should
-        // see one unified result, not N redundant rows.
-        let primary = results.drain(..).next();
-        out.push(from_flag_eval_result(flag, primary, global_idx));
-        global_idx += 1;
+        // feature-flag-utp: emit ONE ContextPreviewResult per sub-context in
+        // the bundle. `evaluate_flag` returns one FlagEvaluationResult per
+        // sub-context (in input order), each evaluated against the FULL
+        // bundle — so rule conditions and cross-context percentage hashing are
+        // preserved and all results for a bundle share the same outcome.
+        // `context_index` is the GLOBAL sub-context index across every input
+        // EvaluationContext, so callers can map results back to their flat
+        // input list. (A non-empty `ec.contexts` always yields ≥1 result; the
+        // guard keeps a defensive single empty result if that ever changes.)
+        if results.is_empty() {
+            out.push(from_flag_eval_result(flag, None, global_idx));
+            global_idx += 1;
+        } else {
+            for r in results {
+                out.push(from_flag_eval_result(flag, Some(r), global_idx));
+                global_idx += 1;
+            }
+        }
     }
     out
 }

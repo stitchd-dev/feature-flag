@@ -114,26 +114,32 @@ fn multi_subcontext_bundle_shares_cross_context_hash_input() {
     let flag = cross_context_flag();
     let results = evaluate_preview(&flag, &[bundle], &[], env_id(), &[]);
 
-    // One result per bundle (the whole bundle is evaluated as one unit).
+    // feature-flag-utp: one result per sub-context (user + device +
+    // application → 3). The whole bundle is evaluated as one unit, so every
+    // sub-context result shares the SAME cross-context hash input.
     assert_eq!(
         results.len(),
-        1,
-        "expected 1 result per bundle, got {}",
+        3,
+        "expected 1 result per sub-context, got {}",
         results.len()
     );
-
-    let r = &results[0];
-    let debug = r
-        .rollout_debug
-        .as_ref()
-        .expect("percentage rule must populate rollout_debug");
 
     // The expected hash_input is the concatenation of every selector value
     // across the FULL bundle: user.key="alice", device.os="iOS 18",
     // application.key="stitchd-web".
     let expected_hash_input = format!("cross-ctx{}aliceiOS 18stitchd-web", env_id());
-    assert_eq!(
-        debug.hash_input, expected_hash_input,
-        "cross-context hash_input must concatenate selectors across the FULL bundle"
-    );
+    for (i, r) in results.iter().enumerate() {
+        assert_eq!(
+            r.context_index, i,
+            "context_index is the global sub-context index"
+        );
+        let debug = r
+            .rollout_debug
+            .as_ref()
+            .expect("percentage rule must populate rollout_debug");
+        assert_eq!(
+            debug.hash_input, expected_hash_input,
+            "every sub-context result must share the FULL-bundle cross-context hash_input"
+        );
+    }
 }
