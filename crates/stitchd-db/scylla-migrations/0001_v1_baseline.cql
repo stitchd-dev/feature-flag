@@ -4,12 +4,13 @@
 -- =============================================================================
 
 -- Keyspace: replication configured by the bootstrap applier at deploy time.
-CREATE KEYSPACE IF NOT EXISTS stitchd_segments
+-- __KEYSPACE__ is substituted by the migration runner (migrate::run).
+CREATE KEYSPACE IF NOT EXISTS __KEYSPACE__
     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}
     AND durable_writes = true;
 
 -- Main entries table; each full-replace writes to a new generation partition for atomic swap.
-CREATE TABLE IF NOT EXISTS stitchd_segments.segment_list_entries (
+CREATE TABLE IF NOT EXISTS __KEYSPACE__.segment_list_entries (
     segment_id   UUID,
     context_type TEXT,
     generation   BIGINT,
@@ -20,7 +21,7 @@ CREATE TABLE IF NOT EXISTS stitchd_segments.segment_list_entries (
   AND gc_grace_seconds = 86400;
 
 -- Pointer table for atomic generation swap; one row per (segment_id, context_type).
-CREATE TABLE IF NOT EXISTS stitchd_segments.segment_list_generations (
+CREATE TABLE IF NOT EXISTS __KEYSPACE__.segment_list_generations (
     segment_id        UUID,
     context_type      TEXT,
     active_generation BIGINT,
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS stitchd_segments.segment_list_generations (
 );
 
 -- Counter rows for get_list_segment_summary; running include/exclude counts.
-CREATE TABLE IF NOT EXISTS stitchd_segments.segment_list_summary (
+CREATE TABLE IF NOT EXISTS __KEYSPACE__.segment_list_summary (
     segment_id    UUID,
     context_type  TEXT,
     include_count COUNTER,
@@ -38,7 +39,7 @@ CREATE TABLE IF NOT EXISTS stitchd_segments.segment_list_summary (
 );
 
 -- Orphaned-generation tracker for the sweeper; records superseded generations pending cleanup.
-CREATE TABLE IF NOT EXISTS stitchd_segments.segment_list_orphaned_gens (
+CREATE TABLE IF NOT EXISTS __KEYSPACE__.segment_list_orphaned_gens (
     segment_id   UUID,
     context_type TEXT,
     generation   BIGINT,
