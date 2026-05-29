@@ -107,8 +107,8 @@ async fn insert_experiment(
     sqlx::query(
         "INSERT INTO experiments \
             (id, env_id, flag_id, flag_rule_id, name, status, traffic_allocation, \
-             targets_default_rule, unit_context_types, pre_period_days, analysis_type) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8, $9, $10, $11)",
+             targets_default_rule, unit_context_types, pre_period_days) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7::numeric, $8, $9, $10)",
     )
     .bind(exp_id)
     .bind(env_id)
@@ -120,7 +120,6 @@ async fn insert_experiment(
     .bind(targets_default_rule)
     .bind(&ucts)
     .bind(pre_period_days)
-    .bind("frequentist")
     .execute(pool)
     .await
     .map(|_| exp_id)
