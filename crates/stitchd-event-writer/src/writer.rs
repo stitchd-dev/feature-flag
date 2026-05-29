@@ -22,7 +22,13 @@ pub enum WriteError {
 /// A row in the `events` ClickHouse table.
 ///
 /// Fields map 1-to-1 with the table DDL. Nullable value columns are `Option`
-/// so exactly one is `Some` depending on the event's value type.
+/// so exactly one is `Some` depending on the event's value type. The
+/// `ingested_at` column carries a `DEFAULT now64()` in the schema, so it is
+/// intentionally omitted here — ClickHouse fills it server-side.
+///
+/// This is the single canonical row type for the `events` table; the gRPC
+/// ingestion handler in `stitchd-analytics-service` constructs and writes
+/// `EventRow` directly rather than maintaining a parallel struct.
 #[derive(Debug, Serialize, clickhouse::Row)]
 pub struct EventRow {
     /// Environment UUID.
@@ -38,8 +44,17 @@ pub struct EventRow {
     pub value_int: Option<i64>,
     /// Double value, set when the event carries a `Double` metric.
     pub value_double: Option<f64>,
-    /// Client-supplied event timestamp as Unix milliseconds.
+    /// Server-side ingestion timestamp as Unix milliseconds.
     pub timestamp: i64,
+    /// Arbitrary per-event metadata (filterable by the metrics layer).
+    ///
+    /// Encoded as `Vec<(String, String)>` rather than `HashMap` because the
+    /// `clickhouse` crate's `RowBinary` serializer only supports sequences for
+    /// `Map(K, V)` columns (see clickhouse-rs#193).
+    pub properties: Vec<(String, String)>,
+    /// Client wall-clock time as Unix milliseconds. Falls back to `timestamp`
+    /// when the caller has no distinct client-supplied event time.
+    pub occurred_at: i64,
 }
 
 impl EventRow {
@@ -56,6 +71,8 @@ impl EventRow {
             EventValue::Double(v) => (None, None, Some(v)),
         };
 
+        let timestamp = payload.timestamp.timestamp_millis();
+
         Self {
             env_id,
             contexts,
@@ -63,7 +80,12 @@ impl EventRow {
             value_bool,
             value_int,
             value_double,
-            timestamp: payload.timestamp.timestamp_millis(),
+            timestamp,
+            // The REST `EventPayload` carries no separate properties map or
+            // client wall-clock; default to empty metadata and reuse the
+            // ingestion timestamp as `occurred_at`.
+            properties: Vec::new(),
+            occurred_at: timestamp,
         }
     }
 }

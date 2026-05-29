@@ -56,6 +56,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use stitchd_db::clickhouse::{EvalLogRow, insert_eval_log_rows};
 use stitchd_event_writer::migrations as ch_migrations;
+use stitchd_event_writer::writer::EventRow;
 use uuid::Uuid;
 
 // ── Connection helpers ──────────────────────────────────────────────────────
@@ -112,22 +113,6 @@ struct EventStatsRow {
     context_type: String,
     variant_key: String,
     cnt: u64,
-}
-
-// ── EventV2Row mirror (kept local to avoid pulling analytics-service into deps) ──
-
-#[derive(Debug, serde::Serialize, clickhouse::Row)]
-struct EventV2Row {
-    #[serde(with = "clickhouse::serde::uuid")]
-    env_id: Uuid,
-    contexts: Vec<(String, String)>,
-    metric_key: String,
-    value_bool: Option<bool>,
-    value_int: Option<i64>,
-    value_double: Option<f64>,
-    timestamp: i64,
-    properties: Vec<(String, String)>,
-    occurred_at: i64,
 }
 
 // ── Seed state ──────────────────────────────────────────────────────────────
@@ -217,10 +202,10 @@ async fn seed(pool: &PgPool) -> Seed {
     sqlx::query(
         "INSERT INTO experiments \
             (id, env_id, flag_id, flag_rule_id, name, status, traffic_allocation, \
-             targets_default_rule, unit_context_types, analysis_type, \
+             targets_default_rule, unit_context_types, \
              pre_period_days) \
          VALUES ($1, $2, $3, NULL, $4, 'draft', 100.0, true, \
-                 '{user,account}', 'frequentist', 0)",
+                 '{user,account}', 0)",
     )
     .bind(exp_id)
     .bind(env_id)
@@ -551,7 +536,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
     let to_millis = |dt: DateTime<Utc>| dt.timestamp_millis();
     let event_rows = vec![
         // pre-assignment (alice) — must be filtered out by ITT join
-        EventV2Row {
+        EventRow {
             env_id: seed.env_id,
             contexts: vec![("user".into(), "alice".into())],
             metric_key: "click".into(),
@@ -563,7 +548,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             occurred_at: to_millis(pre_event),
         },
         // post-assignment (alice / control) — counts
-        EventV2Row {
+        EventRow {
             env_id: seed.env_id,
             contexts: vec![("user".into(), "alice".into())],
             metric_key: "click".into(),
@@ -575,7 +560,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             occurred_at: to_millis(post_event),
         },
         // post-assignment (bob / treatment) — counts
-        EventV2Row {
+        EventRow {
             env_id: seed.env_id,
             contexts: vec![("user".into(), "bob".into())],
             metric_key: "click".into(),
@@ -587,7 +572,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
             occurred_at: to_millis(post_event),
         },
         // post-assignment (account/acme / treatment) — counts at account level
-        EventV2Row {
+        EventRow {
             env_id: seed.env_id,
             contexts: vec![("account".into(), "acme".into())],
             metric_key: "click".into(),
@@ -600,7 +585,7 @@ async fn full_lifecycle_default_rule_bound_multi_context_type() {
         },
     ];
     let mut insert = client
-        .insert::<EventV2Row>("events")
+        .insert::<EventRow>("events")
         .await
         .expect("init events insert");
     for row in &event_rows {

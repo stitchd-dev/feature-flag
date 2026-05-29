@@ -15,7 +15,7 @@
 //! 2. Reject unknown / soft-deleted keys with a per-event `RejectedEvent`
 //!    (rejected events do **not** abort the batch).
 //! 3. Validate the `MetricValue` matches the registered `EventValueType`.
-//! 4. Build an [`EventV2Row`] and accumulate.
+//! 4. Build an [`EventRow`] and accumulate.
 //! 5. After the loop, write all accepted rows to ClickHouse `events` in
 //!    a single batch INSERT.
 //!
@@ -26,7 +26,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use moka::future::Cache;
-use serde::Serialize;
 use tonic::{Request, Response, Status};
 use tracing::instrument;
 use uuid::Uuid;
@@ -34,6 +33,7 @@ use uuid::Uuid;
 use stitchd_core::event::{EventDefinition, EventValueType};
 use stitchd_core::id::EnvironmentId;
 use stitchd_db::{EventDefinitionRepository, RepositoryError};
+use stitchd_event_writer::writer::EventRow;
 use stitchd_proto::analytics::v1::{
     RejectedEvent, TrackEvent, TrackEventsRequest, TrackEventsResponse, metric_value,
 };
@@ -172,43 +172,6 @@ fn reconstruct_repo_error(arc: &RepositoryError) -> RepositoryError {
 }
 
 // ---------------------------------------------------------------------------
-// Row written to ClickHouse `events`
-// ---------------------------------------------------------------------------
-
-/// A row in the `events` ClickHouse table.
-///
-/// Mirrors the schema added in `events_metrics_20260519` Phase 1 (migration
-/// `20260520000001_events_properties`): the canonical ingestion table now
-/// carries `properties` + `occurred_at` alongside the legacy columns.
-#[derive(Debug, Serialize, clickhouse::Row)]
-pub struct EventV2Row {
-    /// Tenant scope.
-    #[serde(with = "clickhouse::serde::uuid")]
-    pub env_id: Uuid,
-    /// Evaluation-time context pairs: `(type, key)`.
-    pub contexts: Vec<(String, String)>,
-    /// Pre-registered event key (FK → `event_definitions.key`).
-    pub metric_key: String,
-    /// Bool variant; populated iff registered type is `Bool`.
-    pub value_bool: Option<bool>,
-    /// Int variant; populated iff registered type is `Int`.
-    pub value_int: Option<i64>,
-    /// Double variant; populated iff registered type is `Double`.
-    pub value_double: Option<f64>,
-    /// Server-side ingestion timestamp (Unix millis).
-    pub timestamp: i64,
-    /// Arbitrary per-event metadata (filterable by metrics layer).
-    ///
-    /// Encoded as `Vec<(String, String)>` rather than `HashMap` because
-    /// the `clickhouse` crate's RowBinary serializer only supports
-    /// sequences for `Map(K, V)` columns — see clickhouse-rs#193.
-    pub properties: Vec<(String, String)>,
-    /// Client wall-clock time (Unix millis). Falls back to `timestamp` when
-    /// the SDK omitted `occurred_at` in the request.
-    pub occurred_at: i64,
-}
-
-// ---------------------------------------------------------------------------
 // State + handler
 // ---------------------------------------------------------------------------
 
@@ -251,14 +214,14 @@ fn resolve_env_id(
     ))
 }
 
-/// Convert an SDK `TrackEvent` to an ingest-ready [`EventV2Row`], or return
+/// Convert an SDK `TrackEvent` to an ingest-ready [`EventRow`], or return
 /// a [`RejectedEvent`] with a machine-readable reason discriminant.
 fn validate_event(
     event: &TrackEvent,
     def: &EventDefinition,
     env_id: EnvironmentId,
     now_millis: i64,
-) -> Result<EventV2Row, RejectedEvent> {
+) -> Result<EventRow, RejectedEvent> {
     // ── value-type match ──────────────────────────────────────────────────
     //
     // `count` metric_type is a pure occurrence marker — every fire counts
@@ -334,7 +297,7 @@ fn validate_event(
         });
     }
 
-    Ok(EventV2Row {
+    Ok(EventRow {
         env_id: env_id.as_uuid(),
         contexts,
         metric_key: event.event_key.clone(),
@@ -353,14 +316,14 @@ fn validate_event(
 #[allow(clippy::result_large_err)] // tonic::Status is external; cannot box.
 async fn write_rows_to_clickhouse(
     ch_client: &clickhouse::Client,
-    rows: &[EventV2Row],
+    rows: &[EventRow],
 ) -> Result<(), Status> {
     if rows.is_empty() {
         return Ok(());
     }
 
     let mut insert = ch_client
-        .insert::<EventV2Row>("events")
+        .insert::<EventRow>("events")
         .await
         .map_err(|e| Status::internal(format!("clickhouse insert init failed: {e}")))?;
     for row in rows {
@@ -404,7 +367,7 @@ pub async fn handle_track_events(
 
     let now_millis = chrono::Utc::now().timestamp_millis();
 
-    let mut rows: Vec<EventV2Row> = Vec::with_capacity(inner.events.len());
+    let mut rows: Vec<EventRow> = Vec::with_capacity(inner.events.len());
     let mut rejected: Vec<RejectedEvent> = Vec::new();
 
     for event in &inner.events {

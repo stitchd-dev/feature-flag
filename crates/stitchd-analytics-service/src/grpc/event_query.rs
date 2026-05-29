@@ -119,7 +119,7 @@ struct FiringRow {
     value_int: Option<i64>,
     value_double: Option<f64>,
     /// `properties` is `Map(String, String)` — RowBinary deserialises as a
-    /// `Vec<(String, String)>` (same pattern as `EventV2Row` write side).
+    /// `Vec<(String, String)>` (same pattern as the `EventRow` write side).
     properties: Vec<(String, String)>,
     occurred_at_ms: i64,
     ingested_at_ms: i64,

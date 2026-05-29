@@ -14,8 +14,8 @@
 //!    `metric_ids` at compute time.
 //!
 //! 3. **Event ingestion** — writes events directly to ClickHouse
-//!    `events` (mirroring `EventV2Row` from
-//!    `stitchd-analytics-service::grpc::ingestion`). This is the pragmatic
+//!    `events` using the canonical [`EventRow`] from
+//!    `stitchd-event-writer`. This is the pragmatic
 //!    deviation from the original plan: skipping the SDK → gateway →
 //!    analytics-service hops keeps the test focused on the
 //!    "experiment reads events through the metric dispatcher" half of the
@@ -38,7 +38,6 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use serde::Serialize;
 use stitchd_core::{
     event::{EventDefinition, EventValueType, MetricType},
     experimentation::{Experiment, ExperimentStatus},
@@ -63,6 +62,7 @@ use stitchd_db::{
         PgProjectRepository,
     },
 };
+use stitchd_event_writer::writer::EventRow;
 use stitchd_stats_service::{
     dispatch::{dispatch_metric_query, rewrite_placeholders_to_clickhouse},
     queries::QueryBind,
@@ -83,38 +83,23 @@ fn make_ch_client() -> clickhouse::Client {
         .with_database("stitchd")
 }
 
-/// A single row in `events` — mirrors `EventV2Row` from the
-/// analytics-service ingestion path. Replicated locally to avoid pulling
-/// the analytics-service into `stitchd-db`'s dev-deps; the schema is
-/// pinned by the migration in `stitchd-event-writer`.
-#[derive(Debug, Serialize, clickhouse::Row)]
-struct EventV2Row {
-    #[serde(with = "clickhouse::serde::uuid")]
-    env_id: uuid::Uuid,
-    contexts: Vec<(String, String)>,
-    metric_key: String,
-    value_bool: Option<bool>,
-    value_int: Option<i64>,
-    value_double: Option<f64>,
-    timestamp: i64,
-    properties: Vec<(String, String)>,
-    occurred_at: i64,
-}
-
 /// A single result row returned by the ratio query — mirrors the SELECT
-/// list emitted by `ratio::build_ratio_query`. Column types match the
-/// emitted SQL:
+/// list emitted by `ratio::build_ratio_query`. Column order and types match
+/// the emitted SQL exactly:
+/// - `context_type`: `LowCardinality(String)` → deserialised as `String`
 /// - `variant_key`: `String`
-/// - `num_value` / `den_value` / `den_count`: `UInt64` (because the
-///   underlying aggregator is `count()`)
+/// - `num_value` / `den_value` / `den_count`: `Float64` (the aggregation
+///   builder wraps every aggregator in `toFloat64(...)`, including the
+///   `count()` denominator)
 /// - `metric_value`: `Nullable(Float64)` (the `nullIf` div-by-zero guard
 ///   in `ratio.rs` makes the result type nullable)
 #[derive(Debug, serde::Deserialize, clickhouse::Row)]
 struct RatioResultRow {
+    context_type: String,
     variant_key: String,
-    num_value: u64,
-    den_value: u64,
-    den_count: u64,
+    num_value: f64,
+    den_value: f64,
+    den_count: f64,
     metric_value: Option<f64>,
 }
 
@@ -387,7 +372,7 @@ async fn seed_running_experiment(
 
 // ── Event writing ───────────────────────────────────────────────────────────
 
-/// Build a single `EventV2Row` carrying the experiment / iteration /
+/// Build a single [`EventRow`] carrying the experiment / iteration /
 /// variant context tuples expected by the dispatched query.
 fn make_event_row(
     env_id: EnvironmentId,
@@ -397,8 +382,8 @@ fn make_event_row(
     user_key: &str,
     event_key: &str,
     now_millis: i64,
-) -> EventV2Row {
-    EventV2Row {
+) -> EventRow {
+    EventRow {
         env_id: env_id.as_uuid(),
         contexts: vec![
             ("user".into(), user_key.into()),
@@ -419,10 +404,10 @@ fn make_event_row(
     }
 }
 
-/// Insert a batch of `EventV2Row`s in one CH statement.
-async fn insert_events(client: &clickhouse::Client, rows: &[EventV2Row]) {
+/// Insert a batch of [`EventRow`]s in one CH statement.
+async fn insert_events(client: &clickhouse::Client, rows: &[EventRow]) {
     let mut insert = client
-        .insert::<EventV2Row>("events")
+        .insert::<EventRow>("events")
         .await
         .expect("insert init");
     for row in rows {
@@ -489,11 +474,10 @@ async fn sdk_fires_events_experiment_reads_via_ratio_metric() {
     // pair in a test binary is heavyweight, and the SDK→gateway hops are
     // covered by other integration tests in this track. The schema of the
     // rows we write here mirrors what the analytics-service ingestion
-    // handler would have emitted on its happy path (see
-    // `stitchd-analytics-service::grpc::ingestion::EventV2Row` — same
-    // column order and types).
+    // handler would have emitted on its happy path — both construct the
+    // canonical `stitchd_event_writer::writer::EventRow`.
     let now_millis = Utc::now().timestamp_millis();
-    let mut rows: Vec<EventV2Row> = Vec::with_capacity(N_CONTEXTS + N_COMPLETED);
+    let mut rows: Vec<EventRow> = Vec::with_capacity(N_CONTEXTS + N_COMPLETED);
 
     for i in 0..N_CONTEXTS {
         let user_key = format!("user-{i}");
@@ -555,9 +539,17 @@ async fn sdk_fires_events_experiment_reads_via_ratio_metric() {
         .find(|r| r.variant_key == VARIANT_KEY)
         .unwrap_or_else(|| panic!("missing `{VARIANT_KEY}` row in {result_rows:?}"));
 
-    // Counts should be exactly what we wrote.
-    let expected_num = N_COMPLETED as u64;
-    let expected_den = N_CONTEXTS as u64;
+    // The metric's unit_context_types is `["user"]`, so the ratio query
+    // groups/returns rows at the `user` context level.
+    assert_eq!(
+        treatment.context_type, "user",
+        "expected user-level attribution (row={treatment:?})",
+    );
+
+    // Counts should be exactly what we wrote. The aggregator emits Float64,
+    // but the values are whole counts so exact equality holds.
+    let expected_num = N_COMPLETED as f64;
+    let expected_den = N_CONTEXTS as f64;
     assert_eq!(
         treatment.num_value, expected_num,
         "numerator count mismatch (row={treatment:?})",

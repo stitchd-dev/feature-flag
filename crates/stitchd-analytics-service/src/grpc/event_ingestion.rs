@@ -142,6 +142,11 @@ pub async fn handle_ingest_event(
             value_int,
             value_double,
             timestamp: event.timestamp_ms,
+            // The legacy `MetricEvent` wire type carries neither a properties
+            // map nor a distinct client wall-clock; default to empty metadata
+            // and reuse the event timestamp as `occurred_at`.
+            properties: Vec::new(),
+            occurred_at: event.timestamp_ms,
         });
 
         accepted_count += 1;
