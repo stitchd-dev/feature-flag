@@ -89,10 +89,10 @@ change is explicitly approved.
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
-- [ ] Task 5.1: Full green gate on the branch — workspace tests (--no-fail-fast),
-      clippy -D warnings, fmt, contract-check, sqlx-check, docs idempotency.
-- [ ] Task 5.2: Refresh `conductor/tech-stack.md` / `product.md` notes for any
-      approved contract/boundary changes; finalize `patterns.md`.
-- [ ] Task 5.3: Confirm flag-evaluation/experiment/auth behavior unchanged
-      (conformance/parity/e2e pass unmodified).
-- [ ] Task: Conductor - User Manual Verification 'Final Verification & Sync' (Protocol in workflow.md)
+- [x] Task 5.1: Full green gate on the branch — workspace tests (--no-fail-fast),
+      clippy -D warnings, fmt, contract-check, sqlx-check, docs idempotency. <!-- 95ebea4,85185dd — fmt/clippy/contract(23/23)/docs-idempotency clean; .sqlx unchanged; ~1417 unit tests green; 103 DB/CH tests infra-gated→CI -->
+- [x] Task 5.2: Refresh `conductor/tech-stack.md` / `product.md` notes for any
+      approved contract/boundary changes; finalize `patterns.md`. <!-- 0111c1d — tech-stack note; patterns.md finalized Phase 3; product.md unchanged (NFR4) -->
+- [x] Task 5.3: Confirm flag-evaluation/experiment/auth behavior unchanged
+      (conformance/parity/e2e pass unmodified). <!-- verified: e2e/conformance/parity test files UNMODIFIED vs main; core eval unchanged; full e2e execution → CI -->
+- [x] Task: Conductor - User Manual Verification 'Final Verification & Sync' (Protocol in workflow.md) <!-- autonomous mode -->
