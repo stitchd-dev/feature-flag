@@ -10,54 +10,22 @@
 
 #![allow(clippy::expect_used)]
 
-use chrono::{DateTime, Duration, TimeZone, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use clickhouse::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use stitchd_core::metric::{AggregationConfig, AggregationOperator};
+use stitchd_db::clickhouse::SeedAssignmentRow;
+use stitchd_event_writer::SeedEventRow;
 use stitchd_stats_service::{
     dispatch::rewrite_placeholders_to_clickhouse,
     queries::{QueryBind, preview::build_experiment_preview_aggregation_query},
 };
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, clickhouse::Row)]
-struct AssignmentRow {
-    #[serde(with = "clickhouse::serde::uuid")]
-    experiment_id: Uuid,
-    #[serde(with = "clickhouse::serde::uuid")]
-    iteration_id: Uuid,
-    #[serde(with = "clickhouse::serde::uuid")]
-    env_id: Uuid,
-    #[serde(with = "clickhouse::serde::uuid")]
-    flag_id: Uuid,
-    #[serde(with = "clickhouse::serde::uuid::option")]
-    matched_rule_id: Option<Uuid>,
-    context_type: String,
-    context_key: String,
-    variant_key: String,
-    #[serde(with = "clickhouse::serde::chrono::datetime64::millis")]
-    assigned_at: DateTime<Utc>,
-    #[serde(rename = "_version")]
-    version: i64,
-}
-
-#[derive(Debug, Clone, Serialize, clickhouse::Row)]
-struct EventRow {
-    #[serde(with = "clickhouse::serde::uuid")]
-    env_id: Uuid,
-    contexts: Vec<(String, String)>,
-    metric_key: String,
-    value_bool: Option<bool>,
-    value_int: Option<i64>,
-    value_double: Option<f64>,
-    #[serde(with = "clickhouse::serde::chrono::datetime64::millis")]
-    timestamp: DateTime<Utc>,
-    #[serde(with = "clickhouse::serde::chrono::datetime64::millis")]
-    ingested_at: DateTime<Utc>,
-    properties: Vec<(String, String)>,
-    #[serde(with = "clickhouse::serde::chrono::datetime64::millis")]
-    occurred_at: DateTime<Utc>,
-}
+// `SeedAssignmentRow` is shared from `stitchd-db` (DUP-004).
+// `SeedEventRow` is shared from `stitchd-event-writer` (DUP-005).
+type AssignmentRow = SeedAssignmentRow;
+type EventRow = SeedEventRow;
 
 #[derive(Debug, Clone, Deserialize, clickhouse::Row)]
 #[allow(dead_code)]
