@@ -639,7 +639,16 @@ impl FlagService for FlagServiceImpl {
                     )));
                 }
 
-                record.enabled = flag_proto.enabled;
+                // B1: enabled_override takes precedence when present; fall back
+                // to flag.enabled for backward compatibility with callers that do
+                // not yet send enabled_override (old gateway pre-fetches the
+                // current value and sends it as flag.enabled, so this path
+                // preserves the caller's intent).
+                if let Some(enabled) = req.enabled_override {
+                    record.enabled = enabled;
+                } else {
+                    record.enabled = flag_proto.enabled;
+                }
                 if !flag_proto.name.is_empty() {
                     record.name = flag_proto.name.clone();
                 }
@@ -981,6 +990,198 @@ impl FlagService for FlagServiceImpl {
                 #[allow(clippy::cast_sign_loss)]
                 let version = (record.version + 1) as u64;
                 let proto = mapping::build_feature_flag_proto(&record, vec![], &[]);
+                Ok(Response::new(MutateFlagResponse {
+                    flag: Some(proto),
+                    version,
+                }))
+            }
+            MutationKind::ReplaceVariants => {
+                // B2: Replace only the variants list; preserve all other metadata.
+                // No pre-fetch needed — the service fetches the current record
+                // server-side and merges.
+                let flags = fetch_flag_list!(self, project_id, env_id_result);
+
+                let record = flags
+                    .into_iter()
+                    .find(|f| f.key.as_str() == flag_proto.key.as_str())
+                    .ok_or_else(|| {
+                        Status::not_found(format!("flag '{}' not found", flag_proto.key))
+                    })?;
+
+                self.ensure_flag_unlocked(record.id)
+                    .await
+                    .map_err(Status::from)?;
+
+                // Optimistic locking check.
+                #[allow(clippy::cast_sign_loss)]
+                let stored_version = record.version as u64;
+                if req.version != 0 && stored_version != req.version {
+                    return Err(Status::aborted(format!(
+                        "version conflict: expected {}, actual {}",
+                        req.version, stored_version
+                    )));
+                }
+
+                // A1+A2: Validate variants before replacing.
+                if !flag_proto.variants.is_empty() {
+                    use stitchd_core::flag::FlagValueType as D;
+                    use stitchd_proto::flags::v1::FlagValueType as P;
+                    let effective_vt = match record.value_type {
+                        D::Int => P::Int,
+                        D::Double => P::Double,
+                        D::Str => P::String,
+                        D::Json => P::Json,
+                        D::Bool => P::Bool,
+                    };
+                    validate_proto_variants(&flag_proto.variants, effective_vt)?;
+                    if effective_vt == P::Bool {
+                        validate_bool_flag_variants(&flag_proto.variants)?;
+                    }
+                }
+
+                // Replace variants.
+                let domain_variants: Vec<_> = flag_proto
+                    .variants
+                    .iter()
+                    .filter_map(|v| mapping::proto_variant_to_domain(v.clone()))
+                    .collect();
+                self.variant_repo
+                    .replace_all_for_flag(record.id, &domain_variants)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                let variants = self
+                    .variant_repo
+                    .find_by_flag(record.id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                let rules = self
+                    .flag_repo
+                    .find_rules(record.id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                #[allow(clippy::cast_sign_loss)]
+                let version = stored_version;
+                let proto = mapping::build_feature_flag_proto(&record, variants, &rules);
+                Ok(Response::new(MutateFlagResponse {
+                    flag: Some(proto),
+                    version,
+                }))
+            }
+            MutationKind::ReplaceRules => {
+                // B2: Replace only the rules list + optionally default_variant_key
+                // / default_rule_distribution; preserve variants and other metadata.
+                let flags = fetch_flag_list!(self, project_id, env_id_result);
+
+                let mut record = flags
+                    .into_iter()
+                    .find(|f| f.key.as_str() == flag_proto.key.as_str())
+                    .ok_or_else(|| {
+                        Status::not_found(format!("flag '{}' not found", flag_proto.key))
+                    })?;
+
+                self.ensure_flag_unlocked(record.id)
+                    .await
+                    .map_err(Status::from)?;
+
+                // Optimistic locking check.
+                #[allow(clippy::cast_sign_loss)]
+                let stored_version = record.version as u64;
+                if req.version != 0 && stored_version != req.version {
+                    return Err(Status::aborted(format!(
+                        "version conflict: expected {}, actual {}",
+                        req.version, stored_version
+                    )));
+                }
+
+                // Fetch current variants to build variant_key→id map.
+                let variants = self
+                    .variant_repo
+                    .find_by_flag(record.id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                // Resolve default_variant_key → variant ID when provided.
+                if !flag_proto.default_variant_key.is_empty() {
+                    let variant_id = variants
+                        .iter()
+                        .find(|v| v.key == flag_proto.default_variant_key)
+                        .map(|v| v.id)
+                        .ok_or_else(|| {
+                            Status::not_found(format!(
+                                "variant '{}' not found",
+                                flag_proto.default_variant_key
+                            ))
+                        })?;
+                    record.default_variant_id = Some(variant_id);
+                }
+
+                // Replace rules.
+                if !flag_proto.rules.is_empty() {
+                    for (i, r) in flag_proto.rules.iter().enumerate() {
+                        if let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) =
+                            &r.output
+                            && !alloc.hash_inputs.is_empty()
+                        {
+                            mapping::validate_proto_hash_inputs(&alloc.hash_inputs)
+                                .map_err(|msg| {
+                                    FlagServiceError::InvalidHashInputs(format!("rule[{i}]: {msg}"))
+                                })
+                                .map_err(Status::from)?;
+                        }
+                        mapping::validate_proto_rule_condition(&r.rule_payload)
+                            .map_err(|msg| {
+                                FlagServiceError::InvalidArgument(format!("rule[{i}]: {msg}"))
+                            })
+                            .map_err(Status::from)?;
+                    }
+                    let variant_key_to_id: std::collections::HashMap<_, _> =
+                        variants.iter().map(|v| (v.key.clone(), v.id)).collect();
+                    let domain_rules: Vec<_> = flag_proto
+                        .rules
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, r)| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            mapping::proto_flag_rule_to_domain(
+                                record.id,
+                                i as i32,
+                                r,
+                                &variant_key_to_id,
+                            )
+                        })
+                        .collect();
+                    self.flag_repo
+                        .upsert_rules(record.id, &domain_rules)
+                        .await
+                        .map_err(FlagServiceError::from)
+                        .map_err(Status::from)?;
+                }
+
+                // Persist any default_variant_key change (even if rules are empty).
+                let updated = self
+                    .flag_repo
+                    .update(&record)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                let rules = self
+                    .flag_repo
+                    .find_rules(updated.id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                #[allow(clippy::cast_sign_loss)]
+                let version = updated.version as u64;
+                let proto = mapping::build_feature_flag_proto(&updated, variants, &rules);
                 Ok(Response::new(MutateFlagResponse {
                     flag: Some(proto),
                     version,
@@ -2282,6 +2483,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 0,
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_ok());
@@ -2308,6 +2510,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 0,
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_err());
@@ -2341,6 +2544,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1, // matches initial version
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_ok());
@@ -2376,6 +2580,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 99, // wrong version
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_err());
@@ -2409,6 +2614,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_ok());
@@ -2441,6 +2647,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 42, // wrong
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_err());
@@ -2474,6 +2681,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_ok());
@@ -2497,6 +2705,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 0,
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_err());
@@ -2521,6 +2730,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_err());
@@ -2536,6 +2746,7 @@ mod tests {
             kind: MutationKind::Create as i32,
             flag: None,
             version: 0,
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         assert!(result.is_err());
@@ -3106,6 +3317,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let result = svc.mutate_flag(req).await;
         let err = result.expect_err("expected FailedPrecondition for locked flag");
@@ -3148,6 +3360,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let err = svc.mutate_flag(req).await.expect_err("archive should fail");
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
@@ -3222,6 +3435,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let err = svc
             .mutate_flag(req)
@@ -3284,6 +3498,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let err = svc
             .mutate_flag(req)
@@ -3387,6 +3602,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let err = svc
             .mutate_flag(req)
@@ -3462,6 +3678,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let resp = svc
             .mutate_flag(req)
@@ -3540,6 +3757,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         let resp = svc
             .mutate_flag(req)
@@ -3609,6 +3827,7 @@ mod tests {
                 ..Default::default()
             }),
             version: 1,
+            enabled_override: None,
         });
         // The update may still error on version-mismatch or stub repo
         // semantics, but it must NOT error with the `invalid_condition`

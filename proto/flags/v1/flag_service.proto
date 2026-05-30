@@ -32,12 +32,18 @@ message ListFlagsResponse {
 // ─── Mutation ─────────────────────────────────────────────────────────────────
 
 enum MutationKind {
-  MUTATION_KIND_UNSPECIFIED = 0;
-  MUTATION_KIND_CREATE      = 1;
-  MUTATION_KIND_UPDATE      = 2;
-  MUTATION_KIND_DELETE      = 3;
-  MUTATION_KIND_ARCHIVE     = 4;
-  MUTATION_KIND_RESTORE     = 5;
+  MUTATION_KIND_UNSPECIFIED       = 0;
+  MUTATION_KIND_CREATE            = 1;
+  MUTATION_KIND_UPDATE            = 2;
+  MUTATION_KIND_DELETE            = 3;
+  MUTATION_KIND_ARCHIVE           = 4;
+  MUTATION_KIND_RESTORE           = 5;
+  // Replace only the variants list, preserving all other flag metadata.
+  // Applies the same validation as CREATE/UPDATE (variant values, bool invariant).
+  MUTATION_KIND_REPLACE_VARIANTS  = 6;
+  // Replace only the rules list (and optionally default_variant_key /
+  // default_rule_distribution), preserving all other flag metadata.
+  MUTATION_KIND_REPLACE_RULES     = 7;
 }
 
 message MutateFlagRequest {
@@ -50,6 +56,11 @@ message MutateFlagRequest {
   // Project-scoped admin operations set this instead of environment_id.
   // When present the service uses project-level repository methods directly.
   string        project_id     = 5;
+  // When present: override the flag's enabled state to this value.
+  // When absent: preserve the current enabled state (no pre-fetch required).
+  // Use proto3 optional so callers can distinguish "not provided" from
+  // "explicitly set to false".
+  optional bool enabled_override = 6;
 }
 
 message MutateFlagResponse {

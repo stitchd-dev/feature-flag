@@ -537,6 +537,7 @@ pub async fn create_flag(
         kind: MutationKind::Create as i32,
         flag: Some(flag),
         version: 0,
+        enabled_override: None,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -602,28 +603,17 @@ pub async fn update_flag(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<FlagMutateRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    // When `enabled` is omitted, preserve the current value by fetching first.
-    let current_enabled = if body.enabled.is_none() {
-        let get_req = tonic::Request::new(GetFlagRequest {
-            environment_id: String::new(),
-            project_id: project_id.clone(),
-            flag_key: flag_key.clone(),
-        });
-        let mut client = state.flag_client.lock().await;
-        client
-            .get_flag(get_req)
-            .await
-            .ok()
-            .map(|r| r.into_inner().enabled)
-            .unwrap_or(true)
-    } else {
-        body.enabled.unwrap_or(true)
-    };
+    // B1: Use enabled_override to signal the service whether to change the
+    // enabled state. When body.enabled is absent the field is left None so
+    // the service preserves the current value — no pre-fetch needed.
+    let enabled_override = body.enabled;
     let flag = FeatureFlag {
         key: flag_key,
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
-        enabled: current_enabled,
+        // enabled field is still sent for backward compat with old service
+        // deployments; new service honours enabled_override first.
+        enabled: enabled_override.unwrap_or(false),
         default_variant_key: body.default_variant_key.unwrap_or_default(),
         value_type: body
             .value_type
@@ -639,6 +629,7 @@ pub async fn update_flag(
         kind: MutationKind::Update as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
+        enabled_override,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -681,6 +672,7 @@ pub async fn delete_flag(
         kind: MutationKind::Delete as i32,
         flag: Some(flag),
         version: 0,
+        enabled_override: None,
     });
     let mut client = state.flag_client.lock().await;
     client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -721,6 +713,7 @@ pub async fn archive_flag(
         kind: MutationKind::Archive as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
+        enabled_override: None,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -749,6 +742,7 @@ pub async fn restore_flag(
         kind: MutationKind::Restore as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
+        enabled_override: None,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -791,20 +785,8 @@ pub async fn update_variants(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<ReplaceVariantsBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    // First fetch the current flag to get its metadata (enabled, name, etc.).
-    let get_req = tonic::Request::new(GetFlagRequest {
-        environment_id: String::new(),
-        project_id: project_id.clone(),
-        flag_key: flag_key.clone(),
-    });
-    let mut client = state.flag_client.lock().await;
-    let current = client
-        .get_flag(get_req)
-        .await
-        .map_err(GatewayError::from)?
-        .into_inner();
-
-    // Build an Update mutation carrying the new variant list.
+    // B2: Use ReplaceVariants mutation kind so the service fetches current
+    // flag metadata and preserves it. No pre-fetch needed in the gateway.
     let proto_variants = body
         .variants
         .into_iter()
@@ -812,20 +794,18 @@ pub async fn update_variants(
         .collect();
     let flag = FeatureFlag {
         key: flag_key,
-        enabled: current.enabled,
-        name: current.name,
-        description: current.description,
-        value_type: current.value_type,
         variants: proto_variants,
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
         environment_id: String::new(),
         project_id,
-        kind: MutationKind::Update as i32,
+        kind: MutationKind::ReplaceVariants as i32,
         flag: Some(flag),
         version: body.version,
+        enabled_override: None,
     });
+    let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     let flag_json = inner
@@ -1024,35 +1004,22 @@ pub async fn update_rules(
         .collect::<Result<Vec<_>, _>>()
         .map_err(GatewayError::BadRequest)?;
 
-    // Fetch current flag to carry over metadata.
-    let get_req = tonic::Request::new(GetFlagRequest {
-        environment_id: String::new(),
-        project_id: project_id.clone(),
-        flag_key: flag_key.clone(),
-    });
-    let mut client = state.flag_client.lock().await;
-    let current = client
-        .get_flag(get_req)
-        .await
-        .map_err(GatewayError::from)?
-        .into_inner();
-
+    // B2: Use ReplaceRules mutation kind so the service fetches current flag
+    // metadata and preserves it. No pre-fetch needed in the gateway.
     let flag = FeatureFlag {
         key: flag_key,
-        enabled: current.enabled,
-        name: current.name,
-        description: current.description,
-        value_type: current.value_type,
         rules: proto_rules,
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
         environment_id: String::new(),
         project_id,
-        kind: MutationKind::Update as i32,
+        kind: MutationKind::ReplaceRules as i32,
         flag: Some(flag),
         version: body.version,
+        enabled_override: None,
     });
+    let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     let flag_json = inner
