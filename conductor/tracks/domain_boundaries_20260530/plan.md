@@ -38,7 +38,7 @@ change is explicitly approved.
   <!-- depends: task1, task2, task3, task4, task5 -->
 - [ ] Task: Conductor - User Manual Verification 'Audit & Findings' (Protocol in workflow.md)
 
-## Phase 2: Lean-Gateway Refactor
+## Phase 2: Lean-Gateway Refactor [checkpoint: 9591ffc]
 <!-- execution: sequential -->
 <!-- depends: phase1 -->
 
