@@ -54,9 +54,3 @@ pub fn make_stub_state() -> Arc<GatewayState> {
         stats,
     ))
 }
-
-/// Same as `make_stub_state` — the `_with_flag` variant exists for tests that
-/// import it but currently rely on the lazy-connection behavior anyway.
-pub fn make_stub_state_with_flag() -> Arc<GatewayState> {
-    make_stub_state()
-}

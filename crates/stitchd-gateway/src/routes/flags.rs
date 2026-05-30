@@ -1541,7 +1541,7 @@ mod tests {
     };
     use tower::ServiceExt as _;
 
-    use crate::tests::helpers::{make_stub_state, make_stub_state_with_flag};
+    use crate::tests::helpers::make_stub_state;
 
     #[tokio::test]
     async fn list_flags_returns_200() {
@@ -1759,12 +1759,6 @@ mod tests {
             "status: {}",
             resp.status()
         );
-    }
-
-    // Keeps the compiler happy — make_stub_state_with_flag exported for other tests
-    #[allow(dead_code)]
-    fn _use_with_flag() {
-        let _ = make_stub_state_with_flag;
     }
 
     #[tokio::test]
