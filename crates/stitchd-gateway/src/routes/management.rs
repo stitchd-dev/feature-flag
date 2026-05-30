@@ -221,7 +221,7 @@ pub async fn create_user(
         email: body.email,
         display_name: body.display_name,
         password: body.password,
-        org_role: body.org_role.unwrap_or_else(|| "org_member".into()),
+        org_role: body.org_role.unwrap_or_default(),
     });
     let mut client = state.management_client.lock().await;
     let resp = client.create_user(req).await.map_err(GatewayError::from)?;
