@@ -284,7 +284,7 @@ export function EventDetail() {
     setRefMetricsLoading(true)
     api
       .get<{ items: ReferencingMetric[] }>(
-        `/v1/metrics?env_id=${envId}&event_key=${encodeURIComponent(eventKey)}&limit=200`,
+        `/v1/metrics?env_id=${envId}&event_key=${encodeURIComponent(eventKey)}&per_page=200`,
         { signal: ac.signal },
       )
       .then(({ data }) => {

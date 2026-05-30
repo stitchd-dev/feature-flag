@@ -65,7 +65,7 @@ export function ExperimentsList() {
     if (!envId) return
     const ctrl = new AbortController()
     api
-      .get<MetricsListResponse>(`/v1/metrics?env_id=${encodeURIComponent(envId)}&limit=500`, {
+      .get<MetricsListResponse>(`/v1/metrics?env_id=${encodeURIComponent(envId)}&per_page=200`, {
         signal: ctrl.signal,
       })
       .then(({ data }) => setMetricLookup(buildMetricNameLookup(data.items ?? [])))
