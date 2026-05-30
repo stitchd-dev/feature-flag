@@ -52,6 +52,28 @@ pub enum RepositoryError {
     Unexpected(#[from] anyhow::Error),
 }
 
+#[cfg(feature = "tonic")]
+impl From<RepositoryError> for tonic::Status {
+    fn from(e: RepositoryError) -> Self {
+        match e {
+            RepositoryError::NotFound { id } => Self::not_found(format!("not found: {id}")),
+            RepositoryError::VersionConflict { expected, actual } => Self::aborted(format!(
+                "version conflict: expected {expected}, actual {actual}"
+            )),
+            RepositoryError::UniqueViolation { field } => {
+                Self::already_exists(format!("unique violation on: {field}"))
+            }
+            RepositoryError::ForeignKeyViolation { constraint } => {
+                Self::invalid_argument(format!("referenced entity does not exist: {constraint}"))
+            }
+            RepositoryError::InvalidState { reason } => Self::failed_precondition(reason),
+            RepositoryError::Database(_) | RepositoryError::Unexpected(_) => {
+                Self::internal("internal error")
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

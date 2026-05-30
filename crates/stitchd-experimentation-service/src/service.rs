@@ -471,7 +471,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
         self.experiment_repo
             .create(&experiment)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         metrics::counter!("experimentation_service.create_experiment.ok").increment(1);
 
@@ -495,7 +495,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .find_by_id(exp_id)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         metrics::counter!("experimentation_service.get_experiment.ok").increment(1);
         Ok(Response::new(core_to_proto(&experiment)))
@@ -524,7 +524,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .list_by_environment_paginated(env_id, offset, per_page)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         let protos: Vec<_> = experiments.iter().map(core_to_proto).collect();
         metrics::counter!("experimentation_service.list_experiments.ok").increment(1);
@@ -559,7 +559,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .find_by_id(exp_id)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         if !proto_exp.name.is_empty() {
             experiment.name = proto_exp.name.clone();
@@ -626,7 +626,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .update(&experiment)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         metrics::counter!("experimentation_service.update_experiment.ok").increment(1);
 
@@ -650,12 +650,12 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .find_by_id(exp_id)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         self.experiment_repo
             .soft_delete(exp_id)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         metrics::counter!("experimentation_service.delete_experiment.ok").increment(1);
         Ok(Response::new(core_to_proto(&experiment)))
@@ -677,7 +677,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .apply_transition(exp_id, target_status, None)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         // Note: the flag-service holds an in-process `FlagLockCache` keyed on
         // `flag_id` that derives lockedness from PG. Because flag-service and
@@ -720,7 +720,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .list_iterations(exp_id)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         let total = iterations.len() as u64;
         let window: Vec<_> = if req.limit == 0 {
@@ -1022,7 +1022,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .list_all_running()
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         // For each running experiment, fetch the active (un-ended) iteration.
         let mut items: Vec<Result<RunningExperiment, Status>> =
@@ -1032,7 +1032,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
                 .experiment_repo
                 .list_iterations(exp.id)
                 .await
-                .map_err(repo_err_to_status)?;
+                .map_err(Status::from)?;
 
             // Active iteration = most recent one with no ended_at.
             let active = iterations.into_iter().rfind(|i| i.ended_at.is_none());
@@ -1071,7 +1071,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .experiment_repo
             .find_iteration_by_id(iter_id)
             .await
-            .map_err(repo_err_to_status)?;
+            .map_err(Status::from)?;
 
         metrics::counter!("experimentation_service.get_experiment_iteration.ok").increment(1);
         Ok(Response::new(iteration_to_proto(&iter)))
@@ -1143,30 +1143,6 @@ impl ExperimentationService for ExperimentationServiceImpl {
         Ok(Response::new(
             stitchd_proto::experiments::v1::ListExposuresResponse { exposures, total },
         ))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Error mapping
-// ---------------------------------------------------------------------------
-
-fn repo_err_to_status(e: stitchd_db::RepositoryError) -> Status {
-    match e {
-        stitchd_db::RepositoryError::NotFound { id } => {
-            Status::not_found(format!("not found: {id}"))
-        }
-        stitchd_db::RepositoryError::VersionConflict { expected, actual } => Status::aborted(
-            format!("version conflict: expected {expected}, actual {actual}"),
-        ),
-        stitchd_db::RepositoryError::UniqueViolation { field } => {
-            Status::already_exists(format!("unique violation on: {field}"))
-        }
-        stitchd_db::RepositoryError::ForeignKeyViolation { constraint } => {
-            Status::invalid_argument(format!("referenced entity does not exist: {constraint}"))
-        }
-        stitchd_db::RepositoryError::InvalidState { reason } => Status::failed_precondition(reason),
-        stitchd_db::RepositoryError::Database(e) => Status::internal(format!("database: {e}")),
-        stitchd_db::RepositoryError::Unexpected(e) => Status::internal(format!("unexpected: {e}")),
     }
 }
 
@@ -1691,19 +1667,19 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // repo_err_to_status tests
+    // RepositoryError → Status conversion tests (via From impl in stitchd-db)
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_repo_err_not_found_to_not_found_status() {
-        let s = repo_err_to_status(RepositoryError::NotFound { id: "abc".into() });
+        let s = Status::from(RepositoryError::NotFound { id: "abc".into() });
         assert_eq!(s.code(), tonic::Code::NotFound);
         assert!(s.message().contains("abc"));
     }
 
     #[test]
     fn test_repo_err_version_conflict_to_aborted() {
-        let s = repo_err_to_status(RepositoryError::VersionConflict {
+        let s = Status::from(RepositoryError::VersionConflict {
             expected: 1,
             actual: 2,
         });
@@ -1712,7 +1688,7 @@ mod tests {
 
     #[test]
     fn test_repo_err_unique_violation_to_already_exists() {
-        let s = repo_err_to_status(RepositoryError::UniqueViolation {
+        let s = Status::from(RepositoryError::UniqueViolation {
             field: "flag_rule_id".into(),
         });
         assert_eq!(s.code(), tonic::Code::AlreadyExists);
@@ -1720,7 +1696,7 @@ mod tests {
 
     #[test]
     fn test_repo_err_invalid_state_to_failed_precondition() {
-        let s = repo_err_to_status(RepositoryError::InvalidState {
+        let s = Status::from(RepositoryError::InvalidState {
             reason: "cannot mutate running experiment".into(),
         });
         assert_eq!(s.code(), tonic::Code::FailedPrecondition);
@@ -1728,13 +1704,13 @@ mod tests {
 
     #[test]
     fn test_repo_err_database_to_internal() {
-        let s = repo_err_to_status(RepositoryError::Database(sqlx::Error::RowNotFound));
+        let s = Status::from(RepositoryError::Database(sqlx::Error::RowNotFound));
         assert_eq!(s.code(), tonic::Code::Internal);
     }
 
     #[test]
     fn test_repo_err_unexpected_to_internal() {
-        let s = repo_err_to_status(RepositoryError::Unexpected(anyhow::anyhow!(
+        let s = Status::from(RepositoryError::Unexpected(anyhow::anyhow!(
             "unexpected error"
         )));
         assert_eq!(s.code(), tonic::Code::Internal);
