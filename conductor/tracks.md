@@ -78,3 +78,8 @@ This file tracks all major tracks for the project.
 -->
 
 <!-- ARCHIVED: integration_bugfix_20260524 (2026-05-24) — Integration Bug Hunt & Fix: 34 bugs found and fixed across gateway, db, experimentation-service, admin UI, analytics, and SDK. Full run of all functional use cases against a live stack. See conductor/archive/integration_bugfix_20260524/ -->
+
+---
+
+## [ ] Track: Domain-Boundary Refactor — Lean Gateway, Dedup, Dead-Code Audit
+*Link: [./conductor/tracks/domain_boundaries_20260530/](./conductor/tracks/domain_boundaries_20260530/)*

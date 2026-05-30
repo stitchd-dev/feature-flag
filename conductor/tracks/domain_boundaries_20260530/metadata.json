@@ -1,0 +1,13 @@
+{
+  "track_id": "domain_boundaries_20260530",
+  "type": "refactor",
+  "status": "new",
+  "priority": "medium",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-05-30T10:32:32Z",
+  "updated_at": "2026-05-30T10:32:32Z",
+  "description": "Analyze the codebase and refactor to proper domain boundaries with a lean gateway acting purely as a translation/orchestration layer over gRPC; consolidate duplicate code, fix cross-codebase inconsistencies, and remove dead code judged against active product need. Audit-first: Phase 1 produces a dispositioned findings report; later phases execute approved, behavior-preserving changes in small green-gated batches (contract evolution allowed with snapshot+docs in the same batch).",
+  "git_branch": "track/domain_boundaries_20260530",
+  "worktree_path": ".worktrees/domain_boundaries_20260530"
+}
