@@ -303,6 +303,44 @@ The following items affect the REST or gRPC contract surface and require explici
 
 ---
 
+---
+
+## Phase 2 Re-Audit — 2026-05-30
+
+### Items Successfully Moved to Services
+
+The following Phase 1 domain-logic leaks have been resolved in Phase 2:
+
+| ID | Was in gateway | Now in service | Evidence |
+|----|---------------|----------------|---------|
+| GL-04 | `update_flag` read-modify-write for `enabled` preservation | Flag-service via `enabled_override: Option<bool>` in `MutateFlagRequest` | `flags.rs:609` — gateway passes `enabled_override` directly; no pre-fetch |
+| GL-05 | `update_variants`/`update_rules` read-modify-write to carry flag metadata | Flag-service via `ReplaceVariants`/`ReplaceRules` mutation kinds | `flags.rs:803,1018` — uses `MutationKind::ReplaceVariants/ReplaceRules` |
+| GL-08 | `validate_experiment_binding` multi-service domain validation | Experimentation-service validates binding fields internally | `experiments.rs:394,479` — comment: "Pure translation: binding validation has moved to the experimentation-service (GL-08)" |
+| GL-09 | `get_results` back-compat shim for context-type bundle synthesis | Experimentation-service always populates `results_by_context_type` | `experiments.rs:665` — comment: "experimentation-service always populates results_by_context_type … so the gateway just passes through" |
+| GL-10 | `forward_to_analytics` `_test` property stamping | Analytics-service via `mark_test` field on `TrackEventsRequest` | `events.rs:590-593` — `mark_test: if mark_test { Some(true) } else { None }` |
+| GL-11 | `validate_segment_condition_expr` + `SEGMENT_FORBIDDEN_OPS` operator allow-list | Segmentation-service validates condition_expr bytes | `segments.rs:619-628` — `encode_condition_expr` comment: "Validation of forbidden operators now happens server-side"; validators are `#[cfg(test)]` only |
+| GL-13 | `create_event` name defaulting to event_key | Analytics-service defaults name to event_key | `event_admin.rs:219-221` — comment: "GL-13: name defaulting moved into analytics-service" |
+| GL-14 | `parse_aggregator`/`parse_goal_direction` enum string validation | Gateway is now a pass-through for `aggregator` and `goal_direction` | `metrics.rs:341-348` — string pass-through; domain-typed helpers are `#[cfg(test)]` only |
+
+### Items Deferred (with rationale)
+
+| ID | Location | Rationale |
+|----|----------|-----------|
+| GL-01 (`validate_hash_inputs`) | `flags.rs:157-181` (also called at `:938`, `:1179`) | Defense-in-depth: service-side validation already exists in `flag-service/src/mapping.rs`. Gateway also validates to return better error messages to the admin UI. Acceptable duplicate per original GL-01 disposition ("defense-in-depth"). Low priority to remove. |
+| GL-06 (`invalid_distribution:` prefix parsing) | `flags.rs:1207-1222` | Admin UI compat: the `invalid_distribution:` prefix is a stable signal from the flag-service; rewriting to proto `ErrorDetails` requires a flag-service proto change. Deferred as a future proto migration item. |
+| GL-07 (`evaluate_preview` bundle reconstruction) | `flags.rs:1297-1485` | HIGH risk: involves opaque `results_json` re-parsing and cross-context bundle reconstruction. Requires proto changes to both `EvaluatePreviewRequest` and `EvaluatePreviewResponse`. Left for a dedicated track. |
+
+### Assessment
+
+The gateway is significantly leaner post-Phase 2. Comparing the original audit (14 DOMAIN-LOGIC-LEAK items):
+- **8 of 14 resolved**: GL-04, GL-05, GL-08, GL-09, GL-10, GL-11, GL-13, GL-14 all moved to their owning services.
+- **3 intentionally remaining**: GL-01 (defense-in-depth, deferred), GL-06 (admin UI compat, deferred), GL-07 (HIGH risk, deferred).
+- **3 not re-audited** (GL-02, GL-03, GL-12 — originally `validate_variant_values`, `update_variants` boolean invariant, `create_user` default role): GL-02 and GL-03 are moot because `update_variants` now uses `ReplaceVariants` mutation kind and flag-service handles structural validation; GL-12 (`create_user` org_role defaulting) remains a minor item.
+
+The remaining items (GL-01, GL-06, GL-07) are all explicitly documented with rationale. No unreviewed domain-logic leaks were found in this re-audit beyond the known-deferred set.
+
+---
+
 ## Conventions Seed for `patterns.md`
 
 ```markdown

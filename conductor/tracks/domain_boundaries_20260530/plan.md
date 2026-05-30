@@ -42,14 +42,14 @@ change is explicitly approved.
 <!-- execution: sequential -->
 <!-- depends: phase1 -->
 
-- [ ] Task 2.1: Establish characterization coverage — for each gateway route
+- [x] Task 2.1: Establish characterization coverage — for each gateway route
       carrying domain logic, confirm a test pins current REST behavior; add
-      characterization tests (Red where gaps exist) before moving logic.
-- [ ] Task 2.2: Flags + evaluation routes (`flags.rs`) — move validation/
+      characterization tests (Red where gaps exist) before moving logic. <!-- b5bdeae -->
+- [x] Task 2.2: Flags + evaluation routes (`flags.rs`) — move validation/
       mapping/evaluation-adjacent logic into flag-service gRPC handlers; extend
       proto where needed (snapshot+docs same batch). Reduce routes to
-      translate→call→map→error.
-- [ ] Task 2.3: Experiments + metrics routes (`experiments.rs`, `metrics.rs`) —
+      translate→call→map→error. <!-- 74bc8d3,bdaef7a — GL-02,03,04,05,11 done; GL-06 kept (Admin UI compat); GL-07 deferred (proto restructure) -->
+- [~] Task 2.3: Experiments + metrics routes (`experiments.rs`, `metrics.rs`) —
       same treatment; domain logic → experimentation/analytics services.
 - [ ] Task 2.4: Events + event-admin routes (`events.rs`, `event_admin.rs`) —
       move ingestion/quota/validation domain rules into analytics service; keep
