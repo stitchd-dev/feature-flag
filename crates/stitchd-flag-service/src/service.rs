@@ -563,6 +563,14 @@ impl FlagService for FlagServiceImpl {
                     version: 1,
                 };
 
+                // A1: Validate variant values match the declared type server-side.
+                {
+                    let vt =
+                        stitchd_proto::flags::v1::FlagValueType::try_from(flag_proto.value_type)
+                            .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Unspecified);
+                    validate_proto_variants(&flag_proto.variants, vt)?;
+                }
+
                 self.flag_repo
                     .create(&record)
                     .await
@@ -782,6 +790,32 @@ impl FlagService for FlagServiceImpl {
                     .await
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
+
+                // A1+A2: Validate variant values and boolean invariant server-side.
+                if !flag_proto.variants.is_empty() {
+                    // Resolve the effective value_type: prefer the inbound
+                    // value_type if non-zero, otherwise fall back to the stored
+                    // record's type (which was just updated above if provided).
+                    let effective_vt = if flag_proto.value_type != 0 {
+                        stitchd_proto::flags::v1::FlagValueType::try_from(flag_proto.value_type)
+                            .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Unspecified)
+                    } else {
+                        // Map the stored domain type back to proto enum for comparison.
+                        use stitchd_core::flag::FlagValueType as D;
+                        use stitchd_proto::flags::v1::FlagValueType as P;
+                        match record.value_type {
+                            D::Int => P::Int,
+                            D::Double => P::Double,
+                            D::Str => P::String,
+                            D::Json => P::Json,
+                            D::Bool => P::Bool,
+                        }
+                    };
+                    validate_proto_variants(&flag_proto.variants, effective_vt)?;
+                    if effective_vt == stitchd_proto::flags::v1::FlagValueType::Bool {
+                        validate_bool_flag_variants(&flag_proto.variants)?;
+                    }
+                }
 
                 // Replace variants if the request includes a non-empty list.
                 if !flag_proto.variants.is_empty() {
@@ -1277,6 +1311,111 @@ impl FlagService for FlagServiceImpl {
             version: new_version,
         }))
     }
+}
+
+/// Validate that every proto [`Variant`]'s value is compatible with
+/// `value_type` and that all variant keys are non-empty and unique.
+///
+/// Only runs when both conditions hold:
+/// - `variants` is non-empty
+/// - `value_type` is not `Unspecified` (i.e. the caller actually declared a type)
+///
+/// Returns `Err(Status::invalid_argument(...))` on the first violation.
+#[allow(clippy::result_large_err)]
+fn validate_proto_variants(
+    variants: &[stitchd_proto::flags::v1::Variant],
+    value_type: stitchd_proto::flags::v1::FlagValueType,
+) -> Result<(), Status> {
+    use stitchd_proto::flags::v1::FlagValueType;
+    use stitchd_proto::flags::v1::variant_value::Value;
+
+    if variants.is_empty() || value_type == FlagValueType::Unspecified {
+        return Ok(());
+    }
+
+    // Validate each variant's value against the declared type.
+    for v in variants {
+        let inner_value = v.value.as_ref().and_then(|vv| vv.value.as_ref());
+        let ok = match value_type {
+            FlagValueType::Bool => matches!(inner_value, Some(Value::BoolValue(_))),
+            FlagValueType::Int => matches!(inner_value, Some(Value::IntValue(_))),
+            FlagValueType::Double => matches!(
+                inner_value,
+                Some(Value::IntValue(_)) | Some(Value::DoubleValue(_))
+            ),
+            FlagValueType::String => matches!(inner_value, Some(Value::StringValue(_))),
+            FlagValueType::Json | FlagValueType::Unspecified => true,
+        };
+        if !ok {
+            let expected = match value_type {
+                FlagValueType::Bool => "boolean (true or false)",
+                FlagValueType::Int => "integer number",
+                FlagValueType::Double => "decimal number",
+                FlagValueType::String => "string",
+                _ => "JSON value",
+            };
+            return Err(Status::invalid_argument(format!(
+                "variant '{}': value is not a valid {} ({})",
+                v.key,
+                expected,
+                value_type.as_str_name(),
+            )));
+        }
+    }
+
+    // Validate keys are non-empty and unique.
+    let mut seen = std::collections::HashSet::new();
+    for v in variants {
+        let key = v.key.trim();
+        if key.is_empty() {
+            return Err(Status::invalid_argument("variant key must not be empty"));
+        }
+        if !seen.insert(key) {
+            return Err(Status::invalid_argument(format!(
+                "duplicate variant key: \"{key}\""
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate the boolean-flag structural invariant: when variants are being
+/// updated for a boolean flag, there must be exactly 2 variants with bool
+/// values (`true` and `false`).
+///
+/// Only called when `variants` is non-empty and `value_type` is `Bool`.
+///
+/// Returns `Err(Status::invalid_argument(...))` on violation.
+#[allow(clippy::result_large_err)]
+fn validate_bool_flag_variants(
+    variants: &[stitchd_proto::flags::v1::Variant],
+) -> Result<(), Status> {
+    use stitchd_proto::flags::v1::variant_value::Value;
+
+    if variants.len() != 2 {
+        return Err(Status::invalid_argument(
+            "boolean flags must have exactly 2 variants",
+        ));
+    }
+    let has_true = variants.iter().any(|v| {
+        v.value
+            .as_ref()
+            .and_then(|vv| vv.value.as_ref())
+            .is_some_and(|inner| matches!(inner, Value::BoolValue(true)))
+    });
+    let has_false = variants.iter().any(|v| {
+        v.value
+            .as_ref()
+            .and_then(|vv| vv.value.as_ref())
+            .is_some_and(|inner| matches!(inner, Value::BoolValue(false)))
+    });
+    if !has_true || !has_false {
+        return Err(Status::invalid_argument(
+            "boolean flags must have exactly 2 variants",
+        ));
+    }
+    Ok(())
 }
 
 /// Convert a proto `FlagValueType` to the domain type.

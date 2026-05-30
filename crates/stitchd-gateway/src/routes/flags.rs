@@ -362,56 +362,6 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
     }
 }
 
-/// Validate that every variant's value matches the declared flag type.
-/// Returns `None` when all values are valid, or `Some(error_message)` on the
-/// first bad value.
-fn validate_variant_values(
-    variants: &[VariantBody],
-    value_type: stitchd_proto::flags::v1::FlagValueType,
-) -> Option<String> {
-    use stitchd_proto::flags::v1::FlagValueType;
-    for v in variants {
-        let ok = match value_type {
-            FlagValueType::Bool => matches!(v.value, serde_json::Value::Bool(_)),
-            FlagValueType::Int => {
-                // Must be a JSON number that round-trips as an i64.
-                v.value.as_i64().is_some()
-            }
-            FlagValueType::Double => {
-                // Any JSON number is acceptable.
-                v.value.is_number()
-            }
-            FlagValueType::String => v.value.is_string(),
-            // JSON flags accept any valid JSON value (object, array, primitive).
-            FlagValueType::Json | FlagValueType::Unspecified => true,
-        };
-        if !ok {
-            let expected = match value_type {
-                FlagValueType::Bool => "boolean (true or false)",
-                FlagValueType::Int => "integer number (e.g. 42)",
-                FlagValueType::Double => "decimal number (e.g. 3.14)",
-                FlagValueType::String => "string (e.g. \"hello\")",
-                _ => "JSON value",
-            };
-            return Some(format!(
-                "Variant \"{}\": expected {}, got `{}`",
-                v.key, expected, v.value
-            ));
-        }
-    }
-    // Ensure all variant keys are non-empty and unique.
-    let mut seen = std::collections::HashSet::new();
-    for v in variants {
-        if v.key.trim().is_empty() {
-            return Some("Variant key must not be empty".to_string());
-        }
-        if !seen.insert(v.key.trim()) {
-            return Some(format!("Duplicate variant key: \"{}\"", v.key.trim()));
-        }
-    }
-    None
-}
-
 fn parse_value_type(s: &str) -> stitchd_proto::flags::v1::FlagValueType {
     use stitchd_proto::flags::v1::FlagValueType;
     match s {
@@ -568,9 +518,6 @@ pub async fn create_flag(
         .map(parse_value_type)
         .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Bool);
     let variant_list = body.variants.unwrap_or_default();
-    if let Some(err) = validate_variant_values(&variant_list, proto_value_type) {
-        return Err(GatewayError::BadRequest(err));
-    }
     let variants = variant_list
         .into_iter()
         .map(variant_body_to_proto)
@@ -856,35 +803,6 @@ pub async fn update_variants(
         .await
         .map_err(GatewayError::from)?
         .into_inner();
-
-    // Boolean flags: only variant keys (names) may change; values must stay true/false.
-    if current.value_type == (stitchd_proto::flags::v1::FlagValueType::Bool as i32) {
-        if body.variants.len() != 2 {
-            return Err(GatewayError::BadRequest(
-                "Boolean flags must have exactly 2 variants".to_string(),
-            ));
-        }
-        let has_true = body
-            .variants
-            .iter()
-            .any(|v| matches!(v.value, serde_json::Value::Bool(true)));
-        let has_false = body
-            .variants
-            .iter()
-            .any(|v| matches!(v.value, serde_json::Value::Bool(false)));
-        if !has_true || !has_false {
-            return Err(GatewayError::BadRequest(
-                "Boolean flag variants must have values true and false".to_string(),
-            ));
-        }
-    }
-
-    // Validate values match the flag's declared type.
-    let declared_type = stitchd_proto::flags::v1::FlagValueType::try_from(current.value_type)
-        .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Unspecified);
-    if let Some(err) = validate_variant_values(&body.variants, declared_type) {
-        return Err(GatewayError::BadRequest(err));
-    }
 
     // Build an Update mutation carrying the new variant list.
     let proto_variants = body

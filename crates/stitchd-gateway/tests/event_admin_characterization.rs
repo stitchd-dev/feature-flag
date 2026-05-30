@@ -20,18 +20,18 @@ use tonic::{Response, Status};
 use tower::ServiceExt as _;
 
 use stitchd_proto::analytics::v1::{
-    CreateEventDefinitionRequest, DeleteEventDefinitionRequest, DeleteEventDefinitionResponse,
-    EventDefinitionMsg, ExperimentResult, GetContextIntelligenceRequest,
-    GetContextIntelligenceResponse, GetEvalStatsRequest, GetEvalStatsResponse,
-    GetEventDefinitionRequest, GetEventFiringsRequest, GetEventFiringsResponse,
-    GetEventStatsRequest, GetEventStatsResponse, GetExperimentResultRequest, GetMetricRequest,
-    IngestEventRequest, IngestEventResponse, ListContextParamsRequest, ListContextParamsResponse,
-    ListContextTypesRequest, ListContextTypesResponse, ListEventDefinitionsRequest,
-    ListEventDefinitionsResponse, ListExperimentResultsRequest, ListMetricsRequest,
-    ListMetricsResponse, MetricDefinition, PreviewMetricRequest, PreviewMetricResponse,
-    RegisterContextRequest, RegisterContextResponse, TrackEventsRequest, TrackEventsResponse,
-    UpdateEventDefinitionRequest, UpdateMetricRequest, WriteExperimentResultsRequest,
-    WriteExperimentResultsResponse, CreateMetricRequest, DeleteMetricRequest, DeleteMetricResponse,
+    CreateEventDefinitionRequest, CreateMetricRequest, DeleteEventDefinitionRequest,
+    DeleteEventDefinitionResponse, DeleteMetricRequest, DeleteMetricResponse, EventDefinitionMsg,
+    ExperimentResult, GetContextIntelligenceRequest, GetContextIntelligenceResponse,
+    GetEvalStatsRequest, GetEvalStatsResponse, GetEventDefinitionRequest, GetEventFiringsRequest,
+    GetEventFiringsResponse, GetEventStatsRequest, GetEventStatsResponse,
+    GetExperimentResultRequest, GetMetricRequest, IngestEventRequest, IngestEventResponse,
+    ListContextParamsRequest, ListContextParamsResponse, ListContextTypesRequest,
+    ListContextTypesResponse, ListEventDefinitionsRequest, ListEventDefinitionsResponse,
+    ListExperimentResultsRequest, ListMetricsRequest, ListMetricsResponse, MetricDefinition,
+    PreviewMetricRequest, PreviewMetricResponse, RegisterContextRequest, RegisterContextResponse,
+    TrackEventsRequest, TrackEventsResponse, UpdateEventDefinitionRequest, UpdateMetricRequest,
+    WriteExperimentResultsRequest, WriteExperimentResultsResponse,
     analytics_service_client::AnalyticsServiceClient,
     analytics_service_server::{AnalyticsService, AnalyticsServiceServer},
 };
@@ -67,10 +67,7 @@ impl AnalyticsService for RecordingAnalyticsService {
         req: tonic::Request<CreateEventDefinitionRequest>,
     ) -> Result<Response<EventDefinitionMsg>, Status> {
         let inner = req.into_inner();
-        self.recorded_names
-            .lock()
-            .unwrap()
-            .push(inner.name.clone());
+        self.recorded_names.lock().unwrap().push(inner.name.clone());
         Ok(Response::new(EventDefinitionMsg {
             id: "evt-uuid".to_string(),
             environment_id: inner.environment_id,
@@ -347,7 +344,11 @@ async fn create_event_without_name_defaults_name_to_event_key() {
     );
 
     let names = recorded_names.lock().unwrap();
-    assert_eq!(names.len(), 1, "expected exactly one CreateEventDefinition call");
+    assert_eq!(
+        names.len(),
+        1,
+        "expected exactly one CreateEventDefinition call"
+    );
     assert_eq!(
         names[0], "button_clicked",
         "gateway must default name to event_key when name is absent; got {:?}",
@@ -390,7 +391,11 @@ async fn create_event_with_name_forwards_provided_name() {
     );
 
     let names = recorded_names.lock().unwrap();
-    assert_eq!(names.len(), 1, "expected exactly one CreateEventDefinition call");
+    assert_eq!(
+        names.len(),
+        1,
+        "expected exactly one CreateEventDefinition call"
+    );
     assert_eq!(
         names[0], "Button Clicked",
         "gateway must forward the provided name unchanged; got {:?}",
