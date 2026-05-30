@@ -46,6 +46,27 @@ impl FlagClient {
         let mut client = self.inner.lock().await;
         client.get_flag(request).await.map(|_| ())
     }
+
+    /// Fetch the full [`FeatureFlag`] for `flag_key` in `environment_id`.
+    ///
+    /// Used by the binding validator to inspect flag rules (e.g. verifying that
+    /// at least one rule produces a percentage allocation when the experiment
+    /// binds to a specific rule via `flag_rule_id`).
+    ///
+    /// Returns `Err(tonic::Status::not_found(...))` if the flag does not exist.
+    pub async fn get_flag(
+        &self,
+        environment_id: &str,
+        flag_key: &str,
+    ) -> Result<stitchd_proto::flags::v1::FeatureFlag, tonic::Status> {
+        let request = tonic::Request::new(GetFlagRequest {
+            environment_id: environment_id.to_string(),
+            flag_key: flag_key.to_string(),
+            project_id: String::new(),
+        });
+        let mut client = self.inner.lock().await;
+        client.get_flag(request).await.map(|r| r.into_inner())
+    }
 }
 
 #[cfg(test)]

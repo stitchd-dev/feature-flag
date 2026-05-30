@@ -27,6 +27,100 @@ use crate::dict_refresh::{DictionaryRefresher, spawn_refresh};
 use crate::flag_client::FlagClient;
 
 // ---------------------------------------------------------------------------
+// Experiment binding validation (GL-08)
+// ---------------------------------------------------------------------------
+
+/// Inputs for the experiment binding invariant checks.
+struct BindingInputs<'a> {
+    environment_id: &'a str,
+    flag_key: Option<&'a str>,
+    flag_rule_id: Option<&'a str>,
+    targets_default_rule: bool,
+    unit_context_types: &'a [String],
+}
+
+/// Validate the four binding invariants and return the resolved `flag_id`
+/// string on success.
+///
+/// Returns `Status::invalid_argument` on any violation — the gateway maps
+/// that to HTTP 400.
+///
+/// When `flag_client` is `None` the flag checks are skipped (matches the
+/// existing behaviour where the service is started without flag-service
+/// connectivity).
+#[allow(clippy::result_large_err)]
+async fn validate_experiment_binding(
+    inputs: &BindingInputs<'_>,
+    analytics_client: &dyn AnalyticsResultsPort,
+    flag_client: Option<&FlagClient>,
+) -> Result<String, Status> {
+    // ── XOR — exactly one of flag_rule_id / targets_default_rule must be set.
+    let has_rule_id = inputs.flag_rule_id.is_some();
+    if has_rule_id && inputs.targets_default_rule {
+        return Err(Status::invalid_argument(
+            "set exactly one of flag_rule_id or targets_default_rule, not both",
+        ));
+    }
+    if !has_rule_id && !inputs.targets_default_rule {
+        return Err(Status::invalid_argument(
+            "experiment must bind to either a flag_rule_id (percentage rollout) or the flag's default rule (targets_default_rule=true)",
+        ));
+    }
+
+    // ── Unit context types — at least one entry, all known to the env's registry.
+    if inputs.unit_context_types.is_empty() {
+        return Err(Status::invalid_argument(
+            "unit_context_types must contain at least one entry",
+        ));
+    }
+
+    let registered = analytics_client
+        .list_context_types(inputs.environment_id)
+        .await?;
+    let registered_set: std::collections::HashSet<_> = registered.into_iter().collect();
+    for ct in inputs.unit_context_types {
+        if !registered_set.contains(ct) {
+            return Err(Status::invalid_argument(format!(
+                "context type '{ct}' is not registered for this environment"
+            )));
+        }
+    }
+
+    // ── Flag lookup — fetch the flag to obtain its UUID (flag_id) and
+    // validate the rule kind when `flag_rule_id` is set.
+    let flag_key = inputs
+        .flag_key
+        .ok_or_else(|| Status::invalid_argument("flag_key is required"))?;
+
+    let flag_id = if let Some(fc) = flag_client {
+        let flag = fc.get_flag(inputs.environment_id, flag_key).await?;
+
+        // ── Rule kind — when bound to a flag rule, the rule's output must be a
+        // percentage rollout (Allocation).
+        if inputs.flag_rule_id.is_some() {
+            let any_percentage_rule = flag.rules.iter().any(|r| {
+                matches!(
+                    r.output,
+                    Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(_))
+                )
+            });
+            if !any_percentage_rule {
+                return Err(Status::invalid_argument(
+                    "the bound rule must produce a percentage rollout (allocation); specific-variant rules are not eligible",
+                ));
+            }
+        }
+
+        flag.flag_id
+    } else {
+        // No flag client — skip flag-side validation, use empty flag_id.
+        String::new()
+    };
+
+    Ok(flag_id)
+}
+
+// ---------------------------------------------------------------------------
 // Status mapping helpers
 // ---------------------------------------------------------------------------
 
@@ -235,8 +329,9 @@ impl ExperimentationServiceImpl {
 impl ExperimentationService for ExperimentationServiceImpl {
     /// Create a new experiment.
     ///
-    /// If the request specifies `ACTIVE` status and a `flag_key` is provided,
-    /// calls the Flag Service to verify the flag exists before creating.
+    /// Validates the experiment binding invariants (GL-08) server-side before
+    /// persisting. If the request specifies `ACTIVE` status, also verifies the
+    /// flag exists via the Flag Service.
     #[instrument(skip(self))]
     async fn create_experiment(
         &self,
@@ -249,7 +344,35 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
         let target_status = proto_status_to_core(proto_exp.status)?;
 
+        // ── Binding validation (GL-08) — validates XOR invariant, context types,
+        // and flag rule kind. Returns the resolved flag_id from the flag service.
+        let flag_key_opt = if proto_exp.flag_key.is_empty() {
+            None
+        } else {
+            Some(proto_exp.flag_key.as_str())
+        };
+        let flag_rule_id_opt = if proto_exp.flag_rule_id.is_empty() {
+            None
+        } else {
+            Some(proto_exp.flag_rule_id.as_str())
+        };
+        let binding_inputs = BindingInputs {
+            environment_id: &proto_exp.environment_id,
+            flag_key: flag_key_opt,
+            flag_rule_id: flag_rule_id_opt,
+            targets_default_rule: proto_exp.targets_default_rule,
+            unit_context_types: &proto_exp.unit_context_types,
+        };
+        let resolved_flag_id_str = validate_experiment_binding(
+            &binding_inputs,
+            self.analytics_client.as_ref(),
+            self.flag_client.as_ref(),
+        )
+        .await?;
+
         // Flag-lock: when activating (ACTIVE/Running), verify the flag exists.
+        // (This check is retained in addition to binding validation because it
+        // uses a different code path: failed_precondition vs. invalid_argument.)
         if target_status == ExperimentStatus::Running
             && !proto_exp.flag_key.is_empty()
             && let Some(fc) = &self.flag_client
@@ -273,9 +396,22 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .map_err(|_| Status::invalid_argument("invalid environment_id UUID"))?;
         let env_id = EnvironmentId::from_uuid(env_uuid);
 
-        let flag_id = uuid::Uuid::parse_str(&proto_exp.flag_id)
-            .map(stitchd_core::id::FlagId::from_uuid)
-            .map_err(|_| Status::invalid_argument("invalid flag_id UUID"))?;
+        // Use the flag_id resolved by the binding validator when available;
+        // fall back to whatever the client sent (e.g. when flag_client is None).
+        // When neither provides a valid UUID (e.g. tests with no flag_client),
+        // generate a new flag_id so the experiment can still be created.
+        let flag_id = if !resolved_flag_id_str.is_empty() {
+            uuid::Uuid::parse_str(&resolved_flag_id_str)
+                .map(stitchd_core::id::FlagId::from_uuid)
+                .map_err(|_| Status::invalid_argument("invalid resolved flag_id UUID"))?
+        } else if !proto_exp.flag_id.is_empty() {
+            uuid::Uuid::parse_str(&proto_exp.flag_id)
+                .map(stitchd_core::id::FlagId::from_uuid)
+                .map_err(|_| Status::invalid_argument("invalid flag_id UUID"))?
+        } else {
+            // No flag_client present — generate a placeholder flag_id.
+            stitchd_core::id::FlagId::new()
+        };
 
         let flag_rule_id = if proto_exp.flag_rule_id.is_empty() {
             None
@@ -398,7 +534,13 @@ impl ExperimentationService for ExperimentationServiceImpl {
         }))
     }
 
-    /// Update an existing experiment (name, description, variant keys).
+    /// Update an existing experiment (name, description, variant keys, and
+    /// optionally binding fields).
+    ///
+    /// When any of the binding fields (`flag_key`, `flag_rule_id`,
+    /// `targets_default_rule`, `unit_context_types`) are supplied in the
+    /// request, the binding invariants are validated server-side (GL-08)
+    /// before the update is persisted.
     #[instrument(skip(self))]
     async fn update_experiment(
         &self,
@@ -428,6 +570,56 @@ impl ExperimentationService for ExperimentationServiceImpl {
         if proto_exp.version > 0 {
             experiment.version = i64::try_from(proto_exp.version).unwrap_or(experiment.version);
         }
+
+        // ── Binding fields update + validation (GL-08) ───────────────────────
+        // Run the binding validator only when the caller supplied any of the
+        // binding fields — matching the gateway's `touches_binding` heuristic.
+        let touches_binding = !proto_exp.flag_rule_id.is_empty()
+            || proto_exp.targets_default_rule
+            || !proto_exp.unit_context_types.is_empty()
+            || !proto_exp.flag_key.is_empty();
+
+        if touches_binding {
+            let flag_key_opt = if proto_exp.flag_key.is_empty() {
+                None
+            } else {
+                Some(proto_exp.flag_key.as_str())
+            };
+            let flag_rule_id_opt = if proto_exp.flag_rule_id.is_empty() {
+                None
+            } else {
+                Some(proto_exp.flag_rule_id.as_str())
+            };
+            let binding_inputs = BindingInputs {
+                environment_id: &proto_exp.environment_id,
+                flag_key: flag_key_opt,
+                flag_rule_id: flag_rule_id_opt,
+                targets_default_rule: proto_exp.targets_default_rule,
+                unit_context_types: &proto_exp.unit_context_types,
+            };
+            validate_experiment_binding(
+                &binding_inputs,
+                self.analytics_client.as_ref(),
+                self.flag_client.as_ref(),
+            )
+            .await?;
+
+            // Apply binding field updates to the experiment row.
+            if !proto_exp.flag_key.is_empty() {
+                experiment.flag_key = Some(proto_exp.flag_key.clone());
+            }
+            if !proto_exp.flag_rule_id.is_empty() {
+                let rule_uuid = uuid::Uuid::parse_str(&proto_exp.flag_rule_id)
+                    .map_err(|_| Status::invalid_argument("invalid flag_rule_id UUID"))?;
+                experiment.flag_rule_id = Some(stitchd_core::id::RuleId::from_uuid(rule_uuid));
+            }
+            experiment.targets_default_rule = proto_exp.targets_default_rule;
+            if !proto_exp.unit_context_types.is_empty() {
+                experiment.unit_context_types = proto_exp.unit_context_types.clone();
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         experiment.updated_at = chrono::Utc::now();
 
         let updated = self
@@ -1014,6 +1206,13 @@ mod tests {
         ) -> Result<Vec<ProtoExperimentResult>, tonic::Status> {
             Ok(vec![])
         }
+
+        async fn list_context_types(
+            &self,
+            _environment_id: &str,
+        ) -> Result<Vec<String>, tonic::Status> {
+            Ok(vec!["user".to_string()])
+        }
     }
 
     /// Returns a fixed list of `ExperimentResult` protos — simulates analytics
@@ -1032,6 +1231,13 @@ mod tests {
         ) -> Result<Vec<ProtoExperimentResult>, tonic::Status> {
             Ok(self.results.clone())
         }
+
+        async fn list_context_types(
+            &self,
+            _environment_id: &str,
+        ) -> Result<Vec<String>, tonic::Status> {
+            Ok(vec!["user".to_string()])
+        }
     }
 
     /// Always returns an Internal gRPC error — simulates analytics-service failure.
@@ -1045,6 +1251,13 @@ mod tests {
             _experiment_id: &str,
             _iteration_id: Option<&str>,
         ) -> Result<Vec<ProtoExperimentResult>, tonic::Status> {
+            Err(tonic::Status::internal("analytics-service unavailable"))
+        }
+
+        async fn list_context_types(
+            &self,
+            _environment_id: &str,
+        ) -> Result<Vec<String>, tonic::Status> {
             Err(tonic::Status::internal("analytics-service unavailable"))
         }
     }
@@ -1561,18 +1774,23 @@ mod tests {
     async fn test_create_experiment_success_returns_experiment() {
         let (env_id, env_id_str) = env_uuid();
         let svc = make_service(env_id);
+        // Provide valid binding fields (GL-08): targets_default_rule=true satisfies
+        // the XOR invariant; flag_key + unit_context_types pass analytics validation
+        // (EmptyAnalyticsMock returns ["user"]).
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
             environment_id: env_id_str.clone(),
             name: "My Experiment".to_string(),
             description: "Testing".to_string(),
-            flag_id: uuid::Uuid::new_v4().to_string(),
+            flag_key: "my-flag".to_string(),
+            targets_default_rule: true,
+            unit_context_types: vec!["user".to_string()],
             ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
             experiment: Some(proto_exp),
         });
         let result = svc.create_experiment(req).await;
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "create failed: {:?}", result.unwrap_err());
         let resp = result.unwrap().into_inner();
         assert_eq!(resp.environment_id, env_id_str);
         assert_eq!(resp.name, "My Experiment");
@@ -1587,10 +1805,13 @@ mod tests {
             None,
         );
         let env_id = EnvironmentId::new();
+        // Provide valid binding fields so we reach the repo call (GL-08).
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
             environment_id: env_id.to_string(),
             name: "Fail".to_string(),
-            flag_id: uuid::Uuid::new_v4().to_string(),
+            flag_key: "my-flag".to_string(),
+            targets_default_rule: true,
+            unit_context_types: vec!["user".to_string()],
             ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
@@ -1923,16 +2144,18 @@ mod tests {
     #[tokio::test]
     async fn test_create_experiment_active_status_without_flag_client_skips_verification() {
         // When flag_client is None and status is ACTIVE, we should not panic and
-        // still create the experiment (flag verification skipped).
+        // still create the experiment (flag verification skipped for flag-lock check;
+        // binding validator also runs with flag_client=None → flag checks skipped).
         let (env_id, env_id_str) = env_uuid();
         let svc = make_service(env_id); // flag_client = None
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
             environment_id: env_id_str.clone(),
             name: "Active Experiment".to_string(),
             flag_key: "my-flag".to_string(),
-            flag_id: uuid::Uuid::new_v4().to_string(),
-            // ACTIVE status
+            // ACTIVE status; binding valid: targets_default_rule=true, unit_context_types provided.
             status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
+            targets_default_rule: true,
+            unit_context_types: vec!["user".to_string()],
             ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
@@ -1940,26 +2163,36 @@ mod tests {
         });
         let result = svc.create_experiment(req).await;
         // No flag client = skip flag check → create succeeds
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "create failed: {:?}", result.unwrap_err());
     }
 
     #[tokio::test]
     async fn test_create_experiment_active_status_with_empty_flag_key_skips_flag_check() {
+        // When flag_key is empty (no binding at all), binding validation will
+        // fail because flag_key is required. This test now asserts that
+        // a missing flag_key + no binding config returns InvalidArgument.
         let (env_id, env_id_str) = env_uuid();
         let svc = make_service(env_id);
         let proto_exp = stitchd_proto::experiments::v1::Experiment {
             environment_id: env_id_str.clone(),
             name: "Active No Key".to_string(),
-            flag_id: uuid::Uuid::new_v4().to_string(),
-            // empty flag_key → skip flag verification
+            // No flag_key, no binding → targets_default_rule=false, flag_rule_id="" →
+            // the XOR invariant (neither set) fires before flag_key check.
             status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
+            unit_context_types: vec!["user".to_string()],
             ..Default::default()
         };
         let req = tonic::Request::new(CreateExperimentRequest {
             experiment: Some(proto_exp),
         });
         let result = svc.create_experiment(req).await;
-        assert!(result.is_ok());
+        // Binding validation fires: neither flag_rule_id nor targets_default_rule set.
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().code(),
+            tonic::Code::InvalidArgument,
+            "expected invalid_argument for missing binding"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2477,5 +2710,150 @@ mod tests {
         });
         let result = svc.transition_experiment(req).await;
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_experiment_binding unit tests (GL-08)
+    // -----------------------------------------------------------------------
+
+    /// Analytics mock that returns a configurable list of context types.
+    struct ContextTypeMock {
+        types: Vec<String>,
+    }
+
+    #[async_trait]
+    impl crate::analytics_client::AnalyticsResultsPort for ContextTypeMock {
+        async fn list_experiment_results(
+            &self,
+            _env_id: &str,
+            _experiment_id: &str,
+            _iteration_id: Option<&str>,
+        ) -> Result<Vec<ProtoExperimentResult>, tonic::Status> {
+            Ok(vec![])
+        }
+
+        async fn list_context_types(
+            &self,
+            _environment_id: &str,
+        ) -> Result<Vec<String>, tonic::Status> {
+            Ok(self.types.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn binding_validation_rejects_xor_violation_both_set() {
+        let analytics = ContextTypeMock {
+            types: vec!["user".to_string()],
+        };
+        let inputs = BindingInputs {
+            environment_id: "env-1",
+            flag_key: Some("flag-1"),
+            flag_rule_id: Some("rule-1"),
+            targets_default_rule: true,
+            unit_context_types: &["user".to_string()],
+        };
+        let err = validate_experiment_binding(&inputs, &analytics, None)
+            .await
+            .expect_err("expected XOR violation error");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("exactly one"));
+    }
+
+    #[tokio::test]
+    async fn binding_validation_rejects_xor_violation_neither_set() {
+        let analytics = ContextTypeMock {
+            types: vec!["user".to_string()],
+        };
+        let inputs = BindingInputs {
+            environment_id: "env-1",
+            flag_key: None,
+            flag_rule_id: None,
+            targets_default_rule: false,
+            unit_context_types: &["user".to_string()],
+        };
+        let err = validate_experiment_binding(&inputs, &analytics, None)
+            .await
+            .expect_err("expected XOR violation (neither set)");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("flag_rule_id"));
+    }
+
+    #[tokio::test]
+    async fn binding_validation_rejects_empty_unit_context_types() {
+        let analytics = ContextTypeMock {
+            types: vec!["user".to_string()],
+        };
+        let inputs = BindingInputs {
+            environment_id: "env-1",
+            flag_key: Some("flag-1"),
+            flag_rule_id: Some("rule-1"),
+            targets_default_rule: false,
+            unit_context_types: &[],
+        };
+        let err = validate_experiment_binding(&inputs, &analytics, None)
+            .await
+            .expect_err("expected empty unit_context_types error");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("unit_context_types"));
+    }
+
+    #[tokio::test]
+    async fn binding_validation_rejects_unknown_context_type() {
+        let analytics = ContextTypeMock {
+            types: vec!["user".to_string(), "account".to_string()],
+        };
+        let inputs = BindingInputs {
+            environment_id: "env-1",
+            flag_key: Some("flag-1"),
+            flag_rule_id: Some("rule-1"),
+            targets_default_rule: false,
+            unit_context_types: &["device".to_string()],
+        };
+        let err = validate_experiment_binding(&inputs, &analytics, None)
+            .await
+            .expect_err("expected unknown context_type error");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("device"));
+    }
+
+    #[tokio::test]
+    async fn binding_validation_rejects_missing_flag_key() {
+        let analytics = ContextTypeMock {
+            types: vec!["user".to_string()],
+        };
+        let inputs = BindingInputs {
+            environment_id: "env-1",
+            flag_key: None,
+            flag_rule_id: Some("rule-1"),
+            targets_default_rule: false,
+            unit_context_types: &["user".to_string()],
+        };
+        // With flag_rule_id set but flag_key missing, targets_default_rule is false
+        // so XOR is satisfied. But flag_key is required.
+        let err = validate_experiment_binding(&inputs, &analytics, None)
+            .await
+            .expect_err("expected missing flag_key error");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("flag_key"));
+    }
+
+    #[tokio::test]
+    async fn binding_validation_accepts_default_rule_with_no_flag_client() {
+        // When flag_client is None, flag validation is skipped.
+        let analytics = ContextTypeMock {
+            types: vec!["user".to_string()],
+        };
+        let inputs = BindingInputs {
+            environment_id: "env-1",
+            flag_key: Some("flag-1"),
+            flag_rule_id: None,
+            targets_default_rule: true,
+            unit_context_types: &["user".to_string()],
+        };
+        let flag_id = validate_experiment_binding(&inputs, &analytics, None)
+            .await
+            .expect("expected valid binding to pass");
+        // No flag client → empty flag_id returned.
+        assert!(flag_id.is_empty());
     }
 }

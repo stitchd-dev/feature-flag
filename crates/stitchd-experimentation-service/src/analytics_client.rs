@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tonic::transport::Channel;
 
 use stitchd_proto::analytics::v1::{
-    ExperimentResult, ListExperimentResultsRequest,
+    ExperimentResult, ListContextTypesRequest, ListExperimentResultsRequest,
     analytics_service_client::AnalyticsServiceClient,
 };
 
@@ -27,6 +27,12 @@ pub trait AnalyticsResultsPort: Send + Sync {
         experiment_id: &str,
         iteration_id: Option<&str>,
     ) -> Result<Vec<ExperimentResult>, tonic::Status>;
+
+    /// Return all context types registered for `environment_id`.
+    ///
+    /// Used by the experiment binding validator to verify that
+    /// `unit_context_types` are all known to the environment.
+    async fn list_context_types(&self, environment_id: &str) -> Result<Vec<String>, tonic::Status>;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +90,15 @@ impl AnalyticsResultsPort for AnalyticsClient {
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         Ok(results)
+    }
+
+    async fn list_context_types(&self, environment_id: &str) -> Result<Vec<String>, tonic::Status> {
+        let request = tonic::Request::new(ListContextTypesRequest {
+            environment_id: environment_id.to_string(),
+        });
+        let mut client = self.inner.lock().await;
+        let resp = client.list_context_types(request).await?.into_inner();
+        Ok(resp.types.into_iter().map(|t| t.context_type).collect())
     }
 }
 
