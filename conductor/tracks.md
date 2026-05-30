@@ -81,5 +81,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [~] Track: Domain-Boundary Refactor — Lean Gateway, Dedup, Dead-Code Audit
+## [x] Track: Domain-Boundary Refactor — Lean Gateway, Dedup, Dead-Code Audit
 *Link: [./conductor/tracks/domain_boundaries_20260530/](./conductor/tracks/domain_boundaries_20260530/)*

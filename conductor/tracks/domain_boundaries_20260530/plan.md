@@ -85,7 +85,7 @@ change is explicitly approved.
 - [x] Task: Conductor - User Manual Verification 'Dead-Code Removal' (Protocol in workflow.md) <!-- autonomous mode: user granted "go ahead" for all phases -->
 - [ ] Task: Conductor - User Manual Verification 'Dead-Code Removal' (Protocol in workflow.md)
 
-## Phase 5: Final Verification & Sync
+## Phase 5: Final Verification & Sync [checkpoint: 2a42024]
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
