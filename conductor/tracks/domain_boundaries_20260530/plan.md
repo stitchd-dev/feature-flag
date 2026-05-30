@@ -64,13 +64,13 @@ change is explicitly approved.
 <!-- execution: sequential -->
 <!-- depends: phase2 -->
 
-- [ ] Task 3.1: Consolidate mappers/error-mapping/validation/ID conversions to
-      their canonical crate; update all call sites.
-- [ ] Task 3.2: Unify ClickHouse row structs + hash/query helpers behind single
+- [x] Task 3.1: Consolidate mappers/error-mapping/validation/ID conversions to
+      their canonical crate; update all call sites. <!-- aecbd72,e2041fb — DUP-003,DUP-001 -->
+- [x] Task 3.2: Unify ClickHouse row structs + hash/query helpers behind single
       canonical definitions (continuation of the `EventRow`/`EventV2Row`
-      consolidation pattern).
-- [ ] Task 3.3: Apply consistent error/pagination/validation/naming/RPC-shape
-      patterns across services; record decisions in `conductor/patterns.md`.
+      consolidation pattern). <!-- 2a28942,513ab9a,d639547 — DUP-004,DUP-005,DUP-006 -->
+- [x] Task 3.3: Apply consistent error/pagination/validation/naming/RPC-shape
+      patterns across services; record decisions in `conductor/patterns.md`. <!-- 9174f7b,41c373e,6e6ab1d — INCON-E001,E002,E005,P002 + patterns.md -->
 - [ ] Task: Conductor - User Manual Verification 'De-duplication & Consistency' (Protocol in workflow.md)
 
 ## Phase 4: Dead-Code Removal
