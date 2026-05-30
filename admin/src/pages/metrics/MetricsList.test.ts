@@ -49,17 +49,17 @@ function goalDirectionArrow(d: MetricRow['goal_direction']): string {
   }
 }
 
-/** Build the GET /v1/metrics query string. */
+/** Build the GET /v1/metrics query string (page/per_page contract). */
 function buildListQuery(args: {
   envId: string
-  offset: number
-  limit: number
+  page: number
+  perPage: number
   kind?: 'aggregation' | 'ratio' | 'funnel' | 'all'
 }): string {
   const qs = new URLSearchParams({
     env_id: args.envId,
-    offset: String(args.offset),
-    limit: String(args.limit),
+    page: String(args.page),
+    per_page: String(args.perPage),
   })
   if (args.kind && args.kind !== 'all') qs.set('kind', args.kind)
   return qs.toString()
@@ -299,22 +299,22 @@ describe('test_renders_metric_rows_with_kind_chip', () => {
 
 describe('test_kind_filter_filters_list', () => {
   it('omits kind param when filter=all', () => {
-    const qs = buildListQuery({ envId: 'env-1', offset: 0, limit: 50, kind: 'all' })
+    const qs = buildListQuery({ envId: 'env-1', page: 1, perPage: 50, kind: 'all' })
     expect(qs).not.toContain('kind=')
   })
   it('appends kind=aggregation when filtering to aggregation', () => {
-    const qs = buildListQuery({ envId: 'env-1', offset: 0, limit: 50, kind: 'aggregation' })
+    const qs = buildListQuery({ envId: 'env-1', page: 1, perPage: 50, kind: 'aggregation' })
     expect(qs).toContain('kind=aggregation')
   })
   it('appends kind=ratio when filtering to ratio', () => {
-    const qs = buildListQuery({ envId: 'env-1', offset: 0, limit: 50, kind: 'ratio' })
+    const qs = buildListQuery({ envId: 'env-1', page: 1, perPage: 50, kind: 'ratio' })
     expect(qs).toContain('kind=ratio')
   })
-  it('always includes env_id, offset, limit', () => {
-    const qs = buildListQuery({ envId: 'env-99', offset: 100, limit: 25 })
+  it('always includes env_id, page, per_page', () => {
+    const qs = buildListQuery({ envId: 'env-99', page: 3, perPage: 25 })
     expect(qs).toContain('env_id=env-99')
-    expect(qs).toContain('offset=100')
-    expect(qs).toContain('limit=25')
+    expect(qs).toContain('page=3')
+    expect(qs).toContain('per_page=25')
   })
 })
 

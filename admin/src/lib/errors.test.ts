@@ -50,4 +50,25 @@ describe('extractErrorMessage', () => {
     }
     expect(extractErrorMessage(err)).toBe('Unauthorized')
   })
+
+  it('extracts the gateway `error` envelope key (400 BadRequest body)', () => {
+    // The gateway serializes BadRequest/NotFound/Conflict/etc. as { error: msg }.
+    // Validation moved server-side (e.g. experiment binding, GL-08) now surfaces
+    // here as a 400 with this shape instead of the old structured 422.
+    const err = {
+      response: { data: { error: 'invalid_rule_kind: rule must allocate by percentage' } },
+      message: 'Request failed with status code 400',
+    }
+    expect(extractErrorMessage(err)).toBe('invalid_rule_kind: rule must allocate by percentage')
+  })
+
+  it('prefers `message` over `error` when both present', () => {
+    const err = { response: { data: { error: 'invalid_distribution', message: 'percentages must sum to 100' } } }
+    expect(extractErrorMessage(err)).toBe('percentages must sum to 100')
+  })
+
+  it('handles a plain-string response body', () => {
+    const err = { response: { data: 'bad request' }, message: 'Request failed with status code 400' }
+    expect(extractErrorMessage(err)).toBe('bad request')
+  })
 })
