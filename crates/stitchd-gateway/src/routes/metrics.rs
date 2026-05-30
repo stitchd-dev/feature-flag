@@ -6,13 +6,15 @@
 //! * `metric:write` for POST / PATCH / DELETE
 //!
 //! # Wire format
-//! The response shape is the domain [`MetricDefinition`] serialized directly
-//! (avoids a parallel `AdminMetricJson` DTO — metrics are admin-only and the
-//! core serde tags already match the proto + JSON wire format).
+//! GET response shapes use [`MetricJson`] (a gateway-local DTO) rather than
+//! the core `MetricDefinition`. This makes the gateway a pass-through for
+//! `aggregator` and `goal_direction` strings — unknown values from
+//! analytics-service are forwarded as-is, keeping the gateway
+//! forward-compatible when analytics-service adds new enum members (GL-14).
 //!
 //! Request bodies are local types that mirror the proto request messages
 //! plus a `kind`-discriminated config field, then we translate JSON → proto
-//! request → gRPC → proto response → domain type → JSON in this module.
+//! request → gRPC → proto response → [`MetricJson`] → JSON in this module.
 //!
 //! # Optimistic locking
 //! PATCH carries an `expected_version` field; the analytics-service returns
@@ -30,6 +32,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use utoipa::ToSchema;
 
+// Core domain types are used in the test module (via `use super::*`) to verify
+// the round-trip of known values. Production code uses the string-based
+// `MetricJson` response DTO instead (GL-14).
+#[cfg(test)]
 use stitchd_core::{
     id::{EnvironmentId, MetricId},
     metric::{
@@ -185,10 +191,89 @@ pub struct PreviewMetricResponseJson {
 /// Paginated list response — mirrors the proto `ListMetricsResponse`.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ListMetricsResponseJson {
-    pub items: Vec<MetricDefinition>,
+    pub items: Vec<MetricJson>,
     pub total: u64,
     pub offset: u64,
     pub limit: u64,
+}
+
+// ─── Gateway response JSON types ─────────────────────────────────────────────
+//
+// These types mirror the proto `MetricDefinition` wire shape but use `String`
+// for `aggregator` and `goal_direction` so the gateway does not act as an
+// exhaustive enum validator (GL-14). Unknown values from analytics-service are
+// passed through to the caller unchanged, making the gateway forward-compatible
+// when analytics-service adds new aggregator or goal-direction values.
+
+/// Gateway-level aggregation config response — `aggregator` is a pass-through
+/// string rather than a typed enum.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AggregationConfigJson {
+    pub event_key: String,
+    /// Raw aggregator string from analytics-service (e.g. `"count"`, `"sum"`).
+    pub aggregator: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_field: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub where_clause: Option<serde_json::Value>,
+}
+
+/// Gateway-level ratio config response — numeric config only, no validation.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RatioConfigJson {
+    pub numerator_metric_id: String,
+    pub denominator_metric_id: String,
+    pub min_denominator: i64,
+}
+
+/// Gateway-level funnel step response.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FunnelStepJson {
+    pub event_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub where_clause: Option<serde_json::Value>,
+}
+
+/// Gateway-level funnel config response.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FunnelConfigJson {
+    pub steps: Vec<FunnelStepJson>,
+    pub window_seconds: i64,
+    pub count_repeats: bool,
+}
+
+/// Kind-discriminated metric config — tag field `kind` matches the core
+/// [`MetricKind`] wire format.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MetricKindJson {
+    Aggregation(AggregationConfigJson),
+    Ratio(RatioConfigJson),
+    Funnel(FunnelConfigJson),
+}
+
+/// Gateway response DTO for a metric definition.
+///
+/// Mirrors `stitchd_core::metric::MetricDefinition` but stores `aggregator`
+/// and `goal_direction` as raw strings from the proto, making the gateway
+/// forward-compatible with new values added by analytics-service (GL-14).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct MetricJson {
+    pub id: String,
+    pub environment_id: String,
+    pub key: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(flatten)]
+    pub kind: MetricKindJson,
+    /// Raw goal direction string from analytics-service (e.g. `"increase"`).
+    pub goal_direction: String,
+    pub version: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<String>,
 }
 
 // ─── Body → proto conversion helpers ──────────────────────────────────────────
@@ -245,32 +330,21 @@ fn kind_body_to_update_proto(k: MetricKindBody) -> update_metric_request::Kind {
     }
 }
 
-// ─── Proto → domain conversion helpers ────────────────────────────────────────
+// ─── Proto → response JSON helpers (GL-14 pass-through) ──────────────────────
+//
+// The gateway does NOT validate aggregator or goal_direction strings: unknown
+// values are returned as-is, keeping the gateway forward-compatible when
+// analytics-service adds new enum members.
 
-fn parse_aggregator(s: &str) -> Result<AggregationOperator, GatewayError> {
-    match s {
-        "count" => Ok(AggregationOperator::Count),
-        "sum" => Ok(AggregationOperator::Sum),
-        "avg" => Ok(AggregationOperator::Avg),
-        "p50" => Ok(AggregationOperator::P50),
-        "p90" => Ok(AggregationOperator::P90),
-        "p99" => Ok(AggregationOperator::P99),
-        "uniq" => Ok(AggregationOperator::Uniq),
-        other => Err(GatewayError::Upstream(format!(
-            "analytics returned unknown aggregator `{other}`"
-        ))),
-    }
+/// Pass-through: return the aggregator string exactly as analytics sent it.
+/// The caller (admin UI / SDK) is responsible for handling unknown values.
+fn parse_aggregator(s: &str) -> String {
+    s.to_string()
 }
 
-fn parse_goal_direction(s: &str) -> Result<GoalDirection, GatewayError> {
-    match s {
-        "increase" => Ok(GoalDirection::Increase),
-        "decrease" => Ok(GoalDirection::Decrease),
-        "neutral" => Ok(GoalDirection::Neutral),
-        other => Err(GatewayError::Upstream(format!(
-            "analytics returned unknown goal_direction `{other}`"
-        ))),
-    }
+/// Pass-through: return the goal direction string exactly as analytics sent it.
+fn parse_goal_direction(s: &str) -> String {
+    s.to_string()
 }
 
 fn parse_where_clause_json(s: Option<&str>) -> Result<Option<serde_json::Value>, GatewayError> {
@@ -282,85 +356,58 @@ fn parse_where_clause_json(s: Option<&str>) -> Result<Option<serde_json::Value>,
     }
 }
 
-fn parse_metric_id(s: &str) -> Result<MetricId, GatewayError> {
-    uuid::Uuid::parse_str(s)
-        .map(MetricId::from_uuid)
-        .map_err(|e| GatewayError::Upstream(format!("invalid metric id from analytics: {e}")))
-}
-
-fn parse_env_id(s: &str) -> Result<EnvironmentId, GatewayError> {
-    uuid::Uuid::parse_str(s)
-        .map(EnvironmentId::from_uuid)
-        .map_err(|e| GatewayError::Upstream(format!("invalid environment id from analytics: {e}")))
-}
-
-fn proto_agg_to_domain(c: ProtoAggregationConfig) -> Result<AggregationConfig, GatewayError> {
-    Ok(AggregationConfig {
-        event_key: c.event_key,
-        aggregator: parse_aggregator(&c.aggregator)?,
-        on_field: c.on_field,
-        where_clause: parse_where_clause_json(c.where_clause_json.as_deref())?,
-    })
-}
-
-fn proto_ratio_to_domain(c: ProtoRatioConfig) -> Result<RatioConfig, GatewayError> {
-    Ok(RatioConfig {
-        numerator_metric_id: parse_metric_id(&c.numerator_metric_id)?,
-        denominator_metric_id: parse_metric_id(&c.denominator_metric_id)?,
-        min_denominator: c.min_denominator,
-    })
-}
-
-fn proto_funnel_to_domain(c: ProtoFunnelConfig) -> Result<FunnelConfig, GatewayError> {
-    let mut steps = Vec::with_capacity(c.steps.len());
-    for s in c.steps {
-        steps.push(FunnelStep {
-            event_key: s.event_key,
-            where_clause: parse_where_clause_json(s.where_clause_json.as_deref())?,
-        });
-    }
-    Ok(FunnelConfig {
-        steps,
-        window_seconds: c.window_seconds,
-        count_repeats: c.count_repeats,
-    })
-}
-
-fn proto_to_domain(p: ProtoMetric) -> Result<MetricDefinition, GatewayError> {
+/// Convert proto `MetricDefinition` to the gateway [`MetricJson`] response DTO.
+///
+/// Unlike [`proto_to_domain`], this function is a pass-through for
+/// `aggregator` and `goal_direction` — unknown values are forwarded as-is
+/// rather than rejected with a gateway error (GL-14).
+fn proto_to_metric_json(p: ProtoMetric) -> Result<MetricJson, GatewayError> {
     let kind = match p.kind {
         Some(metric_definition::Kind::Aggregation(c)) => {
-            MetricKind::Aggregation(proto_agg_to_domain(c)?)
+            MetricKindJson::Aggregation(AggregationConfigJson {
+                event_key: c.event_key,
+                aggregator: parse_aggregator(&c.aggregator),
+                on_field: c.on_field,
+                where_clause: parse_where_clause_json(c.where_clause_json.as_deref())?,
+            })
         }
-        Some(metric_definition::Kind::Ratio(c)) => MetricKind::Ratio(proto_ratio_to_domain(c)?),
-        Some(metric_definition::Kind::Funnel(c)) => MetricKind::Funnel(proto_funnel_to_domain(c)?),
+        Some(metric_definition::Kind::Ratio(c)) => MetricKindJson::Ratio(RatioConfigJson {
+            numerator_metric_id: c.numerator_metric_id,
+            denominator_metric_id: c.denominator_metric_id,
+            min_denominator: c.min_denominator,
+        }),
+        Some(metric_definition::Kind::Funnel(c)) => {
+            let mut steps = Vec::with_capacity(c.steps.len());
+            for s in c.steps {
+                steps.push(FunnelStepJson {
+                    event_key: s.event_key,
+                    where_clause: parse_where_clause_json(s.where_clause_json.as_deref())?,
+                });
+            }
+            MetricKindJson::Funnel(FunnelConfigJson {
+                steps,
+                window_seconds: c.window_seconds,
+                count_repeats: c.count_repeats,
+            })
+        }
         None => {
             return Err(GatewayError::Upstream(
                 "analytics returned MetricDefinition with no kind".to_string(),
             ));
         }
     };
-    Ok(MetricDefinition {
-        id: parse_metric_id(&p.id)?,
-        environment_id: parse_env_id(&p.environment_id)?,
+    Ok(MetricJson {
+        id: p.id,
+        environment_id: p.environment_id,
         key: p.key,
         name: p.name,
         description: p.description,
         kind,
-        goal_direction: parse_goal_direction(&p.goal_direction)?,
+        goal_direction: parse_goal_direction(&p.goal_direction),
         version: p.version,
-        created_at: chrono::DateTime::parse_from_rfc3339(&p.created_at)
-            .map(|d| d.with_timezone(&chrono::Utc))
-            .map_err(|e| GatewayError::Upstream(format!("bad created_at: {e}")))?,
-        updated_at: chrono::DateTime::parse_from_rfc3339(&p.updated_at)
-            .map(|d| d.with_timezone(&chrono::Utc))
-            .map_err(|e| GatewayError::Upstream(format!("bad updated_at: {e}")))?,
-        deleted_at: p
-            .deleted_at
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|s| chrono::DateTime::parse_from_rfc3339(s).map(|d| d.with_timezone(&chrono::Utc)))
-            .transpose()
-            .map_err(|e| GatewayError::Upstream(format!("bad deleted_at: {e}")))?,
+        created_at: p.created_at,
+        updated_at: p.updated_at,
+        deleted_at: p.deleted_at.filter(|s| !s.is_empty()),
     })
 }
 
@@ -386,7 +433,7 @@ fn status_to_gw_err(s: tonic::Status) -> GatewayError {
     tag = "metrics",
     request_body = CreateMetricBody,
     responses(
-        (status = 201, description = "Metric created", body = MetricDefinition),
+        (status = 201, description = "Metric created", body = MetricJson),
         (status = 400, description = "Invalid metric config (e.g. funnel with < 2 steps)"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — missing metric:write"),
@@ -418,8 +465,8 @@ pub async fn create_metric(
     });
     let mut client = state.analytics_client.lock().await;
     let resp = client.create_metric(rpc).await.map_err(status_to_gw_err)?;
-    let domain = proto_to_domain(resp.into_inner())?;
-    Ok((StatusCode::CREATED, Json(domain)))
+    let json = proto_to_metric_json(resp.into_inner())?;
+    Ok((StatusCode::CREATED, Json(json)))
 }
 
 /// `GET /v1/metrics?env_id=<uuid>&offset=&limit=&kind=` — list metrics.
@@ -464,7 +511,7 @@ pub async fn list_metrics(
     let inner = resp.into_inner();
     let mut items = Vec::with_capacity(inner.items.len());
     for p in inner.items {
-        items.push(proto_to_domain(p)?);
+        items.push(proto_to_metric_json(p)?);
     }
     Ok(Json(ListMetricsResponseJson {
         items,
@@ -481,7 +528,7 @@ pub async fn list_metrics(
     tag = "metrics",
     params(("id" = String, Path, description = "Metric UUID")),
     responses(
-        (status = 200, description = "Metric", body = MetricDefinition),
+        (status = 200, description = "Metric", body = MetricJson),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — missing metric:read"),
         (status = 404, description = "Metric not found"),
@@ -503,8 +550,8 @@ pub async fn get_metric(
     });
     let mut client = state.analytics_client.lock().await;
     let resp = client.get_metric(rpc).await.map_err(status_to_gw_err)?;
-    let domain = proto_to_domain(resp.into_inner())?;
-    Ok(Json(domain))
+    let json = proto_to_metric_json(resp.into_inner())?;
+    Ok(Json(json))
 }
 
 /// `PATCH /v1/metrics/{id}` — update a metric (optimistic locking).
@@ -515,7 +562,7 @@ pub async fn get_metric(
     params(("id" = String, Path, description = "Metric UUID")),
     request_body = UpdateMetricBody,
     responses(
-        (status = 200, description = "Updated metric", body = MetricDefinition),
+        (status = 200, description = "Updated metric", body = MetricJson),
         (status = 400, description = "Invalid update payload"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — missing metric:write"),
@@ -549,8 +596,8 @@ pub async fn update_metric(
     });
     let mut client = state.analytics_client.lock().await;
     let resp = client.update_metric(rpc).await.map_err(status_to_gw_err)?;
-    let domain = proto_to_domain(resp.into_inner())?;
-    Ok(Json(domain))
+    let json = proto_to_metric_json(resp.into_inner())?;
+    Ok(Json(json))
 }
 
 /// `DELETE /v1/metrics/{id}` — soft-delete a metric.
@@ -689,6 +736,134 @@ mod tests {
         analytics_service_server::{AnalyticsService as Svc, AnalyticsServiceServer},
         metric_definition,
     };
+
+    // ── Typed proto → domain helpers (test-only, kept for round-trip tests) ─────
+    //
+    // Production code uses `proto_to_metric_json` (string pass-through). These
+    // typed helpers remain to test the `GoalDirection` / `AggregationOperator`
+    // parsing logic for known values without touching the response path.
+
+    fn parse_aggregator_typed(s: &str) -> Result<AggregationOperator, GatewayError> {
+        match s {
+            "count" => Ok(AggregationOperator::Count),
+            "sum" => Ok(AggregationOperator::Sum),
+            "avg" => Ok(AggregationOperator::Avg),
+            "p50" => Ok(AggregationOperator::P50),
+            "p90" => Ok(AggregationOperator::P90),
+            "p99" => Ok(AggregationOperator::P99),
+            "uniq" => Ok(AggregationOperator::Uniq),
+            other => Err(GatewayError::Upstream(format!(
+                "analytics returned unknown aggregator `{other}`"
+            ))),
+        }
+    }
+
+    fn parse_goal_direction_typed(s: &str) -> Result<GoalDirection, GatewayError> {
+        match s {
+            "increase" => Ok(GoalDirection::Increase),
+            "decrease" => Ok(GoalDirection::Decrease),
+            "neutral" => Ok(GoalDirection::Neutral),
+            other => Err(GatewayError::Upstream(format!(
+                "analytics returned unknown goal_direction `{other}`"
+            ))),
+        }
+    }
+
+    fn parse_metric_id_typed(s: &str) -> Result<MetricId, GatewayError> {
+        uuid::Uuid::parse_str(s)
+            .map(MetricId::from_uuid)
+            .map_err(|e| GatewayError::Upstream(format!("invalid metric id from analytics: {e}")))
+    }
+
+    fn parse_env_id_typed(s: &str) -> Result<EnvironmentId, GatewayError> {
+        uuid::Uuid::parse_str(s)
+            .map(EnvironmentId::from_uuid)
+            .map_err(|e| {
+                GatewayError::Upstream(format!("invalid environment id from analytics: {e}"))
+            })
+    }
+
+    fn proto_agg_to_domain_typed(
+        c: ProtoAggregationConfig,
+    ) -> Result<AggregationConfig, GatewayError> {
+        Ok(AggregationConfig {
+            event_key: c.event_key,
+            aggregator: parse_aggregator_typed(&c.aggregator)?,
+            on_field: c.on_field,
+            where_clause: parse_where_clause_json(c.where_clause_json.as_deref())?,
+        })
+    }
+
+    fn proto_ratio_to_domain_typed(
+        c: stitchd_proto::analytics::v1::RatioConfig,
+    ) -> Result<RatioConfig, GatewayError> {
+        Ok(RatioConfig {
+            numerator_metric_id: parse_metric_id_typed(&c.numerator_metric_id)?,
+            denominator_metric_id: parse_metric_id_typed(&c.denominator_metric_id)?,
+            min_denominator: c.min_denominator,
+        })
+    }
+
+    fn proto_funnel_to_domain_typed(
+        c: stitchd_proto::analytics::v1::FunnelConfig,
+    ) -> Result<FunnelConfig, GatewayError> {
+        let mut steps = Vec::with_capacity(c.steps.len());
+        for s in c.steps {
+            steps.push(FunnelStep {
+                event_key: s.event_key,
+                where_clause: parse_where_clause_json(s.where_clause_json.as_deref())?,
+            });
+        }
+        Ok(FunnelConfig {
+            steps,
+            window_seconds: c.window_seconds,
+            count_repeats: c.count_repeats,
+        })
+    }
+
+    fn proto_to_domain(p: ProtoMetric) -> Result<MetricDefinition, GatewayError> {
+        let kind = match p.kind {
+            Some(metric_definition::Kind::Aggregation(c)) => {
+                MetricKind::Aggregation(proto_agg_to_domain_typed(c)?)
+            }
+            Some(metric_definition::Kind::Ratio(c)) => {
+                MetricKind::Ratio(proto_ratio_to_domain_typed(c)?)
+            }
+            Some(metric_definition::Kind::Funnel(c)) => {
+                MetricKind::Funnel(proto_funnel_to_domain_typed(c)?)
+            }
+            None => {
+                return Err(GatewayError::Upstream(
+                    "analytics returned MetricDefinition with no kind".to_string(),
+                ));
+            }
+        };
+        Ok(MetricDefinition {
+            id: parse_metric_id_typed(&p.id)?,
+            environment_id: parse_env_id_typed(&p.environment_id)?,
+            key: p.key,
+            name: p.name,
+            description: p.description,
+            kind,
+            goal_direction: parse_goal_direction_typed(&p.goal_direction)?,
+            version: p.version,
+            created_at: chrono::DateTime::parse_from_rfc3339(&p.created_at)
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .map_err(|e| GatewayError::Upstream(format!("bad created_at: {e}")))?,
+            updated_at: chrono::DateTime::parse_from_rfc3339(&p.updated_at)
+                .map(|d| d.with_timezone(&chrono::Utc))
+                .map_err(|e| GatewayError::Upstream(format!("bad updated_at: {e}")))?,
+            deleted_at: p
+                .deleted_at
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    chrono::DateTime::parse_from_rfc3339(s).map(|d| d.with_timezone(&chrono::Utc))
+                })
+                .transpose()
+                .map_err(|e| GatewayError::Upstream(format!("bad deleted_at: {e}")))?,
+        })
+    }
 
     // ── Mock analytics service ─────────────────────────────────────────────────
     //
