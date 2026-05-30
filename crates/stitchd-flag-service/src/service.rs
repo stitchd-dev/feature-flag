@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use clickhouse::Client as ChClient;
+use stitchd_core::auth::crypto::hash_sdk_key;
 use stitchd_db::{
     ExperimentRepository, FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository,
 };
@@ -330,14 +331,6 @@ fn parse_project_id(s: &str) -> Result<Option<stitchd_core::id::ProjectId>, Stat
     uuid::Uuid::parse_str(s)
         .map(|u| Some(stitchd_core::id::ProjectId::from_uuid(u)))
         .map_err(|_| Status::invalid_argument("invalid project_id"))
-}
-
-/// SHA-256 hash of a raw SDK key (same function as used in stitchd-server).
-pub(crate) fn hash_sdk_key(raw: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(raw.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 #[allow(clippy::too_many_lines)]

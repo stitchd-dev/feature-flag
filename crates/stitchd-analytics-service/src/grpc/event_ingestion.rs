@@ -11,11 +11,10 @@
 
 use std::sync::Arc;
 
-use sha2::{Digest, Sha256};
 use tonic::{Request, Response, Status};
 use tracing::instrument;
 
-use stitchd_core::event::EventValueType;
+use stitchd_core::{auth::crypto::hash_sdk_key, event::EventValueType};
 use stitchd_db::{EventDefinitionRepository, SdkKeyRepository};
 use stitchd_event_writer::writer::EventWriter;
 use stitchd_proto::analytics::v1::{IngestEventRequest, IngestEventResponse};
@@ -25,14 +24,6 @@ pub struct EventIngestionState {
     pub event_def_repo: Arc<dyn EventDefinitionRepository>,
     pub sdk_key_repo: Arc<dyn SdkKeyRepository>,
     pub event_writer: EventWriter,
-}
-
-/// Hash a raw SDK key with SHA-256 → lowercase hex, matching the stored hash.
-#[must_use]
-pub fn hash_sdk_key(raw: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(raw.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 /// Resolve credentials from gRPC metadata to an environment_id.

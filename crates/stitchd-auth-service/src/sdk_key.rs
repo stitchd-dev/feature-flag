@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use sha2::{Digest as _, Sha256};
+pub use stitchd_core::auth::crypto::hash_sdk_key;
 use stitchd_core::{
     id::{EnvironmentId, SdkKeyId},
     tenant::SdkKey,
@@ -44,13 +44,6 @@ impl From<SdkKeyValidationError> for Status {
             SdkKeyValidationError::Internal(msg) => Self::internal(msg),
         }
     }
-}
-
-/// Hash a raw SDK key with SHA-256, returning a lowercase hex string.
-#[must_use]
-pub fn hash_sdk_key(raw: &str) -> String {
-    let digest = Sha256::digest(raw.as_bytes());
-    hex::encode(digest)
 }
 
 /// Validate a raw SDK key, using `cache` to avoid DB round-trips on repeated
