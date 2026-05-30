@@ -49,15 +49,15 @@ change is explicitly approved.
       mapping/evaluation-adjacent logic into flag-service gRPC handlers; extend
       proto where needed (snapshot+docs same batch). Reduce routes to
       translate→call→map→error. <!-- 74bc8d3,bdaef7a — GL-02,03,04,05,11 done; GL-06 kept (Admin UI compat); GL-07 deferred (proto restructure) -->
-- [~] Task 2.3: Experiments + metrics routes (`experiments.rs`, `metrics.rs`) —
-      same treatment; domain logic → experimentation/analytics services.
-- [ ] Task 2.4: Events + event-admin routes (`events.rs`, `event_admin.rs`) —
+- [x] Task 2.3: Experiments + metrics routes (`experiments.rs`, `metrics.rs`) —
+      same treatment; domain logic → experimentation/analytics services. <!-- 2f23e7a,61dbcc0,e93d76b -->
+- [x] Task 2.4: Events + event-admin routes (`events.rs`, `event_admin.rs`) —
       move ingestion/quota/validation domain rules into analytics service; keep
-      quota middleware as cross-cutting in gateway.
-- [ ] Task 2.5: Segments + management + stats + auth-provider routes — same
-      treatment for the remaining route groups.
-- [ ] Task 2.6: Re-audit gateway — verify zero domain logic remains; update
-      OpenAPI snapshot + contract-check for any approved contract changes.
+      quota middleware as cross-cutting in gateway. <!-- 273bedd,14c382d -->
+- [x] Task 2.5: Segments + management + stats + auth-provider routes — same
+      treatment for the remaining route groups. <!-- 0a305e4 — GL-11 done in 2.2 -->
+- [x] Task 2.6: Re-audit gateway — verify zero domain logic remains; update
+      OpenAPI snapshot + contract-check for any approved contract changes. <!-- bcedef0 -->
 - [ ] Task: Conductor - User Manual Verification 'Lean-Gateway Refactor' (Protocol in workflow.md)
 
 ## Phase 3: De-duplication & Consistency
