@@ -893,36 +893,19 @@ pub async fn get_results(
     let resp = client.get_results(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
 
-    let mut results_by_context_type =
-        std::collections::HashMap::<String, ContextTypeResultsJson>::new();
-    for bundle in &inner.results_by_context_type {
-        results_by_context_type.insert(
-            bundle.context_type.clone(),
-            context_type_results_to_json(bundle),
-        );
-    }
-    // Back-compat: when the experimentation service did not populate the
-    // per-context-type bundles (e.g. legacy iterations) but did return a flat
-    // `variant_results` list, synthesise a single bucket keyed by
-    // each row's `context_type` (defaulting to "user").
-    if results_by_context_type.is_empty() && !inner.variant_results.is_empty() {
-        for vr in &inner.variant_results {
-            let ct = if vr.context_type.is_empty() {
-                "user".to_string()
-            } else {
-                vr.context_type.clone()
-            };
-            let bucket =
-                results_by_context_type
-                    .entry(ct)
-                    .or_insert_with(|| ContextTypeResultsJson {
-                        variants: Vec::new(),
-                        srm: None,
-                        guardrails: Vec::new(),
-                    });
-            bucket.variants.push(variant_result_to_json(vr));
-        }
-    }
+    // The experimentation-service always populates `results_by_context_type`
+    // (including defaulting empty `context_type` rows to "user" server-side),
+    // so the gateway just passes through whatever the service returns (GL-09).
+    let results_by_context_type: std::collections::HashMap<String, ContextTypeResultsJson> = inner
+        .results_by_context_type
+        .iter()
+        .map(|bundle| {
+            (
+                bundle.context_type.clone(),
+                context_type_results_to_json(bundle),
+            )
+        })
+        .collect();
 
     let results = ExperimentResultsJson {
         experiment_id: inner.experiment_id.clone(),
