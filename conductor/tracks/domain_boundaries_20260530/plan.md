@@ -73,7 +73,7 @@ change is explicitly approved.
       patterns across services; record decisions in `conductor/patterns.md`. <!-- 9174f7b,41c373e,6e6ab1d — INCON-E001,E002,E005,P002 + patterns.md -->
 - [ ] Task: Conductor - User Manual Verification 'De-duplication & Consistency' (Protocol in workflow.md)
 
-## Phase 4: Dead-Code Removal
+## Phase 4: Dead-Code Removal [checkpoint: ef1cc0c]
 <!-- execution: sequential -->
 <!-- depends: phase3 -->
 
