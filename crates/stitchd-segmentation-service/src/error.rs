@@ -30,6 +30,10 @@ pub enum SegmentationServiceError {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
+    /// The operation is not permitted given the entity's current state.
+    #[error("failed precondition: {0}")]
+    FailedPrecondition(String),
+
     /// An internal database or serialization error.
     #[error("internal: {0}")]
     Internal(String),
@@ -43,6 +47,7 @@ impl From<RepositoryError> for SegmentationServiceError {
                 Self::VersionConflict { expected, actual }
             }
             RepositoryError::UniqueViolation { field } => Self::UniqueViolation { field },
+            RepositoryError::InvalidState { reason } => Self::FailedPrecondition(reason),
             other => Self::Internal(other.to_string()),
         }
     }
@@ -59,6 +64,7 @@ impl From<SegmentationServiceError> for Status {
                 Self::already_exists(format!("unique violation on: {field}"))
             }
             SegmentationServiceError::InvalidArgument(msg) => Self::invalid_argument(msg),
+            SegmentationServiceError::FailedPrecondition(msg) => Self::failed_precondition(msg),
             SegmentationServiceError::Internal(msg) => Self::internal(msg),
         }
     }
@@ -104,12 +110,17 @@ mod tests {
     }
 
     #[test]
-    fn repository_other_error_maps_to_service_internal() {
+    fn repository_invalid_state_maps_to_failed_precondition() {
         let repo_err = RepositoryError::InvalidState {
             reason: "experiment is running".to_string(),
         };
         let svc_err = SegmentationServiceError::from(repo_err);
-        assert!(matches!(svc_err, SegmentationServiceError::Internal(_)));
+        assert!(matches!(
+            svc_err,
+            SegmentationServiceError::FailedPrecondition(_)
+        ));
+        let status: Status = svc_err.into();
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
     }
 
     #[test]

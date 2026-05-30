@@ -1421,7 +1421,7 @@ impl FlagService for FlagServiceImpl {
         // Optimistic-lock check (mirrors mutate_flag).
         if record.version != i64::try_from(req.version).unwrap_or(record.version) {
             return Err(Status::aborted(format!(
-                "version conflict: expected {}, got {}",
+                "version conflict: expected {}, actual {}",
                 record.version, req.version
             )));
         }

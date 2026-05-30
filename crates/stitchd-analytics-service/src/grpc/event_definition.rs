@@ -139,7 +139,7 @@ fn map_repo_err(e: RepositoryError) -> Status {
             Status::already_exists(format!("event_definition: duplicate {field}"))
         }
         RepositoryError::VersionConflict { expected, actual } => Status::aborted(format!(
-            "event_definition: version conflict (expected={expected}, actual={actual})"
+            "version conflict: expected {expected}, actual {actual}"
         )),
         other => Status::internal(format!("event_definition repo error: {other}")),
     }
@@ -328,7 +328,7 @@ pub async fn handle_update_event_definition(
     let existing = repo.find_by_id(id).await.map_err(map_repo_err)?;
     if existing.version != r.expected_version {
         return Err(Status::aborted(format!(
-            "version conflict (expected={}, actual={})",
+            "version conflict: expected {}, actual {}",
             r.expected_version, existing.version
         )));
     }

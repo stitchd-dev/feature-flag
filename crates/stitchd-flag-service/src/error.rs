@@ -54,6 +54,10 @@ pub enum FlagServiceError {
     #[error("flag is locked by experiment {experiment_id}")]
     FlagLocked { experiment_id: ExperimentId },
 
+    /// The operation is not permitted given the entity's current state.
+    #[error("failed precondition: {0}")]
+    FailedPrecondition(String),
+
     /// An internal/database error occurred.
     #[error("internal error: {0}")]
     Internal(String),
@@ -77,6 +81,9 @@ impl From<stitchd_db::RepositoryError> for FlagServiceError {
             stitchd_db::RepositoryError::ForeignKeyViolation { constraint } => {
                 Self::InvalidArgument(format!("referenced entity does not exist: {constraint}"))
             }
+            stitchd_db::RepositoryError::InvalidState { reason } => {
+                Self::FailedPrecondition(reason)
+            }
             other => Self::Internal(other.to_string()),
         }
     }
@@ -97,6 +104,7 @@ impl From<FlagServiceError> for Status {
             FlagServiceError::UnknownDefaultRuleVariant { variant_key } => Self::invalid_argument(
                 format!("invalid_distribution: unknown variant_key `{variant_key}`"),
             ),
+            FlagServiceError::FailedPrecondition(msg) => Self::failed_precondition(msg),
             FlagServiceError::FlagLocked { experiment_id } => {
                 Self::failed_precondition(format!("{FLAG_LOCKED_STATUS_PREFIX}{experiment_id}"))
             }
@@ -141,6 +149,13 @@ mod tests {
     }
 
     #[test]
+    fn failed_precondition_maps_to_failed_precondition_status() {
+        let err = FlagServiceError::FailedPrecondition("state violation".to_string());
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[test]
     fn internal_maps_to_internal_status() {
         let err = FlagServiceError::Internal("db error".to_string());
         let status: Status = err.into();
@@ -179,6 +194,17 @@ mod tests {
         };
         let err: FlagServiceError = repo_err.into();
         assert!(matches!(err, FlagServiceError::Conflict(_)));
+    }
+
+    #[test]
+    fn repository_invalid_state_converts_to_failed_precondition() {
+        let repo_err = stitchd_db::RepositoryError::InvalidState {
+            reason: "experiment is running".to_string(),
+        };
+        let err: FlagServiceError = repo_err.into();
+        assert!(matches!(err, FlagServiceError::FailedPrecondition(_)));
+        let status: Status = err.into();
+        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
     }
 
     #[test]

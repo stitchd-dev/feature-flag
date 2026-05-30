@@ -281,13 +281,13 @@ fn repo_err_to_status(err: RepositoryError, ctx: &str) -> Status {
             Status::not_found(format!("{ctx}: metric not found (id={id})"))
         }
         RepositoryError::VersionConflict { expected, actual } => Status::aborted(format!(
-            "{ctx}: version conflict — expected={expected}, actual={actual}"
+            "version conflict: expected {expected}, actual {actual}"
         )),
         RepositoryError::UniqueViolation { field } => Status::already_exists(format!(
             "{ctx}: unique violation on `{field}` (metric.key must be unique per environment)"
         )),
         RepositoryError::ForeignKeyViolation { constraint } => {
-            Status::failed_precondition(format!("{ctx}: foreign key violation on `{constraint}`"))
+            Status::invalid_argument(format!("referenced entity does not exist: {constraint}"))
         }
         RepositoryError::InvalidState { reason } => {
             Status::failed_precondition(format!("{ctx}: invalid state — {reason}"))
@@ -847,8 +847,12 @@ mod proto_mapping_tests {
             "update_metric",
         );
         assert_eq!(s.code(), tonic::Code::Aborted);
-        assert!(s.message().contains("expected=1"));
-        assert!(s.message().contains("actual=2"));
+        assert!(
+            s.message().contains("expected 1"),
+            "message: {}",
+            s.message()
+        );
+        assert!(s.message().contains("actual 2"), "message: {}", s.message());
     }
 
     #[test]
