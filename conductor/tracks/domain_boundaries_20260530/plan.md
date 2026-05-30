@@ -30,10 +30,10 @@ change is explicitly approved.
       active-module baseline (use `cargo +nightly udeps` / `-W dead_code` / grep
       evidence).
   <!-- files: conductor/tracks/domain_boundaries_20260530/findings.md -->
-- [~] Task 1.6: Synthesize `findings.md` — merge 1.1–1.5 into one dispositioned
+- [x] Task 1.6: Synthesize `findings.md` — merge 1.1–1.5 into one dispositioned
       report (evidence, owning crate, disposition, risk, contract-impact flag);
       present the PROPOSE/contract-affecting items for approval; record agreed
-      conventions seed for `patterns.md`.
+      conventions seed for `patterns.md`. <!-- 880277a -->
   <!-- files: conductor/tracks/domain_boundaries_20260530/findings.md -->
   <!-- depends: task1, task2, task3, task4, task5 -->
 - [ ] Task: Conductor - User Manual Verification 'Audit & Findings' (Protocol in workflow.md)
