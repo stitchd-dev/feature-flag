@@ -772,6 +772,9 @@ fn parse_field(line: &str) -> Option<FieldInfo> {
 
     let (ty, name) = if parts[0] == "repeated" {
         (format!("repeated {}", parts[1]), parts[2])
+    } else if parts[0] == "optional" {
+        // proto3 explicit-presence field: `optional Type name = N;`
+        (format!("optional {}", parts[1]), parts[2])
     } else if parts[0] == "map" || parts[0].starts_with("map<") {
         // map<K, V> name = N
         let (before, after) = code.split_once('>').unwrap_or(("map", ""));
@@ -1442,4 +1445,39 @@ fn project_root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
+}
+
+#[cfg(test)]
+mod parse_field_tests {
+    use super::parse_field;
+
+    #[test]
+    fn plain_scalar_field() {
+        let f = parse_field("string environment_id = 1;").unwrap();
+        assert_eq!(f.name, "environment_id");
+        assert_eq!(f.ty, "string");
+    }
+
+    #[test]
+    fn repeated_field() {
+        let f = parse_field("repeated TrackEvent events = 2;").unwrap();
+        assert_eq!(f.name, "events");
+        assert_eq!(f.ty, "repeated TrackEvent");
+    }
+
+    #[test]
+    fn optional_field_keeps_name_and_type() {
+        // Regression: proto3 `optional` prefix was previously mis-parsed as
+        // `ty=optional, name=bool`, dropping the real field name.
+        let f = parse_field("optional bool enabled_override = 6;").unwrap();
+        assert_eq!(f.name, "enabled_override");
+        assert_eq!(f.ty, "optional bool");
+    }
+
+    #[test]
+    fn map_field() {
+        let f = parse_field("map<string, string> properties = 3;").unwrap();
+        assert_eq!(f.name, "properties");
+        assert!(f.ty.starts_with("map<"));
+    }
 }
