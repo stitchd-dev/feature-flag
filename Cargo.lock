@@ -4050,6 +4050,7 @@ dependencies = [
  "stitchd-stats-service",
  "thiserror 2.0.18",
  "tokio",
+ "tonic",
  "tracing",
  "tracing-subscriber",
  "uuid",
