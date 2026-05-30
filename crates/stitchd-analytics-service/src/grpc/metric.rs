@@ -1260,7 +1260,12 @@ mod handler_tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Aborted);
-        assert!(err.message().contains("expected=1"));
+        // Canonical version-conflict message (INCON-E005): "expected {e}, actual {a}".
+        assert!(
+            err.message().contains("expected 1"),
+            "message: {}",
+            err.message()
+        );
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]
