@@ -477,7 +477,6 @@ impl AuthUserRepository for PgAuthUserRepository {
 mod tests {
     use super::*;
 
-    #[allow(dead_code)]
     async fn seed_org(pool: &PgPool) -> stitchd_core::id::OrganisationId {
         let org_id = stitchd_core::id::OrganisationId::new();
         sqlx::query!(
