@@ -53,6 +53,7 @@ use stitchd_proto::analytics::v1::{
 };
 
 use crate::error::GatewayError;
+use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
 use super::require_permission;
@@ -64,10 +65,9 @@ use super::require_permission;
 pub struct ListMetricsQuery {
     /// Environment UUID — required.
     pub env_id: String,
-    /// 0-based offset; defaults to 0 when unset.
-    pub offset: Option<u64>,
-    /// Page size; defaults to 50 when unset, capped at 200 server-side.
-    pub limit: Option<u64>,
+    /// Pagination (page + per_page, 1-based); translated to offset/limit for gRPC.
+    #[serde(flatten)]
+    pub pagination: PaginationParams,
     /// Optional kind filter (`aggregation` | `ratio` | `funnel`).
     pub kind: Option<String>,
     /// Optional event-key filter — restricts results to metrics that
@@ -186,15 +186,6 @@ pub struct PreviewMetricResponseJson {
     /// Present whenever the analytics layer cannot produce real data yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warning: Option<String>,
-}
-
-/// Paginated list response — mirrors the proto `ListMetricsResponse`.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ListMetricsResponseJson {
-    pub items: Vec<MetricJson>,
-    pub total: u64,
-    pub offset: u64,
-    pub limit: u64,
 }
 
 // ─── Gateway response JSON types ─────────────────────────────────────────────
@@ -476,15 +467,15 @@ pub async fn create_metric(
     tag = "metrics",
     params(
         ("env_id" = String, Query, description = "Environment ID"),
-        ("offset" = Option<u64>, Query, description = "0-based offset (default 0)"),
-        ("limit" = Option<u64>, Query, description = "Page size (default 50, max 200)"),
+        ("page" = Option<u32>, Query, description = "1-based page number (default 1)"),
+        ("per_page" = Option<u32>, Query, description = "Page size (default 50, max 200)"),
         ("kind" = Option<String>, Query,
             description = "Filter by kind: aggregation | ratio | funnel"),
         ("event_key" = Option<String>, Query,
             description = "Filter to metrics directly referencing this event key"),
     ),
     responses(
-        (status = 200, description = "Paginated metrics", body = ListMetricsResponseJson),
+        (status = 200, description = "Paginated metrics"),
         (status = 400, description = "Invalid env_id"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden — missing metric:read"),
@@ -501,8 +492,8 @@ pub async fn list_metrics(
 
     let rpc = tonic::Request::new(ListMetricsRequest {
         environment_id: query.env_id,
-        offset: query.offset,
-        limit: query.limit,
+        offset: Some(query.pagination.offset()),
+        limit: Some(query.pagination.limit()),
         kind: query.kind,
         event_key: query.event_key,
     });
@@ -513,12 +504,11 @@ pub async fn list_metrics(
     for p in inner.items {
         items.push(proto_to_metric_json(p)?);
     }
-    Ok(Json(ListMetricsResponseJson {
+    Ok(Json(PaginatedResponse::new(
         items,
-        total: inner.total,
-        offset: inner.offset,
-        limit: inner.limit,
-    }))
+        inner.total,
+        &query.pagination,
+    )))
 }
 
 /// `GET /v1/metrics/{id}` — fetch one metric.
@@ -1358,7 +1348,7 @@ mod tests {
         let app = test_router(state);
         let mut req = Request::builder()
             .uri(format!(
-                "/v1/metrics?env_id={env}&offset=0&limit=2&kind=aggregation"
+                "/v1/metrics?env_id={env}&page=1&per_page=2&kind=aggregation"
             ))
             .body(Body::empty())
             .unwrap();
@@ -1369,6 +1359,7 @@ mod tests {
 
         let captured = mock.captured.list.lock().await.clone().unwrap();
         assert_eq!(captured.environment_id, env.to_string());
+        // page=1, per_page=2 translates to offset=0, limit=2 for the gRPC call.
         assert_eq!(captured.offset, Some(0));
         assert_eq!(captured.limit, Some(2));
         assert_eq!(captured.kind.as_deref(), Some("aggregation"));
@@ -1378,8 +1369,9 @@ mod tests {
             .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(parsed["total"], 5);
-        assert_eq!(parsed["offset"], 0);
-        assert_eq!(parsed["limit"], 2);
+        // Canonical PaginatedResponse envelope: page + per_page (INCON-P002).
+        assert_eq!(parsed["page"], 1);
+        assert_eq!(parsed["per_page"], 2);
         assert_eq!(parsed["items"].as_array().unwrap().len(), 2);
         // Domain MetricDefinition serialises with `kind` discriminator.
         assert_eq!(parsed["items"][0]["kind"], "aggregation");
@@ -1391,7 +1383,7 @@ mod tests {
     async fn test_update_metric_returns_409_on_stale_version() {
         let (state, mock) = make_state_with_mock().await;
         *mock.update.lock().await = Some(Err(Status::aborted(
-            "version conflict — expected=1, actual=2",
+            "version conflict: expected 1, actual 2",
         )));
 
         let app = test_router(state);

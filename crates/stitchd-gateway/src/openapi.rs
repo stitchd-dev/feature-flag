@@ -154,7 +154,6 @@ use utoipa::{
             crate::routes::metrics::PreviewMetricBody,
             crate::routes::metrics::PreviewMetricResponseJson,
             crate::routes::metrics::PreviewBucketJson,
-            crate::routes::metrics::ListMetricsResponseJson,
             crate::routes::metrics::ListMetricsQuery,
             crate::routes::metrics::AggregationConfigBody,
             crate::routes::metrics::RatioConfigBody,
