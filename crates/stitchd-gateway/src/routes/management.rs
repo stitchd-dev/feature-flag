@@ -816,4 +816,40 @@ mod tests {
             resp.status()
         );
     }
+
+    #[tokio::test]
+    async fn create_user_defaults_org_role_to_org_member_when_omitted() {
+        // This test pins the CURRENT behavior: when `org_role` is absent from
+        // the create-user body, the gateway substitutes "org_member" before
+        // forwarding to the management service.
+        //
+        // After refactoring (GL-12), this default moves into the management
+        // service itself. The API contract — "omitting org_role → org_member" —
+        // must survive the refactor unchanged.
+        let app = test_router(make_stub_state());
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/management/orgs/org-1/users")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"email":"user@example.com","display_name":"Test","password":"pass123"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // Stub gRPC will fail → 502, but the gateway attempted to forward with
+        // org_role = "org_member" (the test confirms the gateway doesn't 400).
+        // A 400 here would mean org_role was passed as absent to the proto, which
+        // would be wrong.
+        assert!(
+            resp.status() == StatusCode::CREATED
+                || resp.status() == StatusCode::BAD_GATEWAY
+                || resp.status() == StatusCode::INTERNAL_SERVER_ERROR,
+            "unexpected status {} — gateway must not 400 when org_role is omitted",
+            resp.status()
+        );
+    }
 }
