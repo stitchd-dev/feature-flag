@@ -1360,21 +1360,7 @@ mod handler_tests {
         timestamp_ms: i64,
         value_double: Option<f64>,
     ) {
-        use clickhouse::Row;
-        use serde::Serialize;
-        #[derive(Serialize, Row)]
-        struct InsertRow<'a> {
-            #[serde(with = "clickhouse::serde::uuid")]
-            env_id: uuid::Uuid,
-            contexts: Vec<(String, String)>,
-            metric_key: &'a str,
-            value_bool: Option<bool>,
-            value_int: Option<i64>,
-            value_double: Option<f64>,
-            timestamp: i64,
-            properties: Vec<(String, String)>,
-            occurred_at: i64,
-        }
+        use crate::grpc::test_support::InsertRow;
         let mut insert = client
             .insert::<InsertRow>("events")
             .await
