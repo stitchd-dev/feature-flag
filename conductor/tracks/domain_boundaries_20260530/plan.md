@@ -6,7 +6,7 @@ Safety net: the existing conformance/parity/e2e + unit suites are the
 characterization tests — they MUST stay green unchanged except where a contract
 change is explicitly approved.
 
-## Phase 1: Audit & Findings
+## Phase 1: Audit & Findings [checkpoint: 5a3a5b0]
 <!-- execution: parallel -->
 
 - [x] Task 1.1: Gateway leanness audit — classify every route in
