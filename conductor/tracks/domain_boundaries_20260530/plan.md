@@ -9,28 +9,28 @@ change is explicitly approved.
 ## Phase 1: Audit & Findings
 <!-- execution: parallel -->
 
-- [ ] Task 1.1: Gateway leanness audit — classify every route in
+- [x] Task 1.1: Gateway leanness audit — classify every route in
       `crates/stitchd-gateway/src/routes/*` as translation / orchestration /
       domain-logic-leak, with file:line evidence and the target service that
       should own each leaked rule.
   <!-- files: conductor/tracks/domain_boundaries_20260530/findings.md -->
-- [ ] Task 1.2: Domain-boundary audit — map cross-domain access; flag any
+- [x] Task 1.2: Domain-boundary audit — map cross-domain access; flag any
       service reaching into another domain's data/logic outside gRPC; confirm
       `stitchd-core`/`stitchd-db` ownership lines.
   <!-- files: conductor/tracks/domain_boundaries_20260530/findings.md -->
-- [ ] Task 1.3: Duplication audit — find repeated DTO↔proto mappers, error
+- [x] Task 1.3: Duplication audit — find repeated DTO↔proto mappers, error
       mapping, validation, ID/UUID conversions, ClickHouse row structs, hash/
       query helpers; propose a canonical home for each.
   <!-- files: conductor/tracks/domain_boundaries_20260530/findings.md -->
-- [ ] Task 1.4: Consistency audit — catalog divergent error handling,
+- [x] Task 1.4: Consistency audit — catalog divergent error handling,
       pagination, validation, naming, and RPC request/response shapes.
   <!-- files: conductor/tracks/domain_boundaries_20260530/findings.md -->
-- [ ] Task 1.5: Dead-code audit — unreferenced items, retired-feature remnants,
+- [x] Task 1.5: Dead-code audit — unreferenced items, retired-feature remnants,
       unreachable branches; tag each DELETE-NOW vs PROPOSE against product.md's
       active-module baseline (use `cargo +nightly udeps` / `-W dead_code` / grep
       evidence).
   <!-- files: conductor/tracks/domain_boundaries_20260530/findings.md -->
-- [ ] Task 1.6: Synthesize `findings.md` — merge 1.1–1.5 into one dispositioned
+- [~] Task 1.6: Synthesize `findings.md` — merge 1.1–1.5 into one dispositioned
       report (evidence, owning crate, disposition, risk, contract-impact flag);
       present the PROPOSE/contract-affecting items for approval; record agreed
       conventions seed for `patterns.md`.
