@@ -60,7 +60,7 @@ change is explicitly approved.
       OpenAPI snapshot + contract-check for any approved contract changes. <!-- bcedef0 -->
 - [ ] Task: Conductor - User Manual Verification 'Lean-Gateway Refactor' (Protocol in workflow.md)
 
-## Phase 3: De-duplication & Consistency
+## Phase 3: De-duplication & Consistency [checkpoint: b025912]
 <!-- execution: sequential -->
 <!-- depends: phase2 -->
 
