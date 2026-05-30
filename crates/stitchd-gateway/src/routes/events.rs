@@ -579,21 +579,17 @@ async fn forward_to_analytics(
 ) -> Result<axum::response::Response, GatewayError> {
     use axum::response::IntoResponse;
 
-    let mut proto_events: Vec<ProtoTrackEvent> =
+    let proto_events: Vec<ProtoTrackEvent> =
         body.events.into_iter().map(json_event_to_proto).collect();
-
-    if mark_test {
-        for ev in &mut proto_events {
-            ev.properties
-                .insert("_test".to_string(), "true".to_string());
-        }
-    }
 
     // env_id resolution is metadata-first on the analytics side, but we also
     // mirror it into the body so direct callers (tests) can drive the RPC.
+    // The `mark_test` flag is forwarded to analytics-service, which applies
+    // the `properties["_test"] = "true"` stamp server-side (GL-10).
     let mut tonic_req = TonicRequest::new(ProtoTrackEventsRequest {
         env_id: env_id.to_string(),
         events: proto_events,
+        mark_test: if mark_test { Some(true) } else { None },
     });
     let env_id_value = env_id.parse().map_err(|_| {
         GatewayError::Upstream(format!("env_id is not valid gRPC metadata: {env_id:?}"))
@@ -2265,7 +2261,12 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
-    // ── 4. Test-mark: every event gets properties["_test"] = "true" ─────────
+    // ── 4. Test-mark: gateway sets mark_test=true in the proto request ──────
+    //
+    // After GL-10, the gateway no longer stamps `properties["_test"] = "true"`
+    // itself; it delegates to analytics-service by setting `mark_test = true`
+    // in the `TrackEventsRequest`. This test verifies the gateway forwards the
+    // flag correctly; the analytics-service unit tests verify the stamping.
 
     #[tokio::test]
     async fn test_admin_track_marks_events_as_test() {
@@ -2295,11 +2296,17 @@ mod tests {
         assert_eq!(captured.len(), 1);
         let (_env_meta, body) = &captured[0];
         assert_eq!(body.events.len(), 2);
+        // Gateway delegates stamping to analytics-service via mark_test flag (GL-10).
+        assert_eq!(
+            body.mark_test,
+            Some(true),
+            "admin-track must set mark_test=true in the proto request"
+        );
+        // Events arrive without _test property — the analytics-service applies it.
         for ev in &body.events {
-            assert_eq!(
-                ev.properties.get("_test").map(String::as_str),
-                Some("true"),
-                "admin-fired events must carry _test=true marker"
+            assert!(
+                !ev.properties.contains_key("_test"),
+                "gateway must NOT pre-stamp _test on events; analytics-service does that"
             );
         }
     }
