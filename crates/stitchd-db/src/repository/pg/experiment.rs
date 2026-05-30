@@ -620,24 +620,10 @@ impl ExperimentRepository for PgExperimentRepository {
             .map_err(RepositoryError::Database)?;
         }
 
-        // 3d. Freeze/unfreeze the bound flag rule (rule-bound experiments only).
-        //     Default-rule-bound experiments rely on the flag-level lock derived
-        //     in Phase 3 — there is no per-rule `frozen` column update.
-        if let Some(rule_id) = current.flag_rule_id {
-            if to == ExperimentStatus::Running {
-                sqlx::query("UPDATE feature_flag_rules SET frozen = TRUE WHERE id = $1")
-                    .bind(rule_id.as_uuid())
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(RepositoryError::Database)?;
-            } else if to == ExperimentStatus::Paused || to == ExperimentStatus::Stopped {
-                sqlx::query("UPDATE feature_flag_rules SET frozen = FALSE WHERE id = $1")
-                    .bind(rule_id.as_uuid())
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(RepositoryError::Database)?;
-            }
-        }
+        // 3d. Flag access-control during an experiment is enforced by the
+        //     whole-flag lock (`is_flag_locked`, derived from experiment status),
+        //     not a per-rule column. The retired `feature_flag_rules.frozen`
+        //     write path was removed in PROP-001 (domain_boundaries_20260530).
 
         // 3e. If from == Running and transitioning to Paused or Stopped: end active iteration.
         if from == ExperimentStatus::Running

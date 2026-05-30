@@ -616,11 +616,12 @@ pub trait ExperimentRepository: Send + Sync {
     /// On transition into `running`:
     /// - Creates a new `experiment_iterations` row (snapshot of current `metric_ids`,
     ///   `traffic_allocation`, `min_sample_size`)
-    /// - Sets `feature_flag_rules.frozen = true` for the experiment's `flag_rule_id`
     ///
     /// On transition into `paused` or `stopped`:
-    /// - Sets `feature_flag_rules.frozen = false` for the experiment's `flag_rule_id`
     /// - If ending an iteration (running→paused, running→stopped): sets `ended_at` = `now()` on the current active iteration
+    ///
+    /// Flag access-control during a running experiment is enforced by the
+    /// whole-flag lock (`is_flag_locked`), not a per-rule column.
     ///
     /// Uniqueness: if another experiment is already running or paused on the same `flag_rule_id`,
     /// return `RepositoryError::UniqueViolation { field: "flag_rule_id" }`.

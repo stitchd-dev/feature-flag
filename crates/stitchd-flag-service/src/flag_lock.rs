@@ -1,6 +1,7 @@
 //! Flag-lock derivation helper.
 //!
-//! The flag-lock model replaces today's per-rule `frozen` boolean with a
+//! The flag-lock model replaced the former per-rule `frozen` boolean (dropped
+//! in PROP-001, domain_boundaries_20260530) with a
 //! **whole-flag** lock derived from "is there an experiment in
 //! `running` or `paused` status on this flag?". When such an experiment
 //! exists, every admin mutation on the flag (variants, rules, default-rule
