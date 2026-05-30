@@ -155,9 +155,14 @@ pub async fn handle_create_event_definition(
     if r.key.trim().is_empty() {
         return Err(Status::invalid_argument("key cannot be empty"));
     }
-    if r.name.trim().is_empty() {
-        return Err(Status::invalid_argument("name cannot be empty"));
-    }
+    // GL-13: when name is absent or empty, default to the event key. This
+    // keeps the behaviour that was previously in the gateway's `create_event`
+    // handler, where `body.name.unwrap_or_else(|| body.event_key.clone())`.
+    let name = if r.name.trim().is_empty() {
+        r.key.trim().to_string()
+    } else {
+        r.name.trim().to_string()
+    };
 
     let env_id = parse_env_id(&r.environment_id)?;
     let metric_type = parse_metric_type(&r.metric_type)?;
@@ -175,7 +180,7 @@ pub async fn handle_create_event_definition(
         id: EventDefinitionId::new(),
         environment_id: env_id,
         key: r.key.trim().to_string(),
-        name: r.name.trim().to_string(),
+        name,
         description: r.description.and_then(|s| {
             let trimmed = s.trim().to_string();
             if trimmed.is_empty() {

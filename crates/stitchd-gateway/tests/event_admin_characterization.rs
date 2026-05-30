@@ -5,7 +5,7 @@
 //! service) has a green baseline to verify against.
 //!
 //! Specifically:
-//! - `POST /v1/events` with `name` absent → gateway forwards `name = event_key`
+//! - `POST /v1/events` with `name` absent → gateway forwards `name = ""` (analytics-service defaults to event_key, GL-13)
 //! - `POST /v1/events` with `name` present → gateway forwards the provided name
 //!
 //! Uses a mock `AnalyticsService` that records the `name` field passed to
@@ -304,14 +304,13 @@ fn build_router(state: Arc<GatewayState>) -> axum::Router {
 
 // ─── Characterization tests ───────────────────────────────────────────────────
 
-/// When `name` is absent from the request body, the gateway defaults `name`
-/// to `event_key` before calling `CreateEventDefinition`.
+/// When `name` is absent from the request body, the gateway passes an empty
+/// string to `CreateEventDefinition` and the analytics-service defaults `name`
+/// to `event_key` server-side (GL-13).
 ///
-/// This pins the domain-logic default that currently lives in the gateway's
-/// `create_event` handler (line: `let name = body.name.unwrap_or_else(|| body.event_key.clone())`).
-/// After refactoring (GL-xx), this default will move into the analytics service.
-/// The external API contract — "omitting name → name equals event_key" — must
-/// survive the refactor unchanged.
+/// This test verifies the gateway's forwarding contract after the refactor:
+/// the gateway forwards `name = ""` (empty) when name is absent, delegating
+/// the defaulting logic to the analytics-service.
 #[tokio::test]
 async fn create_event_without_name_defaults_name_to_event_key() {
     let svc = RecordingAnalyticsService::default();
@@ -349,9 +348,11 @@ async fn create_event_without_name_defaults_name_to_event_key() {
         1,
         "expected exactly one CreateEventDefinition call"
     );
+    // After GL-13, the gateway passes name="" when absent; the analytics-service
+    // defaults it to the event_key. The mock records what the gateway sent.
     assert_eq!(
-        names[0], "button_clicked",
-        "gateway must default name to event_key when name is absent; got {:?}",
+        names[0], "",
+        "gateway must forward empty name when name is absent (analytics-service defaults it); got {:?}",
         names[0]
     );
 }

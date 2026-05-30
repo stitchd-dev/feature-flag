@@ -216,7 +216,9 @@ pub async fn create_event(
     State(state): State<Arc<GatewayState>>,
     Json(body): Json<CreateEventBody>,
 ) -> Result<(StatusCode, Json<EventJson>), GatewayError> {
-    let name = body.name.unwrap_or_else(|| body.event_key.clone());
+    // GL-13: name defaulting (to key when absent) moved into analytics-service.
+    // Gateway passes the name through as-is; empty string signals "use the key".
+    let name = body.name.unwrap_or_default();
     let schema_json = body.schema.as_ref().map(serde_json::Value::to_string);
     let proto_req = tonic::Request::new(CreateEventDefinitionRequest {
         environment_id: body.environment_id,
