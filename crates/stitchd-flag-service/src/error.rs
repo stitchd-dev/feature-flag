@@ -12,6 +12,12 @@ use tonic::Status;
 /// Format: `"flag_locked_by_experiment:<uuid>"`.
 pub const FLAG_LOCKED_STATUS_PREFIX: &str = "flag_locked_by_experiment:";
 
+/// Sentinel prefix stamped onto an `INVALID_ARGUMENT` status when a
+/// default-rule distribution fails validation, so the gateway can rebuild the
+/// structured 422 body (`{ "error": "invalid_distribution", "message": "..." }`)
+/// without inspecting free-form messages. Mirrored by the gateway's copy.
+pub const INVALID_DISTRIBUTION_STATUS_PREFIX: &str = "invalid_distribution:";
+
 /// Errors that can occur in the flag service.
 #[derive(Debug, Error)]
 pub enum FlagServiceError {
@@ -102,7 +108,7 @@ impl From<FlagServiceError> for Status {
                 Self::invalid_argument(format!("invalid_hash_inputs: {msg}"))
             }
             FlagServiceError::UnknownDefaultRuleVariant { variant_key } => Self::invalid_argument(
-                format!("invalid_distribution: unknown variant_key `{variant_key}`"),
+                format!("{INVALID_DISTRIBUTION_STATUS_PREFIX} unknown variant_key `{variant_key}`"),
             ),
             FlagServiceError::FailedPrecondition(msg) => Self::failed_precondition(msg),
             FlagServiceError::FlagLocked { experiment_id } => {

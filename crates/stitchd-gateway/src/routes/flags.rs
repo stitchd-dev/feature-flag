@@ -1200,27 +1200,13 @@ pub async fn set_default_rule_distribution(
     });
 
     let mut client = state.flag_client.lock().await;
-    let resp = match client.set_default_rule_distribution(req).await {
-        Ok(r) => r,
-        Err(s) => {
-            // The flag-service returns `INVALID_ARGUMENT` with a message
-            // prefixed `invalid_distribution:` when the distribution fails
-            // validation. The gateway rewrites that into a structured 422
-            // body the admin UI can branch on. Lock-precondition errors
-            // are already handled by `GatewayError::from(tonic::Status)`.
-            if s.code() == tonic::Code::InvalidArgument
-                && s.message().starts_with("invalid_distribution:")
-            {
-                return Err(GatewayError::InvalidDistribution(
-                    s.message()
-                        .trim_start_matches("invalid_distribution:")
-                        .trim()
-                        .to_string(),
-                ));
-            }
-            return Err(GatewayError::from(s));
-        }
-    };
+    // `invalid_distribution:` and `flag_locked_by_experiment:` sentinels are
+    // both decoded centrally by `GatewayError::from(tonic::Status)` → structured
+    // 422 / 409 bodies the admin UI branches on.
+    let resp = client
+        .set_default_rule_distribution(req)
+        .await
+        .map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     let flag_json = inner
         .flag

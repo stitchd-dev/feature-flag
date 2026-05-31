@@ -1446,8 +1446,12 @@ impl FlagService for FlagServiceImpl {
                     })
                     .collect(),
             };
-            dist.validate()
-                .map_err(|e| Status::invalid_argument(format!("invalid_distribution: {e}")))?;
+            dist.validate().map_err(|e| {
+                Status::invalid_argument(format!(
+                    "{} {e}",
+                    crate::error::INVALID_DISTRIBUTION_STATUS_PREFIX
+                ))
+            })?;
 
             // Phase 4 of flag_eval_unify_20260522: variant_key referential
             // integrity. Reinstates the diagnostic that Phase 2 had to drop
