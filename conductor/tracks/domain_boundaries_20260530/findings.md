@@ -370,3 +370,45 @@ Use `uint64 version` for all optimistic-lock version fields. Never `int64`.
 ### CRUD RPC Naming
 Admin CRUD: separate `Create`/`Update`/`Delete` RPCs. `Mutate*` pattern reserved ONLY for SDK synchronization path (flags, segments SDK RPC) where a single RPC must support multiple mutation kinds in one roundtrip.
 ```
+
+---
+
+## Follow-up Resolutions (post-merge-prep, 2026-05-31)
+
+Worked the three deferred/filed items after the live-DB verification pass.
+
+### f70 — `experiments.analysis_type` stale test seeds — DONE
+Pre-existing (identical on `main`): 4 ClickHouse-MV/dict/backfill test files seeded
+`experiments(... analysis_type)` with a literal `'frequentist'`, but the table has
+no such column. Removed the column + value from all 6 INSERTs. All 4 binaries green
+on live DB (13 tests). `feature-flag-f70` closed.
+
+### GL-06 — `invalid_distribution:` string-parsing — DONE
+Brought the `invalid_distribution:` sentinel to the same pattern as the sibling
+`flag_locked_by_experiment:` one: a shared `pub const INVALID_DISTRIBUTION_STATUS_PREFIX`
+in `flag-service::error` (used by both producers), mirrored in the gateway, decoded
+centrally in `GatewayError::from(tonic::Status)`. The `set_default_rule_distribution`
+route lost its inline `s.message().starts_with(...)` block → plain `map_err(from)`.
+REST contract unchanged (422 `{error:"invalid_distribution",message}`). Unit tests added.
+
+### GL-07 — `evaluate_preview` opaque results_json — SCOPED (full proto restructure WONT-FIX)
+**Done:** the gateway no longer deserializes `results_json` into untyped
+`serde_json::Value` + hand-picks `v["field"].as_u64().unwrap_or(0)`. A pure
+`map_preview_results()` deserializes into the canonical
+`stitchd_core::evaluation::preview::ContextPreviewResult` and maps typed → DTO
+(compile-time-checked). Output byte-identical; unit characterization tests added.
+
+**Deliberately NOT done — the full structured-proto restructure originally proposed:**
+1. The request-side UI-flat-list → `EvaluationContext`-bundle reshape is legitimate
+   gateway **translation**, not a domain-logic leak. Teaching the flag-service's
+   domain gRPC API about the admin UI's flat `_type`/`key` wire shape would couple a
+   domain service to a UI presentation format — worsening boundaries.
+2. The response payload is deeply nested + dynamic: a **recursive** `ConditionNode`
+   tree (Leaf/And/Or/Not) and arbitrary-JSON `variant_value`. A proto mirror would
+   still need `google.protobuf.Value`/`Struct` for those parts, so it yields little
+   real leanness for a large, risky change to a user-facing debug surface.
+3. The opaque-string wire is type-safe in practice (both ends share `stitchd_core`
+   types). This change makes that explicit on the consuming side without the churn.
+
+Net: every actionable audit item across all five categories is now executed, except
+the GL-07 proto restructure, which is recorded here as a reasoned WONT-FIX.
