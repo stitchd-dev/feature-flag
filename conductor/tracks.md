@@ -79,7 +79,6 @@ This file tracks all major tracks for the project.
 
 <!-- ARCHIVED: integration_bugfix_20260524 (2026-05-24) — Integration Bug Hunt & Fix: 34 bugs found and fixed across gateway, db, experimentation-service, admin UI, analytics, and SDK. Full run of all functional use cases against a live stack. See conductor/archive/integration_bugfix_20260524/ -->
 
----
+<!-- ARCHIVED: domain_boundaries_20260530 (2026-05-31) — Domain-Boundary Refactor: Lean Gateway, Dedup, Dead-Code Audit. Audit-first (5 categories: 14 gateway leaks, 5 boundary violations, 8 dup groups, 16 consistency issues, 10 dead-code items). Phase 2 moved 11/14 leaks into owning services (backward-compatible proto: enabled_override, REPLACE_VARIANTS/RULES, mark_test); Phase 3 dedup+canonical conventions→patterns.md; Phase 4 removed ~1,575 dead lines; PROP-001 dropped feature_flag_rules.frozen. Follow-ups: f70/GL-06/GL-07 + admin UI realignment. Merged to main 7be900e. CI green (tests 1988/0, clippy 0, admin 735/735, docs idempotent). See conductor/archive/domain_boundaries_20260530/ -->
 
-## [x] Track: Domain-Boundary Refactor — Lean Gateway, Dedup, Dead-Code Audit
-*Link: [./conductor/tracks/domain_boundaries_20260530/](./conductor/tracks/domain_boundaries_20260530/)*
+---
