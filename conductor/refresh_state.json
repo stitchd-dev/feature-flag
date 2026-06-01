@@ -1,32 +1,29 @@
 {
-  "last_refreshed": "2026-05-27T15:47:00Z",
+  "last_refreshed": "2026-05-31T00:00:00Z",
   "scope": "all",
-  "previous_refresh": "2026-05-22T03:55:00Z",
+  "previous_refresh": "2026-05-27T15:47:00Z",
   "changes": {
     "tech-stack.md": [
-      "Updated Postgres, ClickHouse, and ScyllaDB migrations to show they are collapsed into single V1 baselines (schema_cutover_20260525).",
-      "Removed legacy context_hash_specs dual-read references on stitchd-proto.",
-      "Documented u32 basis-point rollout precision for the Language technology layer.",
-      "Renamed ClickHouse table flag_evaluation_log_v2 to flag_evaluation_log."
+      "No change — already refreshed during domain_boundaries_20260530 Phase 5 (marker 2026-05-30: lean-gateway boundary, canonical error mapping, tonic optional feature on stitchd-db, backward-compatible proto additions, page/per_page pagination)."
     ],
     "product.md": [
-      "Added the completed schema_cutover_20260525 track to the Implementation Status table."
+      "Pagination section corrected: page-based page/per_page is now the single canonical contract (the /v1/metrics offset/limit envelope was retired in domain_boundaries_20260530).",
+      "Whole-flag lock note: the old per-rule frozen column + write path were removed (PROP-001).",
+      "Added the completed domain_boundaries_20260530 (Domain-Boundary Refactor) row to the Implementation Status table."
     ],
     "workflow.md": [
-      "Documented new CI Environment Notes including Vitest admin-frontend + coverage jobs gating docs-build, and test-util feature check on cargo sqlx prepare."
+      "Fixed the `cargo sqlx prepare` command in 'Before Committing' to use `--all-targets --features stitchd-sdk-rust/test-util` (matching CI's sqlx-check job) instead of the narrower `-- --tests`, which could leave queries uncached and fail CI — the exact gotcha hit during domain_boundaries_20260530 verification."
     ],
     "patterns.md": [
-      "Added new Basis Points Rollout Precision pattern under Schema Cutover Patterns."
+      "No change in this refresh — already consolidated during the domain_boundaries_20260530 archive: added central error-sentinel decode, UI<->domain translation is gateway work, typed deserialization of opaque-JSON-over-gRPC, and the Verification & CI Gotchas section (live-DB gate, sqlx-cache flag-match)."
     ]
   },
   "tracks_completed_since_last_refresh": [
-    "docs_refresh_20260522",
-    "flag_eval_unify_20260522",
-    "integration_bugfix_20260524",
-    "schema_cutover_20260525"
+    "domain_boundaries_20260530"
   ],
   "follow_up_drift_notes": [
-    "Reference-only ClickHouse migration folders (crates/stitchd-db/clickhouse-migrations/ and crates/stitchd-analytics-service/clickhouse-migrations/) still exist in the codebase; they were not deleted as described in the schema_cutover plan.",
-    "No Beads-vs-Conductor drift detected: all 1,163 issues are CLOSED, and there is no active/open plan."
+    "No Beads-vs-Conductor drift: epic feature-flag-8i6 and all children CLOSED; 0 open / 0 in_progress / 0 blocked (1193 closed). Archived plan.md ([x]) matches Beads.",
+    "Minor historical artifact: epic feature-flag-8i6's close reason says 'GL-06/GL-07/PROP-001 deferred' — those were actually completed in follow-up work AFTER the epic was closed; later bd notes on the epic record the completions. Not reopened.",
+    "Carried over from prior refresh (still true): reference-only ClickHouse migration folders (crates/stitchd-db/clickhouse-migrations/, crates/stitchd-analytics-service/clickhouse-migrations/) still exist."
   ]
 }

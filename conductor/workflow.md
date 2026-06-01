@@ -1,5 +1,5 @@
 # Project Workflow
-<!-- Last refreshed: 2026-05-27 (post schema_cutover_20260525 merge — updated docs-build job dependencies and sqlx-check prepare verification in CI) -->
+<!-- Last refreshed: 2026-05-31 (post domain_boundaries_20260530 — fixed sqlx-prepare command to match CI's --all-targets --features test-util check) -->
 
 ## Guiding Principles
 
@@ -234,14 +234,16 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
-# After adding new sqlx::query!/sqlx::query_scalar! macros — regenerate
-# the offline cache. The `-- --tests` flag is REQUIRED: by default `cargo
-# sqlx prepare` runs `cargo check` (not `cargo check --tests`), which
-# skips every macro in `#[cfg(test)]` code and the `tests/` directory.
-# Forgetting `-- --tests` silently leaves new test-only queries
-# uncached, causing CI (`SQLX_OFFLINE=true`) to fail with
-# `no cached data for this query`.
-SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --tests
+# After adding OR removing sqlx::query!/sqlx::query_scalar! macros — regenerate
+# the offline cache. Use the SAME flags the CI `sqlx-check` job verifies with
+# (`--all-targets --features stitchd-sdk-rust/test-util`), NOT a narrower
+# `-- --tests`. Preparing with only `--tests` can leave queries that compile
+# under `--all-targets`/the test-util feature uncached, so CI's
+# `cargo sqlx prepare --workspace --check -- --all-targets --features
+# stitchd-sdk-rust/test-util` then fails with `no cached data for this query`.
+# (Conversely, dropping a query — e.g. PROP-001 removing the frozen column —
+# prunes its cache entry; commit the .sqlx/ deletion.)
+SQLX_OFFLINE=false cargo sqlx prepare --workspace -- --all-targets --features stitchd-sdk-rust/test-util
 
 # After modifying a //! preamble, env-var, or .proto — regenerate doc
 # artifacts and confirm zero drift (this is what CI runs):

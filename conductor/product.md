@@ -1,6 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
-<!-- Last refreshed: 2026-05-27 (post schema_cutover_20260525 merge) -->
+<!-- Last refreshed: 2026-05-31 (post domain_boundaries_20260530 — pagination page/per_page canonical, frozen column dropped, refactor logged in status table) -->
 
 # Product Guide
 
@@ -72,6 +72,7 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 | **Experimentation as a whole — complete UI + Backend with eval-log-based first-exposure attribution, whole-flag lock, per-context-type stats, default-rule experiments, Frequentist + Bayesian + CUPED + SRM + Guardrails** | ✅ Complete |
 | Flag-Evaluation Unification — single `stitchd-core::evaluation::evaluate_flag` orchestrator drives preview + SDK; canonical `hash_inputs` selector list (cross-context Key + Parameter mixing) end-to-end through Admin UI → REST → PG → preview AND snapshot → SDK | ✅ Complete |
 | Schema Hard Cutover — collapsed 44 Postgres, 14 ClickHouse, and 5 ScyllaDB migrations into single V1 baselines; retired segment_rules, dual-write hash_inputs, and flag_evaluation_log_v2; migrated rollout percentages to u32 basis points (0.01% precision) | ✅ Complete |
+| Domain-Boundary Refactor (domain_boundaries_20260530) — lean gateway (REST↔gRPC translation + cross-cutting only; domain logic moved into owning services), de-duplication, canonical error/pagination conventions, dead-code removal (~1,575 lines), dropped dead `frozen` column. Behavior-preserving; backward-compatible proto additions only | ✅ Complete |
 
 ## Modules
 
@@ -119,7 +120,7 @@ behaviour (e.g. when building segment rules or flag targeting conditions).
 - Experiments reference **metric_ids** (cutover from raw event_key in migration `20260520000002_experiment_metrics_cutover.sql`); the per-iteration `metric_ids` column lives in `experiment_iterations`.
 - **Attribution model (post-`experimentation_full_20260521`):** first-exposure intent-to-treat (ITT), derived server-side from `flag_evaluation_log_v2`. SDKs are experiment-unaware — they do NOT tag events with `(experiment, iteration, variant)` tuples. Eval-log rows route through `experiment_assignments_mv` into `experiment_assignments`; stats queries JOIN `events_v2` ⨝ `experiment_assignments` on `(env_id, context_type, context_key)` and filter `e.occurred_at >= a.assigned_at` for strict ITT.
 - **Binding model:** an experiment binds to either (a) a percentage-distribution custom rule via `flag_rule_id`, OR (b) the flag's default-rule fallthrough via `targets_default_rule = true` (requires `feature_flags.default_rule_distribution`). XOR-constrained at the PG layer.
-- **Whole-flag lock:** while running/paused, every flag/variant/rule mutation (including default-rule-distribution updates) returns HTTP 409 `FLAG_LOCKED_BY_EXPERIMENT` with the experiment ID in the body. Replaces the old per-rule `frozen` flag.
+- **Whole-flag lock:** while running/paused, every flag/variant/rule mutation (including default-rule-distribution updates) returns HTTP 409 `FLAG_LOCKED_BY_EXPERIMENT` with the experiment ID in the body. Replaces the old per-rule `frozen` flag (whose dead column + write path were removed in `domain_boundaries_20260530`).
 - **Per-context-type analysis:** every experiment carries `unit_context_types text[] NOT NULL` (default `{user}`). All stats (Frequentist t-test / two-proportion Z, Bayesian posteriors, CUPED, SRM chi-square, guardrail direction) compute independently per context type and surface in the Admin UI via a context-type tab strip.
 - **Models:** Frequentist (Welch's t-test, two-proportion Z, Bonferroni correction for >2 variants) and Bayesian (Beta-Binomial / Normal-Normal posteriors, probability-to-beat-control, expected lift). CUPED variance reduction via per-experiment `pre_period_days`. Guardrail metrics flagged on direction violation.
 - **Recompute** is scheduled (60-min via `stitchd-stats-service`) plus event-driven via the `TriggerRecompute` gRPC RPC; on-demand from the Admin UI via `POST /v1/.../experiments/{id}/recompute`.
@@ -141,7 +142,7 @@ The admin console (`admin/`) is a React 19 + Vite SPA with full feature parity:
 - **Context Explorer:** Browse observed context types and their parameter registry (autocomplete source for rule builder)
 - **Eval Analytics:** Evaluation stats per flag via ClickHouse `eval_stats` route; sparklines in flag list
 - **Experiments / Environments / SDK Keys / Org Users / Audit Log:** Full management UI
-- **Pagination:** All list views use URL-driven offset pagination (`?page=N`) — `PaginationParams` + `PaginatedResponse<T>` backed by `COUNT(*) OVER()` window queries
+- **Pagination:** All list views use URL-driven page-based pagination (`?page=N&per_page=M`, 1-based) — the shared `PaginationParams` + `PaginatedResponse<T>` (`{items, total, page, per_page}`) backed by `COUNT(*) OVER()` window queries. (`domain_boundaries_20260530` made `page`/`per_page` the single canonical contract — the `/v1/metrics` route's old `offset`/`limit` envelope was retired.)
 
 ## Server-Side SDK (Rust — initial)
 - `SdkClient::init(config)` blocks until first definition sync via gRPC, then polls at a configurable interval.
