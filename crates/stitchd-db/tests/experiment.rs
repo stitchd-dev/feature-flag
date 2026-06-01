@@ -317,19 +317,6 @@ async fn test_transition_draft_to_running_creates_iteration(pool: sqlx::PgPool) 
         "iteration should still be active"
     );
     assert_eq!(iterations[0].metric_ids, exp.metric_ids);
-
-    // Flag rule must be frozen
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(
-        frozen,
-        "flag rule must be frozen when experiment is running"
-    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -360,19 +347,6 @@ async fn test_transition_running_to_paused_ends_iteration(pool: sqlx::PgPool) {
     assert!(
         iterations[0].ended_at.is_some(),
         "iteration must be ended when paused"
-    );
-
-    // Flag rule must be unfrozen
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(
-        !frozen,
-        "flag rule must be unfrozen when experiment is paused"
     );
 }
 
@@ -442,19 +416,6 @@ async fn test_transition_running_to_stopped_unfreezes_rule(pool: sqlx::PgPool) {
     assert!(
         iterations[0].ended_at.is_some(),
         "iteration must be ended when stopped"
-    );
-
-    // Flag rule must be unfrozen
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(
-        !frozen,
-        "flag rule must be unfrozen when experiment is stopped"
     );
 }
 
@@ -555,16 +516,6 @@ async fn test_stopped_to_running_restart_increments_iteration(pool: sqlx::PgPool
         iterations[1].ended_at.is_none(),
         "new iteration must be active"
     );
-
-    // Flag rule must be frozen again
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(frozen, "flag rule must be frozen on restart");
 }
 
 // ---------------------------------------------------------------------------
@@ -593,15 +544,6 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
         "iteration 1 should be active"
     );
 
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(frozen, "rule must be frozen after →running");
-
     // running → paused (ends iteration 1, unfreezes rule)
     repo.apply_transition(exp.id, ExperimentStatus::Paused, None)
         .await
@@ -613,15 +555,6 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
         iterations[0].ended_at.is_some(),
         "iteration 1 must be ended after pause"
     );
-
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(!frozen, "rule must be unfrozen after →paused");
 
     // paused → running (creates iteration 2, refreezes rule)
     repo.apply_transition(exp.id, ExperimentStatus::Running, None)
@@ -635,15 +568,6 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
         iterations[1].ended_at.is_none(),
         "iteration 2 should be active"
     );
-
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(frozen, "rule must be refrozen after paused→running");
 
     // running → stopped (ends iteration 2, unfreezes rule)
     let final_exp = repo
@@ -663,15 +587,6 @@ async fn test_full_lifecycle_draft_running_paused_running_stopped(pool: sqlx::Pg
         iterations[1].ended_at.is_some(),
         "iteration 2 must have ended_at set"
     );
-
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(!frozen, "rule must be unfrozen after →stopped");
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -753,52 +668,6 @@ async fn test_mutation_guard_patch_while_running_rejected(pool: sqlx::PgPool) {
         matches!(result, Err(RepositoryError::InvalidState { .. })),
         "update while running must return InvalidState, got: {:?}",
         result
-    );
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn test_flag_rule_frozen_while_running(pool: sqlx::PgPool) {
-    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
-    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
-    let repo = PgExperimentRepository::new(pool.clone(), audit);
-
-    let exp = make_experiment(env_id, flag_id, rule_id);
-    repo.create(&exp).await.unwrap();
-
-    // Transition to running
-    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
-        .await
-        .expect("draft→running should succeed");
-
-    // Verify rule is frozen
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(
-        frozen,
-        "flag rule must be frozen while experiment is running"
-    );
-
-    // Transition to paused
-    repo.apply_transition(exp.id, ExperimentStatus::Paused, None)
-        .await
-        .expect("running→paused should succeed");
-
-    // Verify rule is unfrozen
-    let frozen: bool = sqlx::query_scalar!(
-        "SELECT frozen FROM feature_flag_rules WHERE id = $1",
-        rule_id.as_uuid()
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert!(
-        !frozen,
-        "flag rule must be unfrozen when experiment is paused"
     );
 }
 

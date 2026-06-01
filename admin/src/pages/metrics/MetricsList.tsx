@@ -49,8 +49,8 @@ export interface MetricResponse {
 interface ListMetricsResponse {
   items: MetricResponse[]
   total: number
-  offset: number
-  limit: number
+  page: number
+  per_page: number
 }
 
 type KindFilter = 'all' | 'aggregation' | 'ratio' | 'funnel'
@@ -118,8 +118,8 @@ export function MetricsList() {
       if (!envId) return { items: [], total: 0 }
       const qs = new URLSearchParams({
         env_id: envId,
-        offset: String((p - 1) * perPage),
-        limit: String(perPage),
+        page: String(p),
+        per_page: String(perPage),
       })
       if (kindFilter !== 'all') qs.set('kind', kindFilter)
       const { data } = await api.get<ListMetricsResponse>(`/v1/metrics?${qs}`, { signal })

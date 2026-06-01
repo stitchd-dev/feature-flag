@@ -46,8 +46,8 @@ interface MetricFormFieldsProps {
 interface ListMetricsResponse {
   items: MetricResponse[]
   total: number
-  offset: number
-  limit: number
+  page: number
+  per_page: number
 }
 
 const AGGREGATOR_OPTIONS = AGGREGATORS.map((a) => ({ value: a, label: a }))
@@ -317,7 +317,7 @@ function RatioFields({ envId, excludeMetricId }: { envId: string; excludeMetricI
     setLoading(true)
     setLoadError(null)
     api
-      .get<ListMetricsResponse>(`/v1/metrics?env_id=${envId}&limit=200&kind=aggregation`)
+      .get<ListMetricsResponse>(`/v1/metrics?env_id=${envId}&per_page=200&kind=aggregation`)
       .then(({ data }) => {
         if (cancelled) return
         setMetrics(data.items ?? [])

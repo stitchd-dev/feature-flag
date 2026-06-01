@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    auth::types::{OrgRole, UserStatus},
+    auth::types::OrgRole,
     id::{OrganisationId, UserId},
 };
 
@@ -117,11 +117,6 @@ pub enum JwtError {
     #[error("JWT decode error: {0}")]
     Decode(String),
 }
-
-// Make JwtError usable as a clippy-clean unused import suppressor for UserStatus
-// (referenced only in the middleware, not directly here — suppress warning)
-#[allow(dead_code)]
-fn _use_user_status(_: UserStatus) {}
 
 #[cfg(test)]
 mod tests {

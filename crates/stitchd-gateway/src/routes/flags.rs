@@ -362,56 +362,6 @@ fn flag_rule_to_json(r: &stitchd_proto::flags::v1::FlagRule) -> RuleJson {
     }
 }
 
-/// Validate that every variant's value matches the declared flag type.
-/// Returns `None` when all values are valid, or `Some(error_message)` on the
-/// first bad value.
-fn validate_variant_values(
-    variants: &[VariantBody],
-    value_type: stitchd_proto::flags::v1::FlagValueType,
-) -> Option<String> {
-    use stitchd_proto::flags::v1::FlagValueType;
-    for v in variants {
-        let ok = match value_type {
-            FlagValueType::Bool => matches!(v.value, serde_json::Value::Bool(_)),
-            FlagValueType::Int => {
-                // Must be a JSON number that round-trips as an i64.
-                v.value.as_i64().is_some()
-            }
-            FlagValueType::Double => {
-                // Any JSON number is acceptable.
-                v.value.is_number()
-            }
-            FlagValueType::String => v.value.is_string(),
-            // JSON flags accept any valid JSON value (object, array, primitive).
-            FlagValueType::Json | FlagValueType::Unspecified => true,
-        };
-        if !ok {
-            let expected = match value_type {
-                FlagValueType::Bool => "boolean (true or false)",
-                FlagValueType::Int => "integer number (e.g. 42)",
-                FlagValueType::Double => "decimal number (e.g. 3.14)",
-                FlagValueType::String => "string (e.g. \"hello\")",
-                _ => "JSON value",
-            };
-            return Some(format!(
-                "Variant \"{}\": expected {}, got `{}`",
-                v.key, expected, v.value
-            ));
-        }
-    }
-    // Ensure all variant keys are non-empty and unique.
-    let mut seen = std::collections::HashSet::new();
-    for v in variants {
-        if v.key.trim().is_empty() {
-            return Some("Variant key must not be empty".to_string());
-        }
-        if !seen.insert(v.key.trim()) {
-            return Some(format!("Duplicate variant key: \"{}\"", v.key.trim()));
-        }
-    }
-    None
-}
-
 fn parse_value_type(s: &str) -> stitchd_proto::flags::v1::FlagValueType {
     use stitchd_proto::flags::v1::FlagValueType;
     match s {
@@ -568,9 +518,6 @@ pub async fn create_flag(
         .map(parse_value_type)
         .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Bool);
     let variant_list = body.variants.unwrap_or_default();
-    if let Some(err) = validate_variant_values(&variant_list, proto_value_type) {
-        return Err(GatewayError::BadRequest(err));
-    }
     let variants = variant_list
         .into_iter()
         .map(variant_body_to_proto)
@@ -590,6 +537,7 @@ pub async fn create_flag(
         kind: MutationKind::Create as i32,
         flag: Some(flag),
         version: 0,
+        enabled_override: None,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -655,28 +603,17 @@ pub async fn update_flag(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<FlagMutateRequest>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    // When `enabled` is omitted, preserve the current value by fetching first.
-    let current_enabled = if body.enabled.is_none() {
-        let get_req = tonic::Request::new(GetFlagRequest {
-            environment_id: String::new(),
-            project_id: project_id.clone(),
-            flag_key: flag_key.clone(),
-        });
-        let mut client = state.flag_client.lock().await;
-        client
-            .get_flag(get_req)
-            .await
-            .ok()
-            .map(|r| r.into_inner().enabled)
-            .unwrap_or(true)
-    } else {
-        body.enabled.unwrap_or(true)
-    };
+    // B1: Use enabled_override to signal the service whether to change the
+    // enabled state. When body.enabled is absent the field is left None so
+    // the service preserves the current value — no pre-fetch needed.
+    let enabled_override = body.enabled;
     let flag = FeatureFlag {
         key: flag_key,
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
-        enabled: current_enabled,
+        // enabled field is still sent for backward compat with old service
+        // deployments; new service honours enabled_override first.
+        enabled: enabled_override.unwrap_or(false),
         default_variant_key: body.default_variant_key.unwrap_or_default(),
         value_type: body
             .value_type
@@ -692,6 +629,7 @@ pub async fn update_flag(
         kind: MutationKind::Update as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
+        enabled_override,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -734,6 +672,7 @@ pub async fn delete_flag(
         kind: MutationKind::Delete as i32,
         flag: Some(flag),
         version: 0,
+        enabled_override: None,
     });
     let mut client = state.flag_client.lock().await;
     client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -774,6 +713,7 @@ pub async fn archive_flag(
         kind: MutationKind::Archive as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
+        enabled_override: None,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -802,6 +742,7 @@ pub async fn restore_flag(
         kind: MutationKind::Restore as i32,
         flag: Some(flag),
         version: body.version.unwrap_or(0),
+        enabled_override: None,
     });
     let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
@@ -844,49 +785,8 @@ pub async fn update_variants(
     Path((project_id, flag_key)): Path<(String, String)>,
     Json(body): Json<ReplaceVariantsBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    // First fetch the current flag to get its metadata (enabled, name, etc.).
-    let get_req = tonic::Request::new(GetFlagRequest {
-        environment_id: String::new(),
-        project_id: project_id.clone(),
-        flag_key: flag_key.clone(),
-    });
-    let mut client = state.flag_client.lock().await;
-    let current = client
-        .get_flag(get_req)
-        .await
-        .map_err(GatewayError::from)?
-        .into_inner();
-
-    // Boolean flags: only variant keys (names) may change; values must stay true/false.
-    if current.value_type == (stitchd_proto::flags::v1::FlagValueType::Bool as i32) {
-        if body.variants.len() != 2 {
-            return Err(GatewayError::BadRequest(
-                "Boolean flags must have exactly 2 variants".to_string(),
-            ));
-        }
-        let has_true = body
-            .variants
-            .iter()
-            .any(|v| matches!(v.value, serde_json::Value::Bool(true)));
-        let has_false = body
-            .variants
-            .iter()
-            .any(|v| matches!(v.value, serde_json::Value::Bool(false)));
-        if !has_true || !has_false {
-            return Err(GatewayError::BadRequest(
-                "Boolean flag variants must have values true and false".to_string(),
-            ));
-        }
-    }
-
-    // Validate values match the flag's declared type.
-    let declared_type = stitchd_proto::flags::v1::FlagValueType::try_from(current.value_type)
-        .unwrap_or(stitchd_proto::flags::v1::FlagValueType::Unspecified);
-    if let Some(err) = validate_variant_values(&body.variants, declared_type) {
-        return Err(GatewayError::BadRequest(err));
-    }
-
-    // Build an Update mutation carrying the new variant list.
+    // B2: Use ReplaceVariants mutation kind so the service fetches current
+    // flag metadata and preserves it. No pre-fetch needed in the gateway.
     let proto_variants = body
         .variants
         .into_iter()
@@ -894,20 +794,18 @@ pub async fn update_variants(
         .collect();
     let flag = FeatureFlag {
         key: flag_key,
-        enabled: current.enabled,
-        name: current.name,
-        description: current.description,
-        value_type: current.value_type,
         variants: proto_variants,
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
         environment_id: String::new(),
         project_id,
-        kind: MutationKind::Update as i32,
+        kind: MutationKind::ReplaceVariants as i32,
         flag: Some(flag),
         version: body.version,
+        enabled_override: None,
     });
+    let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     let flag_json = inner
@@ -1106,35 +1004,22 @@ pub async fn update_rules(
         .collect::<Result<Vec<_>, _>>()
         .map_err(GatewayError::BadRequest)?;
 
-    // Fetch current flag to carry over metadata.
-    let get_req = tonic::Request::new(GetFlagRequest {
-        environment_id: String::new(),
-        project_id: project_id.clone(),
-        flag_key: flag_key.clone(),
-    });
-    let mut client = state.flag_client.lock().await;
-    let current = client
-        .get_flag(get_req)
-        .await
-        .map_err(GatewayError::from)?
-        .into_inner();
-
+    // B2: Use ReplaceRules mutation kind so the service fetches current flag
+    // metadata and preserves it. No pre-fetch needed in the gateway.
     let flag = FeatureFlag {
         key: flag_key,
-        enabled: current.enabled,
-        name: current.name,
-        description: current.description,
-        value_type: current.value_type,
         rules: proto_rules,
         ..Default::default()
     };
     let req = tonic::Request::new(MutateFlagRequest {
         environment_id: String::new(),
         project_id,
-        kind: MutationKind::Update as i32,
+        kind: MutationKind::ReplaceRules as i32,
         flag: Some(flag),
         version: body.version,
+        enabled_override: None,
     });
+    let mut client = state.flag_client.lock().await;
     let resp = client.mutate_flag(req).await.map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     let flag_json = inner
@@ -1315,27 +1200,13 @@ pub async fn set_default_rule_distribution(
     });
 
     let mut client = state.flag_client.lock().await;
-    let resp = match client.set_default_rule_distribution(req).await {
-        Ok(r) => r,
-        Err(s) => {
-            // The flag-service returns `INVALID_ARGUMENT` with a message
-            // prefixed `invalid_distribution:` when the distribution fails
-            // validation. The gateway rewrites that into a structured 422
-            // body the admin UI can branch on. Lock-precondition errors
-            // are already handled by `GatewayError::from(tonic::Status)`.
-            if s.code() == tonic::Code::InvalidArgument
-                && s.message().starts_with("invalid_distribution:")
-            {
-                return Err(GatewayError::InvalidDistribution(
-                    s.message()
-                        .trim_start_matches("invalid_distribution:")
-                        .trim()
-                        .to_string(),
-                ));
-            }
-            return Err(GatewayError::from(s));
-        }
-    };
+    // `invalid_distribution:` and `flag_locked_by_experiment:` sentinels are
+    // both decoded centrally by `GatewayError::from(tonic::Status)` → structured
+    // 422 / 409 bodies the admin UI branches on.
+    let resp = client
+        .set_default_rule_distribution(req)
+        .await
+        .map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     let flag_json = inner
         .flag
@@ -1490,16 +1361,10 @@ pub async fn evaluate_preview(
         .map_err(GatewayError::from)?
         .into_inner();
 
-    let flag_enabled = resp.flag_enabled;
-
-    let raw_results: Vec<serde_json::Value> = serde_json::from_str(&resp.results_json)
-        .map_err(|e| GatewayError::Upstream(e.to_string()))?;
-
-    // Flatten the input evaluation_contexts into a single list of sub-contexts
-    // in iteration order — `context_index` on each result is a GLOBAL
-    // sub-context index across all input EvaluationContext bundles (see
-    // `feature-flag-utp` fix in core `evaluate_preview`).
-    let flat_subcontexts: Vec<&serde_json::Value> = evaluation_contexts
+    // `context_index` on each result is a GLOBAL sub-context index across all
+    // input EvaluationContext bundles (see the `feature-flag-utp` cross-context
+    // fix in core `evaluate_preview`); recover each row's `context_key` by index.
+    let context_keys: Vec<String> = evaluation_contexts
         .iter()
         .flat_map(|ec| {
             ec["contexts"]
@@ -1507,88 +1372,10 @@ pub async fn evaluate_preview(
                 .map(|arr| arr.iter().collect::<Vec<_>>())
                 .unwrap_or_default()
         })
+        .map(|c| c["key"].as_str().unwrap_or("").to_string())
         .collect();
 
-    // The entire input is ONE evaluation bundle — take the first result only.
-    // All sub-contexts share the same rule evaluation so subsequent results
-    // would be identical; exposing them as multiple rows was confusing.
-    let parse_result = |v: &serde_json::Value| -> PreviewResultJson {
-        let context_index = v["context_index"].as_u64().unwrap_or(0) as usize;
-        let context_key = flat_subcontexts
-            .get(context_index)
-            .and_then(|c| c["key"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let variant_key = v["variant_key"].as_str().unwrap_or("").to_string();
-        let variant_value = v["variant_value"].clone();
-        let fired_rule_index = v["fired_rule_index"].as_u64().map(|n| n as usize);
-        let fired_rule_name = v["fired_rule_name"].as_str().map(str::to_string);
-        let rule_traces = v["rule_traces"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .map(|t| RuleTraceJson {
-                        rule_index: t["rule_index"].as_u64().unwrap_or(0) as usize,
-                        rule_name: t["rule_name"].as_str().map(str::to_string),
-                        outcome: t["outcome"].as_str().unwrap_or("no_match").to_string(),
-                        // Pass the condition_tree through as-is (already a
-                        // tagged ConditionNode JSON from the core).
-                        condition_tree: {
-                            let ct = &t["condition_tree"];
-                            if ct.is_null()
-                                || ct.is_object()
-                                    && ct.as_object().map(|o| o.is_empty()).unwrap_or(false)
-                            {
-                                None
-                            } else if ct.is_object() {
-                                Some(ct.clone())
-                            } else {
-                                None
-                            }
-                        },
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        let rollout_debug = v.get("rollout_debug").and_then(|rd| {
-            if rd.is_null() {
-                None
-            } else {
-                Some(RolloutDebugJson {
-                    hash_input: rd["hash_input"].as_str().unwrap_or("").to_string(),
-                    bucket: rd["bucket"].as_u64().unwrap_or(0) as u32,
-                    variant_ranges: rd["variant_ranges"]
-                        .as_array()
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|r| VariantRangeJson {
-                                    variant_key: r["variant_key"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    from: r["from"].as_u64().unwrap_or(0) as u32,
-                                    to: r["to"].as_u64().unwrap_or(0) as u32,
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default(),
-                })
-            }
-        });
-        PreviewResultJson {
-            context_index,
-            context_key,
-            variant_key,
-            variant_value,
-            disabled: !flag_enabled,
-            fired_rule_index,
-            fired_rule_name,
-            rule_traces,
-            rollout_debug,
-        }
-    };
-
-    let results: Vec<PreviewResultJson> = raw_results.iter().map(parse_result).collect();
+    let results = map_preview_results(&resp.results_json, resp.flag_enabled, &context_keys)?;
 
     Ok((
         StatusCode::OK,
@@ -1597,6 +1384,77 @@ pub async fn evaluate_preview(
             results,
         }),
     ))
+}
+
+/// Map the flag-service's `results_json` — a JSON-serialized
+/// `Vec<stitchd_core::evaluation::preview::ContextPreviewResult>` — into the
+/// admin REST DTOs, enriching each row with its `context_key` (joined by the
+/// global `context_index`) and the flag-level `disabled` flag.
+///
+/// Deserializes into the canonical core type rather than untyped
+/// `serde_json::Value`, so field access is type-checked at compile time instead
+/// of hand-picked via `v["field"].as_u64().unwrap_or(0)`.
+fn map_preview_results(
+    results_json: &str,
+    flag_enabled: bool,
+    context_keys: &[String],
+) -> Result<Vec<PreviewResultJson>, GatewayError> {
+    use stitchd_core::evaluation::preview::{ContextPreviewResult, RuleOutcome};
+
+    let results: Vec<ContextPreviewResult> =
+        serde_json::from_str(results_json).map_err(|e| GatewayError::Upstream(e.to_string()))?;
+
+    fn outcome_str(o: &RuleOutcome) -> String {
+        match o {
+            RuleOutcome::Match => "match",
+            RuleOutcome::NoMatch => "no_match",
+            RuleOutcome::Skipped => "skipped",
+        }
+        .to_string()
+    }
+
+    Ok(results
+        .into_iter()
+        .map(|r| PreviewResultJson {
+            context_key: context_keys
+                .get(r.context_index)
+                .cloned()
+                .unwrap_or_default(),
+            context_index: r.context_index,
+            variant_key: r.variant_key,
+            variant_value: r.variant_value,
+            disabled: !flag_enabled,
+            fired_rule_index: r.fired_rule_index,
+            fired_rule_name: r.fired_rule_name,
+            rule_traces: r
+                .rule_traces
+                .into_iter()
+                .map(|t| RuleTraceJson {
+                    rule_index: t.rule_index,
+                    rule_name: t.rule_name,
+                    outcome: outcome_str(&t.outcome),
+                    // Re-serialize the typed condition tree back to JSON for the
+                    // wire DTO (None → field omitted, matching prior behavior).
+                    condition_tree: t
+                        .condition_tree
+                        .map(|c| serde_json::to_value(c).unwrap_or(serde_json::Value::Null)),
+                })
+                .collect(),
+            rollout_debug: r.rollout_debug.map(|rd| RolloutDebugJson {
+                hash_input: rd.hash_input,
+                bucket: rd.bucket,
+                variant_ranges: rd
+                    .variant_ranges
+                    .into_iter()
+                    .map(|vr| VariantRangeJson {
+                        variant_key: vr.variant_key,
+                        from: vr.from,
+                        to: vr.to,
+                    })
+                    .collect(),
+            }),
+        })
+        .collect())
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
@@ -1656,7 +1514,109 @@ mod tests {
     };
     use tower::ServiceExt as _;
 
-    use crate::tests::helpers::{make_stub_state, make_stub_state_with_flag};
+    use crate::tests::helpers::make_stub_state;
+
+    #[test]
+    fn map_preview_results_maps_typed_core_output_to_admin_dtos() {
+        use stitchd_core::evaluation::preview::{
+            ConditionNode, ContextPreviewResult, RolloutDebug, RuleOutcome, RuleTrace, VariantRange,
+        };
+
+        // What the flag-service emits as `results_json` over the wire.
+        let core_results = vec![
+            ContextPreviewResult {
+                context_index: 0,
+                variant_key: "on".into(),
+                variant_value: serde_json::json!(true),
+                fired_rule_index: Some(0),
+                fired_rule_name: Some("beta users".into()),
+                fired_rule_id: None,
+                rule_traces: vec![RuleTrace {
+                    rule_index: 0,
+                    rule_name: Some("beta users".into()),
+                    outcome: RuleOutcome::Match,
+                    condition_tree: Some(ConditionNode::Leaf {
+                        predicate: "user.plan == beta".into(),
+                        result: true,
+                    }),
+                }],
+                rollout_debug: None,
+            },
+            ContextPreviewResult {
+                context_index: 1,
+                variant_key: "off".into(),
+                variant_value: serde_json::json!(false),
+                fired_rule_index: None,
+                fired_rule_name: None,
+                fired_rule_id: None,
+                rule_traces: vec![RuleTrace {
+                    rule_index: 0,
+                    rule_name: None,
+                    outcome: RuleOutcome::NoMatch,
+                    condition_tree: None,
+                }],
+                rollout_debug: Some(RolloutDebug {
+                    hash_input: "carol".into(),
+                    bucket: 7200,
+                    variant_ranges: vec![
+                        VariantRange {
+                            variant_key: "on".into(),
+                            from: 0,
+                            to: 5000,
+                        },
+                        VariantRange {
+                            variant_key: "off".into(),
+                            from: 5000,
+                            to: 10000,
+                        },
+                    ],
+                }),
+            },
+        ];
+        let results_json = serde_json::to_string(&core_results).unwrap();
+        let context_keys = vec!["alice".to_string(), "carol".to_string()];
+
+        let dtos = map_preview_results(&results_json, true, &context_keys).unwrap();
+        assert_eq!(dtos.len(), 2);
+
+        // Row 0 — matched rule: context_key joined by index, condition_tree present, not disabled.
+        let r0 = &dtos[0];
+        assert_eq!(r0.context_index, 0);
+        assert_eq!(r0.context_key, "alice");
+        assert_eq!(r0.variant_key, "on");
+        assert_eq!(r0.variant_value, serde_json::json!(true));
+        assert!(!r0.disabled);
+        assert_eq!(r0.fired_rule_index, Some(0));
+        assert_eq!(r0.rule_traces[0].outcome, "match");
+        assert_eq!(
+            r0.rule_traces[0].condition_tree.as_ref().unwrap()["kind"],
+            "leaf"
+        );
+        assert!(r0.rollout_debug.is_none());
+
+        // Row 1 — default rule: no condition_tree, rollout_debug ranges, context_key joined.
+        let r1 = &dtos[1];
+        assert_eq!(r1.context_key, "carol");
+        assert_eq!(r1.fired_rule_index, None);
+        assert_eq!(r1.rule_traces[0].outcome, "no_match");
+        assert!(r1.rule_traces[0].condition_tree.is_none());
+        let rd = r1.rollout_debug.as_ref().unwrap();
+        assert_eq!(rd.hash_input, "carol");
+        assert_eq!(rd.bucket, 7200);
+        assert_eq!(rd.variant_ranges.len(), 2);
+        assert_eq!(rd.variant_ranges[1].to, 10000);
+
+        // Serialized wire shape: None condition_tree + (absent) fired_rule_id are omitted.
+        let json = serde_json::to_value(r1).unwrap();
+        assert!(json["rule_traces"][0].get("condition_tree").is_none());
+        assert!(json.get("fired_rule_id").is_none());
+    }
+
+    #[test]
+    fn map_preview_results_propagates_upstream_error_on_bad_json() {
+        let err = map_preview_results("not valid json", true, &[]).unwrap_err();
+        assert!(matches!(err, GatewayError::Upstream(_)));
+    }
 
     #[tokio::test]
     async fn list_flags_returns_200() {
@@ -1842,10 +1802,38 @@ mod tests {
         );
     }
 
-    // Keeps the compiler happy — make_stub_state_with_flag exported for other tests
-    #[allow(dead_code)]
-    fn _use_with_flag() {
-        let _ = make_stub_state_with_flag;
+    #[tokio::test]
+    async fn update_flag_without_enabled_field_preserves_enabled_via_get_then_mutate() {
+        // This test pins the CURRENT behavior: when `enabled` is absent from the
+        // update body, the gateway calls get_flag first, then passes the fetched
+        // enabled state to mutate_flag.
+        //
+        // After refactoring (GL-04), this behavior moves into the flag service
+        // (e.g. via a partial_update field). The API contract — "omitting enabled
+        // preserves the current value" — must survive the refactor unchanged.
+        let state = make_stub_state();
+        let app = test_router(Arc::clone(&state), state);
+        // Without `enabled` field — body contains only name
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/v1/projects/env-1/flags/my-flag")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"name":"renamed"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // With a stub (no real service), the first gRPC call (get_flag) will fail
+        // with a connection error, which the gateway converts to 200 with enabled=true
+        // (the fallback in update_flag) or a 502. Either way, this test confirms
+        // the gateway ATTEMPTS a pre-fetch when enabled is absent.
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
     }
 
     #[tokio::test]

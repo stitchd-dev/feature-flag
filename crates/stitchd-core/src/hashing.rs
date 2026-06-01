@@ -1,31 +1,13 @@
-use crate::context::ParameterValue;
 use murmur3::murmur3_x64_128;
 use std::io::Cursor;
-
-/// Computes a consistent hash for a given context parameter and maps it to a percentage.
-///
-/// The input to the hash is the concatenation of `context_type`, `parameter_key`, and `parameter_value`.
-/// The output is a percentage between 0.000 and 100.000 with 0.1% granularity (mapped to 100,000 buckets).
-/// Used for segment membership checks — returns `f64` for compatibility with segment rule evaluation.
-pub fn compute_hash_percentage(
-    context_type: &str,
-    parameter_key: &str,
-    parameter_value: &ParameterValue,
-) -> f64 {
-    let input = format!("{}{}{}", context_type, parameter_key, parameter_value);
-    let mut cursor = Cursor::new(input);
-    let hash = murmur3_x64_128(&mut cursor, 0).unwrap_or(0);
-    ((hash % 100_000) as f64) / 1000.0
-}
 
 /// Calculates the allocation bucket for a flag rollout based on multiple targets.
 ///
 /// Returns a value in `[0, 9999]` representing basis points (1 = 0.01%).
 /// 10,000 buckets give 0.01% allocation precision.
 ///
-/// The bucket is derived from the canonical `hash % 100_000` reduction — the
-/// same one `compute_hash_percentage` uses — rescaled to basis points by
-/// dividing by 10 (`percent * 100`). This keeps every layer on one hash
+/// The bucket is derived from the canonical `hash % 100_000` reduction,
+/// rescaled to basis points by dividing by 10 (`percent * 100`). This keeps every layer on one hash
 /// reduction: a context that hashes to percentile 51.1% lands in bucket 5110
 /// here and 511 under the legacy 0.1% reference vectors. (The earlier
 /// `hash % 10_000` form was a different modulus, not a finer-grained version
@@ -45,32 +27,6 @@ pub fn calculate_allocation(flag_key: &str, env_id: &str, targets: &[String]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::ParameterValue;
-
-    #[test]
-    fn test_compute_hash_percentage_determinism() {
-        let val = ParameterValue::Str("user-123".to_string());
-        let h1 = compute_hash_percentage("user", "id", &val);
-        let h2 = compute_hash_percentage("user", "id", &val);
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn test_compute_hash_percentage_distribution() {
-        let mut results = Vec::new();
-        for i in 0..1000 {
-            let val = ParameterValue::Int(i);
-            let h = compute_hash_percentage("user", "id", &val);
-            assert!((0.0..100.0).contains(&h));
-            results.push(h);
-        }
-
-        // Check variety (basic check)
-        let mut unique: Vec<_> = results.iter().map(|&x| (x * 1000.0) as u64).collect();
-        unique.sort();
-        unique.dedup();
-        assert!(unique.len() > 950);
-    }
 
     // ── Basis-point contract (Red — these fail until Task 1.2 lands) ────────
 
@@ -101,21 +57,5 @@ mod tests {
             "expected varied distribution, got {} unique values",
             seen.len()
         );
-    }
-
-    #[test]
-    fn test_different_inputs_produce_different_hashes() {
-        let val1 = ParameterValue::Str("user-1".to_string());
-        let val2 = ParameterValue::Str("user-2".to_string());
-
-        let h1 = compute_hash_percentage("user", "id", &val1);
-        let h2 = compute_hash_percentage("user", "id", &val2);
-        assert_ne!(h1, h2);
-
-        let h3 = compute_hash_percentage("user", "other", &val1);
-        assert_ne!(h1, h3);
-
-        let h4 = compute_hash_percentage("other", "id", &val1);
-        assert_ne!(h1, h4);
     }
 }

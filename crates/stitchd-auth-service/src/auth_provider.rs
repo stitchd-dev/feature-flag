@@ -424,13 +424,6 @@ mod tests {
                 providers: StdMutex::new(vec![]),
             })
         }
-
-        #[allow(dead_code)]
-        fn with(p: AuthProvider) -> Arc<Self> {
-            Arc::new(Self {
-                providers: StdMutex::new(vec![p]),
-            })
-        }
     }
 
     #[async_trait]

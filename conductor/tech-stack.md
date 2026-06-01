@@ -1,5 +1,19 @@
 # Tech Stack
-<!-- Last refreshed: 2026-05-27 (post schema_cutover_20260525 merge) -->
+<!-- Last refreshed: 2026-05-30 (post domain_boundaries_20260530 — lean-gateway boundary enforced, canonical error mapping) -->
+
+<!--
+domain_boundaries_20260530 conventions (see conductor/patterns.md for the full set):
+- Gateway carries ZERO domain logic: pure REST↔gRPC translation + cross-cutting
+  (auth/rate-limit/quota) + multi-service orchestration. Every domain rule lives
+  in its owning service behind gRPC.
+- Canonical RepositoryError→tonic::Status mapping is available as
+  `impl From<RepositoryError> for tonic::Status` in `stitchd-db` behind the
+  optional `tonic` feature.
+- Backward-compatible proto additions this track: MutateFlagRequest.enabled_override
+  (proto3 optional), MutationKind.REPLACE_VARIANTS / REPLACE_RULES,
+  TrackEventsRequest.mark_test (proto3 optional). No breaking contract changes.
+-->
+
 
 ## Architecture
 

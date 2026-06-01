@@ -13,6 +13,12 @@ use thiserror::Error;
 /// this gateway can rebuild the structured 409 body.
 const FLAG_LOCKED_STATUS_PREFIX: &str = "flag_locked_by_experiment:";
 
+/// Sentinel prefix the flag-service stamps onto an `INVALID_ARGUMENT` status
+/// when a default-rule distribution fails validation, so the gateway can
+/// rebuild the structured 422 body without inspecting free-form messages.
+/// Mirrors `stitchd_flag_service::error::INVALID_DISTRIBUTION_STATUS_PREFIX`.
+const INVALID_DISTRIBUTION_STATUS_PREFIX: &str = "invalid_distribution:";
+
 /// Structured error variants returned by gateway handlers. The
 /// `*StructuredCode` variants surface a stable `error` discriminator in
 /// the JSON body so the admin UI / SDK can branch without parsing the
@@ -96,6 +102,13 @@ impl From<tonic::Status> for GatewayError {
             return GatewayError::FlagLockedByExperiment {
                 experiment_id: rest.trim().to_string(),
             };
+        }
+        // Decode the invalid-distribution sentinel before the generic
+        // InvalidArgument → BadRequest mapping so it surfaces as a structured 422.
+        if s.code() == tonic::Code::InvalidArgument
+            && let Some(rest) = s.message().strip_prefix(INVALID_DISTRIBUTION_STATUS_PREFIX)
+        {
+            return GatewayError::InvalidDistribution(rest.trim().to_string());
         }
         match s.code() {
             tonic::Code::Unauthenticated => GatewayError::Unauthorized(s.message().to_string()),
@@ -230,6 +243,30 @@ mod tests {
         let s = tonic::Status::invalid_argument("bad field");
         let err = GatewayError::from(s);
         assert!(matches!(err, GatewayError::BadRequest(_)));
+    }
+
+    #[test]
+    fn invalid_distribution_status_decodes_to_structured_variant() {
+        // The flag-service stamps the sentinel onto an InvalidArgument status;
+        // the gateway must decode it centrally (not via per-route string checks)
+        // into the structured 422 variant.
+        let s = tonic::Status::invalid_argument(format!(
+            "{INVALID_DISTRIBUTION_STATUS_PREFIX} percentages must sum to 100"
+        ));
+        let err = GatewayError::from(s);
+        match err {
+            GatewayError::InvalidDistribution(msg) => {
+                assert_eq!(msg, "percentages must sum to 100");
+            }
+            other => panic!("expected InvalidDistribution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_distribution_response_is_422() {
+        let err = GatewayError::InvalidDistribution("percentages must sum to 100".to_string());
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]

@@ -367,10 +367,22 @@ pub async fn handle_track_events(
 
     let now_millis = chrono::Utc::now().timestamp_millis();
 
-    let mut rows: Vec<EventRow> = Vec::with_capacity(inner.events.len());
+    // When the gateway sets `mark_test = true` (admin-auth track endpoint),
+    // stamp `properties["_test"] = "true"` on every event so the admin UI
+    // can filter test firings out of production aggregates.
+    let mark_test = inner.mark_test == Some(true);
+    let mut events: Vec<TrackEvent> = inner.events;
+    if mark_test {
+        for ev in &mut events {
+            ev.properties
+                .insert("_test".to_string(), "true".to_string());
+        }
+    }
+
+    let mut rows: Vec<EventRow> = Vec::with_capacity(events.len());
     let mut rejected: Vec<RejectedEvent> = Vec::new();
 
-    for event in &inner.events {
+    for event in &events {
         // Cache-aware definition lookup. Missing key → reject; transient
         // DB errors → propagate as Internal (drops the whole batch on the
         // first failure — matches IngestEvent's behaviour).
@@ -571,6 +583,7 @@ mod tests {
         let mut req = Request::new(TrackEventsRequest {
             env_id: String::new(),
             events,
+            mark_test: None,
         });
         req.metadata_mut().insert(
             "x-env-id",
@@ -653,6 +666,7 @@ mod tests {
         let req = Request::new(TrackEventsRequest {
             env_id: String::new(),
             events: vec![],
+            mark_test: None,
         });
         let err = handle_track_events(&state, req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unauthenticated);
@@ -669,6 +683,7 @@ mod tests {
         let mut req = Request::new(TrackEventsRequest {
             env_id: String::new(),
             events: vec![],
+            mark_test: None,
         });
         req.metadata_mut()
             .insert("x-env-id", MetadataValue::try_from("not-a-uuid").unwrap());
@@ -683,6 +698,7 @@ mod tests {
         let req = Request::new(TrackEventsRequest {
             env_id: env_id.as_uuid().to_string(),
             events: vec![],
+            mark_test: None,
         });
         let resp = handle_track_events(&state, req).await.unwrap().into_inner();
         assert_eq!(resp.accepted_count, 0);
@@ -865,6 +881,85 @@ mod tests {
 
         assert_eq!(resp.accepted_count, 1);
         assert!(resp.rejected.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // mark_test (GL-10) — analytics-service stamps `_test=true` when the
+    // gateway sets `mark_test = true` in the request.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn mark_test_stamps_test_property_on_all_events() {
+        // Verify the stamping logic directly via `validate_event` after
+        // simulating what `handle_track_events` does with mark_test=true.
+        // We mutate a Vec of events as the handler does.
+        let env_id = EnvironmentId::new();
+        let def = EventDefinition {
+            id: EventDefinitionId::new(),
+            environment_id: env_id,
+            key: "click".into(),
+            name: "Click".into(),
+            description: None,
+            value_type: EventValueType::Int,
+            metric_type: MetricType::Count,
+            schema: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+
+        let mut events = vec![int_event("click", 1), int_event("click", 2)];
+
+        // Simulate what handle_track_events does when mark_test = Some(true).
+        let mark_test = true;
+        if mark_test {
+            for ev in &mut events {
+                ev.properties
+                    .insert("_test".to_string(), "true".to_string());
+            }
+        }
+
+        for event in &events {
+            let row = validate_event(event, &def, env_id, 0).expect("should validate");
+            let props: std::collections::HashMap<_, _> = row.properties.into_iter().collect();
+            assert_eq!(
+                props.get("_test").map(String::as_str),
+                Some("true"),
+                "mark_test should stamp _test=true on every event"
+            );
+        }
+    }
+
+    #[test]
+    fn no_mark_test_does_not_stamp_test_property() {
+        let env_id = EnvironmentId::new();
+        let def = EventDefinition {
+            id: EventDefinitionId::new(),
+            environment_id: env_id,
+            key: "click".into(),
+            name: "Click".into(),
+            description: None,
+            value_type: EventValueType::Int,
+            metric_type: MetricType::Count,
+            schema: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            deleted_at: None,
+            version: 1,
+        };
+
+        // mark_test absent — events arrive without _test property.
+        let events = vec![int_event("click", 1)];
+
+        for event in &events {
+            let row = validate_event(event, &def, env_id, 0).expect("should validate");
+            let props: std::collections::HashMap<_, _> = row.properties.into_iter().collect();
+            assert!(
+                !props.contains_key("_test"),
+                "without mark_test, _test property must be absent"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

@@ -344,6 +344,9 @@ impl SegmentationService for SegmentationServiceImpl {
         let condition_expr = if seg_type == SegmentType::Rule && !r.condition_expr.is_empty() {
             let v: serde_json::Value = serde_json::from_slice(&r.condition_expr)
                 .map_err(|e| Status::invalid_argument(format!("invalid condition_expr: {e}")))?;
+            // A3: validate no forbidden operators (InSegment / NotInSegment /
+            // FlagEvaluatedAs) are present in the segment's own condition.
+            validate_segment_condition_expr_proto(&v)?;
             self.state
                 .segment_repo
                 .set_condition_expr(seg.id, Some(&v))
@@ -428,6 +431,8 @@ impl SegmentationService for SegmentationServiceImpl {
         {
             let v: serde_json::Value = serde_json::from_slice(&r.condition_expr)
                 .map_err(|e| Status::invalid_argument(format!("invalid condition_expr: {e}")))?;
+            // A3: validate no forbidden operators before persisting.
+            validate_segment_condition_expr_proto(&v)?;
             self.state
                 .segment_repo
                 .set_condition_expr(updated.id, Some(&v))
@@ -945,6 +950,56 @@ async fn mutate_delete(
         }),
         version: u64::try_from(seg.version).unwrap_or(0),
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Condition-expression validation (A3 — GL-11)
+// ---------------------------------------------------------------------------
+
+/// Ops that are not permitted inside a segment's own `condition_expr`.
+///
+/// - `InSegment` / `NotInSegment` — would create circular segment dependencies.
+/// - `FlagEvaluatedAs` — segments are resolved before flag evaluation, so a
+///   flag-based condition can never be satisfied.
+const SEGMENT_FORBIDDEN_OPS: &[&str] = &["InSegment", "NotInSegment", "FlagEvaluatedAs"];
+
+/// Walk a `ConditionExpr` JSON tree and return `Status::invalid_argument` if
+/// any leaf uses a forbidden operator (see [`SEGMENT_FORBIDDEN_OPS`]).
+///
+/// Mirrors the gateway's `validate_segment_condition_expr` but returns
+/// `tonic::Status` directly so it can be used in service handlers.
+fn validate_segment_condition_expr_proto(expr: &serde_json::Value) -> Result<(), Status> {
+    if expr.is_null() {
+        return Ok(());
+    }
+    // Leaf node: {"Leaf": <condition>}
+    if let Some(leaf) = expr.get("Leaf") {
+        if let Some(obj) = leaf.as_object() {
+            for op in obj.keys() {
+                if SEGMENT_FORBIDDEN_OPS.contains(&op.as_str()) {
+                    return Err(Status::invalid_argument(format!(
+                        "forbidden operator: '{op}' is not allowed in segment rules \
+                         (segments cannot reference other segments or flag evaluations)"
+                    )));
+                }
+            }
+        }
+        return Ok(());
+    }
+    // And / Or: recurse into children array
+    for key in &["And", "Or"] {
+        if let Some(arr) = expr.get(key).and_then(|v| v.as_array()) {
+            for child in arr {
+                validate_segment_condition_expr_proto(child)?;
+            }
+            return Ok(());
+        }
+    }
+    // Not: recurse into the single inner expression
+    if let Some(inner) = expr.get("Not") {
+        return validate_segment_condition_expr_proto(inner);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

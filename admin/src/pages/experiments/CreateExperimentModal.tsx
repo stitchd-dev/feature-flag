@@ -337,7 +337,7 @@ function MetricPicker({
     const ctrl = new AbortController()
     api
       .get<MetricsListResponse>(
-        `/v1/metrics?env_id=${encodeURIComponent(envId)}&limit=200`,
+        `/v1/metrics?env_id=${encodeURIComponent(envId)}&per_page=200`,
         { signal: ctrl.signal },
       )
       .then(({ data }) => {

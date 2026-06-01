@@ -6,6 +6,9 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+test-fixtures = []
+
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
 clickhouse = { workspace = true }

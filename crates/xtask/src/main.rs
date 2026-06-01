@@ -1,28 +1,21 @@
 //! `xtask` — workspace utility commands invoked via `cargo xtask <task>`.
 //!
-//! Implements three tasks:
+//! Implements two tasks:
 //! - `docs` — regenerate gRPC reference, OpenAPI JSON, env-vars table, SDK rustdoc, and
 //!   the mdBook site under `docs/book/`. Idempotent: running twice produces no diff.
 //! - `scylla-migrate` — apply pending CQL migrations from
 //!   `crates/stitchd-db/scylla-migrations/` against the configured ScyllaDB cluster.
-//! - `verify-hash-cutover` — re-hash a frozen corpus of `(legacy
-//!   context_hash_specs, new hash_inputs)` pairs and report bucket-identical vs.
-//!   operator-review-required percentages. See Phase 3 of
-//!   `conductor/tracks/flag_eval_unify_20260522/`.
 
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-mod verify_hash_cutover;
-
 fn main() -> Result<()> {
     let task = std::env::args().nth(1);
     match task.as_deref() {
         Some("docs") => docs(),
         Some("scylla-migrate") => scylla_migrate(),
-        Some("verify-hash-cutover") => verify_hash_cutover::run(),
         _ => {
             eprintln!("Usage: cargo xtask <task>");
             eprintln!();
@@ -31,9 +24,6 @@ fn main() -> Result<()> {
                 "  docs                  Regenerate all documentation and build the mdBook site"
             );
             eprintln!("  scylla-migrate        Apply pending ScyllaDB CQL migrations");
-            eprintln!(
-                "  verify-hash-cutover   Re-hash the percentage-rule cutover corpus and report drift"
-            );
             std::process::exit(1);
         }
     }
@@ -782,6 +772,9 @@ fn parse_field(line: &str) -> Option<FieldInfo> {
 
     let (ty, name) = if parts[0] == "repeated" {
         (format!("repeated {}", parts[1]), parts[2])
+    } else if parts[0] == "optional" {
+        // proto3 explicit-presence field: `optional Type name = N;`
+        (format!("optional {}", parts[1]), parts[2])
     } else if parts[0] == "map" || parts[0].starts_with("map<") {
         // map<K, V> name = N
         let (before, after) = code.split_once('>').unwrap_or(("map", ""));
@@ -1452,4 +1445,39 @@ fn project_root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
+}
+
+#[cfg(test)]
+mod parse_field_tests {
+    use super::parse_field;
+
+    #[test]
+    fn plain_scalar_field() {
+        let f = parse_field("string environment_id = 1;").unwrap();
+        assert_eq!(f.name, "environment_id");
+        assert_eq!(f.ty, "string");
+    }
+
+    #[test]
+    fn repeated_field() {
+        let f = parse_field("repeated TrackEvent events = 2;").unwrap();
+        assert_eq!(f.name, "events");
+        assert_eq!(f.ty, "repeated TrackEvent");
+    }
+
+    #[test]
+    fn optional_field_keeps_name_and_type() {
+        // Regression: proto3 `optional` prefix was previously mis-parsed as
+        // `ty=optional, name=bool`, dropping the real field name.
+        let f = parse_field("optional bool enabled_override = 6;").unwrap();
+        assert_eq!(f.name, "enabled_override");
+        assert_eq!(f.ty, "optional bool");
+    }
+
+    #[test]
+    fn map_field() {
+        let f = parse_field("map<string, string> properties = 3;").unwrap();
+        assert_eq!(f.name, "properties");
+        assert!(f.ty.starts_with("map<"));
+    }
 }

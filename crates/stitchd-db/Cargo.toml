@@ -6,6 +6,10 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[features]
+tonic = ["dep:tonic"]
+test-fixtures = []
+
 [dependencies]
 stitchd-core = { path = "../stitchd-core" }
 scylla = { workspace = true }
@@ -23,6 +27,7 @@ serde = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 metrics = { workspace = true }
+tonic = { version = "0.14", optional = true }
 
 [dev-dependencies]
 tracing-subscriber = { workspace = true }

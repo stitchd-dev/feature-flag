@@ -281,13 +281,13 @@ fn repo_err_to_status(err: RepositoryError, ctx: &str) -> Status {
             Status::not_found(format!("{ctx}: metric not found (id={id})"))
         }
         RepositoryError::VersionConflict { expected, actual } => Status::aborted(format!(
-            "{ctx}: version conflict — expected={expected}, actual={actual}"
+            "version conflict: expected {expected}, actual {actual}"
         )),
         RepositoryError::UniqueViolation { field } => Status::already_exists(format!(
             "{ctx}: unique violation on `{field}` (metric.key must be unique per environment)"
         )),
         RepositoryError::ForeignKeyViolation { constraint } => {
-            Status::failed_precondition(format!("{ctx}: foreign key violation on `{constraint}`"))
+            Status::invalid_argument(format!("referenced entity does not exist: {constraint}"))
         }
         RepositoryError::InvalidState { reason } => {
             Status::failed_precondition(format!("{ctx}: invalid state — {reason}"))
@@ -847,8 +847,12 @@ mod proto_mapping_tests {
             "update_metric",
         );
         assert_eq!(s.code(), tonic::Code::Aborted);
-        assert!(s.message().contains("expected=1"));
-        assert!(s.message().contains("actual=2"));
+        assert!(
+            s.message().contains("expected 1"),
+            "message: {}",
+            s.message()
+        );
+        assert!(s.message().contains("actual 2"), "message: {}", s.message());
     }
 
     #[test]
@@ -1256,7 +1260,12 @@ mod handler_tests {
         .await
         .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Aborted);
-        assert!(err.message().contains("expected=1"));
+        // Canonical version-conflict message (INCON-E005): "expected {e}, actual {a}".
+        assert!(
+            err.message().contains("expected 1"),
+            "message: {}",
+            err.message()
+        );
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]
@@ -1360,21 +1369,7 @@ mod handler_tests {
         timestamp_ms: i64,
         value_double: Option<f64>,
     ) {
-        use clickhouse::Row;
-        use serde::Serialize;
-        #[derive(Serialize, Row)]
-        struct InsertRow<'a> {
-            #[serde(with = "clickhouse::serde::uuid")]
-            env_id: uuid::Uuid,
-            contexts: Vec<(String, String)>,
-            metric_key: &'a str,
-            value_bool: Option<bool>,
-            value_int: Option<i64>,
-            value_double: Option<f64>,
-            timestamp: i64,
-            properties: Vec<(String, String)>,
-            occurred_at: i64,
-        }
+        use crate::grpc::test_support::InsertRow;
         let mut insert = client
             .insert::<InsertRow>("events")
             .await

@@ -169,6 +169,15 @@ pub fn generate_opaque_token() -> (String, String) {
     (raw_hex, hash_hex)
 }
 
+/// Hash a raw SDK key with SHA-256, returning a lowercase 64-character hex string.
+///
+/// The result is stored in the database and compared on every SDK-key authentication
+/// request.  All services must use this function to ensure consistent hashing.
+#[must_use]
+pub fn hash_sdk_key(raw: &str) -> String {
+    hex::encode(Sha256::digest(raw.as_bytes()))
+}
+
 /// Generate a 6-digit OTP and its Argon2id hash.
 ///
 /// Returns `(otp_string, argon2_hash)`:

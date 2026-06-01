@@ -63,3 +63,24 @@ Patterns, gotchas, and context discovered during implementation.
 ---
 
 <!-- Learnings from implementation will be appended below -->
+
+## [2026-05-30 Phase 1] — Audit & Findings (5 parallel agents)
+
+- **Implemented:** 5 parallel audit agents (gateway leanness, domain boundaries, duplication, consistency, dead-code); synthesized into findings.md
+- **Files changed:** findings.md, findings_1–5_*.md, plan.md, implement_state.json
+- **Commit:** 880277a
+
+- **Learnings:**
+  - Patterns: gateway has 62 clean TRANSLATION handlers + 14 DOMAIN-LOGIC-LEAK instances concentrated in flags.rs (6), experiments.rs (2), events.rs (2), segments.rs (3), other (3)
+  - Patterns: cross-cutting middleware (JWT/SDK auth, rate-limit, quota, permission guard, pagination normalisation, HTTP status code translation) is CORRECTLY in gateway
+  - Patterns: main boundary violation is analytics→stats direct crate import (HIGH severity); two new gRPC RPCs needed (PreviewMetric, InitSchedule)
+  - Patterns: stitchd-core::auth violates its own "no I/O" contract; used exclusively by auth-service; should move there
+  - Patterns: 8 duplicate groups found; hash_sdk_key×3 is the easiest consolidation; repo_err_to_status×7 is the highest-impact consolidation
+  - Patterns: 16 consistency issues; canonical patterns table agreed and recorded as conventions seed in findings.md
+  - Patterns: 6 DELETE-NOW + 4 PROPOSE dead-code items; DC-006 (370-line completed-migration tool) is biggest win
+  - Gotchas: evaluate_preview (GL-07) is the highest-risk refactor — opaque `results_json` string in response requires structured proto change
+  - Gotchas: DC-001 (spawn_eval_log_write) and PROP-003 (EvalContextRow type alias) must be removed together
+  - Gotchas: timestamp inconsistency (int64 *_ms vs string RFC 3339) is a breaking proto change for external clients
+  - Context: items with contract-impact flag must have user approval before Phase 2 can proceed
+
+---

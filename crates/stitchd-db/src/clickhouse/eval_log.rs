@@ -43,7 +43,7 @@ pub struct EvalLogRow {
     /// The rule UUID that matched, or `None` if the flag fell through to the
     /// default-rule path. `None` is also used when the row predates the
     /// schema migration (CH `Nullable(UUID)` column added 2026-05-21).
-    /// Populated by `stitchd-flag-service::eval_log_writer` in Phase 2 of the
+    /// Populated by `stitchd-flag-service::sdk_backend` in Phase 2 of the
     /// `experimentation_full_20260521` track. Used by `experiment_assignments_mv`
     /// to scope exposures to the experiment's bound rule (or default-rule).
     #[serde(with = "clickhouse::serde::uuid::option")]

@@ -615,15 +615,31 @@ pub async fn lookup_segment_entry(
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
+/// Serialise an optional `condition_expr` JSON value to bytes for the proto.
+/// Validation of forbidden operators now happens server-side in the
+/// segmentation-service (GL-11). Returns `GatewayError::BadRequest` only
+/// if the value cannot be serialised.
+fn encode_condition_expr(expr: Option<serde_json::Value>) -> Result<Vec<u8>, GatewayError> {
+    match expr {
+        None => Ok(Vec::new()),
+        Some(v) => serde_json::to_vec(&v)
+            .map_err(|e| GatewayError::BadRequest(format!("malformed condition_expr: {e}"))),
+    }
+}
+
 /// Ops that are not permitted inside a segment's own `condition_expr`.
 ///
-/// - `InSegment` / `NotInSegment` — would create circular segment dependencies.
-/// - `FlagEvaluatedAs` — segments are resolved before flag evaluation, so a
-///   flag-based condition can never be satisfied.
+/// Kept for unit-test coverage only; enforcement now lives in the
+/// segmentation-service gRPC handler (GL-11).
+#[cfg(test)]
 const SEGMENT_FORBIDDEN_OPS: &[&str] = &["InSegment", "NotInSegment", "FlagEvaluatedAs"];
 
 /// Walk a `ConditionExpr` JSON tree and return an error if any leaf uses a
 /// forbidden operator (see [`SEGMENT_FORBIDDEN_OPS`]).
+///
+/// Kept for unit-test coverage only; enforcement now lives in the
+/// segmentation-service gRPC handler (GL-11).
+#[cfg(test)]
 fn validate_segment_condition_expr(expr: &serde_json::Value) -> Result<(), GatewayError> {
     if expr.is_null() {
         return Ok(());
@@ -656,20 +672,6 @@ fn validate_segment_condition_expr(expr: &serde_json::Value) -> Result<(), Gatew
         return validate_segment_condition_expr(inner);
     }
     Ok(())
-}
-
-/// Validate, then serialise an optional `condition_expr` JSON value to bytes
-/// for the proto. Returns `GatewayError::BadRequest` if the JSON is
-/// unserializable or contains forbidden operators.
-fn encode_condition_expr(expr: Option<serde_json::Value>) -> Result<Vec<u8>, GatewayError> {
-    match expr {
-        None => Ok(Vec::new()),
-        Some(v) => {
-            validate_segment_condition_expr(&v)?;
-            serde_json::to_vec(&v)
-                .map_err(|e| GatewayError::BadRequest(format!("malformed condition_expr: {e}")))
-        }
-    }
 }
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────

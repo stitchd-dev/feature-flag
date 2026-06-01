@@ -131,8 +131,8 @@ pub async fn seed_rule_bound(pool: &PgPool, ucts: &[&str]) -> Seed {
     sqlx::query(
         "INSERT INTO experiments \
             (id, env_id, flag_id, flag_rule_id, name, status, traffic_allocation, \
-             targets_default_rule, unit_context_types, analysis_type) \
-         VALUES ($1, $2, $3, $4, $5, 'running', 100.0, false, $6, 'frequentist')",
+             targets_default_rule, unit_context_types) \
+         VALUES ($1, $2, $3, $4, $5, 'running', 100.0, false, $6)",
     )
     .bind(experiment_id)
     .bind(env_id)

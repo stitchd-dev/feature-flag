@@ -132,8 +132,8 @@ async fn seed_minimum(pool: &PgPool) -> Seed {
     sqlx::query(
         "INSERT INTO experiments \
             (id, env_id, flag_id, flag_rule_id, name, status, traffic_allocation, \
-             targets_default_rule, unit_context_types, analysis_type) \
-         VALUES ($1, $2, $3, $4, $5, 'running', 100.0, false, '{user}', 'frequentist')",
+             targets_default_rule, unit_context_types) \
+         VALUES ($1, $2, $3, $4, $5, 'running', 100.0, false, '{user}')",
     )
     .bind(rule_bound_exp)
     .bind(env_id)
@@ -164,8 +164,8 @@ async fn seed_minimum(pool: &PgPool) -> Seed {
     sqlx::query(
         "INSERT INTO experiments \
             (id, env_id, flag_id, flag_rule_id, name, status, traffic_allocation, \
-             targets_default_rule, unit_context_types, analysis_type) \
-         VALUES ($1, $2, $3, NULL, $4, 'running', 100.0, true, '{user,account}', 'frequentist')",
+             targets_default_rule, unit_context_types) \
+         VALUES ($1, $2, $3, NULL, $4, 'running', 100.0, true, '{user,account}')",
     )
     .bind(default_rule_exp)
     .bind(env_id)

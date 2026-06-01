@@ -8,3 +8,6 @@ pub mod experiment_results;
 pub mod ingestion;
 pub mod metric;
 pub mod service;
+
+#[cfg(test)]
+pub mod test_support;

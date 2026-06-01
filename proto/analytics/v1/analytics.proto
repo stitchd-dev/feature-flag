@@ -75,6 +75,11 @@ message TrackEventsRequest {
   // are present.
   string              env_id = 1;
   repeated TrackEvent events = 2;
+  // When true, the analytics-service stamps `properties["_test"] = "true"` on
+  // every event in the batch before storing. Set by the gateway's admin-auth
+  // track endpoint (`POST /v1/admin/events/track`) to mark test firings so
+  // the admin UI can filter them out of production aggregates.
+  optional bool       mark_test = 3;
 }
 
 // One rejected event with a machine-readable reason discriminant.
