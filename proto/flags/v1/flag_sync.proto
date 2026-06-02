@@ -71,6 +71,11 @@ message ExclusionGate {
   uint32 bucket_lo  = 2;
   // Exclusive upper bound of the assigned bucket range.
   uint32 bucket_hi  = 3;
+  // The context type whose `key` is hashed to derive the exclusion-group
+  // bucket (the experiment's randomization unit, e.g. "user"). If no context
+  // of this type is present in the evaluated bundle, the context is held out
+  // (not enrolled) — a missing randomization unit cannot be bucketed.
+  string context_type = 4;
 }
 
 message ContextHashSpec {

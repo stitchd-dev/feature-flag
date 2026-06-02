@@ -5,11 +5,14 @@ use crate::id::{EnvironmentId, ProjectId, SegmentId};
 use crate::rule_engine::error::RuleEngineError;
 use crate::rule_engine::eval_expr::evaluate_expr;
 use crate::rule_engine::eval_rules::evaluate_rules;
-use crate::rule_engine::types::{EvaluationInput, PercentageTarget, Rule, RuleOutput, TargetField};
+use crate::rule_engine::types::{
+    EvaluationInput, ExclusionGate, PercentageTarget, Rule, RuleOutput, TargetField,
+};
 use crate::segment::{SegmentDefinition, SegmentEvaluator};
 use crate::variants::VariantValue;
 use std::collections::{HashMap, HashSet};
 
+use super::exclusion::{group_bucket, range_contains};
 use super::preview::{RolloutDebug, RuleOutcome, RuleTrace, VariantRange, build_condition_tree};
 use super::types::{
     EvalOutcome, EvaluationTrace, FlagEvaluationResult, HashInputSpec, HashSelector,
@@ -201,6 +204,41 @@ fn evaluate_one(
         }
 
         let matched = evaluate_expr(&rule.condition, &input).unwrap_or(false);
+
+        // Exclusion-group gate: a matched percentage rule with a gate that does
+        // NOT admit this context is held out — the rule does not enroll the
+        // context. Treat it exactly as a non-match (fall through to the next
+        // rule / default outcome). The gate is pure rule data; no I/O.
+        let held_out = matched
+            && matches!(
+                &rule.output,
+                RuleOutput::Percentage {
+                    exclusion_gate: Some(gate),
+                    ..
+                } if !exclusion_gate_admits(gate, bundle)
+            );
+
+        if held_out {
+            if want_trace {
+                // Record the gated rule as NoMatch and annotate why via a
+                // RolloutDebug note (kept as a string so no new trace type is
+                // needed). The condition tree still reflects that targeting
+                // passed; the held-out reason explains the non-enrollment.
+                let condition_tree = Some(build_condition_tree(&rule.condition, &input));
+                rule_traces.push(RuleTrace {
+                    rule_index: i,
+                    rule_name: rule.name.clone(),
+                    outcome: RuleOutcome::NoMatch,
+                    condition_tree,
+                });
+                rollout_debug = Some(RolloutDebug {
+                    hash_input: EXCLUSION_HELD_OUT_NOTE.to_string(),
+                    bucket: 0,
+                    variant_ranges: Vec::new(),
+                });
+            }
+            continue;
+        }
 
         if matched {
             // Resolve variant from rule output.
@@ -406,6 +444,33 @@ pub(crate) fn resolve_hash_inputs(spec: &HashInputSpec, bundle: &[Context]) -> V
         .collect()
 }
 
+/// Held-out marker recorded in [`RolloutDebug::hash_input`] when an exclusion
+/// gate excludes a context from a percentage rule. Kept as a string note so no
+/// new trace type is required (the trace types live outside this module's
+/// ownership and stay frozen).
+pub(crate) const EXCLUSION_HELD_OUT_NOTE: &str = "held out by exclusion group";
+
+/// Evaluate a percentage rule's exclusion gate against the context bundle.
+///
+/// Returns `true` if the context is admitted to the rule's distribution (no
+/// gate, or the gate's randomization-unit context is present and its
+/// exclusion-group bucket falls in `[bucket_lo, bucket_hi)`). Returns `false`
+/// if the context is held out — either because the randomization-unit context
+/// type is absent from the bundle (a missing unit cannot be bucketed) or
+/// because its bucket lies outside the allocated range.
+///
+/// Pure: no I/O, no async — just bucket math over the in-memory bundle.
+fn exclusion_gate_admits(gate: &ExclusionGate, bundle: &[Context]) -> bool {
+    match bundle.iter().find(|c| c.context_type == gate.context_type) {
+        // Randomization unit absent → cannot bucket → held out.
+        None => false,
+        Some(ctx) => {
+            let bucket = group_bucket(&ctx.key, &gate.group_salt);
+            range_contains(bucket, gate.bucket_lo, gate.bucket_hi)
+        }
+    }
+}
+
 /// Bridge: build a `HashInputSpec` from the legacy `PercentageTarget` list.
 ///
 /// This is the internal conversion used by `evaluate_flag` while
@@ -467,7 +532,30 @@ impl FlagEvaluator {
                         ))
                     });
                 }
-                RuleOutput::Percentage { targets, weights, .. } => {
+                RuleOutput::Percentage {
+                    targets,
+                    weights,
+                    exclusion_gate,
+                } => {
+                    // Exclusion-group gate: if present and it does not admit
+                    // this context, the rule does not enroll the context.
+                    // This legacy single-output path cannot rewind to later
+                    // rules (`evaluate_rules` already committed to the first
+                    // match), so a held-out context falls through to the
+                    // flag's default handling below. The unified
+                    // `evaluate_flag`/`evaluate_one` path — used by BOTH the
+                    // SDK and preview — continues to subsequent rules.
+                    if let Some(gate) = exclusion_gate
+                        && !exclusion_gate_admits(gate, &context.contexts)
+                    {
+                        return flag.get_default_variant().ok_or_else(|| {
+                            RuleEngineError::Internal(
+                                "Context held out by exclusion group and flag has no default variant"
+                                    .to_string(),
+                            )
+                        });
+                    }
+
                     // Implement percentage rollout logic using hashing
                     let mut target_values = Vec::with_capacity(targets.len());
                     for t in targets {
@@ -2011,5 +2099,204 @@ mod tests {
             results[0].variant_key == "on" || results[0].variant_key == "off",
             "missing context must yield deterministic variant, not crash"
         );
+    }
+
+    // ── Phase 2: exclusion-group eval gating ─────────────────────────────────
+
+    const GATE_SALT: &str = "phase2-exclusion-salt";
+
+    /// Find a `user-N` key whose exclusion-group bucket (under `GATE_SALT`)
+    /// falls in `[lo, hi)`. Panics if none found in the scan window.
+    fn key_in_bucket_range(lo: u16, hi: u16) -> String {
+        for i in 0..200_000u32 {
+            let key = format!("user-{i}");
+            let b = group_bucket(&key, GATE_SALT);
+            if range_contains(b, lo, hi) {
+                return key;
+            }
+        }
+        panic!("no user key found with bucket in [{lo}, {hi})");
+    }
+
+    /// Build a flag with a single always-match Percentage rule that carries the
+    /// given exclusion gate. Falls through to default variant `off` when held
+    /// out (there is no later rule).
+    fn gated_percentage_flag(gate: Option<ExclusionGate>) -> Flag {
+        let mut flag = setup_flag();
+        let on_id = flag.variants[0].id;
+        let off_id = flag.variants[1].id;
+        flag.rules[0].rule.condition = ConditionExpr::And(vec![]); // always match
+        flag.rules[0].rule.name = Some("gated".to_string());
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "user".to_string(),
+                field: TargetField::Key,
+            }],
+            // 100% → on, so an enrolled context always resolves to "on";
+            // a held-out context falls through to the default variant "off".
+            weights: vec![(on_id, 10000), (off_id, 0)],
+            exclusion_gate: gate,
+        };
+        flag
+    }
+
+    fn eval_one(flag: &Flag, ctx: Context, trace: TraceLevel) -> FlagEvaluationResult {
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+        let mut results = evaluate_flag(
+            flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            trace,
+        );
+        results.remove(0)
+    }
+
+    #[test]
+    fn exclusion_gate_in_range_context_enrolls() {
+        let gate = ExclusionGate {
+            group_salt: GATE_SALT.to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 0,
+            bucket_hi: 5000,
+        };
+        let flag = gated_percentage_flag(Some(gate));
+        let key = key_in_bucket_range(0, 5000);
+        let res = eval_one(&flag, Context::new("user", &key), TraceLevel::Off);
+        assert_eq!(res.variant_key, "on", "in-range context must enroll");
+        assert!(matches!(res.outcome, EvalOutcome::RuleMatch { rule_index: 0 }));
+    }
+
+    #[test]
+    fn exclusion_gate_out_of_range_context_held_out() {
+        let gate = ExclusionGate {
+            group_salt: GATE_SALT.to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 0,
+            bucket_hi: 5000,
+        };
+        let flag = gated_percentage_flag(Some(gate));
+        // Pick a key whose bucket is >= 5000 → outside [0, 5000).
+        let key = key_in_bucket_range(5000, 10000);
+        let res = eval_one(&flag, Context::new("user", &key), TraceLevel::Off);
+        // Held out → rule does not enroll → falls through to default "off".
+        assert_eq!(res.variant_key, "off", "out-of-range context must be held out");
+        assert!(matches!(res.outcome, EvalOutcome::DefaultFallthrough));
+    }
+
+    #[test]
+    fn exclusion_gate_missing_unit_context_held_out() {
+        let gate = ExclusionGate {
+            group_salt: GATE_SALT.to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 0,
+            bucket_hi: 10000, // full range — only a missing unit can hold out
+        };
+        let flag = gated_percentage_flag(Some(gate));
+        // Bundle has NO "user" context → the randomization unit is absent.
+        let res = eval_one(&flag, Context::new("device", "d1"), TraceLevel::Off);
+        assert_eq!(
+            res.variant_key, "off",
+            "missing randomization-unit context must be held out"
+        );
+        assert!(matches!(res.outcome, EvalOutcome::DefaultFallthrough));
+    }
+
+    #[test]
+    fn exclusion_gate_none_unchanged() {
+        // No gate → the percentage rule enrolls every context as before.
+        let flag = gated_percentage_flag(None);
+        let res = eval_one(&flag, Context::new("user", "anyone"), TraceLevel::Off);
+        assert_eq!(res.variant_key, "on", "ungrouped rule must enroll normally");
+        assert!(matches!(res.outcome, EvalOutcome::RuleMatch { rule_index: 0 }));
+    }
+
+    #[test]
+    fn exclusion_gate_held_out_falls_through_to_later_rule() {
+        // A held-out context must continue to subsequent rules, not stop at the
+        // gated rule. Add a second always-match Variant rule after the gated
+        // percentage rule.
+        let mut flag = gated_percentage_flag(Some(ExclusionGate {
+            group_salt: GATE_SALT.to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 0,
+            bucket_hi: 1, // virtually nobody enrolls
+        }));
+        let on_id = flag.variants[0].id;
+        flag.rules.push(FlagRule {
+            flag_id: flag.record.id,
+            rule_index: 1,
+            rule: Rule {
+                id: RuleId::new(),
+                name: Some("fallback".to_string()),
+                condition: ConditionExpr::And(vec![]), // always match
+                output: RuleOutput::Variant(on_id),
+            },
+        });
+        // Pick a key outside [0,1) so it's held out by the gated rule.
+        let key = key_in_bucket_range(1, 10000);
+        let res = eval_one(&flag, Context::new("user", &key), TraceLevel::Off);
+        // Held out by rule 0 → rule 1 fires → "on".
+        assert_eq!(res.variant_key, "on");
+        assert!(matches!(res.outcome, EvalOutcome::RuleMatch { rule_index: 1 }));
+    }
+
+    #[test]
+    fn exclusion_gate_full_trace_shows_held_out_reason() {
+        let gate = ExclusionGate {
+            group_salt: GATE_SALT.to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 0,
+            bucket_hi: 1,
+        };
+        let flag = gated_percentage_flag(Some(gate));
+        let key = key_in_bucket_range(1, 10000); // held out
+        let res = eval_one(&flag, Context::new("user", &key), TraceLevel::Full);
+        let trace = res.trace.as_ref().expect("Full trace must be present");
+        // The gated rule is recorded as NoMatch (it did not enroll).
+        assert!(matches!(
+            trace.rule_traces[0].outcome,
+            crate::evaluation::preview::RuleOutcome::NoMatch
+        ));
+        // The held-out reason is surfaced via the rollout-debug note.
+        let dbg = trace
+            .rollout_debug
+            .as_ref()
+            .expect("held-out case must annotate rollout_debug");
+        assert_eq!(dbg.hash_input, EXCLUSION_HELD_OUT_NOTE);
+    }
+
+    #[test]
+    fn exclusion_gate_legacy_evaluator_holds_out_to_default() {
+        // The legacy `FlagEvaluator::evaluate` path also honors the gate: a
+        // held-out context falls through to the flag's default variant.
+        let gate = ExclusionGate {
+            group_salt: GATE_SALT.to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 0,
+            bucket_hi: 1,
+        };
+        let flag = gated_percentage_flag(Some(gate));
+        let key = key_in_bucket_range(1, 10000); // held out
+        let context = EvaluationContext::new().with_context(Context::new("user", &key));
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let segments = HashSet::new();
+        let v = FlagEvaluator::evaluate(&flag, &context, &segments, env).unwrap();
+        assert_eq!(v.key, "off", "legacy path must hold out to default variant");
+
+        // In-range context enrolls on the legacy path too.
+        let flag2 = gated_percentage_flag(Some(ExclusionGate {
+            group_salt: GATE_SALT.to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 0,
+            bucket_hi: 10000,
+        }));
+        let ctx2 = EvaluationContext::new().with_context(Context::new("user", "anyone"));
+        let v2 = FlagEvaluator::evaluate(&flag2, &ctx2, &segments, env).unwrap();
+        assert_eq!(v2.key, "on");
     }
 }

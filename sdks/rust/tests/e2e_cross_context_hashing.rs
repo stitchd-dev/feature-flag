@@ -419,7 +419,11 @@ mod stitchd_flag_service_mapping {
                         Some((vid, b.weight_bp))
                     })
                     .collect();
-                RuleOutput::Percentage { targets, weights }
+                RuleOutput::Percentage {
+                    targets,
+                    weights,
+                    exclusion_gate: None,
+                }
             }
             None => return None,
         };
