@@ -29,6 +29,7 @@ const SIGNIFICANT: ExperimentInteraction = {
   interaction_estimate: 0.0421,
   p_value: 0.0003,
   significant: true,
+  insufficient_data: false,
 }
 
 const NOT_SIGNIFICANT: ExperimentInteraction = {
@@ -41,6 +42,23 @@ const NOT_SIGNIFICANT: ExperimentInteraction = {
   interaction_estimate: -0.001,
   p_value: 0.62,
   significant: false,
+  insufficient_data: false,
+}
+
+// Backend returns 0.0 sentinels + insufficient_data=true when there isn't
+// enough shared exposure. The `significant` flag may even be true on the wire,
+// but the row must never be treated as a real significant result.
+const INSUFFICIENT: ExperimentInteraction = {
+  experiment_id_a: 'exp-a',
+  experiment_id_b: 'exp-d',
+  other_experiment_name: 'New onboarding flow',
+  context_type: 'user',
+  metric_key: 'activation_rate',
+  shared_count: 12,
+  interaction_estimate: 0.0,
+  p_value: 0.0,
+  significant: true,
+  insufficient_data: true,
 }
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
@@ -56,6 +74,11 @@ describe('hasSignificantInteraction', () => {
 
   it('returns false for an empty list', () => {
     expect(hasSignificantInteraction([])).toBe(false)
+  })
+
+  it('ignores insufficient-data rows even when flagged significant', () => {
+    expect(hasSignificantInteraction([INSUFFICIENT])).toBe(false)
+    expect(hasSignificantInteraction([NOT_SIGNIFICANT, INSUFFICIENT])).toBe(false)
   })
 })
 
@@ -124,6 +147,19 @@ describe('InteractionsTab render', () => {
     expect(html).toMatch(/data-significant="false"/)
     expect(html).toMatch(/Not significant/)
     expect(html).toMatch(/badge success/)
+  })
+
+  it('renders an "Insufficient data" badge instead of p=0.0 / significance', () => {
+    const html = renderToString(
+      <InteractionsTab interactions={[INSUFFICIENT]} loading={false} error={null} />,
+    )
+    expect(html).toMatch(/data-insufficient="true"/)
+    expect(html).toMatch(/Insufficient data/)
+    // The 0.0 sentinels must NOT render as numbers, nor as a significance badge.
+    expect(html).not.toMatch(/0\.0000/)
+    expect(html).not.toMatch(/data-significant/)
+    expect(html).not.toMatch(/badge warning/)
+    expect(html).not.toMatch(/>Significant</)
   })
 
   it('renders an empty state when there are no interactions', () => {

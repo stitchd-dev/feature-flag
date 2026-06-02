@@ -10,9 +10,11 @@ import { Formik, Form } from 'formik'
 import { I } from '../../../components/icons'
 import { Modal } from '../../../components/Modal'
 import { FormField } from '../../../components/form/FormField'
+import { FormSelect } from '../../../components/form/FormSelect'
 import { FormTextarea } from '../../../components/form/FormTextarea'
 import { FormErrorBanner } from '../../../components/form/FormErrorBanner'
 import { FormSubmit } from '../../../components/form/FormSubmit'
+import { useContextTypeSuggestions } from '../../../hooks/useContextSuggestions'
 import { extractErrorMessage } from '../../../lib/errors'
 import {
   exclusionGroupSchema,
@@ -23,6 +25,27 @@ import {
   updateExclusionGroup,
   type ExclusionGroup,
 } from '../../../lib/api/exclusionGroups'
+
+/**
+ * Build the diversion-unit <select> options from the env's known context
+ * types. Always includes "user" (the default unit) and, in edit mode, the
+ * group's current unit — even if it's no longer reported as a context type —
+ * so the select reflects the persisted value.
+ */
+export function buildUnitOptions(
+  contextTypes: string[],
+  currentUnit?: string,
+): { value: string; label: string }[] {
+  const seen = new Set<string>()
+  const values: string[] = []
+  for (const ct of ['user', ...contextTypes, currentUnit ?? '']) {
+    const v = ct.trim()
+    if (!v || seen.has(v)) continue
+    seen.add(v)
+    values.push(v)
+  }
+  return values.map((v) => ({ value: v, label: v }))
+}
 
 interface Props {
   envId: string
@@ -35,9 +58,19 @@ interface Props {
 export function ExclusionGroupModal({ envId, group, onClose, onSaved }: Props) {
   const isEdit = Boolean(group)
 
+  // Source the diversion-unit options from the env's known context types.
+  // Always include "user" (the default) and the group's existing unit so the
+  // select never renders an empty/mismatched value.
+  const { data: contextTypes } = useContextTypeSuggestions(envId)
+  const unitOptions = buildUnitOptions(
+    contextTypes.map((c) => c.context_type),
+    group?.unit_context_type,
+  )
+
   const initialValues: ExclusionGroupFormValues = {
     name: group?.name ?? '',
     description: group?.description ?? '',
+    unit_context_type: group?.unit_context_type ?? 'user',
   }
 
   async function handleSubmit(
@@ -49,12 +82,17 @@ export function ExclusionGroupModal({ envId, group, onClose, onSaved }: Props) {
     try {
       const saved =
         isEdit && group
-          ? await updateExclusionGroup(envId, group.id, {
+          ? // unit_context_type is immutable — never sent on PATCH.
+            await updateExclusionGroup(envId, group.id, {
               name,
               description,
               version: group.version,
             })
-          : await createExclusionGroup(envId, { name, description })
+          : await createExclusionGroup(envId, {
+              name,
+              description,
+              unit_context_type: values.unit_context_type.trim(),
+            })
       onSaved(saved)
     } catch (err: unknown) {
       setStatus({ error: extractErrorMessage(err) })
@@ -111,6 +149,17 @@ export function ExclusionGroupModal({ envId, group, onClose, onSaved }: Props) {
             label="Name"
             placeholder="e.g. Checkout funnel"
             autoFocus
+          />
+          <FormSelect
+            name="unit_context_type"
+            label="Diversion unit"
+            options={unitOptions}
+            disabled={isEdit}
+            hint={
+              isEdit
+                ? 'The diversion unit is fixed once a group is created.'
+                : 'All experiments in this group must randomize on this unit.'
+            }
           />
           <FormTextarea
             name="description"

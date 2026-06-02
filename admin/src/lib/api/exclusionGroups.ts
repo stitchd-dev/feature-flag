@@ -29,6 +29,11 @@ export interface ExclusionGroup {
   env_id: string
   name: string
   description: string
+  /**
+   * Randomization unit the group diverts on (e.g. "user"). Every member
+   * experiment must randomize on this context type. Immutable after creation.
+   */
+  unit_context_type: string
   /** Basis points currently allocated to assigned experiments (0–10000). */
   allocated_bp: number
   /** Basis points still available to assign (0–10000). */
@@ -62,6 +67,12 @@ export interface ExperimentInteraction {
   p_value: number
   /** True when the interaction is statistically significant. */
   significant: boolean
+  /**
+   * True when there isn't enough shared exposure to estimate the interaction.
+   * When set, `interaction_estimate` and `p_value` are 0.0 sentinels (not real
+   * values) and the row must never be shown as significant.
+   */
+  insufficient_data: boolean
 }
 
 export interface InteractionsResponse {
@@ -100,7 +111,7 @@ export async function getExclusionGroup(
 
 export async function createExclusionGroup(
   envId: string,
-  body: { name?: string; description?: string },
+  body: { name?: string; description?: string; unit_context_type: string },
 ): Promise<ExclusionGroup> {
   const { data } = await api.post<ExclusionGroup>(
     `/v1/environments/${envId}/exclusion-groups`,
