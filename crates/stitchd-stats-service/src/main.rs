@@ -138,10 +138,13 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(PgMetricRepository::new(pg_pool.clone(), audit.clone()));
     let experiment_repo: Arc<dyn stitchd_db::ExperimentRepository> =
         Arc::new(PgExperimentRepository::new(pg_pool.clone(), audit.clone()));
-    let interaction_cells: Arc<dyn stitchd_stats_service::interaction_compute::InteractionCellReader> =
-        Arc::new(ClickHouseInteractionCells::new(Arc::new(ch_client.clone())));
+    let interaction_cells: Arc<
+        dyn stitchd_stats_service::interaction_compute::InteractionCellReader,
+    > = Arc::new(ClickHouseInteractionCells::new(Arc::new(ch_client.clone())));
     let interaction_writer: Arc<dyn stitchd_stats_service::interaction_compute::InteractionWriter> =
-        Arc::new(ClickHouseInteractionWriter::new(Arc::new(ch_client.clone())));
+        Arc::new(ClickHouseInteractionWriter::new(Arc::new(
+            ch_client.clone(),
+        )));
 
     // ── Scheduler loop ────────────────────────────────────────────────────────
     let scheduler_pool = pg_pool.clone();
