@@ -176,7 +176,10 @@ async fn interaction_cells_and_shared_count_match_fixture() {
     assert_eq!(find("control", "treatment"), 1, "u3");
     // No row should exist for the unshared u4 / u5 contexts.
     let total: u64 = cell_rows.iter().map(|r| r.cell_count).sum();
-    assert_eq!(total, 3, "only the 3 shared contexts count, got {cell_rows:?}");
+    assert_eq!(
+        total, 3,
+        "only the 3 shared contexts count, got {cell_rows:?}"
+    );
 
     let shared = build_shared_count_query(
         &env_id.to_string(),

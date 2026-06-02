@@ -101,7 +101,14 @@ pub fn build_interaction_cells_query(
     }
 
     let mut binds = Vec::new();
-    let (a_filter, b_filter) = emit_filters(&mut binds, env_id, exp_a, exp_b, context_type, interaction_end);
+    let (a_filter, b_filter) = emit_filters(
+        &mut binds,
+        env_id,
+        exp_a,
+        exp_b,
+        context_type,
+        interaction_end,
+    );
 
     let sql = format!(
         "SELECT\n    \
@@ -147,7 +154,14 @@ pub fn build_shared_count_query(
     }
 
     let mut binds = Vec::new();
-    let (a_filter, b_filter) = emit_filters(&mut binds, env_id, exp_a, exp_b, context_type, interaction_end);
+    let (a_filter, b_filter) = emit_filters(
+        &mut binds,
+        env_id,
+        exp_a,
+        exp_b,
+        context_type,
+        interaction_end,
+    );
 
     let sql = format!(
         "SELECT count() AS shared_count\n\
@@ -233,7 +247,8 @@ mod tests {
             q.sql
         );
         assert!(
-            q.sql.contains("INNER JOIN experiment_assignments AS b FINAL"),
+            q.sql
+                .contains("INNER JOIN experiment_assignments AS b FINAL"),
             "B side must self-join assignments FINAL, got:\n{}",
             q.sql
         );
@@ -258,8 +273,16 @@ mod tests {
     #[test]
     fn cells_query_selects_variant_combination_and_count() {
         let q = build_interaction_cells_query(ENV_ID, EXP_A, EXP_B, "user", end()).unwrap();
-        assert!(q.sql.contains("a.variant_key AS a_variant_key"), "{}", q.sql);
-        assert!(q.sql.contains("b.variant_key AS b_variant_key"), "{}", q.sql);
+        assert!(
+            q.sql.contains("a.variant_key AS a_variant_key"),
+            "{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("b.variant_key AS b_variant_key"),
+            "{}",
+            q.sql
+        );
         assert!(q.sql.contains("count() AS cell_count"), "{}", q.sql);
         assert!(
             q.sql.contains("GROUP BY a.variant_key, b.variant_key"),
@@ -319,8 +342,7 @@ mod tests {
 
     #[test]
     fn cells_query_rejects_self_interaction() {
-        let err =
-            build_interaction_cells_query(ENV_ID, EXP_A, EXP_A, "user", end()).unwrap_err();
+        let err = build_interaction_cells_query(ENV_ID, EXP_A, EXP_A, "user", end()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
@@ -329,7 +351,11 @@ mod tests {
     #[test]
     fn shared_count_query_selects_scalar_count() {
         let q = build_shared_count_query(ENV_ID, EXP_A, EXP_B, "user", end()).unwrap();
-        assert!(q.sql.contains("SELECT count() AS shared_count"), "{}", q.sql);
+        assert!(
+            q.sql.contains("SELECT count() AS shared_count"),
+            "{}",
+            q.sql
+        );
         assert!(
             !q.sql.contains("GROUP BY"),
             "shared-count must be a scalar (no GROUP BY), got:\n{}",

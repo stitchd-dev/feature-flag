@@ -33,22 +33,38 @@
 //!    `experiment_assignments AS b FINAL` on the shared context identity
 //!    `(env_id, context_type, context_key)`, restricted to experiment A / B and
 //!    bounded by the overlap-window upper bound `assigned_at < interaction_end`.
-//!    Exactly the same self-join as [`super::interaction`], emitting one row per
-//!    shared context with `(a_variant, b_variant, context_key)`.
-//! 2. `ctx_events` CTE — per shared context, the metric outcome: `count()` of
-//!    matching events (`>0` ⇒ conversion success) and `sum`/`sum_sq` of the
-//!    event value. Events are matched on `(env_id, context_type, context_key)`
-//!    via `ARRAY JOIN e.contexts` (CH 24's analyzer rejects `arrayExists` inside
-//!    `JOIN ON`; mirrors [`super::aggregation`]) and the metric's `event_key`.
-//!    A `LEFT JOIN` keeps contexts with zero events (n counts them, success does
-//!    not).
-//! 3. Outer `SELECT` — `GROUP BY (a_variant, b_variant)` producing the per-cell
+//!    Mirrors [`super::interaction`]'s self-join but **also carries**
+//!    `greatest(a.assigned_at, b.assigned_at) AS joint_assigned_at` — the
+//!    timestamp at which the context was simultaneously exposed to *both*
+//!    experiments. This is the first-exposure (ITT) lower bound for the cell.
+//! 2. `matched_events` CTE — the candidate events for the metric, flattened to
+//!    `(context_key, value, occurred_at)`. Events are matched on
+//!    `(env_id, context_type)` and the metric's `event_key` via
+//!    `ARRAY JOIN e.contexts` (CH 24's analyzer rejects `arrayExists` inside
+//!    `JOIN ON`; mirrors [`super::aggregation`]) and upper-bounded by
+//!    `occurred_at < interaction_end`. The per-context *lower* bound is applied
+//!    in the next step (it depends on the joint-exposure time, which is per
+//!    context).
+//! 3. `ctx_events` CTE — per shared context, the metric outcome. `shared` is
+//!    `LEFT JOIN`ed to `matched_events` on `context_key` (equality only — CH
+//!    24's analyzer rejects a mixed equality+inequality `JOIN ON` across the two
+//!    tables, `INVALID_JOIN_ON_EXPRESSION`). The ITT lower bound is instead
+//!    applied as a conditional-aggregation predicate
+//!    `me.occurred_at >= s.joint_assigned_at` inside `countIf` / `sumIf`, so only
+//!    events at/after the context's JOINT exposure are counted — strict
+//!    first-exposure ITT, matching every other experiment metric on this
+//!    platform. The `LEFT JOIN` keeps contexts with zero qualifying events (they
+//!    still count toward `n`, just not `successes`). Aggregates per context:
+//!    `event_count` (`>0` ⇒ conversion success) and `value_sum` / `value_sq_sum`.
+//! 4. Outer `SELECT` — `GROUP BY (a_variant, b_variant)` producing the per-cell
 //!    aggregates.
 //!
 //! ## Bind order
 //!
 //! `clickhouse-rs` binds `?` by SQL position, so binds are pushed left-to-right
-//! in appearance order:
+//! in appearance order. The per-context ITT lower bound (`joint_assigned_at`) is
+//! a *column reference* carried out of `shared`, not a bind, so the bind list is
+//! unchanged from the lifetime-events version:
 //!
 //!   1. `env_id`          (`a.env_id = toUUID(?)`)
 //!   2. `exp_a`           (`a.experiment_id = toUUID(?)`)
@@ -59,7 +75,7 @@
 //!   7. `env_id`          (`e.env_id = toUUID(?)` — events side)
 //!   8. `event_key`       (`e.metric_key = ?`)
 //!   9. `context_type`    (`ctx_pair.1 = ?` — events context filter)
-//!  10. `interaction_end` (`e.occurred_at < ?` — events window)
+//!  10. `interaction_end` (`e.occurred_at < ?` — events window upper bound)
 
 use chrono::{DateTime, Utc};
 use stitchd_core::metric::{AggregationConfig, AggregationOperator};
@@ -164,7 +180,8 @@ pub fn build_interaction_metric_cells_query(
             SELECT\n        \
                 a.context_key AS context_key,\n        \
                 a.variant_key AS a_variant_key,\n        \
-                b.variant_key AS b_variant_key\n    \
+                b.variant_key AS b_variant_key,\n        \
+                greatest(a.assigned_at, b.assigned_at) AS joint_assigned_at\n    \
             FROM experiment_assignments AS a FINAL\n    \
             INNER JOIN experiment_assignments AS b FINAL\n        \
                 ON a.env_id = b.env_id\n       \
@@ -179,30 +196,39 @@ pub fn build_interaction_metric_cells_query(
               AND a.variant_key != ''\n      \
               AND b.variant_key != ''\n\
         ),\n\
-        ctx_events AS (\n    \
+        matched_events AS (\n    \
             SELECT\n        \
                 ctx_pair.2 AS context_key,\n        \
-                count() AS event_count,\n        \
-                sum({value_expr}) AS value_sum,\n        \
-                sum({value_expr} * {value_expr}) AS value_sq_sum\n    \
+                {value_expr} AS value,\n        \
+                e.occurred_at AS occurred_at\n    \
             FROM events AS e\n    \
             ARRAY JOIN e.contexts AS ctx_pair\n    \
             WHERE e.env_id = toUUID({ev_env_ph})\n      \
               AND e.metric_key = {event_ph}\n      \
               AND ctx_pair.1 = {ev_ctx_ph}\n      \
-              AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph})\n    \
-            GROUP BY ctx_pair.2\n\
+              AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph})\n\
+        ),\n\
+        ctx_events AS (\n    \
+            SELECT\n        \
+                s.a_variant_key AS a_variant_key,\n        \
+                s.b_variant_key AS b_variant_key,\n        \
+                countIf(me.occurred_at >= s.joint_assigned_at) AS event_count,\n        \
+                sumIf(me.value, me.occurred_at >= s.joint_assigned_at) AS value_sum,\n        \
+                sumIf(me.value * me.value, me.occurred_at >= s.joint_assigned_at) AS value_sq_sum\n    \
+            FROM shared AS s\n    \
+            LEFT JOIN matched_events AS me\n        \
+                ON me.context_key = s.context_key\n    \
+            GROUP BY s.context_key, s.a_variant_key, s.b_variant_key\n\
         )\n\
         SELECT\n    \
-            s.a_variant_key AS a_variant_key,\n    \
-            s.b_variant_key AS b_variant_key,\n    \
+            ce.a_variant_key AS a_variant_key,\n    \
+            ce.b_variant_key AS b_variant_key,\n    \
             count() AS n,\n    \
-            countIf(ifNull(ce.event_count, 0) > 0) AS successes,\n    \
-            sum(ifNull(ce.value_sum, 0.0)) AS value_sum,\n    \
-            sum(ifNull(ce.value_sq_sum, 0.0)) AS value_sq_sum\n\
-        FROM shared AS s\n\
-        LEFT JOIN ctx_events AS ce ON s.context_key = ce.context_key\n\
-        GROUP BY s.a_variant_key, s.b_variant_key"
+            countIf(ce.event_count > 0) AS successes,\n    \
+            sum(ce.value_sum) AS value_sum,\n    \
+            sum(ce.value_sq_sum) AS value_sq_sum\n\
+        FROM ctx_events AS ce\n\
+        GROUP BY ce.a_variant_key, ce.b_variant_key"
     );
 
     Ok(BuiltQuery { sql, binds })
@@ -308,7 +334,11 @@ mod tests {
             "{}",
             q.sql
         );
-        assert!(q.sql.contains("AND a.context_key = b.context_key"), "{}", q.sql);
+        assert!(
+            q.sql.contains("AND a.context_key = b.context_key"),
+            "{}",
+            q.sql
+        );
     }
 
     #[test]
@@ -316,7 +346,11 @@ mod tests {
         let q =
             build_interaction_metric_cells_query(&count_cfg(), ENV_ID, EXP_A, EXP_B, "user", end())
                 .unwrap();
-        assert!(q.sql.contains("ARRAY JOIN e.contexts AS ctx_pair"), "{}", q.sql);
+        assert!(
+            q.sql.contains("ARRAY JOIN e.contexts AS ctx_pair"),
+            "{}",
+            q.sql
+        );
         assert!(!q.sql.contains("arrayExists"), "{}", q.sql);
     }
 
@@ -327,14 +361,15 @@ mod tests {
                 .unwrap();
         assert!(q.sql.contains("count() AS n"), "{}", q.sql);
         assert!(
-            q.sql.contains("countIf(ifNull(ce.event_count, 0) > 0) AS successes"),
+            q.sql.contains("countIf(ce.event_count > 0) AS successes"),
             "{}",
             q.sql
         );
         assert!(q.sql.contains("AS value_sum"), "{}", q.sql);
         assert!(q.sql.contains("AS value_sq_sum"), "{}", q.sql);
         assert!(
-            q.sql.contains("GROUP BY s.a_variant_key, s.b_variant_key"),
+            q.sql
+                .contains("GROUP BY ce.a_variant_key, ce.b_variant_key"),
             "{}",
             q.sql
         );
@@ -346,7 +381,42 @@ mod tests {
             build_interaction_metric_cells_query(&count_cfg(), ENV_ID, EXP_A, EXP_B, "user", end())
                 .unwrap();
         assert!(
-            q.sql.contains("LEFT JOIN ctx_events AS ce ON s.context_key = ce.context_key"),
+            q.sql.contains("LEFT JOIN matched_events AS me"),
+            "{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("ON me.context_key = s.context_key"),
+            "{}",
+            q.sql
+        );
+    }
+
+    /// HIGH-2 regression: the metric must be strict first-exposure (ITT). The
+    /// `shared` CTE carries `greatest(a.assigned_at, b.assigned_at)` as the
+    /// per-context joint-exposure timestamp, and the event join is bounded below
+    /// by it — so pre-exposure events cannot be counted.
+    #[test]
+    fn query_bounds_events_below_by_joint_exposure_itt() {
+        let q =
+            build_interaction_metric_cells_query(&count_cfg(), ENV_ID, EXP_A, EXP_B, "user", end())
+                .unwrap();
+        // Joint-exposure timestamp carried out of `shared`.
+        assert!(
+            q.sql
+                .contains("greatest(a.assigned_at, b.assigned_at) AS joint_assigned_at"),
+            "{}",
+            q.sql
+        );
+        // Per-context ITT lower bound on the event join.
+        assert!(
+            q.sql.contains("me.occurred_at >= s.joint_assigned_at"),
+            "{}",
+            q.sql
+        );
+        // Upper bound still present (overlap-window end).
+        assert!(
+            q.sql.contains("e.occurred_at < fromUnixTimestamp64Milli("),
             "{}",
             q.sql
         );
@@ -400,8 +470,8 @@ mod tests {
             on_field: Some("value".into()),
             where_clause: None,
         };
-        let q =
-            build_interaction_metric_cells_query(&cfg, ENV_ID, EXP_A, EXP_B, "user", end()).unwrap();
+        let q = build_interaction_metric_cells_query(&cfg, ENV_ID, EXP_A, EXP_B, "user", end())
+            .unwrap();
         assert!(q.sql.contains("coalesce(e.value_double"), "{}", q.sql);
         assert!(!q.sql.contains("properties["), "{}", q.sql);
     }

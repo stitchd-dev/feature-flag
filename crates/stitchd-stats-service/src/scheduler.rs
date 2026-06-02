@@ -205,6 +205,12 @@ mod tests {
         {
             Err(Status::unimplemented("not used in tests"))
         }
+        async fn get_exclusion_group(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::GetExclusionGroupRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
         async fn update_exclusion_group(
             &self,
             _req: Request<stitchd_proto::experiments::v1::UpdateExclusionGroupRequest>,
@@ -221,10 +227,8 @@ mod tests {
         async fn assign_experiment_to_group(
             &self,
             _req: Request<stitchd_proto::experiments::v1::AssignExperimentToGroupRequest>,
-        ) -> Result<
-            Response<stitchd_proto::experiments::v1::AssignExperimentToGroupResponse>,
-            Status,
-        > {
+        ) -> Result<Response<stitchd_proto::experiments::v1::AssignExperimentToGroupResponse>, Status>
+        {
             Err(Status::unimplemented("not used in tests"))
         }
         async fn unassign_experiment(

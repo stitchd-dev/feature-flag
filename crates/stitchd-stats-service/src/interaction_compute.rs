@@ -82,13 +82,44 @@ pub struct InteractionRow {
     /// Total shared contexts across all cells.
     pub shared_count: u64,
     /// JSON of the per-cell stats (the `CellAggregate` grid).
+    ///
+    /// ## JSON schema
+    ///
+    /// A JSON array of cell objects, one per `(a_variant, b_variant)` cell of
+    /// the interaction grid (serialized from `Vec<CellAggregate>`):
+    ///
+    /// ```json
+    /// [
+    ///   {
+    ///     "a_variant_key": "control",     // string: A-experiment variant key
+    ///     "b_variant_key": "treatment",   // string: B-experiment variant key
+    ///     "n": 1234,                       // u64: shared contexts in this cell
+    ///     "successes": 210,                // u64: contexts with ≥1 post-exposure
+    ///                                      //      qualifying event (conversion)
+    ///     "value_sum": 9876.5,             // f64: Σ per-context metric value
+    ///     "value_sq_sum": 123456.7         // f64: Σ per-context metric value²
+    ///   }
+    ///   // … one object per cell
+    /// ]
+    /// ```
+    ///
+    /// Conversion metrics read `n` + `successes`; continuous metrics read `n` +
+    /// `value_sum` + `value_sq_sum`. All six fields are always present (the SQL
+    /// shape is uniform across metric kinds). On a serialization failure the
+    /// empty array `"[]"` is persisted.
     pub cell_stats: String,
-    /// Interaction effect-size estimate (`NaN` when insufficient data).
+    /// Interaction effect-size estimate (`0.0` sentinel when insufficient data).
     pub interaction_estimate: f64,
-    /// Two-sided p-value (`NaN` when insufficient data).
+    /// Two-sided p-value (`0.0` sentinel when insufficient data).
     pub p_value: f64,
-    /// Whether the interaction is significant at alpha = 0.05.
+    /// Whether the interaction is significant after Benjamini–Hochberg FDR
+    /// correction across the sweep batch (FDR = 0.05). Always `false` when
+    /// `insufficient_data` is true.
     pub significant: bool,
+    /// Whether the inputs were too sparse/degenerate to run the test. When true,
+    /// `interaction_estimate` / `p_value` are `0.0` sentinels and `significant`
+    /// is `false`.
+    pub insufficient_data: bool,
     /// When the row was computed.
     pub computed_at: DateTime<Utc>,
 }
@@ -138,6 +169,16 @@ pub trait InteractionWriter: Send + Sync {
 /// / no-shared-metric pairs are already excluded by [`candidate_pairs`], so this
 /// never writes a row for them.
 ///
+/// ## Multiple-comparison correction (MED-1)
+///
+/// The sweep runs one significance test per `(pair × shared metric ×
+/// context_type)`. Flagging each at the raw per-test α = 0.05 would inflate the
+/// family-wise error across the batch. Instead, after computing every result we
+/// apply a **Benjamini–Hochberg** procedure across the batch's *valid*
+/// (non-`insufficient_data`) p-values and set each persisted `significant` from
+/// the BH decision at FDR = 0.05. Insufficient-data rows never participate and
+/// are never significant. See [`benjamini_hochberg`].
+///
 /// # Errors
 /// Propagates the first reader / writer error encountered. A per-cell read that
 /// returns an empty grid is skipped (no shared population on that context_type —
@@ -155,7 +196,10 @@ pub async fn compute_and_persist_interactions(
     let by_id: HashMap<Uuid, &ExperimentMeta> = experiments.iter().map(|e| (e.id, e)).collect();
     let env_str = env_id.to_string();
 
-    let mut written = 0usize;
+    // Phase 1 — compute every (pair × metric × context_type) result for the
+    // batch. We collect them all before deciding significance so the
+    // Benjamini–Hochberg correction can see the whole family of tests.
+    let mut rows: Vec<InteractionRow> = Vec::new();
     for (exp_a, exp_b) in pairs {
         let (Some(a), Some(b)) = (by_id.get(&exp_a), by_id.get(&exp_b)) else {
             continue;
@@ -207,10 +251,9 @@ pub async fn compute_and_persist_interactions(
 
                 let result = compute_result(cell_kind, &cells);
                 let shared_count: u64 = cells.iter().map(|c| c.n).sum();
-                let cell_stats = serde_json::to_string(&cells)
-                    .unwrap_or_else(|_| "[]".to_owned());
+                let cell_stats = serde_json::to_string(&cells).unwrap_or_else(|_| "[]".to_owned());
 
-                let row = InteractionRow {
+                rows.push(InteractionRow {
                     env_id,
                     experiment_id_a: exp_a,
                     experiment_id_b: exp_b,
@@ -218,17 +261,90 @@ pub async fn compute_and_persist_interactions(
                     metric_key: def.key.clone(),
                     shared_count,
                     cell_stats,
+                    // Insufficient-data rows keep 0.0 sentinels (the column is
+                    // non-nullable Float64); the flag distinguishes them.
                     interaction_estimate: nan_to_zero(result.estimate),
                     p_value: nan_to_zero(result.p_value),
-                    significant: result.significant,
+                    // Provisional; overwritten by the BH pass below.
+                    significant: false,
+                    insufficient_data: result.insufficient_data,
                     computed_at,
-                };
-                writer.write_row(&row).await?;
-                written += 1;
+                });
             }
         }
     }
+
+    // Phase 2 — Benjamini–Hochberg correction across the batch's valid tests,
+    // then persist. Only non-insufficient rows feed the correction; their
+    // (already sanitized) p-values are used.
+    let valid_pvalues: Vec<f64> = rows
+        .iter()
+        .filter(|r| !r.insufficient_data)
+        .map(|r| r.p_value)
+        .collect();
+    let reject = benjamini_hochberg(&valid_pvalues, 0.05);
+
+    let mut reject_iter = reject.into_iter();
+    let mut written = 0usize;
+    for mut row in rows {
+        // Each valid row consumes the next BH decision (same iteration order as
+        // `valid_pvalues` was built). Insufficient rows are never significant.
+        row.significant = if row.insufficient_data {
+            false
+        } else {
+            reject_iter.next().unwrap_or(false)
+        };
+        writer.write_row(&row).await?;
+        written += 1;
+    }
     Ok(written)
+}
+
+/// Benjamini–Hochberg step-up procedure for controlling the false discovery
+/// rate (FDR) across a family of independent tests.
+///
+/// Given the `pvalues` of the family and a target `fdr` (e.g. `0.05`), returns a
+/// per-input boolean — `true` ⇒ reject the null (declare significant). The
+/// returned vector is in the **same order** as the input; the ranking is done
+/// internally on a sorted copy.
+///
+/// Method: sort the `m` p-values ascending, find the largest rank `k`
+/// (1-indexed) for which `p_(k) ≤ (k / m) · fdr`, then reject every hypothesis
+/// whose p-value is `≤ p_(k)` (the BH step-up threshold). With one true effect
+/// among many nulls this rejects only the small p-value(s) that clear the
+/// rank-scaled threshold, sharply curbing the family-wise false-positive rate a
+/// raw per-test α would produce. An empty family returns an empty vector; `fdr`
+/// is clamped to `[0, 1]`.
+#[must_use]
+pub fn benjamini_hochberg(pvalues: &[f64], fdr: f64) -> Vec<bool> {
+    let m = pvalues.len();
+    if m == 0 {
+        return Vec::new();
+    }
+    let fdr = fdr.clamp(0.0, 1.0);
+
+    // Rank the p-values ascending, remembering original positions.
+    let mut indexed: Vec<(usize, f64)> = pvalues.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Largest k (1-indexed) with p_(k) <= (k/m)*fdr → BH threshold = p_(k).
+    let mut k_max: Option<usize> = None;
+    for (rank0, &(_, p)) in indexed.iter().enumerate() {
+        let k = rank0 + 1;
+        let threshold = (k as f64 / m as f64) * fdr;
+        if p <= threshold {
+            k_max = Some(k);
+        }
+    }
+
+    let mut reject = vec![false; m];
+    if let Some(k) = k_max {
+        // Step-up: reject the k smallest-p hypotheses (ranks 1..=k).
+        for &(orig_idx, _) in &indexed[..k] {
+            reject[orig_idx] = true;
+        }
+    }
+    reject
 }
 
 /// Top-level sweep: compute and persist interactions for every environment
@@ -275,14 +391,20 @@ pub async fn run_interaction_sweep(
                 flag_id: e.flag_id.as_uuid(),
                 started_at: e.created_at,
                 ended_at: None,
-                metric_ids: e.metric_ids.iter().map(stitchd_core::id::MetricId::as_uuid).collect(),
+                metric_ids: e
+                    .metric_ids
+                    .iter()
+                    .map(stitchd_core::id::MetricId::as_uuid)
+                    .collect(),
                 exclusion_group_id: e.exclusion_group_id.map(|g| g.as_uuid()),
             })
             .collect();
 
         // Resolve all referenced metric definitions in one batch.
-        let mut metric_ids: Vec<stitchd_core::id::MetricId> =
-            exps.iter().flat_map(|e| e.metric_ids.iter().copied()).collect();
+        let mut metric_ids: Vec<stitchd_core::id::MetricId> = exps
+            .iter()
+            .flat_map(|e| e.metric_ids.iter().copied())
+            .collect();
         metric_ids.sort_by_key(stitchd_core::id::MetricId::as_uuid);
         metric_ids.dedup();
         let defs = metric_repo.find_batch_by_ids(&metric_ids).await?;
@@ -453,6 +575,7 @@ struct ChInteractionRow {
     interaction_estimate: f64,
     p_value: f64,
     significant: bool,
+    insufficient_data: bool,
     #[serde(with = "clickhouse::serde::chrono::datetime64::millis")]
     computed_at: DateTime<Utc>,
 }
@@ -489,6 +612,7 @@ impl InteractionWriter for ClickHouseInteractionWriter {
                 interaction_estimate: row.interaction_estimate,
                 p_value: row.p_value,
                 significant: row.significant,
+                insufficient_data: row.insufficient_data,
                 computed_at: row.computed_at,
             })
             .await?;
@@ -631,6 +755,58 @@ mod tests {
     }
 
     #[test]
+    fn bh_empty_family_is_empty() {
+        assert!(benjamini_hochberg(&[], 0.05).is_empty());
+    }
+
+    #[test]
+    fn bh_one_true_effect_among_many_nulls_survives() {
+        // One genuinely small p-value (a true effect) plus 19 null p-values
+        // sampled across (0,1). At a raw α=0.05 several nulls near the low end
+        // would be spuriously "significant"; BH at FDR=0.05 must reject ONLY the
+        // true effect.
+        let mut pvalues = vec![0.0001]; // the true effect
+        // 19 nulls, deliberately including some smallish ones (0.04, 0.06, …)
+        // that a per-test α=0.05 would (partly) flag.
+        let nulls = [
+            0.04, 0.06, 0.11, 0.17, 0.23, 0.29, 0.35, 0.41, 0.47, 0.53, 0.59, 0.65, 0.71, 0.77,
+            0.83, 0.89, 0.93, 0.97, 0.99,
+        ];
+        pvalues.extend_from_slice(&nulls);
+
+        let reject = benjamini_hochberg(&pvalues, 0.05);
+        assert!(reject[0], "the true effect (p=0.0001) must survive BH");
+        assert_eq!(
+            reject.iter().filter(|&&r| r).count(),
+            1,
+            "only the single true effect should be declared significant under BH"
+        );
+
+        // Sanity: a raw per-test α=0.05 would over-flag (the 0.04 null too).
+        let raw_flagged = pvalues.iter().filter(|&&p| p <= 0.05).count();
+        assert!(
+            raw_flagged > 1,
+            "raw α=0.05 over-flags ({raw_flagged}); BH is stricter"
+        );
+    }
+
+    #[test]
+    fn bh_all_nulls_rejects_nothing() {
+        let pvalues = [0.2, 0.4, 0.6, 0.8, 0.95];
+        let reject = benjamini_hochberg(&pvalues, 0.05);
+        assert!(reject.iter().all(|&r| !r), "no nulls should be rejected");
+    }
+
+    #[test]
+    fn bh_preserves_input_order() {
+        // Smallest p is in the middle of the slice; its rejection must map back
+        // to its original index.
+        let pvalues = [0.9, 0.0001, 0.8];
+        let reject = benjamini_hochberg(&pvalues, 0.05);
+        assert_eq!(reject, vec![false, true, false]);
+    }
+
+    #[test]
     fn compute_result_maps_variant_keys_to_dense_levels() {
         // A planted strong interaction on a 2x2 conversion grid.
         let cells = vec![
@@ -641,7 +817,10 @@ mod tests {
         ];
         let r = compute_result(MetricCellKind::Conversion, &cells);
         assert!(!r.insufficient_data, "grid has ample data");
-        assert!(r.significant, "planted super-additive cell should be significant");
+        assert!(
+            r.significant,
+            "planted super-additive cell should be significant"
+        );
     }
 
     #[tokio::test]
@@ -651,7 +830,10 @@ mod tests {
         let a = meta(Uuid::from_u128(1), Uuid::new_v4(), metric);
         let b = meta(Uuid::from_u128(2), Uuid::new_v4(), metric);
         let mut metrics = HashMap::new();
-        metrics.insert(metric, agg_metric(metric, "checkout", AggregationOperator::Count));
+        metrics.insert(
+            metric,
+            agg_metric(metric, "checkout", AggregationOperator::Count),
+        );
 
         let reader = FakeReader {
             cells: vec![
@@ -742,7 +924,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(n, 0, "funnel metric must be skipped");
-        assert!(reader.calls.lock().unwrap().is_empty(), "no CH read for skipped metric");
+        assert!(
+            reader.calls.lock().unwrap().is_empty(),
+            "no CH read for skipped metric"
+        );
         assert!(writer.rows.lock().unwrap().is_empty());
     }
 
@@ -756,7 +941,10 @@ mod tests {
         a.exclusion_group_id = Some(group);
         b.exclusion_group_id = Some(group);
         let mut metrics = HashMap::new();
-        metrics.insert(metric, agg_metric(metric, "checkout", AggregationOperator::Count));
+        metrics.insert(
+            metric,
+            agg_metric(metric, "checkout", AggregationOperator::Count),
+        );
 
         let reader = FakeReader {
             cells: vec![binary_cell("control", "control", 100, 10)],
@@ -956,7 +1144,10 @@ mod tests {
         let a = meta(Uuid::from_u128(1), Uuid::new_v4(), metric);
         let b = meta(Uuid::from_u128(2), Uuid::new_v4(), metric);
         let mut metrics = HashMap::new();
-        metrics.insert(metric, agg_metric(metric, "checkout", AggregationOperator::Count));
+        metrics.insert(
+            metric,
+            agg_metric(metric, "checkout", AggregationOperator::Count),
+        );
 
         let reader = FakeReader {
             cells: vec![],
