@@ -274,6 +274,7 @@ fn group_to_proto(g: &ExclusionGroup) -> stitchd_proto::experiments::v1::Exclusi
         allocated_bp: g.allocated_bp,
         free_bp: g.free_bp,
         version: g.version,
+        unit_context_type: g.unit_context_type.clone(),
     }
 }
 
@@ -1380,12 +1381,45 @@ impl ExperimentationService for ExperimentationServiceImpl {
             Some(proto.description.as_str())
         };
 
+        // The group's diversion unit; defaults to "user" when unset. Validate it
+        // against the env's registered context types (mirrors experiment
+        // creation) so the group can only randomize on a real unit.
+        let unit_context_type = if proto.unit_context_type.trim().is_empty() {
+            "user".to_string()
+        } else {
+            proto.unit_context_type.clone()
+        };
+        let registered = self
+            .analytics_client
+            .list_context_types(&proto.env_id)
+            .await?;
+        if !registered.iter().any(|ct| ct == &unit_context_type) {
+            return Err(Status::invalid_argument(format!(
+                "context type '{unit_context_type}' is not registered for this environment"
+            )));
+        }
+
         let group = repo
-            .create(env_id, &proto.name, description)
+            .create(env_id, &proto.name, description, &unit_context_type)
             .await
             .map_err(Status::from)?;
 
         metrics::counter!("experimentation_service.create_exclusion_group.ok").increment(1);
+        Ok(Response::new(group_to_proto(&group)))
+    }
+
+    #[instrument(skip(self))]
+    async fn get_exclusion_group(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::GetExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        let repo = self.exclusion_group_repo()?;
+        let req = request.into_inner();
+        let group_id = parse_group_id(&req.group_id)?;
+
+        let group = repo.find_by_id(group_id).await.map_err(Status::from)?;
+
+        metrics::counter!("experimentation_service.get_exclusion_group.ok").increment(1);
         Ok(Response::new(group_to_proto(&group)))
     }
 
@@ -1494,8 +1528,26 @@ impl ExperimentationService for ExperimentationServiceImpl {
             pct_to_bp(experiment.traffic_allocation)
         };
 
-        // Load the group to obtain its salt for the gate.
+        // Load the group to obtain its salt and diversion unit for the gate.
         let group = repo.find_by_id(group_id).await.map_err(Status::from)?;
+
+        // Mutual exclusion only holds if EVERY member randomizes on the same
+        // unit — the group's `unit_context_type`. Reject any experiment that
+        // does not declare that unit; otherwise its context would bucket on a
+        // different key and silently break exclusion.
+        if !experiment
+            .unit_context_types
+            .iter()
+            .any(|ct| ct == &group.unit_context_type)
+        {
+            return Err(Status::failed_precondition(format!(
+                "experiment cannot join exclusion group: the group randomizes on unit '{}', \
+                 but the experiment's unit_context_types ({}) do not include it; all members \
+                 must share the group's diversion unit for mutual exclusion to hold",
+                group.unit_context_type,
+                experiment.unit_context_types.join(", ")
+            )));
+        }
 
         // Allocate a disjoint range; capacity overflow → FAILED_PRECONDITION.
         let range = repo
@@ -1504,21 +1556,12 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .map_err(Status::from)?;
 
         // When the experiment is rule-bound, push the gate onto the rule so the
-        // flag snapshot enforces exclusion. The randomization unit is the first
-        // declared unit context type.
+        // flag snapshot enforces exclusion. The randomization unit is the
+        // GROUP's diversion unit (shared by all members), not the experiment's.
         if let Some(flag_rule_id) = experiment.flag_rule_id {
-            let context_type = experiment
-                .unit_context_types
-                .first()
-                .cloned()
-                .ok_or_else(|| {
-                    Status::failed_precondition(
-                        "experiment has no unit_context_types; cannot build exclusion gate",
-                    )
-                })?;
             let gate = ExclusionGate {
                 group_salt: group.salt.clone(),
-                context_type,
+                context_type: group.unit_context_type.clone(),
                 bucket_lo: range.lo,
                 bucket_hi: range.hi,
             };
@@ -1661,6 +1704,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
                 interaction_estimate: r.interaction_estimate,
                 p_value: r.p_value,
                 significant: r.significant,
+                insufficient_data: r.insufficient_data,
             });
         }
 
@@ -3292,8 +3336,10 @@ mod tests {
             interaction_estimate: 0.42,
             p_value: 0.001,
             significant: true,
+            insufficient_data: false,
         };
-        // Row where `this_exp` is side B → "other" is side A.
+        // Row where `this_exp` is side B → "other" is side A. This pair lacked
+        // enough shared exposures: insufficient_data=true, significant=false.
         let third_exp = uuid::Uuid::new_v4();
         let row_b = CoreInteractionRow {
             experiment_id_a: third_exp,
@@ -3304,6 +3350,7 @@ mod tests {
             interaction_estimate: 0.0,
             p_value: 0.0,
             significant: false,
+            insufficient_data: true,
         };
         let svc = make_service(env_id).with_interactions_reader(Arc::new(
             CannedInteractionsReader {
@@ -3328,6 +3375,7 @@ mod tests {
         assert_eq!(first.metric_key, "checkout");
         assert_eq!(first.shared_count, 400);
         assert!(first.significant);
+        assert!(!first.insufficient_data);
 
         let second = &resp.interactions[1];
         // this_exp is side B here; the "other" resolved is side A (third_exp).
@@ -3335,6 +3383,7 @@ mod tests {
         assert_eq!(second.experiment_id_b, this_exp.to_string());
         assert_eq!(second.other_experiment_name, "Test Experiment");
         assert!(!second.significant);
+        assert!(second.insufficient_data);
     }
 
     /// When no refresher is attached, transitions still succeed.
@@ -3522,6 +3571,7 @@ mod tests {
             name: "g".to_string(),
             description: None,
             salt: salt.to_string(),
+            unit_context_type: "user".to_string(),
             allocated_bp: 2500,
             free_bp: 7500,
             version: 1,
@@ -3549,6 +3599,7 @@ mod tests {
             env_id: EnvironmentId,
             name: &str,
             description: Option<&str>,
+            unit_context_type: &str,
         ) -> Result<ExclusionGroup, RepositoryError> {
             Ok(ExclusionGroup {
                 id: ExclusionGroupId::new(),
@@ -3556,6 +3607,7 @@ mod tests {
                 name: name.to_string(),
                 description: description.map(ToString::to_string),
                 salt: self.salt.clone(),
+                unit_context_type: unit_context_type.to_string(),
                 allocated_bp: 0,
                 free_bp: 10_000,
                 version: 1,
@@ -3574,6 +3626,7 @@ mod tests {
                 name: name.to_string(),
                 description: description.map(ToString::to_string),
                 salt: self.salt.clone(),
+                unit_context_type: "user".to_string(),
                 allocated_bp: 0,
                 free_bp: 10_000,
                 version: expected_version + 1,
@@ -3631,6 +3684,7 @@ mod tests {
             _env_id: EnvironmentId,
             _name: &str,
             _description: Option<&str>,
+            _unit_context_type: &str,
         ) -> Result<ExclusionGroup, RepositoryError> {
             unreachable!()
         }
@@ -3773,6 +3827,7 @@ mod tests {
                     allocated_bp: 0,
                     free_bp: 0,
                     version: 0,
+                    unit_context_type: String::new(),
                 }),
             },
         );
@@ -3798,6 +3853,7 @@ mod tests {
                     allocated_bp: 0,
                     free_bp: 0,
                     version: 0,
+                    unit_context_type: "user".to_string(),
                 }),
             },
         );
@@ -3833,6 +3889,7 @@ mod tests {
                     allocated_bp: 0,
                     free_bp: 0,
                     version: 0,
+                    unit_context_type: String::new(),
                 }),
             },
         );
@@ -3928,6 +3985,311 @@ mod tests {
         );
         let err = svc.assign_experiment_to_group(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    }
+
+    /// A group repo whose group randomizes on the `account` unit. Used to verify
+    /// the cross-member diversion-unit check and gate construction.
+    #[derive(Default)]
+    struct AccountUnitGroupRepo {
+        salt: String,
+    }
+
+    #[async_trait]
+    impl ExclusionGroupRepository for AccountUnitGroupRepo {
+        async fn find_by_id(
+            &self,
+            id: ExclusionGroupId,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            let mut g = sample_group(&self.salt);
+            g.id = id;
+            g.unit_context_type = "account".to_string();
+            Ok(g)
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+        ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn create(
+            &self,
+            _env_id: EnvironmentId,
+            _name: &str,
+            _description: Option<&str>,
+            _unit_context_type: &str,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            unreachable!()
+        }
+        async fn update(
+            &self,
+            _id: ExclusionGroupId,
+            _name: &str,
+            _description: Option<&str>,
+            _expected_version: i64,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            unreachable!()
+        }
+        async fn soft_delete(&self, _id: ExclusionGroupId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn allocate_range(
+            &self,
+            _group_id: ExclusionGroupId,
+            _experiment_id: ExperimentId,
+            requested_bp: u32,
+        ) -> Result<BucketRange, RepositoryError> {
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(BucketRange {
+                lo: 0,
+                hi: requested_bp as u16,
+            })
+        }
+        async fn free_range(&self, _experiment_id: ExperimentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn allocated_free_bp(
+            &self,
+            _group_id: ExclusionGroupId,
+        ) -> Result<(u32, u32), RepositoryError> {
+            Ok((2500, 7500))
+        }
+    }
+
+    /// HIGH-1: assignment is rejected with FAILED_PRECONDITION when the
+    /// experiment does not declare the group's diversion unit, because mutual
+    /// exclusion can only hold if all members randomize on the same unit.
+    #[tokio::test]
+    async fn test_assign_rejected_on_unit_mismatch() {
+        let (env_id, env_str) = env_uuid();
+        // make_experiment → unit_context_types = ["user"], group unit = "account".
+        let svc = make_service(env_id).with_exclusion_groups(
+            Arc::new(AccountUnitGroupRepo::default()),
+            Arc::new(MockGateWriter::default()),
+        );
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::AssignExperimentToGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+                requested_bp: 2500,
+            },
+        );
+        let err = svc.assign_experiment_to_group(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            err.message().contains("account"),
+            "expected unit-mismatch message, got {:?}",
+            err.message()
+        );
+    }
+
+    /// HIGH-1: the exclusion gate carries the GROUP's diversion unit, not the
+    /// experiment's first unit. Here the group randomizes on `account` and the
+    /// experiment declares both `user` and `account`, so the gate must use
+    /// `account`.
+    #[tokio::test]
+    async fn test_assign_gate_uses_group_unit_not_experiment_first() {
+        let (env_id, env_str) = env_uuid();
+        let group_repo = Arc::new(AccountUnitGroupRepo {
+            salt: "acct-salt".to_string(),
+        });
+        let gate_writer = Arc::new(MockGateWriter::default());
+        // Experiment that declares the group's unit (account) in addition to user.
+        struct MultiUnitRepo {
+            env_id: EnvironmentId,
+        }
+        #[async_trait]
+        impl ExperimentRepository for MultiUnitRepo {
+            async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
+                let mut exp = make_experiment(self.env_id);
+                exp.id = id;
+                exp.unit_context_types = vec!["user".to_string(), "account".to_string()];
+                Ok(exp)
+            }
+            async fn list_by_environment(
+                &self,
+                _env_id: EnvironmentId,
+                _status_filter: Option<ExperimentStatus>,
+            ) -> Result<Vec<Experiment>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn list_by_environment_paginated(
+                &self,
+                _env_id: EnvironmentId,
+                _offset: u64,
+                _limit: u64,
+            ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+                Ok((vec![], 0))
+            }
+            async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                experiment: &Experiment,
+            ) -> Result<Experiment, RepositoryError> {
+                Ok(experiment.clone())
+            }
+            async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn list_iterations(
+                &self,
+                _experiment_id: ExperimentId,
+            ) -> Result<Vec<ExperimentIteration>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn apply_transition(
+                &self,
+                id: ExperimentId,
+                to: ExperimentStatus,
+                _actor_id: Option<stitchd_core::id::UserId>,
+            ) -> Result<Experiment, RepositoryError> {
+                let mut exp = make_experiment(self.env_id);
+                exp.id = id;
+                exp.status = to;
+                Ok(exp)
+            }
+            async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn find_active_experiment_for_flag(
+                &self,
+                _flag_id: stitchd_core::id::FlagId,
+            ) -> Result<Option<ExperimentId>, RepositoryError> {
+                Ok(None)
+            }
+            async fn find_iteration_by_id(
+                &self,
+                iteration_id: stitchd_core::id::ExperimentIterationId,
+            ) -> Result<ExperimentIteration, RepositoryError> {
+                Err(RepositoryError::NotFound {
+                    id: iteration_id.to_string(),
+                })
+            }
+        }
+
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(MultiUnitRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_exclusion_groups(group_repo.clone(), gate_writer.clone());
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::AssignExperimentToGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+                requested_bp: 2500,
+            },
+        );
+        svc.assign_experiment_to_group(req).await.unwrap();
+
+        let sets = gate_writer.sets.lock().unwrap();
+        assert_eq!(sets.len(), 1);
+        let gate = sets[0].1.as_ref().expect("gate should be Some");
+        assert_eq!(gate.context_type, "account");
+        assert_eq!(gate.group_salt, "acct-salt");
+    }
+
+    /// The new GetExclusionGroup RPC returns the group (with its diversion unit)
+    /// and surfaces NOT_FOUND from the repo.
+    #[tokio::test]
+    async fn test_get_exclusion_group_returns_group_with_unit() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id).with_exclusion_groups(
+            Arc::new(MockGroupRepo::default()),
+            Arc::new(MockGateWriter::default()),
+        );
+        let gid = ExclusionGroupId::new();
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExclusionGroupRequest {
+                env_id: env_str,
+                group_id: gid.to_string(),
+            },
+        );
+        let got = svc.get_exclusion_group(req).await.unwrap().into_inner();
+        assert_eq!(got.id, gid.to_string());
+        assert_eq!(got.unit_context_type, "user");
+    }
+
+    #[tokio::test]
+    async fn test_get_exclusion_group_not_found() {
+        let (env_id, env_str) = env_uuid();
+        // FullGroupRepo::find_by_id returns Ok; use a repo that returns NotFound.
+        struct MissingGroupRepo;
+        #[async_trait]
+        impl ExclusionGroupRepository for MissingGroupRepo {
+            async fn find_by_id(
+                &self,
+                id: ExclusionGroupId,
+            ) -> Result<ExclusionGroup, RepositoryError> {
+                Err(RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn list_by_environment(
+                &self,
+                _env_id: EnvironmentId,
+            ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _env_id: EnvironmentId,
+                _name: &str,
+                _description: Option<&str>,
+                _unit_context_type: &str,
+            ) -> Result<ExclusionGroup, RepositoryError> {
+                unreachable!()
+            }
+            async fn update(
+                &self,
+                _id: ExclusionGroupId,
+                _name: &str,
+                _description: Option<&str>,
+                _expected_version: i64,
+            ) -> Result<ExclusionGroup, RepositoryError> {
+                unreachable!()
+            }
+            async fn soft_delete(&self, _id: ExclusionGroupId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn allocate_range(
+                &self,
+                _group_id: ExclusionGroupId,
+                _experiment_id: ExperimentId,
+                _requested_bp: u32,
+            ) -> Result<BucketRange, RepositoryError> {
+                unreachable!()
+            }
+            async fn free_range(
+                &self,
+                _experiment_id: ExperimentId,
+            ) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn allocated_free_bp(
+                &self,
+                _group_id: ExclusionGroupId,
+            ) -> Result<(u32, u32), RepositoryError> {
+                Ok((0, 10_000))
+            }
+        }
+
+        let svc = make_service(env_id).with_exclusion_groups(
+            Arc::new(MissingGroupRepo),
+            Arc::new(MockGateWriter::default()),
+        );
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExclusionGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+            },
+        );
+        let err = svc.get_exclusion_group(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
     }
 
     #[tokio::test]

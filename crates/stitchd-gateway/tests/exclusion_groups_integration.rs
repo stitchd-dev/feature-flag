@@ -50,6 +50,8 @@ struct MockExpService {
     groups: Vec<ExclusionGroup>,
     group_total: u64,
     created_group: Option<ExclusionGroup>,
+    /// When set, `get_exclusion_group` returns it; when `None`, returns NOT_FOUND.
+    single_group: Option<ExclusionGroup>,
     /// When set, assign returns the `flag_locked_by_experiment:<id>` sentinel.
     locked_experiment_id: Option<String>,
     assign_response: Option<AssignExperimentToGroupResponse>,
@@ -150,6 +152,16 @@ impl ExperimentationService for MockExpService {
         _req: tonic::Request<stitchd_proto::experiments::v1::CreateExclusionGroupRequest>,
     ) -> Result<Response<ExclusionGroup>, Status> {
         Ok(Response::new(self.created_group.clone().unwrap_or_default()))
+    }
+
+    async fn get_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetExclusionGroupRequest>,
+    ) -> Result<Response<ExclusionGroup>, Status> {
+        match &self.single_group {
+            Some(g) => Ok(Response::new(g.clone())),
+            None => Err(Status::not_found("exclusion group not found")),
+        }
     }
 
     async fn list_exclusion_groups(
@@ -281,6 +293,7 @@ async fn list_exclusion_groups_returns_capacity_fields() {
             allocated_bp: 3000,
             free_bp: 7000,
             version: 2,
+            unit_context_type: "user".to_string(),
         }],
         group_total: 1,
         ..Default::default()
@@ -318,6 +331,7 @@ async fn create_exclusion_group_returns_201() {
             allocated_bp: 0,
             free_bp: 10000,
             version: 1,
+            unit_context_type: "user".to_string(),
         }),
         ..Default::default()
     };
@@ -330,7 +344,9 @@ async fn create_exclusion_group_returns_201() {
                 .method("POST")
                 .uri("/v1/environments/env-1/exclusion-groups")
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"name":"Checkout","description":"funnel"}"#))
+                .body(Body::from(
+                    r#"{"name":"Checkout","description":"funnel","unit_context_type":"account"}"#,
+                ))
                 .unwrap(),
         )
         .await
@@ -340,6 +356,61 @@ async fn create_exclusion_group_returns_201() {
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body["id"], "grp-new");
     assert_eq!(body["free_bp"], 10000);
+    // The created group's diversion unit is surfaced in the response body.
+    assert_eq!(body["unit_context_type"], "user");
+}
+
+#[tokio::test]
+async fn get_exclusion_group_returns_200_via_rpc() {
+    let svc = MockExpService {
+        single_group: Some(ExclusionGroup {
+            id: "grp-1".to_string(),
+            env_id: "env-1".to_string(),
+            name: "Checkout".to_string(),
+            description: "funnel".to_string(),
+            allocated_bp: 2500,
+            free_bp: 7500,
+            version: 5,
+            unit_context_type: "account".to_string(),
+        }),
+        ..Default::default()
+    };
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let app = build_router(make_state(exp_client));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/environments/env-1/exclusion-groups/grp-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["id"], "grp-1");
+    assert_eq!(body["unit_context_type"], "account");
+}
+
+#[tokio::test]
+async fn get_exclusion_group_returns_404_when_absent() {
+    // single_group None → mock returns NOT_FOUND → gateway 404.
+    let svc = MockExpService::default();
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let app = build_router(make_state(exp_client));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/environments/env-1/exclusion-groups/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -423,17 +494,33 @@ async fn assign_experiment_returns_409_when_flag_locked() {
 #[tokio::test]
 async fn get_interactions_maps_rows() {
     let svc = MockExpService {
-        interactions: vec![ExperimentInteraction {
-            experiment_id_a: "exp-1".to_string(),
-            experiment_id_b: "exp-2".to_string(),
-            other_experiment_name: "Banner test".to_string(),
-            context_type: "user".to_string(),
-            metric_key: "conversion".to_string(),
-            shared_count: 4200,
-            interaction_estimate: 0.034,
-            p_value: 0.012,
-            significant: true,
-        }],
+        interactions: vec![
+            ExperimentInteraction {
+                experiment_id_a: "exp-1".to_string(),
+                experiment_id_b: "exp-2".to_string(),
+                other_experiment_name: "Banner test".to_string(),
+                context_type: "user".to_string(),
+                metric_key: "conversion".to_string(),
+                shared_count: 4200,
+                interaction_estimate: 0.034,
+                p_value: 0.012,
+                significant: true,
+                insufficient_data: false,
+            },
+            // A pair with too few shared exposures to test: insufficient_data.
+            ExperimentInteraction {
+                experiment_id_a: "exp-1".to_string(),
+                experiment_id_b: "exp-3".to_string(),
+                other_experiment_name: "Sparse test".to_string(),
+                context_type: "user".to_string(),
+                metric_key: "conversion".to_string(),
+                shared_count: 12,
+                interaction_estimate: 0.0,
+                p_value: 0.0,
+                significant: false,
+                insufficient_data: true,
+            },
+        ],
         ..Default::default()
     };
     let exp_client = spawn_mock_exp_service(svc).await;
@@ -457,4 +544,10 @@ async fn get_interactions_maps_rows() {
     assert_eq!(row["metric_key"], "conversion");
     assert_eq!(row["shared_count"], 4200);
     assert_eq!(row["significant"], true);
+    assert_eq!(row["insufficient_data"], false);
+    // The sparse pair surfaces insufficient_data=true.
+    let sparse = &body["interactions"][1];
+    assert_eq!(sparse["experiment_id_b"], "exp-3");
+    assert_eq!(sparse["insufficient_data"], true);
+    assert_eq!(sparse["significant"], false);
 }

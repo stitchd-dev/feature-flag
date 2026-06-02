@@ -23,8 +23,8 @@ use utoipa::ToSchema;
 
 use stitchd_proto::experiments::v1::{
     AssignExperimentToGroupRequest, CreateExclusionGroupRequest, DeleteExclusionGroupRequest,
-    ExclusionGroup, ListExclusionGroupsRequest, UnassignExperimentRequest,
-    UpdateExclusionGroupRequest,
+    ExclusionGroup, GetExclusionGroupRequest, ListExclusionGroupsRequest,
+    UnassignExperimentRequest, UpdateExclusionGroupRequest,
 };
 
 use crate::error::GatewayError;
@@ -46,6 +46,10 @@ pub struct ListExclusionGroupsQuery {
 pub struct CreateExclusionGroupBody {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// The group's diversion (randomization) unit context type, e.g. "user".
+    /// All member experiments must randomize on this unit for mutual exclusion
+    /// to hold. Defaults to "user" when omitted. Immutable after creation.
+    pub unit_context_type: Option<String>,
 }
 
 /// Request body for `PATCH /exclusion-groups/{group_id}`.
@@ -79,6 +83,9 @@ pub struct ExclusionGroupJson {
     pub free_bp: u32,
     /// Optimistic-concurrency version, bumped on every mutation.
     pub version: i64,
+    /// The group's diversion (randomization) unit context type, e.g. "user".
+    /// All member experiments must randomize on this unit. Immutable.
+    pub unit_context_type: String,
 }
 
 /// Response for assign / unassign — the updated experiment alongside the
@@ -98,6 +105,7 @@ fn exclusion_group_to_json(g: &ExclusionGroup) -> ExclusionGroupJson {
         allocated_bp: g.allocated_bp,
         free_bp: g.free_bp,
         version: g.version,
+        unit_context_type: g.unit_context_type.clone(),
     }
 }
 
@@ -168,6 +176,10 @@ pub async fn create_exclusion_group(
         env_id: environment_id,
         name: body.name.unwrap_or_default(),
         description: body.description.unwrap_or_default(),
+        unit_context_type: body
+            .unit_context_type
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "user".to_string()),
         ..Default::default()
     };
     let req = tonic::Request::new(CreateExclusionGroupRequest { group: Some(group) });
@@ -184,9 +196,8 @@ pub async fn create_exclusion_group(
 
 /// `GET /v1/environments/{environment_id}/exclusion-groups/{group_id}`
 ///
-/// The experimentation-service has no single-group RPC; the gateway fetches
-/// the environment's groups and selects the requested one, returning 404 if
-/// it is absent.
+/// Fetches a single group via the experimentation-service `GetExclusionGroup`
+/// RPC, surfacing the upstream NOT_FOUND as a 404.
 #[utoipa::path(
     get,
     path = "/v1/environments/{environment_id}/exclusion-groups/{group_id}",
@@ -207,23 +218,16 @@ pub async fn get_exclusion_group(
     State(state): State<Arc<GatewayState>>,
     Path((environment_id, group_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let req = tonic::Request::new(ListExclusionGroupsRequest {
+    let req = tonic::Request::new(GetExclusionGroupRequest {
         env_id: environment_id,
-        page: 1,
-        per_page: 200,
+        group_id,
     });
     let mut client = state.experimentation_client.lock().await;
     let resp = client
-        .list_exclusion_groups(req)
+        .get_exclusion_group(req)
         .await
         .map_err(GatewayError::from)?;
-    let inner = resp.into_inner();
-    let group = inner
-        .groups
-        .iter()
-        .find(|g| g.id == group_id)
-        .ok_or_else(|| GatewayError::NotFound(format!("exclusion group {group_id}")))?;
-    Ok(Json(exclusion_group_to_json(group)))
+    Ok(Json(exclusion_group_to_json(&resp.into_inner())))
 }
 
 /// `PATCH /v1/environments/{environment_id}/exclusion-groups/{group_id}`
@@ -442,6 +446,7 @@ mod tests {
             allocated_bp: 3000,
             free_bp: 7000,
             version: 4,
+            unit_context_type: "account".to_string(),
         };
         let j = exclusion_group_to_json(&g);
         assert_eq!(j.id, "grp-1");
@@ -450,6 +455,7 @@ mod tests {
         assert_eq!(j.allocated_bp, 3000);
         assert_eq!(j.free_bp, 7000);
         assert_eq!(j.version, 4);
+        assert_eq!(j.unit_context_type, "account");
     }
 
     #[tokio::test]

@@ -804,8 +804,13 @@ pub struct ExperimentInteractionJson {
     /// Estimated interaction effect size.
     pub interaction_estimate: f64,
     pub p_value: f64,
-    /// `true` when the interaction is statistically significant.
+    /// `true` when the interaction is statistically significant. Always `false`
+    /// when `insufficient_data` is `true`.
     pub significant: bool,
+    /// `true` when the pair lacked enough shared exposures to run a meaningful
+    /// interaction test; treat `significant`/`interaction_estimate` as
+    /// inconclusive in that case.
+    pub insufficient_data: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -824,6 +829,7 @@ fn interaction_to_json(i: &ExperimentInteraction) -> ExperimentInteractionJson {
         interaction_estimate: i.interaction_estimate,
         p_value: i.p_value,
         significant: i.significant,
+        insufficient_data: i.insufficient_data,
     }
 }
 
