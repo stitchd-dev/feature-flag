@@ -39,61 +39,61 @@ Phases 3 + 6; Phase 8 needs Phase 7; Phase 9 needs Phase 8. Shared seams:
   <!-- files: proto/experiments/v1/experimentation_service.proto, proto/flags/v1/*.proto -->
 - [x] Task: Conductor - User Manual Verification 'Schema & Domain Model' (Protocol in workflow.md)  [24a103a]
 
-## Phase 2: Exclusion-Group Eval Gating
+## Phase 2: Exclusion-Group Eval Gating  [checkpoint: 847f220]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task: Extend `evaluate_flag` with rule-resident gate — when the matched rule carries an
+- [x] Task: Extend `evaluate_flag` with rule-resident gate — when the matched rule carries an  [a999b0e]
       `exclusion_gate`, enroll only if `group_bucket(context_key, salt) ∈ [lo, hi)`; else fall through
       to non-experiment outcome. Core stays pure/non-async/experiment-unaware. TDD: in-range enrolls,
       out-of-range holds out, ungrouped unchanged, NO I/O on path.
   <!-- files: crates/stitchd-core/src/evaluation/engine.rs -->
-- [ ] Task: Carry the gate on the flag-definition snapshot (PG read → proto → flag-service
+- [x] Task: Carry the gate on the flag-definition snapshot (PG read → proto → flag-service  [a999b0e]
       server-streaming sync), reusing the existing `hash_inputs` plumbing.
   <!-- files: crates/stitchd-flag-service/src/service.rs, crates/stitchd-db/src/repository/pg/flag.rs -->
-- [ ] Task: Preview-path parity — evaluate-preview honors the gate; trace surfaces "held out by
+- [x] Task: Preview-path parity — evaluate-preview honors the gate; trace surfaces "held out by  [a999b0e]
       exclusion group" reason (in-memory, same path as RolloutDebug).
   <!-- files: crates/stitchd-core/src/evaluation/engine.rs, crates/stitchd-flag-service/src/preview.rs -->
   <!-- depends: task1 -->
-- [ ] Task: SDK parity test — `stitchd-sdk-rust::evaluate` produces identical gated outcomes as preview,
+- [x] Task: SDK parity test — `stitchd-sdk-rust::evaluate` produces identical gated outcomes as preview,  [a999b0e]
       reading only the in-memory `ArcSwap` snapshot (no network during eval).
   <!-- files: sdks/rust/tests/exclusion_gating.rs -->
   <!-- depends: task2 -->
-- [ ] Task: Conductor - User Manual Verification 'Exclusion-Group Eval Gating' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Exclusion-Group Eval Gating' (Protocol in workflow.md)  [a999b0e]
 
-## Phase 3: Exclusion-Group Management Service
+## Phase 3: Exclusion-Group Management Service  [checkpoint: 847f220]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task: PG repository — exclusion_groups CRUD + range allocator (find disjoint free range sized by
+- [x] Task: PG repository — exclusion_groups CRUD + range allocator (find disjoint free range sized by  [e4ea2cf]
       traffic_allocation; reject on insufficient capacity; free range on stop/delete). TDD: allocation,
       capacity rejection, free-and-reuse, optimistic-concurrency conflict.
   <!-- files: crates/stitchd-db/src/repository/pg/exclusion_group.rs -->
-- [ ] Task: experimentation-service RPCs — CreateExclusionGroup / ListExclusionGroups /
+- [x] Task: experimentation-service RPCs — CreateExclusionGroup / ListExclusionGroups /  [e4ea2cf]
       UpdateExclusionGroup / DeleteExclusionGroup + AssignExperimentToGroup / UnassignExperiment;
       assignment **stamps** the `exclusion_gate` onto the bound rule's distribution (clears on unassign).
   <!-- files: crates/stitchd-experimentation-service/src/service.rs -->
   <!-- depends: task1 -->
-- [ ] Task: Lifecycle wiring — TransitionExperiment frees the group range + clears the rule gate on stop;
+- [x] Task: Lifecycle wiring — TransitionExperiment frees the group range + clears the rule gate on stop;  [e4ea2cf]
       group membership is a locked attribute while running/paused (extends the whole-flag lock).
   <!-- files: crates/stitchd-experimentation-service/src/service.rs -->
   <!-- depends: task2 -->
-- [ ] Task: Conductor - User Manual Verification 'Exclusion-Group Management Service' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Exclusion-Group Management Service' (Protocol in workflow.md)  [e4ea2cf]
 
-## Phase 4: Interaction Detection Query
+## Phase 4: Interaction Detection Query  [checkpoint: 847f220]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task: Detection query builder — self-join `experiment_assignments` on
+- [x] Task: Detection query builder — self-join `experiment_assignments` on  [dddb240]
       `(env_id, context_type, context_key)` across distinct experiment_ids with overlapping windows;
       emit shared-context count + per-(Aᵥ × Bᵥ) cell counts. Pure `BuiltQuery` (parameterized).
       TDD against query-builder snapshot + a seeded ClickHouse fixture.
   <!-- files: crates/stitchd-stats-service/src/queries/interaction.rs, crates/stitchd-stats-service/src/queries/mod.rs -->
-- [ ] Task: Pair enumerator — list candidate overlapping experiment pairs for an env (distinct flags,
+- [x] Task: Pair enumerator — list candidate overlapping experiment pairs for an env (distinct flags,  [dddb240]
       overlapping active windows, shared metric_ids, NOT same exclusion group).
   <!-- files: crates/stitchd-stats-service/src/interaction_pairs.rs -->
   <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Interaction Detection Query' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Interaction Detection Query' (Protocol in workflow.md)  [dddb240]
 
 ## Phase 5: Interaction Significance Math
 <!-- execution: parallel -->
