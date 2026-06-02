@@ -14,7 +14,10 @@ import SOURCE from './ExperimentDetail.tsx?raw'
 import { hasSignificantInteraction } from './tabs/Interactions'
 import type { ExperimentInteraction } from '../../lib/api/exclusionGroups'
 
-function interaction(significant: boolean): ExperimentInteraction {
+function interaction(
+  significant: boolean,
+  insufficient_data = false,
+): ExperimentInteraction {
   return {
     experiment_id_a: 'a',
     experiment_id_b: 'b',
@@ -22,9 +25,10 @@ function interaction(significant: boolean): ExperimentInteraction {
     context_type: 'user',
     metric_key: 'm',
     shared_count: 10,
-    interaction_estimate: 0.1,
-    p_value: significant ? 0.001 : 0.5,
+    interaction_estimate: insufficient_data ? 0.0 : 0.1,
+    p_value: insufficient_data ? 0.0 : significant ? 0.001 : 0.5,
     significant,
+    insufficient_data,
   }
 }
 
@@ -33,6 +37,11 @@ describe('interaction-warning gate', () => {
     expect(hasSignificantInteraction([interaction(true)])).toBe(true)
     expect(hasSignificantInteraction([interaction(false)])).toBe(false)
     expect(hasSignificantInteraction([])).toBe(false)
+  })
+
+  it('does not count insufficient-data rows toward the warning', () => {
+    // significant=true on the wire but insufficient_data=true → not a real hit.
+    expect(hasSignificantInteraction([interaction(true, true)])).toBe(false)
   })
 })
 

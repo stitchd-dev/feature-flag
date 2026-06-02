@@ -192,6 +192,7 @@ export function ExclusionGroups() {
                   <thead>
                     <tr>
                       <th>Name</th>
+                      <th>Diversion unit</th>
                       <th>Description</th>
                       <th style={{ width: 260 }}>Capacity</th>
                       <th></th>
@@ -202,6 +203,9 @@ export function ExclusionGroups() {
                       <tr key={g.id}>
                         <td>
                           <span style={{ fontWeight: 600, fontSize: 13 }}>{g.name}</span>
+                        </td>
+                        <td>
+                          <span className="badge">{g.unit_context_type || 'user'}</span>
                         </td>
                         <td style={{ color: 'var(--fg-muted)', fontSize: 12 }}>
                           {g.description || '—'}

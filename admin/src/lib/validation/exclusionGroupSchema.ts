@@ -10,6 +10,11 @@ import * as Yup from 'yup'
 export interface ExclusionGroupFormValues {
   name: string
   description?: string
+  /**
+   * Randomization unit the group diverts on (e.g. "user"). Required on create,
+   * immutable on edit. Every member experiment must randomize on this unit.
+   */
+  unit_context_type: string
 }
 
 export const exclusionGroupSchema: Yup.ObjectSchema<ExclusionGroupFormValues> =
@@ -23,4 +28,9 @@ export const exclusionGroupSchema: Yup.ObjectSchema<ExclusionGroupFormValues> =
     description: Yup.string()
       .trim()
       .max(500, 'Description must be 500 characters or fewer'),
+
+    unit_context_type: Yup.string()
+      .trim()
+      .min(1, 'Diversion unit is required')
+      .required('Diversion unit is required'),
   })

@@ -24,6 +24,8 @@ import {
   countMembersByGroup,
 } from './capacity'
 import { CapacityBar } from './CapacityBar'
+import { buildUnitOptions } from './ExclusionGroupModal'
+import { exclusionGroupSchema } from '../../../lib/validation/exclusionGroupSchema'
 import type { ExclusionGroup } from '../../../lib/api/exclusionGroups'
 
 const GROUP: ExclusionGroup = {
@@ -31,6 +33,7 @@ const GROUP: ExclusionGroup = {
   env_id: 'env-1',
   name: 'Checkout funnel',
   description: 'Shared checkout experiments',
+  unit_context_type: 'user',
   allocated_bp: 2500,
   free_bp: 7500,
   version: 1,
@@ -154,6 +157,62 @@ describe('ExclusionGroups (module shape)', () => {
 
   it('supports delete via deleteExclusionGroup', () => {
     expect(LIST_SOURCE).toMatch(/deleteExclusionGroup/)
+  })
+
+  it('surfaces the group diversion unit in the list', () => {
+    expect(LIST_SOURCE).toMatch(/Diversion unit/)
+    expect(LIST_SOURCE).toMatch(/g\.unit_context_type/)
+  })
+})
+
+// ─── Diversion-unit field ─────────────────────────────────────────────────────
+
+describe('buildUnitOptions', () => {
+  it('always includes "user" first by default', () => {
+    expect(buildUnitOptions([])).toEqual([{ value: 'user', label: 'user' }])
+  })
+
+  it('merges env context types after "user", de-duped', () => {
+    const opts = buildUnitOptions(['account', 'user', 'device'])
+    expect(opts.map((o) => o.value)).toEqual(['user', 'account', 'device'])
+  })
+
+  it('includes the current (edit) unit even if not in the env types', () => {
+    const opts = buildUnitOptions(['user'], 'org')
+    expect(opts.map((o) => o.value)).toContain('org')
+  })
+})
+
+describe('exclusionGroupSchema (diversion unit)', () => {
+  it('accepts a non-empty unit_context_type', async () => {
+    await expect(
+      exclusionGroupSchema.validate({ name: 'X', unit_context_type: 'user' }),
+    ).resolves.toBeTruthy()
+  })
+
+  it('rejects an empty unit_context_type', async () => {
+    await expect(
+      exclusionGroupSchema.validate({ name: 'X', unit_context_type: '' }),
+    ).rejects.toThrow(/Diversion unit is required/)
+  })
+})
+
+describe('ExclusionGroupModal (diversion-unit field)', () => {
+  it('renders a unit_context_type select', () => {
+    expect(MODAL_SOURCE).toMatch(/name="unit_context_type"/)
+    expect(MODAL_SOURCE).toMatch(/FormSelect/)
+  })
+
+  it('disables the unit select on edit (immutable)', () => {
+    expect(MODAL_SOURCE).toMatch(/disabled=\{isEdit\}/)
+  })
+
+  it('sends unit_context_type only on create', () => {
+    expect(MODAL_SOURCE).toMatch(/unit_context_type: values\.unit_context_type/)
+  })
+
+  it('defaults the unit to "user"', () => {
+    expect(MODAL_SOURCE).toMatch(/group\?\.unit_context_type \?\? 'user'/)
   })
 })
 

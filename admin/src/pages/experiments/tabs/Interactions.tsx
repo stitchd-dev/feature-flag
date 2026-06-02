@@ -35,11 +35,15 @@ export function formatEstimate(estimate: number | null | undefined): string {
   return estimate > 0 ? `+${fixed}` : fixed
 }
 
-/** True when any interaction in the list is statistically significant. */
+/**
+ * True when any interaction in the list is a *real* statistically significant
+ * result. Rows flagged `insufficient_data` carry 0.0 sentinels for their
+ * estimate/p-value and must never be counted as significant.
+ */
 export function hasSignificantInteraction(
   interactions: ExperimentInteraction[],
 ): boolean {
-  return interactions.some((i) => i.significant)
+  return interactions.some((i) => i.significant && !i.insufficient_data)
 }
 
 export function InteractionsTab({ interactions, loading, error }: Props) {
@@ -111,7 +115,7 @@ export function InteractionsTab({ interactions, loading, error }: Props) {
                   fontSize: 12,
                 }}
               >
-                {formatEstimate(row.interaction_estimate)}
+                {row.insufficient_data ? '—' : formatEstimate(row.interaction_estimate)}
               </td>
               <td
                 style={{
@@ -120,15 +124,21 @@ export function InteractionsTab({ interactions, loading, error }: Props) {
                   fontSize: 12,
                 }}
               >
-                {formatPValue(row.p_value)}
+                {row.insufficient_data ? '—' : formatPValue(row.p_value)}
               </td>
               <td>
-                <span
-                  className={`badge ${row.significant ? 'warning' : 'success'}`}
-                  data-significant={row.significant}
-                >
-                  {row.significant ? 'Significant' : 'Not significant'}
-                </span>
+                {row.insufficient_data ? (
+                  <span className="badge" data-insufficient="true">
+                    Insufficient data
+                  </span>
+                ) : (
+                  <span
+                    className={`badge ${row.significant ? 'warning' : 'success'}`}
+                    data-significant={row.significant}
+                  >
+                    {row.significant ? 'Significant' : 'Not significant'}
+                  </span>
+                )}
               </td>
             </tr>
           ))}
