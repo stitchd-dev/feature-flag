@@ -108,17 +108,17 @@ Phases 3 + 6; Phase 8 needs Phase 7; Phase 9 needs Phase 8. Shared seams:
   <!-- files: crates/stitchd-stats-service/src/stats/interaction_continuous.rs -->
 - [x] Task: Conductor - User Manual Verification 'Interaction Significance Math' (Protocol in workflow.md)  [ce6e97f]
 
-## Phase 6: Stats-Service Orchestration + Read RPCs
+## Phase 6: Stats-Service Orchestration + Read RPCs  [checkpoint: 13df229]
 <!-- execution: sequential -->
 <!-- depends: phase5 -->
 
-- [ ] Task: Wire interaction computation into the 60-min schedule + on-demand recompute; write rows to
+- [x] Task: Wire interaction computation into the 60-min schedule + on-demand recompute; write rows to  [13df229]
       `experiment_interactions`; skip same-group (mutually excluded) pairs.
   <!-- files: crates/stitchd-stats-service/src/dispatch.rs, crates/stitchd-stats-service/src/results_writer.rs -->
-- [ ] Task: experimentation-service read path — `GetExperimentInteractions` RPC reading
+- [x] Task: experimentation-service read path — `GetExperimentInteractions` RPC reading  [13df229]
       `experiment_interactions` for an experiment + context type.
   <!-- files: crates/stitchd-experimentation-service/src/service.rs, crates/stitchd-experimentation-service/src/analytics_client.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Stats-Service Orchestration + Read RPCs' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Stats-Service Orchestration + Read RPCs' (Protocol in workflow.md)  [13df229]
 
 ## Phase 7: Gateway REST Surface
 <!-- execution: parallel -->
