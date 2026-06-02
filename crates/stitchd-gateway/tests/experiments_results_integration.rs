@@ -149,6 +149,13 @@ impl ExperimentationService for MockExpService {
         Err(Status::unimplemented("not used"))
     }
 
+    async fn get_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
     async fn list_exclusion_groups(
         &self,
         _req: tonic::Request<stitchd_proto::experiments::v1::ListExclusionGroupsRequest>,

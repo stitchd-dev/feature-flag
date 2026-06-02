@@ -26,6 +26,10 @@ pub struct InteractionRow {
     pub interaction_estimate: f64,
     pub p_value: f64,
     pub significant: bool,
+    /// True when the pair lacked enough shared exposures to run a meaningful
+    /// interaction test; callers should treat `significant`/estimate as
+    /// inconclusive in that case.
+    pub insufficient_data: bool,
 }
 
 /// Reads interaction rows involving a given experiment.
@@ -65,6 +69,7 @@ struct ChRow {
     interaction_estimate: f64,
     p_value: f64,
     significant: bool,
+    insufficient_data: bool,
 }
 
 #[async_trait]
@@ -86,7 +91,8 @@ impl InteractionsReader for ClickHouseInteractionsReader {
                 shared_count,
                 interaction_estimate,
                 p_value,
-                significant
+                significant,
+                insufficient_data
             FROM experiment_interactions
             WHERE env_id = toUUID('{env_str}')
               AND (experiment_id_a = toUUID('{exp_str}') OR experiment_id_b = toUUID('{exp_str}'))
@@ -105,6 +111,7 @@ impl InteractionsReader for ClickHouseInteractionsReader {
                 interaction_estimate: r.interaction_estimate,
                 p_value: r.p_value,
                 significant: r.significant,
+                insufficient_data: r.insufficient_data,
             })
             .collect())
     }
@@ -150,6 +157,7 @@ mod tests {
                 interaction_estimate: 0.4,
                 p_value: 0.001,
                 significant: true,
+                insufficient_data: false,
             }],
             calls: calls.clone(),
         };
@@ -157,6 +165,7 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].metric_key, "checkout");
         assert!(rows[0].significant);
+        assert!(!rows[0].insufficient_data);
         assert_eq!(calls.lock().unwrap()[0], (env, exp));
     }
 }
