@@ -12,10 +12,10 @@ use utoipa::ToSchema;
 
 use stitchd_proto::experiments::v1::{
     BoundTarget, ContextTypeResults, CreateExperimentRequest, DeleteExperimentRequest, Experiment,
-    ExperimentIteration, ExperimentStatus, GetExperimentRequest, GetResultsRequest,
-    ListExperimentsRequest, ListExposuresRequest, ListIterationsRequest,
-    SrmResult as ProtoSrmResult, TransitionExperimentRequest, UpdateExperimentRequest,
-    VariantResult,
+    ExperimentInteraction, ExperimentIteration, ExperimentStatus, GetExperimentInteractionsRequest,
+    GetExperimentRequest, GetResultsRequest, ListExperimentsRequest, ListExposuresRequest,
+    ListIterationsRequest, SrmResult as ProtoSrmResult, TransitionExperimentRequest,
+    UpdateExperimentRequest, VariantResult,
 };
 
 use crate::error::GatewayError;
@@ -228,7 +228,7 @@ fn ms_to_iso(ms: i64) -> String {
     d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn experiment_to_json(e: &Experiment) -> ExperimentJson {
+pub(crate) fn experiment_to_json(e: &Experiment) -> ExperimentJson {
     let variants = e.variant_keys.len() as u32;
     ExperimentJson {
         id: e.id.clone(),
@@ -787,6 +787,84 @@ pub async fn list_exposures(
     )))
 }
 
+// ─── GET /interactions (Phase 7) ─────────────────────────────────────────────
+
+/// One pairwise interaction estimate between this experiment and another that
+/// shares assignment population. Surfaces possible cross-experiment effects.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExperimentInteractionJson {
+    pub experiment_id_a: String,
+    pub experiment_id_b: String,
+    /// Human-readable name of the *other* experiment in the pair.
+    pub other_experiment_name: String,
+    pub context_type: String,
+    pub metric_key: String,
+    /// Number of contexts assigned in both experiments.
+    pub shared_count: u64,
+    /// Estimated interaction effect size.
+    pub interaction_estimate: f64,
+    pub p_value: f64,
+    /// `true` when the interaction is statistically significant.
+    pub significant: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ExperimentInteractionsJson {
+    pub interactions: Vec<ExperimentInteractionJson>,
+}
+
+fn interaction_to_json(i: &ExperimentInteraction) -> ExperimentInteractionJson {
+    ExperimentInteractionJson {
+        experiment_id_a: i.experiment_id_a.clone(),
+        experiment_id_b: i.experiment_id_b.clone(),
+        other_experiment_name: i.other_experiment_name.clone(),
+        context_type: i.context_type.clone(),
+        metric_key: i.metric_key.clone(),
+        shared_count: i.shared_count,
+        interaction_estimate: i.interaction_estimate,
+        p_value: i.p_value,
+        significant: i.significant,
+    }
+}
+
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/interactions`
+///
+/// Pairwise interaction estimates between this experiment and others that
+/// share assignment population. Drives the admin Interactions tab.
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/interactions",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+    ),
+    responses(
+        (status = 200, description = "Experiment interactions", body = ExperimentInteractionsJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_interactions(
+    State(state): State<Arc<GatewayState>>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(GetExperimentInteractionsRequest {
+        env_id: environment_id,
+        experiment_id,
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .get_experiment_interactions(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let interactions: Vec<ExperimentInteractionJson> =
+        inner.interactions.iter().map(interaction_to_json).collect();
+    Ok(Json(ExperimentInteractionsJson { interactions }))
+}
+
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
@@ -817,6 +895,10 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
             get(list_exposures),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/interactions",
+            get(get_interactions),
         )
         .with_state(state)
 }

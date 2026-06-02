@@ -28,6 +28,7 @@ pub mod context_intel;
 pub mod eval_stats;
 pub mod event_admin;
 pub mod events;
+pub mod exclusion_groups;
 pub mod experiments;
 pub mod flags;
 pub mod management;
