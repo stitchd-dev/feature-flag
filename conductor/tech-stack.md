@@ -206,6 +206,7 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 | `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`. `context_type` column (default 'user') supports per-context-type results |
 | `experiment_assignments` | ReplacingMergeTree(`_version`) | First-exposure (ITT) assignments keyed on `(experiment_id, iteration_id, context_type, context_key)`. Inverted version column (`-toUnixTimestamp64Milli(assigned_at)`) so MAX(_version) returns the MIN(assigned_at) — first exposure wins. Monthly partitions, 180-day TTL |
 | `experiment_assignments_mv` | Materialized View | Watches `flag_evaluation_log` inserts; routes rows where `targeting_on = true AND dictHas('experiment_iterations_active', (env_id, flag_id, matched_rule_id, context_type))` into `experiment_assignments` |
+| `experiment_interactions` | MergeTree | Pairwise cross-experiment interaction results, keyed `(env_id, experiment_id_a, experiment_id_b, context_type, metric_key)`. Holds `shared_count`, `cell_stats` (JSON per Aᵥ×Bᵥ cell), `interaction_estimate`, `p_value`, `significant`, `computed_at`. Written by `stitchd-stats-service` interaction sweep (60-min tick); read by `stitchd-experimentation-service` `GetExperimentInteractions`. Added in `xexp_interaction_20260602` (auto-applied on boot via `event_writer::migrations` array). |
 
 **ClickHouse dictionaries:**
 
@@ -230,6 +231,12 @@ All historical migrations (PostgreSQL, ClickHouse, ScyllaDB) were collapsed into
 - **PostgreSQL:** Defined in `crates/stitchd-db/migrations/20260525000001_v1_baseline.sql` (plus a partial unique constraint fix in `20260525000002_fix_flag_key_unique_partial.sql`). Retired `segment_rules` table and `context_hash_specs` dual-write columns.
 - **ClickHouse:** Defined in `crates/stitchd-event-writer/migrations/20260525000001_v1_baseline.sql`. Table `flag_evaluation_log_v2` renamed back to `flag_evaluation_log`.
 - **ScyllaDB:** Defined in `crates/stitchd-db/scylla-migrations/0001_v1_baseline.cql`.
+
+Post-baseline incremental migrations:
+- `crates/stitchd-db/migrations/20260602000001_exclusion_groups.sql` (`xexp_interaction_20260602`): adds the `exclusion_groups` table (per-env, immutable `salt`, version/audit/soft-delete; partial unique index on `(env_id, name) WHERE deleted_at IS NULL`) and the nullable `exclusion_group_id` + `group_bucket_lo/hi` columns on `experiments` (CHECK `0 <= lo < hi <= 10000` or both NULL) and snapshot columns on `experiment_iterations`.
+- `crates/stitchd-event-writer/migrations/20260602000002_experiment_interactions.sql` (`xexp_interaction_20260602`): the ClickHouse `experiment_interactions` table (registered in the `event_writer::migrations` MIGRATIONS array so it auto-applies on analytics-service boot).
+
+The experimentation-service proto gained additive RPCs (`CreateExclusionGroup`/`ListExclusionGroups`/`UpdateExclusionGroup`/`DeleteExclusionGroup`/`AssignExperimentToGroup`/`UnassignExperiment`/`GetExperimentInteractions`); `flags.v1.PercentageAllocation` gained an additive `exclusion_gate` (group_salt + context_type + bucket_lo/hi) carried on the existing definition-sync path.
 
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
