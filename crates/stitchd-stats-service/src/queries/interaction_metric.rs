@@ -172,7 +172,7 @@ pub fn build_interaction_metric_cells_query(
     // column routing: None/""/value/value_double/value_int read the typed
     // columns; any other on_field is a properties[<name>] string coerced to
     // Float64.
-    let value_expr = numeric_value_expr(cfg);
+    let value_expr = super::numeric_value_expr(cfg);
 
     let sql = format!(
         "WITH\n\
@@ -232,26 +232,6 @@ pub fn build_interaction_metric_cells_query(
     );
 
     Ok(BuiltQuery { sql, binds })
-}
-
-/// Build a `Float64`-valued per-event value expression for the metric.
-///
-/// Mirrors [`super::aggregation`]'s `numeric_value_expr` routing so a
-/// continuous interaction's per-cell `sum`/`sum_sq` match the per-experiment
-/// aggregation semantics. Conversion metrics ignore the value (they only check
-/// `event_count > 0`), but the expression is always emitted so the SQL shape is
-/// uniform.
-fn numeric_value_expr(cfg: &AggregationConfig) -> String {
-    let use_canonical = matches!(
-        cfg.on_field.as_deref(),
-        None | Some("") | Some("value") | Some("value_double") | Some("value_int")
-    );
-    if use_canonical {
-        "ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)".to_owned()
-    } else {
-        let field = cfg.on_field.as_deref().unwrap_or_default();
-        format!("ifNull(toFloat64OrNull(e.properties['{field}']), 0.0)")
-    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

@@ -608,8 +608,10 @@ impl ExperimentRepository for PgExperimentRepository {
                     (id, experiment_id, flag_id, iteration_number, started_at, metric_ids,
                      guardrail_metric_ids, traffic_allocation, min_sample_size,
                      targets_default_rule, pre_period_days, unit_context_types,
-                     default_rule_distribution)
-                VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7::float8::numeric, $8, $9, $10, $11, $12)
+                     default_rule_distribution,
+                     exclusion_group_id, group_bucket_lo, group_bucket_hi)
+                VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7::float8::numeric, $8, $9, $10, $11, $12,
+                        $13, $14, $15)
                 ",
             )
             .bind(iteration_id.as_uuid())
@@ -624,6 +626,12 @@ impl ExperimentRepository for PgExperimentRepository {
             .bind(pre_period_to_i32(current.pre_period_days))
             .bind(&current.unit_context_types)
             .bind(dist_json)
+            // Snapshot the exclusion-group membership at iteration start, mirroring
+            // the other config fields — so retrospective per-iteration analysis
+            // reflects the group/range that was actually in force during the run.
+            .bind(current.exclusion_group_id.map(|g| g.as_uuid()))
+            .bind(current.group_bucket_lo.map(i32::from))
+            .bind(current.group_bucket_hi.map(i32::from))
             .execute(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
@@ -680,6 +688,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 traffic_allocation::float8 AS traffic_allocation,
                 min_sample_size, pre_period_days, unit_context_types,
                 scheduled_start_at, scheduled_end_at,
+                exclusion_group_id, group_bucket_lo, group_bucket_hi,
                 version, created_at, updated_at, deleted_at
             FROM experiments
             WHERE status = 'running' AND deleted_at IS NULL

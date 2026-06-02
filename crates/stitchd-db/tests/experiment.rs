@@ -145,6 +145,39 @@ fn make_experiment(env_id: EnvironmentId, flag_id: FlagId, flag_rule_id: RuleId)
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Regression: `list_all_running` (the scheduler's running-experiment source,
+/// fed into the interaction sweep) must SELECT the exclusion-group columns that
+/// the shared `row_to_experiment` mapper reads. Before the fix the SELECT
+/// omitted them, so `row.get("exclusion_group_id")` panicked at runtime the
+/// moment any experiment was running.
+#[sqlx::test(migrations = "./migrations")]
+async fn test_list_all_running_maps_group_columns(pool: sqlx::PgPool) {
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let mut exp = make_experiment(env_id, flag_id, rule_id);
+    exp.status = ExperimentStatus::Running;
+    repo.create(&exp).await.unwrap();
+
+    // Populate the allocated bucket range (mirrors a group assignment). The
+    // CHECK constraint allows both bucket bounds set with 0 <= lo < hi <= 10000.
+    sqlx::query("UPDATE experiments SET group_bucket_lo = 0, group_bucket_hi = 2500 WHERE id = $1")
+        .bind(exp.id.as_uuid())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Must NOT panic, and must surface the group columns through the mapper.
+    let running = repo.list_all_running().await.expect("list_all_running must not panic");
+    let found = running
+        .iter()
+        .find(|e| e.id == exp.id)
+        .expect("running experiment should be listed");
+    assert_eq!(found.group_bucket_lo, Some(0));
+    assert_eq!(found.group_bucket_hi, Some(2500));
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn test_create_and_find(pool: sqlx::PgPool) {
     let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;

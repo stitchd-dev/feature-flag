@@ -48,7 +48,9 @@ pub fn group_bucket(context_key: &str, salt: &str) -> u16 {
     let input = format!("{salt}{context_key}");
     let mut cursor = Cursor::new(input);
     let hash = murmur3_x64_128(&mut cursor, 0).unwrap_or(0);
-    ((hash % 100_000) / 10) as u16
+    // Shared reduction with flag rollout allocation; result is ≤ 9999 so it
+    // always fits a u16.
+    u16::try_from(crate::hashing::reduce_hash_to_basis_points(hash)).unwrap_or(0)
 }
 
 /// Returns whether `bucket` falls in the range `[lo, hi)` — `lo` inclusive,

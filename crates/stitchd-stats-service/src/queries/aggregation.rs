@@ -222,18 +222,9 @@ fn percentile(cfg: &AggregationConfig, q: &str) -> Result<String, QueryBuildErro
 ///   — `properties` is `Map(String, String)`, so `toFloat64OrNull` is
 ///   the right coercion.
 fn numeric_value_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
-    let use_canonical = matches!(
-        cfg.on_field.as_deref(),
-        None | Some("") | Some("value") | Some("value_double") | Some("value_int")
-    );
-    Ok(if use_canonical {
-        // Canonical numeric columns — coalesce returns Nullable(Float64);
-        // ifNull makes it non-nullable for the aggregator.
-        "ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)".to_owned()
-    } else {
-        let field = cfg.on_field.as_deref().unwrap();
-        format!("ifNull(toFloat64OrNull(e.properties['{field}']), 0.0)")
-    })
+    // Delegates to the single shared definition in the parent module; the
+    // `Result` wrapper is retained for the existing `?` call sites.
+    Ok(super::numeric_value_expr(cfg))
 }
 
 /// Resolve the `on_field` reference to a ClickHouse expression.

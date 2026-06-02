@@ -1520,6 +1520,18 @@ impl ExperimentationService for ExperimentationServiceImpl {
         // (experiment running/paused) — surfaces as the whole-flag-lock 409.
         reject_if_flag_locked(&experiment)?;
 
+        // Default-rule-bound experiments cannot carry an exclusion gate: the gate
+        // rides on a percentage rule's output, and the flag's default-rule
+        // distribution has no gate slot. Reject up front rather than silently
+        // allocating a bucket range that evaluation never enforces.
+        let Some(flag_rule_id) = experiment.flag_rule_id else {
+            return Err(Status::failed_precondition(
+                "experiment binds to the flag's default rule (targets_default_rule=true); \
+                 default-rule experiments cannot join an exclusion group — bind the experiment \
+                 to a percentage-rollout rule to use mutual exclusion",
+            ));
+        };
+
         // Size the carve-out by the experiment's traffic allocation, unless the
         // caller explicitly overrides via `requested_bp`.
         let requested_bp = if req.requested_bp > 0 {
@@ -1555,25 +1567,23 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .await
             .map_err(Status::from)?;
 
-        // When the experiment is rule-bound, push the gate onto the rule so the
-        // flag snapshot enforces exclusion. The randomization unit is the
-        // GROUP's diversion unit (shared by all members), not the experiment's.
-        if let Some(flag_rule_id) = experiment.flag_rule_id {
-            let gate = ExclusionGate {
-                group_salt: group.salt.clone(),
-                context_type: group.unit_context_type.clone(),
-                bucket_lo: range.lo,
-                bucket_hi: range.hi,
-            };
-            // Best-effort consistency: if the gate write fails, release the
-            // range we just allocated so we don't leak bucket space.
-            if let Err(e) = gate_writer
-                .set_rule_exclusion_gate(flag_rule_id, Some(gate))
-                .await
-            {
-                let _ = repo.free_range(exp_id).await;
-                return Err(Status::from(e));
-            }
+        // Push the gate onto the bound percentage rule so the flag snapshot
+        // enforces exclusion. The randomization unit is the GROUP's diversion
+        // unit (shared by all members), not the experiment's.
+        let gate = ExclusionGate {
+            group_salt: group.salt.clone(),
+            context_type: group.unit_context_type.clone(),
+            bucket_lo: range.lo,
+            bucket_hi: range.hi,
+        };
+        // Best-effort consistency: if the gate write fails, release the range we
+        // just allocated so we don't leak bucket space.
+        if let Err(e) = gate_writer
+            .set_rule_exclusion_gate(flag_rule_id, Some(gate))
+            .await
+        {
+            let _ = repo.free_range(exp_id).await;
+            return Err(Status::from(e));
         }
 
         // Re-read the group for the post-allocation allocated/free split.

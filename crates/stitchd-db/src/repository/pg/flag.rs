@@ -197,15 +197,21 @@ impl PgFlagRepository {
     ) -> Result<(), RepositoryError> {
         use stitchd_core::rule_engine::types::{Rule, RuleOutput};
 
-        let rule_def: Option<serde_json::Value> = sqlx::query_scalar(
-            "SELECT rule_def FROM feature_flag_rules WHERE id = $1",
+        // Atomic read-modify-write: lock the rule row FOR UPDATE so a concurrent
+        // rule edit (`upsert_rules`) cannot interleave and clobber (or be clobbered
+        // by) the gate change. The previous non-transactional SELECT-then-UPDATE
+        // was a lost-update race.
+        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
+
+        let row: Option<(uuid::Uuid, serde_json::Value)> = sqlx::query_as(
+            "SELECT flag_id, rule_def FROM feature_flag_rules WHERE id = $1 FOR UPDATE",
         )
         .bind(flag_rule_id.as_uuid())
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let Some(rule_def) = rule_def else {
+        let Some((flag_id, rule_def)) = row else {
             return Err(RepositoryError::NotFound {
                 id: flag_rule_id.to_string(),
             });
@@ -214,6 +220,9 @@ impl PgFlagRepository {
         let mut rule: Rule = serde_json::from_value(rule_def).map_err(|e| {
             RepositoryError::Unexpected(anyhow::anyhow!("failed to deserialize rule_def: {e}"))
         })?;
+
+        // Capture the audit action before moving `gate` into the rule output.
+        let setting_gate = gate.is_some();
 
         // Only Percentage outputs carry an exclusion gate.
         if let RuleOutput::Percentage {
@@ -234,9 +243,27 @@ impl PgFlagRepository {
         sqlx::query("UPDATE feature_flag_rules SET rule_def = $1 WHERE id = $2")
             .bind(new_def)
             .bind(flag_rule_id.as_uuid())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
+
+        tx.commit().await.map_err(RepositoryError::Database)?;
+
+        // Audit the mutation: the write originates in the experimentation-service
+        // but lands on flag data, so record it in the flag audit trail for history.
+        self.audit
+            .log(
+                None,
+                "flag_rule",
+                flag_rule_id.as_uuid(),
+                if setting_gate {
+                    "set_exclusion_gate"
+                } else {
+                    "clear_exclusion_gate"
+                },
+                serde_json::json!({ "flag_id": flag_id }),
+            )
+            .await?;
 
         Ok(())
     }

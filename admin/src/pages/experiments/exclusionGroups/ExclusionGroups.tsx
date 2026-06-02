@@ -64,6 +64,9 @@ export function ExclusionGroups() {
   )
 
   // Member counts — derived by tallying experiments' exclusion_group_id.
+  // Fetched once per environment: group pagination/search does not change
+  // experiment→group membership, so this must NOT depend on `total` (which would
+  // re-fetch the full experiment list on every page change).
   const [memberCounts, setMemberCounts] = useState<Record<string, number>>({})
   useEffect(() => {
     if (!envId) return
@@ -75,7 +78,7 @@ export function ExclusionGroups() {
       })
       .catch(() => undefined)
     return () => ctrl.abort()
-  }, [envId, total])
+  }, [envId])
 
   const filtered = groups.filter(
     (g) =>

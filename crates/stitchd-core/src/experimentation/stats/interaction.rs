@@ -252,7 +252,15 @@ fn binary_rxc(
                 continue;
             }
             let col_rate = col_s[c] / col_n[c];
-            let exp_rate = (row_rate * col_rate / grand_rate).clamp(0.0, 1.0);
+            let exp_rate = row_rate * col_rate / grand_rate;
+            // The multiplicative-margins fit can predict a rate outside [0,1] for
+            // skewed grids. Clamping would silently bias the statistic toward
+            // non-significance (masking real interactions); instead abstain — the
+            // additive model does not fit this table, so the interaction cannot be
+            // tested reliably with this approximation.
+            if !(0.0..=1.0).contains(&exp_rate) {
+                return InteractionResult::insufficient(df);
+            }
             let exp_succ = nij * exp_rate;
             let exp_fail = nij * (1.0 - exp_rate);
             let obs_succ = s[r][c] as f64;

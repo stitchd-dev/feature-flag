@@ -166,12 +166,23 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
         &self,
         env_id: EnvironmentId,
     ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
+        // Single query: compute each group's allocated basis points via a
+        // correlated subquery over its member experiments, instead of an N+1
+        // `sum_allocated_bp` call per group.
         let rows = sqlx::query(
             r"
-            SELECT id, env_id, name, description, salt, unit_context_type, version
-            FROM exclusion_groups
-            WHERE env_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at
+            SELECT g.id, g.env_id, g.name, g.description, g.salt, g.unit_context_type, g.version,
+                   COALESCE((
+                       SELECT SUM(e.group_bucket_hi - e.group_bucket_lo)
+                       FROM experiments e
+                       WHERE e.exclusion_group_id = g.id
+                         AND e.group_bucket_lo IS NOT NULL
+                         AND e.group_bucket_hi IS NOT NULL
+                         AND e.deleted_at IS NULL
+                   ), 0)::bigint AS allocated_bp
+            FROM exclusion_groups g
+            WHERE g.env_id = $1 AND g.deleted_at IS NULL
+            ORDER BY g.created_at
             ",
         )
         .bind(env_id.as_uuid())
@@ -179,12 +190,15 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
         .await
         .map_err(RepositoryError::Database)?;
 
-        let mut groups = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let id = ExclusionGroupId::from_uuid(row.get("id"));
-            let allocated = Self::sum_allocated_bp(&self.pool, id).await?;
-            groups.push(row_to_group(row, allocated));
-        }
+        let groups = rows
+            .iter()
+            .map(|row| {
+                let allocated_i64: i64 = row.get("allocated_bp");
+                let allocated =
+                    u32::try_from(allocated_i64.clamp(0, i64::from(BP_TOTAL))).unwrap_or(0);
+                row_to_group(row, allocated)
+            })
+            .collect();
         Ok(groups)
     }
 

@@ -29,6 +29,26 @@ pub mod ratio;
 
 use thiserror::Error;
 
+/// Shared ClickHouse numeric value expression for a metric's `on_field`.
+///
+/// Routes the canonical numeric columns (`value` / `value_double` / `value_int`,
+/// or unset) to a coalesced `Float64`, and any other field to a
+/// `toFloat64OrNull` over `properties[...]`. Single definition reused by both
+/// [`aggregation`] and [`interaction_metric`] so the value-column encoding can
+/// only change in one place.
+pub(crate) fn numeric_value_expr(cfg: &stitchd_core::metric::AggregationConfig) -> String {
+    let use_canonical = matches!(
+        cfg.on_field.as_deref(),
+        None | Some("") | Some("value") | Some("value_double") | Some("value_int")
+    );
+    if use_canonical {
+        "ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)".to_owned()
+    } else {
+        let field = cfg.on_field.as_deref().unwrap_or_default();
+        format!("ifNull(toFloat64OrNull(e.properties['{field}']), 0.0)")
+    }
+}
+
 // ── BuiltQuery ───────────────────────────────────────────────────────────────
 
 /// The output of a metric query builder.
