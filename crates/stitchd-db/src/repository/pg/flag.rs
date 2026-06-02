@@ -169,6 +169,77 @@ impl PgFlagRepository {
     pub fn new(pool: PgPool, audit: Arc<dyn AuditLogger>) -> Self {
         Self { pool, audit }
     }
+
+    /// Set or clear the exclusion-group gate on a single flag rule's stored
+    /// `rule_def` JSONB (a serialised [`stitchd_core::rule_engine::types::Rule`]).
+    ///
+    /// This is how an exclusion-group assignment reaches the in-memory flag
+    /// snapshot: the gate is written onto the rule's `Percentage` output, and
+    /// flag-service then reads `rule_def` unchanged. When `gate` is `Some` the
+    /// gate is set; when `None` it is cleared.
+    ///
+    /// The gate only applies to `Percentage` outputs. If the rule's output is
+    /// not a percentage rollout (e.g. a direct `Variant`), this is a no-op for
+    /// a `Some` gate, since exclusion gating is meaningless without a
+    /// distribution to gate; clearing (`None`) is likewise a no-op.
+    ///
+    /// Additive: deliberately does not touch `find_rules`/`upsert_rules`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RepositoryError::NotFound`] if the rule does not exist,
+    /// [`RepositoryError::Unexpected`] if the stored `rule_def` cannot be
+    /// (de)serialised, or [`RepositoryError::Database`] on a SQL error.
+    pub async fn set_rule_exclusion_gate(
+        &self,
+        flag_rule_id: stitchd_core::id::RuleId,
+        gate: Option<stitchd_core::rule_engine::types::ExclusionGate>,
+    ) -> Result<(), RepositoryError> {
+        use stitchd_core::rule_engine::types::{Rule, RuleOutput};
+
+        let rule_def: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT rule_def FROM feature_flag_rules WHERE id = $1",
+        )
+        .bind(flag_rule_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let Some(rule_def) = rule_def else {
+            return Err(RepositoryError::NotFound {
+                id: flag_rule_id.to_string(),
+            });
+        };
+
+        let mut rule: Rule = serde_json::from_value(rule_def).map_err(|e| {
+            RepositoryError::Unexpected(anyhow::anyhow!("failed to deserialize rule_def: {e}"))
+        })?;
+
+        // Only Percentage outputs carry an exclusion gate.
+        if let RuleOutput::Percentage {
+            ref mut exclusion_gate,
+            ..
+        } = rule.output
+        {
+            *exclusion_gate = gate;
+        } else {
+            // Non-percentage rule: nothing to gate. No-op.
+            return Ok(());
+        }
+
+        let new_def = serde_json::to_value(&rule).map_err(|e| {
+            RepositoryError::Unexpected(anyhow::anyhow!("failed to serialize rule_def: {e}"))
+        })?;
+
+        sqlx::query("UPDATE feature_flag_rules SET rule_def = $1 WHERE id = $2")
+            .bind(new_def)
+            .bind(flag_rule_id.as_uuid())
+            .execute(&self.pool)
+            .await
+            .map_err(RepositoryError::Database)?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
