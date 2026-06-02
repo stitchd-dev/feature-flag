@@ -118,8 +118,13 @@ async fn main() -> anyhow::Result<()> {
             .with_user(ch_user)
             .with_password(ch_password),
     );
-    let exposure_reader = Arc::new(ClickHouseExposureReader::new(ch_client));
-    tracing::info!(url = %ch_url, db = %ch_db, "ClickHouse exposure reader configured");
+    let exposure_reader = Arc::new(ClickHouseExposureReader::new(ch_client.clone()));
+    let interactions_reader = Arc::new(
+        stitchd_experimentation_service::interactions_reader::ClickHouseInteractionsReader::new(
+            ch_client,
+        ),
+    );
+    tracing::info!(url = %ch_url, db = %ch_db, "ClickHouse exposure + interactions readers configured");
 
     let svc = ExperimentationServiceImpl::new(
         experiment_repo,
@@ -128,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
         flag_client,
     )
     .with_exposure_reader(exposure_reader)
+    .with_interactions_reader(interactions_reader)
     .with_exclusion_groups(exclusion_group_repo, flag_repo);
 
     let (health_reporter, health_service) = health_reporter();

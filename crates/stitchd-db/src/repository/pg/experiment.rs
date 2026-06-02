@@ -7,7 +7,10 @@ use sqlx::PgPool;
 
 use stitchd_core::{
     experimentation::{Experiment, ExperimentIteration, ExperimentStatus, validate_transition},
-    id::{EnvironmentId, ExperimentId, ExperimentIterationId, FlagId, MetricId, RuleId, UserId},
+    id::{
+        EnvironmentId, ExclusionGroupId, ExperimentId, ExperimentIterationId, FlagId, MetricId,
+        RuleId, UserId,
+    },
     rollout::RolloutDistribution,
 };
 
@@ -74,6 +77,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.min_sample_size, e.pre_period_days, e.unit_context_types,
                 e.scheduled_start_at, e.scheduled_end_at,
                 e.version, e.created_at, e.updated_at, e.deleted_at,
+                e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -109,6 +113,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.min_sample_size, e.pre_period_days, e.unit_context_types,
                 e.scheduled_start_at, e.scheduled_end_at,
                 e.version, e.created_at, e.updated_at, e.deleted_at,
+                e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -156,6 +161,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.min_sample_size, e.pre_period_days, e.unit_context_types,
                 e.scheduled_start_at, e.scheduled_end_at,
                 e.version, e.created_at, e.updated_at, e.deleted_at,
+                e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -328,7 +334,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 traffic_allocation::float8 AS traffic_allocation,
                 min_sample_size, pre_period_days, unit_context_types,
                 scheduled_start_at, scheduled_end_at,
-                version, created_at, updated_at, deleted_at
+                version, created_at, updated_at, deleted_at,
+                exclusion_group_id, group_bucket_lo, group_bucket_hi
             ",
         )
         .bind(&experiment.name)
@@ -448,7 +455,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 metric_ids, guardrail_metric_ids,
                 traffic_allocation::float8 AS traffic_allocation,
                 min_sample_size, targets_default_rule, pre_period_days,
-                unit_context_types, default_rule_distribution
+                unit_context_types, default_rule_distribution,
+                exclusion_group_id, group_bucket_lo, group_bucket_hi
             FROM experiment_iterations
             WHERE experiment_id = $1
             ORDER BY iteration_number
@@ -523,7 +531,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 traffic_allocation::float8 AS traffic_allocation,
                 min_sample_size, pre_period_days, unit_context_types,
                 scheduled_start_at, scheduled_end_at,
-                version, created_at, updated_at, deleted_at
+                version, created_at, updated_at, deleted_at,
+                exclusion_group_id, group_bucket_lo, group_bucket_hi
             ",
         )
         .bind(experiment_status_str(to))
@@ -720,7 +729,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 metric_ids, guardrail_metric_ids,
                 traffic_allocation::float8 AS traffic_allocation,
                 min_sample_size, targets_default_rule, pre_period_days,
-                unit_context_types, default_rule_distribution
+                unit_context_types, default_rule_distribution,
+                exclusion_group_id, group_bucket_lo, group_bucket_hi
             FROM experiment_iterations
             WHERE id = $1
             ",
@@ -788,11 +798,21 @@ fn row_to_experiment(row: &sqlx::postgres::PgRow) -> Experiment {
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         deleted_at: row.get("deleted_at"),
-        // Phase 2 wires exclusion-group reads from the DB; ungrouped for now.
-        exclusion_group_id: None,
-        group_bucket_lo: None,
-        group_bucket_hi: None,
+        exclusion_group_id: row
+            .get::<Option<uuid::Uuid>, _>("exclusion_group_id")
+            .map(ExclusionGroupId::from_uuid),
+        group_bucket_lo: row.get::<Option<i32>, _>("group_bucket_lo").map(bucket_to_u16),
+        group_bucket_hi: row.get::<Option<i32>, _>("group_bucket_hi").map(bucket_to_u16),
     }
+}
+
+/// Map an `INTEGER` group-bucket column value (0..=10000 basis points) to the
+/// `u16` the domain model uses. Out-of-range / negative values (which the
+/// `experiments_group_bucket_range` CHECK constraint forbids) are clamped into
+/// `u16` defensively rather than panicking on a malformed row.
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+fn bucket_to_u16(n: i32) -> u16 {
+    n.clamp(0, i32::from(u16::MAX)) as u16
 }
 
 fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, RepositoryError> {
@@ -827,10 +847,11 @@ fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, 
         pre_period_days: pre_period_to_u32(row.get::<i32, _>("pre_period_days")),
         unit_context_types: row.get::<Vec<String>, _>("unit_context_types"),
         default_rule_distribution,
-        // Phase 2 wires exclusion-group reads from the DB; ungrouped for now.
-        exclusion_group_id: None,
-        group_bucket_lo: None,
-        group_bucket_hi: None,
+        exclusion_group_id: row
+            .get::<Option<uuid::Uuid>, _>("exclusion_group_id")
+            .map(ExclusionGroupId::from_uuid),
+        group_bucket_lo: row.get::<Option<i32>, _>("group_bucket_lo").map(bucket_to_u16),
+        group_bucket_hi: row.get::<Option<i32>, _>("group_bucket_hi").map(bucket_to_u16),
     })
 }
 

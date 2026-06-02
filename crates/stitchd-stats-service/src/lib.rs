@@ -11,6 +11,7 @@ pub mod context_refresher;
 pub mod cuped_fetch;
 pub mod dispatch;
 pub mod grpc;
+pub mod interaction_compute;
 pub mod interaction_pairs;
 pub mod job_service;
 pub mod queries;

@@ -23,6 +23,7 @@
 pub mod aggregation;
 pub mod funnel;
 pub mod interaction;
+pub mod interaction_metric;
 pub mod preview;
 pub mod ratio;
 

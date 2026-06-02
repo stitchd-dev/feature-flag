@@ -390,6 +390,10 @@ pub struct ExperimentationServiceImpl {
     /// Optional ClickHouse-backed reader for paginated `experiment_assignments`
     /// reads (`ListExposures` RPC). `None` makes the RPC return `Unimplemented`.
     exposure_reader: Option<Arc<dyn crate::exposure_reader::ExposureReader>>,
+    /// Optional ClickHouse-backed reader for `experiment_interactions`
+    /// (`GetExperimentInteractions` RPC). `None` makes the RPC return
+    /// `Unimplemented`.
+    interactions_reader: Option<Arc<dyn crate::interactions_reader::InteractionsReader>>,
     /// Optional exclusion-group repository (PG). `None` makes the exclusion-group
     /// RPCs return `Unimplemented`.
     exclusion_group_repo: Option<Arc<dyn ExclusionGroupRepository>>,
@@ -415,9 +419,21 @@ impl ExperimentationServiceImpl {
             flag_client,
             dictionary_refresher: None,
             exposure_reader: None,
+            interactions_reader: None,
             exclusion_group_repo: None,
             rule_gate_writer: None,
         }
+    }
+
+    /// Attach a ClickHouse-backed reader for `experiment_interactions`. Without
+    /// it, `GetExperimentInteractions` returns `Status::unimplemented`.
+    #[must_use]
+    pub fn with_interactions_reader(
+        mut self,
+        reader: Arc<dyn crate::interactions_reader::InteractionsReader>,
+    ) -> Self {
+        self.interactions_reader = Some(reader);
+        self
     }
 
     /// Attach the exclusion-group repository and rule-gate writer. Required for
@@ -1585,12 +1601,72 @@ impl ExperimentationService for ExperimentationServiceImpl {
         ))
     }
 
+    #[instrument(skip(self))]
     async fn get_experiment_interactions(
         &self,
-        _request: Request<stitchd_proto::experiments::v1::GetExperimentInteractionsRequest>,
+        request: Request<stitchd_proto::experiments::v1::GetExperimentInteractionsRequest>,
     ) -> Result<Response<stitchd_proto::experiments::v1::GetExperimentInteractionsResponse>, Status>
     {
-        Err(Status::unimplemented("get_experiment_interactions not yet implemented"))
+        let req = request.into_inner();
+        let env_id = uuid::Uuid::parse_str(&req.env_id)
+            .map_err(|_| Status::invalid_argument("invalid env_id UUID"))?;
+        let experiment_id = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+
+        let reader = self.interactions_reader.as_ref().ok_or_else(|| {
+            Status::unimplemented("interactions_reader not configured on this service instance")
+        })?;
+
+        let rows = reader
+            .list_interactions(env_id, experiment_id)
+            .await
+            .map_err(|e| Status::internal(format!("clickhouse error: {e}")))?;
+
+        // Resolve the "other" experiment's name per row, caching lookups so a
+        // pair appearing across many (context_type, metric_key) rows costs one
+        // experiments-table read.
+        let mut name_cache: std::collections::HashMap<uuid::Uuid, String> =
+            std::collections::HashMap::new();
+        let mut interactions = Vec::with_capacity(rows.len());
+        for r in rows {
+            let other_id = if r.experiment_id_a == experiment_id {
+                r.experiment_id_b
+            } else {
+                r.experiment_id_a
+            };
+            let other_name = match name_cache.get(&other_id) {
+                Some(n) => n.clone(),
+                None => {
+                    let name = match self
+                        .experiment_repo
+                        .find_by_id(ExperimentId::from_uuid(other_id))
+                        .await
+                    {
+                        Ok(exp) => exp.name,
+                        // A deleted / missing counterpart should not fail the
+                        // whole read — surface an empty name for that row.
+                        Err(_) => String::new(),
+                    };
+                    name_cache.insert(other_id, name.clone());
+                    name
+                }
+            };
+            interactions.push(stitchd_proto::experiments::v1::ExperimentInteraction {
+                experiment_id_a: r.experiment_id_a.to_string(),
+                experiment_id_b: r.experiment_id_b.to_string(),
+                other_experiment_name: other_name,
+                context_type: r.context_type,
+                metric_key: r.metric_key,
+                shared_count: r.shared_count,
+                interaction_estimate: r.interaction_estimate,
+                p_value: r.p_value,
+                significant: r.significant,
+            });
+        }
+
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsResponse { interactions },
+        ))
     }
 }
 
@@ -3131,6 +3207,134 @@ mod tests {
         let resp = svc.list_exposures(req).await.unwrap().into_inner();
         assert_eq!(resp.exposures.len(), 1);
         assert_eq!(resp.exposures[0].matched_rule_id, "");
+    }
+
+    // -----------------------------------------------------------------------
+    // GetExperimentInteractions handler tests (Phase 6 Task 2)
+    // -----------------------------------------------------------------------
+
+    use crate::interactions_reader::{
+        InteractionRow as CoreInteractionRow, InteractionsReader,
+    };
+
+    /// Test reader returning canned interaction rows.
+    struct CannedInteractionsReader {
+        rows: Vec<CoreInteractionRow>,
+    }
+
+    #[async_trait]
+    impl InteractionsReader for CannedInteractionsReader {
+        async fn list_interactions(
+            &self,
+            _env_id: uuid::Uuid,
+            _experiment_id: uuid::Uuid,
+        ) -> Result<Vec<CoreInteractionRow>, clickhouse::error::Error> {
+            Ok(self.rows.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_interactions_returns_unimplemented_without_reader() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: uuid::Uuid::new_v4().to_string(),
+            },
+        );
+        let err = svc.get_experiment_interactions(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn test_get_interactions_invalid_uuid_returns_invalid_argument() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id)
+            .with_interactions_reader(Arc::new(CannedInteractionsReader { rows: vec![] }));
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: "not-a-uuid".to_string(),
+            },
+        );
+        let err = svc.get_experiment_interactions(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_get_interactions_empty_when_no_rows() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id)
+            .with_interactions_reader(Arc::new(CannedInteractionsReader { rows: vec![] }));
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: uuid::Uuid::new_v4().to_string(),
+            },
+        );
+        let resp = svc.get_experiment_interactions(req).await.unwrap().into_inner();
+        assert!(resp.interactions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_interactions_maps_rows_and_resolves_other_name() {
+        let (env_id, env_str) = env_uuid();
+        let this_exp = uuid::Uuid::new_v4();
+        let other_exp = uuid::Uuid::new_v4();
+        // Row where `this_exp` is side A → "other" is side B.
+        let row_a = CoreInteractionRow {
+            experiment_id_a: this_exp,
+            experiment_id_b: other_exp,
+            context_type: "user".into(),
+            metric_key: "checkout".into(),
+            shared_count: 400,
+            interaction_estimate: 0.42,
+            p_value: 0.001,
+            significant: true,
+        };
+        // Row where `this_exp` is side B → "other" is side A.
+        let third_exp = uuid::Uuid::new_v4();
+        let row_b = CoreInteractionRow {
+            experiment_id_a: third_exp,
+            experiment_id_b: this_exp,
+            context_type: "account".into(),
+            metric_key: "revenue".into(),
+            shared_count: 50,
+            interaction_estimate: 0.0,
+            p_value: 0.0,
+            significant: false,
+        };
+        let svc = make_service(env_id).with_interactions_reader(Arc::new(
+            CannedInteractionsReader {
+                rows: vec![row_a, row_b],
+            },
+        ));
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: this_exp.to_string(),
+            },
+        );
+        let resp = svc.get_experiment_interactions(req).await.unwrap().into_inner();
+        assert_eq!(resp.interactions.len(), 2);
+
+        let first = &resp.interactions[0];
+        assert_eq!(first.experiment_id_a, this_exp.to_string());
+        assert_eq!(first.experiment_id_b, other_exp.to_string());
+        // AlwaysSucceedRepo names every experiment "Test Experiment".
+        assert_eq!(first.other_experiment_name, "Test Experiment");
+        assert_eq!(first.context_type, "user");
+        assert_eq!(first.metric_key, "checkout");
+        assert_eq!(first.shared_count, 400);
+        assert!(first.significant);
+
+        let second = &resp.interactions[1];
+        // this_exp is side B here; the "other" resolved is side A (third_exp).
+        assert_eq!(second.experiment_id_a, third_exp.to_string());
+        assert_eq!(second.experiment_id_b, this_exp.to_string());
+        assert_eq!(second.other_experiment_name, "Test Experiment");
+        assert!(!second.significant);
     }
 
     /// When no refresher is attached, transitions still succeed.
