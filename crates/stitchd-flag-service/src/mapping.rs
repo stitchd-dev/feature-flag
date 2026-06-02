@@ -9,11 +9,11 @@ use stitchd_core::{
     variants::VariantValue,
 };
 use stitchd_proto::flags::v1::{
-    AllocationBucket, ContextKeySelector, ContextParameterSelector, FeatureFlag,
-    FlagRule as ProtoFlagRule, FlagValueType as ProtoFlagValueType,
-    HashSelector as ProtoHashSelector, PercentageAllocation, Variant as ProtoVariant,
-    VariantValue as ProtoVariantValue, hash_selector::Selector as ProtoSelectorInner,
-    variant_value::Value as ProtoVariantValueInner,
+    AllocationBucket, ContextKeySelector, ContextParameterSelector,
+    ExclusionGate as ProtoExclusionGate, FeatureFlag, FlagRule as ProtoFlagRule,
+    FlagValueType as ProtoFlagValueType, HashSelector as ProtoHashSelector, PercentageAllocation,
+    Variant as ProtoVariant, VariantValue as ProtoVariantValue,
+    hash_selector::Selector as ProtoSelectorInner, variant_value::Value as ProtoVariantValueInner,
 };
 
 /// Convert a proto [`ProtoVariant`] to a domain [`stitchd_core::flag::Variant`].
@@ -97,10 +97,14 @@ pub fn proto_flag_rule_to_domain(
                 })
                 .collect();
             // Phase 2 wires the exclusion gate through proto↔core mapping.
+            let exclusion_gate = alloc
+                .exclusion_gate
+                .as_ref()
+                .map(proto_exclusion_gate_to_domain);
             RuleOutput::Percentage {
                 targets,
                 weights,
-                exclusion_gate: None,
+                exclusion_gate,
             }
         }
         None => return None,
@@ -277,6 +281,40 @@ fn target_to_proto_hash_selector(
     }
 }
 
+/// Convert a proto [`ProtoExclusionGate`] to a domain
+/// [`stitchd_core::rule_engine::types::ExclusionGate`].
+///
+/// Proto bucket bounds are `u32` (proto3 has no `u16`); the domain uses `u16`
+/// since exclusion-group buckets live in `[0, 9999]`. Out-of-range values are
+/// clamped via `as u16` truncation, which is harmless because a gate with
+/// bounds beyond the bucket space would never admit anything anyway.
+#[must_use]
+fn proto_exclusion_gate_to_domain(
+    gate: &ProtoExclusionGate,
+) -> stitchd_core::rule_engine::types::ExclusionGate {
+    stitchd_core::rule_engine::types::ExclusionGate {
+        group_salt: gate.group_salt.clone(),
+        context_type: gate.context_type.clone(),
+        bucket_lo: gate.bucket_lo as u16,
+        bucket_hi: gate.bucket_hi as u16,
+    }
+}
+
+/// Convert a domain [`stitchd_core::rule_engine::types::ExclusionGate`] to the
+/// proto [`ProtoExclusionGate`]. Carries all four fields including
+/// `context_type`.
+#[must_use]
+fn domain_exclusion_gate_to_proto(
+    gate: &stitchd_core::rule_engine::types::ExclusionGate,
+) -> ProtoExclusionGate {
+    ProtoExclusionGate {
+        group_salt: gate.group_salt.clone(),
+        bucket_lo: u32::from(gate.bucket_lo),
+        bucket_hi: u32::from(gate.bucket_hi),
+        context_type: gate.context_type.clone(),
+    }
+}
+
 /// Convert a domain `FlagValueType` to the proto [`ProtoFlagValueType`].
 #[must_use]
 pub const fn domain_value_type_to_proto(
@@ -307,7 +345,11 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
             let key = variant_key_map.get(variant_id).cloned().unwrap_or_default();
             Some(Output::VariantKey(key))
         }
-        RuleOutput::Percentage { targets, weights, .. } => {
+        RuleOutput::Percentage {
+            targets,
+            weights,
+            exclusion_gate,
+        } => {
             let hash_inputs: Vec<ProtoHashSelector> =
                 targets.iter().map(target_to_proto_hash_selector).collect();
 
@@ -324,7 +366,7 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
                 buckets,
                 hash_inputs,
                 // Phase 2 wires the exclusion gate through core↔proto mapping.
-                exclusion_gate: None,
+                exclusion_gate: exclusion_gate.as_ref().map(domain_exclusion_gate_to_proto),
             }))
         }
     };
@@ -961,5 +1003,101 @@ mod tests {
         assert_eq!(proto.name, "My Flag");
         assert_eq!(proto.description, "A flag for testing");
         assert!(proto.enabled);
+    }
+
+    // ── Phase 2: exclusion-gate mapping (all 4 fields incl context_type) ────
+
+    #[test]
+    fn percentage_exclusion_gate_round_trips_core_proto_core() {
+        use stitchd_core::rule_engine::types::ExclusionGate;
+
+        let vid = make_variant_id();
+        let mut key_map = HashMap::new();
+        key_map.insert(vid, "t".to_string());
+        let variant_map: HashMap<String, VariantId> =
+            [("t".to_string(), vid)].into_iter().collect();
+
+        let gate = ExclusionGate {
+            group_salt: "exp-group-7".to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 2500,
+            bucket_hi: 7500,
+        };
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: FlagId::new(),
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![PercentageTarget {
+                        context_type: "user".to_string(),
+                        field: TargetField::Key,
+                    }],
+                    weights: vec![(vid, 10000)],
+                    exclusion_gate: Some(gate.clone()),
+                },
+            },
+        };
+
+        // core → proto: all four fields carried.
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = &proto.output
+        else {
+            panic!("expected Allocation output");
+        };
+        let pg = alloc
+            .exclusion_gate
+            .as_ref()
+            .expect("exclusion_gate must survive core→proto");
+        assert_eq!(pg.group_salt, "exp-group-7");
+        assert_eq!(pg.context_type, "user");
+        assert_eq!(pg.bucket_lo, 2500);
+        assert_eq!(pg.bucket_hi, 7500);
+
+        // proto → core: identical gate recovered.
+        let domain =
+            proto_flag_rule_to_domain(FlagId::new(), 0, &proto, &variant_map).expect("conversion");
+        let RuleOutput::Percentage { exclusion_gate, .. } = domain.rule.output else {
+            panic!("expected Percentage output");
+        };
+        assert_eq!(exclusion_gate, Some(gate));
+    }
+
+    #[test]
+    fn percentage_without_exclusion_gate_maps_to_none() {
+        let vid = make_variant_id();
+        let mut key_map = HashMap::new();
+        key_map.insert(vid, "t".to_string());
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: FlagId::new(),
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![PercentageTarget {
+                        context_type: "user".to_string(),
+                        field: TargetField::Key,
+                    }],
+                    weights: vec![(vid, 10000)],
+                    exclusion_gate: None,
+                },
+            },
+        };
+
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = proto.output
+        else {
+            panic!("expected Allocation output");
+        };
+        assert!(
+            alloc.exclusion_gate.is_none(),
+            "ungated rule must serialize without an exclusion gate"
+        );
     }
 }
