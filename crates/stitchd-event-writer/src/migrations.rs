@@ -23,10 +23,16 @@ pub enum MigrationError {
 }
 
 /// An embedded migration: (filename, SQL content).
-static MIGRATIONS: &[(&str, &str)] = &[(
-    "20260525000001_v1_baseline",
-    include_str!("../migrations/20260525000001_v1_baseline.sql"),
-)];
+static MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "20260525000001_v1_baseline",
+        include_str!("../migrations/20260525000001_v1_baseline.sql"),
+    ),
+    (
+        "20260602000002_experiment_interactions",
+        include_str!("../migrations/20260602000002_experiment_interactions.sql"),
+    ),
+];
 
 /// Apply all pending ClickHouse migrations.
 ///
