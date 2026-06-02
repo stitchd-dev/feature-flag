@@ -95,18 +95,18 @@ Phases 3 + 6; Phase 8 needs Phase 7; Phase 9 needs Phase 8. Shared seams:
   <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Interaction Detection Query' (Protocol in workflow.md)  [dddb240]
 
-## Phase 5: Interaction Significance Math
+## Phase 5: Interaction Significance Math  [checkpoint: ce6e97f]
 <!-- execution: parallel -->
 <!-- depends: phase4 -->
 
-- [ ] Task: Two-way interaction test for binary metrics (conversion) — main effects + A×B interaction
+- [x] Task: Two-way interaction test for binary metrics (conversion) — main effects + A×B interaction  [ce6e97f]
       term with p-value; insufficient-data → null. TDD: planted interaction flagged, independent effects
       not (no false positive), small-sample null.
   <!-- files: crates/stitchd-stats-service/src/stats/interaction.rs -->
-- [ ] Task: Two-way interaction test for continuous metrics (revenue/duration/numeric) — two-way model
+- [x] Task: Two-way interaction test for continuous metrics (revenue/duration/numeric) — two-way model  [ce6e97f]
       on cell means/variances; interaction significance.
   <!-- files: crates/stitchd-stats-service/src/stats/interaction_continuous.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Interaction Significance Math' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Interaction Significance Math' (Protocol in workflow.md)  [ce6e97f]
 
 ## Phase 6: Stats-Service Orchestration + Read RPCs
 <!-- execution: sequential -->
