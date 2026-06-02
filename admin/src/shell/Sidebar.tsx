@@ -18,6 +18,7 @@ function getOrgNav(orgId: string) {
     { id: 'flags', path: `${p}/flags`, label: 'Feature Flags', icon: 'flag', badge: '' },
     { id: 'segments', path: `${p}/segments`, label: 'Segments', icon: 'segment', badge: '' },
     { id: 'experiments', path: `${p}/experiments`, label: 'Experiments', icon: 'beaker', badge: '' },
+    { id: 'exclusion-groups', path: `${p}/exclusion-groups`, label: 'Exclusion Groups', icon: 'layers', badge: '' },
     { id: 'events', path: `${p}/events`, label: 'Events', icon: 'event', badge: '' },
     { id: 'metrics', path: `${p}/metrics`, label: 'Metrics', icon: 'metric', badge: '' },
   ]

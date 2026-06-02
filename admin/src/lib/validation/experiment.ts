@@ -65,6 +65,12 @@ export interface ExperimentFormValues {
   /** 0–100 with 0.1 step. */
   traffic_allocation: number
   model: ExperimentModel
+  /**
+   * Optional mutual-exclusion group UUID. Empty string = ungrouped (the
+   * default). When set, the modal calls the assign endpoint after create with
+   * `requested_bp` derived from `traffic_allocation`.
+   */
+  exclusion_group_id?: string
 }
 
 /**
@@ -188,4 +194,16 @@ export const experimentSchema: Yup.ObjectSchema<ExperimentFormValues> = Yup.obje
   model: Yup.string()
     .oneOf(EXPERIMENT_MODELS as unknown as string[], 'Invalid model')
     .required('Model is required'),
+
+  // Optional mutual-exclusion group. Empty string = ungrouped (default).
+  // The "fits within free capacity" check is enforced at the field level by
+  // the picker (`exclusionGroupFitsCapacity`) since it needs the live group's
+  // `free_bp`, which the schema does not carry.
+  exclusion_group_id: Yup.string()
+    .trim()
+    .test(
+      'group-uuid-or-empty',
+      'Exclusion group must be a valid UUID',
+      (value) => !value || UUID_RE.test(value),
+    ),
 }) as unknown as Yup.ObjectSchema<ExperimentFormValues>

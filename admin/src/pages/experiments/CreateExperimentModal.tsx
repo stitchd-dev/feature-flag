@@ -31,6 +31,16 @@ import { api } from '../../lib/api'
 import { slugify } from '../../lib/utils'
 import { extractErrorMessage } from '../../lib/errors'
 import {
+  listExclusionGroups,
+  getExclusionGroup,
+  assignExperimentToGroup,
+  type ExclusionGroup,
+} from '../../lib/api/exclusionGroups'
+import {
+  exclusionGroupFitsCapacity,
+  formatBpPercent,
+} from './exclusionGroups/capacity'
+import {
   experimentSchema,
   MAX_METRIC_IDS,
   MAX_GUARDRAIL_METRIC_IDS,
@@ -677,6 +687,99 @@ function UnitContextTypesPicker({ envId }: { envId: string }) {
   )
 }
 
+// ── Exclusion-group picker (optional) ─────────────────────────────────────────
+
+/**
+ * Optional mutual-exclusion group selector. When a group is chosen, surfaces
+ * its remaining capacity and validates that the experiment's traffic
+ * allocation fits within the group's `free_bp` — blocking the form (and
+ * disabling submit) when it does not.
+ *
+ * Ungrouped is the default (empty value).
+ */
+function ExclusionGroupPicker({ envId }: { envId: string }) {
+  const { values } = useFormikContext<ExperimentFormValues>()
+  const [{ value }, , helpers] = useField<string>('exclusion_group_id')
+
+  const [groups, setGroups] = useState<ExclusionGroup[]>([])
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!envId) return
+    const ctrl = new AbortController()
+    listExclusionGroups(envId, { per_page: 200 }, ctrl.signal)
+      .then((res) => setGroups(res.items ?? []))
+      .catch((err: unknown) => {
+        if ((err as { code?: string }).code === 'ERR_CANCELED') return
+        setLoadError(extractErrorMessage(err))
+      })
+    return () => ctrl.abort()
+  }, [envId])
+
+  const selected = groups.find((g) => g.id === value) ?? null
+  const capacity = selected
+    ? exclusionGroupFitsCapacity(selected, values.traffic_allocation)
+    : null
+
+  return (
+    <div>
+      <label
+        className="label"
+        htmlFor="exclusion_group_id"
+        style={{ display: 'block', marginBottom: 4 }}
+      >
+        Mutual-exclusion group
+      </label>
+      <select
+        id="exclusion_group_id"
+        className="input"
+        aria-label="Mutual-exclusion group"
+        value={value ?? ''}
+        onChange={(e) => void helpers.setValue(e.target.value)}
+        style={{
+          width: '100%',
+          borderColor: capacity && !capacity.fits ? 'var(--danger)' : undefined,
+        }}
+      >
+        <option value="">Ungrouped (default)</option>
+        {groups.map((g) => (
+          <option key={g.id} value={g.id}>
+            {g.name} ({formatBpPercent(g.free_bp)} free)
+          </option>
+        ))}
+      </select>
+
+      {loadError && (
+        <div role="alert" style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>
+          Failed to load groups: {loadError}
+        </div>
+      )}
+
+      {selected && capacity && (
+        <div
+          role={capacity.fits ? undefined : 'alert'}
+          style={{
+            fontSize: 11,
+            marginTop: 4,
+            color: capacity.fits ? 'var(--fg-muted)' : 'var(--danger)',
+          }}
+        >
+          {capacity.fits
+            ? `Remaining capacity: ${formatBpPercent(selected.free_bp)} free. This experiment requests ${formatBpPercent(capacity.requestedBp)}.`
+            : capacity.message}
+        </div>
+      )}
+
+      {!selected && !loadError && (
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+          Optional. Grouped experiments never share traffic — their allocation
+          is carved from the group's budget.
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Main modal ────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -723,6 +826,7 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
     pre_period_days: number
     traffic_allocation: number
     model: 'bayesian' | 'frequentist'
+    exclusion_group_id: string
   } | null>(null)
 
   // Flag list (env-scoped) — backs the FlagPicker.
@@ -760,6 +864,7 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
       pre_period_days?: number
       traffic_allocation?: number
       model: 'bayesian' | 'frequentist'
+      exclusion_group_id?: string | null
     }
     api
       .get<FullExperimentJson>(
@@ -781,6 +886,7 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
           traffic_allocation:
             data.traffic_allocation != null ? data.traffic_allocation * 100 : 100,
           model: data.model,
+          exclusion_group_id: data.exclusion_group_id ?? '',
         })
       })
       .catch(() => undefined)
@@ -809,6 +915,7 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
     pre_period_days: 0,
     traffic_allocation: 100,
     model: 'bayesian',
+    exclusion_group_id: '',
   }
 
   // ── Submit handler ────────────────────────────────────────────────────────
@@ -829,10 +936,32 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
         navigate(`/org/${orgId}/experiments/${editExperimentKey}`)
       } else {
         const body = buildExperimentCreateBody(values, envId)
-        const { data } = await api.post<{ key: string }>(
+        const { data } = await api.post<{ key: string; id?: string }>(
           `/v1/environments/${envId}/experiments`,
           body,
         )
+        // Optional mutual-exclusion assignment. `requested_bp` is the traffic
+        // allocation in basis points (traffic% × 100). Errors here surface in
+        // the banner without losing the just-created experiment.
+        const groupId = values.exclusion_group_id?.trim()
+        if (groupId) {
+          // Re-validate against the group's live free capacity before assigning
+          // (the picker shows a warning, but capacity can drift between load
+          // and submit). Block when the request doesn't fit.
+          const group = await getExclusionGroup(envId, groupId)
+          const capacity = exclusionGroupFitsCapacity(
+            group,
+            values.traffic_allocation,
+          )
+          if (!capacity.fits) {
+            setStatus({ error: capacity.message })
+            return
+          }
+          await assignExperimentToGroup(envId, data.id ?? data.key, {
+            group_id: groupId,
+            requested_bp: capacity.requestedBp,
+          })
+        }
         onClose()
         navigate(`/org/${orgId}/experiments/${data.key}`)
       }
@@ -983,6 +1112,8 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
             placeholder="100"
             hint="Fraction of exposures included in the experiment. 100 = full rollout."
           />
+
+          {envId && <ExclusionGroupPicker envId={envId} />}
         </Form>
       </Modal>
     </Formik>
