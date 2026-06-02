@@ -192,6 +192,57 @@ mod tests {
         {
             Err(Status::unimplemented("not used in tests"))
         }
+        async fn create_exclusion_group(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::CreateExclusionGroupRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_exclusion_groups(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::ListExclusionGroupsRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::ListExclusionGroupsResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn update_exclusion_group(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::UpdateExclusionGroupRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn delete_exclusion_group(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn assign_experiment_to_group(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::AssignExperimentToGroupRequest>,
+        ) -> Result<
+            Response<stitchd_proto::experiments::v1::AssignExperimentToGroupResponse>,
+            Status,
+        > {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn unassign_experiment(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::UnassignExperimentRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::UnassignExperimentResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_experiment_interactions(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::GetExperimentInteractionsRequest>,
+        ) -> Result<
+            Response<stitchd_proto::experiments::v1::GetExperimentInteractionsResponse>,
+            Status,
+        > {
+            Err(Status::unimplemented("not used in tests"))
+        }
     }
 
     /// Spin up an in-process gRPC server and return a client connected to it.

@@ -211,7 +211,7 @@ fn evaluate_one(
                         result_variant_value = v.value.clone();
                     }
                 }
-                RuleOutput::Percentage { targets, weights } => {
+                RuleOutput::Percentage { targets, weights, .. } => {
                     // Bridge old PercentageTarget shape → HashInputSpec on
                     // the fly. Phase 5/6 cuts over the storage; this
                     // internal conversion preserves byte-identity in the
@@ -467,7 +467,7 @@ impl FlagEvaluator {
                         ))
                     });
                 }
-                RuleOutput::Percentage { targets, weights } => {
+                RuleOutput::Percentage { targets, weights, .. } => {
                     // Implement percentage rollout logic using hashing
                     let mut target_values = Vec::with_capacity(targets.len());
                     for t in targets {
@@ -712,6 +712,7 @@ mod tests {
                 field: TargetField::Key,
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
+            exclusion_gate: None,
         };
 
         let segments = HashSet::new();
@@ -812,6 +813,7 @@ mod tests {
                 field: TargetField::Key,
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
+            exclusion_gate: None,
         };
 
         // Provide user context but NOT org context
@@ -847,6 +849,7 @@ mod tests {
                 field: TargetField::Parameter("nonexistent_param".to_string()),
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
+            exclusion_gate: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -882,6 +885,7 @@ mod tests {
                 field: TargetField::Key,
             }],
             weights: vec![(v1_id, 1)], // only covers bucket 0
+            exclusion_gate: None,
         };
 
         // Iterate users until we find one that doesn't land in bucket 0
@@ -925,6 +929,7 @@ mod tests {
                 field: TargetField::Key,
             }],
             weights: vec![(nonexistent, 10000)],
+            exclusion_gate: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1093,6 +1098,7 @@ mod tests {
                 field: TargetField::Parameter("beta".to_string()),
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
+            exclusion_gate: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1466,6 +1472,7 @@ mod tests {
                 field: TargetField::Key,
             }],
             weights: vec![(on_id, 5000), (off_id, 5000)],
+            exclusion_gate: None,
         };
 
         let ctx = Context::new("user", "u1");
@@ -1774,6 +1781,7 @@ mod tests {
                 },
             ],
             weights: vec![(on_id, 5000), (off_id, 5000)],
+            exclusion_gate: None,
         };
 
         let memberships = ListMembershipIndex::new();
@@ -1866,6 +1874,7 @@ mod tests {
                         field: TargetField::Key,
                     }],
                     weights: vec![(on_id, 5000), (off_id, 5000)],
+                    exclusion_gate: None,
                 },
             },
         });
@@ -1970,6 +1979,7 @@ mod tests {
                 },
             ],
             weights: vec![(on_id, 5000), (off_id, 5000)],
+            exclusion_gate: None,
         };
 
         let memberships = ListMembershipIndex::new();

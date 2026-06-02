@@ -79,6 +79,7 @@ fn cross_context_flag() -> Flag {
                         },
                     ],
                     weights: vec![(on, 5000), (off, 5000)],
+                    exclusion_gate: None,
                 },
             },
         }],

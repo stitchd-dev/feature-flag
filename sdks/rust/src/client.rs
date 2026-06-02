@@ -1308,7 +1308,11 @@ fn proto_allocation_to_core(
         })
         .collect();
 
-    Some(RuleOutput::Percentage { targets, weights })
+    Some(RuleOutput::Percentage {
+        targets,
+        weights,
+        exclusion_gate: None,
+    })
 }
 
 /// Read the canonical [`HashInputSpec`] out of a proto
@@ -2324,6 +2328,7 @@ mod tests {
                     })),
                 },
             ],
+            exclusion_gate: None,
         };
 
         let proto_rule = ProtoFlagRule {

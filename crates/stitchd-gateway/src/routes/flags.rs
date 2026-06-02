@@ -955,6 +955,7 @@ fn rule_body_to_proto(
             context_hash_specs: Default::default(),
             buckets,
             hash_inputs: proto_hash_inputs,
+            exclusion_gate: None,
         }))
     } else {
         None

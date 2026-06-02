@@ -10,7 +10,29 @@
 //! Pure, in-memory math — no I/O, no async.
 
 use murmur3::murmur3_x64_128;
+use serde::{Deserialize, Serialize};
 use std::io::Cursor;
+
+/// A half-open exclusion-group bucket range `[lo, hi)` in basis points.
+///
+/// `lo` is inclusive, `hi` is exclusive; an empty range (`lo == hi`) contains
+/// nothing. Membership delegates to [`range_contains`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct BucketRange {
+    /// Inclusive lower bound, in basis points.
+    pub lo: u16,
+    /// Exclusive upper bound, in basis points.
+    pub hi: u16,
+}
+
+impl BucketRange {
+    /// Returns whether `bucket` falls in this range `[lo, hi)`.
+    #[must_use]
+    pub fn contains(&self, bucket: u16) -> bool {
+        range_contains(bucket, self.lo, self.hi)
+    }
+}
 
 /// Computes the exclusion-group bucket for a context, in `[0, 9999]`.
 ///
@@ -102,5 +124,25 @@ mod tests {
         for x in [0u16, 1, 5000, 9999] {
             assert!(!range_contains(x, x, x), "empty range [{x},{x}) should hold nothing");
         }
+    }
+
+    #[test]
+    fn bucket_range_contains_matches_range_contains() {
+        let r = BucketRange { lo: 10, hi: 20 };
+        for b in 0u16..30 {
+            assert_eq!(
+                r.contains(b),
+                range_contains(b, 10, 20),
+                "BucketRange::contains diverged from range_contains at {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn bucket_range_serde_round_trips() {
+        let r = BucketRange { lo: 2500, hi: 5000 };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: BucketRange = serde_json::from_str(&json).unwrap();
+        assert_eq!(r, back);
     }
 }

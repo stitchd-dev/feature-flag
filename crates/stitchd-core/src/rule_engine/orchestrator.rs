@@ -274,6 +274,7 @@ mod tests {
                     field: crate::rule_engine::types::TargetField::Key,
                 }],
                 weights: vec![(v1, 5000), (v2, 5000)],
+                exclusion_gate: None,
             },
         };
 

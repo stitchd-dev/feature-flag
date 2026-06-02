@@ -245,6 +245,7 @@ fn build_proto_flag(hash_inputs: &[HashSelectorJson]) -> FeatureFlag {
             },
         ],
         hash_inputs: hash_inputs.iter().map(HashSelectorJson::to_proto).collect(),
+        exclusion_gate: None,
     };
 
     // Empty `And([])` is the universal-match condition — the

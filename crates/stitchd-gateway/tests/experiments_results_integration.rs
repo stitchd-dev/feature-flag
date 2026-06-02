@@ -141,6 +141,57 @@ impl ExperimentationService for MockExpService {
             },
         ))
     }
+
+    async fn create_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::CreateExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn list_exclusion_groups(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListExclusionGroupsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExclusionGroupsResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn update_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::UpdateExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn delete_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn assign_experiment_to_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::AssignExperimentToGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::AssignExperimentToGroupResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn unassign_experiment(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::UnassignExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::UnassignExperimentResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn get_experiment_interactions(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetExperimentInteractionsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetExperimentInteractionsResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock_exp_service(svc: MockExpService) -> ExperimentationServiceClient<Channel> {

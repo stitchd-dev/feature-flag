@@ -158,6 +158,9 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         metric_ids: i.metric_ids.iter().map(ToString::to_string).collect(),
         traffic_allocation: i.traffic_allocation,
         unit_context_types: i.unit_context_types.clone(),
+        exclusion_group_id: i.exclusion_group_id.map(|g| g.to_string()),
+        group_bucket_lo: i.group_bucket_lo.map(u32::from),
+        group_bucket_hi: i.group_bucket_hi.map(u32::from),
     }
 }
 
@@ -251,6 +254,9 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
             .collect(),
         pre_period_days: e.pre_period_days,
         metric_ids: e.metric_ids.iter().map(|id| id.to_string()).collect(),
+        exclusion_group_id: e.exclusion_group_id.map(|g| g.to_string()),
+        group_bucket_lo: e.group_bucket_lo.map(u32::from),
+        group_bucket_hi: e.group_bucket_hi.map(u32::from),
     }
 }
 
@@ -466,6 +472,11 @@ impl ExperimentationService for ExperimentationServiceImpl {
             updated_at: now,
             deleted_at: None,
             version: 1,
+            // Group assignment happens via AssignExperimentToGroup (Phase 2/3),
+            // not at create time; ungrouped on creation.
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
         };
 
         self.experiment_repo
@@ -1144,6 +1155,63 @@ impl ExperimentationService for ExperimentationServiceImpl {
             stitchd_proto::experiments::v1::ListExposuresResponse { exposures, total },
         ))
     }
+
+    // ── Exclusion groups + interactions ─────────────────────────────────────
+    //
+    // Proto surface landed via the parallel P1.T5 merge; the handlers are wired
+    // in Phase 2/3 (reads + persistence). Until then these return
+    // `Unimplemented` so the trait is satisfied and the workspace stays green.
+
+    async fn create_exclusion_group(
+        &self,
+        _request: Request<stitchd_proto::experiments::v1::CreateExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        Err(Status::unimplemented("create_exclusion_group not yet implemented"))
+    }
+
+    async fn list_exclusion_groups(
+        &self,
+        _request: Request<stitchd_proto::experiments::v1::ListExclusionGroupsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExclusionGroupsResponse>, Status> {
+        Err(Status::unimplemented("list_exclusion_groups not yet implemented"))
+    }
+
+    async fn update_exclusion_group(
+        &self,
+        _request: Request<stitchd_proto::experiments::v1::UpdateExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        Err(Status::unimplemented("update_exclusion_group not yet implemented"))
+    }
+
+    async fn delete_exclusion_group(
+        &self,
+        _request: Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status> {
+        Err(Status::unimplemented("delete_exclusion_group not yet implemented"))
+    }
+
+    async fn assign_experiment_to_group(
+        &self,
+        _request: Request<stitchd_proto::experiments::v1::AssignExperimentToGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::AssignExperimentToGroupResponse>, Status>
+    {
+        Err(Status::unimplemented("assign_experiment_to_group not yet implemented"))
+    }
+
+    async fn unassign_experiment(
+        &self,
+        _request: Request<stitchd_proto::experiments::v1::UnassignExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::UnassignExperimentResponse>, Status> {
+        Err(Status::unimplemented("unassign_experiment not yet implemented"))
+    }
+
+    async fn get_experiment_interactions(
+        &self,
+        _request: Request<stitchd_proto::experiments::v1::GetExperimentInteractionsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetExperimentInteractionsResponse>, Status>
+    {
+        Err(Status::unimplemented("get_experiment_interactions not yet implemented"))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1293,6 +1361,9 @@ mod tests {
             updated_at: now,
             deleted_at: None,
             version: 1,
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
         }
     }
 
@@ -1389,6 +1460,9 @@ mod tests {
                 pre_period_days: 0,
                 unit_context_types: vec!["user".to_string()],
                 default_rule_distribution: None,
+                exclusion_group_id: None,
+                group_bucket_lo: None,
+                group_bucket_hi: None,
             })
         }
     }
@@ -2266,6 +2340,9 @@ mod tests {
                 pre_period_days: 0,
                 unit_context_types: vec!["user".to_string()],
                 default_rule_distribution: None,
+                exclusion_group_id: None,
+                group_bucket_lo: None,
+                group_bucket_hi: None,
             }])
         }
 
@@ -2313,6 +2390,9 @@ mod tests {
                 pre_period_days: 0,
                 unit_context_types: vec!["user".to_string()],
                 default_rule_distribution: None,
+                exclusion_group_id: None,
+                group_bucket_lo: None,
+                group_bucket_hi: None,
             })
         }
     }

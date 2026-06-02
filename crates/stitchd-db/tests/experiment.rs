@@ -135,6 +135,9 @@ fn make_experiment(env_id: EnvironmentId, flag_id: FlagId, flag_rule_id: RuleId)
         updated_at: Utc::now(),
         deleted_at: None,
         version: 1,
+        exclusion_group_id: None,
+        group_bucket_lo: None,
+        group_bucket_hi: None,
     }
 }
 

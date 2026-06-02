@@ -168,6 +168,9 @@ mod tests {
             updated_at: Utc::now(),
             deleted_at: None,
             version: 1,
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
         };
         exp_repo.create(&exp).await.unwrap();
         exp_repo

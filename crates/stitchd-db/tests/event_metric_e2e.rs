@@ -353,6 +353,9 @@ async fn seed_running_experiment(
         updated_at: Utc::now(),
         deleted_at: None,
         version: 1,
+        exclusion_group_id: None,
+        group_bucket_lo: None,
+        group_bucket_hi: None,
     };
     repo.create(&exp).await.expect("experiment insert");
     repo.apply_transition(exp.id, ExperimentStatus::Running, None)

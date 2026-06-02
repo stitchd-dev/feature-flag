@@ -788,6 +788,10 @@ fn row_to_experiment(row: &sqlx::postgres::PgRow) -> Experiment {
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
         deleted_at: row.get("deleted_at"),
+        // Phase 2 wires exclusion-group reads from the DB; ungrouped for now.
+        exclusion_group_id: None,
+        group_bucket_lo: None,
+        group_bucket_hi: None,
     }
 }
 
@@ -823,6 +827,10 @@ fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, 
         pre_period_days: pre_period_to_u32(row.get::<i32, _>("pre_period_days")),
         unit_context_types: row.get::<Vec<String>, _>("unit_context_types"),
         default_rule_distribution,
+        // Phase 2 wires exclusion-group reads from the DB; ungrouped for now.
+        exclusion_group_id: None,
+        group_bucket_lo: None,
+        group_bucket_hi: None,
     })
 }
 

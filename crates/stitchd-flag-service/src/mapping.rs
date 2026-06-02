@@ -96,7 +96,12 @@ pub fn proto_flag_rule_to_domain(
                     Some((vid, b.weight_bp))
                 })
                 .collect();
-            RuleOutput::Percentage { targets, weights }
+            // Phase 2 wires the exclusion gate through proto↔core mapping.
+            RuleOutput::Percentage {
+                targets,
+                weights,
+                exclusion_gate: None,
+            }
         }
         None => return None,
     };
@@ -302,7 +307,7 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
             let key = variant_key_map.get(variant_id).cloned().unwrap_or_default();
             Some(Output::VariantKey(key))
         }
-        RuleOutput::Percentage { targets, weights } => {
+        RuleOutput::Percentage { targets, weights, .. } => {
             let hash_inputs: Vec<ProtoHashSelector> =
                 targets.iter().map(target_to_proto_hash_selector).collect();
 
@@ -318,6 +323,8 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
                 context_hash_specs: HashMap::new(),
                 buckets,
                 hash_inputs,
+                // Phase 2 wires the exclusion gate through core↔proto mapping.
+                exclusion_gate: None,
             }))
         }
     };
@@ -387,6 +394,7 @@ pub fn build_feature_flag_proto(
                     context_hash_specs: Default::default(),
                     buckets,
                     hash_inputs,
+                    exclusion_gate: None,
                 },
             )),
             name: String::new(),
@@ -637,6 +645,7 @@ mod tests {
                         field: TargetField::Key,
                     }],
                     weights: vec![(vid, 10000)],
+                    exclusion_gate: None,
                 },
             },
         };
@@ -671,6 +680,7 @@ mod tests {
                         field: TargetField::Parameter("user_id".to_string()),
                     }],
                     weights: vec![(vid, 5000)],
+                    exclusion_gate: None,
                 },
             },
         };
@@ -712,6 +722,7 @@ mod tests {
                         },
                     ],
                     weights: vec![(vid, 10000)],
+                    exclusion_gate: None,
                 },
             },
         };
@@ -784,6 +795,7 @@ mod tests {
                             )),
                         },
                     ],
+                    exclusion_gate: None,
                 },
             )),
             name: String::new(),
@@ -835,6 +847,7 @@ mod tests {
                         weight_bp: 10000,
                     }],
                     hash_inputs: vec![],
+                    exclusion_gate: None,
                 },
             )),
             name: String::new(),
