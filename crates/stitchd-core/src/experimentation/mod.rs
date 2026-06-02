@@ -35,6 +35,11 @@ pub struct ExclusionGroup {
     pub description: Option<String>,
     /// Salt shared by all members, used to derive each context's group bucket.
     pub salt: String,
+    /// The group's diversion (randomization) unit context type, e.g. `"user"`.
+    /// Every member experiment must randomize on this unit so a given context
+    /// hashes to ONE shared exclusion bucket across the group's flags — this
+    /// invariant is what makes mutual exclusion hold. Immutable after creation.
+    pub unit_context_type: String,
     /// Computed view: total basis points currently allocated to members
     /// (sum of all member bucket ranges).
     pub allocated_bp: u32,

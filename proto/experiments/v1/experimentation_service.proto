@@ -282,10 +282,20 @@ message ExclusionGroup {
   uint32 free_bp      = 6;
   // Optimistic-concurrency version, bumped on every mutation.
   int64  version      = 7;
+  // The group's diversion (randomization) unit context type, e.g. "user".
+  // ALL member experiments must randomize on this unit so a context maps to a
+  // single shared exclusion bucket across the group's flags — this is what
+  // makes mutual exclusion hold. Immutable after creation.
+  string unit_context_type = 8;
 }
 
 message CreateExclusionGroupRequest {
   ExclusionGroup group = 1;
+}
+
+message GetExclusionGroupRequest {
+  string env_id   = 1;
+  string group_id = 2;
 }
 
 message ListExclusionGroupsRequest {
@@ -349,7 +359,13 @@ message ExperimentInteraction {
   uint64 shared_count          = 6;
   double interaction_estimate  = 7;
   double p_value               = 8;
+  // Significance after family-wise (Benjamini–Hochberg) correction across the
+  // batch of pairwise tests. False when insufficient_data is true.
   bool   significant           = 9;
+  // True when the cell sample was too small for a valid test. Consumers MUST
+  // treat the row as non-actionable and ignore estimate/p_value (persisted as
+  // 0.0 sentinels, NOT a real p-value of zero).
+  bool   insufficient_data     = 10;
 }
 
 message GetExperimentInteractionsRequest {
@@ -393,6 +409,7 @@ service ExperimentationService {
   // ── Exclusion groups (mutually-exclusive experiments) ──────────────────────
   rpc CreateExclusionGroup(CreateExclusionGroupRequest) returns (ExclusionGroup);
   rpc ListExclusionGroups(ListExclusionGroupsRequest)   returns (ListExclusionGroupsResponse);
+  rpc GetExclusionGroup(GetExclusionGroupRequest)       returns (ExclusionGroup);
   rpc UpdateExclusionGroup(UpdateExclusionGroupRequest) returns (ExclusionGroup);
   rpc DeleteExclusionGroup(DeleteExclusionGroupRequest) returns (DeleteExclusionGroupResponse);
   rpc AssignExperimentToGroup(AssignExperimentToGroupRequest) returns (AssignExperimentToGroupResponse);

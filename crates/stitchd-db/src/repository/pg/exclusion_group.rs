@@ -49,12 +49,15 @@ pub trait ExclusionGroupRepository: Send + Sync {
     ) -> Result<Vec<ExclusionGroup>, RepositoryError>;
 
     /// Create a new group. A random immutable `salt` is generated and stored.
-    /// Returns the persisted group (with `allocated_bp = 0`, `free_bp = 10000`).
+    /// `unit_context_type` is the group's diversion (randomization) unit; all
+    /// member experiments must randomize on it. Returns the persisted group
+    /// (with `allocated_bp = 0`, `free_bp = 10000`).
     async fn create(
         &self,
         env_id: EnvironmentId,
         name: &str,
         description: Option<&str>,
+        unit_context_type: &str,
     ) -> Result<ExclusionGroup, RepositoryError>;
 
     /// Update a group's `name`/`description` (optimistic locking via `version`).
@@ -144,7 +147,7 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
     async fn find_by_id(&self, id: ExclusionGroupId) -> Result<ExclusionGroup, RepositoryError> {
         let row = sqlx::query(
             r"
-            SELECT id, env_id, name, description, salt, version
+            SELECT id, env_id, name, description, salt, unit_context_type, version
             FROM exclusion_groups
             WHERE id = $1 AND deleted_at IS NULL
             ",
@@ -165,7 +168,7 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
     ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
         let rows = sqlx::query(
             r"
-            SELECT id, env_id, name, description, salt, version
+            SELECT id, env_id, name, description, salt, unit_context_type, version
             FROM exclusion_groups
             WHERE env_id = $1 AND deleted_at IS NULL
             ORDER BY created_at
@@ -190,6 +193,7 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
         env_id: EnvironmentId,
         name: &str,
         description: Option<&str>,
+        unit_context_type: &str,
     ) -> Result<ExclusionGroup, RepositoryError> {
         let id = ExclusionGroupId::new();
         // Generate a random, immutable salt server-side. Two fresh UUIDs (hex,
@@ -199,9 +203,9 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
 
         let row = sqlx::query(
             r"
-            INSERT INTO exclusion_groups (id, env_id, name, description, salt, version)
-            VALUES ($1, $2, $3, $4, $5, 1)
-            RETURNING id, env_id, name, description, salt, version
+            INSERT INTO exclusion_groups (id, env_id, name, description, salt, unit_context_type, version)
+            VALUES ($1, $2, $3, $4, $5, $6, 1)
+            RETURNING id, env_id, name, description, salt, unit_context_type, version
             ",
         )
         .bind(id.as_uuid())
@@ -209,6 +213,7 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
         .bind(name)
         .bind(description)
         .bind(&salt)
+        .bind(unit_context_type)
         .fetch_one(&self.pool)
         .await
         .map_err(map_group_db_err)?;
@@ -243,7 +248,7 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
             UPDATE exclusion_groups
             SET name = $1, description = $2, version = $3, updated_at = NOW()
             WHERE id = $4 AND version = $5 AND deleted_at IS NULL
-            RETURNING id, env_id, name, description, salt, version
+            RETURNING id, env_id, name, description, salt, unit_context_type, version
             ",
         )
         .bind(name)
@@ -534,6 +539,7 @@ fn row_to_group(row: &sqlx::postgres::PgRow, allocated_bp: u32) -> ExclusionGrou
         name: row.get("name"),
         description: row.get("description"),
         salt: row.get("salt"),
+        unit_context_type: row.get("unit_context_type"),
         allocated_bp,
         free_bp: BP_TOTAL - allocated_bp.min(BP_TOTAL),
         version: i64::from(version),
