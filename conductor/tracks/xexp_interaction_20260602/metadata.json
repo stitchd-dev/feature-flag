@@ -1,0 +1,13 @@
+{
+  "track_id": "xexp_interaction_20260602",
+  "type": "feature",
+  "status": "new",
+  "priority": "medium",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-06-02T08:01:19Z",
+  "updated_at": "2026-06-02T08:01:19Z",
+  "description": "Cross-experiment interaction: mutual-exclusion groups (layers) for prevention + pairwise two-way interaction detection/significance for analysis. Exclusion gate carried as in-memory rule snapshot data (zero DB lookup during evaluation).",
+  "git_branch": "track/xexp_interaction_20260602",
+  "worktree_path": ".worktrees/xexp_interaction_20260602"
+}
