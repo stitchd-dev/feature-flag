@@ -120,14 +120,14 @@ Phases 3 + 6; Phase 8 needs Phase 7; Phase 9 needs Phase 8. Shared seams:
   <!-- files: crates/stitchd-experimentation-service/src/service.rs, crates/stitchd-experimentation-service/src/analytics_client.rs -->
 - [x] Task: Conductor - User Manual Verification 'Stats-Service Orchestration + Read RPCs' (Protocol in workflow.md)  [13df229]
 
-## Phase 7: Gateway REST Surface
+## Phase 7: Gateway REST Surface  [checkpoint: dbff080]
 <!-- execution: parallel -->
 <!-- depends: phase3, phase6 -->
 
-- [ ] Task: REST routes — exclusion-group CRUD + assign/unassign + capacity; interaction-results read.
+- [x] Task: REST routes — exclusion-group CRUD + assign/unassign + capacity; interaction-results read.  [dbff080]
       Pure REST↔gRPC translation (lean-gateway); `#[utoipa::path]` annotations; canonical error mapping.
   <!-- files: crates/stitchd-gateway/src/routes/exclusion_groups.rs, crates/stitchd-gateway/src/routes/experiments.rs, crates/stitchd-gateway/src/router.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Gateway REST Surface' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Gateway REST Surface' (Protocol in workflow.md)  [dbff080]
 
 ## Phase 8: Admin UI
 <!-- execution: parallel -->
