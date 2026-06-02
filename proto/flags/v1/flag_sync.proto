@@ -54,6 +54,23 @@ message PercentageAllocation {
   // `stitchd-core::evaluation::types::HashInputSpec` for the canonical
   // domain representation.
   repeated HashSelector hash_inputs = 3;
+  // [ADDITIVE] Optional exclusion gate. When present, the experiment/flag rule
+  // only applies to contexts whose group-salt hash bucket falls within
+  // [bucket_lo, bucket_hi). Used by mutually-exclusive experiment groups so
+  // that overlapping experiments carve out disjoint slices of traffic.
+  optional ExclusionGate exclusion_gate = 4;
+}
+
+// [ADDITIVE] Bucket-range gate over a per-group salt hash. Buckets are in the
+// same 0..100_000 (basis-point ×10) space as PercentageAllocation hashing.
+message ExclusionGate {
+  // Salt identifying the exclusion group; mixed into the hash input so each
+  // group partitions traffic independently.
+  string group_salt = 1;
+  // Inclusive lower bound of the assigned bucket range.
+  uint32 bucket_lo  = 2;
+  // Exclusive upper bound of the assigned bucket range.
+  uint32 bucket_hi  = 3;
 }
 
 message ContextHashSpec {
