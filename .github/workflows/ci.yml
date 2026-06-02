@@ -190,6 +190,18 @@ jobs:
             --cobertura \
             --output-path coverage/cobertura.xml
 
+      - name: Cross-experiment interaction live-ClickHouse tests
+        # MED-4 (xexp_interaction_20260602 review): the interaction detection /
+        # compute SQL is only exercised by `#[ignore]`d live-ClickHouse tests,
+        # which `cargo llvm-cov` above does not run (no `-- --ignored`). ClickHouse
+        # is already up from "Start infrastructure services" and these tests are
+        # self-contained (they call `event_writer::migrations::run` to create
+        # their tables and default `STITCHD_CLICKHOUSE_URL` to localhost), so run
+        # them explicitly here to guard the join semantics + ITT bounding.
+        run: |
+          cargo test -p stitchd-stats-service \
+            --test interaction_query --test interaction_compute -- --ignored
+
       - name: Upload coverage to Codecov
         # Use the official `codecov/codecov-action` instead of the
         # legacy uploader-bash flow. The action:

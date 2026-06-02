@@ -11,8 +11,43 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::id::{EnvironmentId, ExperimentId, ExperimentIterationId, FlagId, MetricId, RuleId};
+use crate::id::{
+    EnvironmentId, ExclusionGroupId, ExperimentId, ExperimentIterationId, FlagId, MetricId, RuleId,
+};
 use crate::rollout::RolloutDistribution;
+
+/// A mutually-exclusive experiment group within an environment.
+///
+/// Members of the same group are placed into disjoint basis-point bucket ranges
+/// (carved out of `[0, 10000)`) using a shared [`salt`](ExclusionGroup::salt),
+/// guaranteeing that a context enrolled in one member experiment cannot be
+/// enrolled in any other member of the same group.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ExclusionGroup {
+    /// Unique identifier.
+    pub id: ExclusionGroupId,
+    /// The environment this group belongs to.
+    pub environment_id: EnvironmentId,
+    /// Human-readable name.
+    pub name: String,
+    /// Optional description.
+    pub description: Option<String>,
+    /// Salt shared by all members, used to derive each context's group bucket.
+    pub salt: String,
+    /// The group's diversion (randomization) unit context type, e.g. `"user"`.
+    /// Every member experiment must randomize on this unit so a given context
+    /// hashes to ONE shared exclusion bucket across the group's flags — this
+    /// invariant is what makes mutual exclusion hold. Immutable after creation.
+    pub unit_context_type: String,
+    /// Computed view: total basis points currently allocated to members
+    /// (sum of all member bucket ranges).
+    pub allocated_bp: u32,
+    /// Computed view: free basis points remaining (`10000 - allocated_bp`).
+    pub free_bp: u32,
+    /// Optimistic-concurrency version counter.
+    pub version: i64,
+}
 
 /// Errors that can occur during experiment operations.
 #[derive(Debug, Error, PartialEq)]
@@ -168,6 +203,17 @@ pub struct Experiment {
     pub deleted_at: Option<DateTime<Utc>>,
     /// Optimistic-concurrency version counter.
     pub version: i64,
+    /// Exclusion-group membership. `None` when ungrouped.
+    #[serde(default)]
+    pub exclusion_group_id: Option<ExclusionGroupId>,
+    /// Inclusive lower bound of the disjoint bucket range allocated within the
+    /// exclusion group, in basis points. `None` when ungrouped.
+    #[serde(default)]
+    pub group_bucket_lo: Option<u16>,
+    /// Exclusive upper bound of the disjoint bucket range allocated within the
+    /// exclusion group, in basis points. `None` when ungrouped.
+    #[serde(default)]
+    pub group_bucket_hi: Option<u16>,
 }
 
 /// A snapshot of an experiment configuration at the start of a run period.
@@ -209,6 +255,20 @@ pub struct ExperimentIteration {
     /// so SRM's expected-allocation calculation does not depend on the live
     /// flag row.
     pub default_rule_distribution: Option<RolloutDistribution>,
+    /// Snapshot of exclusion-group membership at iteration start. `None` when
+    /// ungrouped.
+    #[serde(default)]
+    pub exclusion_group_id: Option<ExclusionGroupId>,
+    /// Snapshot of the inclusive lower bound of the disjoint bucket range
+    /// allocated within the exclusion group, in basis points. `None` when
+    /// ungrouped.
+    #[serde(default)]
+    pub group_bucket_lo: Option<u16>,
+    /// Snapshot of the exclusive upper bound of the disjoint bucket range
+    /// allocated within the exclusion group, in basis points. `None` when
+    /// ungrouped.
+    #[serde(default)]
+    pub group_bucket_hi: Option<u16>,
 }
 
 #[cfg(test)]
@@ -440,6 +500,9 @@ mod tests {
             updated_at: Utc::now(),
             deleted_at: None,
             version: 1,
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
         };
         assert_eq!(exp.status, ExperimentStatus::Draft);
         assert_eq!(exp.metric_ids.len(), 1);
@@ -464,8 +527,90 @@ mod tests {
             pre_period_days: 0,
             unit_context_types: vec!["user".into()],
             default_rule_distribution: None,
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
         };
         assert_eq!(iter.iteration_number, 1);
         assert!(iter.ended_at.is_none());
+    }
+
+    // ── Exclusion-group field serde back-compat ──────────────────────────────
+
+    #[test]
+    fn experiment_deserializes_without_exclusion_fields() {
+        // Legacy serialized JSON lacking the 3 new fields → None.
+        let json = serde_json::to_string(&Experiment {
+            id: ExperimentId::new(),
+            environment_id: EnvironmentId::new(),
+            flag_id: FlagId::new(),
+            flag_key: None,
+            variant_keys: vec![],
+            flag_rule_id: Some(RuleId::new()),
+            targets_default_rule: false,
+            name: "exp".to_string(),
+            description: None,
+            hypothesis: None,
+            metric_ids: vec![MetricId::new()],
+            guardrail_metric_ids: vec![],
+            traffic_allocation: 100.0,
+            min_sample_size: None,
+            pre_period_days: 0,
+            unit_context_types: vec!["user".into()],
+            scheduled_start_at: None,
+            scheduled_end_at: None,
+            status: ExperimentStatus::Draft,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
+        })
+        .unwrap();
+        // Strip the new fields to simulate a legacy payload.
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("exclusion_group_id");
+        obj.remove("group_bucket_lo");
+        obj.remove("group_bucket_hi");
+        let exp: Experiment = serde_json::from_value(value).unwrap();
+        assert!(exp.exclusion_group_id.is_none());
+        assert!(exp.group_bucket_lo.is_none());
+        assert!(exp.group_bucket_hi.is_none());
+    }
+
+    #[test]
+    fn experiment_iteration_deserializes_without_exclusion_fields() {
+        let json = serde_json::to_string(&ExperimentIteration {
+            id: ExperimentIterationId::new(),
+            experiment_id: ExperimentId::new(),
+            flag_id: FlagId::new(),
+            iteration_number: 1,
+            started_at: Utc::now(),
+            ended_at: None,
+            metric_ids: vec![MetricId::new()],
+            guardrail_metric_ids: vec![],
+            traffic_allocation: 100.0,
+            min_sample_size: None,
+            targets_default_rule: false,
+            pre_period_days: 0,
+            unit_context_types: vec!["user".into()],
+            default_rule_distribution: None,
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
+        })
+        .unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        obj.remove("exclusion_group_id");
+        obj.remove("group_bucket_lo");
+        obj.remove("group_bucket_hi");
+        let iter: ExperimentIteration = serde_json::from_value(value).unwrap();
+        assert!(iter.exclusion_group_id.is_none());
+        assert!(iter.group_bucket_lo.is_none());
+        assert!(iter.group_bucket_hi.is_none());
     }
 }

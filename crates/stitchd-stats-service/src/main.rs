@@ -127,11 +127,34 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // ── Repositories + interaction CH reader/writer ───────────────────────────
+    use stitchd_db::{PgExperimentRepository, PgMetricRepository};
+    use stitchd_stats_service::interaction_compute::{
+        ClickHouseInteractionCells, ClickHouseInteractionWriter, run_interaction_sweep,
+    };
+    let audit: Arc<dyn stitchd_db::AuditLogger> =
+        Arc::new(stitchd_db::PgAuditLogger::new(pg_pool.clone()));
+    let metric_repo: Arc<dyn stitchd_db::MetricRepository> =
+        Arc::new(PgMetricRepository::new(pg_pool.clone(), audit.clone()));
+    let experiment_repo: Arc<dyn stitchd_db::ExperimentRepository> =
+        Arc::new(PgExperimentRepository::new(pg_pool.clone(), audit.clone()));
+    let interaction_cells: Arc<
+        dyn stitchd_stats_service::interaction_compute::InteractionCellReader,
+    > = Arc::new(ClickHouseInteractionCells::new(Arc::new(ch_client.clone())));
+    let interaction_writer: Arc<dyn stitchd_stats_service::interaction_compute::InteractionWriter> =
+        Arc::new(ClickHouseInteractionWriter::new(Arc::new(
+            ch_client.clone(),
+        )));
+
     // ── Scheduler loop ────────────────────────────────────────────────────────
     let scheduler_pool = pg_pool.clone();
     let scheduler_interval = config.scheduler_interval;
     let scheduler_exp_client = exp_client.clone();
     let scheduler_analytics_client = analytics_client.clone();
+    let sweep_experiment_repo = experiment_repo.clone();
+    let sweep_metric_repo = metric_repo.clone();
+    let sweep_cells = interaction_cells.clone();
+    let sweep_writer = interaction_writer.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(scheduler_interval);
         loop {
@@ -182,6 +205,28 @@ async fn main() -> anyhow::Result<()> {
                     }
                 });
             }
+
+            // ── Cross-experiment interaction sweep ─────────────────────────────
+            // After the per-experiment pass, recompute pairwise interactions for
+            // every environment's running experiments and persist them to the
+            // ClickHouse `experiment_interactions` table.
+            match sweep_experiment_repo.list_all_running().await {
+                Ok(running) => {
+                    match run_interaction_sweep(
+                        sweep_cells.as_ref(),
+                        sweep_writer.as_ref(),
+                        sweep_metric_repo.as_ref(),
+                        &running,
+                        chrono::Utc::now(),
+                    )
+                    .await
+                    {
+                        Ok(n) => info!(interactions_written = n, "interaction sweep complete"),
+                        Err(e) => error!("interaction sweep failed: {e}"),
+                    }
+                }
+                Err(e) => error!("interaction sweep: failed to list running experiments: {e}"),
+            }
         }
     });
 
@@ -195,14 +240,7 @@ async fn main() -> anyhow::Result<()> {
         .await;
 
     // ── Timeseries reader (Phase 7 Task 3) ────────────────────────────────────
-    use stitchd_db::{PgExperimentRepository, PgMetricRepository};
     use stitchd_stats_service::timeseries_reader::ClickHouseTimeseriesReader;
-    let audit: Arc<dyn stitchd_db::AuditLogger> =
-        Arc::new(stitchd_db::PgAuditLogger::new(pg_pool.clone()));
-    let metric_repo: Arc<dyn stitchd_db::MetricRepository> =
-        Arc::new(PgMetricRepository::new(pg_pool.clone(), audit.clone()));
-    let experiment_repo: Arc<dyn stitchd_db::ExperimentRepository> =
-        Arc::new(PgExperimentRepository::new(pg_pool.clone(), audit));
     let timeseries_reader = Arc::new(ClickHouseTimeseriesReader::new(
         Arc::new(ch_client.clone()),
         metric_repo,

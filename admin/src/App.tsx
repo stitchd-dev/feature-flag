@@ -23,6 +23,7 @@ import { SegmentsList } from './pages/segments/SegmentsList'
 import { SegmentDetail } from './pages/segments/SegmentDetail'
 import { ExperimentsList } from './pages/experiments/ExperimentsList'
 import { ExperimentDetail } from './pages/experiments/ExperimentDetail'
+import { ExclusionGroups } from './pages/experiments/exclusionGroups/ExclusionGroups'
 import { EventsList } from './pages/events/EventsList'
 import { EventDetail } from './pages/events/EventDetail'
 import { MetricsList } from './pages/metrics/MetricsList'
@@ -114,6 +115,7 @@ function AppRoutes() {
           <Route path="/org/:orgId/segments" element={<SegmentsList />} />
           <Route path="/org/:orgId/segments/:key" element={<SegmentDetail />} />
           <Route path="/org/:orgId/experiments" element={<ExperimentsList />} />
+          <Route path="/org/:orgId/exclusion-groups" element={<ExclusionGroups />} />
           <Route path="/org/:orgId/experiments/:key" element={<ExperimentDetail />} />
           <Route path="/org/:orgId/events" element={<EventsList />} />
           <Route path="/org/:orgId/events/:eventKey" element={<EventDetail />} />

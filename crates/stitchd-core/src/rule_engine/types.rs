@@ -49,6 +49,32 @@ pub struct PercentageTarget {
     pub field: TargetField,
 }
 
+// ── ExclusionGate ─────────────────────────────────────────────────────────────
+
+/// A mutually-exclusive-group gate resident on a rule's percentage allocation.
+///
+/// When present, a context is admitted to the rule's percentage distribution
+/// only if its exclusion-group bucket (computed from `group_salt`) falls in the
+/// allocated `[bucket_lo, bucket_hi)` basis-point range. This is the
+/// spec-mandated location for the gate: it lives on the rule output, not on the
+/// experiment, so a context can be excluded before any percentage bucketing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ExclusionGate {
+    /// Salt used to derive the context's exclusion-group bucket (shared by all
+    /// members of the same exclusion group).
+    pub group_salt: String,
+    /// The context type whose `key` is hashed to derive the exclusion-group
+    /// bucket (the experiment's randomization unit, e.g. `"user"`). If no
+    /// context of this type is present in the evaluated bundle, the context is
+    /// held out (not enrolled) — a missing randomization unit cannot be bucketed.
+    pub context_type: String,
+    /// Inclusive lower bound of the allocated bucket range, in basis points.
+    pub bucket_lo: u16,
+    /// Exclusive upper bound of the allocated bucket range, in basis points.
+    pub bucket_hi: u16,
+}
+
 // ── RuleOutput ────────────────────────────────────────────────────────────────
 
 /// The outcome produced when a rule matches.
@@ -63,6 +89,11 @@ pub enum RuleOutput {
         targets: Vec<PercentageTarget>,
         /// `(variant_id, weight)` pairs; weights are basis points and must sum to 10000.
         weights: Vec<(VariantId, u32)>,
+        /// Optional mutually-exclusive-group gate. When `Some`, contexts whose
+        /// exclusion-group bucket falls outside the allocated range are excluded
+        /// from this distribution. Absent in legacy serialized rules → `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exclusion_gate: Option<ExclusionGate>,
     },
 }
 
@@ -188,5 +219,62 @@ mod tests {
             field: TargetField::Parameter("account_tier".to_string()),
         };
         assert!(matches!(t.field, TargetField::Parameter(_)));
+    }
+
+    #[test]
+    fn exclusion_gate_serde_round_trips() {
+        let gate = ExclusionGate {
+            group_salt: "grp-salt".to_string(),
+            context_type: "user".to_string(),
+            bucket_lo: 0,
+            bucket_hi: 2500,
+        };
+        let json = serde_json::to_string(&gate).unwrap();
+        let back: ExclusionGate = serde_json::from_str(&json).unwrap();
+        assert_eq!(gate, back);
+    }
+
+    #[test]
+    fn percentage_deserializes_without_exclusion_gate() {
+        // Legacy serialized JSONB lacking `exclusion_gate` → None.
+        let json = r#"{"Percentage":{"targets":[],"weights":[]}}"#;
+        let output: RuleOutput = serde_json::from_str(json).unwrap();
+        match output {
+            RuleOutput::Percentage {
+                exclusion_gate, ..
+            } => assert!(exclusion_gate.is_none()),
+            other => panic!("expected Percentage, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn percentage_skips_serializing_none_exclusion_gate() {
+        let output = RuleOutput::Percentage {
+            targets: vec![],
+            weights: vec![],
+            exclusion_gate: None,
+        };
+        let json = serde_json::to_string(&output).unwrap();
+        assert!(
+            !json.contains("exclusion_gate"),
+            "None gate should be skipped: {json}"
+        );
+    }
+
+    #[test]
+    fn percentage_round_trips_with_exclusion_gate() {
+        let output = RuleOutput::Percentage {
+            targets: vec![],
+            weights: vec![(VariantId::new(), 10000)],
+            exclusion_gate: Some(ExclusionGate {
+                group_salt: "s".to_string(),
+                context_type: "user".to_string(),
+                bucket_lo: 2500,
+                bucket_hi: 5000,
+            }),
+        };
+        let json = serde_json::to_string(&output).unwrap();
+        let back: RuleOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(output, back);
     }
 }

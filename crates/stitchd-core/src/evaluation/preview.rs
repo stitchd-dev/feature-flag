@@ -705,6 +705,7 @@ mod tests {
                         field: TargetField::Key,
                     }],
                     weights: vec![(on_id, 5000), (off_id, 5000)],
+                    exclusion_gate: None,
                 },
             },
         });
@@ -989,6 +990,7 @@ mod tests {
                         field: TargetField::Parameter("account_id".to_string()),
                     }],
                     weights: vec![(on_id, 5000), (off_id, 5000)],
+                    exclusion_gate: None,
                 },
             },
         });

@@ -39,6 +39,9 @@ import { Timeseries } from './tabs/Timeseries'
 import type { MetricRowEntry } from './tabs/Timeseries'
 import { IterationsTab, shouldKeepPolling } from './tabs/Iterations'
 import type { IterationSummary } from './tabs/Iterations'
+import { InteractionsTab, hasSignificantInteraction } from './tabs/Interactions'
+import { listExperimentInteractions } from '../../lib/api/exclusionGroups'
+import type { ExperimentInteraction } from '../../lib/api/exclusionGroups'
 
 /**
  * Minimal projection of a `metric_definitions` row used by ExperimentDetail
@@ -57,6 +60,7 @@ type Tab =
   | 'exposures'
   | 'timeseries'
   | 'iterations'
+  | 'interactions'
   | 'config'
   | 'metrics'
   | 'events'
@@ -341,6 +345,35 @@ function ExperimentDetailBody({
     setSelectedIteration(null)
   }, [activeContextType])
 
+  // ── Interactions fetch ────────────────────────────────────────────────────
+  // Fetched on mount (not lazily) so the Results tab can surface a "significant
+  // interaction" warning banner without the user opening the Interactions tab.
+  const [interactions, setInteractions] = useState<ExperimentInteraction[]>([])
+  const [interactionsLoading, setInteractionsLoading] = useState(false)
+  const [interactionsError, setInteractionsError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!envId || !apiExp.key) return
+    const ctrl = new AbortController()
+    setInteractionsLoading(true)
+    setInteractionsError(null)
+    listExperimentInteractions(envId, apiExp.key, ctrl.signal)
+      .then((data) => {
+        if (ctrl.signal.aborted) return
+        setInteractions(data.interactions ?? [])
+      })
+      .catch((err) => {
+        if (ctrl.signal.aborted) return
+        setInteractionsError(extractErrorMessage(err))
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setInteractionsLoading(false)
+      })
+    return () => ctrl.abort()
+  }, [envId, apiExp.key])
+
+  const showInteractionWarning = hasSignificantInteraction(interactions)
+
   // ── Timeseries fetch ──────────────────────────────────────────────────────
   const [tsDays, setTsDays] = useState(7)
   const [tsSeries, setTsSeries] = useState<Record<string, TimeseriesData>>({})
@@ -530,6 +563,7 @@ function ExperimentDetailBody({
           <button className={`tab ${tab === 'exposures' ? 'active' : ''}`} onClick={() => setTab('exposures')}>Exposures · SRM</button>
           <button className={`tab ${tab === 'timeseries' ? 'active' : ''}`} onClick={() => setTab('timeseries')}>Time-series</button>
           <button className={`tab ${tab === 'iterations' ? 'active' : ''}`} onClick={() => setTab('iterations')}>Iterations</button>
+          <button className={`tab ${tab === 'interactions' ? 'active' : ''}`} onClick={() => setTab('interactions')}>Interactions{showInteractionWarning && <span className="count" style={{ background: 'var(--warning-bg, rgba(217,119,6,0.12))', color: 'var(--warning, #b45309)' }}>!</span>}</button>
           <button className={`tab ${tab === 'config' ? 'active' : ''}`} onClick={() => setTab('config')}>Configuration</button>
           <button className={`tab ${tab === 'metrics' ? 'active' : ''}`} onClick={() => setTab('metrics')}>Metrics <span className="count">{metricNames.length || apiExp.metric_ids.length || 0}</span></button>
           <button className={`tab ${tab === 'events' ? 'active' : ''}`} onClick={() => setTab('events')}>Events</button>
@@ -537,6 +571,32 @@ function ExperimentDetailBody({
 
         {tab === 'results' && (
           <>
+            {showInteractionWarning && (
+              <div
+                role="alert"
+                data-testid="interaction-warning"
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  padding: '10px 14px',
+                  marginBottom: 14,
+                  borderRadius: 8,
+                  background: 'var(--warning-bg, rgba(217,119,6,0.1))',
+                  border: '1px solid rgba(217,119,6,0.3)',
+                  color: 'var(--warning, #b45309)',
+                  fontSize: 13,
+                }}
+              >
+                <I.alert size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>
+                  A significant interaction with another concurrent experiment
+                  was detected. Interpret these results with caution — the
+                  estimated effect may be confounded. See the Interactions tab
+                  for details.
+                </span>
+              </div>
+            )}
             <div className="stat-grid" style={{ marginBottom: 14 }}>
               <div className="stat"><div className="stat-label">Lift (relative)</div><div className="stat-value" style={{ color: 'var(--success)' }}>{display.lift}</div><div className="stat-delta">vs control</div></div>
               <div className="stat"><div className="stat-label">{useBayesian ? 'P(variant > control)' : 'P-value'}</div><div className="stat-value">{useBayesian ? `${display.confidence}%` : (display.confidence > 0 ? (1 - display.confidence / 100).toFixed(4) : '—')}</div><div className="stat-delta">{useBayesian ? 'Bayesian posterior' : 'two-sided'}</div></div>
@@ -604,6 +664,14 @@ function ExperimentDetailBody({
             experimentId={apiExp.key}
             defaultModel={resultsDefaultModel}
             metricNames={metricNames.length > 0 ? metricNames : apiExp.metric_ids}
+          />
+        )}
+
+        {tab === 'interactions' && (
+          <InteractionsTab
+            interactions={interactions}
+            loading={interactionsLoading}
+            error={interactionsError}
           />
         )}
 

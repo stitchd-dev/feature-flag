@@ -88,6 +88,9 @@ export interface ExperimentResponse {
    *  on the experiments list. */
   scheduled_end_at?: string | null
   unit_context_types: string[]
+  /** UUID of the mutual-exclusion group this experiment is assigned to, when
+   *  any. Absent / null when the experiment is ungrouped. */
+  exclusion_group_id?: string | null
   created_at: string
   updated_at: string
 }

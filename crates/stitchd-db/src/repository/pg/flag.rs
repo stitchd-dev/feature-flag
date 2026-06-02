@@ -169,6 +169,104 @@ impl PgFlagRepository {
     pub fn new(pool: PgPool, audit: Arc<dyn AuditLogger>) -> Self {
         Self { pool, audit }
     }
+
+    /// Set or clear the exclusion-group gate on a single flag rule's stored
+    /// `rule_def` JSONB (a serialised [`stitchd_core::rule_engine::types::Rule`]).
+    ///
+    /// This is how an exclusion-group assignment reaches the in-memory flag
+    /// snapshot: the gate is written onto the rule's `Percentage` output, and
+    /// flag-service then reads `rule_def` unchanged. When `gate` is `Some` the
+    /// gate is set; when `None` it is cleared.
+    ///
+    /// The gate only applies to `Percentage` outputs. If the rule's output is
+    /// not a percentage rollout (e.g. a direct `Variant`), this is a no-op for
+    /// a `Some` gate, since exclusion gating is meaningless without a
+    /// distribution to gate; clearing (`None`) is likewise a no-op.
+    ///
+    /// Additive: deliberately does not touch `find_rules`/`upsert_rules`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RepositoryError::NotFound`] if the rule does not exist,
+    /// [`RepositoryError::Unexpected`] if the stored `rule_def` cannot be
+    /// (de)serialised, or [`RepositoryError::Database`] on a SQL error.
+    pub async fn set_rule_exclusion_gate(
+        &self,
+        flag_rule_id: stitchd_core::id::RuleId,
+        gate: Option<stitchd_core::rule_engine::types::ExclusionGate>,
+    ) -> Result<(), RepositoryError> {
+        use stitchd_core::rule_engine::types::{Rule, RuleOutput};
+
+        // Atomic read-modify-write: lock the rule row FOR UPDATE so a concurrent
+        // rule edit (`upsert_rules`) cannot interleave and clobber (or be clobbered
+        // by) the gate change. The previous non-transactional SELECT-then-UPDATE
+        // was a lost-update race.
+        let mut tx = self.pool.begin().await.map_err(RepositoryError::Database)?;
+
+        let row: Option<(uuid::Uuid, serde_json::Value)> = sqlx::query_as(
+            "SELECT flag_id, rule_def FROM feature_flag_rules WHERE id = $1 FOR UPDATE",
+        )
+        .bind(flag_rule_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        let Some((flag_id, rule_def)) = row else {
+            return Err(RepositoryError::NotFound {
+                id: flag_rule_id.to_string(),
+            });
+        };
+
+        let mut rule: Rule = serde_json::from_value(rule_def).map_err(|e| {
+            RepositoryError::Unexpected(anyhow::anyhow!("failed to deserialize rule_def: {e}"))
+        })?;
+
+        // Capture the audit action before moving `gate` into the rule output.
+        let setting_gate = gate.is_some();
+
+        // Only Percentage outputs carry an exclusion gate.
+        if let RuleOutput::Percentage {
+            ref mut exclusion_gate,
+            ..
+        } = rule.output
+        {
+            *exclusion_gate = gate;
+        } else {
+            // Non-percentage rule: nothing to gate. No-op.
+            return Ok(());
+        }
+
+        let new_def = serde_json::to_value(&rule).map_err(|e| {
+            RepositoryError::Unexpected(anyhow::anyhow!("failed to serialize rule_def: {e}"))
+        })?;
+
+        sqlx::query("UPDATE feature_flag_rules SET rule_def = $1 WHERE id = $2")
+            .bind(new_def)
+            .bind(flag_rule_id.as_uuid())
+            .execute(&mut *tx)
+            .await
+            .map_err(RepositoryError::Database)?;
+
+        tx.commit().await.map_err(RepositoryError::Database)?;
+
+        // Audit the mutation: the write originates in the experimentation-service
+        // but lands on flag data, so record it in the flag audit trail for history.
+        self.audit
+            .log(
+                None,
+                "flag_rule",
+                flag_rule_id.as_uuid(),
+                if setting_gate {
+                    "set_exclusion_gate"
+                } else {
+                    "clear_exclusion_gate"
+                },
+                serde_json::json!({ "flag_id": flag_id }),
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]

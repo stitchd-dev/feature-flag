@@ -71,6 +71,7 @@ define_id!(ExperimentId);
 define_id!(ExperimentIterationId);
 define_id!(MetricId);
 define_id!(AuditLogId);
+define_id!(ExclusionGroupId);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

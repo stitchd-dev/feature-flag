@@ -8,10 +8,14 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use stitchd_core::{
-    experimentation::{Experiment, ExperimentStatus},
-    id::{EnvironmentId, ExperimentId, ExperimentIterationId},
+    experimentation::{Experiment, ExclusionGroup, ExperimentStatus},
+    id::{EnvironmentId, ExclusionGroupId, ExperimentId, ExperimentIterationId, RuleId},
+    rule_engine::types::ExclusionGate,
 };
-use stitchd_db::{ExperimentRepository, StatsScheduleRepository};
+use stitchd_db::{
+    ExperimentRepository, RepositoryError, StatsScheduleRepository,
+    repository::pg::ExclusionGroupRepository,
+};
 use stitchd_proto::experiments::v1::{
     BoundTarget, ContextTypeResults, CreateExperimentRequest, DeleteExperimentRequest,
     ExperimentIteration as ProtoIteration, ExperimentResults, GetExperimentIterationRequest,
@@ -158,6 +162,9 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         metric_ids: i.metric_ids.iter().map(ToString::to_string).collect(),
         traffic_allocation: i.traffic_allocation,
         unit_context_types: i.unit_context_types.clone(),
+        exclusion_group_id: i.exclusion_group_id.map(|g| g.to_string()),
+        group_bucket_lo: i.group_bucket_lo.map(u32::from),
+        group_bucket_hi: i.group_bucket_hi.map(u32::from),
     }
 }
 
@@ -251,6 +258,113 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
             .collect(),
         pre_period_days: e.pre_period_days,
         metric_ids: e.metric_ids.iter().map(|id| id.to_string()).collect(),
+        exclusion_group_id: e.exclusion_group_id.map(|g| g.to_string()),
+        group_bucket_lo: e.group_bucket_lo.map(u32::from),
+        group_bucket_hi: e.group_bucket_hi.map(u32::from),
+    }
+}
+
+/// Map a core [`ExclusionGroup`] to the proto message.
+fn group_to_proto(g: &ExclusionGroup) -> stitchd_proto::experiments::v1::ExclusionGroup {
+    stitchd_proto::experiments::v1::ExclusionGroup {
+        id: g.id.to_string(),
+        env_id: g.environment_id.to_string(),
+        name: g.name.clone(),
+        description: g.description.clone().unwrap_or_default(),
+        allocated_bp: g.allocated_bp,
+        free_bp: g.free_bp,
+        version: g.version,
+        unit_context_type: g.unit_context_type.clone(),
+    }
+}
+
+/// Convert a traffic-allocation percentage (e.g. `25.0`) to basis points
+/// (`2500`), clamped to `[0, 10000]`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn pct_to_bp(pct: f64) -> u32 {
+    let bp = (pct * 100.0).round();
+    if bp <= 0.0 {
+        0
+    } else if bp >= 10_000.0 {
+        10_000
+    } else {
+        bp as u32
+    }
+}
+
+/// Sentinel prefix used to encode the locking experiment ID into a
+/// `failed_precondition` status so the gateway rebuilds the structured 409
+/// (`flag_locked_by_experiment`) body. Must match
+/// `stitchd_flag_service::error::FLAG_LOCKED_STATUS_PREFIX`.
+const FLAG_LOCKED_STATUS_PREFIX: &str = "flag_locked_by_experiment:";
+
+/// Reject group-membership mutations while the experiment's flag is locked by a
+/// running/paused experiment. The experiment itself being running/paused means
+/// its flag is locked (whole-flag freeze), so we key off the experiment's own
+/// status. Returns the flag-lock sentinel `Status` (→ HTTP 409) when locked.
+#[allow(clippy::result_large_err)]
+fn reject_if_flag_locked(experiment: &Experiment) -> Result<(), Status> {
+    if matches!(
+        experiment.status,
+        ExperimentStatus::Running | ExperimentStatus::Paused
+    ) {
+        return Err(Status::failed_precondition(format!(
+            "{FLAG_LOCKED_STATUS_PREFIX}{}",
+            experiment.id
+        )));
+    }
+    Ok(())
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_env_id(s: &str) -> Result<EnvironmentId, Status> {
+    uuid::Uuid::parse_str(s)
+        .map(EnvironmentId::from_uuid)
+        .map_err(|_| Status::invalid_argument("invalid env_id UUID"))
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_group_id(s: &str) -> Result<ExclusionGroupId, Status> {
+    uuid::Uuid::parse_str(s)
+        .map(ExclusionGroupId::from_uuid)
+        .map_err(|_| Status::invalid_argument("invalid group_id UUID"))
+}
+
+#[allow(clippy::result_large_err)]
+fn parse_experiment_id(s: &str) -> Result<ExperimentId, Status> {
+    uuid::Uuid::parse_str(s)
+        .map(ExperimentId::from_uuid)
+        .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))
+}
+
+// ---------------------------------------------------------------------------
+// Rule-gate writer port
+// ---------------------------------------------------------------------------
+
+/// Port for writing/clearing a rule's exclusion gate on its stored `rule_def`.
+///
+/// Defined here (rather than in the DB trait layer) so the experimentation
+/// service can depend on the narrow capability it needs and tests can mock it.
+/// Implemented for `stitchd_db::repository::pg::PgFlagRepository` below.
+#[async_trait]
+pub trait RuleGateWriter: Send + Sync {
+    /// Set (`Some`) or clear (`None`) the exclusion gate on `flag_rule_id`.
+    async fn set_rule_exclusion_gate(
+        &self,
+        flag_rule_id: RuleId,
+        gate: Option<ExclusionGate>,
+    ) -> Result<(), RepositoryError>;
+}
+
+#[async_trait]
+impl RuleGateWriter for stitchd_db::repository::pg::PgFlagRepository {
+    async fn set_rule_exclusion_gate(
+        &self,
+        flag_rule_id: RuleId,
+        gate: Option<ExclusionGate>,
+    ) -> Result<(), RepositoryError> {
+        // Delegates to the inherent method added on the PG flag repo (P3.T1).
+        Self::set_rule_exclusion_gate(self, flag_rule_id, gate).await
     }
 }
 
@@ -277,6 +391,17 @@ pub struct ExperimentationServiceImpl {
     /// Optional ClickHouse-backed reader for paginated `experiment_assignments`
     /// reads (`ListExposures` RPC). `None` makes the RPC return `Unimplemented`.
     exposure_reader: Option<Arc<dyn crate::exposure_reader::ExposureReader>>,
+    /// Optional ClickHouse-backed reader for `experiment_interactions`
+    /// (`GetExperimentInteractions` RPC). `None` makes the RPC return
+    /// `Unimplemented`.
+    interactions_reader: Option<Arc<dyn crate::interactions_reader::InteractionsReader>>,
+    /// Optional exclusion-group repository (PG). `None` makes the exclusion-group
+    /// RPCs return `Unimplemented`.
+    exclusion_group_repo: Option<Arc<dyn ExclusionGroupRepository>>,
+    /// Optional writer for rule exclusion gates (PG flag repo). Required for
+    /// Assign/Unassign to push the gate onto the rule's `rule_def` so the
+    /// flag snapshot picks it up. `None` makes those RPCs return `Unimplemented`.
+    rule_gate_writer: Option<Arc<dyn RuleGateWriter>>,
 }
 
 impl ExperimentationServiceImpl {
@@ -295,7 +420,73 @@ impl ExperimentationServiceImpl {
             flag_client,
             dictionary_refresher: None,
             exposure_reader: None,
+            interactions_reader: None,
+            exclusion_group_repo: None,
+            rule_gate_writer: None,
         }
+    }
+
+    /// Attach a ClickHouse-backed reader for `experiment_interactions`. Without
+    /// it, `GetExperimentInteractions` returns `Status::unimplemented`.
+    #[must_use]
+    pub fn with_interactions_reader(
+        mut self,
+        reader: Arc<dyn crate::interactions_reader::InteractionsReader>,
+    ) -> Self {
+        self.interactions_reader = Some(reader);
+        self
+    }
+
+    /// Attach the exclusion-group repository and rule-gate writer. Required for
+    /// the exclusion-group RPCs (Create/List/Update/Delete/Assign/Unassign) to
+    /// function; without it those calls return `Status::unimplemented`.
+    #[must_use]
+    pub fn with_exclusion_groups(
+        mut self,
+        repo: Arc<dyn ExclusionGroupRepository>,
+        gate_writer: Arc<dyn RuleGateWriter>,
+    ) -> Self {
+        self.exclusion_group_repo = Some(repo);
+        self.rule_gate_writer = Some(gate_writer);
+        self
+    }
+
+    /// Borrow the exclusion-group repo or fail with `Unimplemented` when the
+    /// service was constructed without one.
+    #[allow(clippy::result_large_err)]
+    fn exclusion_group_repo(&self) -> Result<&Arc<dyn ExclusionGroupRepository>, Status> {
+        self.exclusion_group_repo.as_ref().ok_or_else(|| {
+            Status::unimplemented("exclusion_group_repo not configured on this service instance")
+        })
+    }
+
+    /// Borrow the rule-gate writer or fail with `Unimplemented`.
+    #[allow(clippy::result_large_err)]
+    fn rule_gate_writer(&self) -> Result<&Arc<dyn RuleGateWriter>, Status> {
+        self.rule_gate_writer.as_ref().ok_or_else(|| {
+            Status::unimplemented("rule_gate_writer not configured on this service instance")
+        })
+    }
+
+    /// Release an experiment's exclusion-group assignment: free its bucket
+    /// range, clear the group columns, and clear the rule's exclusion gate.
+    ///
+    /// Shared by `unassign_experiment` (RPC) and the `stopped` lifecycle
+    /// transition. Idempotent — safe to call on an already-ungrouped experiment.
+    async fn release_experiment_group(
+        &self,
+        repo: &dyn ExclusionGroupRepository,
+        gate_writer: &dyn RuleGateWriter,
+        experiment: &Experiment,
+    ) -> Result<(), Status> {
+        repo.free_range(experiment.id).await.map_err(Status::from)?;
+        if let Some(flag_rule_id) = experiment.flag_rule_id {
+            gate_writer
+                .set_rule_exclusion_gate(flag_rule_id, None)
+                .await
+                .map_err(Status::from)?;
+        }
+        Ok(())
     }
 
     /// Attach a ClickHouse dictionary refresher. Every successful
@@ -466,6 +657,11 @@ impl ExperimentationService for ExperimentationServiceImpl {
             updated_at: now,
             deleted_at: None,
             version: 1,
+            // Group assignment happens via AssignExperimentToGroup (Phase 2/3),
+            // not at create time; ungrouped on creation.
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
         };
 
         self.experiment_repo
@@ -678,6 +874,19 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .apply_transition(exp_id, target_status, None)
             .await
             .map_err(Status::from)?;
+
+        // Lifecycle (P3.T3): on transition to `stopped`, release any
+        // exclusion-group assignment — free the bucket range and clear the
+        // rule's exclusion gate — so the bucket space becomes reusable. Only
+        // runs when the service is wired with exclusion-group support; the
+        // `free_range` call is a no-op when the experiment holds no range.
+        if target_status == ExperimentStatus::Stopped
+            && let (Some(repo), Some(gate_writer)) =
+                (self.exclusion_group_repo.as_ref(), self.rule_gate_writer.as_ref())
+        {
+            self.release_experiment_group(repo.as_ref(), gate_writer.as_ref(), &updated)
+                .await?;
+        }
 
         // Note: the flag-service holds an in-process `FlagLockCache` keyed on
         // `flag_id` that derives lockedness from PG. Because flag-service and
@@ -1144,6 +1353,375 @@ impl ExperimentationService for ExperimentationServiceImpl {
             stitchd_proto::experiments::v1::ListExposuresResponse { exposures, total },
         ))
     }
+
+    // ── Exclusion groups + interactions ─────────────────────────────────────
+    //
+    // Proto surface landed via the parallel P1.T5 merge; the handlers are wired
+    // in Phase 2/3 (reads + persistence). Until then these return
+    // `Unimplemented` so the trait is satisfied and the workspace stays green.
+
+    #[instrument(skip(self))]
+    async fn create_exclusion_group(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::CreateExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        let repo = self.exclusion_group_repo()?;
+        let proto = request
+            .into_inner()
+            .group
+            .ok_or_else(|| Status::invalid_argument("group field is required"))?;
+
+        let env_id = parse_env_id(&proto.env_id)?;
+        if proto.name.trim().is_empty() {
+            return Err(Status::invalid_argument("group name must not be empty"));
+        }
+        let description = if proto.description.is_empty() {
+            None
+        } else {
+            Some(proto.description.as_str())
+        };
+
+        // The group's diversion unit; defaults to "user" when unset. Validate it
+        // against the env's registered context types (mirrors experiment
+        // creation) so the group can only randomize on a real unit.
+        let unit_context_type = if proto.unit_context_type.trim().is_empty() {
+            "user".to_string()
+        } else {
+            proto.unit_context_type.clone()
+        };
+        let registered = self
+            .analytics_client
+            .list_context_types(&proto.env_id)
+            .await?;
+        if !registered.iter().any(|ct| ct == &unit_context_type) {
+            return Err(Status::invalid_argument(format!(
+                "context type '{unit_context_type}' is not registered for this environment"
+            )));
+        }
+
+        let group = repo
+            .create(env_id, &proto.name, description, &unit_context_type)
+            .await
+            .map_err(Status::from)?;
+
+        metrics::counter!("experimentation_service.create_exclusion_group.ok").increment(1);
+        Ok(Response::new(group_to_proto(&group)))
+    }
+
+    #[instrument(skip(self))]
+    async fn get_exclusion_group(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::GetExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        let repo = self.exclusion_group_repo()?;
+        let req = request.into_inner();
+        let group_id = parse_group_id(&req.group_id)?;
+
+        let group = repo.find_by_id(group_id).await.map_err(Status::from)?;
+
+        metrics::counter!("experimentation_service.get_exclusion_group.ok").increment(1);
+        Ok(Response::new(group_to_proto(&group)))
+    }
+
+    #[instrument(skip(self))]
+    async fn list_exclusion_groups(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::ListExclusionGroupsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExclusionGroupsResponse>, Status> {
+        let repo = self.exclusion_group_repo()?;
+        let req = request.into_inner();
+        let env_id = parse_env_id(&req.env_id)?;
+
+        let groups = repo
+            .list_by_environment(env_id)
+            .await
+            .map_err(Status::from)?;
+        let total = groups.len() as u64;
+        let proto_groups = groups.iter().map(group_to_proto).collect();
+
+        metrics::counter!("experimentation_service.list_exclusion_groups.ok").increment(1);
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::ListExclusionGroupsResponse {
+                groups: proto_groups,
+                total,
+            },
+        ))
+    }
+
+    #[instrument(skip(self))]
+    async fn update_exclusion_group(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::UpdateExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        let repo = self.exclusion_group_repo()?;
+        let proto = request
+            .into_inner()
+            .group
+            .ok_or_else(|| Status::invalid_argument("group field is required"))?;
+
+        let group_id = parse_group_id(&proto.id)?;
+        if proto.name.trim().is_empty() {
+            return Err(Status::invalid_argument("group name must not be empty"));
+        }
+        let description = if proto.description.is_empty() {
+            None
+        } else {
+            Some(proto.description.as_str())
+        };
+        let expected_version = proto.version;
+
+        let group = repo
+            .update(group_id, &proto.name, description, expected_version)
+            .await
+            .map_err(Status::from)?;
+
+        metrics::counter!("experimentation_service.update_exclusion_group.ok").increment(1);
+        Ok(Response::new(group_to_proto(&group)))
+    }
+
+    #[instrument(skip(self))]
+    async fn delete_exclusion_group(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status> {
+        let repo = self.exclusion_group_repo()?;
+        let req = request.into_inner();
+        let group_id = parse_group_id(&req.group_id)?;
+
+        repo.soft_delete(group_id).await.map_err(Status::from)?;
+
+        metrics::counter!("experimentation_service.delete_exclusion_group.ok").increment(1);
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::DeleteExclusionGroupResponse {},
+        ))
+    }
+
+    #[instrument(skip(self))]
+    async fn assign_experiment_to_group(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::AssignExperimentToGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::AssignExperimentToGroupResponse>, Status>
+    {
+        let repo = self.exclusion_group_repo()?;
+        let gate_writer = self.rule_gate_writer()?;
+        let req = request.into_inner();
+
+        let group_id = parse_group_id(&req.group_id)?;
+        let exp_id = parse_experiment_id(&req.experiment_id)?;
+
+        // Load the experiment so we can size the allocation and build the gate.
+        let experiment = self
+            .experiment_repo
+            .find_by_id(exp_id)
+            .await
+            .map_err(Status::from)?;
+
+        // Membership mutation is rejected while the bound flag is locked
+        // (experiment running/paused) — surfaces as the whole-flag-lock 409.
+        reject_if_flag_locked(&experiment)?;
+
+        // Default-rule-bound experiments cannot carry an exclusion gate: the gate
+        // rides on a percentage rule's output, and the flag's default-rule
+        // distribution has no gate slot. Reject up front rather than silently
+        // allocating a bucket range that evaluation never enforces.
+        let Some(flag_rule_id) = experiment.flag_rule_id else {
+            return Err(Status::failed_precondition(
+                "experiment binds to the flag's default rule (targets_default_rule=true); \
+                 default-rule experiments cannot join an exclusion group — bind the experiment \
+                 to a percentage-rollout rule to use mutual exclusion",
+            ));
+        };
+
+        // Size the carve-out by the experiment's traffic allocation, unless the
+        // caller explicitly overrides via `requested_bp`.
+        let requested_bp = if req.requested_bp > 0 {
+            req.requested_bp
+        } else {
+            pct_to_bp(experiment.traffic_allocation)
+        };
+
+        // Load the group to obtain its salt and diversion unit for the gate.
+        let group = repo.find_by_id(group_id).await.map_err(Status::from)?;
+
+        // Mutual exclusion only holds if EVERY member randomizes on the same
+        // unit — the group's `unit_context_type`. Reject any experiment that
+        // does not declare that unit; otherwise its context would bucket on a
+        // different key and silently break exclusion.
+        if !experiment
+            .unit_context_types
+            .iter()
+            .any(|ct| ct == &group.unit_context_type)
+        {
+            return Err(Status::failed_precondition(format!(
+                "experiment cannot join exclusion group: the group randomizes on unit '{}', \
+                 but the experiment's unit_context_types ({}) do not include it; all members \
+                 must share the group's diversion unit for mutual exclusion to hold",
+                group.unit_context_type,
+                experiment.unit_context_types.join(", ")
+            )));
+        }
+
+        // Allocate a disjoint range; capacity overflow → FAILED_PRECONDITION.
+        let range = repo
+            .allocate_range(group_id, exp_id, requested_bp)
+            .await
+            .map_err(Status::from)?;
+
+        // Push the gate onto the bound percentage rule so the flag snapshot
+        // enforces exclusion. The randomization unit is the GROUP's diversion
+        // unit (shared by all members), not the experiment's.
+        let gate = ExclusionGate {
+            group_salt: group.salt.clone(),
+            context_type: group.unit_context_type.clone(),
+            bucket_lo: range.lo,
+            bucket_hi: range.hi,
+        };
+        // Best-effort consistency: if the gate write fails, release the range we
+        // just allocated so we don't leak bucket space.
+        if let Err(e) = gate_writer
+            .set_rule_exclusion_gate(flag_rule_id, Some(gate))
+            .await
+        {
+            let _ = repo.free_range(exp_id).await;
+            return Err(Status::from(e));
+        }
+
+        // Re-read the group for the post-allocation allocated/free split.
+        let updated_group = repo.find_by_id(group_id).await.map_err(Status::from)?;
+
+        // Echo the experiment with its new group assignment populated.
+        let mut proto_exp = core_to_proto(&experiment);
+        proto_exp.exclusion_group_id = Some(group_id.to_string());
+        proto_exp.group_bucket_lo = Some(u32::from(range.lo));
+        proto_exp.group_bucket_hi = Some(u32::from(range.hi));
+
+        metrics::counter!("experimentation_service.assign_experiment_to_group.ok").increment(1);
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::AssignExperimentToGroupResponse {
+                experiment: Some(proto_exp),
+                group: Some(group_to_proto(&updated_group)),
+            },
+        ))
+    }
+
+    #[instrument(skip(self))]
+    async fn unassign_experiment(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::UnassignExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::UnassignExperimentResponse>, Status> {
+        let repo = self.exclusion_group_repo()?;
+        let gate_writer = self.rule_gate_writer()?;
+        let req = request.into_inner();
+        let exp_id = parse_experiment_id(&req.experiment_id)?;
+
+        let experiment = self
+            .experiment_repo
+            .find_by_id(exp_id)
+            .await
+            .map_err(Status::from)?;
+
+        // Reject while the bound flag is locked (running/paused) → 409.
+        reject_if_flag_locked(&experiment)?;
+
+        let group_id = experiment.exclusion_group_id;
+
+        // Release the range, clear group columns, and clear the rule gate.
+        self.release_experiment_group(repo.as_ref(), gate_writer.as_ref(), &experiment)
+            .await?;
+
+        // Echo the now-ungrouped experiment.
+        let mut proto_exp = core_to_proto(&experiment);
+        proto_exp.exclusion_group_id = None;
+        proto_exp.group_bucket_lo = None;
+        proto_exp.group_bucket_hi = None;
+
+        // Return the group (post-release) when the experiment had one.
+        let group_proto = if let Some(gid) = group_id {
+            repo.find_by_id(gid)
+                .await
+                .ok()
+                .map(|g| group_to_proto(&g))
+        } else {
+            None
+        };
+
+        metrics::counter!("experimentation_service.unassign_experiment.ok").increment(1);
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::UnassignExperimentResponse {
+                experiment: Some(proto_exp),
+                group: group_proto,
+            },
+        ))
+    }
+
+    #[instrument(skip(self))]
+    async fn get_experiment_interactions(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::GetExperimentInteractionsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetExperimentInteractionsResponse>, Status>
+    {
+        let req = request.into_inner();
+        let env_id = uuid::Uuid::parse_str(&req.env_id)
+            .map_err(|_| Status::invalid_argument("invalid env_id UUID"))?;
+        let experiment_id = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+
+        let reader = self.interactions_reader.as_ref().ok_or_else(|| {
+            Status::unimplemented("interactions_reader not configured on this service instance")
+        })?;
+
+        let rows = reader
+            .list_interactions(env_id, experiment_id)
+            .await
+            .map_err(|e| Status::internal(format!("clickhouse error: {e}")))?;
+
+        // Resolve the "other" experiment's name per row, caching lookups so a
+        // pair appearing across many (context_type, metric_key) rows costs one
+        // experiments-table read.
+        let mut name_cache: std::collections::HashMap<uuid::Uuid, String> =
+            std::collections::HashMap::new();
+        let mut interactions = Vec::with_capacity(rows.len());
+        for r in rows {
+            let other_id = if r.experiment_id_a == experiment_id {
+                r.experiment_id_b
+            } else {
+                r.experiment_id_a
+            };
+            let other_name = match name_cache.get(&other_id) {
+                Some(n) => n.clone(),
+                None => {
+                    let name = match self
+                        .experiment_repo
+                        .find_by_id(ExperimentId::from_uuid(other_id))
+                        .await
+                    {
+                        Ok(exp) => exp.name,
+                        // A deleted / missing counterpart should not fail the
+                        // whole read — surface an empty name for that row.
+                        Err(_) => String::new(),
+                    };
+                    name_cache.insert(other_id, name.clone());
+                    name
+                }
+            };
+            interactions.push(stitchd_proto::experiments::v1::ExperimentInteraction {
+                experiment_id_a: r.experiment_id_a.to_string(),
+                experiment_id_b: r.experiment_id_b.to_string(),
+                other_experiment_name: other_name,
+                context_type: r.context_type,
+                metric_key: r.metric_key,
+                shared_count: r.shared_count,
+                interaction_estimate: r.interaction_estimate,
+                p_value: r.p_value,
+                significant: r.significant,
+                insufficient_data: r.insufficient_data,
+            });
+        }
+
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsResponse { interactions },
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1293,6 +1871,9 @@ mod tests {
             updated_at: now,
             deleted_at: None,
             version: 1,
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
         }
     }
 
@@ -1389,6 +1970,9 @@ mod tests {
                 pre_period_days: 0,
                 unit_context_types: vec!["user".to_string()],
                 default_rule_distribution: None,
+                exclusion_group_id: None,
+                group_bucket_lo: None,
+                group_bucket_hi: None,
             })
         }
     }
@@ -2266,6 +2850,9 @@ mod tests {
                 pre_period_days: 0,
                 unit_context_types: vec!["user".to_string()],
                 default_rule_distribution: None,
+                exclusion_group_id: None,
+                group_bucket_lo: None,
+                group_bucket_hi: None,
             }])
         }
 
@@ -2313,6 +2900,9 @@ mod tests {
                 pre_period_days: 0,
                 unit_context_types: vec!["user".to_string()],
                 default_rule_distribution: None,
+                exclusion_group_id: None,
+                group_bucket_lo: None,
+                group_bucket_hi: None,
             })
         }
     }
@@ -2673,6 +3263,139 @@ mod tests {
         assert_eq!(resp.exposures[0].matched_rule_id, "");
     }
 
+    // -----------------------------------------------------------------------
+    // GetExperimentInteractions handler tests (Phase 6 Task 2)
+    // -----------------------------------------------------------------------
+
+    use crate::interactions_reader::{
+        InteractionRow as CoreInteractionRow, InteractionsReader,
+    };
+
+    /// Test reader returning canned interaction rows.
+    struct CannedInteractionsReader {
+        rows: Vec<CoreInteractionRow>,
+    }
+
+    #[async_trait]
+    impl InteractionsReader for CannedInteractionsReader {
+        async fn list_interactions(
+            &self,
+            _env_id: uuid::Uuid,
+            _experiment_id: uuid::Uuid,
+        ) -> Result<Vec<CoreInteractionRow>, clickhouse::error::Error> {
+            Ok(self.rows.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_interactions_returns_unimplemented_without_reader() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: uuid::Uuid::new_v4().to_string(),
+            },
+        );
+        let err = svc.get_experiment_interactions(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn test_get_interactions_invalid_uuid_returns_invalid_argument() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id)
+            .with_interactions_reader(Arc::new(CannedInteractionsReader { rows: vec![] }));
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: "not-a-uuid".to_string(),
+            },
+        );
+        let err = svc.get_experiment_interactions(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_get_interactions_empty_when_no_rows() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id)
+            .with_interactions_reader(Arc::new(CannedInteractionsReader { rows: vec![] }));
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: uuid::Uuid::new_v4().to_string(),
+            },
+        );
+        let resp = svc.get_experiment_interactions(req).await.unwrap().into_inner();
+        assert!(resp.interactions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_interactions_maps_rows_and_resolves_other_name() {
+        let (env_id, env_str) = env_uuid();
+        let this_exp = uuid::Uuid::new_v4();
+        let other_exp = uuid::Uuid::new_v4();
+        // Row where `this_exp` is side A → "other" is side B.
+        let row_a = CoreInteractionRow {
+            experiment_id_a: this_exp,
+            experiment_id_b: other_exp,
+            context_type: "user".into(),
+            metric_key: "checkout".into(),
+            shared_count: 400,
+            interaction_estimate: 0.42,
+            p_value: 0.001,
+            significant: true,
+            insufficient_data: false,
+        };
+        // Row where `this_exp` is side B → "other" is side A. This pair lacked
+        // enough shared exposures: insufficient_data=true, significant=false.
+        let third_exp = uuid::Uuid::new_v4();
+        let row_b = CoreInteractionRow {
+            experiment_id_a: third_exp,
+            experiment_id_b: this_exp,
+            context_type: "account".into(),
+            metric_key: "revenue".into(),
+            shared_count: 50,
+            interaction_estimate: 0.0,
+            p_value: 0.0,
+            significant: false,
+            insufficient_data: true,
+        };
+        let svc = make_service(env_id).with_interactions_reader(Arc::new(
+            CannedInteractionsReader {
+                rows: vec![row_a, row_b],
+            },
+        ));
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: this_exp.to_string(),
+            },
+        );
+        let resp = svc.get_experiment_interactions(req).await.unwrap().into_inner();
+        assert_eq!(resp.interactions.len(), 2);
+
+        let first = &resp.interactions[0];
+        assert_eq!(first.experiment_id_a, this_exp.to_string());
+        assert_eq!(first.experiment_id_b, other_exp.to_string());
+        // AlwaysSucceedRepo names every experiment "Test Experiment".
+        assert_eq!(first.other_experiment_name, "Test Experiment");
+        assert_eq!(first.context_type, "user");
+        assert_eq!(first.metric_key, "checkout");
+        assert_eq!(first.shared_count, 400);
+        assert!(first.significant);
+        assert!(!first.insufficient_data);
+
+        let second = &resp.interactions[1];
+        // this_exp is side B here; the "other" resolved is side A (third_exp).
+        assert_eq!(second.experiment_id_a, third_exp.to_string());
+        assert_eq!(second.experiment_id_b, this_exp.to_string());
+        assert_eq!(second.other_experiment_name, "Test Experiment");
+        assert!(!second.significant);
+        assert!(second.insufficient_data);
+    }
+
     /// When no refresher is attached, transitions still succeed.
     #[tokio::test]
     async fn test_transition_experiment_without_refresher_is_noop() {
@@ -2831,5 +3554,840 @@ mod tests {
             .expect("expected valid binding to pass");
         // No flag client → empty flag_id returned.
         assert!(flag_id.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Exclusion-group RPC tests (P3.T2/T3)
+    // -----------------------------------------------------------------------
+
+    use std::sync::Mutex;
+    use stitchd_core::experimentation::ExclusionGroup;
+    use stitchd_core::evaluation::exclusion::BucketRange;
+    use stitchd_db::repository::pg::ExclusionGroupRepository;
+
+    /// In-memory exclusion-group repo for service tests. Records allocate/free
+    /// calls so tests can assert lifecycle behaviour.
+    #[derive(Default)]
+    struct MockGroupRepo {
+        salt: String,
+        allocated: Mutex<Vec<ExperimentId>>,
+        freed: Mutex<Vec<ExperimentId>>,
+    }
+
+    fn sample_group(salt: &str) -> ExclusionGroup {
+        ExclusionGroup {
+            id: ExclusionGroupId::new(),
+            environment_id: EnvironmentId::new(),
+            name: "g".to_string(),
+            description: None,
+            salt: salt.to_string(),
+            unit_context_type: "user".to_string(),
+            allocated_bp: 2500,
+            free_bp: 7500,
+            version: 1,
+        }
+    }
+
+    #[async_trait]
+    impl ExclusionGroupRepository for MockGroupRepo {
+        async fn find_by_id(
+            &self,
+            id: ExclusionGroupId,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            let mut g = sample_group(&self.salt);
+            g.id = id;
+            Ok(g)
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+        ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
+            Ok(vec![sample_group(&self.salt)])
+        }
+        async fn create(
+            &self,
+            env_id: EnvironmentId,
+            name: &str,
+            description: Option<&str>,
+            unit_context_type: &str,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            Ok(ExclusionGroup {
+                id: ExclusionGroupId::new(),
+                environment_id: env_id,
+                name: name.to_string(),
+                description: description.map(ToString::to_string),
+                salt: self.salt.clone(),
+                unit_context_type: unit_context_type.to_string(),
+                allocated_bp: 0,
+                free_bp: 10_000,
+                version: 1,
+            })
+        }
+        async fn update(
+            &self,
+            id: ExclusionGroupId,
+            name: &str,
+            description: Option<&str>,
+            expected_version: i64,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            Ok(ExclusionGroup {
+                id,
+                environment_id: EnvironmentId::new(),
+                name: name.to_string(),
+                description: description.map(ToString::to_string),
+                salt: self.salt.clone(),
+                unit_context_type: "user".to_string(),
+                allocated_bp: 0,
+                free_bp: 10_000,
+                version: expected_version + 1,
+            })
+        }
+        async fn soft_delete(&self, _id: ExclusionGroupId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn allocate_range(
+            &self,
+            _group_id: ExclusionGroupId,
+            experiment_id: ExperimentId,
+            requested_bp: u32,
+        ) -> Result<BucketRange, RepositoryError> {
+            self.allocated.lock().unwrap().push(experiment_id);
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(BucketRange {
+                lo: 0,
+                hi: requested_bp as u16,
+            })
+        }
+        async fn free_range(&self, experiment_id: ExperimentId) -> Result<(), RepositoryError> {
+            self.freed.lock().unwrap().push(experiment_id);
+            Ok(())
+        }
+        async fn allocated_free_bp(
+            &self,
+            _group_id: ExclusionGroupId,
+        ) -> Result<(u32, u32), RepositoryError> {
+            Ok((2500, 7500))
+        }
+    }
+
+    /// A group repo whose allocate always rejects with a capacity error.
+    struct FullGroupRepo;
+
+    #[async_trait]
+    impl ExclusionGroupRepository for FullGroupRepo {
+        async fn find_by_id(
+            &self,
+            id: ExclusionGroupId,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            let mut g = sample_group("salt");
+            g.id = id;
+            Ok(g)
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+        ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn create(
+            &self,
+            _env_id: EnvironmentId,
+            _name: &str,
+            _description: Option<&str>,
+            _unit_context_type: &str,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            unreachable!()
+        }
+        async fn update(
+            &self,
+            _id: ExclusionGroupId,
+            _name: &str,
+            _description: Option<&str>,
+            _expected_version: i64,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            unreachable!()
+        }
+        async fn soft_delete(&self, _id: ExclusionGroupId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn allocate_range(
+            &self,
+            _group_id: ExclusionGroupId,
+            _experiment_id: ExperimentId,
+            _requested_bp: u32,
+        ) -> Result<BucketRange, RepositoryError> {
+            Err(RepositoryError::InvalidState {
+                reason: "no contiguous free window".to_string(),
+            })
+        }
+        async fn free_range(&self, _experiment_id: ExperimentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn allocated_free_bp(
+            &self,
+            _group_id: ExclusionGroupId,
+        ) -> Result<(u32, u32), RepositoryError> {
+            Ok((10_000, 0))
+        }
+    }
+
+    /// In-memory rule-gate writer recording the last gate written per rule.
+    #[derive(Default)]
+    struct MockGateWriter {
+        sets: Mutex<Vec<(RuleId, Option<ExclusionGate>)>>,
+    }
+
+    #[async_trait]
+    impl RuleGateWriter for MockGateWriter {
+        async fn set_rule_exclusion_gate(
+            &self,
+            flag_rule_id: RuleId,
+            gate: Option<ExclusionGate>,
+        ) -> Result<(), RepositoryError> {
+            self.sets.lock().unwrap().push((flag_rule_id, gate));
+            Ok(())
+        }
+    }
+
+    /// Experiment repo returning a single experiment with a fixed status.
+    struct StatusRepo {
+        env_id: EnvironmentId,
+        status: ExperimentStatus,
+    }
+
+    #[async_trait]
+    impl ExperimentRepository for StatusRepo {
+        async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
+            let mut exp = make_experiment(self.env_id);
+            exp.id = id;
+            exp.status = self.status;
+            Ok(exp)
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+            _status_filter: Option<ExperimentStatus>,
+        ) -> Result<Vec<Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
+        async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
+            Ok(experiment.clone())
+        }
+        async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn list_iterations(
+            &self,
+            _experiment_id: ExperimentId,
+        ) -> Result<Vec<ExperimentIteration>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn apply_transition(
+            &self,
+            id: ExperimentId,
+            to: ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<Experiment, RepositoryError> {
+            let mut exp = make_experiment(self.env_id);
+            exp.id = id;
+            exp.status = to;
+            Ok(exp)
+        }
+        async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<ExperimentId>, RepositoryError> {
+            Ok(None)
+        }
+        async fn find_iteration_by_id(
+            &self,
+            iteration_id: stitchd_core::id::ExperimentIterationId,
+        ) -> Result<ExperimentIteration, RepositoryError> {
+            Err(RepositoryError::NotFound {
+                id: iteration_id.to_string(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_exclusion_group_unimplemented_without_repo() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::CreateExclusionGroupRequest {
+                group: Some(stitchd_proto::experiments::v1::ExclusionGroup {
+                    id: String::new(),
+                    env_id: env_str,
+                    name: "g".to_string(),
+                    description: String::new(),
+                    allocated_bp: 0,
+                    free_bp: 0,
+                    version: 0,
+                    unit_context_type: String::new(),
+                }),
+            },
+        );
+        let err = svc.create_exclusion_group(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn test_create_and_list_exclusion_group() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id).with_exclusion_groups(
+            Arc::new(MockGroupRepo::default()),
+            Arc::new(MockGateWriter::default()),
+        );
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::CreateExclusionGroupRequest {
+                group: Some(stitchd_proto::experiments::v1::ExclusionGroup {
+                    id: String::new(),
+                    env_id: env_str.clone(),
+                    name: "Checkout".to_string(),
+                    description: "desc".to_string(),
+                    allocated_bp: 0,
+                    free_bp: 0,
+                    version: 0,
+                    unit_context_type: "user".to_string(),
+                }),
+            },
+        );
+        let created = svc.create_exclusion_group(req).await.unwrap().into_inner();
+        assert_eq!(created.name, "Checkout");
+        assert_eq!(created.free_bp, 10_000);
+
+        let list_req = tonic::Request::new(
+            stitchd_proto::experiments::v1::ListExclusionGroupsRequest {
+                env_id: env_str,
+                page: 0,
+                per_page: 0,
+            },
+        );
+        let listed = svc.list_exclusion_groups(list_req).await.unwrap().into_inner();
+        assert_eq!(listed.total, 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_exclusion_group_empty_name_rejected() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id).with_exclusion_groups(
+            Arc::new(MockGroupRepo::default()),
+            Arc::new(MockGateWriter::default()),
+        );
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::CreateExclusionGroupRequest {
+                group: Some(stitchd_proto::experiments::v1::ExclusionGroup {
+                    id: String::new(),
+                    env_id: env_str,
+                    name: "   ".to_string(),
+                    description: String::new(),
+                    allocated_bp: 0,
+                    free_bp: 0,
+                    version: 0,
+                    unit_context_type: String::new(),
+                }),
+            },
+        );
+        let err = svc.create_exclusion_group(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn test_assign_experiment_to_group_sets_gate() {
+        let (env_id, env_str) = env_uuid();
+        let group_repo = Arc::new(MockGroupRepo {
+            salt: "the-salt".to_string(),
+            ..Default::default()
+        });
+        let gate_writer = Arc::new(MockGateWriter::default());
+        // Draft experiment (AlwaysSucceedRepo) → flag not locked, has flag_rule_id.
+        let svc = make_service(env_id)
+            .with_exclusion_groups(group_repo.clone(), gate_writer.clone());
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::AssignExperimentToGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+                requested_bp: 2500,
+            },
+        );
+        let resp = svc.assign_experiment_to_group(req).await.unwrap().into_inner();
+        let exp = resp.experiment.unwrap();
+        assert_eq!(exp.group_bucket_lo, Some(0));
+        assert_eq!(exp.group_bucket_hi, Some(2500));
+        assert!(exp.exclusion_group_id.is_some());
+
+        // A gate was written with the group's salt.
+        let sets = gate_writer.sets.lock().unwrap();
+        assert_eq!(sets.len(), 1);
+        let gate = sets[0].1.as_ref().expect("gate should be Some");
+        assert_eq!(gate.group_salt, "the-salt");
+        assert_eq!(gate.context_type, "user");
+        assert_eq!((gate.bucket_lo, gate.bucket_hi), (0, 2500));
+        // Range was allocated, not freed.
+        assert_eq!(group_repo.allocated.lock().unwrap().len(), 1);
+        assert!(group_repo.freed.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_assign_rejected_when_flag_locked() {
+        let (env_id, env_str) = env_uuid();
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(StatusRepo {
+                env_id,
+                status: ExperimentStatus::Running,
+            }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_exclusion_groups(
+            Arc::new(MockGroupRepo::default()),
+            Arc::new(MockGateWriter::default()),
+        );
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::AssignExperimentToGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+                requested_bp: 2500,
+            },
+        );
+        let err = svc.assign_experiment_to_group(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            err.message().starts_with("flag_locked_by_experiment:"),
+            "expected flag-lock sentinel, got {:?}",
+            err.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_assign_capacity_overflow_failed_precondition() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id)
+            .with_exclusion_groups(Arc::new(FullGroupRepo), Arc::new(MockGateWriter::default()));
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::AssignExperimentToGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+                requested_bp: 6000,
+            },
+        );
+        let err = svc.assign_experiment_to_group(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    }
+
+    /// A group repo whose group randomizes on the `account` unit. Used to verify
+    /// the cross-member diversion-unit check and gate construction.
+    #[derive(Default)]
+    struct AccountUnitGroupRepo {
+        salt: String,
+    }
+
+    #[async_trait]
+    impl ExclusionGroupRepository for AccountUnitGroupRepo {
+        async fn find_by_id(
+            &self,
+            id: ExclusionGroupId,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            let mut g = sample_group(&self.salt);
+            g.id = id;
+            g.unit_context_type = "account".to_string();
+            Ok(g)
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+        ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn create(
+            &self,
+            _env_id: EnvironmentId,
+            _name: &str,
+            _description: Option<&str>,
+            _unit_context_type: &str,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            unreachable!()
+        }
+        async fn update(
+            &self,
+            _id: ExclusionGroupId,
+            _name: &str,
+            _description: Option<&str>,
+            _expected_version: i64,
+        ) -> Result<ExclusionGroup, RepositoryError> {
+            unreachable!()
+        }
+        async fn soft_delete(&self, _id: ExclusionGroupId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn allocate_range(
+            &self,
+            _group_id: ExclusionGroupId,
+            _experiment_id: ExperimentId,
+            requested_bp: u32,
+        ) -> Result<BucketRange, RepositoryError> {
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(BucketRange {
+                lo: 0,
+                hi: requested_bp as u16,
+            })
+        }
+        async fn free_range(&self, _experiment_id: ExperimentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn allocated_free_bp(
+            &self,
+            _group_id: ExclusionGroupId,
+        ) -> Result<(u32, u32), RepositoryError> {
+            Ok((2500, 7500))
+        }
+    }
+
+    /// HIGH-1: assignment is rejected with FAILED_PRECONDITION when the
+    /// experiment does not declare the group's diversion unit, because mutual
+    /// exclusion can only hold if all members randomize on the same unit.
+    #[tokio::test]
+    async fn test_assign_rejected_on_unit_mismatch() {
+        let (env_id, env_str) = env_uuid();
+        // make_experiment → unit_context_types = ["user"], group unit = "account".
+        let svc = make_service(env_id).with_exclusion_groups(
+            Arc::new(AccountUnitGroupRepo::default()),
+            Arc::new(MockGateWriter::default()),
+        );
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::AssignExperimentToGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+                requested_bp: 2500,
+            },
+        );
+        let err = svc.assign_experiment_to_group(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            err.message().contains("account"),
+            "expected unit-mismatch message, got {:?}",
+            err.message()
+        );
+    }
+
+    /// HIGH-1: the exclusion gate carries the GROUP's diversion unit, not the
+    /// experiment's first unit. Here the group randomizes on `account` and the
+    /// experiment declares both `user` and `account`, so the gate must use
+    /// `account`.
+    #[tokio::test]
+    async fn test_assign_gate_uses_group_unit_not_experiment_first() {
+        let (env_id, env_str) = env_uuid();
+        let group_repo = Arc::new(AccountUnitGroupRepo {
+            salt: "acct-salt".to_string(),
+        });
+        let gate_writer = Arc::new(MockGateWriter::default());
+        // Experiment that declares the group's unit (account) in addition to user.
+        struct MultiUnitRepo {
+            env_id: EnvironmentId,
+        }
+        #[async_trait]
+        impl ExperimentRepository for MultiUnitRepo {
+            async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
+                let mut exp = make_experiment(self.env_id);
+                exp.id = id;
+                exp.unit_context_types = vec!["user".to_string(), "account".to_string()];
+                Ok(exp)
+            }
+            async fn list_by_environment(
+                &self,
+                _env_id: EnvironmentId,
+                _status_filter: Option<ExperimentStatus>,
+            ) -> Result<Vec<Experiment>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn list_by_environment_paginated(
+                &self,
+                _env_id: EnvironmentId,
+                _offset: u64,
+                _limit: u64,
+            ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+                Ok((vec![], 0))
+            }
+            async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn update(
+                &self,
+                experiment: &Experiment,
+            ) -> Result<Experiment, RepositoryError> {
+                Ok(experiment.clone())
+            }
+            async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn list_iterations(
+                &self,
+                _experiment_id: ExperimentId,
+            ) -> Result<Vec<ExperimentIteration>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn apply_transition(
+                &self,
+                id: ExperimentId,
+                to: ExperimentStatus,
+                _actor_id: Option<stitchd_core::id::UserId>,
+            ) -> Result<Experiment, RepositoryError> {
+                let mut exp = make_experiment(self.env_id);
+                exp.id = id;
+                exp.status = to;
+                Ok(exp)
+            }
+            async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn find_active_experiment_for_flag(
+                &self,
+                _flag_id: stitchd_core::id::FlagId,
+            ) -> Result<Option<ExperimentId>, RepositoryError> {
+                Ok(None)
+            }
+            async fn find_iteration_by_id(
+                &self,
+                iteration_id: stitchd_core::id::ExperimentIterationId,
+            ) -> Result<ExperimentIteration, RepositoryError> {
+                Err(RepositoryError::NotFound {
+                    id: iteration_id.to_string(),
+                })
+            }
+        }
+
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(MultiUnitRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_exclusion_groups(group_repo.clone(), gate_writer.clone());
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::AssignExperimentToGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+                requested_bp: 2500,
+            },
+        );
+        svc.assign_experiment_to_group(req).await.unwrap();
+
+        let sets = gate_writer.sets.lock().unwrap();
+        assert_eq!(sets.len(), 1);
+        let gate = sets[0].1.as_ref().expect("gate should be Some");
+        assert_eq!(gate.context_type, "account");
+        assert_eq!(gate.group_salt, "acct-salt");
+    }
+
+    /// The new GetExclusionGroup RPC returns the group (with its diversion unit)
+    /// and surfaces NOT_FOUND from the repo.
+    #[tokio::test]
+    async fn test_get_exclusion_group_returns_group_with_unit() {
+        let (env_id, env_str) = env_uuid();
+        let svc = make_service(env_id).with_exclusion_groups(
+            Arc::new(MockGroupRepo::default()),
+            Arc::new(MockGateWriter::default()),
+        );
+        let gid = ExclusionGroupId::new();
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExclusionGroupRequest {
+                env_id: env_str,
+                group_id: gid.to_string(),
+            },
+        );
+        let got = svc.get_exclusion_group(req).await.unwrap().into_inner();
+        assert_eq!(got.id, gid.to_string());
+        assert_eq!(got.unit_context_type, "user");
+    }
+
+    #[tokio::test]
+    async fn test_get_exclusion_group_not_found() {
+        let (env_id, env_str) = env_uuid();
+        // FullGroupRepo::find_by_id returns Ok; use a repo that returns NotFound.
+        struct MissingGroupRepo;
+        #[async_trait]
+        impl ExclusionGroupRepository for MissingGroupRepo {
+            async fn find_by_id(
+                &self,
+                id: ExclusionGroupId,
+            ) -> Result<ExclusionGroup, RepositoryError> {
+                Err(RepositoryError::NotFound { id: id.to_string() })
+            }
+            async fn list_by_environment(
+                &self,
+                _env_id: EnvironmentId,
+            ) -> Result<Vec<ExclusionGroup>, RepositoryError> {
+                Ok(vec![])
+            }
+            async fn create(
+                &self,
+                _env_id: EnvironmentId,
+                _name: &str,
+                _description: Option<&str>,
+                _unit_context_type: &str,
+            ) -> Result<ExclusionGroup, RepositoryError> {
+                unreachable!()
+            }
+            async fn update(
+                &self,
+                _id: ExclusionGroupId,
+                _name: &str,
+                _description: Option<&str>,
+                _expected_version: i64,
+            ) -> Result<ExclusionGroup, RepositoryError> {
+                unreachable!()
+            }
+            async fn soft_delete(&self, _id: ExclusionGroupId) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn allocate_range(
+                &self,
+                _group_id: ExclusionGroupId,
+                _experiment_id: ExperimentId,
+                _requested_bp: u32,
+            ) -> Result<BucketRange, RepositoryError> {
+                unreachable!()
+            }
+            async fn free_range(
+                &self,
+                _experiment_id: ExperimentId,
+            ) -> Result<(), RepositoryError> {
+                Ok(())
+            }
+            async fn allocated_free_bp(
+                &self,
+                _group_id: ExclusionGroupId,
+            ) -> Result<(u32, u32), RepositoryError> {
+                Ok((0, 10_000))
+            }
+        }
+
+        let svc = make_service(env_id).with_exclusion_groups(
+            Arc::new(MissingGroupRepo),
+            Arc::new(MockGateWriter::default()),
+        );
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExclusionGroupRequest {
+                env_id: env_str,
+                group_id: ExclusionGroupId::new().to_string(),
+            },
+        );
+        let err = svc.get_exclusion_group(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::NotFound);
+    }
+
+    #[tokio::test]
+    async fn test_unassign_clears_gate_and_frees_range() {
+        let (env_id, _) = env_uuid();
+        let group_repo = Arc::new(MockGroupRepo::default());
+        let gate_writer = Arc::new(MockGateWriter::default());
+        let svc = make_service(env_id)
+            .with_exclusion_groups(group_repo.clone(), gate_writer.clone());
+
+        let exp_id = ExperimentId::new();
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::UnassignExperimentRequest {
+                env_id: env_id.to_string(),
+                experiment_id: exp_id.to_string(),
+            },
+        );
+        let resp = svc.unassign_experiment(req).await.unwrap().into_inner();
+        let exp = resp.experiment.unwrap();
+        assert!(exp.exclusion_group_id.is_none());
+
+        assert_eq!(group_repo.freed.lock().unwrap().len(), 1);
+        let sets = gate_writer.sets.lock().unwrap();
+        assert_eq!(sets.len(), 1);
+        assert!(sets[0].1.is_none(), "gate should be cleared (None)");
+    }
+
+    #[tokio::test]
+    async fn test_unassign_rejected_when_flag_locked() {
+        let (env_id, _) = env_uuid();
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(StatusRepo {
+                env_id,
+                status: ExperimentStatus::Paused,
+            }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_exclusion_groups(
+            Arc::new(MockGroupRepo::default()),
+            Arc::new(MockGateWriter::default()),
+        );
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::UnassignExperimentRequest {
+                env_id: env_id.to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+            },
+        );
+        let err = svc.unassign_experiment(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    }
+
+    #[tokio::test]
+    async fn test_transition_to_stopped_releases_group() {
+        let (env_id, _) = env_uuid();
+        let group_repo = Arc::new(MockGroupRepo::default());
+        let gate_writer = Arc::new(MockGateWriter::default());
+        let svc = make_service(env_id)
+            .with_exclusion_groups(group_repo.clone(), gate_writer.clone());
+
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: ExperimentId::new().to_string(),
+            new_status: core_status_to_proto(ExperimentStatus::Stopped),
+            environment_id: String::new(),
+            reason: String::new(),
+        });
+        svc.transition_experiment(req).await.unwrap();
+
+        // The stopped transition freed the range and cleared the gate.
+        assert_eq!(group_repo.freed.lock().unwrap().len(), 1);
+        let sets = gate_writer.sets.lock().unwrap();
+        assert_eq!(sets.len(), 1);
+        assert!(sets[0].1.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_experiment_interactions_remains_unimplemented() {
+        let (env_id, _) = env_uuid();
+        let svc = make_service(env_id);
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_id.to_string(),
+                experiment_id: ExperimentId::new().to_string(),
+            },
+        );
+        let err = svc.get_experiment_interactions(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
     }
 }

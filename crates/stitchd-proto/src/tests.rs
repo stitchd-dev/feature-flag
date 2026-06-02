@@ -129,6 +129,7 @@ mod compilation_tests {
                 weight_bp: 10000,
             }],
             hash_inputs: new_inputs,
+            exclusion_gate: None,
         };
 
         let mut buf = Vec::new();
@@ -182,6 +183,7 @@ mod compilation_tests {
                 weight_bp: 10000,
             }],
             hash_inputs: vec![],
+            exclusion_gate: None,
         };
         let mut buf = Vec::new();
         sender.encode(&mut buf).expect("encode");

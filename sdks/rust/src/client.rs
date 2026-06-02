@@ -41,7 +41,7 @@ use stitchd_core::flag::{Flag, FlagRecord, FlagRule as CoreFlagRule, Variant as 
 use stitchd_core::id::{EnvironmentId, FlagId, FlagKey, ProjectId, RuleId, SegmentId, VariantId};
 use stitchd_core::rule_engine::condition::Condition;
 use stitchd_core::rule_engine::types::{
-    ConditionExpr, PercentageTarget, Rule, RuleOutput, TargetField,
+    ConditionExpr, ExclusionGate, PercentageTarget, Rule, RuleOutput, TargetField,
 };
 use stitchd_core::segment::{RuleBasedSegment, SegmentDefinition};
 use stitchd_core::variants::{FlagValueType, VariantValue as CoreVariantValue};
@@ -1308,7 +1308,22 @@ fn proto_allocation_to_core(
         })
         .collect();
 
-    Some(RuleOutput::Percentage { targets, weights })
+    // Carry the exclusion gate proto→core so the SDK's in-memory snapshot
+    // holds it; `evaluate_flag` reads it on the zero-DB-lookup eval path.
+    // Proto bucket bounds are `u32`; the domain uses `u16` (buckets live in
+    // `[0, 9999]`), so we truncate via `as u16`.
+    let exclusion_gate = alloc.exclusion_gate.as_ref().map(|g| ExclusionGate {
+        group_salt: g.group_salt.clone(),
+        context_type: g.context_type.clone(),
+        bucket_lo: g.bucket_lo as u16,
+        bucket_hi: g.bucket_hi as u16,
+    });
+
+    Some(RuleOutput::Percentage {
+        targets,
+        weights,
+        exclusion_gate,
+    })
 }
 
 /// Read the canonical [`HashInputSpec`] out of a proto
@@ -2324,6 +2339,7 @@ mod tests {
                     })),
                 },
             ],
+            exclusion_gate: None,
         };
 
         let proto_rule = ProtoFlagRule {

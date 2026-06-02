@@ -26,8 +26,8 @@ use crate::middleware::auth::{
 use crate::middleware::event_quota::{build_limiter_from_env, event_quota_middleware};
 use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
-    admin, auth, auth_providers, context_intel, eval_stats, event_admin, events, experiments,
-    flags, management, metrics, oidc, saml, sdk_backend, segments, stats,
+    admin, auth, auth_providers, context_intel, eval_stats, event_admin, events, exclusion_groups,
+    experiments, flags, management, metrics, oidc, saml, sdk_backend, segments, stats,
 };
 use crate::state::GatewayState;
 
@@ -283,6 +283,19 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             get(experiments::list_exposures),
         )
         .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/interactions",
+            get(experiments::get_interactions),
+        )
+        // Exclusion groups — read
+        .route(
+            "/v1/environments/{environment_id}/exclusion-groups",
+            get(exclusion_groups::list_exclusion_groups),
+        )
+        .route(
+            "/v1/environments/{environment_id}/exclusion-groups/{group_id}",
+            get(exclusion_groups::get_exclusion_group),
+        )
+        .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/timeseries",
             get(stats::get_timeseries),
         )
@@ -399,6 +412,21 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/recompute",
             post(stats::trigger_recompute_env_scoped),
+        )
+        // Exclusion groups — write
+        .route(
+            "/v1/environments/{environment_id}/exclusion-groups",
+            post(exclusion_groups::create_exclusion_group),
+        )
+        .route(
+            "/v1/environments/{environment_id}/exclusion-groups/{group_id}",
+            patch(exclusion_groups::update_exclusion_group)
+                .delete(exclusion_groups::delete_exclusion_group),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/exclusion-group",
+            post(exclusion_groups::assign_experiment_to_group)
+                .delete(exclusion_groups::unassign_experiment),
         )
         // Stats recompute — write (triggers a compute job)
         .route(

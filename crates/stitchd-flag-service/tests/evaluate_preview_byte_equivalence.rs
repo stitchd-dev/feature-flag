@@ -259,6 +259,7 @@ fn corpus_cross_context_hash() -> (Flag, Vec<EvaluationContext>) {
                     },
                 ],
                 weights: vec![(on, 5000), (off, 5000)],
+                exclusion_gate: None,
             },
         },
     });

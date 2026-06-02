@@ -587,6 +587,9 @@ export interface ExperimentSummary {
   created_at: string
   updated_at: string
   unit_context_types: string[]
+  /** UUID of the mutual-exclusion group this experiment is assigned to, when
+   *  any. Absent / null when ungrouped. */
+  exclusion_group_id?: string | null
 }
 
 export async function listExperiments(

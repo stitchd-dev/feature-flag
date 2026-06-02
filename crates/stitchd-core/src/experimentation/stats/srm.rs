@@ -192,7 +192,7 @@ pub fn compute_srm(observations: &[SrmObservation]) -> SrmResult {
 /// Survival function of the χ²(df) distribution at `x` — i.e. the upper-tail
 /// p-value `P(X ≥ x)`. Equivalent to `Q(df/2, x/2)` where `Q` is the
 /// regularized upper incomplete gamma function.
-fn chi_square_sf(x: f64, df: f64) -> f64 {
+pub(crate) fn chi_square_sf(x: f64, df: f64) -> f64 {
     if x <= 0.0 || df <= 0.0 {
         return 1.0;
     }

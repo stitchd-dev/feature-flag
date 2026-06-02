@@ -245,6 +245,7 @@ fn build_proto_flag(hash_inputs: &[HashSelectorJson]) -> FeatureFlag {
             },
         ],
         hash_inputs: hash_inputs.iter().map(HashSelectorJson::to_proto).collect(),
+        exclusion_gate: None,
     };
 
     // Empty `And([])` is the universal-match condition — the
@@ -418,7 +419,11 @@ mod stitchd_flag_service_mapping {
                         Some((vid, b.weight_bp))
                     })
                     .collect();
-                RuleOutput::Percentage { targets, weights }
+                RuleOutput::Percentage {
+                    targets,
+                    weights,
+                    exclusion_gate: None,
+                }
             }
             None => return None,
         };

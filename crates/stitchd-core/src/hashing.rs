@@ -13,6 +13,19 @@ use std::io::Cursor;
 /// `hash % 10_000` form was a different modulus, not a finer-grained version
 /// of the same reduction, and silently re-bucketed every context.)
 ///
+/// Canonical reduction of a 128-bit Murmur3 digest to a basis-point bucket in
+/// `[0, 9999]` (`(hash % 100_000) / 10`, i.e. 0.01% precision).
+///
+/// This is the SINGLE definition of the bucket reduction shared by flag rollout
+/// allocation ([`calculate_allocation`]) and exclusion-group bucketing
+/// ([`crate::evaluation::exclusion::group_bucket`]) — keep both layers on one
+/// reduction so a context's percentile placement is consistent across them.
+#[must_use]
+pub fn reduce_hash_to_basis_points(hash: u128) -> u32 {
+    // `(x % 100_000) / 10` is at most 9999, so the conversion never truncates.
+    u32::try_from((hash % 100_000) / 10).unwrap_or(0)
+}
+
 /// Hash input: `flag_key` + `env_id` + concatenated target values.
 pub fn calculate_allocation(flag_key: &str, env_id: &str, targets: &[String]) -> u32 {
     let mut input = format!("{}{}", flag_key, env_id);
@@ -21,7 +34,7 @@ pub fn calculate_allocation(flag_key: &str, env_id: &str, targets: &[String]) ->
     }
     let mut cursor = Cursor::new(input);
     let hash = murmur3_x64_128(&mut cursor, 0).unwrap_or(0);
-    ((hash % 100_000) / 10) as u32
+    reduce_hash_to_basis_points(hash)
 }
 
 #[cfg(test)]

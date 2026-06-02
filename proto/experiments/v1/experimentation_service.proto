@@ -34,6 +34,13 @@ message Experiment {
   uint32           pre_period_days      = 16;
   // Metric definition UUIDs attached to this experiment.
   repeated string  metric_ids           = 17;
+  // [ADDITIVE] Mutually-exclusive group membership. When set, this experiment
+  // shares a disjoint slice of group traffic with other experiments in the
+  // same group. `group_bucket_lo`/`group_bucket_hi` define the assigned
+  // [lo, hi) bucket range within the group's salted hash space.
+  optional string  exclusion_group_id   = 18;
+  optional uint32  group_bucket_lo      = 19;
+  optional uint32  group_bucket_hi      = 20;
 }
 
 // ─── Iteration (a single run of an experiment) ────────────────────────────────
@@ -53,6 +60,12 @@ message ExperimentIteration {
   // Surfaced to the admin Iterations tab so per-iteration context-type
   // badges render correctly without an extra round-trip.
   repeated string unit_context_types = 8;
+  // [ADDITIVE] Snapshot of the iteration's exclusion-group assignment, mirroring
+  // the parent Experiment fields at iteration start. Absent for experiments
+  // not bound to an exclusion group.
+  optional string exclusion_group_id = 9;
+  optional uint32 group_bucket_lo    = 10;
+  optional uint32 group_bucket_hi    = 11;
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────
@@ -252,6 +265,118 @@ message ListExposuresResponse {
   uint64               total     = 2;
 }
 
+// ─── Exclusion groups (mutually-exclusive experiments) ────────────────────────
+//
+// An exclusion group partitions an environment's traffic into disjoint
+// basis-point slices so that member experiments never co-assign the same
+// context. `allocated_bp` + `free_bp` always sum to the group's total budget.
+
+message ExclusionGroup {
+  string id           = 1;
+  string env_id       = 2;
+  string name         = 3;
+  string description  = 4;
+  // Basis points currently allocated to member experiments.
+  uint32 allocated_bp = 5;
+  // Basis points still available for new assignments.
+  uint32 free_bp      = 6;
+  // Optimistic-concurrency version, bumped on every mutation.
+  int64  version      = 7;
+  // The group's diversion (randomization) unit context type, e.g. "user".
+  // ALL member experiments must randomize on this unit so a context maps to a
+  // single shared exclusion bucket across the group's flags — this is what
+  // makes mutual exclusion hold. Immutable after creation.
+  string unit_context_type = 8;
+}
+
+message CreateExclusionGroupRequest {
+  ExclusionGroup group = 1;
+}
+
+message GetExclusionGroupRequest {
+  string env_id   = 1;
+  string group_id = 2;
+}
+
+message ListExclusionGroupsRequest {
+  string env_id   = 1;
+  uint32 page     = 2;
+  uint32 per_page = 3;
+}
+
+message ListExclusionGroupsResponse {
+  repeated ExclusionGroup groups = 1;
+  uint64                  total  = 2;
+}
+
+message UpdateExclusionGroupRequest {
+  ExclusionGroup group = 1;
+}
+
+message DeleteExclusionGroupRequest {
+  string env_id   = 1;
+  string group_id = 2;
+}
+
+message DeleteExclusionGroupResponse {}
+
+message AssignExperimentToGroupRequest {
+  string env_id        = 1;
+  string group_id      = 2;
+  string experiment_id = 3;
+  // Basis points to carve out of the group's free budget for this experiment.
+  uint32 requested_bp  = 4;
+}
+
+message AssignExperimentToGroupResponse {
+  // Echoes the updated experiment with its assigned bucket range populated.
+  Experiment experiment = 1;
+  // The group after allocation (reflecting the new allocated/free split).
+  ExclusionGroup group  = 2;
+}
+
+message UnassignExperimentRequest {
+  string env_id        = 1;
+  string experiment_id = 2;
+}
+
+message UnassignExperimentResponse {
+  Experiment     experiment = 1;
+  ExclusionGroup group      = 2;
+}
+
+// ─── Experiment interactions ──────────────────────────────────────────────────
+//
+// Pairwise interaction estimates between an experiment and others that share
+// assignment population, used to surface possible cross-experiment effects.
+
+message ExperimentInteraction {
+  string experiment_id_a       = 1;
+  string experiment_id_b       = 2;
+  string other_experiment_name = 3;
+  string context_type          = 4;
+  string metric_key            = 5;
+  uint64 shared_count          = 6;
+  double interaction_estimate  = 7;
+  double p_value               = 8;
+  // Significance after family-wise (Benjamini–Hochberg) correction across the
+  // batch of pairwise tests. False when insufficient_data is true.
+  bool   significant           = 9;
+  // True when the cell sample was too small for a valid test. Consumers MUST
+  // treat the row as non-actionable and ignore estimate/p_value (persisted as
+  // 0.0 sentinels, NOT a real p-value of zero).
+  bool   insufficient_data     = 10;
+}
+
+message GetExperimentInteractionsRequest {
+  string env_id        = 1;
+  string experiment_id = 2;
+}
+
+message GetExperimentInteractionsResponse {
+  repeated ExperimentInteraction interactions = 1;
+}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
@@ -280,4 +405,17 @@ service ExperimentationService {
   // Paginated read against ClickHouse `experiment_assignments` for one
   // experiment + context_type. Powers the admin UI's "Exposures" panel.
   rpc ListExposures(ListExposuresRequest) returns (ListExposuresResponse);
+
+  // ── Exclusion groups (mutually-exclusive experiments) ──────────────────────
+  rpc CreateExclusionGroup(CreateExclusionGroupRequest) returns (ExclusionGroup);
+  rpc ListExclusionGroups(ListExclusionGroupsRequest)   returns (ListExclusionGroupsResponse);
+  rpc GetExclusionGroup(GetExclusionGroupRequest)       returns (ExclusionGroup);
+  rpc UpdateExclusionGroup(UpdateExclusionGroupRequest) returns (ExclusionGroup);
+  rpc DeleteExclusionGroup(DeleteExclusionGroupRequest) returns (DeleteExclusionGroupResponse);
+  rpc AssignExperimentToGroup(AssignExperimentToGroupRequest) returns (AssignExperimentToGroupResponse);
+  rpc UnassignExperiment(UnassignExperimentRequest)     returns (UnassignExperimentResponse);
+
+  // ── Experiment interactions ────────────────────────────────────────────────
+  rpc GetExperimentInteractions(GetExperimentInteractionsRequest)
+      returns (GetExperimentInteractionsResponse);
 }

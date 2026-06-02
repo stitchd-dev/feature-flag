@@ -85,6 +85,15 @@ use utoipa::{
         crate::routes::experiments::list_iterations,
         crate::routes::experiments::get_results,
         crate::routes::experiments::list_exposures,
+        crate::routes::experiments::get_interactions,
+        // Exclusion groups (JWT)
+        crate::routes::exclusion_groups::list_exclusion_groups,
+        crate::routes::exclusion_groups::create_exclusion_group,
+        crate::routes::exclusion_groups::get_exclusion_group,
+        crate::routes::exclusion_groups::update_exclusion_group,
+        crate::routes::exclusion_groups::delete_exclusion_group,
+        crate::routes::exclusion_groups::assign_experiment_to_group,
+        crate::routes::exclusion_groups::unassign_experiment,
         // Stats recompute
         crate::routes::stats::trigger_recompute,
         crate::routes::stats::get_job_status,
@@ -186,6 +195,15 @@ use utoipa::{
             crate::routes::experiments::ExposureRowJson,
             crate::routes::experiments::ListExposuresQuery,
             crate::routes::experiments::ListIterationsQuery,
+            crate::routes::experiments::ExperimentInteractionJson,
+            crate::routes::experiments::ExperimentInteractionsJson,
+            // Exclusion groups
+            crate::routes::exclusion_groups::ExclusionGroupJson,
+            crate::routes::exclusion_groups::CreateExclusionGroupBody,
+            crate::routes::exclusion_groups::UpdateExclusionGroupBody,
+            crate::routes::exclusion_groups::AssignExperimentBody,
+            crate::routes::exclusion_groups::AssignmentResultJson,
+            crate::routes::exclusion_groups::ListExclusionGroupsQuery,
             // Stats
             crate::routes::stats::RecomputeJobJson,
             crate::routes::stats::JobStatusJson,
