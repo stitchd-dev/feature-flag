@@ -1,8 +1,8 @@
 {
-  "current_phase": "Phase 1: Schema & Domain Model",
-  "current_phase_index": 0,
+  "current_phase": "Phase 2: Exclusion-Group Eval Gating",
+  "current_phase_index": 1,
   "current_task_index": 0,
-  "completed_phases": [],
-  "last_updated": "2026-06-02T08:05:00Z",
+  "completed_phases": ["Phase 1: Schema & Domain Model"],
+  "last_updated": "2026-06-02T08:30:00Z",
   "status": "in_progress"
 }

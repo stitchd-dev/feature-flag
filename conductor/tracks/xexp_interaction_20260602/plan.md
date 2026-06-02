@@ -13,31 +13,31 @@ Phases 3 + 6; Phase 8 needs Phase 7; Phase 9 needs Phase 8. Shared seams:
 
 ---
 
-## Phase 1: Schema & Domain Model
+## Phase 1: Schema & Domain Model  [checkpoint: 24a103a]
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task: Core bucket math — `group_bucket(context_key, salt) -> u16` (0–9999) + range-membership
+- [x] Task: Core bucket math — `group_bucket(context_key, salt) -> u16` (0–9999) + range-membership
       helper in `stitchd-core`, reusing the existing Murmur3 hashing. TDD: determinism, distribution,
       boundary (lo inclusive / hi exclusive) tests first.
   <!-- files: crates/stitchd-core/src/evaluation/exclusion.rs, crates/stitchd-core/src/evaluation/mod.rs -->
-- [ ] Task: Core domain types — `ExclusionGroup`, `BucketRange`, `experiments` model fields
+- [x] Task: Core domain types — `ExclusionGroup`, `BucketRange`, `experiments` model fields  [24a103a]
       (`exclusion_group_id`, `group_bucket_lo/hi`), and an optional `exclusion_gate` on the rule's
       percentage-allocation type (RolloutDistribution) — NOT an experiment binding.
   <!-- files: crates/stitchd-core/src/experiment.rs, crates/stitchd-core/src/rule_engine/types.rs -->
   <!-- depends: task1 -->
-- [ ] Task: PostgreSQL migration — `exclusion_groups` table (env-scoped, unique name, immutable salt,
+- [x] Task: PostgreSQL migration — `exclusion_groups` table (env-scoped, unique name, immutable salt,  [e601a78]
       version/audit/soft-delete) + `experiments` ALTER (group_id + bucket range) + snapshot columns on
       `experiment_iterations`. Add partial soft-delete index.
   <!-- files: crates/stitchd-db/migrations/20260602000001_exclusion_groups.sql -->
-- [ ] Task: ClickHouse migration — `experiment_interactions` table keyed on
+- [x] Task: ClickHouse migration — `experiment_interactions` table keyed on  [553f9f3]
       `(env_id, experiment_id_a, experiment_id_b, context_type, metric_key)`.
   <!-- files: crates/stitchd-event-writer/migrations/20260602000002_experiment_interactions.sql -->
-- [ ] Task: Proto additions — `ExclusionGroup` message + group fields on `Experiment`/`ExperimentIteration`;
+- [x] Task: Proto additions — `ExclusionGroup` message + group fields on `Experiment`/`ExperimentIteration`;  [e99e1c1]
       `exclusion_gate` fields on the `PercentageAllocation`/rollout message; group-management RPCs;
       `Interaction*` messages + read RPC. All additive (proto3 optional / new).
   <!-- files: proto/experiments/v1/experimentation_service.proto, proto/flags/v1/*.proto -->
-- [ ] Task: Conductor - User Manual Verification 'Schema & Domain Model' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Schema & Domain Model' (Protocol in workflow.md)  [24a103a]
 
 ## Phase 2: Exclusion-Group Eval Gating
 <!-- execution: parallel -->
