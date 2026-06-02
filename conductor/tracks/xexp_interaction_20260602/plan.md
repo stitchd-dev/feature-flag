@@ -129,19 +129,19 @@ Phases 3 + 6; Phase 8 needs Phase 7; Phase 9 needs Phase 8. Shared seams:
   <!-- files: crates/stitchd-gateway/src/routes/exclusion_groups.rs, crates/stitchd-gateway/src/routes/experiments.rs, crates/stitchd-gateway/src/router.rs -->
 - [x] Task: Conductor - User Manual Verification 'Gateway REST Surface' (Protocol in workflow.md)  [dbff080]
 
-## Phase 8: Admin UI
+## Phase 8: Admin UI  [checkpoint: 229053c]
 <!-- execution: parallel -->
 <!-- depends: phase7 -->
 
-- [ ] Task: Exclusion-group management UI — list/create/edit groups + capacity view (allocated vs free
+- [x] Task: Exclusion-group management UI — list/create/edit groups + capacity view (allocated vs free  [229053c]
       bucket space, member experiments). Formik + Yup; vitest.
   <!-- files: admin/src/pages/experiments/exclusionGroups/, admin/src/lib/api/exclusionGroups.ts -->
-- [ ] Task: CreateExperiment group picker — optional group select with remaining-capacity validation.
+- [x] Task: CreateExperiment group picker — optional group select with remaining-capacity validation.  [229053c]
   <!-- files: admin/src/pages/experiments/CreateExperimentModal.tsx -->
-- [ ] Task: ExperimentDetail Interactions tab + Results-tab warning banner — overlaps, per-cell
+- [x] Task: ExperimentDetail Interactions tab + Results-tab warning banner — overlaps, per-cell  [229053c]
       breakdown, significance verdict.
   <!-- files: admin/src/pages/experiments/tabs/Interactions.tsx, admin/src/pages/experiments/ExperimentDetail.tsx, admin/src/pages/experiments/tabs/Results.tsx -->
-- [ ] Task: Conductor - User Manual Verification 'Admin UI' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Admin UI' (Protocol in workflow.md)  [229053c]
 
 ## Phase 9: Docs + Final Verification & Sync
 <!-- execution: sequential -->
