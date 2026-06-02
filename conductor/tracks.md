@@ -83,5 +83,5 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [~] Track: Cross-Experiment Interaction — Exclusion Groups + Interaction Analysis
+## [x] Track: Cross-Experiment Interaction — Exclusion Groups + Interaction Analysis
 *Link: [./conductor/tracks/xexp_interaction_20260602/](./conductor/tracks/xexp_interaction_20260602/)*

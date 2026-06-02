@@ -143,14 +143,14 @@ Phases 3 + 6; Phase 8 needs Phase 7; Phase 9 needs Phase 8. Shared seams:
   <!-- files: admin/src/pages/experiments/tabs/Interactions.tsx, admin/src/pages/experiments/ExperimentDetail.tsx, admin/src/pages/experiments/tabs/Results.tsx -->
 - [x] Task: Conductor - User Manual Verification 'Admin UI' (Protocol in workflow.md)  [229053c]
 
-## Phase 9: Docs + Final Verification & Sync
+## Phase 9: Docs + Final Verification & Sync  [checkpoint: efc0415]
 <!-- execution: sequential -->
 <!-- depends: phase8 -->
 
-- [ ] Task: Update product.md / tech-stack.md (new tables, RPCs, env if any); regenerate
+- [x] Task: Update product.md / tech-stack.md (new tables, RPCs, env if any); regenerate  [efc0415]
       `cargo xtask docs` and confirm idempotency; refresh patterns.md with any discovered patterns.
   <!-- files: conductor/product.md, conductor/tech-stack.md, conductor/patterns.md -->
-- [ ] Task: Full quality gate — workspace tests, clippy, sqlx offline prepare (CI flags), admin vitest,
+- [x] Task: Full quality gate — workspace tests, clippy, sqlx offline prepare (CI flags), admin vitest,  [efc0415]
       docs diff.
   <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Docs + Final Verification & Sync' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Docs + Final Verification & Sync' (Protocol in workflow.md)  [efc0415]
