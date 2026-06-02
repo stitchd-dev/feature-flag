@@ -64,6 +64,11 @@ pub struct ExclusionGate {
     /// Salt used to derive the context's exclusion-group bucket (shared by all
     /// members of the same exclusion group).
     pub group_salt: String,
+    /// The context type whose `key` is hashed to derive the exclusion-group
+    /// bucket (the experiment's randomization unit, e.g. `"user"`). If no
+    /// context of this type is present in the evaluated bundle, the context is
+    /// held out (not enrolled) — a missing randomization unit cannot be bucketed.
+    pub context_type: String,
     /// Inclusive lower bound of the allocated bucket range, in basis points.
     pub bucket_lo: u16,
     /// Exclusive upper bound of the allocated bucket range, in basis points.
@@ -220,6 +225,7 @@ mod tests {
     fn exclusion_gate_serde_round_trips() {
         let gate = ExclusionGate {
             group_salt: "grp-salt".to_string(),
+            context_type: "user".to_string(),
             bucket_lo: 0,
             bucket_hi: 2500,
         };
@@ -262,6 +268,7 @@ mod tests {
             weights: vec![(VariantId::new(), 10000)],
             exclusion_gate: Some(ExclusionGate {
                 group_salt: "s".to_string(),
+                context_type: "user".to_string(),
                 bucket_lo: 2500,
                 bucket_hi: 5000,
             }),
