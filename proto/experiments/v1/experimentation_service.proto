@@ -347,25 +347,43 @@ message UnassignExperimentResponse {
 
 // ─── Experiment interactions ──────────────────────────────────────────────────
 //
-// Pairwise interaction estimates between an experiment and others that share
+// N-way interaction estimates among a tuple of experiments that share
 // assignment population, used to surface possible cross-experiment effects.
+// `interaction_order` is the size of the tuple (2 = pairwise, 3 = three-way).
 
 message ExperimentInteraction {
-  string experiment_id_a       = 1;
-  string experiment_id_b       = 2;
-  string other_experiment_name = 3;
-  string context_type          = 4;
-  string metric_key            = 5;
-  uint64 shared_count          = 6;
-  double interaction_estimate  = 7;
-  double p_value               = 8;
+  // Experiment ids participating in this interaction tuple (length ==
+  // interaction_order). For a "main" row the tuple is a single experiment.
+  repeated string experiment_ids      = 1;
+  // Human-readable names aligned 1:1 with `experiment_ids` (same order, same
+  // length). Ids without a resolvable experiment fall back to the id string.
+  repeated string experiment_names    = 2;
+  // Number of experiments in the tuple: 2 for pairwise, 3 for three-way.
+  uint32 interaction_order            = 3;
+  // Term key: "main:<uuid>" / "2way:<a>x<b>" / "3way:<a>x<b>x<c>".
+  string term                         = 4;
+  string context_type                 = 5;
+  string metric_key                   = 6;
+  uint64 shared_count                 = 7;
+  double interaction_estimate         = 8;
+  double p_value                      = 9;
+  // Degrees of freedom of the interaction test.
+  uint32 df                           = 10;
   // Significance after family-wise (Benjamini–Hochberg) correction across the
-  // batch of pairwise tests. False when insufficient_data is true.
-  bool   significant           = 9;
+  // batch of interaction tests. False when insufficient_data is true.
+  bool   significant                  = 11;
   // True when the cell sample was too small for a valid test. Consumers MUST
   // treat the row as non-actionable and ignore estimate/p_value (persisted as
   // 0.0 sentinels, NOT a real p-value of zero).
-  bool   insufficient_data     = 10;
+  bool   insufficient_data            = 12;
+  // Bayesian posterior probability that an interaction effect exists.
+  double bayes_prob                   = 13;
+  // Bayesian posterior expected interaction effect size.
+  double bayes_expected               = 14;
+  // Lower bound of the Bayesian credible interval.
+  double bayes_ci_low                 = 15;
+  // Upper bound of the Bayesian credible interval.
+  double bayes_ci_high                = 16;
 }
 
 message GetExperimentInteractionsRequest {

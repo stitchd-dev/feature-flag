@@ -789,28 +789,44 @@ pub async fn list_exposures(
 
 // ─── GET /interactions (Phase 7) ─────────────────────────────────────────────
 
-/// One pairwise interaction estimate between this experiment and another that
-/// shares assignment population. Surfaces possible cross-experiment effects.
+/// One N-way interaction estimate among a tuple of experiments that share
+/// assignment population. Surfaces possible cross-experiment effects.
+/// `interaction_order` is the tuple size (2 = pairwise, 3 = three-way).
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ExperimentInteractionJson {
-    pub experiment_id_a: String,
-    pub experiment_id_b: String,
-    /// Human-readable name of the *other* experiment in the pair.
-    pub other_experiment_name: String,
+    /// Experiment ids in this interaction tuple (length == `interaction_order`).
+    pub experiment_ids: Vec<String>,
+    /// Human-readable names aligned 1:1 with `experiment_ids` (same order, same
+    /// length); ids without a resolvable experiment fall back to the id string.
+    pub experiment_names: Vec<String>,
+    /// Number of experiments in the tuple: 2 for pairwise, 3 for three-way.
+    pub interaction_order: u32,
+    /// Term key: `main:<uuid>` / `2way:<a>x<b>` / `3way:<a>x<b>x<c>`.
+    pub term: String,
     pub context_type: String,
     pub metric_key: String,
-    /// Number of contexts assigned in both experiments.
+    /// Number of contexts assigned in every experiment of the tuple.
     pub shared_count: u64,
     /// Estimated interaction effect size.
     pub interaction_estimate: f64,
     pub p_value: f64,
+    /// Degrees of freedom of the interaction test.
+    pub df: u32,
     /// `true` when the interaction is statistically significant. Always `false`
     /// when `insufficient_data` is `true`.
     pub significant: bool,
-    /// `true` when the pair lacked enough shared exposures to run a meaningful
+    /// `true` when the tuple lacked enough shared exposures to run a meaningful
     /// interaction test; treat `significant`/`interaction_estimate` as
     /// inconclusive in that case.
     pub insufficient_data: bool,
+    /// Bayesian posterior probability that an interaction effect exists.
+    pub bayes_prob: f64,
+    /// Bayesian posterior expected interaction effect size.
+    pub bayes_expected: f64,
+    /// Lower bound of the Bayesian credible interval.
+    pub bayes_ci_low: f64,
+    /// Upper bound of the Bayesian credible interval.
+    pub bayes_ci_high: f64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -820,23 +836,29 @@ pub struct ExperimentInteractionsJson {
 
 fn interaction_to_json(i: &ExperimentInteraction) -> ExperimentInteractionJson {
     ExperimentInteractionJson {
-        experiment_id_a: i.experiment_id_a.clone(),
-        experiment_id_b: i.experiment_id_b.clone(),
-        other_experiment_name: i.other_experiment_name.clone(),
+        experiment_ids: i.experiment_ids.clone(),
+        experiment_names: i.experiment_names.clone(),
+        interaction_order: i.interaction_order,
+        term: i.term.clone(),
         context_type: i.context_type.clone(),
         metric_key: i.metric_key.clone(),
         shared_count: i.shared_count,
         interaction_estimate: i.interaction_estimate,
         p_value: i.p_value,
+        df: i.df,
         significant: i.significant,
         insufficient_data: i.insufficient_data,
+        bayes_prob: i.bayes_prob,
+        bayes_expected: i.bayes_expected,
+        bayes_ci_low: i.bayes_ci_low,
+        bayes_ci_high: i.bayes_ci_high,
     }
 }
 
 /// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/interactions`
 ///
-/// Pairwise interaction estimates between this experiment and others that
-/// share assignment population. Drives the admin Interactions tab.
+/// N-way interaction estimates (orders 2 and 3) among tuples of experiments
+/// that share assignment population. Drives the admin Interactions tab.
 #[utoipa::path(
     get,
     path = "/v1/environments/{environment_id}/experiments/{experiment_id}/interactions",
@@ -1349,5 +1371,51 @@ mod tests {
             "status: {}",
             resp.status()
         );
+    }
+
+    #[test]
+    fn interaction_to_json_maps_3way_and_bayes_fields() {
+        let proto = ExperimentInteraction {
+            experiment_ids: vec!["a".into(), "b".into(), "c".into()],
+            experiment_names: vec!["Exp A".into(), "Exp B".into(), "Exp C".into()],
+            interaction_order: 3,
+            term: "3way:axbxc".into(),
+            context_type: "user".into(),
+            metric_key: "checkout".into(),
+            shared_count: 400,
+            interaction_estimate: 0.42,
+            p_value: 0.001,
+            df: 4,
+            significant: true,
+            insufficient_data: false,
+            bayes_prob: 0.97,
+            bayes_expected: 0.40,
+            bayes_ci_low: 0.15,
+            bayes_ci_high: 0.66,
+        };
+        let j = interaction_to_json(&proto);
+        assert_eq!(j.interaction_order, 3);
+        assert_eq!(j.term, "3way:axbxc");
+        assert_eq!(j.experiment_ids, vec!["a", "b", "c"]);
+        assert_eq!(j.experiment_names, vec!["Exp A", "Exp B", "Exp C"]);
+        assert_eq!(j.shared_count, 400);
+        assert_eq!(j.df, 4);
+        assert!(j.significant);
+        assert!(!j.insufficient_data);
+        // Bayesian fields surface unchanged.
+        assert!((j.bayes_prob - 0.97).abs() < 1e-9);
+        assert!((j.bayes_expected - 0.40).abs() < 1e-9);
+        assert!((j.bayes_ci_low - 0.15).abs() < 1e-9);
+        assert!((j.bayes_ci_high - 0.66).abs() < 1e-9);
+
+        // Confirm the DTO serializes the new N-way shape.
+        let v = serde_json::to_value(&j).unwrap();
+        assert_eq!(v["interaction_order"], 3);
+        assert_eq!(v["term"], "3way:axbxc");
+        assert!(v["experiment_ids"].is_array());
+        assert!(v.get("bayes_ci_high").is_some());
+        // Old pairwise fields are gone.
+        assert!(v.get("experiment_id_a").is_none());
+        assert!(v.get("other_experiment_name").is_none());
     }
 }

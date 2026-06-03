@@ -32,10 +32,6 @@ static MIGRATIONS: &[(&str, &str)] = &[
         "20260602000002_experiment_interactions",
         include_str!("../migrations/20260602000002_experiment_interactions.sql"),
     ),
-    (
-        "20260602000005_interaction_insufficient_data",
-        include_str!("../migrations/20260602000005_interaction_insufficient_data.sql"),
-    ),
 ];
 
 /// Apply all pending ClickHouse migrations.

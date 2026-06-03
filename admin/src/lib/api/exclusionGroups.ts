@@ -50,21 +50,31 @@ export interface ExclusionGroupListResponse {
 }
 
 /**
- * One pairwise interaction estimate between this experiment and another running
- * experiment, scoped to a context type + metric.
+ * One N-way interaction estimate among a tuple of experiments that share
+ * assignment population, scoped to a context type + metric.
+ * `interaction_order` is the tuple size (2 = pairwise, 3 = three-way).
  */
 export interface ExperimentInteraction {
-  experiment_id_a: string
-  experiment_id_b: string
-  /** Display name of the *other* experiment in the pair. */
-  other_experiment_name: string
+  /** Experiment ids in this interaction tuple (length == interaction_order). */
+  experiment_ids: string[]
+  /**
+   * Human-readable names aligned 1:1 with experiment_ids (same order, same
+   * length); ids without a resolvable experiment fall back to the id string.
+   */
+  experiment_names: string[]
+  /** Number of experiments in the tuple: 2 for pairwise, 3 for three-way. */
+  interaction_order: number
+  /** Term key: `main:<uuid>` / `2way:<a>x<b>` / `3way:<a>x<b>x<c>`. */
+  term: string
   context_type: string
   metric_key: string
-  /** Number of contexts exposed to both experiments. */
+  /** Number of contexts assigned in every experiment of the tuple. */
   shared_count: number
   /** Estimated interaction effect size. */
   interaction_estimate: number
   p_value: number
+  /** Degrees of freedom of the interaction test. */
+  df: number
   /** True when the interaction is statistically significant. */
   significant: boolean
   /**
@@ -73,6 +83,14 @@ export interface ExperimentInteraction {
    * values) and the row must never be shown as significant.
    */
   insufficient_data: boolean
+  /** Bayesian posterior probability that an interaction effect exists. */
+  bayes_prob: number
+  /** Bayesian posterior expected interaction effect size. */
+  bayes_expected: number
+  /** Lower bound of the Bayesian credible interval. */
+  bayes_ci_low: number
+  /** Upper bound of the Bayesian credible interval. */
+  bayes_ci_high: number
 }
 
 export interface InteractionsResponse {

@@ -1,22 +1,54 @@
 -- =============================================================================
--- experiment_interactions — pairwise experiment interaction statistics
+-- experiment_interactions — N-way cross-experiment interaction statistics
 -- =============================================================================
-
--- Per-(experiment pair, context, metric) interaction analysis results.
--- cell_stats holds JSON of per-(variant_A x variant_B) cell counts/means.
+--
+-- Superseded the pairwise schema in nway_interaction_20260603 (clean cutover —
+-- system not live, no backfill). Generalizes the hardcoded experiment_id_a/b
+-- pair into an ordered `experiment_ids` array + `interaction_order` (2 or 3) so
+-- pairwise and 3-way share one table. Each candidate tuple emits a full
+-- hierarchical decomposition: one row per `term`
+--   * "main:<exp>"          — a single-experiment main effect
+--   * "2way:<a>x<b>"         — a pairwise interaction term
+--   * "3way:<a>x<b>x<c>"     — the top-order three-way interaction term
+-- A row is uniquely identified by (env_id, interaction_order, experiment_ids,
+-- context_type, metric_key, term) — the FULL participating tuple is in the sort
+-- key. `experiment_ids` is REQUIRED in the key: a lower-order term (e.g. main:X,
+-- or 2way:AxB) is emitted by every candidate tuple that contains it, so without
+-- experiment_ids those rows (same order, same term, different tuple) would
+-- collide and silently overwrite each other under ReplacingMergeTree FINAL.
+--
+-- cell_stats holds JSON of the N-dimensional variant-tuple cells (see
+-- stitchd-stats-service::interaction_compute::CellAggregate). Frequentist columns
+-- (interaction_estimate / p_value / df / significant / insufficient_data) and
+-- Bayesian columns (bayes_*) coexist per term; insufficient_data rows carry 0.0
+-- sentinels for the Frequentist estimate/p_value (ClickHouse Float64 cannot hold
+-- NaN) and must never be rendered as significant.
+--
+-- Engine: ReplacingMergeTree(computed_at) — the 60-min sweep re-inserts each
+-- tick; the latest computed_at wins per ORDER BY key. READERS MUST USE `FINAL`
+-- (or argMax) to collapse the unmerged window. A 30-day TTL bounds rows lingering
+-- from experiments that have since stopped (sweep refreshes live rows hourly).
 CREATE TABLE IF NOT EXISTS experiment_interactions
 (
     env_id               UUID,
-    experiment_id_a      UUID,
-    experiment_id_b      UUID,
+    experiment_ids       Array(UUID),
+    interaction_order    UInt8,
+    term                 String,
     context_type         LowCardinality(String),
     metric_key           LowCardinality(String),
     shared_count         UInt64,
     cell_stats           String,
     interaction_estimate Float64,
     p_value              Float64,
+    df                   UInt32,
     significant          Bool,
+    insufficient_data    Bool DEFAULT false,
+    bayes_prob           Float64,
+    bayes_expected       Float64,
+    bayes_ci_low         Float64,
+    bayes_ci_high        Float64,
     computed_at          DateTime64(3, 'UTC')
 )
-ENGINE = MergeTree()
-ORDER BY (env_id, experiment_id_a, experiment_id_b, context_type, metric_key);
+ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (env_id, interaction_order, experiment_ids, context_type, metric_key, term)
+TTL toDateTime(computed_at) + INTERVAL 30 DAY;

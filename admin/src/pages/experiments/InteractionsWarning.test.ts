@@ -17,18 +17,25 @@ import type { ExperimentInteraction } from '../../lib/api/exclusionGroups'
 function interaction(
   significant: boolean,
   insufficient_data = false,
+  bayes_prob = 0.5,
 ): ExperimentInteraction {
   return {
-    experiment_id_a: 'a',
-    experiment_id_b: 'b',
-    other_experiment_name: 'Other',
+    experiment_ids: ['a', 'b'],
+    experiment_names: ['Exp A', 'Other'],
+    interaction_order: 2,
+    term: '2way:axb',
     context_type: 'user',
     metric_key: 'm',
     shared_count: 10,
     interaction_estimate: insufficient_data ? 0.0 : 0.1,
     p_value: insufficient_data ? 0.0 : significant ? 0.001 : 0.5,
+    df: 1,
     significant,
     insufficient_data,
+    bayes_prob: insufficient_data ? 0.0 : bayes_prob,
+    bayes_expected: insufficient_data ? 0.0 : 0.09,
+    bayes_ci_low: insufficient_data ? 0.0 : 0.01,
+    bayes_ci_high: insufficient_data ? 0.0 : 0.17,
   }
 }
 

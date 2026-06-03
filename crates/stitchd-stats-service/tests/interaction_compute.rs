@@ -18,7 +18,10 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use async_trait::async_trait;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use clickhouse::Client;
 use serde::Deserialize;
@@ -29,7 +32,8 @@ use stitchd_core::metric::{
 use stitchd_db::clickhouse::SeedAssignmentRow;
 use stitchd_event_writer::SeedEventRow;
 use stitchd_stats_service::interaction_compute::{
-    ClickHouseInteractionCells, ClickHouseInteractionWriter, compute_and_persist_interactions,
+    ClickHouseInteractionCells, ClickHouseInteractionWriter, InteractionCellReader, InteractionRow,
+    InteractionWriter, NdCellAggregate, compute_and_persist_interactions,
 };
 use stitchd_stats_service::interaction_pairs::ExperimentMeta;
 use uuid::Uuid;
@@ -37,12 +41,16 @@ use uuid::Uuid;
 type AssignmentRow = SeedAssignmentRow;
 type EventRow = SeedEventRow;
 
+/// One persisted interaction **term** row. The `Array(UUID)` column is read as
+/// `Array(String)` under the alias `experiment_ids_str` (the `fetch_rows` SQL
+/// stringifies it via `arrayMap`) to sidestep the array-UUID RowBinary serde on
+/// the read side. clickhouse-rs matches columns by NAME, so the field name must
+/// equal the SQL alias.
 #[derive(Debug, Clone, Deserialize, clickhouse::Row)]
 struct InteractionResultRow {
-    #[serde(with = "clickhouse::serde::uuid")]
-    experiment_id_a: Uuid,
-    #[serde(with = "clickhouse::serde::uuid")]
-    experiment_id_b: Uuid,
+    experiment_ids_str: Vec<String>,
+    interaction_order: u8,
+    term: String,
     context_type: String,
     metric_key: String,
     shared_count: u64,
@@ -51,11 +59,10 @@ struct InteractionResultRow {
     insufficient_data: bool,
 }
 
-/// Decoded `cell_stats` JSON row (mirrors `CellAggregate`).
+/// Decoded `cell_stats` JSON cell (mirrors `NdCellAggregate`).
 #[derive(Debug, Clone, Deserialize)]
 struct CellStat {
-    a_variant_key: String,
-    b_variant_key: String,
+    variant_keys: Vec<String>,
     n: u64,
     successes: u64,
 }
@@ -216,11 +223,20 @@ async fn seed_pair(
 }
 
 async fn fetch_rows(ch: &Client, exp: Uuid) -> Vec<InteractionResultRow> {
+    // Stringify the Array(UUID) column so it reads as Array(String) — avoids the
+    // array-UUID RowBinary serde on the read side. `FINAL` collapses the
+    // ReplacingMergeTree window so re-inserts within a tick don't duplicate.
+    // Alias the stringified projection to a NON-colliding name: reusing
+    // `experiment_ids` makes ClickHouse try to unify the String[] alias with the
+    // UUID[] column referenced in WHERE/ORDER BY (NO_COMMON_TYPE). Row decoding is
+    // positional, so the alias name is irrelevant to deserialization.
     let sql = format!(
-        "SELECT experiment_id_a, experiment_id_b, context_type, metric_key, shared_count, \
+        "SELECT arrayMap(x -> toString(x), experiment_ids) AS experiment_ids_str, \
+         interaction_order, term, context_type, metric_key, shared_count, \
          cell_stats, significant, insufficient_data
-         FROM experiment_interactions
-         WHERE experiment_id_a = toUUID('{exp}') OR experiment_id_b = toUUID('{exp}')"
+         FROM experiment_interactions FINAL
+         WHERE has(experiment_ids, toUUID('{exp}'))
+         ORDER BY interaction_order, term"
     );
     ch.query(&sql)
         .fetch_all::<InteractionResultRow>()
@@ -279,26 +295,40 @@ async fn significant_interaction_is_written() {
     )
     .await
     .expect("compute_and_persist should succeed");
-    assert_eq!(written, 1, "one (pair, metric, context_type) row");
+    assert_eq!(
+        written, 3,
+        "one pair × metric × context → 2 main + 1 two-way"
+    );
 
     let rows = fetch_rows(&ch, exp_a).await;
-    assert_eq!(rows.len(), 1, "exactly one interaction row, got {rows:?}");
-    assert_eq!(rows[0].metric_key, "checkout");
-    assert_eq!(rows[0].context_type, "user");
-    assert_eq!(rows[0].shared_count, 400);
+    assert_eq!(
+        rows.len(),
+        3,
+        "the full pairwise decomposition, got {rows:?}"
+    );
+    // The persisted tuple is the sorted (min, max) ordering candidate_pairs emits.
+    let (lo, hi) = (exp_a.min(exp_b), exp_a.max(exp_b));
+    for r in &rows {
+        assert_eq!(r.metric_key, "checkout");
+        assert_eq!(r.context_type, "user");
+        assert_eq!(r.shared_count, 400);
+        assert_eq!(r.interaction_order, 2);
+        assert_eq!(r.experiment_ids_str, vec![lo.to_string(), hi.to_string()]);
+    }
+    let two = rows
+        .iter()
+        .find(|r| r.term.starts_with("2way:"))
+        .expect("two-way term present");
+    assert_eq!(two.term, format!("2way:{lo}x{hi}"));
     assert!(
-        rows[0].significant,
+        two.significant,
         "planted super-additive interaction must be significant"
     );
     // MED-2: a well-powered grid is not insufficient.
     assert!(
-        !rows[0].insufficient_data,
+        !two.insufficient_data,
         "ample-data grid must persist insufficient_data = false"
     );
-    // The persisted pair is the sorted (min, max) ordering candidate_pairs emits.
-    let (lo, hi) = (exp_a.min(exp_b), exp_a.max(exp_b));
-    assert_eq!(rows[0].experiment_id_a, lo);
-    assert_eq!(rows[0].experiment_id_b, hi);
 }
 
 /// Independent (additive) effects produce a non-significant row.
@@ -347,12 +377,16 @@ async fn independent_effects_are_not_significant() {
     )
     .await
     .expect("compute_and_persist should succeed");
-    assert_eq!(written, 1);
+    assert_eq!(written, 3);
 
     let rows = fetch_rows(&ch, exp_a).await;
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 3);
+    let two = rows
+        .iter()
+        .find(|r| r.term.starts_with("2way:"))
+        .expect("two-way term present");
     assert!(
-        !rows[0].significant,
+        !two.significant,
         "additive effects must NOT be flagged as a significant interaction"
     );
 }
@@ -460,16 +494,20 @@ async fn insufficient_data_is_persisted() {
     )
     .await
     .expect("compute_and_persist should succeed");
-    assert_eq!(written, 1);
+    assert_eq!(written, 3);
 
     let rows = fetch_rows(&ch, exp_a).await;
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 3);
+    let two = rows
+        .iter()
+        .find(|r| r.term.starts_with("2way:"))
+        .expect("two-way term present");
     assert!(
-        rows[0].insufficient_data,
+        two.insufficient_data,
         "sparse grid must persist insufficient_data = true"
     );
     assert!(
-        !rows[0].significant,
+        !two.significant,
         "insufficient-data rows are never significant"
     );
 }
@@ -559,18 +597,25 @@ async fn pre_exposure_events_are_excluded_itt() {
     )
     .await
     .expect("compute_and_persist should succeed");
-    assert_eq!(written, 1);
+    assert_eq!(written, 3, "pairwise decomposition: 2 main + 1 two-way");
 
     let rows = fetch_rows(&ch, exp_a).await;
-    assert_eq!(rows.len(), 1, "exactly one interaction row, got {rows:?}");
-    assert_eq!(rows[0].shared_count, (n_per_cell * 4) as u64);
+    assert_eq!(
+        rows.len(),
+        3,
+        "the pairwise decomposition rows, got {rows:?}"
+    );
+    // The cell grid is shared across all term rows of the tuple.
+    let row = &rows[0];
+    assert_eq!(row.shared_count, (n_per_cell * 4) as u64);
 
     let cells: Vec<CellStat> =
-        serde_json::from_str(&rows[0].cell_stats).expect("cell_stats is valid JSON");
+        serde_json::from_str(&row.cell_stats).expect("cell_stats is valid JSON");
     assert_eq!(cells.len(), 4, "2x2 grid of cells, got {cells:?}");
 
     for cell in &cells {
-        let key = (cell.a_variant_key.clone(), cell.b_variant_key.clone());
+        assert_eq!(cell.variant_keys.len(), 2, "pairwise variant tuple");
+        let key = (cell.variant_keys[0].clone(), cell.variant_keys[1].clone());
         let expected = expected_succ.get(&key).copied().unwrap_or(0);
         assert_eq!(
             cell.n, n_per_cell as u64,
@@ -587,4 +632,560 @@ async fn pre_exposure_events_are_excluded_itt() {
             "pre-exposure-only contexts must not be successes ({cell:?})"
         );
     }
+}
+
+/// Seed THREE experiments (distinct flags) over a shared 2×2×2 context grid —
+/// every context is assigned a variant in all three experiments. Returns
+/// `(env, exp_a, exp_b, exp_c, metric_id)`.
+async fn seed_triple(
+    ch: &Client,
+    key_prefix: &str,
+    n_per_cell: usize,
+) -> (Uuid, Uuid, Uuid, Uuid, Uuid) {
+    let env_id = Uuid::new_v4();
+    let (exp_a, exp_b, exp_c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (iter_a, iter_b, iter_c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (flag_a, flag_b, flag_c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let metric = Uuid::new_v4();
+    let at = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let evt_at = at + Duration::hours(1);
+    let variants = ["control", "treatment"];
+
+    let mut assigns = Vec::new();
+    let mut events = Vec::new();
+    for (ai, av) in variants.iter().enumerate() {
+        for (bi, bv) in variants.iter().enumerate() {
+            for (ci, cv) in variants.iter().enumerate() {
+                for k in 0..n_per_cell {
+                    let ckey = format!("{key_prefix}_{ai}{bi}{ci}_{k}");
+                    assigns.push(assignment(exp_a, iter_a, env_id, flag_a, &ckey, av, at));
+                    assigns.push(assignment(exp_b, iter_b, env_id, flag_b, &ckey, bv, at));
+                    assigns.push(assignment(exp_c, iter_c, env_id, flag_c, &ckey, cv, at));
+                    if k % 2 == 0 {
+                        events.push(conversion_event(env_id, &ckey, evt_at));
+                    }
+                }
+            }
+        }
+    }
+    insert_assignments(ch, &assigns).await;
+    insert_events(ch, &events).await;
+    (env_id, exp_a, exp_b, exp_c, metric)
+}
+
+/// Regression for the ReplacingMergeTree dedup-key fix (review #1) + the
+/// order-2/order-3 sub-term distinction (review #7): with three overlapping
+/// experiments sharing one metric, the sweep emits pairs AND the triple, and a
+/// `main:<exp>` term is produced once per tuple containing that experiment. The
+/// fix added `experiment_ids` to the table's ORDER BY, so those same-order,
+/// same-term rows from DIFFERENT tuples must NOT collapse under FINAL.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs running clickhouse"]
+async fn three_way_sweep_keeps_distinct_main_effect_rows() {
+    let ch = make_client();
+    stitchd_event_writer::migrations::run(&ch)
+        .await
+        .expect("apply CH migrations");
+
+    let (env, exp_a, exp_b, exp_c, metric) = seed_triple(&ch, "nway", 40).await;
+
+    let reader = ClickHouseInteractionCells::new(ch.clone());
+    let writer = ClickHouseInteractionWriter::new(ch.clone());
+    let mut metrics = HashMap::new();
+    metrics.insert(metric, conversion_metric(metric));
+    let started = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let mut exps = vec![
+        meta(exp_a, Uuid::new_v4(), metric, started),
+        meta(exp_b, Uuid::new_v4(), metric, started),
+        meta(exp_c, Uuid::new_v4(), metric, started),
+    ];
+    // distinct flags so all three pairwise + the triple are candidates
+    exps[0].flag_id = Uuid::new_v4();
+    exps[1].flag_id = Uuid::new_v4();
+    exps[2].flag_id = Uuid::new_v4();
+
+    let written = compute_and_persist_interactions(
+        &reader,
+        &writer,
+        env,
+        &exps,
+        &metrics,
+        &["user".to_string()],
+        Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap(),
+    )
+    .await
+    .expect("compute_and_persist should succeed");
+    // 3 pairs × (2 main + 1 two-way) + 1 triple × (3 main + 3 two-way + 1 three-way)
+    assert_eq!(written, 16, "pairs + triple full decomposition");
+
+    // Rows where exp_a participates: pairs {A,B},{A,C} and triple {A,B,C}.
+    let rows = fetch_rows(&ch, exp_a).await;
+    let main_a = format!("main:{exp_a}");
+    let main_a_rows: Vec<_> = rows.iter().filter(|r| r.term == main_a).collect();
+    // THE FIX: 3 distinct main:A rows survive FINAL (one per tuple containing A).
+    // Pre-fix, the two order-2 rows ({A,B},{A,C}) shared a dedup key and one was
+    // silently lost, leaving only 2.
+    assert_eq!(
+        main_a_rows.len(),
+        3,
+        "main:A must persist once per tuple containing A (no FINAL collapse): {main_a_rows:?}"
+    );
+    let distinct_tuples: std::collections::HashSet<_> = main_a_rows
+        .iter()
+        .map(|r| r.experiment_ids_str.clone())
+        .collect();
+    assert_eq!(
+        distinct_tuples.len(),
+        3,
+        "the 3 main:A rows name 3 distinct tuples"
+    );
+    let order2 = main_a_rows
+        .iter()
+        .filter(|r| r.interaction_order == 2)
+        .count();
+    let order3 = main_a_rows
+        .iter()
+        .filter(|r| r.interaction_order == 3)
+        .count();
+    assert_eq!(
+        (order2, order3),
+        (2, 1),
+        "two pairwise + one three-way main:A"
+    );
+}
+
+// ── review #12: consolidated aggregation fetch ────────────────────────────────
+//
+// Two reader wrappers around the production `ClickHouseInteractionCells`, both
+// reading the SAME live CH data:
+//   * `OldPathReader` does NOT override `fetch_aggregation_cells_consolidated`,
+//     so the trait's DEFAULT impl runs — one per-tuple `fetch_aggregation_cells`
+//     CH query per tuple (the pre-#12 path). It counts those per-tuple calls.
+//   * `NewPathReader` overrides `fetch_aggregation_cells_consolidated` to issue
+//     the SINGLE consolidated CH query (the production override). It counts the
+//     consolidated calls.
+// Wrapping the real reader (not a fake) means the equivalence assertion compares
+// two genuine CH execution paths over identical seeded data.
+
+/// OLD path: forces the per-tuple aggregation fetch by inheriting the default
+/// `fetch_aggregation_cells_consolidated`. Counts per-tuple CH cell queries.
+struct OldPathReader {
+    inner: ClickHouseInteractionCells,
+    agg_calls: AtomicUsize,
+}
+
+impl OldPathReader {
+    fn new(client: Arc<Client>) -> Self {
+        Self {
+            inner: ClickHouseInteractionCells::new(client),
+            agg_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl InteractionCellReader for OldPathReader {
+    async fn fetch_aggregation_cells(
+        &self,
+        cfg: &AggregationConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+        self.agg_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .fetch_aggregation_cells(cfg, env_id, exp_ids, context_type, interaction_end)
+            .await
+    }
+
+    // NB: `fetch_aggregation_cells_consolidated` intentionally NOT overridden —
+    // the trait default fans out to `fetch_aggregation_cells` per tuple.
+
+    async fn fetch_funnel_cells(
+        &self,
+        cfg: &stitchd_core::metric::FunnelConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+        self.inner
+            .fetch_funnel_cells(cfg, env_id, exp_ids, context_type, interaction_end)
+            .await
+    }
+
+    async fn fetch_ratio_cells(
+        &self,
+        num_cfg: &AggregationConfig,
+        den_cfg: &AggregationConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+        self.inner
+            .fetch_ratio_cells(
+                num_cfg,
+                den_cfg,
+                env_id,
+                exp_ids,
+                context_type,
+                interaction_end,
+            )
+            .await
+    }
+}
+
+/// NEW path: issues the single consolidated aggregation fetch. Counts the
+/// consolidated CH cell queries.
+struct NewPathReader {
+    inner: ClickHouseInteractionCells,
+    consolidated_calls: AtomicUsize,
+}
+
+impl NewPathReader {
+    fn new(client: Arc<Client>) -> Self {
+        Self {
+            inner: ClickHouseInteractionCells::new(client),
+            consolidated_calls: AtomicUsize::new(0),
+        }
+    }
+}
+
+#[async_trait]
+impl InteractionCellReader for NewPathReader {
+    async fn fetch_aggregation_cells(
+        &self,
+        cfg: &AggregationConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+        self.inner
+            .fetch_aggregation_cells(cfg, env_id, exp_ids, context_type, interaction_end)
+            .await
+    }
+
+    async fn fetch_aggregation_cells_consolidated(
+        &self,
+        cfg: &AggregationConfig,
+        env_id: &str,
+        tuples: &[&[&str]],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<Vec<NdCellAggregate>>, anyhow::Error> {
+        self.consolidated_calls.fetch_add(1, Ordering::SeqCst);
+        self.inner
+            .fetch_aggregation_cells_consolidated(
+                cfg,
+                env_id,
+                tuples,
+                context_type,
+                interaction_end,
+            )
+            .await
+    }
+
+    async fn fetch_funnel_cells(
+        &self,
+        cfg: &stitchd_core::metric::FunnelConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+        self.inner
+            .fetch_funnel_cells(cfg, env_id, exp_ids, context_type, interaction_end)
+            .await
+    }
+
+    async fn fetch_ratio_cells(
+        &self,
+        num_cfg: &AggregationConfig,
+        den_cfg: &AggregationConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+        self.inner
+            .fetch_ratio_cells(
+                num_cfg,
+                den_cfg,
+                env_id,
+                exp_ids,
+                context_type,
+                interaction_end,
+            )
+            .await
+    }
+}
+
+/// In-memory writer capturing the `InteractionRow`s the sweep produces — lets
+/// the equivalence test compare the two fetch paths without round-tripping
+/// through `experiment_interactions`.
+#[derive(Default)]
+struct CapturingWriter {
+    rows: Mutex<Vec<InteractionRow>>,
+}
+
+#[async_trait]
+impl InteractionWriter for CapturingWriter {
+    async fn write_row(&self, row: &InteractionRow) -> Result<(), anyhow::Error> {
+        self.rows.lock().expect("rows mutex").push(row.clone());
+        Ok(())
+    }
+}
+
+/// Normalize a captured row set for order-independent equivalence comparison:
+/// zero out `computed_at` (set per-run) and sort by the tuple/term identity.
+fn normalize_rows(mut rows: Vec<InteractionRow>) -> Vec<InteractionRow> {
+    let epoch = Utc.timestamp_opt(0, 0).unwrap();
+    for r in &mut rows {
+        r.computed_at = epoch;
+    }
+    rows.sort_by(|a, b| {
+        (&a.experiment_ids, &a.term, &a.context_type, &a.metric_key).cmp(&(
+            &b.experiment_ids,
+            &b.term,
+            &b.context_type,
+            &b.metric_key,
+        ))
+    });
+    rows
+}
+
+/// EQUIVALENCE (review #12): the consolidated aggregation fetch must produce
+/// the EXACT same interaction rows as the per-tuple fetch. Seeds three
+/// experiments sharing one conversion metric over a 2×2×2 grid (so the sweep
+/// emits all three pairs AND the triple), runs the sweep once via the OLD
+/// per-tuple path and once via the NEW consolidated path into two capturing
+/// writers, and asserts the produced rows are identical (ignoring `computed_at`).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs running clickhouse"]
+async fn consolidated_aggregation_matches_per_tuple_three_way() {
+    let ch = make_client();
+    stitchd_event_writer::migrations::run(&ch)
+        .await
+        .expect("apply CH migrations");
+
+    let (env, exp_a, exp_b, exp_c, metric) = seed_triple(&ch, "equiv3", 40).await;
+
+    let mut metrics = HashMap::new();
+    metrics.insert(metric, conversion_metric(metric));
+    let started = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let mut exps = vec![
+        meta(exp_a, Uuid::new_v4(), metric, started),
+        meta(exp_b, Uuid::new_v4(), metric, started),
+        meta(exp_c, Uuid::new_v4(), metric, started),
+    ];
+    exps[0].flag_id = Uuid::new_v4();
+    exps[1].flag_id = Uuid::new_v4();
+    exps[2].flag_id = Uuid::new_v4();
+    let computed_at = Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap();
+
+    // OLD per-tuple path.
+    let old_reader = OldPathReader::new(ch.clone());
+    let old_writer = CapturingWriter::default();
+    let n_old = compute_and_persist_interactions(
+        &old_reader,
+        &old_writer,
+        env,
+        &exps,
+        &metrics,
+        &["user".to_string()],
+        computed_at,
+    )
+    .await
+    .expect("old-path sweep");
+
+    // NEW consolidated path.
+    let new_reader = NewPathReader::new(ch.clone());
+    let new_writer = CapturingWriter::default();
+    let n_new = compute_and_persist_interactions(
+        &new_reader,
+        &new_writer,
+        env,
+        &exps,
+        &metrics,
+        &["user".to_string()],
+        computed_at,
+    )
+    .await
+    .expect("new-path sweep");
+
+    // 3 pairs × 3 terms + 1 triple × 7 terms = 16 rows either way.
+    assert_eq!(n_old, 16, "old path: pairs + triple decomposition");
+    assert_eq!(n_new, 16, "new path: pairs + triple decomposition");
+
+    let old_rows = normalize_rows(old_writer.rows.into_inner().expect("old rows"));
+    let new_rows = normalize_rows(new_writer.rows.into_inner().expect("new rows"));
+
+    assert_eq!(
+        old_rows.len(),
+        new_rows.len(),
+        "row counts must match: old={} new={}",
+        old_rows.len(),
+        new_rows.len()
+    );
+    // Field-by-field identity (PartialEq covers experiment_ids, term,
+    // shared_count, cell_stats, interaction_estimate, p_value, df,
+    // insufficient_data, significant, and every bayes_* field).
+    for (o, n) in old_rows.iter().zip(new_rows.iter()) {
+        assert_eq!(
+            o, n,
+            "consolidated fetch diverged from per-tuple for term {} on {:?}:\nOLD={o:?}\nNEW={n:?}",
+            o.term, o.experiment_ids
+        );
+    }
+
+    // The fetch-count contrast on this very run (3 experiments, one metric, one
+    // context): OLD issues 4 per-tuple aggregation queries (3 pairs + 1 triple),
+    // NEW issues exactly 1 consolidated query.
+    assert_eq!(
+        old_reader.agg_calls.load(Ordering::SeqCst),
+        4,
+        "old path: 3 pairs + 1 triple = 4 per-tuple aggregation fetches"
+    );
+    assert_eq!(
+        new_reader.consolidated_calls.load(Ordering::SeqCst),
+        1,
+        "new path: a single consolidated aggregation fetch"
+    );
+}
+
+/// EQUIVALENCE (review #12), 2-experiment case: a single candidate pair must
+/// also produce identical rows via both fetch paths (the consolidated query
+/// degenerates to one grid).
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs running clickhouse"]
+async fn consolidated_aggregation_matches_per_tuple_pairwise() {
+    let ch = make_client();
+    stitchd_event_writer::migrations::run(&ch)
+        .await
+        .expect("apply CH migrations");
+
+    let rates = [[0.10, 0.12], [0.14, 0.60]];
+    let (env, exp_a, exp_b, metric) = seed_pair(&ch, "equiv2", 100, rates).await;
+
+    let mut metrics = HashMap::new();
+    metrics.insert(metric, conversion_metric(metric));
+    let started = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let mut exps = vec![
+        meta(exp_a, Uuid::new_v4(), metric, started),
+        meta(exp_b, Uuid::new_v4(), metric, started),
+    ];
+    exps[0].flag_id = Uuid::new_v4();
+    exps[1].flag_id = Uuid::new_v4();
+    let computed_at = Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap();
+
+    let old_reader = OldPathReader::new(ch.clone());
+    let old_writer = CapturingWriter::default();
+    compute_and_persist_interactions(
+        &old_reader,
+        &old_writer,
+        env,
+        &exps,
+        &metrics,
+        &["user".to_string()],
+        computed_at,
+    )
+    .await
+    .expect("old-path sweep");
+
+    let new_reader = NewPathReader::new(ch.clone());
+    let new_writer = CapturingWriter::default();
+    compute_and_persist_interactions(
+        &new_reader,
+        &new_writer,
+        env,
+        &exps,
+        &metrics,
+        &["user".to_string()],
+        computed_at,
+    )
+    .await
+    .expect("new-path sweep");
+
+    let old_rows = normalize_rows(old_writer.rows.into_inner().expect("old rows"));
+    let new_rows = normalize_rows(new_writer.rows.into_inner().expect("new rows"));
+    assert_eq!(
+        old_rows, new_rows,
+        "pairwise consolidated must match per-tuple"
+    );
+
+    // One pair → OLD issues 1 per-tuple fetch, NEW issues 1 consolidated fetch.
+    assert_eq!(old_reader.agg_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(new_reader.consolidated_calls.load(Ordering::SeqCst), 1);
+}
+
+/// FETCH-COUNT (review #12 impact): for three experiments sharing one
+/// aggregation metric on one context_type, the OLD per-tuple path issues 4
+/// aggregation cell queries (3 pairs + 1 triple) while the NEW consolidated
+/// path issues exactly 1 — a 4× round-trip reduction. (In-process; still reads
+/// live CH because the wrappers delegate to the production reader.)
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs running clickhouse"]
+async fn consolidated_aggregation_fetch_count_three_experiments() {
+    let ch = make_client();
+    stitchd_event_writer::migrations::run(&ch)
+        .await
+        .expect("apply CH migrations");
+
+    let (env, exp_a, exp_b, exp_c, metric) = seed_triple(&ch, "fcount", 20).await;
+
+    let mut metrics = HashMap::new();
+    metrics.insert(metric, conversion_metric(metric));
+    let started = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let mut exps = vec![
+        meta(exp_a, Uuid::new_v4(), metric, started),
+        meta(exp_b, Uuid::new_v4(), metric, started),
+        meta(exp_c, Uuid::new_v4(), metric, started),
+    ];
+    exps[0].flag_id = Uuid::new_v4();
+    exps[1].flag_id = Uuid::new_v4();
+    exps[2].flag_id = Uuid::new_v4();
+    let computed_at = Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap();
+
+    let old_reader = OldPathReader::new(ch.clone());
+    let old_writer = CapturingWriter::default();
+    compute_and_persist_interactions(
+        &old_reader,
+        &old_writer,
+        env,
+        &exps,
+        &metrics,
+        &["user".to_string()],
+        computed_at,
+    )
+    .await
+    .expect("old-path sweep");
+
+    let new_reader = NewPathReader::new(ch.clone());
+    let new_writer = CapturingWriter::default();
+    compute_and_persist_interactions(
+        &new_reader,
+        &new_writer,
+        env,
+        &exps,
+        &metrics,
+        &["user".to_string()],
+        computed_at,
+    )
+    .await
+    .expect("new-path sweep");
+
+    let old_aggs = old_reader.agg_calls.load(Ordering::SeqCst);
+    let new_consolidated = new_reader.consolidated_calls.load(Ordering::SeqCst);
+    println!(
+        "review #12 fetch counts — OLD per-tuple aggregation queries = {old_aggs}, \
+         NEW consolidated aggregation queries = {new_consolidated}"
+    );
+    assert_eq!(old_aggs, 4, "OLD: C(3,2) + C(3,3) = 3 pairs + 1 triple = 4");
+    assert_eq!(
+        new_consolidated, 1,
+        "NEW: one query per (metric, context_type)"
+    );
 }
