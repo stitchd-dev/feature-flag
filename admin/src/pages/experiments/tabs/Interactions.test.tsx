@@ -103,13 +103,15 @@ describe('hasSignificantInteraction', () => {
     expect(hasSignificantInteraction([NOT_SIGNIFICANT, INSUFFICIENT])).toBe(false)
   })
 
-  it('returns true for a row with high bayes_prob (> 0.95) even if not frequentist-significant', () => {
+  it('returns false for a high-bayes-prob row that is not frequentist-significant (bayes is uncorrected, does not drive the banner)', () => {
     const highBayes: ExperimentInteraction = {
       ...NOT_SIGNIFICANT,
       significant: false,
       bayes_prob: 0.96,
     }
-    expect(hasSignificantInteraction([highBayes])).toBe(true)
+    // bayes_prob is an uncorrected directional posterior (≈0.5 under the null,
+    // easily >0.95 for a modest effect); it must NOT fire the page-level warning.
+    expect(hasSignificantInteraction([highBayes])).toBe(false)
   })
 
   it('returns false when bayes_prob is high but insufficient_data is set', () => {

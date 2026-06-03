@@ -62,25 +62,37 @@ export function formatBayesCI(
  * Fallback:   raw term string
  */
 export function formatTerm(term: string, order: number): string {
-  if (order === 1 || term.startsWith('main:')) return 'Main effect'
-  if (order === 2 || term.startsWith('2way:')) return 'A×B'
-  if (order === 3 || term.startsWith('3way:')) return 'A×B×C'
+  // The term prefix is authoritative (it names the actual effect); `order` is
+  // only a fallback for an unprefixed term.
+  if (term.startsWith('main:')) return 'Main effect'
+  if (term.startsWith('2way:')) return 'A×B'
+  if (term.startsWith('3way:')) return 'A×B×C'
+  if (order === 1) return 'Main effect'
+  if (order === 2) return 'A×B'
+  if (order === 3) return 'A×B×C'
   return term
 }
 
 /**
- * True when any interaction in the list is a *real* significant result — either
- * frequentist significant (significant && !insufficient_data) or a high-probability
- * Bayesian interaction (bayes_prob > 0.95 && !insufficient_data).
- * Rows flagged `insufficient_data` carry 0.0 sentinels and must never be counted.
+ * True when the experiment has a *real* significant cross-experiment
+ * interaction — i.e. a non-insufficient INTERACTION term (2-way/3-way, never a
+ * `main:` effect) that is frequentist-significant after the sweep's
+ * Benjamini–Hochberg correction.
+ *
+ * Deliberately excludes: (a) `main:` rows — a single-experiment main effect is
+ * not a cross-experiment interaction and would otherwise fire the banner on any
+ * well-powered experiment; (b) the per-row Bayesian `bayes_prob` — it is an
+ * UNcorrected directional posterior (≈0.5 under the null, easily >0.95 for a
+ * modest effect) and is not multiplicity-controlled, so gating the page-level
+ * warning on it produces false alarms and contradicts the per-row frequentist
+ * badge. Bayesian columns remain shown per row for context.
  */
 export function hasSignificantInteraction(
   interactions: ExperimentInteraction[],
 ): boolean {
   return interactions.some(
     (i) =>
-      !i.insufficient_data &&
-      ((i.significant) || (i.bayes_prob > 0.95)),
+      !i.insufficient_data && i.significant && !i.term.startsWith('main:'),
   )
 }
 

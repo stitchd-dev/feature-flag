@@ -2,8 +2,9 @@
  * Interactions tab — P5 N-way tests.
  *
  * Exercises the N-way (order 2 + 3) rendering, Bayesian columns, order badges,
- * insufficient-data masking, and the generalized hasSignificantInteraction helper
- * (fires on high-bayes-prob rows as well as frequentist-significant rows).
+ * insufficient-data masking, and the hasSignificantInteraction helper (fires
+ * only on FDR-significant INTERACTION terms — never main effects, and never the
+ * uncorrected directional bayes_prob).
  *
  * Uses renderToString (node env) consistent with the sibling tab tests.
  */
@@ -122,12 +123,23 @@ describe('hasSignificantInteraction (N-way + Bayesian)', () => {
     expect(hasSignificantInteraction([BENIGN, TWO_WAY_SIGNIFICANT])).toBe(true)
   })
 
-  it('returns true when only a high-bayes-prob (> 0.95) row is present', () => {
-    expect(hasSignificantInteraction([HIGH_BAYES_ONLY])).toBe(true)
+  it('returns false when only a high-bayes-prob (> 0.95) row is present (bayes is uncorrected, does not drive the banner)', () => {
+    expect(hasSignificantInteraction([HIGH_BAYES_ONLY])).toBe(false)
   })
 
   it('returns false for an all-insufficient set', () => {
     expect(hasSignificantInteraction([INSUFFICIENT_DATA])).toBe(false)
+  })
+
+  it('returns false for a significant MAIN-EFFECT row (a main effect is not a cross-experiment interaction)', () => {
+    const significantMain: ExperimentInteraction = {
+      ...BENIGN,
+      term: 'main:exp-x',
+      interaction_order: 2,
+      significant: true,
+      insufficient_data: false,
+    }
+    expect(hasSignificantInteraction([significantMain])).toBe(false)
   })
 
   it('returns false when no rows are significant and all bayes_prob ≤ 0.95', () => {
