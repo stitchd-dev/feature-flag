@@ -590,10 +590,10 @@ function ExperimentDetailBody({
               >
                 <I.alert size={15} style={{ flexShrink: 0, marginTop: 1 }} />
                 <span>
-                  A significant interaction with another concurrent experiment
-                  was detected. Interpret these results with caution — the
-                  estimated effect may be confounded. See the Interactions tab
-                  for details.
+                  A significant interaction with one or more concurrent
+                  experiments was detected (frequentist or Bayesian). Interpret
+                  these results with caution — the estimated effect may be
+                  confounded. See the Interactions tab for details.
                 </span>
               </div>
             )}
