@@ -9,19 +9,799 @@
 //! - pairwise interactions (`TermKind::TwoWay`)
 //! - for `order == 3`, the three-way interaction (`TermKind::ThreeWay`)
 //!
-//! Partition the total sum of squares into main / 2-way / 3-way / error
-//! components using only per-cell sufficient statistics `(n, sum, sum_sq)`, and
-//! emit an F-test per term (`MS_term / MS_error` on the correct df). Empty
-//! cells, no within-cell replication (`df_err <= 0`), or zero error variance →
+//! ## Method
+//!
+//! A single **common error term** is computed from the full k-factor cell
+//! structure (per-cell within-variance pooled across every populated cell):
+//! `SS_error = Σ_cells (Σx² − (Σx)²/n)`, `df_error = N − (#non-empty cells)`.
+//! Every F-test below uses this same `MS_error = SS_error / df_error`
+//! denominator, so the terms share one residual estimate (the standard balanced
+//! factorial-ANOVA partition). If `df_error ≤ 0` (no within-cell replication) or
+//! `SS_error ≤ 0` (zero residual variance), every term is
 //! [`super::InteractionResult::insufficient`].
 //!
-//! The order-2 interaction term MUST reproduce [`super::continuous_interaction`]
-//! (regression gate, P2.T7). Distribution helper from the parent: `super::fdist_sf`.
+//! - **Main{i}:** one-way between-level SS on factor `i`'s marginal level means,
+//!   `SS_i = Σ_l n_l·(mean_l − grand_mean)²`, `df_i = L_i − 1`.
+//! - **TwoWay{a,b}:** delegates to [`super::continuous_interaction`] on the
+//!   table collapsed onto the `(a, b)` grid. At `order == 2` this is identical
+//!   to the full-model 2-way term (and exactly reproduces the regression
+//!   baseline, gate P2.T7); at `order == 3` it is the *marginal* 2-way
+//!   interaction.
+//! - **ThreeWay{0,1,2}** (order 3): the residual interaction SS
+//!   `SS₃ = SS_cells − SS_A − SS_B − SS_C − SS_AB − SS_BC − SS_AC`, with
+//!   `df₃ = (Lₐ−1)(L_b−1)(L_c−1)`.
+//!
+//! `significant` is `p_value < super::ALPHA` and not insufficient. Distribution
+//! tail from the parent: `super::fdist_sf`.
 
-use super::{NdContinuousCell, TermResult};
+use super::{NdContinuousCell, TermKind, TermResult};
 
-/// See module contract. **Stub** — returns no terms until implemented (P2.T3).
+/// See module contract. Returns one [`TermResult`] per main effect, pairwise
+/// interaction, and (for `order == 3`) the three-way interaction.
 pub fn continuous_terms(cells: &[NdContinuousCell], order: usize) -> Vec<TermResult> {
-    let _ = (cells, order);
-    Vec::new()
+    let mut out = Vec::new();
+
+    // The common error term shared by every (non-delegated) F-test.
+    let err = ErrorTerm::from_cells(cells, order);
+
+    // Main effects: one per factor.
+    for i in 0..order {
+        out.push(main_term(cells, i, &err));
+    }
+
+    // Pairwise interactions: one per unordered pair a < b.
+    for a in 0..order {
+        for b in (a + 1)..order {
+            out.push(two_way_term(cells, a, b));
+        }
+    }
+
+    // Three-way interaction (order 3 only).
+    if order == 3 {
+        out.push(three_way_term(cells, &err));
+    }
+
+    out
+}
+
+// ── Shared error term ────────────────────────────────────────────────────────
+
+/// The pooled within-cell error term, computed once from the full k-factor
+/// table and reused by every F-test that is *not* delegated to the legacy 2-way
+/// routine. `valid` is false when there is no replication (`df ≤ 0`) or no
+/// residual variance (`ss ≤ 0`), in which case dependent terms are insufficient.
+struct ErrorTerm {
+    ss: f64,
+    df: f64,
+    valid: bool,
+}
+
+impl ErrorTerm {
+    fn from_cells(cells: &[NdContinuousCell], order: usize) -> Self {
+        let mut ss = 0.0f64;
+        let mut total_n = 0.0f64;
+        let mut non_empty = 0u64;
+        for c in cells {
+            // Cells with the wrong arity or no observations contribute nothing
+            // to the pooled within-variance and are not counted as a fitted
+            // cell mean (so they don't consume an error df).
+            if c.levels.len() != order || c.n == 0 {
+                continue;
+            }
+            let n = c.n as f64;
+            ss += c.sum_sq - c.sum * c.sum / n;
+            total_n += n;
+            non_empty += 1;
+        }
+        // Floating-point cancellation can produce a tiny negative SS.
+        if ss < 0.0 {
+            ss = 0.0;
+        }
+        let df = total_n - non_empty as f64;
+        let valid = df > 0.0 && ss > 0.0;
+        ErrorTerm { ss, df, valid }
+    }
+
+    /// Mean square of the error term (only meaningful when `valid`).
+    #[inline]
+    fn ms(&self) -> f64 {
+        self.ss / self.df
+    }
+}
+
+// ── Main effect ──────────────────────────────────────────────────────────────
+
+/// One-way between-level F-test on factor `factor`'s trial-weighted marginal
+/// level means, tested against the common error term.
+fn main_term(cells: &[NdContinuousCell], factor: usize, err: &ErrorTerm) -> TermResult {
+    let kind = TermKind::Main { factor };
+
+    // Collapse onto the single factor: marginal (n, sum) per level.
+    let levels = match marginal_1d(cells, factor) {
+        Some(m) => m,
+        None => return term(kind, super::InteractionResult::insufficient(0)),
+    };
+    let n_levels = levels.len();
+    let df_factor = (n_levels as u32).saturating_sub(1);
+
+    if n_levels < 2 || !err.valid {
+        return term(kind, super::InteractionResult::insufficient(df_factor));
+    }
+
+    let total_n: f64 = levels.iter().map(|(n, _)| n).sum();
+    let grand_sum: f64 = levels.iter().map(|(_, s)| s).sum();
+    if total_n <= 0.0 {
+        return term(kind, super::InteractionResult::insufficient(df_factor));
+    }
+    let grand_mean = grand_sum / total_n;
+
+    // SS_factor = Σ_l n_l · (mean_l − grand_mean)².
+    let mut ss_factor = 0.0f64;
+    for &(n_l, sum_l) in &levels {
+        if n_l <= 0.0 {
+            continue;
+        }
+        let dev = sum_l / n_l - grand_mean;
+        ss_factor += n_l * dev * dev;
+    }
+    if ss_factor < 0.0 {
+        ss_factor = 0.0;
+    }
+
+    f_test(kind, ss_factor, df_factor, err)
+}
+
+// ── Pairwise interaction ───────────────────────────────────────────────────
+
+/// Pairwise interaction on factors `a < b`, delegated to the legacy two-way
+/// routine on the collapsed `(a, b)` grid. At order 2 this is the full-model
+/// 2-way term (exact regression-baseline reproduction); at order 3 it is the
+/// marginal 2-way interaction.
+fn two_way_term(cells: &[NdContinuousCell], a: usize, b: usize) -> TermResult {
+    let kind = TermKind::TwoWay { a, b };
+
+    // Collapse other factors away: sum (n, sum, sum_sq) onto the (a, b) grid.
+    let mut collapsed: Vec<super::ContinuousCell> = Vec::new();
+    for c in cells {
+        if c.levels.len() <= a.max(b) {
+            // Cell missing one of the two factors → arity mismatch; skip it
+            // rather than index out of bounds.
+            continue;
+        }
+        let a_level = c.levels[a];
+        let b_level = c.levels[b];
+        if let Some(slot) = collapsed
+            .iter_mut()
+            .find(|cc| cc.a_level == a_level && cc.b_level == b_level)
+        {
+            slot.n = slot.n.saturating_add(c.n);
+            slot.sum += c.sum;
+            slot.sum_sq += c.sum_sq;
+        } else {
+            collapsed.push(super::ContinuousCell {
+                a_level,
+                b_level,
+                n: c.n,
+                sum: c.sum,
+                sum_sq: c.sum_sq,
+            });
+        }
+    }
+
+    let freq = super::continuous_interaction(&collapsed);
+    term(kind, freq)
+}
+
+// ── Three-way interaction ────────────────────────────────────────────────────
+
+/// Full three-way interaction F-test (order 3 only): the residual cell-mean
+/// variation after removing all main effects and pairwise interactions, tested
+/// against the common error term.
+fn three_way_term(cells: &[NdContinuousCell], err: &ErrorTerm) -> TermResult {
+    let kind = TermKind::ThreeWay { a: 0, b: 1, c: 2 };
+
+    // Level counts per factor (max index + 1), arity-checked to 3.
+    let mut maxlvl = [0usize; 3];
+    let mut total_n = 0.0f64;
+    let mut grand_sum = 0.0f64;
+    for cell in cells {
+        if cell.levels.len() != 3 {
+            continue;
+        }
+        for (d, m) in maxlvl.iter_mut().enumerate() {
+            *m = (*m).max(cell.levels[d]);
+        }
+        if cell.n > 0 {
+            total_n += cell.n as f64;
+            grand_sum += cell.sum;
+        }
+    }
+    let l = [maxlvl[0] + 1, maxlvl[1] + 1, maxlvl[2] + 1];
+    let df3 = ((l[0] - 1) * (l[1] - 1) * (l[2] - 1)) as u32;
+
+    // Need ≥2 levels on every factor and a valid error term.
+    if l.iter().any(|&x| x < 2) || !err.valid || total_n <= 0.0 {
+        return term(kind, super::InteractionResult::insufficient(df3));
+    }
+
+    // Dense 3-D cell accumulator. An empty cell makes the full-factorial mean
+    // decomposition unidentifiable, so we abstain if any is missing.
+    let mut cell_n = vec![0.0f64; l[0] * l[1] * l[2]];
+    let mut cell_sum = vec![0.0f64; l[0] * l[1] * l[2]];
+    let idx = |i: usize, j: usize, k: usize| (i * l[1] + j) * l[2] + k;
+    for cell in cells {
+        if cell.levels.len() != 3 || cell.n == 0 {
+            continue;
+        }
+        let p = idx(cell.levels[0], cell.levels[1], cell.levels[2]);
+        cell_n[p] += cell.n as f64;
+        cell_sum[p] += cell.sum;
+    }
+    if cell_n.iter().any(|&x| x <= 0.0) {
+        return term(kind, super::InteractionResult::insufficient(df3));
+    }
+
+    let grand_mean = grand_sum / total_n;
+
+    // SS_cells = Σ_cells n · (cell_mean − grand_mean)².
+    let mut ss_cells = 0.0f64;
+    for p in 0..cell_n.len() {
+        let dev = cell_sum[p] / cell_n[p] - grand_mean;
+        ss_cells += cell_n[p] * dev * dev;
+    }
+
+    // Main-effect SS on each factor's marginal.
+    let ss_a = one_way_ss(cells, 0, grand_mean);
+    let ss_b = one_way_ss(cells, 1, grand_mean);
+    let ss_c = one_way_ss(cells, 2, grand_mean);
+
+    // Pairwise interaction SS on each collapsed 2-factor marginal table.
+    let ss_ab = two_way_ss(cells, 0, 1, grand_mean);
+    let ss_ac = two_way_ss(cells, 0, 2, grand_mean);
+    let ss_bc = two_way_ss(cells, 1, 2, grand_mean);
+
+    // Residual three-way SS.
+    let mut ss3 = ss_cells - ss_a - ss_b - ss_c - ss_ab - ss_ac - ss_bc;
+    // Clamp tiny negative SS from floating-point cancellation.
+    if ss3 < 0.0 {
+        ss3 = 0.0;
+    }
+
+    f_test(kind, ss3, df3, err)
+}
+
+// ── SS helpers (shared by the 3-way decomposition) ──────────────────────────
+
+/// Trial-weighted marginal `(n, sum)` per level on `factor`. Returns `None`
+/// when no populated cell carries that factor.
+fn marginal_1d(cells: &[NdContinuousCell], factor: usize) -> Option<Vec<(f64, f64)>> {
+    let max_level = cells
+        .iter()
+        .filter(|c| c.levels.len() > factor && c.n > 0)
+        .map(|c| c.levels[factor])
+        .max()?;
+    let mut levels = vec![(0.0f64, 0.0f64); max_level + 1];
+    for c in cells {
+        if c.levels.len() <= factor || c.n == 0 {
+            continue;
+        }
+        let slot = &mut levels[c.levels[factor]];
+        slot.0 += c.n as f64;
+        slot.1 += c.sum;
+    }
+    Some(levels)
+}
+
+/// One-way between-level SS on `factor`'s marginal level means, relative to the
+/// supplied grand mean. Used inside the 3-way partition.
+fn one_way_ss(cells: &[NdContinuousCell], factor: usize, grand_mean: f64) -> f64 {
+    let Some(levels) = marginal_1d(cells, factor) else {
+        return 0.0;
+    };
+    let mut ss = 0.0f64;
+    for (n_l, sum_l) in levels {
+        if n_l <= 0.0 {
+            continue;
+        }
+        let dev = sum_l / n_l - grand_mean;
+        ss += n_l * dev * dev;
+    }
+    ss
+}
+
+/// Pairwise interaction SS on the table collapsed onto factors `(a, b)`:
+/// `Σ_cells n · (cell_mean − row_mean − col_mean + grand_mean)²`, with all means
+/// trial-weighted. Used inside the 3-way partition.
+fn two_way_ss(cells: &[NdContinuousCell], a: usize, b: usize, grand_mean: f64) -> f64 {
+    // Collapse onto the (a, b) grid.
+    let mut rows = 0usize;
+    let mut colsn = 0usize;
+    for c in cells {
+        if c.levels.len() <= a.max(b) || c.n == 0 {
+            continue;
+        }
+        rows = rows.max(c.levels[a] + 1);
+        colsn = colsn.max(c.levels[b] + 1);
+    }
+    if rows == 0 || colsn == 0 {
+        return 0.0;
+    }
+
+    let mut cell_n = vec![vec![0.0f64; colsn]; rows];
+    let mut cell_sum = vec![vec![0.0f64; colsn]; rows];
+    for c in cells {
+        if c.levels.len() <= a.max(b) || c.n == 0 {
+            continue;
+        }
+        cell_n[c.levels[a]][c.levels[b]] += c.n as f64;
+        cell_sum[c.levels[a]][c.levels[b]] += c.sum;
+    }
+
+    // Row / column marginals on the collapsed grid.
+    let mut row_n = vec![0.0f64; rows];
+    let mut row_sum = vec![0.0f64; rows];
+    let mut col_n = vec![0.0f64; colsn];
+    let mut col_sum = vec![0.0f64; colsn];
+    for r in 0..rows {
+        for c in 0..colsn {
+            row_n[r] += cell_n[r][c];
+            row_sum[r] += cell_sum[r][c];
+            col_n[c] += cell_n[r][c];
+            col_sum[c] += cell_sum[r][c];
+        }
+    }
+
+    let mut ss = 0.0f64;
+    for r in 0..rows {
+        if row_n[r] <= 0.0 {
+            continue;
+        }
+        let row_mean = row_sum[r] / row_n[r];
+        for c in 0..colsn {
+            if cell_n[r][c] <= 0.0 || col_n[c] <= 0.0 {
+                continue;
+            }
+            let cell_mean = cell_sum[r][c] / cell_n[r][c];
+            let col_mean = col_sum[c] / col_n[c];
+            let resid = cell_mean - row_mean - col_mean + grand_mean;
+            ss += cell_n[r][c] * resid * resid;
+        }
+    }
+    ss
+}
+
+// ── Result construction ──────────────────────────────────────────────────────
+
+/// Build an F-test [`TermResult`] for `kind` from a term SS / df against the
+/// common error term. Abstains (insufficient) on zero term-df or a non-finite F.
+fn f_test(kind: TermKind, ss_term: f64, df_term: u32, err: &ErrorTerm) -> TermResult {
+    if df_term == 0 || !err.valid {
+        return term(kind, super::InteractionResult::insufficient(df_term));
+    }
+    let ms_term = ss_term / df_term as f64;
+    let f = ms_term / err.ms();
+    if !f.is_finite() {
+        return term(kind, super::InteractionResult::insufficient(df_term));
+    }
+    let p_value = super::fdist_sf(f, df_term as f64, err.df);
+    term(
+        kind,
+        super::InteractionResult {
+            estimate: f,
+            statistic: f,
+            p_value,
+            df: df_term,
+            significant: p_value < super::ALPHA,
+            insufficient_data: false,
+        },
+    )
+}
+
+/// Wrap a frequentist result as a Bayesian-free [`TermResult`].
+#[inline]
+fn term(kind: TermKind, freq: super::InteractionResult) -> TermResult {
+    TermResult {
+        kind,
+        freq,
+        bayes: None,
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::experimentation::stats::interaction::ContinuousCell;
+
+    // ── cell builders ────────────────────────────────────────────────────────
+
+    /// An n-factor continuous cell from explicit values (n / Σx / Σx²).
+    fn cell_vals(levels: &[usize], vals: &[f64]) -> NdContinuousCell {
+        let n = vals.len() as u64;
+        let sum: f64 = vals.iter().sum();
+        let sum_sq: f64 = vals.iter().map(|v| v * v).sum();
+        NdContinuousCell {
+            levels: levels.to_vec(),
+            n,
+            sum,
+            sum_sq,
+        }
+    }
+
+    /// A cell whose values are centred on `mean` with realistic, non-trivial
+    /// within-cell spread (a fixed symmetric ±spread pattern → deterministic,
+    /// non-zero variance), repeated `n` times. `n >= 40` per the contract.
+    fn cell_mean(levels: &[usize], mean: f64, n: u64) -> NdContinuousCell {
+        assert!(n >= 2);
+        // Repeating ±s/±2s pattern: mean preserved (sums to ~0 over a period of
+        // 4), variance ≈ 2.5·s². Deterministic so tests are reproducible.
+        let s = 3.0;
+        let pattern = [s, -s, 2.0 * s, -2.0 * s];
+        let mut vals = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            vals.push(mean + pattern[(i as usize) % 4]);
+        }
+        cell_vals(levels, &vals)
+    }
+
+    /// The legacy 2-way cell builder, mirroring the planted means used by the
+    /// regression baseline in `interaction.rs`.
+    fn ccell_mean_2d(a: usize, b: usize, mean: f64, n: u64) -> ContinuousCell {
+        let c = cell_mean(&[a, b], mean, n);
+        ContinuousCell {
+            a_level: a,
+            b_level: b,
+            n: c.n,
+            sum: c.sum,
+            sum_sq: c.sum_sq,
+        }
+    }
+
+    fn find(terms: &[TermResult], kind: TermKind) -> &TermResult {
+        terms
+            .iter()
+            .find(|t| t.kind == kind)
+            .unwrap_or_else(|| panic!("missing term {kind:?}"))
+    }
+
+    // ── order-2 TwoWay reproduces the legacy fn exactly ──────────────────────
+
+    /// Planted 2-way interaction: means (0,0)=(0,1)=(1,0)=10, (1,1)=30. The
+    /// order-2 `TwoWay` term must equal `continuous_interaction` bit-for-bit
+    /// (regression gate P2.T7) and be significant.
+    #[test]
+    fn order2_twoway_matches_legacy_on_planted_interaction() {
+        let nd = [
+            cell_mean(&[0, 0], 10.0, 60),
+            cell_mean(&[0, 1], 10.0, 60),
+            cell_mean(&[1, 0], 10.0, 60),
+            cell_mean(&[1, 1], 30.0, 60),
+        ];
+        let legacy_cells = [
+            ccell_mean_2d(0, 0, 10.0, 60),
+            ccell_mean_2d(0, 1, 10.0, 60),
+            ccell_mean_2d(1, 0, 10.0, 60),
+            ccell_mean_2d(1, 1, 30.0, 60),
+        ];
+
+        let terms = continuous_terms(&nd, 2);
+        let two = find(&terms, TermKind::TwoWay { a: 0, b: 1 });
+        let legacy = super::super::continuous_interaction(&legacy_cells);
+
+        assert_eq!(two.freq.estimate, legacy.estimate);
+        assert_eq!(two.freq.p_value, legacy.p_value);
+        assert_eq!(two.freq.df, legacy.df);
+        assert_eq!(two.freq.statistic, legacy.statistic);
+        assert_eq!(two.freq.insufficient_data, legacy.insufficient_data);
+        assert!(two.bayes.is_none());
+        assert!(!two.freq.insufficient_data);
+        assert!(two.freq.significant, "planted interaction should be sig");
+    }
+
+    /// Purely additive means (10, 15, 20, 25): the order-2 `TwoWay` term must
+    /// equal the legacy fn exactly and be NOT significant (no false positive).
+    #[test]
+    fn order2_twoway_matches_legacy_on_additive() {
+        let nd = [
+            cell_mean(&[0, 0], 10.0, 80),
+            cell_mean(&[0, 1], 15.0, 80),
+            cell_mean(&[1, 0], 20.0, 80),
+            cell_mean(&[1, 1], 25.0, 80),
+        ];
+        let legacy_cells = [
+            ccell_mean_2d(0, 0, 10.0, 80),
+            ccell_mean_2d(0, 1, 15.0, 80),
+            ccell_mean_2d(1, 0, 20.0, 80),
+            ccell_mean_2d(1, 1, 25.0, 80),
+        ];
+
+        let terms = continuous_terms(&nd, 2);
+        let two = find(&terms, TermKind::TwoWay { a: 0, b: 1 });
+        let legacy = super::super::continuous_interaction(&legacy_cells);
+
+        assert_eq!(two.freq.estimate, legacy.estimate);
+        assert_eq!(two.freq.p_value, legacy.p_value);
+        assert_eq!(two.freq.df, legacy.df);
+        assert_eq!(two.freq.statistic, legacy.statistic);
+        assert!(!two.freq.insufficient_data);
+        assert!(
+            !two.freq.significant,
+            "additive design must not be significant"
+        );
+    }
+
+    /// Order 2 emits exactly: Main{0}, Main{1}, TwoWay{0,1} (no three-way).
+    #[test]
+    fn order2_emits_expected_term_set() {
+        let nd = [
+            cell_mean(&[0, 0], 10.0, 50),
+            cell_mean(&[0, 1], 12.0, 50),
+            cell_mean(&[1, 0], 14.0, 50),
+            cell_mean(&[1, 1], 16.0, 50),
+        ];
+        let terms = continuous_terms(&nd, 2);
+        let kinds: Vec<TermKind> = terms.iter().map(|t| t.kind).collect();
+        assert_eq!(kinds.len(), 3);
+        assert!(kinds.contains(&TermKind::Main { factor: 0 }));
+        assert!(kinds.contains(&TermKind::Main { factor: 1 }));
+        assert!(kinds.contains(&TermKind::TwoWay { a: 0, b: 1 }));
+        assert!(terms.iter().all(|t| t.bayes.is_none()));
+    }
+
+    // ── order-3 three-way interaction ────────────────────────────────────────
+
+    /// Order 3 emits exactly 3 mains + 3 pairwise + 1 three-way = 7 terms.
+    #[test]
+    fn order3_emits_seven_terms() {
+        let nd = full_2x2x2(|_, _, _| 10.0, 50);
+        let terms = continuous_terms(&nd, 3);
+        assert_eq!(terms.len(), 7);
+        for k in [
+            TermKind::Main { factor: 0 },
+            TermKind::Main { factor: 1 },
+            TermKind::Main { factor: 2 },
+            TermKind::TwoWay { a: 0, b: 1 },
+            TermKind::TwoWay { a: 0, b: 2 },
+            TermKind::TwoWay { a: 1, b: 2 },
+            TermKind::ThreeWay { a: 0, b: 1, c: 2 },
+        ] {
+            assert!(terms.iter().any(|t| t.kind == k), "missing {k:?}");
+        }
+        assert!(terms.iter().all(|t| t.bayes.is_none()));
+    }
+
+    /// Build a full 2×2×2 design; cell mean from the closure, fixed `n` & spread.
+    fn full_2x2x2(mean: impl Fn(usize, usize, usize) -> f64, n: u64) -> Vec<NdContinuousCell> {
+        let mut v = Vec::with_capacity(8);
+        for i in 0..2 {
+            for j in 0..2 {
+                for k in 0..2 {
+                    v.push(cell_mean(&[i, j, k], mean(i, j, k), n));
+                }
+            }
+        }
+        v
+    }
+
+    /// Planted 3-way interaction is significant. The mean model is purely the
+    /// triple product `8·(i·j·k)`: all main effects, AB/AC/BC interactions are
+    /// zero in expectation, leaving only the 3-way term.
+    #[test]
+    fn order3_planted_threeway_is_significant() {
+        let nd = full_2x2x2(|i, j, k| 10.0 + 8.0 * (i * j * k) as f64, 60);
+        let terms = continuous_terms(&nd, 3);
+        let three = find(&terms, TermKind::ThreeWay { a: 0, b: 1, c: 2 });
+        assert!(!three.freq.insufficient_data);
+        assert_eq!(three.freq.df, 1); // (2-1)^3
+        assert!(
+            three.freq.significant,
+            "planted 3-way should be significant: p={} F={}",
+            three.freq.p_value, three.freq.statistic
+        );
+    }
+
+    /// No three-way: a fully additive + pairwise mean model (main + AB + AC + BC
+    /// terms, but the triple residual is zero) is NOT significant on the
+    /// three-way term.
+    #[test]
+    fn order3_no_threeway_is_not_significant() {
+        // mean = base + a-main + b-main + c-main + AB + AC + BC, no ABC.
+        // Encode each factor as 0/1; pairwise terms are products of two factors.
+        let model = |i: usize, j: usize, k: usize| {
+            let (i, j, k) = (i as f64, j as f64, k as f64);
+            10.0 + 2.0 * i + 3.0 * j + 4.0 * k // mains
+                + 5.0 * i * j + 6.0 * i * k + 7.0 * j * k // pairwise
+        };
+        let nd = full_2x2x2(model, 80);
+        let terms = continuous_terms(&nd, 3);
+        let three = find(&terms, TermKind::ThreeWay { a: 0, b: 1, c: 2 });
+        assert!(!three.freq.insufficient_data);
+        assert!(
+            !three.freq.significant,
+            "additive+pairwise model has no 3-way: p={} F={}",
+            three.freq.p_value, three.freq.statistic
+        );
+    }
+
+    /// At order 3, the `TwoWay{0,1}` term is the *marginal* 2-way interaction:
+    /// it equals `continuous_interaction` on the table collapsed over factor 2.
+    #[test]
+    fn order3_twoway_is_marginal_interaction() {
+        let nd = full_2x2x2(|i, j, k| 10.0 + 8.0 * (i * j * k) as f64, 60);
+        let terms = continuous_terms(&nd, 3);
+        let two = find(&terms, TermKind::TwoWay { a: 0, b: 1 });
+
+        // Collapse over factor 2 by hand and call the legacy routine.
+        let mut collapsed: Vec<ContinuousCell> = Vec::new();
+        for c in &nd {
+            let (a, b) = (c.levels[0], c.levels[1]);
+            if let Some(s) = collapsed
+                .iter_mut()
+                .find(|cc| cc.a_level == a && cc.b_level == b)
+            {
+                s.n += c.n;
+                s.sum += c.sum;
+                s.sum_sq += c.sum_sq;
+            } else {
+                collapsed.push(ContinuousCell {
+                    a_level: a,
+                    b_level: b,
+                    n: c.n,
+                    sum: c.sum,
+                    sum_sq: c.sum_sq,
+                });
+            }
+        }
+        let legacy = super::super::continuous_interaction(&collapsed);
+        assert_eq!(two.freq.estimate, legacy.estimate);
+        assert_eq!(two.freq.p_value, legacy.p_value);
+        assert_eq!(two.freq.df, legacy.df);
+    }
+
+    // ── main effects ─────────────────────────────────────────────────────────
+
+    /// A factor whose marginal means differ strongly is significant; a flat
+    /// factor (identical marginal means) is not.
+    #[test]
+    fn main_effect_varying_vs_flat() {
+        // Factor 0 varies (level 0 ≈ 10, level 1 ≈ 40); factor 1 is flat across
+        // its levels (marginal means equal). Strong within-row replication.
+        let nd = [
+            cell_mean(&[0, 0], 10.0, 80),
+            cell_mean(&[0, 1], 10.0, 80),
+            cell_mean(&[1, 0], 40.0, 80),
+            cell_mean(&[1, 1], 40.0, 80),
+        ];
+        let terms = continuous_terms(&nd, 2);
+
+        let m0 = find(&terms, TermKind::Main { factor: 0 });
+        assert!(!m0.freq.insufficient_data);
+        assert_eq!(m0.freq.df, 1);
+        assert!(
+            m0.freq.significant,
+            "varying factor 0 should be significant: p={}",
+            m0.freq.p_value
+        );
+
+        let m1 = find(&terms, TermKind::Main { factor: 1 });
+        assert!(!m1.freq.insufficient_data);
+        assert!(
+            !m1.freq.significant,
+            "flat factor 1 should not be significant: p={}",
+            m1.freq.p_value
+        );
+        // A flat factor's between-level SS is ~0 → F ~0 → p ~1.
+        assert!(
+            m1.freq.estimate.abs() < 1e-6,
+            "F should be ≈0 for flat factor"
+        );
+    }
+
+    /// A three-level factor yields df = 2 on its main effect.
+    #[test]
+    fn main_effect_three_levels_df_is_two() {
+        let nd = [
+            cell_mean(&[0, 0], 10.0, 50),
+            cell_mean(&[0, 1], 12.0, 50),
+            cell_mean(&[1, 0], 20.0, 50),
+            cell_mean(&[1, 1], 22.0, 50),
+            cell_mean(&[2, 0], 30.0, 50),
+            cell_mean(&[2, 1], 32.0, 50),
+        ];
+        let terms = continuous_terms(&nd, 2);
+        let m0 = find(&terms, TermKind::Main { factor: 0 });
+        assert_eq!(m0.freq.df, 2);
+        assert!(m0.freq.significant);
+    }
+
+    // ── insufficient-data paths ──────────────────────────────────────────────
+
+    /// One observation per cell → df_error ≤ 0 → every term insufficient.
+    #[test]
+    fn no_replication_all_terms_insufficient() {
+        let nd = [
+            cell_vals(&[0, 0], &[10.0]),
+            cell_vals(&[0, 1], &[12.0]),
+            cell_vals(&[1, 0], &[14.0]),
+            cell_vals(&[1, 1], &[20.0]),
+        ];
+        let terms = continuous_terms(&nd, 2);
+        assert_eq!(terms.len(), 3);
+        for t in &terms {
+            assert!(
+                t.freq.insufficient_data,
+                "{:?} should be insufficient",
+                t.kind
+            );
+            assert!(!t.freq.significant);
+            assert!(t.freq.estimate.is_nan());
+            assert!(t.freq.p_value.is_nan());
+        }
+    }
+
+    /// Zero within-cell variance → SS_error = 0 → every term insufficient.
+    #[test]
+    fn zero_within_variance_all_terms_insufficient() {
+        let nd = [
+            cell_vals(&[0, 0], &[10.0, 10.0, 10.0, 10.0]),
+            cell_vals(&[0, 1], &[12.0, 12.0, 12.0, 12.0]),
+            cell_vals(&[1, 0], &[14.0, 14.0, 14.0, 14.0]),
+            cell_vals(&[1, 1], &[25.0, 25.0, 25.0, 25.0]),
+        ];
+        let terms = continuous_terms(&nd, 2);
+        for t in &terms {
+            assert!(
+                t.freq.insufficient_data,
+                "{:?} should be insufficient",
+                t.kind
+            );
+        }
+    }
+
+    /// An empty cell makes the 3-way term unidentifiable → that term is
+    /// insufficient (the marginal lower-order terms can still resolve).
+    #[test]
+    fn order3_empty_cell_threeway_insufficient() {
+        // Full 2×2×2 minus the (1,1,1) cell.
+        let mut nd = Vec::new();
+        for i in 0..2 {
+            for j in 0..2 {
+                for k in 0..2 {
+                    if (i, j, k) == (1, 1, 1) {
+                        continue;
+                    }
+                    nd.push(cell_mean(&[i, j, k], 10.0 + (i + j + k) as f64, 50));
+                }
+            }
+        }
+        let terms = continuous_terms(&nd, 3);
+        let three = find(&terms, TermKind::ThreeWay { a: 0, b: 1, c: 2 });
+        assert!(three.freq.insufficient_data);
+        assert!(!three.freq.significant);
+    }
+
+    /// A single level on a factor → that main effect (and any interaction using
+    /// it) is insufficient (no contrast / no interaction df).
+    #[test]
+    fn single_level_factor_main_is_insufficient() {
+        // Factor 0 has only level 0; factor 1 has two levels.
+        let nd = [cell_mean(&[0, 0], 10.0, 60), cell_mean(&[0, 1], 20.0, 60)];
+        let terms = continuous_terms(&nd, 2);
+        let m0 = find(&terms, TermKind::Main { factor: 0 });
+        assert!(m0.freq.insufficient_data, "single-level factor 0");
+        // The 2-way term has a 1-level factor → legacy routine returns insufficient.
+        let two = find(&terms, TermKind::TwoWay { a: 0, b: 1 });
+        assert!(two.freq.insufficient_data);
+    }
+
+    // ── determinism ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn is_deterministic() {
+        let nd = full_2x2x2(|i, j, k| 10.0 + 8.0 * (i * j * k) as f64, 60);
+        let a = continuous_terms(&nd, 3);
+        let b = continuous_terms(&nd, 3);
+        assert_eq!(a, b);
+    }
 }
