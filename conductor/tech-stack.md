@@ -53,9 +53,11 @@ seqtest_20260603 additions (Sequential Testing — always-valid inference):
   experiments.v1 VariantResult +per-variant sequential_* fields (tags 10-15, surfaced on read).
 - Compute: stats-service `sequential_compute` builds the blob from the per-variant sufficient
   stats and threads the running-min prev_p from the prior tick's CH row. tau^2 default =
-  unit-information pooled variance (floored 1e-9). NOTE: the scheduled per-metric compute pass
-  (frequentist/bayesian/sequential) is a pre-existing scaffold (write_results(&[])); sequential is
-  wired at the build_metric_summaries seam and activates with it (follow-up feature-flag-k1l).
+  unit-information pooled variance (floored 1e-9). The scheduled per-metric compute pass
+  (frequentist/bayesian/sequential/SRM) is now IMPLEMENTED in stitchd-stats-service (compute.rs +
+  queries/variant_stats.rs): per-metric sufficient-stats queries -> ITT VariantStats/RatioGroupStats
+  -> stats -> non-empty experiment_results (feature-flag-k1l/-2lh; live-CH integration test). CUPED
+  is the remaining follow-up (feature-flag-z7m).
 -->
 
 

@@ -68,11 +68,12 @@ under a real effect and uniform CS coverage are likewise tested.
 
 ## Activation note
 
-The always-valid statistics are produced by the scheduled per-metric stats pass — the same pass that
-computes the Frequentist / Bayesian / CUPED / SRM results. Sequential inference is wired at that pass's
-`build_metric_summaries` seam and activates alongside the other per-metric statistics. (The end-to-end
-scheduled per-metric compute orchestration is tracked separately; sequential testing adds no new
-dependency beyond it.)
+The always-valid statistics are produced by the scheduled per-metric stats pass in
+`stitchd-stats-service` — the same pass that computes the Frequentist / Bayesian / SRM results. That
+pass executes the per-metric sufficient-statistics queries, builds per-variant `VariantStats` /
+`RatioGroupStats` under intent-to-treat semantics, and persists non-empty `experiment_results` rows
+each tick; sequential inference is computed there alongside the other statistics (gated on the
+per-experiment opt-in). CUPED variance reduction is the one remaining follow-up.
 
 ## Out of scope
 
