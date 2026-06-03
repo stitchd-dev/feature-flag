@@ -1302,7 +1302,10 @@ mod nd_cell_tests {
 
     #[test]
     fn json_round_trips_pairwise() {
-        let cells = vec![cell(&["control", "on"], 100, 20), cell(&["t1", "off"], 50, 5)];
+        let cells = vec![
+            cell(&["control", "on"], 100, 20),
+            cell(&["t1", "off"], 50, 5),
+        ];
         let json = cells_to_json(&cells);
         let back = cells_from_json(&json).expect("valid json");
         assert_eq!(cells, back);
