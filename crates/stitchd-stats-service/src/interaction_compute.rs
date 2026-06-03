@@ -1,22 +1,31 @@
-//! Cross-experiment interaction orchestration.
+//! Cross-experiment **N-way** interaction orchestration.
 //!
-//! Ties together the building blocks merged in earlier phases into the full
+//! Ties together the building blocks from earlier phases into the full
 //! compute-and-persist pipeline that runs on the 60-minute scheduler tick and
-//! on the on-demand recompute path:
+//! on the on-demand recompute path. Generalizes the original pairwise sweep to
+//! any interaction order (2 or 3):
 //!
-//! 1. [`crate::interaction_pairs::candidate_pairs`] enumerates the experiment
-//!    pairs worth testing (distinct flags, overlapping windows, shared metric,
-//!    not same exclusion group).
-//! 2. For each pair × shared metric × shared `context_type`, the per-cell metric
-//!    query ([`crate::queries::interaction_metric`]) aggregates the
-//!    `(a_variant, b_variant)` grid over the shared population.
-//! 3. The cells are fed to the interaction significance math
-//!    ([`stitchd_core::experimentation::stats::interaction`]) — `binary_*` for
-//!    conversion metrics, `continuous_*` for numeric metrics.
-//! 4. A row is written to the ClickHouse `experiment_interactions` table.
+//! 1. [`crate::interaction_pairs::candidate_pairs`] **and**
+//!    [`crate::interaction_pairs::candidate_triples`] enumerate the experiment
+//!    tuples worth testing (distinct flags, overlapping windows, shared metric,
+//!    not same exclusion group; triples additionally need a common metric).
+//! 2. For each tuple × shared metric × shared `context_type`, the metric is
+//!    classified (conversion / continuous / ratio / funnel) and the matching
+//!    k-way cell query ([`crate::queries::interaction_metric`]) aggregates the
+//!    variant-tuple grid over the shared population into [`NdCellAggregate`]s.
+//! 3. The cells are mapped to dense level indices
+//!    ([`dense_levels`] / [`level_indices`]) and fed to the N-way decomposition
+//!    ([`stitchd_core::experimentation::stats::interaction`]): the Frequentist
+//!    `*_terms` plus the matching Bayesian `*_bayes`, merged per `TermKind`.
+//! 4. Each decomposition **term** (main effect, pairwise, three-way) becomes one
+//!    row in the ClickHouse `experiment_interactions` table.
 //!
-//! Funnel and ratio metrics are out of scope for v1 — they are skipped with a
-//! `tracing::debug!` log rather than erroring.
+//! ## Multiple-comparison correction
+//!
+//! Every non-insufficient Frequentist p-value across the WHOLE sweep feeds a
+//! single Benjamini–Hochberg pass at FDR = 0.05 ([`benjamini_hochberg`]); the
+//! decisions set each row's `significant` (insufficient rows are never
+//! significant). Bayesian fields are independent of the FDR correction.
 //!
 //! ## Testability
 //!
@@ -37,40 +46,25 @@ use uuid::Uuid;
 
 use stitchd_core::experimentation::Experiment;
 use stitchd_core::experimentation::stats::interaction::{
-    BinaryCell, ContinuousCell, InteractionResult, binary_interaction, continuous_interaction,
+    BayesianInteraction, NdBinaryCell, NdContinuousCell, NdRatioCell, TermKind, TermResult,
+    binary_bayes, binary_terms, continuous_bayes, continuous_terms, ratio_bayes, ratio_terms,
 };
-use stitchd_core::metric::{MetricDefinition, MetricKind};
+use stitchd_core::metric::{AggregationConfig, MetricDefinition, MetricKind, RatioConfig};
 use stitchd_db::repository::MetricRepository;
 
 use crate::dispatch::rewrite_placeholders_to_clickhouse;
-use crate::interaction_pairs::{ExperimentMeta, candidate_pairs};
+use crate::interaction_pairs::{ExperimentMeta, candidate_pairs, candidate_triples};
 use crate::queries::QueryBind;
-use crate::queries::interaction_metric::{MetricCellKind, build_interaction_metric_cells_query};
-
-/// One per-(a_variant, b_variant) metric cell as returned by the metric-cells
-/// query. Carries both conversion and continuous statistics; the caller reads
-/// only the columns relevant to the metric kind.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct CellAggregate {
-    /// A-experiment variant key.
-    pub a_variant_key: String,
-    /// B-experiment variant key.
-    pub b_variant_key: String,
-    /// Number of shared contexts in this cell.
-    pub n: u64,
-    /// Shared contexts in this cell with ≥1 qualifying event (conversion).
-    pub successes: u64,
-    /// Σ per-context metric value (continuous).
-    pub value_sum: f64,
-    /// Σ per-context metric value² (continuous).
-    pub value_sq_sum: f64,
-}
+use crate::queries::interaction_metric::{
+    MetricCellKind, build_interaction_funnel_cells_query, build_interaction_metric_cells_query,
+    build_interaction_ratio_cells_query,
+};
 
 // ── N-dimensional (N-way) interaction cell ───────────────────────────────────
 
 /// One N-dimensional interaction cell, keyed by the variant tuple across the
-/// participating experiments (in experiment-tuple order). Generalizes
-/// [`CellAggregate`] (the pairwise A×B cell) to any interaction order.
+/// participating experiments (in experiment-tuple order — the same order as the
+/// query aliases `a0, a1, …`).
 ///
 /// Carries the sufficient statistics for *every* supported metric kind so a
 /// single uniform SQL shape feeds binary (conversion/funnel), continuous, and
@@ -169,88 +163,112 @@ pub fn level_indices(cell: &NdCellAggregate, levels: &[Vec<String>]) -> Option<V
         .collect()
 }
 
-/// One computed interaction row, ready to persist to `experiment_interactions`.
+/// One computed interaction **term** row, ready to persist to
+/// `experiment_interactions`. One candidate tuple emits a full hierarchical
+/// decomposition — one row per term (main / pairwise / three-way).
 #[derive(Debug, Clone, PartialEq)]
 pub struct InteractionRow {
     /// Environment UUID.
     pub env_id: Uuid,
-    /// First experiment of the (sorted) pair.
-    pub experiment_id_a: Uuid,
-    /// Second experiment of the pair.
-    pub experiment_id_b: Uuid,
+    /// Participating experiment UUIDs, **sorted ascending**. `len()` equals
+    /// `interaction_order`.
+    pub experiment_ids: Vec<Uuid>,
+    /// Interaction order of the candidate tuple (2 or 3) — the number of
+    /// participating experiments.
+    pub interaction_order: u8,
+    /// Term identity string, encoding the participating experiment UUIDs at the
+    /// term's factor positions:
+    /// - `"main:<exp>"` — a single-experiment main effect,
+    /// - `"2way:<a>x<b>"` — a pairwise interaction term,
+    /// - `"3way:<a>x<b>x<c>"` — the top-order three-way interaction term.
+    pub term: String,
     /// Context dimension the interaction was computed over.
     pub context_type: String,
     /// Shared metric key.
     pub metric_key: String,
-    /// Total shared contexts across all cells.
+    /// Total shared contexts across all cells of the tuple's grid.
     pub shared_count: u64,
-    /// JSON of the per-cell stats (the `CellAggregate` grid).
-    ///
-    /// ## JSON schema
-    ///
-    /// A JSON array of cell objects, one per `(a_variant, b_variant)` cell of
-    /// the interaction grid (serialized from `Vec<CellAggregate>`):
-    ///
-    /// ```json
-    /// [
-    ///   {
-    ///     "a_variant_key": "control",     // string: A-experiment variant key
-    ///     "b_variant_key": "treatment",   // string: B-experiment variant key
-    ///     "n": 1234,                       // u64: shared contexts in this cell
-    ///     "successes": 210,                // u64: contexts with ≥1 post-exposure
-    ///                                      //      qualifying event (conversion)
-    ///     "value_sum": 9876.5,             // f64: Σ per-context metric value
-    ///     "value_sq_sum": 123456.7         // f64: Σ per-context metric value²
-    ///   }
-    ///   // … one object per cell
-    /// ]
-    /// ```
-    ///
-    /// Conversion metrics read `n` + `successes`; continuous metrics read `n` +
-    /// `value_sum` + `value_sq_sum`. All six fields are always present (the SQL
-    /// shape is uniform across metric kinds). On a serialization failure the
-    /// empty array `"[]"` is persisted.
+    /// JSON of the per-cell stats — the N-dimensional [`NdCellAggregate`] grid
+    /// (serialized via [`cells_to_json`]). Shared across every term row of the
+    /// same tuple. On a serialization failure the empty array `"[]"` is
+    /// persisted.
     pub cell_stats: String,
-    /// Interaction effect-size estimate (`0.0` sentinel when insufficient data).
+    /// Frequentist interaction effect-size estimate for this term (`0.0`
+    /// sentinel when insufficient data).
     pub interaction_estimate: f64,
-    /// Two-sided p-value (`0.0` sentinel when insufficient data).
+    /// Two-sided Frequentist p-value for this term (`0.0` sentinel when
+    /// insufficient data).
     pub p_value: f64,
-    /// Whether the interaction is significant after Benjamini–Hochberg FDR
-    /// correction across the sweep batch (FDR = 0.05). Always `false` when
+    /// Degrees of freedom of the term's Frequentist test.
+    pub df: u32,
+    /// Whether the term is significant after Benjamini–Hochberg FDR correction
+    /// across the sweep batch (FDR = 0.05). Always `false` when
     /// `insufficient_data` is true.
     pub significant: bool,
-    /// Whether the inputs were too sparse/degenerate to run the test. When true,
-    /// `interaction_estimate` / `p_value` are `0.0` sentinels and `significant`
-    /// is `false`.
+    /// Whether the inputs were too sparse/degenerate to run the term's test.
+    /// When true, `interaction_estimate` / `p_value` are `0.0` sentinels and
+    /// `significant` is `false`.
     pub insufficient_data: bool,
+    /// Posterior probability the interaction effect is non-negligible
+    /// (Bayesian). `0.0` when no posterior was computed.
+    pub bayes_prob: f64,
+    /// Posterior mean of the interaction effect (Bayesian). `0.0` when absent.
+    pub bayes_expected: f64,
+    /// Lower bound of the Bayesian credible interval. `0.0` when absent.
+    pub bayes_ci_low: f64,
+    /// Upper bound of the Bayesian credible interval. `0.0` when absent.
+    pub bayes_ci_high: f64,
     /// When the row was computed.
     pub computed_at: DateTime<Utc>,
 }
 
 // ── Reader / writer traits ───────────────────────────────────────────────────
 
-/// Reads the per-cell metric grid for one (pair, metric, context_type) from
-/// ClickHouse.
+/// Reads the per-variant-tuple metric grid for one (tuple, metric,
+/// context_type) from ClickHouse, one method per metric family. Each returns
+/// the N-dimensional cell grid keyed by variant tuple (in `exp_ids` order).
 #[async_trait]
 pub trait InteractionCellReader: Send + Sync {
-    /// Fetch the `(a_variant, b_variant)` metric cells for the shared population
-    /// of `(exp_a, exp_b)` within `env_id`, restricted to `context_type` and the
-    /// supplied aggregation metric.
-    async fn fetch_cells(
+    /// Conversion / continuous cells for an `Aggregation` metric over the shared
+    /// population of `exp_ids` (length 2 or 3) within `env_id`.
+    async fn fetch_aggregation_cells(
         &self,
-        cfg: &stitchd_core::metric::AggregationConfig,
+        cfg: &AggregationConfig,
         env_id: &str,
-        exp_a: &str,
-        exp_b: &str,
+        exp_ids: &[&str],
         context_type: &str,
         interaction_end: DateTime<Utc>,
-    ) -> Result<Vec<CellAggregate>, anyhow::Error>;
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error>;
+
+    /// Binary funnel cells (`successes` = reached final step) for a `Funnel`
+    /// metric over the shared population of `exp_ids`.
+    async fn fetch_funnel_cells(
+        &self,
+        cfg: &stitchd_core::metric::FunnelConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error>;
+
+    /// Ratio cells (numerator/denominator second moments) for a `Ratio` metric
+    /// over the shared population of `exp_ids`. `num_cfg`/`den_cfg` are the
+    /// resolved aggregation legs.
+    async fn fetch_ratio_cells(
+        &self,
+        num_cfg: &AggregationConfig,
+        den_cfg: &AggregationConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error>;
 }
 
 /// Persists computed interaction rows to ClickHouse.
 #[async_trait]
 pub trait InteractionWriter: Send + Sync {
-    /// Write one interaction row to `experiment_interactions`.
+    /// Write one interaction term row to `experiment_interactions`.
     async fn write_row(&self, row: &InteractionRow) -> Result<(), anyhow::Error>;
 }
 
@@ -295,91 +313,116 @@ pub async fn compute_and_persist_interactions(
     context_types: &[String],
     computed_at: DateTime<Utc>,
 ) -> Result<usize, anyhow::Error> {
-    let pairs = candidate_pairs(experiments);
     let by_id: HashMap<Uuid, &ExperimentMeta> = experiments.iter().map(|e| (e.id, e)).collect();
     let env_str = env_id.to_string();
 
-    // Phase 1 — compute every (pair × metric × context_type) result for the
-    // batch. We collect them all before deciding significance so the
+    // Enumerate every candidate tuple (pairs + triples) as a uniform list of
+    // experiment-id vectors so the rest of the pipeline is order-agnostic.
+    let mut tuples: Vec<Vec<Uuid>> = Vec::new();
+    for (a, b) in candidate_pairs(experiments) {
+        tuples.push(vec![a, b]);
+    }
+    for (a, b, c) in candidate_triples(experiments) {
+        tuples.push(vec![a, b, c]);
+    }
+
+    // Phase 1 — compute every (tuple × metric × context_type) decomposition for
+    // the batch. We collect all term rows before deciding significance so the
     // Benjamini–Hochberg correction can see the whole family of tests.
     let mut rows: Vec<InteractionRow> = Vec::new();
-    for (exp_a, exp_b) in pairs {
-        let (Some(a), Some(b)) = (by_id.get(&exp_a), by_id.get(&exp_b)) else {
-            continue;
-        };
+    for exp_ids in tuples {
+        let metas: Option<Vec<&ExperimentMeta>> =
+            exp_ids.iter().map(|id| by_id.get(id).copied()).collect();
+        let Some(metas) = metas else { continue };
 
-        // The overlap-window upper bound: earliest of the two end times, or
-        // "now" when both are still running. candidate_pairs already proved the
-        // windows overlap.
-        let interaction_end = overlap_end(a.ended_at, b.ended_at, computed_at);
+        // Overlap-window upper bound: earliest finite end across the tuple, or
+        // "now" when all are still running. candidate_* proved the windows
+        // overlap pairwise (⇒ a common live window by Helly's theorem).
+        let interaction_end = metas.iter().fold(computed_at, |acc, m| match m.ended_at {
+            Some(end) => acc.min(end),
+            None => acc,
+        });
 
-        // Shared metrics — intersection of the two experiments' metric sets.
-        let shared_metric_ids: Vec<Uuid> = a
+        // Metrics common to EVERY experiment in the tuple.
+        let shared_metric_ids: Vec<Uuid> = metas[0]
             .metric_ids
             .iter()
-            .filter(|m| b.metric_ids.contains(m))
+            .filter(|m| metas[1..].iter().all(|meta| meta.metric_ids.contains(m)))
             .copied()
             .collect();
+
+        let id_strs: Vec<String> = exp_ids.iter().map(Uuid::to_string).collect();
+        let id_refs: Vec<&str> = id_strs.iter().map(String::as_str).collect();
 
         for metric_id in shared_metric_ids {
             let Some(def) = metrics.get(&metric_id) else {
                 tracing::debug!(%metric_id, "interaction: metric definition not resolved; skipping");
                 continue;
             };
-            let MetricKind::Aggregation(cfg) = &def.kind else {
-                tracing::debug!(
-                    %metric_id,
-                    kind = def.kind.tag(),
-                    "interaction: skipping non-aggregation metric (funnel/ratio out of scope v1)"
-                );
-                continue;
-            };
-            let cell_kind = MetricCellKind::classify(cfg);
 
             for context_type in context_types {
-                let cells = reader
-                    .fetch_cells(
-                        cfg,
-                        &env_str,
-                        &exp_a.to_string(),
-                        &exp_b.to_string(),
-                        context_type,
-                        interaction_end,
-                    )
-                    .await?;
+                // Classify the metric, fetch the matching k-way cell grid, and
+                // run the matching N-way decomposition (Frequentist + Bayesian).
+                let computed = compute_tuple_metric(
+                    reader,
+                    def,
+                    metrics,
+                    &env_str,
+                    &id_refs,
+                    context_type,
+                    interaction_end,
+                )
+                .await?;
+                let Some((cells, terms)) = computed else {
+                    continue; // skipped (unresolved ratio legs) or empty grid
+                };
 
-                if cells.is_empty() {
-                    continue; // no shared population on this context_type
-                }
-
-                let result = compute_result(cell_kind, &cells);
                 let shared_count: u64 = cells.iter().map(|c| c.n).sum();
-                let cell_stats = serde_json::to_string(&cells).unwrap_or_else(|_| "[]".to_owned());
+                let cell_stats = cells_to_json(&cells);
+                let order = exp_ids.len() as u8;
 
-                rows.push(InteractionRow {
-                    env_id,
-                    experiment_id_a: exp_a,
-                    experiment_id_b: exp_b,
-                    context_type: context_type.clone(),
-                    metric_key: def.key.clone(),
-                    shared_count,
-                    cell_stats,
-                    // Insufficient-data rows keep 0.0 sentinels (the column is
-                    // non-nullable Float64); the flag distinguishes them.
-                    interaction_estimate: nan_to_zero(result.estimate),
-                    p_value: nan_to_zero(result.p_value),
-                    // Provisional; overwritten by the BH pass below.
-                    significant: false,
-                    insufficient_data: result.insufficient_data,
-                    computed_at,
-                });
+                // One row per decomposition term. The factor index → experiment
+                // mapping is `factor i ↔ exp_ids[i]` (query alias / tuple order).
+                for t in &terms {
+                    let term = term_string(t.kind, &exp_ids);
+                    let bayes = t.bayes.unwrap_or(BayesianInteraction {
+                        prob: 0.0,
+                        expected: 0.0,
+                        ci_low: 0.0,
+                        ci_high: 0.0,
+                    });
+                    rows.push(InteractionRow {
+                        env_id,
+                        experiment_ids: exp_ids.clone(),
+                        interaction_order: order,
+                        term,
+                        context_type: context_type.clone(),
+                        metric_key: def.key.clone(),
+                        shared_count,
+                        cell_stats: cell_stats.clone(),
+                        // Insufficient-data terms keep 0.0 sentinels (the column
+                        // is non-nullable Float64); the flag distinguishes them.
+                        interaction_estimate: nan_to_zero(t.freq.estimate),
+                        p_value: nan_to_zero(t.freq.p_value),
+                        df: t.freq.df,
+                        // Provisional; overwritten by the BH pass below.
+                        significant: false,
+                        insufficient_data: t.freq.insufficient_data,
+                        bayes_prob: nan_to_zero(bayes.prob),
+                        bayes_expected: nan_to_zero(bayes.expected),
+                        bayes_ci_low: nan_to_zero(bayes.ci_low),
+                        bayes_ci_high: nan_to_zero(bayes.ci_high),
+                        computed_at,
+                    });
+                }
             }
         }
     }
 
-    // Phase 2 — Benjamini–Hochberg correction across the batch's valid tests,
-    // then persist. Only non-insufficient rows feed the correction; their
-    // (already sanitized) p-values are used.
+    // Phase 2 — Benjamini–Hochberg correction across the batch's valid
+    // Frequentist tests, then persist. Only non-insufficient rows feed the
+    // correction; their (already sanitized) p-values are used. Bayesian fields
+    // are NOT part of the FDR decision.
     let valid_pvalues: Vec<f64> = rows
         .iter()
         .filter(|r| !r.insufficient_data)
@@ -401,6 +444,196 @@ pub async fn compute_and_persist_interactions(
         written += 1;
     }
     Ok(written)
+}
+
+/// Classify `def`, fetch the matching k-way cell grid for `exp_ids`, and run the
+/// N-way decomposition (Frequentist `*_terms` + matching Bayesian `*_bayes`,
+/// merged per [`TermKind`]).
+///
+/// Returns `None` when the grid is empty (no shared population on this
+/// `context_type`) or when a ratio metric's legs cannot be resolved as two
+/// aggregation metrics (logged + skipped — never an error).
+///
+/// # Errors
+/// Propagates the reader error encountered.
+async fn compute_tuple_metric(
+    reader: &dyn InteractionCellReader,
+    def: &MetricDefinition,
+    metrics: &HashMap<Uuid, MetricDefinition>,
+    env_str: &str,
+    exp_ids: &[&str],
+    context_type: &str,
+    interaction_end: DateTime<Utc>,
+) -> Result<Option<(Vec<NdCellAggregate>, Vec<TermResult>)>, anyhow::Error> {
+    let order = exp_ids.len();
+    match &def.kind {
+        MetricKind::Aggregation(cfg) => {
+            let cells = reader
+                .fetch_aggregation_cells(cfg, env_str, exp_ids, context_type, interaction_end)
+                .await?;
+            if cells.is_empty() {
+                return Ok(None);
+            }
+            let terms = match MetricCellKind::classify(cfg) {
+                MetricCellKind::Conversion => {
+                    decompose_binary(&cells, order, BinarySource::Conversion)
+                }
+                MetricCellKind::Continuous => decompose_continuous(&cells, order),
+            };
+            Ok(Some((cells, terms)))
+        }
+        MetricKind::Funnel(cfg) => {
+            let cells = reader
+                .fetch_funnel_cells(cfg, env_str, exp_ids, context_type, interaction_end)
+                .await?;
+            if cells.is_empty() {
+                return Ok(None);
+            }
+            let terms = decompose_binary(&cells, order, BinarySource::Funnel);
+            Ok(Some((cells, terms)))
+        }
+        MetricKind::Ratio(ratio_cfg) => {
+            let Some((num_cfg, den_cfg)) = resolve_ratio_legs(ratio_cfg, metrics) else {
+                tracing::debug!(
+                    metric_key = %def.key,
+                    "interaction: ratio legs not resolvable to two aggregation metrics; skipping"
+                );
+                return Ok(None);
+            };
+            let cells = reader
+                .fetch_ratio_cells(
+                    &num_cfg,
+                    &den_cfg,
+                    env_str,
+                    exp_ids,
+                    context_type,
+                    interaction_end,
+                )
+                .await?;
+            if cells.is_empty() {
+                return Ok(None);
+            }
+            let terms = decompose_ratio(&cells, order);
+            Ok(Some((cells, terms)))
+        }
+    }
+}
+
+/// Which binary source the cell grid represents — purely for documentation; the
+/// `successes` column already carries the right semantics for both.
+#[derive(Debug, Clone, Copy)]
+enum BinarySource {
+    /// `successes` = contexts with ≥1 qualifying event.
+    Conversion,
+    /// `successes` = contexts that reached the funnel's final step.
+    Funnel,
+}
+
+/// Resolve a [`RatioConfig`] to its numerator + denominator
+/// [`AggregationConfig`] legs, returning `None` if either referenced metric is
+/// absent from `metrics` or is not itself an aggregation metric.
+fn resolve_ratio_legs(
+    ratio_cfg: &RatioConfig,
+    metrics: &HashMap<Uuid, MetricDefinition>,
+) -> Option<(AggregationConfig, AggregationConfig)> {
+    let num = metrics.get(&ratio_cfg.numerator_metric_id.as_uuid())?;
+    let den = metrics.get(&ratio_cfg.denominator_metric_id.as_uuid())?;
+    let (MetricKind::Aggregation(num_cfg), MetricKind::Aggregation(den_cfg)) =
+        (&num.kind, &den.kind)
+    else {
+        return None;
+    };
+    Some((num_cfg.clone(), den_cfg.clone()))
+}
+
+/// Map an [`NdCellAggregate`] grid to dense binary cells and run the binary
+/// decomposition + matching Bayesian posteriors, merged by [`TermKind`].
+fn decompose_binary(
+    cells: &[NdCellAggregate],
+    order: usize,
+    _source: BinarySource,
+) -> Vec<TermResult> {
+    let levels = dense_levels(cells, order);
+    let nd: Vec<NdBinaryCell> = cells
+        .iter()
+        .filter_map(|c| {
+            level_indices(c, &levels).map(|lv| NdBinaryCell {
+                levels: lv,
+                n: c.n,
+                successes: c.successes,
+            })
+        })
+        .collect();
+    let mut terms = binary_terms(&nd, order);
+    merge_bayes(&mut terms, binary_bayes(&nd, order));
+    terms
+}
+
+/// Map an [`NdCellAggregate`] grid to dense continuous cells and run the
+/// continuous decomposition + matching Bayesian posteriors.
+fn decompose_continuous(cells: &[NdCellAggregate], order: usize) -> Vec<TermResult> {
+    let levels = dense_levels(cells, order);
+    let nd: Vec<NdContinuousCell> = cells
+        .iter()
+        .filter_map(|c| {
+            level_indices(c, &levels).map(|lv| NdContinuousCell {
+                levels: lv,
+                n: c.n,
+                sum: c.value_sum,
+                sum_sq: c.value_sq_sum,
+            })
+        })
+        .collect();
+    let mut terms = continuous_terms(&nd, order);
+    merge_bayes(&mut terms, continuous_bayes(&nd, order));
+    terms
+}
+
+/// Map an [`NdCellAggregate`] grid to dense ratio cells and run the ratio
+/// decomposition + matching Bayesian posteriors.
+fn decompose_ratio(cells: &[NdCellAggregate], order: usize) -> Vec<TermResult> {
+    let levels = dense_levels(cells, order);
+    let nd: Vec<NdRatioCell> = cells
+        .iter()
+        .filter_map(|c| {
+            level_indices(c, &levels).map(|lv| NdRatioCell {
+                levels: lv,
+                n: c.n,
+                num_sum: c.num_sum,
+                den_sum: c.den_sum,
+                num_sq_sum: c.num_sq_sum,
+                den_sq_sum: c.den_sq_sum,
+                num_den_sum: c.num_den_sum,
+            })
+        })
+        .collect();
+    let mut terms = ratio_terms(&nd, order);
+    merge_bayes(&mut terms, ratio_bayes(&nd, order));
+    terms
+}
+
+/// Attach each Bayesian posterior to the matching Frequentist term by
+/// [`TermKind`] (the two inference models are computed independently).
+fn merge_bayes(terms: &mut [TermResult], bayes: Vec<(TermKind, BayesianInteraction)>) {
+    for t in terms.iter_mut() {
+        if let Some((_, b)) = bayes.iter().find(|(k, _)| *k == t.kind) {
+            t.bayes = Some(*b);
+        }
+    }
+}
+
+/// Render the `term` column string for a decomposition term, substituting the
+/// ACTUAL experiment UUIDs at the term's factor positions (`exp_ids[factor]`,
+/// tuple order):
+/// - `"main:<exp>"`, `"2way:<a>x<b>"`, `"3way:<a>x<b>x<c>"`.
+fn term_string(kind: TermKind, exp_ids: &[Uuid]) -> String {
+    match kind {
+        TermKind::Main { factor } => format!("main:{}", exp_ids[factor]),
+        TermKind::TwoWay { a, b } => format!("2way:{}x{}", exp_ids[a], exp_ids[b]),
+        TermKind::ThreeWay { a, b, c } => {
+            format!("3way:{}x{}x{}", exp_ids[a], exp_ids[b], exp_ids[c])
+        }
+    }
 }
 
 /// Benjamini–Hochberg step-up procedure for controlling the false discovery
@@ -461,10 +694,12 @@ pub fn benjamini_hochberg(pvalues: &[f64], fdr: f64) -> Vec<bool> {
 ///
 /// `started_at` for each [`ExperimentMeta`] is taken from the experiment's
 /// `created_at`, and `ended_at` is `None` (running experiments are still live) —
-/// so [`candidate_pairs`]' window-overlap check treats every concurrently-running
-/// pair as overlapping, which is correct.
+/// so the window-overlap check treats every concurrently-running tuple as
+/// overlapping, which is correct. Both candidate pairs and candidate triples are
+/// enumerated inside [`compute_and_persist_interactions`].
 ///
-/// Returns the total number of interaction rows written across all environments.
+/// Returns the total number of interaction term rows written across all
+/// environments.
 ///
 /// # Errors
 /// Propagates the first metric-repo / reader / writer error encountered.
@@ -539,52 +774,6 @@ pub async fn run_interaction_sweep(
     Ok(total)
 }
 
-/// Run the interaction significance test appropriate to the metric kind over a
-/// per-cell grid, mapping variant keys to dense zero-based level indices.
-#[must_use]
-pub fn compute_result(kind: MetricCellKind, cells: &[CellAggregate]) -> InteractionResult {
-    // Dense level indexing: assign each distinct variant key a stable
-    // zero-based index in first-seen order, separately per factor. The
-    // interaction math derives grid dimensions from the max level index, so the
-    // indices must be contiguous from 0.
-    let mut a_idx: HashMap<String, usize> = HashMap::new();
-    let mut b_idx: HashMap<String, usize> = HashMap::new();
-    for c in cells {
-        let n_a = a_idx.len();
-        a_idx.entry(c.a_variant_key.clone()).or_insert(n_a);
-        let n_b = b_idx.len();
-        b_idx.entry(c.b_variant_key.clone()).or_insert(n_b);
-    }
-
-    match kind {
-        MetricCellKind::Conversion => {
-            let binary: Vec<BinaryCell> = cells
-                .iter()
-                .map(|c| BinaryCell {
-                    a_level: a_idx[&c.a_variant_key],
-                    b_level: b_idx[&c.b_variant_key],
-                    n: c.n,
-                    successes: c.successes,
-                })
-                .collect();
-            binary_interaction(&binary)
-        }
-        MetricCellKind::Continuous => {
-            let cont: Vec<ContinuousCell> = cells
-                .iter()
-                .map(|c| ContinuousCell {
-                    a_level: a_idx[&c.a_variant_key],
-                    b_level: b_idx[&c.b_variant_key],
-                    n: c.n,
-                    sum: c.value_sum,
-                    sum_sq: c.value_sq_sum,
-                })
-                .collect();
-            continuous_interaction(&cont)
-        }
-    }
-}
-
 /// Replace `NaN` (insufficient-data sentinel) with `0.0` so the value
 /// round-trips cleanly through the ClickHouse `Float64` column.
 fn nan_to_zero(v: f64) -> f64 {
@@ -593,15 +782,51 @@ fn nan_to_zero(v: f64) -> f64 {
 
 // ── ClickHouse-backed reader ─────────────────────────────────────────────────
 
-/// Row shape deserialised from the metric-cells query.
+/// Row shape deserialised from the aggregation metric-cells query. The
+/// `variant_keys` array maps to a `Vec<String>` in tuple order.
 #[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
-struct ChCellRow {
-    a_variant_key: String,
-    b_variant_key: String,
+struct ChAggregationCellRow {
+    variant_keys: Vec<String>,
     n: u64,
     successes: u64,
     value_sum: f64,
     value_sq_sum: f64,
+}
+
+/// Row shape deserialised from the funnel metric-cells query (binary path).
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+struct ChFunnelCellRow {
+    variant_keys: Vec<String>,
+    n: u64,
+    successes: u64,
+}
+
+/// Row shape deserialised from the ratio metric-cells query (second moments).
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+struct ChRatioCellRow {
+    variant_keys: Vec<String>,
+    n: u64,
+    num_sum: f64,
+    den_sum: f64,
+    num_sq_sum: f64,
+    den_sq_sum: f64,
+    num_den_sum: f64,
+}
+
+/// Rewrite a [`crate::queries::BuiltQuery`]'s placeholders to `?` and bind its
+/// values onto a fresh CH query (the returned `Query` owns a clone of the
+/// client, so it does not borrow `client`).
+fn bind_query(client: &Client, sql: String, binds: Vec<QueryBind>) -> clickhouse::query::Query {
+    let sql = rewrite_placeholders_to_clickhouse(sql);
+    let mut query = client.query(&sql);
+    for b in binds {
+        query = match b {
+            QueryBind::Str(s) => query.bind(s),
+            QueryBind::I64(n) => query.bind(n),
+            QueryBind::F64(f) => query.bind(f),
+        };
+    }
+    query
 }
 
 /// Production [`InteractionCellReader`] backed by a `clickhouse::Client`.
@@ -619,42 +844,106 @@ impl ClickHouseInteractionCells {
 
 #[async_trait]
 impl InteractionCellReader for ClickHouseInteractionCells {
-    async fn fetch_cells(
+    async fn fetch_aggregation_cells(
         &self,
-        cfg: &stitchd_core::metric::AggregationConfig,
+        cfg: &AggregationConfig,
         env_id: &str,
-        exp_a: &str,
-        exp_b: &str,
+        exp_ids: &[&str],
         context_type: &str,
         interaction_end: DateTime<Utc>,
-    ) -> Result<Vec<CellAggregate>, anyhow::Error> {
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
         let built = build_interaction_metric_cells_query(
             cfg,
             env_id,
-            exp_a,
-            exp_b,
+            exp_ids,
             context_type,
             interaction_end,
         )?;
-        let sql = rewrite_placeholders_to_clickhouse(built.sql);
-        let mut query = self.client.query(&sql);
-        for b in built.binds {
-            query = match b {
-                QueryBind::Str(s) => query.bind(s),
-                QueryBind::I64(n) => query.bind(n),
-                QueryBind::F64(f) => query.bind(f),
-            };
-        }
-        let rows = query.fetch_all::<ChCellRow>().await?;
+        let query = bind_query(&self.client, built.sql, built.binds);
+        let rows = query.fetch_all::<ChAggregationCellRow>().await?;
         Ok(rows
             .into_iter()
-            .map(|r| CellAggregate {
-                a_variant_key: r.a_variant_key,
-                b_variant_key: r.b_variant_key,
+            .map(|r| NdCellAggregate {
+                variant_keys: r.variant_keys,
                 n: r.n,
                 successes: r.successes,
                 value_sum: r.value_sum,
                 value_sq_sum: r.value_sq_sum,
+                num_sum: 0.0,
+                den_sum: 0.0,
+                num_sq_sum: 0.0,
+                den_sq_sum: 0.0,
+                num_den_sum: 0.0,
+            })
+            .collect())
+    }
+
+    async fn fetch_funnel_cells(
+        &self,
+        cfg: &stitchd_core::metric::FunnelConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+        let built = build_interaction_funnel_cells_query(
+            cfg,
+            env_id,
+            exp_ids,
+            context_type,
+            interaction_end,
+        )?;
+        let query = bind_query(&self.client, built.sql, built.binds);
+        let rows = query.fetch_all::<ChFunnelCellRow>().await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| NdCellAggregate {
+                variant_keys: r.variant_keys,
+                n: r.n,
+                successes: r.successes,
+                value_sum: 0.0,
+                value_sq_sum: 0.0,
+                num_sum: 0.0,
+                den_sum: 0.0,
+                num_sq_sum: 0.0,
+                den_sq_sum: 0.0,
+                num_den_sum: 0.0,
+            })
+            .collect())
+    }
+
+    async fn fetch_ratio_cells(
+        &self,
+        num_cfg: &AggregationConfig,
+        den_cfg: &AggregationConfig,
+        env_id: &str,
+        exp_ids: &[&str],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+        let built = build_interaction_ratio_cells_query(
+            num_cfg,
+            den_cfg,
+            env_id,
+            exp_ids,
+            context_type,
+            interaction_end,
+        )?;
+        let query = bind_query(&self.client, built.sql, built.binds);
+        let rows = query.fetch_all::<ChRatioCellRow>().await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| NdCellAggregate {
+                variant_keys: r.variant_keys,
+                n: r.n,
+                successes: 0,
+                value_sum: 0.0,
+                value_sq_sum: 0.0,
+                num_sum: r.num_sum,
+                den_sum: r.den_sum,
+                num_sq_sum: r.num_sq_sum,
+                den_sq_sum: r.den_sq_sum,
+                num_den_sum: r.num_den_sum,
             })
             .collect())
     }
@@ -662,23 +951,87 @@ impl InteractionCellReader for ClickHouseInteractionCells {
 
 // ── ClickHouse-backed writer ─────────────────────────────────────────────────
 
-/// Row shape inserted into the `experiment_interactions` table.
+/// Serde adapter for a ClickHouse `Array(UUID)` column.
+///
+/// clickhouse 0.15 ships only a scalar [`clickhouse::serde::uuid`] helper (which
+/// encodes a UUID as the `(u64, u64)` hi/lo pair the RowBinary UUID layout
+/// expects) — there is no `uuid::vec`. This module serializes a `Vec<Uuid>` as a
+/// sequence where each element is that same `(u64, u64)` pair, which the
+/// RowBinary validator accepts for `Array(UUID)` (an outer `Seq` over the
+/// `UUID`-as-2-tuple element type).
+mod uuid_vec {
+    use serde::de::{SeqAccess, Visitor};
+    use serde::ser::SerializeSeq;
+    use serde::{Deserializer, Serializer};
+    use std::fmt;
+    use uuid::Uuid;
+
+    pub(super) fn serialize<S>(ids: &[Uuid], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(ids.len()))?;
+        for id in ids {
+            // Mirror clickhouse::serde::uuid for the non-human-readable
+            // RowBinary path: the UUID is a (u64, u64) hi/lo pair.
+            seq.serialize_element(&id.as_u64_pair())?;
+        }
+        seq.end()
+    }
+
+    // Kept for symmetry with `clickhouse::serde::uuid` and to document the wire
+    // format; the production reader of this column lives in another crate, so
+    // this side is currently unused here.
+    #[allow(dead_code)]
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Uuid>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct VecVisitor;
+        impl<'de> Visitor<'de> for VecVisitor {
+            type Value = Vec<Uuid>;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("an Array(UUID)")
+            }
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut out = Vec::new();
+                while let Some((hi, lo)) = seq.next_element::<(u64, u64)>()? {
+                    out.push(Uuid::from_u64_pair(hi, lo));
+                }
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_seq(VecVisitor)
+    }
+}
+
+/// Row shape inserted into the `experiment_interactions` table — column list
+/// matches the migrated schema exactly (env, ids array, order, term, context,
+/// metric, count, cell_stats, Frequentist columns, Bayesian columns, time).
 #[derive(Debug, Clone, Serialize, clickhouse::Row)]
 struct ChInteractionRow {
     #[serde(with = "clickhouse::serde::uuid")]
     env_id: Uuid,
-    #[serde(with = "clickhouse::serde::uuid")]
-    experiment_id_a: Uuid,
-    #[serde(with = "clickhouse::serde::uuid")]
-    experiment_id_b: Uuid,
+    #[serde(with = "uuid_vec")]
+    experiment_ids: Vec<Uuid>,
+    interaction_order: u8,
+    term: String,
     context_type: String,
     metric_key: String,
     shared_count: u64,
     cell_stats: String,
     interaction_estimate: f64,
     p_value: f64,
+    df: u32,
     significant: bool,
     insufficient_data: bool,
+    bayes_prob: f64,
+    bayes_expected: f64,
+    bayes_ci_low: f64,
+    bayes_ci_high: f64,
     #[serde(with = "clickhouse::serde::chrono::datetime64::millis")]
     computed_at: DateTime<Utc>,
 }
@@ -706,36 +1059,27 @@ impl InteractionWriter for ClickHouseInteractionWriter {
         insert
             .write(&ChInteractionRow {
                 env_id: row.env_id,
-                experiment_id_a: row.experiment_id_a,
-                experiment_id_b: row.experiment_id_b,
+                experiment_ids: row.experiment_ids.clone(),
+                interaction_order: row.interaction_order,
+                term: row.term.clone(),
                 context_type: row.context_type.clone(),
                 metric_key: row.metric_key.clone(),
                 shared_count: row.shared_count,
                 cell_stats: row.cell_stats.clone(),
                 interaction_estimate: row.interaction_estimate,
                 p_value: row.p_value,
+                df: row.df,
                 significant: row.significant,
                 insufficient_data: row.insufficient_data,
+                bayes_prob: row.bayes_prob,
+                bayes_expected: row.bayes_expected,
+                bayes_ci_low: row.bayes_ci_low,
+                bayes_ci_high: row.bayes_ci_high,
                 computed_at: row.computed_at,
             })
             .await?;
         insert.end().await?;
         Ok(())
-    }
-}
-
-/// Earliest finite end among the two experiment windows, falling back to `now`
-/// when both are open-ended (still running).
-fn overlap_end(
-    a_end: Option<DateTime<Utc>>,
-    b_end: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> DateTime<Utc> {
-    match (a_end, b_end) {
-        (Some(a), Some(b)) => a.min(b),
-        (Some(a), None) => a.min(now),
-        (None, Some(b)) => b.min(now),
-        (None, None) => now,
     }
 }
 
@@ -789,31 +1133,68 @@ mod tests {
         }
     }
 
-    /// Fake reader returning canned cells; records the (env, exp_a, exp_b,
-    /// context_type) it was asked for.
+    /// Fake reader returning canned N-D cells per metric family; records the
+    /// (env, exp_ids joined, context_type) it was asked for. `agg_cells` is also
+    /// served for funnel reads (both are the binary path), and `ratio_cells` for
+    /// ratio reads.
+    #[derive(Default)]
     struct FakeReader {
-        cells: Vec<CellAggregate>,
-        calls: Mutex<Vec<(String, String, String, String)>>,
+        agg_cells: Vec<NdCellAggregate>,
+        ratio_cells: Vec<NdCellAggregate>,
+        calls: Mutex<Vec<(String, String, String)>>,
+    }
+
+    impl FakeReader {
+        fn with_agg(cells: Vec<NdCellAggregate>) -> Self {
+            Self {
+                agg_cells: cells,
+                ..Default::default()
+            }
+        }
+        fn record(&self, env_id: &str, exp_ids: &[&str], context_type: &str) {
+            self.calls.lock().unwrap().push((
+                env_id.to_string(),
+                exp_ids.join(","),
+                context_type.to_string(),
+            ));
+        }
     }
 
     #[async_trait]
     impl InteractionCellReader for FakeReader {
-        async fn fetch_cells(
+        async fn fetch_aggregation_cells(
             &self,
             _cfg: &AggregationConfig,
             env_id: &str,
-            exp_a: &str,
-            exp_b: &str,
+            exp_ids: &[&str],
             context_type: &str,
             _interaction_end: DateTime<Utc>,
-        ) -> Result<Vec<CellAggregate>, anyhow::Error> {
-            self.calls.lock().unwrap().push((
-                env_id.to_string(),
-                exp_a.to_string(),
-                exp_b.to_string(),
-                context_type.to_string(),
-            ));
-            Ok(self.cells.clone())
+        ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+            self.record(env_id, exp_ids, context_type);
+            Ok(self.agg_cells.clone())
+        }
+        async fn fetch_funnel_cells(
+            &self,
+            _cfg: &stitchd_core::metric::FunnelConfig,
+            env_id: &str,
+            exp_ids: &[&str],
+            context_type: &str,
+            _interaction_end: DateTime<Utc>,
+        ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+            self.record(env_id, exp_ids, context_type);
+            Ok(self.agg_cells.clone())
+        }
+        async fn fetch_ratio_cells(
+            &self,
+            _num_cfg: &AggregationConfig,
+            _den_cfg: &AggregationConfig,
+            env_id: &str,
+            exp_ids: &[&str],
+            context_type: &str,
+            _interaction_end: DateTime<Utc>,
+        ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+            self.record(env_id, exp_ids, context_type);
+            Ok(self.ratio_cells.clone())
         }
     }
 
@@ -831,24 +1212,30 @@ mod tests {
         }
     }
 
-    fn binary_cell(a: &str, b: &str, n: u64, succ: u64) -> CellAggregate {
-        CellAggregate {
-            a_variant_key: a.into(),
-            b_variant_key: b.into(),
+    /// Build an N-D binary cell from a variant tuple.
+    fn nd_binary(variants: &[&str], n: u64, succ: u64) -> NdCellAggregate {
+        NdCellAggregate {
+            variant_keys: variants.iter().map(|s| (*s).to_owned()).collect(),
             n,
             successes: succ,
             value_sum: 0.0,
             value_sq_sum: 0.0,
+            num_sum: 0.0,
+            den_sum: 0.0,
+            num_sq_sum: 0.0,
+            den_sq_sum: 0.0,
+            num_den_sum: 0.0,
         }
     }
 
-    #[test]
-    fn overlap_end_picks_earliest_finite_or_now() {
-        let now = ts(20);
-        assert_eq!(overlap_end(Some(ts(10)), Some(ts(15)), now), ts(10));
-        assert_eq!(overlap_end(Some(ts(10)), None, now), ts(10));
-        assert_eq!(overlap_end(None, Some(ts(25)), now), now);
-        assert_eq!(overlap_end(None, None, now), now);
+    /// A 2×2 conversion grid with a planted super-additive (1,1) corner.
+    fn strong_2x2() -> Vec<NdCellAggregate> {
+        vec![
+            nd_binary(&["control", "control"], 100, 10),
+            nd_binary(&["control", "treatment"], 100, 12),
+            nd_binary(&["treatment", "control"], 100, 14),
+            nd_binary(&["treatment", "treatment"], 100, 60),
+        ]
     }
 
     #[test]
@@ -910,24 +1297,29 @@ mod tests {
     }
 
     #[test]
-    fn compute_result_maps_variant_keys_to_dense_levels() {
-        // A planted strong interaction on a 2x2 conversion grid.
-        let cells = vec![
-            binary_cell("control", "control", 100, 10),
-            binary_cell("control", "treatment", 100, 12),
-            binary_cell("treatment", "control", 100, 14),
-            binary_cell("treatment", "treatment", 100, 60),
+    fn term_string_uses_actual_experiment_uuids() {
+        let ids = vec![
+            Uuid::from_u128(10),
+            Uuid::from_u128(20),
+            Uuid::from_u128(30),
         ];
-        let r = compute_result(MetricCellKind::Conversion, &cells);
-        assert!(!r.insufficient_data, "grid has ample data");
-        assert!(
-            r.significant,
-            "planted super-additive cell should be significant"
+        assert_eq!(
+            term_string(TermKind::Main { factor: 1 }, &ids),
+            format!("main:{}", ids[1])
+        );
+        assert_eq!(
+            term_string(TermKind::TwoWay { a: 0, b: 2 }, &ids),
+            format!("2way:{}x{}", ids[0], ids[2])
+        );
+        assert_eq!(
+            term_string(TermKind::ThreeWay { a: 0, b: 1, c: 2 }, &ids),
+            format!("3way:{}x{}x{}", ids[0], ids[1], ids[2])
         );
     }
 
     #[tokio::test]
-    async fn writes_a_row_for_a_valid_pair() {
+    async fn writes_three_term_rows_for_a_valid_pair() {
+        // A 2-way candidate yields a 2-main + 1-two-way = 3-term decomposition.
         let metric = Uuid::new_v4();
         let env = Uuid::new_v4();
         let a = meta(Uuid::from_u128(1), Uuid::new_v4(), metric);
@@ -938,15 +1330,7 @@ mod tests {
             agg_metric(metric, "checkout", AggregationOperator::Count),
         );
 
-        let reader = FakeReader {
-            cells: vec![
-                binary_cell("control", "control", 100, 10),
-                binary_cell("control", "treatment", 100, 12),
-                binary_cell("treatment", "control", 100, 14),
-                binary_cell("treatment", "treatment", 100, 60),
-            ],
-            calls: Mutex::new(vec![]),
-        };
+        let reader = FakeReader::with_agg(strong_2x2());
         let writer = FakeWriter::default();
 
         let n = compute_and_persist_interactions(
@@ -961,23 +1345,52 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(n, 1);
+        assert_eq!(n, 3, "2 main effects + 1 two-way term");
         let rows = writer.rows.lock().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].metric_key, "checkout");
-        assert_eq!(rows[0].context_type, "user");
-        assert_eq!(rows[0].shared_count, 400);
-        assert!(rows[0].significant);
-        assert!(rows[0].cell_stats.contains("a_variant_key"));
+        assert_eq!(rows.len(), 3);
+        // Every row shares tuple-level metadata.
+        let (lo, hi) = (
+            Uuid::from_u128(1).min(Uuid::from_u128(2)),
+            Uuid::from_u128(1).max(Uuid::from_u128(2)),
+        );
+        for r in rows.iter() {
+            assert_eq!(r.metric_key, "checkout");
+            assert_eq!(r.context_type, "user");
+            assert_eq!(r.shared_count, 400);
+            assert_eq!(r.interaction_order, 2);
+            assert_eq!(r.experiment_ids, vec![lo, hi]);
+            assert!(r.cell_stats.contains("variant_keys"));
+        }
+        // The two-way term must carry the expected term string and be significant.
+        let two = rows
+            .iter()
+            .find(|r| r.term.starts_with("2way:"))
+            .expect("two-way row present");
+        assert_eq!(two.term, format!("2way:{lo}x{hi}"));
+        assert!(
+            two.significant,
+            "planted super-additive pair is significant"
+        );
+        // Bayesian posterior attached (non-zero for a strong effect).
+        assert!(
+            two.bayes_prob > 0.0,
+            "two-way posterior probability attached"
+        );
+        // Two main-effect rows.
+        assert_eq!(
+            rows.iter().filter(|r| r.term.starts_with("main:")).count(),
+            2
+        );
     }
 
     #[tokio::test]
-    async fn skips_funnel_and_ratio_metrics() {
+    async fn funnel_metric_now_produces_rows() {
+        // Funnel is in-scope for the N-way pipeline (binary path) — it must be
+        // read and produce term rows, not skipped.
         let metric = Uuid::new_v4();
         let env = Uuid::new_v4();
         let a = meta(Uuid::from_u128(1), Uuid::new_v4(), metric);
         let b = meta(Uuid::from_u128(2), Uuid::new_v4(), metric);
-        // Define the shared metric as a funnel — out of scope.
         let now = Utc::now();
         let funnel = MetricDefinition {
             id: MetricId::from_uuid(metric),
@@ -1008,9 +1421,92 @@ mod tests {
         let mut metrics = HashMap::new();
         metrics.insert(metric, funnel);
 
+        let reader = FakeReader::with_agg(strong_2x2());
+        let writer = FakeWriter::default();
+
+        let n = compute_and_persist_interactions(
+            &reader,
+            &writer,
+            env,
+            &[a, b],
+            &metrics,
+            &["user".to_string()],
+            ts(15),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            n, 3,
+            "funnel decomposition yields 3 terms (2 main + 1 two-way)"
+        );
+        assert_eq!(
+            reader.calls.lock().unwrap().len(),
+            1,
+            "funnel metric IS read (one fetch for the pair × context_type)"
+        );
+        assert_eq!(writer.rows.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn ratio_metric_resolves_legs_and_produces_rows() {
+        // A ratio metric whose two legs resolve to aggregation metrics is read
+        // via the ratio path and produces term rows.
+        let num_id = Uuid::new_v4();
+        let den_id = Uuid::new_v4();
+        let ratio_id = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let a = meta(Uuid::from_u128(1), Uuid::new_v4(), ratio_id);
+        let b = meta(Uuid::from_u128(2), Uuid::new_v4(), ratio_id);
+
+        let now = Utc::now();
+        let ratio = MetricDefinition {
+            id: MetricId::from_uuid(ratio_id),
+            environment_id: EnvironmentId::new(),
+            key: "completion_rate".into(),
+            name: "r".into(),
+            description: None,
+            kind: MetricKind::Ratio(RatioConfig {
+                numerator_metric_id: MetricId::from_uuid(num_id),
+                denominator_metric_id: MetricId::from_uuid(den_id),
+                min_denominator: 0,
+            }),
+            goal_direction: GoalDirection::Increase,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+        };
+        let mut metrics = HashMap::new();
+        metrics.insert(ratio_id, ratio);
+        metrics.insert(num_id, agg_metric(num_id, "num", AggregationOperator::Sum));
+        metrics.insert(den_id, agg_metric(den_id, "den", AggregationOperator::Sum));
+
+        // Ratio cells with non-degenerate second moments so the test can run.
+        let ratio_cells = (0..2)
+            .flat_map(|ai| {
+                (0..2).map(move |bi| {
+                    let av = if ai == 0 { "control" } else { "treatment" };
+                    let bv = if bi == 0 { "control" } else { "treatment" };
+                    NdCellAggregate {
+                        variant_keys: vec![av.to_owned(), bv.to_owned()],
+                        n: 100,
+                        successes: 0,
+                        value_sum: 0.0,
+                        value_sq_sum: 0.0,
+                        num_sum: 50.0 + (ai * bi) as f64 * 30.0,
+                        den_sum: 100.0,
+                        num_sq_sum: 40.0,
+                        den_sq_sum: 120.0,
+                        num_den_sum: 60.0,
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+
         let reader = FakeReader {
-            cells: vec![binary_cell("control", "control", 100, 10)],
-            calls: Mutex::new(vec![]),
+            ratio_cells,
+            ..Default::default()
         };
         let writer = FakeWriter::default();
 
@@ -1026,12 +1522,171 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(n, 0, "funnel metric must be skipped");
-        assert!(
-            reader.calls.lock().unwrap().is_empty(),
-            "no CH read for skipped metric"
+        assert_eq!(
+            n, 3,
+            "ratio decomposition yields 3 terms (2 main + 1 two-way)"
         );
+        let rows = writer.rows.lock().unwrap();
+        assert!(rows.iter().any(|r| r.term.starts_with("2way:")));
+        assert_eq!(rows[0].metric_key, "completion_rate");
+    }
+
+    #[tokio::test]
+    async fn ratio_with_unresolvable_legs_is_skipped() {
+        // Numerator metric absent from the map → ratio skipped, no read, no rows.
+        let ratio_id = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let a = meta(Uuid::from_u128(1), Uuid::new_v4(), ratio_id);
+        let b = meta(Uuid::from_u128(2), Uuid::new_v4(), ratio_id);
+        let now = Utc::now();
+        let ratio = MetricDefinition {
+            id: MetricId::from_uuid(ratio_id),
+            environment_id: EnvironmentId::new(),
+            key: "completion_rate".into(),
+            name: "r".into(),
+            description: None,
+            kind: MetricKind::Ratio(RatioConfig {
+                numerator_metric_id: MetricId::new(),
+                denominator_metric_id: MetricId::new(),
+                min_denominator: 0,
+            }),
+            goal_direction: GoalDirection::Increase,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+        };
+        let mut metrics = HashMap::new();
+        metrics.insert(ratio_id, ratio);
+
+        let reader = FakeReader::default();
+        let writer = FakeWriter::default();
+
+        let n = compute_and_persist_interactions(
+            &reader,
+            &writer,
+            env,
+            &[a, b],
+            &metrics,
+            &["user".to_string()],
+            ts(15),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(n, 0, "unresolvable ratio legs → skipped");
+        assert!(reader.calls.lock().unwrap().is_empty(), "no CH read");
         assert!(writer.rows.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn three_way_candidate_emits_full_seven_term_decomposition() {
+        // Three experiments on distinct flags sharing one conversion metric →
+        // one candidate triple. The decomposition is 3 main + 3 two-way + 1
+        // three-way = 7 term rows, all order=3, bayes attached, FDR applied.
+        let metric = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let id_a = Uuid::from_u128(1);
+        let id_b = Uuid::from_u128(2);
+        let id_c = Uuid::from_u128(3);
+        let a = meta(id_a, Uuid::new_v4(), metric);
+        let b = meta(id_b, Uuid::new_v4(), metric);
+        let c = meta(id_c, Uuid::new_v4(), metric);
+        let mut metrics = HashMap::new();
+        metrics.insert(
+            metric,
+            agg_metric(metric, "checkout", AggregationOperator::Count),
+        );
+
+        // 2×2×2 grid with a planted three-way bump in the (1,1,1) corner.
+        let variants = ["control", "treatment"];
+        let mut cells = Vec::new();
+        for (ai, av) in variants.iter().enumerate() {
+            for (bi, bv) in variants.iter().enumerate() {
+                for (ci, cv) in variants.iter().enumerate() {
+                    let succ = 100 + 120 * (ai * bi * ci) as u64;
+                    cells.push(nd_binary(&[av, bv, cv], 1000, succ));
+                }
+            }
+        }
+
+        let reader = FakeReader::with_agg(cells);
+        let writer = FakeWriter::default();
+
+        let n = compute_and_persist_interactions(
+            &reader,
+            &writer,
+            env,
+            &[a, b, c],
+            &metrics,
+            &["user".to_string()],
+            ts(15),
+        )
+        .await
+        .unwrap();
+
+        // Among 3 experiments sharing a metric the sweep enumerates 3 candidate
+        // pairs (3 terms each = 9) AND 1 candidate triple (7 terms) = 16 rows.
+        assert_eq!(n, 16, "3 pairs × 3 terms + 1 triple × 7 terms");
+        let rows = writer.rows.lock().unwrap();
+        assert_eq!(rows.len(), 16);
+
+        // Sorted (lo, mid, hi) tuple from candidate_triples.
+        let mut ids = [id_a, id_b, id_c];
+        ids.sort();
+        let [lo, mid, hi] = ids;
+
+        // The three-way candidate's rows: the full 7-term hierarchical
+        // decomposition, all order=3, on the sorted tuple.
+        let triple_rows: Vec<&InteractionRow> =
+            rows.iter().filter(|r| r.interaction_order == 3).collect();
+        assert_eq!(
+            triple_rows.len(),
+            7,
+            "the triple emits a 7-term decomposition"
+        );
+        for r in &triple_rows {
+            assert_eq!(r.experiment_ids, vec![lo, mid, hi]);
+            assert_eq!(r.context_type, "user");
+            assert_eq!(r.metric_key, "checkout");
+        }
+        assert_eq!(
+            triple_rows
+                .iter()
+                .filter(|r| r.term.starts_with("main:"))
+                .count(),
+            3
+        );
+        assert_eq!(
+            triple_rows
+                .iter()
+                .filter(|r| r.term.starts_with("2way:"))
+                .count(),
+            3
+        );
+        let three: Vec<&&InteractionRow> = triple_rows
+            .iter()
+            .filter(|r| r.term.starts_with("3way:"))
+            .collect();
+        assert_eq!(three.len(), 1, "exactly one three-way term");
+        // The three-way term names all three experiment UUIDs in factor order.
+        assert_eq!(three[0].term, format!("3way:{lo}x{mid}x{hi}"));
+
+        // The 9 pairwise rows are order=2.
+        assert_eq!(rows.iter().filter(|r| r.interaction_order == 2).count(), 9);
+
+        // Bayes attached to terms (populated from the merge; non-zero for the
+        // well-powered grid).
+        let bayes_attached = rows
+            .iter()
+            .any(|r| r.bayes_prob != 0.0 || r.bayes_expected != 0.0);
+        assert!(bayes_attached, "Bayesian posteriors merged into terms");
+        // FDR applied across the whole 16-test family: at least one term in the
+        // well-powered planted grid clears the BH threshold.
+        assert!(
+            rows.iter().any(|r| r.significant),
+            "well-powered planted interaction yields at least one significant term"
+        );
     }
 
     #[tokio::test]
@@ -1049,10 +1704,7 @@ mod tests {
             agg_metric(metric, "checkout", AggregationOperator::Count),
         );
 
-        let reader = FakeReader {
-            cells: vec![binary_cell("control", "control", 100, 10)],
-            calls: Mutex::new(vec![]),
-        };
+        let reader = FakeReader::with_agg(strong_2x2());
         let writer = FakeWriter::default();
 
         let n = compute_and_persist_interactions(
@@ -1189,26 +1841,22 @@ mod tests {
         );
         let repo = MapMetricRepo { by_id };
 
-        let reader = FakeReader {
-            cells: vec![
-                binary_cell("control", "control", 100, 10),
-                binary_cell("control", "treatment", 100, 12),
-                binary_cell("treatment", "control", 100, 14),
-                binary_cell("treatment", "treatment", 100, 60),
-            ],
-            calls: Mutex::new(vec![]),
-        };
+        let reader = FakeReader::with_agg(strong_2x2());
         let writer = FakeWriter::default();
 
         let n = run_interaction_sweep(&reader, &writer, &repo, &[a, b], Utc::now())
             .await
             .unwrap();
-        assert_eq!(n, 1, "one (pair, metric, context_type) row written");
+        assert_eq!(n, 3, "one pair × one metric × one context → 3 term rows");
         let rows = writer.rows.lock().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].env_id, env.as_uuid());
-        assert_eq!(rows[0].context_type, "user");
-        assert!(rows[0].significant);
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| r.env_id == env.as_uuid()));
+        assert!(rows.iter().all(|r| r.context_type == "user"));
+        assert!(
+            rows.iter()
+                .any(|r| r.term.starts_with("2way:") && r.significant),
+            "the planted two-way term is significant"
+        );
     }
 
     #[tokio::test]
@@ -1227,10 +1875,7 @@ mod tests {
         );
         let repo = MapMetricRepo { by_id };
 
-        let reader = FakeReader {
-            cells: vec![binary_cell("control", "control", 100, 10)],
-            calls: Mutex::new(vec![]),
-        };
+        let reader = FakeReader::with_agg(strong_2x2());
         let writer = FakeWriter::default();
 
         let n = run_interaction_sweep(&reader, &writer, &repo, &[a, b], Utc::now())
@@ -1252,10 +1897,7 @@ mod tests {
             agg_metric(metric, "checkout", AggregationOperator::Count),
         );
 
-        let reader = FakeReader {
-            cells: vec![],
-            calls: Mutex::new(vec![]),
-        };
+        let reader = FakeReader::default(); // empty grids
         let writer = FakeWriter::default();
 
         let n = compute_and_persist_interactions(

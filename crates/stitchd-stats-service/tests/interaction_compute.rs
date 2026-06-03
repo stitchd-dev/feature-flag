@@ -37,12 +37,14 @@ use uuid::Uuid;
 type AssignmentRow = SeedAssignmentRow;
 type EventRow = SeedEventRow;
 
+/// One persisted interaction **term** row. `experiment_ids` is read as
+/// `Array(String)` (the `fetch_rows` SQL stringifies the `Array(UUID)` column
+/// via `arrayMap`) to sidestep the array-UUID RowBinary serde on the read side.
 #[derive(Debug, Clone, Deserialize, clickhouse::Row)]
 struct InteractionResultRow {
-    #[serde(with = "clickhouse::serde::uuid")]
-    experiment_id_a: Uuid,
-    #[serde(with = "clickhouse::serde::uuid")]
-    experiment_id_b: Uuid,
+    experiment_ids: Vec<String>,
+    interaction_order: u8,
+    term: String,
     context_type: String,
     metric_key: String,
     shared_count: u64,
@@ -51,11 +53,10 @@ struct InteractionResultRow {
     insufficient_data: bool,
 }
 
-/// Decoded `cell_stats` JSON row (mirrors `CellAggregate`).
+/// Decoded `cell_stats` JSON cell (mirrors `NdCellAggregate`).
 #[derive(Debug, Clone, Deserialize)]
 struct CellStat {
-    a_variant_key: String,
-    b_variant_key: String,
+    variant_keys: Vec<String>,
     n: u64,
     successes: u64,
 }
@@ -216,11 +217,16 @@ async fn seed_pair(
 }
 
 async fn fetch_rows(ch: &Client, exp: Uuid) -> Vec<InteractionResultRow> {
+    // Stringify the Array(UUID) column so it reads as Array(String) — avoids the
+    // array-UUID RowBinary serde on the read side. `FINAL` collapses the
+    // ReplacingMergeTree window so re-inserts within a tick don't duplicate.
     let sql = format!(
-        "SELECT experiment_id_a, experiment_id_b, context_type, metric_key, shared_count, \
+        "SELECT arrayMap(x -> toString(x), experiment_ids) AS experiment_ids, \
+         interaction_order, term, context_type, metric_key, shared_count, \
          cell_stats, significant, insufficient_data
-         FROM experiment_interactions
-         WHERE experiment_id_a = toUUID('{exp}') OR experiment_id_b = toUUID('{exp}')"
+         FROM experiment_interactions FINAL
+         WHERE has(experiment_ids, toUUID('{exp}'))
+         ORDER BY interaction_order, term"
     );
     ch.query(&sql)
         .fetch_all::<InteractionResultRow>()
@@ -279,26 +285,40 @@ async fn significant_interaction_is_written() {
     )
     .await
     .expect("compute_and_persist should succeed");
-    assert_eq!(written, 1, "one (pair, metric, context_type) row");
+    assert_eq!(
+        written, 3,
+        "one pair × metric × context → 2 main + 1 two-way"
+    );
 
     let rows = fetch_rows(&ch, exp_a).await;
-    assert_eq!(rows.len(), 1, "exactly one interaction row, got {rows:?}");
-    assert_eq!(rows[0].metric_key, "checkout");
-    assert_eq!(rows[0].context_type, "user");
-    assert_eq!(rows[0].shared_count, 400);
+    assert_eq!(
+        rows.len(),
+        3,
+        "the full pairwise decomposition, got {rows:?}"
+    );
+    // The persisted tuple is the sorted (min, max) ordering candidate_pairs emits.
+    let (lo, hi) = (exp_a.min(exp_b), exp_a.max(exp_b));
+    for r in &rows {
+        assert_eq!(r.metric_key, "checkout");
+        assert_eq!(r.context_type, "user");
+        assert_eq!(r.shared_count, 400);
+        assert_eq!(r.interaction_order, 2);
+        assert_eq!(r.experiment_ids, vec![lo.to_string(), hi.to_string()]);
+    }
+    let two = rows
+        .iter()
+        .find(|r| r.term.starts_with("2way:"))
+        .expect("two-way term present");
+    assert_eq!(two.term, format!("2way:{lo}x{hi}"));
     assert!(
-        rows[0].significant,
+        two.significant,
         "planted super-additive interaction must be significant"
     );
     // MED-2: a well-powered grid is not insufficient.
     assert!(
-        !rows[0].insufficient_data,
+        !two.insufficient_data,
         "ample-data grid must persist insufficient_data = false"
     );
-    // The persisted pair is the sorted (min, max) ordering candidate_pairs emits.
-    let (lo, hi) = (exp_a.min(exp_b), exp_a.max(exp_b));
-    assert_eq!(rows[0].experiment_id_a, lo);
-    assert_eq!(rows[0].experiment_id_b, hi);
 }
 
 /// Independent (additive) effects produce a non-significant row.
@@ -347,12 +367,16 @@ async fn independent_effects_are_not_significant() {
     )
     .await
     .expect("compute_and_persist should succeed");
-    assert_eq!(written, 1);
+    assert_eq!(written, 3);
 
     let rows = fetch_rows(&ch, exp_a).await;
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 3);
+    let two = rows
+        .iter()
+        .find(|r| r.term.starts_with("2way:"))
+        .expect("two-way term present");
     assert!(
-        !rows[0].significant,
+        !two.significant,
         "additive effects must NOT be flagged as a significant interaction"
     );
 }
@@ -460,16 +484,20 @@ async fn insufficient_data_is_persisted() {
     )
     .await
     .expect("compute_and_persist should succeed");
-    assert_eq!(written, 1);
+    assert_eq!(written, 3);
 
     let rows = fetch_rows(&ch, exp_a).await;
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 3);
+    let two = rows
+        .iter()
+        .find(|r| r.term.starts_with("2way:"))
+        .expect("two-way term present");
     assert!(
-        rows[0].insufficient_data,
+        two.insufficient_data,
         "sparse grid must persist insufficient_data = true"
     );
     assert!(
-        !rows[0].significant,
+        !two.significant,
         "insufficient-data rows are never significant"
     );
 }
@@ -559,18 +587,25 @@ async fn pre_exposure_events_are_excluded_itt() {
     )
     .await
     .expect("compute_and_persist should succeed");
-    assert_eq!(written, 1);
+    assert_eq!(written, 3, "pairwise decomposition: 2 main + 1 two-way");
 
     let rows = fetch_rows(&ch, exp_a).await;
-    assert_eq!(rows.len(), 1, "exactly one interaction row, got {rows:?}");
-    assert_eq!(rows[0].shared_count, (n_per_cell * 4) as u64);
+    assert_eq!(
+        rows.len(),
+        3,
+        "the pairwise decomposition rows, got {rows:?}"
+    );
+    // The cell grid is shared across all term rows of the tuple.
+    let row = &rows[0];
+    assert_eq!(row.shared_count, (n_per_cell * 4) as u64);
 
     let cells: Vec<CellStat> =
-        serde_json::from_str(&rows[0].cell_stats).expect("cell_stats is valid JSON");
+        serde_json::from_str(&row.cell_stats).expect("cell_stats is valid JSON");
     assert_eq!(cells.len(), 4, "2x2 grid of cells, got {cells:?}");
 
     for cell in &cells {
-        let key = (cell.a_variant_key.clone(), cell.b_variant_key.clone());
+        assert_eq!(cell.variant_keys.len(), 2, "pairwise variant tuple");
+        let key = (cell.variant_keys[0].clone(), cell.variant_keys[1].clone());
         let expected = expected_succ.get(&key).copied().unwrap_or(0);
         assert_eq!(
             cell.n, n_per_cell as u64,
