@@ -41,6 +41,13 @@ message Experiment {
   optional string  exclusion_group_id   = 18;
   optional uint32  group_bucket_lo      = 19;
   optional uint32  group_bucket_hi      = 20;
+  // [ADDITIVE] Sequential testing (always-valid mSPRT / GAVI) configuration.
+  // `sequential_tau_squared` is optional: absent = auto-derive the mixing
+  // variance at compute time.
+  bool             sequential_testing_enabled = 21;
+  double           sequential_alpha           = 22;
+  optional double  sequential_tau_squared     = 23;
+  int64            sequential_min_sample_size = 24;
 }
 
 // ─── Iteration (a single run of an experiment) ────────────────────────────────
@@ -66,6 +73,12 @@ message ExperimentIteration {
   optional string exclusion_group_id = 9;
   optional uint32 group_bucket_lo    = 10;
   optional uint32 group_bucket_hi    = 11;
+  // [ADDITIVE] Snapshot of the sequential testing configuration at iteration
+  // start (mirrors the parent Experiment fields).
+  bool            sequential_testing_enabled = 12;
+  double          sequential_alpha           = 13;
+  optional double sequential_tau_squared     = 14;
+  int64           sequential_min_sample_size = 15;
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────
@@ -85,6 +98,15 @@ message VariantResult {
   bool   direction_violation = 8;
   // Observed `treatment − control` lift on the metric. `0.0` for the control row.
   double lift              = 9;
+  // [ADDITIVE] Sequential testing (always-valid) result for this variant row.
+  // All optional — absent when sequential testing was not run. Populated by
+  // a later phase; left unset for now.
+  optional double sequential_p_value         = 10;
+  optional double sequential_ci_lower        = 11;
+  optional double sequential_ci_upper        = 12;
+  optional bool   sequential_crossed         = 13;
+  optional bool   sequential_insufficient_data = 14;
+  optional string sequential_method          = 15;
 }
 
 // SRM (Sample Ratio Mismatch) summary for one context type's assignment counts.

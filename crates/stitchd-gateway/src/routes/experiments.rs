@@ -61,6 +61,20 @@ pub struct CreateExperimentBody {
     /// CUPED pre-period window in days; `0` disables variance reduction.
     #[serde(default)]
     pub pre_period_days: u32,
+    /// Enable sequential (always-valid) testing for this experiment.
+    #[serde(default)]
+    pub sequential_testing_enabled: bool,
+    /// Target type-I error rate (α) for the sequential test. `0` (the default)
+    /// lets the service apply the platform default (`0.05`).
+    #[serde(default)]
+    pub sequential_alpha: f64,
+    /// Mixing variance (τ²) for the mSPRT mixture; omit to auto-derive.
+    #[serde(default)]
+    pub sequential_tau_squared: Option<f64>,
+    /// Minimum per-variant sample size before a sequential verdict is allowed.
+    /// `0` (the default) lets the service apply the platform default (`100`).
+    #[serde(default)]
+    pub sequential_min_sample_size: i64,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -122,6 +136,15 @@ pub struct ExperimentJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ended_at: Option<String>,
     pub unit_context_types: Vec<String>,
+    /// Whether sequential (always-valid) testing is enabled.
+    pub sequential_testing_enabled: bool,
+    /// Target type-I error rate (α) for the sequential test.
+    pub sequential_alpha: f64,
+    /// Mixing variance (τ²); absent (omitted) when auto-derived.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequential_tau_squared: Option<f64>,
+    /// Minimum per-variant sample size before a sequential verdict is allowed.
+    pub sequential_min_sample_size: i64,
 }
 
 /// Per-variant result row — used in both `variants` and `guardrails` buckets
@@ -247,6 +270,10 @@ pub(crate) fn experiment_to_json(e: &Experiment) -> ExperimentJson {
         started_at: None,
         ended_at: None,
         unit_context_types: e.unit_context_types.clone(),
+        sequential_testing_enabled: e.sequential_testing_enabled,
+        sequential_alpha: e.sequential_alpha,
+        sequential_tau_squared: e.sequential_tau_squared,
+        sequential_min_sample_size: e.sequential_min_sample_size,
     }
 }
 
@@ -404,6 +431,10 @@ pub async fn create_experiment(
         unit_context_types: body.unit_context_types,
         guardrail_metric_ids: body.guardrail_metric_ids,
         pre_period_days: body.pre_period_days,
+        sequential_testing_enabled: body.sequential_testing_enabled,
+        sequential_alpha: body.sequential_alpha,
+        sequential_tau_squared: body.sequential_tau_squared,
+        sequential_min_sample_size: body.sequential_min_sample_size,
         ..Default::default()
     };
     let req = tonic::Request::new(CreateExperimentRequest {

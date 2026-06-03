@@ -59,6 +59,20 @@ pub struct ExperimentResultRow {
     pub frequentist_result: String,
     /// Bayesian analysis result as JSON string; `""` when absent.
     pub bayesian_result: String,
+    /// Sequential (always-valid) test p-value; `None` when not computed.
+    pub sequential_p_value: Option<f64>,
+    /// Sequential confidence-interval lower bound; `None` when not computed.
+    pub sequential_ci_lower: Option<f64>,
+    /// Sequential confidence-interval upper bound; `None` when not computed.
+    pub sequential_ci_upper: Option<f64>,
+    /// Sequential method discriminant (e.g. `"msprt"`, `"gavi"`); `""` when absent.
+    pub sequential_method: String,
+    /// Whether the always-valid boundary was crossed; `None` when not computed.
+    /// Stored as CH `Nullable(UInt8)` (0/1).
+    pub sequential_crossed: Option<u8>,
+    /// Whether the row had insufficient data for a sequential verdict; `None`
+    /// when not computed. Stored as CH `Nullable(UInt8)` (0/1).
+    pub sequential_insufficient_data: Option<u8>,
     /// Human-readable recommendation string.
     pub recommendation: String,
     /// When this result was computed (Unix milliseconds UTC).
@@ -95,6 +109,19 @@ pub struct WriteResultRow {
     pub frequentist_result: Option<serde_json::Value>,
     /// Bayesian analysis result; `None` stored as `""`.
     pub bayesian_result: Option<serde_json::Value>,
+    /// Sequential (always-valid) test p-value; `None` when not computed.
+    pub sequential_p_value: Option<f64>,
+    /// Sequential confidence-interval lower bound; `None` when not computed.
+    pub sequential_ci_lower: Option<f64>,
+    /// Sequential confidence-interval upper bound; `None` when not computed.
+    pub sequential_ci_upper: Option<f64>,
+    /// Sequential method discriminant; `None`/empty stored as `""`.
+    pub sequential_method: Option<String>,
+    /// Whether the always-valid boundary was crossed; `None` when not computed.
+    pub sequential_crossed: Option<bool>,
+    /// Whether the row had insufficient data for a sequential verdict; `None`
+    /// when not computed.
+    pub sequential_insufficient_data: Option<bool>,
     /// Human-readable recommendation.
     pub recommendation: String,
     /// Timestamp the analysis was computed.
@@ -207,6 +234,12 @@ impl ClickHouseExperimentResultsRepository {
                 .map(serde_json::to_string)
                 .transpose()?
                 .unwrap_or_default(),
+            sequential_p_value: row.sequential_p_value,
+            sequential_ci_lower: row.sequential_ci_lower,
+            sequential_ci_upper: row.sequential_ci_upper,
+            sequential_method: row.sequential_method.unwrap_or_default(),
+            sequential_crossed: row.sequential_crossed.map(u8::from),
+            sequential_insufficient_data: row.sequential_insufficient_data.map(u8::from),
             recommendation: row.recommendation,
             computed_at: row.computed_at.timestamp_millis(),
             created_at: chrono::Utc::now().timestamp_millis(),
@@ -239,6 +272,8 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
+                     sequential_p_value, sequential_ci_lower, sequential_ci_upper, \
+                     sequential_method, sequential_crossed, sequential_insufficient_data, \
                      recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? AND iteration_id = ? \
@@ -254,6 +289,8 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
+                     sequential_p_value, sequential_ci_lower, sequential_ci_upper, \
+                     sequential_method, sequential_crossed, sequential_insufficient_data, \
                      recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
@@ -280,6 +317,8 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
+                     sequential_p_value, sequential_ci_lower, sequential_ci_upper, \
+                     sequential_method, sequential_crossed, sequential_insufficient_data, \
                      recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
@@ -300,6 +339,8 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
+                     sequential_p_value, sequential_ci_lower, sequential_ci_upper, \
+                     sequential_method, sequential_crossed, sequential_insufficient_data, \
                      recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
@@ -348,6 +389,12 @@ mod tests {
             variant_stats: serde_json::json!({ "control": 100, "treatment": 120 }),
             frequentist_result: Some(serde_json::json!({ "p_value": 0.03 })),
             bayesian_result: None,
+            sequential_p_value: None,
+            sequential_ci_lower: None,
+            sequential_ci_upper: None,
+            sequential_method: None,
+            sequential_crossed: None,
+            sequential_insufficient_data: None,
             recommendation: "ship_treatment".to_string(),
             computed_at: Utc::now(),
             context_type: "user".to_string(),
@@ -392,6 +439,12 @@ mod tests {
             variant_stats: serde_json::json!({}),
             frequentist_result: None,
             bayesian_result: None,
+            sequential_p_value: None,
+            sequential_ci_lower: None,
+            sequential_ci_upper: None,
+            sequential_method: None,
+            sequential_crossed: None,
+            sequential_insufficient_data: None,
             recommendation: "inconclusive".to_string(),
             computed_at: Utc::now(),
             context_type: "user".to_string(),
@@ -414,6 +467,12 @@ mod tests {
             variant_stats: serde_json::json!({ "mean": 42.5 }),
             frequentist_result: Some(serde_json::json!({ "ci_lower": 0.1 })),
             bayesian_result: Some(serde_json::json!({ "posterior_prob": 0.95 })),
+            sequential_p_value: None,
+            sequential_ci_lower: None,
+            sequential_ci_upper: None,
+            sequential_method: None,
+            sequential_crossed: None,
+            sequential_insufficient_data: None,
             recommendation: "ship".to_string(),
             computed_at: Utc::now(),
             context_type: "account".to_string(),

@@ -165,6 +165,10 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         exclusion_group_id: i.exclusion_group_id.map(|g| g.to_string()),
         group_bucket_lo: i.group_bucket_lo.map(u32::from),
         group_bucket_hi: i.group_bucket_hi.map(u32::from),
+        sequential_testing_enabled: i.sequential_testing_enabled,
+        sequential_alpha: i.sequential_alpha,
+        sequential_tau_squared: i.sequential_tau_squared,
+        sequential_min_sample_size: i.sequential_min_sample_size,
     }
 }
 
@@ -261,6 +265,10 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
         exclusion_group_id: e.exclusion_group_id.map(|g| g.to_string()),
         group_bucket_lo: e.group_bucket_lo.map(u32::from),
         group_bucket_hi: e.group_bucket_hi.map(u32::from),
+        sequential_testing_enabled: e.sequential_testing_enabled,
+        sequential_alpha: e.sequential_alpha,
+        sequential_tau_squared: e.sequential_tau_squared,
+        sequential_min_sample_size: e.sequential_min_sample_size,
     }
 }
 
@@ -662,6 +670,21 @@ impl ExperimentationService for ExperimentationServiceImpl {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: proto_exp.sequential_testing_enabled,
+            // proto3 scalars default to 0 when unset; fall back to the platform
+            // defaults (matching the PG column defaults) so a caller that only
+            // flips `sequential_testing_enabled` still gets a valid α / min-N.
+            sequential_alpha: if proto_exp.sequential_alpha > 0.0 {
+                proto_exp.sequential_alpha
+            } else {
+                0.05
+            },
+            sequential_tau_squared: proto_exp.sequential_tau_squared,
+            sequential_min_sample_size: if proto_exp.sequential_min_sample_size > 0 {
+                proto_exp.sequential_min_sample_size
+            } else {
+                100
+            },
         };
 
         self.experiment_repo
@@ -815,6 +838,28 @@ impl ExperimentationService for ExperimentationServiceImpl {
             }
         }
         // ─────────────────────────────────────────────────────────────────────
+
+        // ── Sequential testing config update ─────────────────────────────────
+        // proto3 cannot distinguish "unset" from "false/0" for plain scalars, so
+        // a request that enables sequential testing (or supplies an explicit
+        // tau²) is treated as managing the whole sequential config block; the
+        // 0 → default fallback mirrors create_experiment / the PG defaults.
+        let touches_sequential =
+            proto_exp.sequential_testing_enabled || proto_exp.sequential_tau_squared.is_some();
+        if touches_sequential {
+            experiment.sequential_testing_enabled = proto_exp.sequential_testing_enabled;
+            experiment.sequential_alpha = if proto_exp.sequential_alpha > 0.0 {
+                proto_exp.sequential_alpha
+            } else {
+                0.05
+            };
+            experiment.sequential_tau_squared = proto_exp.sequential_tau_squared;
+            experiment.sequential_min_sample_size = if proto_exp.sequential_min_sample_size > 0 {
+                proto_exp.sequential_min_sample_size
+            } else {
+                100
+            };
+        }
 
         experiment.updated_at = chrono::Utc::now();
 
@@ -1091,6 +1136,14 @@ impl ExperimentationService for ExperimentationServiceImpl {
                         context_type: context_type.clone(),
                         direction_violation: false,
                         lift,
+                        // Sequential testing results are populated by a later
+                        // phase; unset for now.
+                        sequential_p_value: None,
+                        sequential_ci_lower: None,
+                        sequential_ci_upper: None,
+                        sequential_crossed: None,
+                        sequential_insufficient_data: None,
+                        sequential_method: None,
                     });
 
                     // Pull p_value (+ corrected) from frequentist_result JSON.
@@ -1881,6 +1934,10 @@ mod tests {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
         }
     }
 
@@ -1980,6 +2037,10 @@ mod tests {
                 exclusion_group_id: None,
                 group_bucket_lo: None,
                 group_bucket_hi: None,
+                sequential_testing_enabled: false,
+                sequential_alpha: 0.05,
+                sequential_tau_squared: None,
+                sequential_min_sample_size: 100,
             })
         }
     }
@@ -2860,6 +2921,10 @@ mod tests {
                 exclusion_group_id: None,
                 group_bucket_lo: None,
                 group_bucket_hi: None,
+                sequential_testing_enabled: false,
+                sequential_alpha: 0.05,
+                sequential_tau_squared: None,
+                sequential_min_sample_size: 100,
             }])
         }
 
@@ -2910,6 +2975,10 @@ mod tests {
                 exclusion_group_id: None,
                 group_bucket_lo: None,
                 group_bucket_hi: None,
+                sequential_testing_enabled: false,
+                sequential_alpha: 0.05,
+                sequential_tau_squared: None,
+                sequential_min_sample_size: 100,
             })
         }
     }

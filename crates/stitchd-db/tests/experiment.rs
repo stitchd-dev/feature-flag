@@ -138,6 +138,10 @@ fn make_experiment(env_id: EnvironmentId, flag_id: FlagId, flag_rule_id: RuleId)
         exclusion_group_id: None,
         group_bucket_lo: None,
         group_bucket_hi: None,
+        sequential_testing_enabled: false,
+        sequential_alpha: 0.05,
+        sequential_tau_squared: None,
+        sequential_min_sample_size: 100,
     }
 }
 
@@ -356,6 +360,95 @@ async fn test_transition_draft_to_running_creates_iteration(pool: sqlx::PgPool) 
         "iteration should still be active"
     );
     assert_eq!(iterations[0].metric_ids, exp.metric_ids);
+}
+
+/// Sequential-testing config round-trips through create → find_by_id, and is
+/// snapshotted onto the iteration at run start (mirrors pre_period_days /
+/// unit_context_types threading).
+#[sqlx::test(migrations = "./migrations")]
+async fn test_sequential_config_roundtrip_and_iteration_snapshot(pool: sqlx::PgPool) {
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let mut exp = make_experiment(env_id, flag_id, rule_id);
+    exp.sequential_testing_enabled = true;
+    exp.sequential_alpha = 0.01;
+    exp.sequential_tau_squared = Some(0.25);
+    exp.sequential_min_sample_size = 500;
+    repo.create(&exp).await.unwrap();
+
+    // Read back via find_by_id — config must survive the PG round-trip.
+    let fetched = repo.find_by_id(exp.id).await.unwrap();
+    assert!(fetched.sequential_testing_enabled);
+    assert!((fetched.sequential_alpha - 0.01).abs() < f64::EPSILON);
+    assert_eq!(fetched.sequential_tau_squared, Some(0.25));
+    assert_eq!(fetched.sequential_min_sample_size, 500);
+
+    // Transition to running → iteration must snapshot the sequential config.
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .expect("draft→running should succeed");
+    let iterations = repo.list_iterations(exp.id).await.unwrap();
+    assert_eq!(iterations.len(), 1);
+    let it = &iterations[0];
+    assert!(it.sequential_testing_enabled);
+    assert!((it.sequential_alpha - 0.01).abs() < f64::EPSILON);
+    assert_eq!(it.sequential_tau_squared, Some(0.25));
+    assert_eq!(it.sequential_min_sample_size, 500);
+}
+
+/// An experiment created with the platform-default sequential config reads
+/// back the defaults (auto-derive τ² = None, α = 0.05, min-N = 100) and the
+/// iteration snapshot carries those defaults too.
+#[sqlx::test(migrations = "./migrations")]
+async fn test_sequential_config_defaults_roundtrip(pool: sqlx::PgPool) {
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    // make_experiment uses the defaults (disabled, α=0.05, τ²=None, min-N=100).
+    let exp = make_experiment(env_id, flag_id, rule_id);
+    repo.create(&exp).await.unwrap();
+
+    let fetched = repo.find_by_id(exp.id).await.unwrap();
+    assert!(!fetched.sequential_testing_enabled);
+    assert!((fetched.sequential_alpha - 0.05).abs() < f64::EPSILON);
+    assert_eq!(fetched.sequential_tau_squared, None);
+    assert_eq!(fetched.sequential_min_sample_size, 100);
+
+    repo.apply_transition(exp.id, ExperimentStatus::Running, None)
+        .await
+        .unwrap();
+    let iterations = repo.list_iterations(exp.id).await.unwrap();
+    let it = &iterations[0];
+    assert!(!it.sequential_testing_enabled);
+    assert_eq!(it.sequential_tau_squared, None);
+    assert_eq!(it.sequential_min_sample_size, 100);
+}
+
+/// Sequential-testing config can be updated on a draft experiment via the
+/// repository `update` path (mirrors how other config fields round-trip).
+#[sqlx::test(migrations = "./migrations")]
+async fn test_sequential_config_update(pool: sqlx::PgPool) {
+    let (env_id, flag_id, rule_id) = setup_experiment_deps(pool.clone()).await;
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let repo = PgExperimentRepository::new(pool.clone(), audit);
+
+    let exp = make_experiment(env_id, flag_id, rule_id);
+    repo.create(&exp).await.unwrap();
+
+    let mut to_update = repo.find_by_id(exp.id).await.unwrap();
+    to_update.sequential_testing_enabled = true;
+    to_update.sequential_alpha = 0.02;
+    to_update.sequential_tau_squared = Some(0.5);
+    to_update.sequential_min_sample_size = 250;
+    let updated = repo.update(&to_update).await.unwrap();
+
+    assert!(updated.sequential_testing_enabled);
+    assert!((updated.sequential_alpha - 0.02).abs() < f64::EPSILON);
+    assert_eq!(updated.sequential_tau_squared, Some(0.5));
+    assert_eq!(updated.sequential_min_sample_size, 250);
 }
 
 #[sqlx::test(migrations = "./migrations")]
