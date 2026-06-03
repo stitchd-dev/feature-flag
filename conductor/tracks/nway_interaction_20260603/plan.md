@@ -10,26 +10,26 @@ Parallel execution: ENABLED (Phase 2 stats modules, Phase 4 consumers, Phase 5 v
 
 ---
 
-## Phase 1: Foundations — Tech-Stack, Unified Schema, N-D Cell Model
+## Phase 1: Foundations — Tech-Stack, Unified Schema, N-D Cell Model [checkpoint: e8f2300]
 <!-- execution: sequential -->
 <!-- depends: -->
 
-- [ ] Task 1: Document stats additions in `tech-stack.md` (log-linear hierarchical
+- [x] Task 1: Document stats additions in `tech-stack.md` (log-linear hierarchical
       decomposition, multi-factor ANOVA, ratio delta-method, Bayesian interaction
       posteriors) with dated note — REQUIRED before implementation per workflow §7.
   <!-- files: conductor/tech-stack.md -->
 
-- [ ] Task 2: New ClickHouse migration superseding `experiment_interactions`:
-      `experiment_ids Array(UUID)`, `interaction_order UInt8`, `term LowCardinality(String)`,
-      generalized N-D `cell_stats`, Bayesian columns (`bayes_prob`, `bayes_expected`,
-      `bayes_ci_low`, `bayes_ci_high` Float64). Register in `migrations.rs` embed list.
-      Tests: migration applies on a clean CH; ORDER BY key updated.
-  <!-- files: crates/stitchd-event-writer/migrations/20260603000001_nway_interactions.sql, crates/stitchd-event-writer/src/migrations.rs -->
+- [x] Task 2: Superseded `experiment_interactions` in place (clean cutover): rewrote
+      `20260602000002_experiment_interactions.sql` to the unified schema
+      (`experiment_ids Array(UUID)`, `interaction_order UInt8`, `term`, `df`, N-D
+      `cell_stats`, Bayesian cols), engine → `ReplacingMergeTree(computed_at)` + 30d TTL;
+      removed the separate `…0005` ALTER. Verified DDL on live CH.
+  <!-- files: crates/stitchd-event-writer/migrations/20260602000002_experiment_interactions.sql, crates/stitchd-event-writer/src/migrations.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task 3: Generalize the cell aggregate to an N-dimensional, variant-tuple-keyed
+- [x] Task 3: Generalize the cell aggregate to an N-dimensional, variant-tuple-keyed
       type + `cell_stats` (de)serialization (carries n, successes, value_sum,
-      value_sq_sum, plus ratio num/den sums). TDD: serde round-trip + k-D indexing
+      value_sq_sum, plus ratio num/den/sq/cov sums). TDD: serde round-trip + k-D indexing
       fixtures (k=2 and k=3).
   <!-- files: crates/stitchd-stats-service/src/interaction_compute.rs -->
   <!-- depends: task2 -->
