@@ -470,6 +470,104 @@ pub fn build_assignment_counts_query(
     BuiltQuery { sql, binds }
 }
 
+/// Build the per-`(context_type, variant_key)` **raw per-unit sample** query
+/// for one experiment + iteration restricted to a single `context_type` and a
+/// single `Aggregation` metric — the input a percentile significance test (a
+/// bootstrap CI on the q-th quantile) needs but the scalar sufficient-stats
+/// path cannot reconstruct.
+///
+/// Mirrors [`build_aggregation_cells_query`] exactly (same `assignments` CTE,
+/// same ITT `me.occurred_at >= asg.assigned_at` bound, same coalesced
+/// [`super::numeric_value_expr`] value, same per-unit reduction), but instead of
+/// the second moments it collects each assigned unit's per-unit metric value
+/// (`value_sum` over its post-exposure events — a non-firing unit contributes
+/// `0`, ITT) into `groupArray(value)` per variant. The array is capped at
+/// `sample_cap` via `groupArray(sample_cap)(...)` so a hot variant cannot
+/// stream an unbounded array back into the compute pass; the caller notes when
+/// the returned length equals the cap (possible truncation).
+///
+/// Result rows carry `(variant_key, samples)` where `samples` is an
+/// `Array(Float64)` of per-unit values (length ≤ `sample_cap`).
+///
+/// # Errors
+/// Returns [`QueryBuildError`] when the metric `where_clause` JsonLogic cannot
+/// be translated.
+pub fn build_percentile_samples_query(
+    cfg: &AggregationConfig,
+    experiment_id: &str,
+    iteration_id: &str,
+    env_id: &str,
+    context_type: &str,
+    iteration_end: DateTime<Utc>,
+    sample_cap: u64,
+) -> Result<BuiltQuery, QueryBuildError> {
+    let end_ms = iteration_end.timestamp_millis();
+    let mut binds = Vec::new();
+
+    let assignments_cte = emit_assignments_cte(
+        &mut binds,
+        experiment_id,
+        iteration_id,
+        env_id,
+        context_type,
+        iteration_end,
+    );
+
+    let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
+    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
+    let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
+    let ev_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
+    let value_expr = super::numeric_value_expr(cfg);
+
+    let extra_where = match cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n      AND ({frag})")
+        }
+        None => String::new(),
+    };
+
+    // The per-unit value is the unit's post-exposure metric sum (ITT — a unit
+    // with no qualifying event contributes 0), reduced per assigned context,
+    // then collected per variant via groupArray (capped). `sample_cap` is a
+    // SQL literal (a trusted internal bound, not user input).
+    let sql = format!(
+        "WITH\n\
+        assignments AS (\n\
+        {assignments_cte}\
+        ),\n\
+        matched_events AS (\n    \
+            SELECT\n        \
+                ctx_pair.2 AS context_key,\n        \
+                {value_expr} AS value,\n        \
+                e.occurred_at AS occurred_at\n    \
+            FROM events AS e\n    \
+            ARRAY JOIN e.contexts AS ctx_pair\n    \
+            WHERE e.env_id = toUUID({ev_env_ph})\n      \
+              AND e.metric_key = {event_ph}\n      \
+              AND ctx_pair.1 = {ev_ctx_ph}\n      \
+              AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph}){extra_where}\n\
+        ),\n\
+        ctx_values AS (\n    \
+            SELECT\n        \
+                asg.context_type AS context_type,\n        \
+                asg.variant_key AS variant_key,\n        \
+                sumIf(me.value, me.occurred_at >= asg.assigned_at) AS unit_value\n    \
+            FROM assignments AS asg\n    \
+            LEFT JOIN matched_events AS me\n        \
+                ON me.context_key = asg.context_key\n    \
+            GROUP BY asg.context_type, asg.context_key, asg.variant_key\n\
+        )\n\
+        SELECT\n    \
+            cv.variant_key AS variant_key,\n    \
+            groupArray({sample_cap})(cv.unit_value) AS samples\n\
+        FROM ctx_values AS cv\n\
+        GROUP BY cv.variant_key"
+    );
+
+    Ok(BuiltQuery { sql, binds })
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -710,6 +808,65 @@ mod tests {
         let err =
             build_funnel_cells_query(&cfg, EXP_ID, ITER_ID, ENV_ID, "user", end()).unwrap_err();
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
+    }
+
+    // ── Percentile raw samples ─────────────────────────────────────────────
+
+    #[test]
+    fn percentile_samples_group_arrays_per_variant_capped() {
+        let q =
+            build_percentile_samples_query(&sum_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end(), 100)
+                .unwrap();
+        assert!(
+            q.sql.contains("groupArray(100)(cv.unit_value) AS samples"),
+            "{}",
+            q.sql
+        );
+        assert!(q.sql.contains("GROUP BY cv.variant_key"), "{}", q.sql);
+        // Same ITT discipline as the aggregation cells query.
+        assert!(
+            q.sql.contains("FROM experiment_assignments AS a FINAL"),
+            "{}",
+            q.sql
+        );
+        assert!(
+            q.sql
+                .contains("sumIf(me.value, me.occurred_at >= asg.assigned_at) AS unit_value"),
+            "{}",
+            q.sql
+        );
+        // Continuous metric uses the property value expr (same as aggregation).
+        assert!(
+            q.sql.contains("toFloat64OrNull(e.properties['revenue'])"),
+            "{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn percentile_samples_bind_order_is_left_to_right() {
+        let q = build_percentile_samples_query(
+            &count_cfg(),
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            "user",
+            end(),
+            50,
+        )
+        .unwrap();
+        // assignments CTE: env, exp, iter, ctx, end
+        assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[1], QueryBind::Str(EXP_ID.into()));
+        assert_eq!(q.binds[2], QueryBind::Str(ITER_ID.into()));
+        assert_eq!(q.binds[3], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[4], QueryBind::I64(end().timestamp_millis()));
+        // events: env, event_key, ctx, end
+        assert_eq!(q.binds[5], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[6], QueryBind::Str("checkout_completed".into()));
+        assert_eq!(q.binds[7], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[8], QueryBind::I64(end().timestamp_millis()));
+        assert_eq!(q.binds.len(), 9);
     }
 
     // ── Assignment counts ──────────────────────────────────────────────────

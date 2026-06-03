@@ -25,18 +25,22 @@
 //!
 //! ## Ratio frequentist (delta method)
 //!
-//! There is no `frequentist::analyze_ratio`, so the ratio contrast is computed
-//! inline via [`ratio_frequentist`] using the SAME delta-method formula as
+//! The ratio contrast is computed via [`frequentist::analyze_ratio`] /
+//! [`bayesian::analyze_ratio`] in stitchd-core (the analyzers mirror the other
+//! metric families), which reuse `RatioGroupStats::ratio_var` — the single
+//! source of truth for the delta-method point + variance shared with
 //! `stats::sequential::sequential_ratio` / `interaction::ratio`
 //! (`Var(R) ≈ (var_num − 2R·cov + R²·var_den) / (mean_den²·n)`, diff-of-ratios
 //! `SE = sqrt(Var(R_t) + Var(R_c))`, two-tailed normal `z`).
 //!
 //! ## Percentile metrics
 //!
-//! P50/P90/P99 carry only the point value (the sufficient-stats path cannot
-//! reconstruct the raw sample a percentile CI needs); they are emitted with a
-//! `NeedsMoreData` recommendation and NO frequentist/bayesian/sequential blob.
-//! A bootstrap-based percentile significance test is out of scope here.
+//! P50/P90/P99 fetch the per-unit raw sample via
+//! [`crate::queries::variant_stats::build_percentile_samples_query`] and run a
+//! bootstrap significance test (`frequentist::analyze_percentile` +
+//! `bayesian::analyze_percentile`) at the aggregator's quantile, producing a
+//! real [`Recommendation`]. When the raw sample cannot be fetched (or is empty)
+//! the pair falls back to `NeedsMoreData` with no frequentist/bayesian blob.
 //!
 //! ## CUPED (deferred)
 //!
@@ -57,8 +61,8 @@ use uuid::Uuid;
 use stitchd_core::experimentation::stats::sequential::RatioGroupStats;
 use stitchd_core::experimentation::stats::srm::{SrmObservation, compute_srm};
 use stitchd_core::experimentation::stats::{
-    AnalysisType, BayesianResult, ConfidenceInterval, FrequentistResult, MetricType, Percentiles,
-    Recommendation, VariantStats, bayesian, frequentist,
+    AnalysisType, BayesianResult, FrequentistResult, MetricType, Percentiles, Recommendation,
+    VariantStats, bayesian, frequentist,
     recommendation::{RecommendationInput, pick_winner, recommend},
 };
 use stitchd_core::metric::{
@@ -69,7 +73,7 @@ use crate::dispatch::rewrite_placeholders_to_clickhouse;
 use crate::queries::QueryBind;
 use crate::queries::variant_stats::{
     build_aggregation_cells_query, build_assignment_counts_query, build_funnel_cells_query,
-    build_ratio_cells_query,
+    build_percentile_samples_query, build_ratio_cells_query,
 };
 use crate::results_writer::{MetricSummary, VariantPoint};
 use crate::scheduler::RunningExperiment;
@@ -110,6 +114,21 @@ struct ChFunnelRow {
     n: u64,
     successes: u64,
 }
+
+/// Raw per-unit sample row (percentile significance) per `variant_key` — the
+/// ITT per-unit metric values collected via `groupArray` (capped CH-side).
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+struct ChPercentileSamplesRow {
+    variant_key: String,
+    samples: Vec<f64>,
+}
+
+/// Upper bound on the number of raw per-unit samples collected per
+/// `(context_type, variant_key)` for a percentile significance test. The
+/// ClickHouse `groupArray(SAMPLE_CAP)(...)` caps the array server-side so a hot
+/// variant cannot stream an unbounded array into the compute pass; a returned
+/// length equal to the cap is treated as "possibly truncated" and logged.
+const PERCENTILE_SAMPLE_CAP: u64 = 100_000;
 
 /// Assignment-count row — the ITT sample-size denominator + SRM observed count.
 #[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
@@ -173,6 +192,20 @@ pub trait CellReader: Send + Sync {
         context_type: &str,
         iteration_end: DateTime<Utc>,
     ) -> Result<HashMap<String, (u64, u64)>, anyhow::Error>;
+
+    /// Raw per-unit metric samples per variant for a percentile significance
+    /// test (capped at [`PERCENTILE_SAMPLE_CAP`] CH-side). Returns
+    /// `variant_key → Vec<per-unit value>` (ITT — non-firing units contribute
+    /// `0`).
+    async fn percentile_samples(
+        &self,
+        cfg: &AggregationConfig,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+    ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error>;
 }
 
 /// Aggregation cell: the event-side sufficient statistics for one variant
@@ -343,6 +376,33 @@ impl CellReader for ClickHouseCellReader {
             .map(|r| (r.variant_key, (r.n, r.successes)))
             .collect())
     }
+
+    async fn percentile_samples(
+        &self,
+        cfg: &AggregationConfig,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+    ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error> {
+        let built = build_percentile_samples_query(
+            cfg,
+            &experiment_id.to_string(),
+            &iteration_id.to_string(),
+            &env_id.to_string(),
+            context_type,
+            iteration_end,
+            PERCENTILE_SAMPLE_CAP,
+        )?;
+        let rows = bind_query(&self.client, built.sql, built.binds)
+            .fetch_all::<ChPercentileSamplesRow>()
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.variant_key, r.samples))
+            .collect())
+    }
 }
 
 // ── Metric-type classification ───────────────────────────────────────────────
@@ -365,6 +425,21 @@ pub fn metric_type_for(def: &MetricDefinition) -> MetricType {
         },
         MetricKind::Ratio(_) => MetricType::Numeric,
         MetricKind::Funnel(_) => MetricType::Funnel,
+    }
+}
+
+/// The target percentile in `[0, 100]` for a percentile aggregator
+/// (P50 → 50.0, P90 → 90.0, P99 → 99.0), as consumed by
+/// [`frequentist::analyze_percentile`] / [`bayesian::analyze_percentile`]
+/// (which divide by 100 internally). Returns `None` for non-percentile
+/// aggregators.
+#[must_use]
+fn percentile_for_aggregator(op: AggregationOperator) -> Option<f64> {
+    match op {
+        AggregationOperator::P50 => Some(50.0),
+        AggregationOperator::P90 => Some(90.0),
+        AggregationOperator::P99 => Some(99.0),
+        _ => None,
     }
 }
 
@@ -481,146 +556,6 @@ pub fn select_control(variant_keys: &[String]) -> Option<String> {
     variant_keys.iter().min().cloned()
 }
 
-// ── Ratio frequentist (delta method) ─────────────────────────────────────────
-
-/// Delta-method point estimate `R` and variance `Var(R)` for a ratio group —
-/// identical to `RatioGroupStats::ratio_var` (which is private to stitchd-core),
-/// reproduced here so the stats-service can compute the frequentist ratio
-/// contrast without an `analyze_ratio` in core. Returns `None` for a degenerate
-/// group (`n < 2`, `den_sum ≤ 0`, `mean_den ≤ 0`, or a non-finite/non-positive
-/// variance).
-#[must_use]
-fn ratio_point_and_var(g: &RatioGroupStats) -> Option<(f64, f64)> {
-    if g.n < 2 || g.den_sum <= 0.0 {
-        return None;
-    }
-    let n = g.n as f64;
-    let mean_num = g.num_sum / n;
-    let mean_den = g.den_sum / n;
-    if !mean_den.is_finite() || mean_den <= 0.0 {
-        return None;
-    }
-    let r = g.num_sum / g.den_sum;
-    let var_num = g.num_sq_sum / n - mean_num * mean_num;
-    let var_den = g.den_sq_sum / n - mean_den * mean_den;
-    let cov = g.num_den_sum / n - mean_num * mean_den;
-    let var_r = (var_num - 2.0 * r * cov + r * r * var_den) / (mean_den * mean_den * n);
-    if !var_r.is_finite() || var_r <= 0.0 || !r.is_finite() {
-        return None;
-    }
-    Some((r, var_r))
-}
-
-/// Standard normal CDF via the same erf approximation `frequentist.rs` uses
-/// (Abramowitz & Stegun 7.1.26). Kept local so the ratio delta-method test does
-/// not depend on a private core helper.
-fn norm_cdf(z: f64) -> f64 {
-    let erf = |x: f64| -> f64 {
-        let sign = if x < 0.0 { -1.0 } else { 1.0 };
-        let x = x.abs();
-        let t = 1.0 / (1.0 + 0.327_591_1 * x);
-        let poly = t
-            * (0.254_829_592
-                + t * (-0.284_496_736
-                    + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
-        sign * (1.0 - poly * (-x * x).exp())
-    };
-    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
-}
-
-/// Frequentist contrast for a **ratio** metric (treatment vs control) via the
-/// delta method.
-///
-/// The effect is the difference of per-group ratios `R_t − R_c`; the groups are
-/// independent so `SE = sqrt(Var(R_c) + Var(R_t))` with each `Var(R)` from
-/// [`ratio_point_and_var`]. The two-tailed p-value is `2·Φ(−|z|)` and the 95 %
-/// CI is `(R_t − R_c) ± 1.96·SE`.
-///
-/// Returns a non-significant, wide-CI result when either group is degenerate
-/// (mirroring the insufficient-data convention of the count/numeric paths).
-#[must_use]
-pub fn ratio_frequentist(
-    control: &RatioGroupStats,
-    variant: &RatioGroupStats,
-) -> FrequentistResult {
-    let (Some((r_c, var_c)), Some((r_t, var_t))) =
-        (ratio_point_and_var(control), ratio_point_and_var(variant))
-    else {
-        return FrequentistResult {
-            p_value: 1.0,
-            p_value_corrected: None,
-            confidence_interval: ConfidenceInterval {
-                lower: f64::NEG_INFINITY,
-                upper: f64::INFINITY,
-            },
-            significant: false,
-        };
-    };
-    let diff = r_t - r_c;
-    let se = (var_c + var_t).sqrt();
-    let z = if se == 0.0 { 0.0 } else { diff / se };
-    let p_value = 2.0 * norm_cdf(-z.abs());
-    let margin = 1.96 * se;
-    FrequentistResult {
-        p_value,
-        p_value_corrected: None,
-        confidence_interval: ConfidenceInterval {
-            lower: diff - margin,
-            upper: diff + margin,
-        },
-        significant: p_value < 0.05,
-    }
-}
-
-/// Bayesian contrast for a **ratio** metric — a normal posterior on the
-/// delta-method estimate/SE (no `analyze_ratio` in core). `prob_best =
-/// P(R_t > R_c)` under `N(diff, SE²)`; the credible interval is `diff ± 1.96·SE`;
-/// expected loss `E[max(R_c − R_t, 0)]` via the closed-form normal tail
-/// expectation (matching `bayesian::analyze_numeric`).
-#[must_use]
-pub fn ratio_bayesian(control: &RatioGroupStats, variant: &RatioGroupStats) -> BayesianResult {
-    let (Some((r_c, var_c)), Some((r_t, var_t))) =
-        (ratio_point_and_var(control), ratio_point_and_var(variant))
-    else {
-        return BayesianResult {
-            prob_best: 0.5,
-            credible_interval: ConfidenceInterval {
-                lower: 0.0,
-                upper: 0.0,
-            },
-            expected_loss: 0.0,
-        };
-    };
-    let diff = r_t - r_c;
-    let se = (var_c + var_t).sqrt();
-    let prob_best = if se == 0.0 {
-        if diff > 0.0 {
-            1.0
-        } else if diff < 0.0 {
-            0.0
-        } else {
-            0.5
-        }
-    } else {
-        1.0 - norm_cdf(-diff / se)
-    };
-    let z95 = 1.959_964;
-    let lower = diff - z95 * se;
-    let upper = diff + z95 * se;
-    let expected_loss = if se == 0.0 {
-        (-diff).max(0.0)
-    } else {
-        let d = diff / se;
-        let phi_d = (-0.5 * d * d).exp() / (2.0 * std::f64::consts::PI).sqrt();
-        (se * phi_d + (-diff) * (1.0 - norm_cdf(d))).max(0.0)
-    };
-    BayesianResult {
-        prob_best,
-        credible_interval: ConfidenceInterval { lower, upper },
-        expected_loss,
-    }
-}
-
 // ── Per-context-per-metric computation ───────────────────────────────────────
 
 /// The point `metric_value` rendered per variant for a metric+context (the
@@ -672,6 +607,14 @@ struct VariantComparison {
     bayesian: BayesianResult,
 }
 
+/// Raw per-unit samples + target quantile for a percentile-metric significance
+/// test. `samples` maps `variant_key → Vec<per-unit value>` (ITT, capped
+/// CH-side); `percentile` is the quantile in `[0, 100]` (P50 → 50.0).
+struct PercentileInput {
+    samples: HashMap<String, Vec<f64>>,
+    percentile: f64,
+}
+
 /// Compute the full per-pair result for one metric within one `context_type`.
 ///
 /// `sample_sizes` maps `variant_key → ITT sample size` (assignment count).
@@ -688,6 +631,7 @@ async fn compute_pair(
     agg: Option<&HashMap<String, AggCell>>,
     ratio: Option<&HashMap<String, RatioGroupStats>>,
     funnel: Option<&HashMap<String, (u64, u64)>>,
+    percentile: Option<&PercentileInput>,
     now: DateTime<Utc>,
 ) -> PairResult {
     // Build the per-variant VariantStats (and RatioGroupStats) over the UNION of
@@ -785,15 +729,19 @@ async fn compute_pair(
         };
     };
 
-    // Percentile: skip frequentist / bayesian / sequential; NeedsMoreData.
+    // Percentile: run a bootstrap significance test on the raw per-unit samples
+    // (frequentist bootstrap CI + bayesian bootstrap prob_best at the
+    // aggregator's quantile). No sequential analogue. Falls back to
+    // NeedsMoreData when the raw samples are unavailable / empty.
     if mt == MetricType::Percentile {
-        return PairResult {
+        return compute_percentile_pair(
             points,
-            frequentist: None,
-            bayesian: None,
-            sequential: None,
-            recommendation: Recommendation::NeedsMoreData.to_string(),
-        };
+            &variant_keys,
+            &control_key,
+            exp,
+            percentile,
+            &variant_stats,
+        );
     }
 
     // Frequentist + Bayesian per non-control variant (vs control).
@@ -820,7 +768,10 @@ async fn compute_pair(
             MetricType::Numeric if !ratio_groups.is_empty() => {
                 let cg = ratio_groups.get(&control_key).expect("control ratio");
                 let vg = ratio_groups.get(vk).expect("variant ratio");
-                (ratio_frequentist(cg, vg), ratio_bayesian(cg, vg))
+                (
+                    frequentist::analyze_ratio(cg, vg),
+                    bayesian::analyze_ratio(cg, vg),
+                )
             }
             MetricType::Numeric => (
                 frequentist::analyze_numeric(control_vs, vs),
@@ -912,6 +863,108 @@ async fn compute_pair(
     }
 }
 
+/// Compute the per-pair result for a **percentile** metric via a bootstrap
+/// significance test on the raw per-unit samples.
+///
+/// For each non-control variant we run [`frequentist::analyze_percentile`]
+/// (bootstrap difference CI — its `p_value` is NaN by design) and
+/// [`bayesian::analyze_percentile`] (bootstrap `prob_best`) at the aggregator's
+/// quantile, then derive a [`Recommendation`] from the **bayesian** posterior
+/// (`prob_best`) since the bootstrap CI carries no analytic p-value. The
+/// per-variant frequentist + bayesian JSON blobs mirror the other families.
+///
+/// Falls back to a `NeedsMoreData`, blob-less result when the raw samples are
+/// missing (the fetch failed) or the control / every variant sample is empty —
+/// matching the prior percentile behaviour rather than emitting a degenerate
+/// test.
+fn compute_percentile_pair(
+    points: Vec<VariantPoint>,
+    variant_keys: &[String],
+    control_key: &str,
+    exp: &RunningExperiment,
+    percentile: Option<&PercentileInput>,
+    variant_stats: &HashMap<String, VariantStats>,
+) -> PairResult {
+    let needs_more = || PairResult {
+        points: points.clone(),
+        frequentist: None,
+        bayesian: None,
+        sequential: None,
+        recommendation: Recommendation::NeedsMoreData.to_string(),
+    };
+
+    // Require the raw samples + a non-empty control sample to test against.
+    let Some(pct) = percentile else {
+        return needs_more();
+    };
+    let q = pct.percentile;
+    let control_samples = match pct.samples.get(control_key) {
+        Some(s) if !s.is_empty() => s.as_slice(),
+        _ => return needs_more(),
+    };
+
+    let mut ordered_non_control: Vec<String> = variant_keys
+        .iter()
+        .filter(|k| *k != control_key)
+        .cloned()
+        .collect();
+    ordered_non_control.sort();
+
+    let min_n = if exp.sequential.min_sample_size > 0 {
+        Some(exp.sequential.min_sample_size)
+    } else {
+        None
+    };
+
+    let mut freq_obj = serde_json::Map::new();
+    let mut bayes_obj = serde_json::Map::new();
+    let mut recs: Vec<(String, Recommendation)> = Vec::new();
+    let mut any_variant_tested = false;
+
+    for vk in &ordered_non_control {
+        let vs = variant_stats.get(vk).expect("vk present");
+        let variant_samples = pct.samples.get(vk).map(Vec::as_slice).unwrap_or(&[]);
+        if variant_samples.is_empty() {
+            // No raw sample for this variant → cannot test it; it stays
+            // NeedsMoreData and contributes no blob entry.
+            recs.push((vk.clone(), Recommendation::NeedsMoreData));
+            continue;
+        }
+        any_variant_tested = true;
+        let freq = frequentist::analyze_percentile(control_samples, variant_samples, q);
+        let bayes = bayesian::analyze_percentile(control_samples, variant_samples, q);
+        freq_obj.insert(vk.clone(), frequentist_to_json(&freq));
+        bayes_obj.insert(vk.clone(), bayesian_to_json(&bayes));
+
+        // Recommendation from the bayesian posterior: the bootstrap frequentist
+        // p-value is NaN, so the Bayesian rule (prob_best thresholds) drives the
+        // verdict here.
+        let rec = recommend(&RecommendationInput {
+            variant_key: vk.clone(),
+            is_control: false,
+            frequentist: Some(freq),
+            bayesian: Some(bayes),
+            analysis_type: AnalysisType::Bayesian,
+            sample_size: vs.sample_size,
+            min_sample_size: min_n,
+        });
+        recs.push((vk.clone(), rec));
+    }
+
+    if !any_variant_tested {
+        return needs_more();
+    }
+
+    let overall = pick_winner(&recs);
+    PairResult {
+        points,
+        frequentist: Some(Value::Object(freq_obj)),
+        bayesian: Some(Value::Object(bayes_obj)),
+        sequential: None,
+        recommendation: overall.to_string(),
+    }
+}
+
 /// Compute the sequential (always-valid) blob for one pair, seeding the running
 /// minimum from the prior stored row.
 #[allow(clippy::too_many_arguments)]
@@ -976,10 +1029,12 @@ async fn compute_sequential(
 /// a still-running iteration). The returned summaries are sorted by
 /// `(metric_key, context_type)` for deterministic writes.
 ///
-/// SRM is computed once per `context_type` over the PRIMARY metric's assignment
-/// counts (the first metric in the experiment's `metric_ids` order that resolves
-/// for that context) and surfaced in the recommendation note of every summary in
-/// that context when the health is not Green.
+/// SRM is computed once per `context_type` over that context's assignment
+/// counts (the equal-split chi-square) and attached as a dedicated
+/// `variant_stats["srm"]` JSON field on every summary in that context — the
+/// exact shape + location the experimentation-service read consumes
+/// (`variant_stats.get("srm")` → `srm_json_to_proto` → `ContextTypeResults.srm`).
+/// It is NOT folded into the recommendation string.
 ///
 /// # Errors
 /// Propagates the first ClickHouse reader error encountered.
@@ -1009,6 +1064,11 @@ pub async fn run_stats_compute(
     let mut bayesian_per_pair: HashMap<(String, String), Value> = HashMap::new();
     let mut sequential_per_pair: HashMap<(String, String), Value> = HashMap::new();
     let mut recommendations_per_pair: HashMap<(String, String), String> = HashMap::new();
+    // SRM JSON per context_type (computed once over the assignment counts);
+    // attached under the top-level `"srm"` key of every result row's
+    // `variant_stats` in that context, which is exactly where the
+    // experimentation-service read consumes it (see [`srm_json_for`]).
+    let mut srm_per_ctx: HashMap<String, Value> = HashMap::new();
 
     for context_type in &context_types {
         // ITT sample-size denominator per variant (assignment counts). Shared
@@ -1024,8 +1084,12 @@ pub async fn run_stats_compute(
             .await?;
         let sample_sizes: HashMap<String, u64> = counts.iter().cloned().collect();
 
-        // SRM once per context over the assignment counts (equal-split expected).
-        let srm_note = srm_note_for(&counts);
+        // SRM once per context over the assignment counts (equal-split
+        // expected). Stored to attach under `variant_stats["srm"]` after the
+        // summaries are built — NOT folded into the recommendation string.
+        if let Some(srm_json) = srm_json_for(&counts) {
+            srm_per_ctx.insert(context_type.clone(), srm_json);
+        }
 
         for def in &defs {
             let mt = metric_type_for(def);
@@ -1082,6 +1146,47 @@ pub async fn run_stats_compute(
                 }
             };
 
+            // Percentile metrics additionally need the raw per-unit samples for
+            // the bootstrap significance test (the scalar cells can't
+            // reconstruct a quantile CI). Only fetched for the percentile
+            // aggregators; the resolved `q` comes from the aggregator (P50/P90/
+            // P99).
+            let percentile = match &def.kind {
+                MetricKind::Aggregation(cfg)
+                    if percentile_for_aggregator(cfg.aggregator).is_some() =>
+                {
+                    let q = percentile_for_aggregator(cfg.aggregator).expect("percentile agg");
+                    let samples = reader
+                        .percentile_samples(
+                            cfg,
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            exp.env_id,
+                            context_type,
+                            iteration_end,
+                        )
+                        .await?;
+                    if let Some((vk, s)) = samples
+                        .iter()
+                        .find(|(_, s)| s.len() as u64 >= PERCENTILE_SAMPLE_CAP)
+                    {
+                        tracing::warn!(
+                            metric_key = %metric_key,
+                            context_type = %context_type,
+                            variant_key = %vk,
+                            cap = PERCENTILE_SAMPLE_CAP,
+                            len = s.len(),
+                            "compute: percentile sample hit the cap; the bootstrap CI uses a truncated sample"
+                        );
+                    }
+                    Some(PercentileInput {
+                        samples,
+                        percentile: q,
+                    })
+                }
+                _ => None,
+            };
+
             let pair = compute_pair(
                 ch,
                 exp,
@@ -1092,6 +1197,7 @@ pub async fn run_stats_compute(
                 agg.as_ref(),
                 ratio.as_ref(),
                 funnel.as_ref(),
+                percentile.as_ref(),
                 now,
             )
             .await;
@@ -1110,14 +1216,10 @@ pub async fn run_stats_compute(
             if let Some(s) = pair.sequential {
                 sequential_per_pair.insert(key.clone(), s);
             }
-            // Append the SRM note (if any) to the recommendation string so the
-            // SRM verdict surfaces even though the result row has no dedicated
-            // SRM column (tracked as a follow-up — see module docs).
-            let rec = match &srm_note {
-                Some(note) => format!("{}; {}", pair.recommendation, note),
-                None => pair.recommendation,
-            };
-            recommendations_per_pair.insert(key, rec);
+            // The recommendation is the metric verdict ALONE — the SRM verdict
+            // is now surfaced as a dedicated `variant_stats["srm"]` field
+            // (attached below), not appended here.
+            recommendations_per_pair.insert(key, pair.recommendation);
         }
     }
 
@@ -1138,6 +1240,16 @@ pub async fn run_stats_compute(
         if let Some(t) = type_by_key.get(&s.metric_key) {
             s.metric_type = (*t).to_string();
         }
+        // Attach the per-context SRM JSON under the top-level `"srm"` key of the
+        // row's `variant_stats` object — the exact location the
+        // experimentation-service read consumes (`variant_stats.get("srm")` →
+        // `srm_json_to_proto` → `ContextTypeResults.srm`). Every row in a
+        // context carries the same SRM snapshot (the read de-dupes per context).
+        if let Some(srm_json) = srm_per_ctx.get(&s.context_type)
+            && let Some(obj) = s.variant_stats.as_object_mut()
+        {
+            obj.insert("srm".to_string(), srm_json.clone());
+        }
     }
     Ok(summaries)
 }
@@ -1154,10 +1266,32 @@ fn metric_type_str(mt: MetricType) -> &'static str {
     }
 }
 
-/// Run the SRM chi-square over equal-split assignment counts and, when the
-/// health is not Green, return a short human-readable note (`srm:<health>
-/// p=<...>`). Returns `None` when SRM is Green or undefined (< 2 variants).
-fn srm_note_for(counts: &[(String, u64)]) -> Option<String> {
+/// Run the SRM chi-square over equal-split assignment counts and build the
+/// per-`context_type` SRM JSON in the EXACT shape the experimentation-service
+/// read consumes (`service::srm_json_to_proto`): a top-level object with
+///
+/// ```json
+/// {
+///   "per_variant": [
+///     {"variant_key": "control", "observed": 1000, "expected": 1000.0,
+///      "chi_sq_contribution": 0.0}
+///   ],
+///   "overall_chi_sq": 0.0,
+///   "overall_chi_sq_p": 1.0,
+///   "health": "green"
+/// }
+/// ```
+///
+/// This object is attached once per context_type under the top-level `"srm"`
+/// key of each result row's `variant_stats` JSON (where the read looks for it),
+/// REPLACING the prior approach of stuffing an `srm:<health>` note into the
+/// recommendation string. `chi_sq_contribution = (observed − expected)² /
+/// expected` is computed here because the core [`SrmPerVariant`] exposes
+/// `deviation_pct` rather than the contribution the proto field wants.
+///
+/// Returns `None` when SRM is undefined for the context (< 2 variants or zero
+/// total assignments) so no `"srm"` key is emitted in that case.
+fn srm_json_for(counts: &[(String, u64)]) -> Option<Value> {
     if counts.len() < 2 {
         return None;
     }
@@ -1175,12 +1309,42 @@ fn srm_note_for(counts: &[(String, u64)]) -> Option<String> {
         })
         .collect();
     let result = compute_srm(&observations);
+
+    let per_variant: Vec<Value> = result
+        .per_variant
+        .iter()
+        .map(|pv| {
+            // chi_sq_contribution = (observed − expected)² / expected (0 when
+            // expected == 0 to avoid a NaN), matching the proto SrmPerVariant
+            // field the read maps into.
+            let contribution = if pv.expected > 0.0 {
+                let diff = pv.observed as f64 - pv.expected;
+                diff * diff / pv.expected
+            } else {
+                0.0
+            };
+            serde_json::json!({
+                "variant_key": pv.variant_key,
+                "observed": pv.observed,
+                "expected": pv.expected,
+                "chi_sq_contribution": contribution,
+            })
+        })
+        .collect();
+
     use stitchd_core::experimentation::stats::srm::SrmHealth;
-    match result.health {
-        SrmHealth::Green => None,
-        SrmHealth::Yellow => Some(format!("srm:yellow p={:.4}", result.overall_chi_sq_p)),
-        SrmHealth::Red => Some(format!("srm:red p={:.4}", result.overall_chi_sq_p)),
-    }
+    let health = match result.health {
+        SrmHealth::Green => "green",
+        SrmHealth::Yellow => "yellow",
+        SrmHealth::Red => "red",
+    };
+
+    Some(serde_json::json!({
+        "per_variant": per_variant,
+        "overall_chi_sq": result.overall_chi_sq,
+        "overall_chi_sq_p": result.overall_chi_sq_p,
+        "health": health,
+    }))
 }
 
 /// Resolve a [`RatioConfig`] to its numerator + denominator
@@ -1339,12 +1503,15 @@ mod tests {
         );
     }
 
-    // ── Ratio delta-method frequentist ───────────────────────────────────────
+    // ── Ratio delta-method analyzers (now in stitchd-core) ───────────────────
 
+    /// The ratio contrast is delegated to `frequentist::analyze_ratio` /
+    /// `bayesian::analyze_ratio` in stitchd-core (the inline helpers were
+    /// removed). This compute-layer smoke test pins the wired-in behaviour:
+    /// R_c=0.5, R_t=0.75 → diff 0.25, significant, prob_best near 1. The
+    /// exhaustive known-value / degenerate cases live in the core unit tests.
     #[test]
-    fn ratio_frequentist_detects_clear_difference() {
-        // Two clearly-different ratios with spread, mirroring the core
-        // sequential_ratio fixture. R_c=0.5, R_t=0.75 on 1000 units each.
+    fn ratio_analyzers_in_core_detect_clear_difference() {
         let control = RatioGroupStats {
             n: 1000,
             num_sum: 1000.0,
@@ -1361,53 +1528,17 @@ mod tests {
             den_sq_sum: 5000.0,
             num_den_sum: 3300.0,
         };
-        let r = ratio_frequentist(&control, &treatment);
-        // Point estimate diff is R_t - R_c = 0.75 - 0.5 = 0.25 (CI midpoint).
-        let mid = (r.confidence_interval.lower + r.confidence_interval.upper) / 2.0;
+        let f = frequentist::analyze_ratio(&control, &treatment);
+        let mid = (f.confidence_interval.lower + f.confidence_interval.upper) / 2.0;
         assert!(
             (mid - 0.25).abs() < 1e-9,
             "CI midpoint {mid} should be 0.25"
         );
-        assert!(r.significant, "p={}", r.p_value);
-        assert!(r.p_value < 0.05);
-    }
+        assert!(f.significant, "p={}", f.p_value);
+        assert!(f.p_value < 0.05);
 
-    #[test]
-    fn ratio_frequentist_known_value_z_check() {
-        // Construct groups with hand-computable variances.
-        // control: n=4, num=[1,1,1,1] den=[2,2,2,2] → R=0.5, var_num=0, var_den=0
-        //   → Var(R)=0 → degenerate (var_r <= 0) → insufficient.
-        // Use a spread case instead to exercise a finite z.
-        let control = RatioGroupStats {
-            n: 100,
-            num_sum: 50.0,
-            den_sum: 100.0,    // R = 0.5
-            num_sq_sum: 30.0,  // mean_num=0.5, var_num=0.30-0.25=0.05
-            den_sq_sum: 120.0, // mean_den=1.0, var_den=1.2-1.0=0.2
-            num_den_sum: 55.0, // cov=0.55-0.5=0.05
-        };
-        // Var(R)=(0.05 - 2*0.5*0.05 + 0.25*0.2)/(1.0 * 100) = (0.05-0.05+0.05)/100 = 5e-4
-        let (r, var) = ratio_point_and_var(&control).expect("finite");
-        assert!((r - 0.5).abs() < 1e-12);
-        assert!(
-            (var - 5e-4).abs() < 1e-9,
-            "Var(R) should be 5e-4, got {var}"
-        );
-    }
-
-    #[test]
-    fn ratio_frequentist_degenerate_is_not_significant() {
-        let degenerate = RatioGroupStats {
-            n: 1,
-            num_sum: 1.0,
-            den_sum: 2.0,
-            num_sq_sum: 1.0,
-            den_sq_sum: 4.0,
-            num_den_sum: 2.0,
-        };
-        let r = ratio_frequentist(&degenerate, &degenerate);
-        assert!(!r.significant);
-        assert!((r.p_value - 1.0).abs() < 1e-12);
+        let b = bayesian::analyze_ratio(&control, &treatment);
+        assert!(b.prob_best > 0.99, "prob_best={}", b.prob_best);
     }
 
     // ── point_value ──────────────────────────────────────────────────────────
@@ -1433,5 +1564,375 @@ mod tests {
         vs.mean = Some(0.25);
         let v = point_value(MetricType::Numeric, &vs, Some(&g));
         assert!((v - 0.25).abs() < 1e-12, "R = 30/120 = 0.25, got {v}");
+    }
+
+    // ── percentile_for_aggregator ─────────────────────────────────────────────
+
+    #[test]
+    fn percentile_for_aggregator_maps_quantiles() {
+        assert_eq!(
+            percentile_for_aggregator(AggregationOperator::P50),
+            Some(50.0)
+        );
+        assert_eq!(
+            percentile_for_aggregator(AggregationOperator::P90),
+            Some(90.0)
+        );
+        assert_eq!(
+            percentile_for_aggregator(AggregationOperator::P99),
+            Some(99.0)
+        );
+        assert_eq!(percentile_for_aggregator(AggregationOperator::Count), None);
+        assert_eq!(percentile_for_aggregator(AggregationOperator::Sum), None);
+    }
+
+    // ── compute_percentile_pair (pure) ────────────────────────────────────────
+
+    fn pct_running_exp() -> RunningExperiment {
+        use crate::scheduler::SequentialSettings;
+        RunningExperiment {
+            experiment_id: Uuid::new_v4(),
+            env_id: Uuid::new_v4(),
+            iteration_id: Uuid::new_v4(),
+            metric_ids: vec![],
+            variant_keys: vec!["control".into(), "treatment".into()],
+            started_at: Utc::now(),
+            unit_context_types: vec!["user".into()],
+            pre_period_days: 0,
+            sequential: SequentialSettings {
+                enabled: false,
+                alpha: 0.05,
+                tau_squared: None,
+                min_sample_size: 0,
+            },
+        }
+    }
+
+    /// A clear upward sample shift yields real frequentist + bayesian blobs and
+    /// a non-`NeedsMoreData` recommendation (the bead's pure-path proof).
+    #[test]
+    fn compute_percentile_pair_clear_shift_is_significant() {
+        let control_samples: Vec<f64> = (0..200).map(|i| 10.0 + (i % 20) as f64).collect();
+        let variant_samples: Vec<f64> = (0..200).map(|i| 40.0 + (i % 20) as f64).collect();
+        let mut samples = HashMap::new();
+        samples.insert("control".to_string(), control_samples);
+        samples.insert("treatment".to_string(), variant_samples);
+        let pct = PercentileInput {
+            samples,
+            percentile: 90.0,
+        };
+        let mut variant_stats = HashMap::new();
+        variant_stats.insert("control".to_string(), percentile_variant_stats(200, 28.0));
+        variant_stats.insert("treatment".to_string(), percentile_variant_stats(200, 58.0));
+        let variant_keys = vec!["control".to_string(), "treatment".to_string()];
+
+        let res = compute_percentile_pair(
+            vec![],
+            &variant_keys,
+            "control",
+            &pct_running_exp(),
+            Some(&pct),
+            &variant_stats,
+        );
+        assert!(res.frequentist.is_some(), "percentile freq blob present");
+        assert!(res.bayesian.is_some(), "percentile bayes blob present");
+        assert_ne!(res.recommendation, "needs_more_data");
+        // The bootstrap frequentist p_value is NaN (serialised null); the CI is
+        // finite + the bayesian prob_best is high.
+        let freq = res.frequentist.unwrap();
+        assert!(
+            freq["treatment"]["confidence_interval"]["lower"]
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+        let bayes = res.bayesian.unwrap();
+        assert!(bayes["treatment"]["prob_best"].as_f64().unwrap() > 0.95);
+    }
+
+    /// Missing raw samples (the fetch yielded nothing) → fall back to the prior
+    /// `NeedsMoreData`, blob-less behaviour.
+    #[test]
+    fn compute_percentile_pair_no_samples_is_needs_more_data() {
+        let variant_keys = vec!["control".to_string(), "treatment".to_string()];
+        let res = compute_percentile_pair(
+            vec![],
+            &variant_keys,
+            "control",
+            &pct_running_exp(),
+            None,
+            &HashMap::new(),
+        );
+        assert!(res.frequentist.is_none());
+        assert!(res.bayesian.is_none());
+        assert_eq!(res.recommendation, "needs_more_data");
+    }
+
+    // ── srm_json_for (891 — dedicated SRM surfacing) ──────────────────────────
+
+    /// The SRM JSON is emitted in the EXACT shape the experimentation-service
+    /// read (`srm_json_to_proto`) consumes: `per_variant[].{variant_key,
+    /// observed, expected, chi_sq_contribution}` + `overall_chi_sq` +
+    /// `overall_chi_sq_p` + lowercase `health`. A balanced 50/50 split → green.
+    #[test]
+    fn srm_json_for_balanced_is_green_with_read_shape() {
+        let counts = vec![
+            ("control".to_string(), 1000),
+            ("treatment".to_string(), 1000),
+        ];
+        let srm = srm_json_for(&counts).expect("srm json for 2 variants");
+        assert_eq!(srm["health"], "green");
+        assert!(srm["overall_chi_sq"].as_f64().unwrap() < 1e-9);
+        assert!(srm["overall_chi_sq_p"].as_f64().unwrap() > 0.99);
+        let pv = srm["per_variant"].as_array().expect("per_variant array");
+        assert_eq!(pv.len(), 2);
+        for row in pv {
+            // Every key the read's srm_json_to_proto reads must be present + typed.
+            assert!(row["variant_key"].is_string());
+            assert!(row["observed"].as_u64().is_some());
+            assert!(row["expected"].as_f64().is_some());
+            assert!(row["chi_sq_contribution"].as_f64().is_some());
+        }
+    }
+
+    /// A heavy mismatch (800 vs 1200, expected 1000 each) → red, with the
+    /// per-variant `chi_sq_contribution` computed correctly:
+    /// (200²/1000) = 40 each, total χ² = 80.
+    #[test]
+    fn srm_json_for_mismatch_is_red_with_contributions() {
+        let counts = vec![("a".to_string(), 800), ("b".to_string(), 1200)];
+        let srm = srm_json_for(&counts).expect("srm json");
+        assert_eq!(srm["health"], "red");
+        assert!((srm["overall_chi_sq"].as_f64().unwrap() - 80.0).abs() < 1e-6);
+        let pv = srm["per_variant"].as_array().unwrap();
+        for row in pv {
+            assert!(
+                (row["chi_sq_contribution"].as_f64().unwrap() - 40.0).abs() < 1e-6,
+                "each contribution should be 40, got {}",
+                row["chi_sq_contribution"]
+            );
+        }
+    }
+
+    /// Fewer than 2 variants (or zero total) → no SRM key emitted.
+    #[test]
+    fn srm_json_for_single_variant_is_none() {
+        assert!(srm_json_for(&[("only".to_string(), 100)]).is_none());
+        assert!(
+            srm_json_for(&[("a".to_string(), 0), ("b".to_string(), 0)]).is_none(),
+            "zero total → no SRM"
+        );
+    }
+
+    // ── run_stats_compute SRM attachment + round-trip (891) ───────────────────
+
+    /// Fake [`CellReader`] returning fixed per-variant cells + assignment
+    /// counts, so `run_stats_compute`'s SRM attachment can be exercised with no
+    /// ClickHouse. Sequential is disabled so `ch` is never queried.
+    struct FakeReader {
+        counts: Vec<(String, u64)>,
+        successes: HashMap<String, u64>,
+    }
+
+    #[async_trait]
+    impl CellReader for FakeReader {
+        async fn assignment_counts(
+            &self,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<(String, u64)>, anyhow::Error> {
+            Ok(self.counts.clone())
+        }
+        async fn aggregation_cells(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, AggCell>, anyhow::Error> {
+            Ok(self
+                .counts
+                .iter()
+                .map(|(vk, n)| {
+                    (
+                        vk.clone(),
+                        AggCell {
+                            event_n: *n,
+                            successes: *self.successes.get(vk).unwrap_or(&0),
+                            value_sum: 0.0,
+                            value_sq_sum: 0.0,
+                        },
+                    )
+                })
+                .collect())
+        }
+        async fn ratio_cells(
+            &self,
+            _n: &AggregationConfig,
+            _d: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, RatioGroupStats>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+        async fn funnel_cells(
+            &self,
+            _cfg: &stitchd_core::metric::FunnelConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, (u64, u64)>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+        async fn percentile_samples(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+    }
+
+    /// End-to-end (no CH): the compute pass attaches the SRM JSON under
+    /// `variant_stats["srm"]` AND keeps the recommendation free of any SRM text.
+    /// The attached JSON is then parsed by the SAME logic the
+    /// experimentation-service read uses (mirrored here as `parse_srm`) into a
+    /// populated SRM result — the round-trip proof for bead 891.
+    #[tokio::test]
+    async fn run_stats_compute_attaches_srm_json_and_clean_recommendation() {
+        use crate::scheduler::SequentialSettings;
+
+        let env_id = Uuid::new_v4();
+        let metric = agg_metric(AggregationOperator::Count);
+        let metric_id = metric.id.as_uuid();
+        let mut metrics = HashMap::new();
+        metrics.insert(metric_id, metric);
+
+        let exp = RunningExperiment {
+            experiment_id: Uuid::new_v4(),
+            env_id,
+            iteration_id: Uuid::new_v4(),
+            metric_ids: vec![metric_id],
+            variant_keys: vec!["control".into(), "treatment".into()],
+            started_at: Utc::now(),
+            unit_context_types: vec!["user".into()],
+            pre_period_days: 0,
+            sequential: SequentialSettings {
+                enabled: false,
+                alpha: 0.05,
+                tau_squared: None,
+                min_sample_size: 0,
+            },
+        };
+
+        // Heavy 800/1200 mismatch → SRM should be RED.
+        let reader = FakeReader {
+            counts: vec![("control".into(), 800), ("treatment".into(), 1200)],
+            successes: HashMap::from([("control".into(), 80), ("treatment".into(), 150)]),
+        };
+
+        // `ch` is never queried (sequential disabled); a default client suffices.
+        let ch = Client::default();
+        let now = Utc::now();
+        let summaries = run_stats_compute(&reader, &ch, &exp, &metrics, now, now)
+            .await
+            .expect("compute pass succeeds without CH I/O");
+
+        assert_eq!(summaries.len(), 1, "one (metric, user) summary");
+        let s = &summaries[0];
+
+        // (a) recommendation carries NO srm text any more.
+        assert!(
+            !s.recommendation.contains("srm"),
+            "recommendation must not embed SRM text; got {}",
+            s.recommendation
+        );
+
+        // (b) variant_stats carries the dedicated `srm` field.
+        let srm_val = s
+            .variant_stats
+            .get("srm")
+            .expect("variant_stats carries top-level srm");
+
+        // (c) round-trip: parse with the SAME field reads as the
+        // experimentation-service `srm_json_to_proto`.
+        let parsed = parse_srm(srm_val).expect("srm json parses");
+        assert_eq!(parsed.health, "red");
+        assert!((parsed.overall_chi_sq - 80.0).abs() < 1e-6);
+        assert_eq!(parsed.per_variant.len(), 2);
+        let control = parsed
+            .per_variant
+            .iter()
+            .find(|p| p.variant_key == "control")
+            .expect("control row");
+        assert_eq!(control.observed, 800);
+        assert!((control.expected - 1000.0).abs() < 1e-9);
+        assert!((control.chi_sq_contribution - 40.0).abs() < 1e-6);
+    }
+
+    /// Minimal mirror of `experimentation-service::service::srm_json_to_proto`'s
+    /// field reads — proves the emitted JSON is consumable by that read without
+    /// a cross-crate dependency. (The real fn returns a proto `SrmResult`; this
+    /// returns the equivalent plain struct using the identical key/type accessors.)
+    struct ParsedSrm {
+        per_variant: Vec<ParsedSrmVariant>,
+        overall_chi_sq: f64,
+        health: String,
+    }
+    struct ParsedSrmVariant {
+        variant_key: String,
+        observed: u64,
+        expected: f64,
+        chi_sq_contribution: f64,
+    }
+    fn parse_srm(val: &Value) -> Option<ParsedSrm> {
+        let obj = val.as_object()?;
+        let per_variant = obj
+            .get("per_variant")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .map(|row| ParsedSrmVariant {
+                        variant_key: row
+                            .get("variant_key")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        observed: row.get("observed").and_then(Value::as_u64).unwrap_or(0),
+                        expected: row.get("expected").and_then(Value::as_f64).unwrap_or(0.0),
+                        chi_sq_contribution: row
+                            .get("chi_sq_contribution")
+                            .and_then(Value::as_f64)
+                            .unwrap_or(0.0),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(ParsedSrm {
+            per_variant,
+            overall_chi_sq: obj
+                .get("overall_chi_sq")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+            health: obj
+                .get("health")
+                .and_then(|s| s.as_str())
+                .unwrap_or("green")
+                .to_lowercase(),
+        })
     }
 }

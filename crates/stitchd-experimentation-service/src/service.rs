@@ -2383,6 +2383,59 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // srm_json_to_proto — the read side of bead 891. Proves the dedicated SRM
+    // JSON the stats-service compute pass attaches under `variant_stats["srm"]`
+    // parses into a populated `SrmResult`. The fixture below is the EXACT shape
+    // `stitchd_stats_service::compute::srm_json_for` emits (per_variant rows
+    // with observed/expected/chi_sq_contribution, overall_chi_sq[_p], health).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn srm_json_to_proto_parses_stats_service_shape() {
+        // Mirror of compute::srm_json_for for an 800/1200 mismatch (expected
+        // 1000 each → χ² = 80, red).
+        let srm_json = serde_json::json!({
+            "per_variant": [
+                {"variant_key": "control", "observed": 800, "expected": 1000.0, "chi_sq_contribution": 40.0},
+                {"variant_key": "treatment", "observed": 1200, "expected": 1000.0, "chi_sq_contribution": 40.0}
+            ],
+            "overall_chi_sq": 80.0,
+            "overall_chi_sq_p": 0.0,
+            "health": "red"
+        });
+        let proto = srm_json_to_proto(&srm_json).expect("srm json parses into SrmResult");
+        assert_eq!(proto.health, "red");
+        assert!((proto.overall_chi_sq - 80.0).abs() < 1e-6);
+        assert!((proto.overall_chi_sq_p - 0.0).abs() < 1e-9);
+        assert_eq!(proto.per_variant.len(), 2);
+        let control = proto
+            .per_variant
+            .iter()
+            .find(|p| p.variant_key == "control")
+            .expect("control row present");
+        assert_eq!(control.observed, 800);
+        assert!((control.expected - 1000.0).abs() < 1e-9);
+        assert!((control.chi_sq_contribution - 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn srm_json_to_proto_balanced_green() {
+        // The shape compute::srm_json_for emits for a balanced split.
+        let srm_json = serde_json::json!({
+            "per_variant": [
+                {"variant_key": "control", "observed": 1000, "expected": 1000.0, "chi_sq_contribution": 0.0},
+                {"variant_key": "treatment", "observed": 1000, "expected": 1000.0, "chi_sq_contribution": 0.0}
+            ],
+            "overall_chi_sq": 0.0,
+            "overall_chi_sq_p": 1.0,
+            "health": "green"
+        });
+        let proto = srm_json_to_proto(&srm_json).expect("parses");
+        assert_eq!(proto.health, "green");
+        assert_eq!(proto.per_variant.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
     // RepositoryError → Status conversion tests (via From impl in stitchd-db)
     // -----------------------------------------------------------------------
 

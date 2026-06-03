@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::sequential::RatioGroupStats;
 use super::{BayesianResult, ConfidenceInterval, VariantStats};
 
 // ── Per-variant Bayesian result (spec §3) ─────────────────────────────────────
@@ -354,6 +355,64 @@ pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> Bayesia
     let beta_v = 1.0 + (n_v - conv_v).max(0.0);
 
     beta_binomial_mc(alpha_c, beta_c, alpha_v, beta_v, 10_000, 42)
+}
+
+/// Bayesian analysis of a **ratio** metric — a normal posterior on the
+/// delta-method estimate / SE.
+///
+/// Ratio sufficient statistics are not present on [`VariantStats`], so — like
+/// [`super::frequentist::analyze_ratio`] and
+/// [`super::sequential::sequential_ratio`] — this takes explicit per-group
+/// [`RatioGroupStats`] and reuses [`RatioGroupStats::ratio_var`] (the single
+/// source of truth for the delta-method point + variance). The effect is
+/// `diff = R_t − R_c` with `SE = sqrt(Var(R_c) + Var(R_t))`. We then place a
+/// `N(diff, SE²)` posterior on the lift: `prob_best = P(R_t > R_c)`, the 95 %
+/// credible interval is `diff ± 1.96·SE`, and the expected loss
+/// `E[max(R_c − R_t, 0)]` uses the closed-form normal tail expectation
+/// (matching [`analyze_numeric`]).
+///
+/// Returns the neutral `prob_best = 0.5`, zero-width-CI result when either
+/// group is degenerate (see [`RatioGroupStats::ratio_var`]).
+pub fn analyze_ratio(control: &RatioGroupStats, variant: &RatioGroupStats) -> BayesianResult {
+    let (Some((r_c, var_c)), Some((r_t, var_t))) = (control.ratio_var(), variant.ratio_var())
+    else {
+        return BayesianResult {
+            prob_best: 0.5,
+            credible_interval: ConfidenceInterval {
+                lower: 0.0,
+                upper: 0.0,
+            },
+            expected_loss: 0.0,
+        };
+    };
+    let diff = r_t - r_c;
+    let se = (var_c + var_t).sqrt();
+    let prob_best = if se == 0.0 {
+        if diff > 0.0 {
+            1.0
+        } else if diff < 0.0 {
+            0.0
+        } else {
+            0.5
+        }
+    } else {
+        1.0 - normal_cdf(-diff / se)
+    };
+    let z95 = 1.959_964;
+    let lower = diff - z95 * se;
+    let upper = diff + z95 * se;
+    let expected_loss = if se == 0.0 {
+        (-diff).max(0.0)
+    } else {
+        let d = diff / se;
+        let phi_d = (-0.5 * d * d).exp() / (2.0 * std::f64::consts::PI).sqrt();
+        (se * phi_d + (-diff) * (1.0 - normal_cdf(d))).max(0.0)
+    };
+    BayesianResult {
+        prob_best,
+        credible_interval: ConfidenceInterval { lower, upper },
+        expected_loss,
+    }
 }
 
 // ── Shared Monte Carlo helper ─────────────────────────────────────────────────
@@ -1168,6 +1227,80 @@ mod tests {
         assert!(v.get("posterior_ci_upper").is_some());
         assert!(v.get("probability_to_beat_control").is_some());
         assert!(v.get("expected_lift").is_some());
+    }
+
+    // ── analyze_ratio (delta-method normal posterior) ────────────────────────
+
+    /// Clear positive ratio lift (R_c = 0.5, R_t = 0.75, spread) → prob_best
+    /// near 1, expected_loss near 0, CI midpoint = diff = 0.25. Mirrors the
+    /// prior inline `compute::ratio_bayesian` behaviour.
+    #[test]
+    fn ratio_clear_winner_prob_best_high() {
+        let control = RatioGroupStats {
+            n: 1000,
+            num_sum: 1000.0,
+            den_sum: 2000.0,
+            num_sq_sum: 1500.0,
+            den_sq_sum: 5000.0,
+            num_den_sum: 2400.0,
+        };
+        let treatment = RatioGroupStats {
+            n: 1000,
+            num_sum: 1500.0,
+            den_sum: 2000.0,
+            num_sq_sum: 2800.0,
+            den_sq_sum: 5000.0,
+            num_den_sum: 3300.0,
+        };
+        let r = analyze_ratio(&control, &treatment);
+        assert!(r.prob_best > 0.99, "prob_best={}", r.prob_best);
+        assert!(r.expected_loss < 0.01, "expected_loss={}", r.expected_loss);
+        let mid = (r.credible_interval.lower + r.credible_interval.upper) / 2.0;
+        assert!(
+            (mid - 0.25).abs() < 1e-9,
+            "CI midpoint {mid} should be 0.25"
+        );
+    }
+
+    /// Degenerate groups → neutral prob_best = 0.5, zero-width CI, zero loss.
+    #[test]
+    fn ratio_degenerate_is_neutral() {
+        let degenerate = RatioGroupStats {
+            n: 1,
+            num_sum: 1.0,
+            den_sum: 2.0,
+            num_sq_sum: 1.0,
+            den_sq_sum: 4.0,
+            num_den_sum: 2.0,
+        };
+        let r = analyze_ratio(&degenerate, &degenerate);
+        assert_eq!(r.prob_best, 0.5);
+        assert_eq!(r.credible_interval.lower, 0.0);
+        assert_eq!(r.credible_interval.upper, 0.0);
+        assert_eq!(r.expected_loss, 0.0);
+    }
+
+    /// Identical non-degenerate groups → prob_best = 0.5, expected_loss > 0
+    /// (a coin-flip lift has a positive expected downside), CI centred on 0.
+    #[test]
+    fn ratio_identical_groups_prob_best_half() {
+        let g = RatioGroupStats {
+            n: 100,
+            num_sum: 50.0,
+            den_sum: 100.0,
+            num_sq_sum: 30.0,
+            den_sq_sum: 120.0,
+            num_den_sum: 55.0,
+        };
+        let r = analyze_ratio(&g, &g);
+        assert!(
+            (r.prob_best - 0.5).abs() < 1e-9,
+            "prob_best={}",
+            r.prob_best
+        );
+        let mid = (r.credible_interval.lower + r.credible_interval.upper) / 2.0;
+        assert!((mid - 0.0).abs() < 1e-12, "CI midpoint {mid} should be 0.0");
+        assert!(r.expected_loss > 0.0);
     }
 
     // ── analyze_funnel with no conversions and no conversion_rate ────────────

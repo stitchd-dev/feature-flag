@@ -344,7 +344,13 @@ impl RatioGroupStats {
     ///
     /// Returns `None` when the group is degenerate (`den_sum ≤ 0`,
     /// `mean_den ≤ 0`, `n < 2`, or a non-finite / non-positive variance).
-    fn ratio_var(&self) -> Option<(f64, f64)> {
+    ///
+    /// `pub(crate)` so [`super::frequentist::analyze_ratio`] /
+    /// [`super::bayesian::analyze_ratio`] can build their contrasts from the
+    /// SAME delta-method point + variance — this is the single source of truth
+    /// for the ratio formula across the fixed-horizon, sequential, and Bayesian
+    /// views (see [`super::frequentist::analyze_ratio`]).
+    pub(crate) fn ratio_var(&self) -> Option<(f64, f64)> {
         if self.n < 2 || self.den_sum <= 0.0 {
             return None;
         }

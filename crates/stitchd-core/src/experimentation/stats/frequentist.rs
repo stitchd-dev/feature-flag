@@ -10,6 +10,7 @@
 //! | [`analyze_percentile`]  | Bootstrap CI (delegates to bootstrap)  |
 //! | [`analyze_funnel`]      | Two-proportion z-test on final step    |
 
+use super::sequential::RatioGroupStats;
 use super::{ConfidenceInterval, FrequentistResult, VariantStats};
 
 // ── Normal CDF helpers ────────────────────────────────────────────────────────
@@ -379,6 +380,49 @@ pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> Frequen
         confidence_interval: ConfidenceInterval {
             lower: lift - margin,
             upper: lift + margin,
+        },
+        significant: p_value < 0.05,
+    }
+}
+
+/// Delta-method contrast for a **ratio** metric (treatment vs control).
+///
+/// A ratio metric's per-group point estimate is `R = num_sum / den_sum`; its
+/// variance comes from the delta method ([`RatioGroupStats::ratio_var`], the
+/// single source of truth shared with [`super::sequential::sequential_ratio`]).
+/// Because the two groups are independent, the effect `R₂ − R₁` has variance
+/// `Var(R₁) + Var(R₂)`, so `SE = sqrt(Var(R_c) + Var(R_t))`. The two-tailed
+/// p-value is `2·Φ(−|z|)` with `z = (R_t − R_c) / SE`, and the 95 % CI is
+/// `(R_t − R_c) ± 1.96·SE`.
+///
+/// Returns a non-significant, whole-line-CI result when either group is
+/// degenerate (`n < 2`, `den_sum ≤ 0`, non-finite variance) — mirroring the
+/// insufficient-data convention of the count / numeric paths.
+#[must_use]
+pub fn analyze_ratio(control: &RatioGroupStats, variant: &RatioGroupStats) -> FrequentistResult {
+    let (Some((r_c, var_c)), Some((r_t, var_t))) = (control.ratio_var(), variant.ratio_var())
+    else {
+        return FrequentistResult {
+            p_value: 1.0,
+            p_value_corrected: None,
+            confidence_interval: ConfidenceInterval {
+                lower: f64::NEG_INFINITY,
+                upper: f64::INFINITY,
+            },
+            significant: false,
+        };
+    };
+    let diff = r_t - r_c;
+    let se = (var_c + var_t).sqrt();
+    let z = if se == 0.0 { 0.0 } else { diff / se };
+    let p_value = z_to_p(z);
+    let margin = 1.96 * se;
+    FrequentistResult {
+        p_value,
+        p_value_corrected: None,
+        confidence_interval: ConfidenceInterval {
+            lower: diff - margin,
+            upper: diff + margin,
         },
         significant: p_value < 0.05,
     }
@@ -884,6 +928,84 @@ mod tests {
             "Bonferroni multiplier for K=2 should be 2"
         );
         assert!((corrected[1] - (raw[1] * 2.0).min(1.0)).abs() < 1e-12);
+    }
+
+    // ── analyze_ratio (delta method) ──────────────────────────────────────────
+
+    /// Clear ratio difference: R_c = 0.5, R_t = 0.75 on 1000 units each with
+    /// spread. Mirrors the prior inline `compute::ratio_frequentist` fixture —
+    /// the numbers must not change. CI midpoint = R_t − R_c = 0.25; significant.
+    #[test]
+    fn analyze_ratio_detects_clear_difference() {
+        let control = RatioGroupStats {
+            n: 1000,
+            num_sum: 1000.0,
+            den_sum: 2000.0,
+            num_sq_sum: 1500.0,
+            den_sq_sum: 5000.0,
+            num_den_sum: 2400.0,
+        };
+        let treatment = RatioGroupStats {
+            n: 1000,
+            num_sum: 1500.0,
+            den_sum: 2000.0,
+            num_sq_sum: 2800.0,
+            den_sq_sum: 5000.0,
+            num_den_sum: 3300.0,
+        };
+        let r = analyze_ratio(&control, &treatment);
+        let mid = (r.confidence_interval.lower + r.confidence_interval.upper) / 2.0;
+        assert!(
+            (mid - 0.25).abs() < 1e-9,
+            "CI midpoint {mid} should be 0.25"
+        );
+        assert!(r.significant, "p={}", r.p_value);
+        assert!(r.p_value < 0.05);
+    }
+
+    /// Degenerate groups (n = 1) → insufficient: p = 1.0, not significant,
+    /// whole-line CI. Matches the prior inline convention exactly.
+    #[test]
+    fn analyze_ratio_degenerate_is_not_significant() {
+        let degenerate = RatioGroupStats {
+            n: 1,
+            num_sum: 1.0,
+            den_sum: 2.0,
+            num_sq_sum: 1.0,
+            den_sq_sum: 4.0,
+            num_den_sum: 2.0,
+        };
+        let r = analyze_ratio(&degenerate, &degenerate);
+        assert!(!r.significant);
+        assert!((r.p_value - 1.0).abs() < 1e-12);
+        assert_eq!(r.confidence_interval.lower, f64::NEG_INFINITY);
+        assert_eq!(r.confidence_interval.upper, f64::INFINITY);
+    }
+
+    /// Identical non-degenerate groups → zero lift, z = 0, p = 1.0, CI centred
+    /// on zero (the SE is finite so the CI is finite too).
+    #[test]
+    fn analyze_ratio_identical_groups_zero_lift() {
+        let g = RatioGroupStats {
+            n: 100,
+            num_sum: 50.0,
+            den_sum: 100.0,
+            num_sq_sum: 30.0,
+            den_sq_sum: 120.0,
+            num_den_sum: 55.0,
+        };
+        let r = analyze_ratio(&g, &g);
+        let mid = (r.confidence_interval.lower + r.confidence_interval.upper) / 2.0;
+        assert!((mid - 0.0).abs() < 1e-12, "lift should be 0, got {mid}");
+        // z = 0 → p = 2·Φ(0); the erf approximation yields ~1.000000001, so
+        // allow a small slack (the prior inline norm_cdf had the same property).
+        assert!(
+            (r.p_value - 1.0).abs() < 1e-6,
+            "p should be ≈1.0, got {}",
+            r.p_value
+        );
+        assert!(!r.significant);
+        assert!(r.confidence_interval.lower.is_finite());
     }
 
     /// analyze_funnel and analyze_count should give identical results when
