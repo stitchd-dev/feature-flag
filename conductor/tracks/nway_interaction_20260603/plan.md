@@ -82,57 +82,53 @@ Parallel execution: ENABLED (Phase 2 stats modules, Phase 4 consumers, Phase 5 v
 
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Core Statistics' (automated gate: clippy -D + 107 tests + fmt green)
 
-## Phase 3: Sweep Orchestration — Enumeration, k-Way Join, Metric Routing, FDR, Persist
+## Phase 3: Sweep Orchestration — Enumeration, k-Way Join, Metric Routing, FDR, Persist [checkpoint: 513f848]
 <!-- execution: sequential -->
 <!-- depends: phase1, phase2 -->
 
-- [ ] Task 1: Extend candidate enumeration to tuples up to order 3 — triple validity
-      (every constituent pair satisfies `can_interact`; exclude triples where any two
-      co-share an exclusion group). TDD: enumeration fixtures.
+- [x] Task 1: `candidate_triples` enumeration (94e2e5f) — triple valid iff all 3 pairs
+      `can_interact` + common metric across all 3 (Helly: pairwise window-overlap ⇒ common). 7 tests.
   <!-- files: crates/stitchd-stats-service/src/interaction_pairs.rs -->
 
-- [ ] Task 2: Generalize the self-join query builder to k aliases on
-      `(env_id, context_type, context_key)`, ITT bound = `greatest(a…k.assigned_at)`,
-      variant-tuple cell aggregation. Add **funnel** (windowFunnel → reached/total per
-      cell) and **ratio** (numerator/denominator sums per cell) query variants. TDD:
-      generated-SQL snapshot tests for k=2, k=3, funnel, ratio.
+- [x] Task 2: k-way cell query (88fc51f) — chained k aliases, `array(variant_keys)`,
+      `greatest()` ITT bound; agg/conversion+continuous, **funnel** (`windowFunnel`==steps),
+      **ratio** (2nd-moment sums) builders. 24 query-shape tests.
   <!-- files: crates/stitchd-stats-service/src/queries/interaction_metric.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task 3: Metric-type routing in the sweep — aggregation/conversion→log-linear,
-      funnel→binary(reached), continuous→ANOVA, ratio→delta; invoke Phase-2 stats and
-      attach Bayesian posteriors per term.
+- [x] Task 3: Metric-type routing (88fc51f) — pairs+triples × metric × context; classify →
+      fetch grid → NdCell → Frequentist `*_terms` + matching `*_bayes`, merged by `TermKind`;
+      one row per term with `main:`/`2way:`/`3way:<uuids>` term strings.
   <!-- files: crates/stitchd-stats-service/src/interaction_compute.rs -->
   <!-- depends: task2 -->
 
-- [ ] Task 4: Apply one BH-FDR (0.05) across the full Frequentist term family (all
-      orders + decomposed terms); persist generalized rows (ids array / order / term /
-      Frequentist + Bayesian) to CH; insufficient-data sentinels preserved.
+- [x] Task 4: Single BH-FDR (0.05) over the whole sweep's Frequentist family; persist
+      generalized rows (experiment_ids Array(UUID) via custom uuid_vec serde / order / term /
+      df / Frequentist + Bayesian); retired old CellAggregate/compute_result/a-b shape.
   <!-- files: crates/stitchd-stats-service/src/interaction_compute.rs -->
   <!-- depends: task3 -->
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Sweep Orchestration' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3' (build + clippy + fmt + 78 stats interaction tests green)
 
-## Phase 4: Transport — Proto, Reader/RPC, Gateway REST, OpenAPI
+## Phase 4: Transport — Proto, Reader/RPC, Gateway REST, OpenAPI [checkpoint: f35bda5]
 <!-- execution: parallel -->
 <!-- depends: phase2, phase3 -->
 
-- [ ] Task 1: Generalize proto `ExperimentInteraction` — `repeated experiment_ids`,
-      `interaction_order`, `term`, Bayesian fields (additive field numbers; keep wire
-      back-compat). Regenerate prost types. (Shared seam — gates the two consumers.)
+- [x] Task 1: proto `ExperimentInteraction` generalized (9836f61) — `repeated experiment_ids`
+      + `experiment_names`, `interaction_order`, `term`, `df`, `bayes_*`. Renumbered (not live).
   <!-- files: proto/experiments/v1/experimentation_service.proto -->
 
-- [ ] Task 2: Generalize `interactions_reader.rs` to read new columns + map to proto;
-      update the `GetExperimentInteractions` service impl. TDD: reader maps a 3-way row.
+- [x] Task 2: `interactions_reader.rs` + service (9836f61) — `FINAL` + `has(experiment_ids, ?)`,
+      custom `Array(UUID)` deserialize matching the writer; per-id name resolution. 86 tests.
   <!-- files: crates/stitchd-experimentation-service/src/interactions_reader.rs, crates/stitchd-experimentation-service/src/service.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task 3: Gateway REST DTO + handler + OpenAPI + router for the generalized shape.
-      TDD: REST integration test returns 2-way + 3-way rows with Bayesian fields.
+- [x] Task 3: Gateway `ExperimentInteractionJson` DTO + mapping (9836f61); utoipa
+      auto-regenerates the OpenAPI schema. 246 gateway tests; integration asserts a 3-way row.
   <!-- files: crates/stitchd-gateway/src/routes/experiments.rs, crates/stitchd-gateway/src/openapi.rs, crates/stitchd-gateway/src/router.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Transport' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4' (workspace build + clippy + fmt green; live round-trip in Phase 6)
 
 ## Phase 5: Admin UI — Interactions Tab + Warning Banner
 <!-- execution: parallel -->
