@@ -29,6 +29,10 @@ const validBase: ExperimentFormValues = {
   guardrail_metric_ids: [],
   unit_context_types: ['user'],
   pre_period_days: 0,
+  sequential_testing_enabled: false,
+  sequential_alpha: 0.05,
+  sequential_tau_squared: undefined,
+  sequential_min_sample_size: 100,
   traffic_allocation: 100,
   model: 'bayesian',
 }

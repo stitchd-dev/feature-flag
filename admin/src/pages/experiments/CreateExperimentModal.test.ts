@@ -46,6 +46,10 @@ const validBase: ExperimentFormValues = {
   guardrail_metric_ids: [],
   unit_context_types: ['user'],
   pre_period_days: 0,
+  sequential_testing_enabled: false,
+  sequential_alpha: 0.05,
+  sequential_tau_squared: undefined,
+  sequential_min_sample_size: 100,
   traffic_allocation: 100,
   model: 'bayesian',
 }
@@ -222,6 +226,93 @@ describe('experimentSchema — pre_period_days', () => {
     const r = await validate({ pre_period_days: 1.5 })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.errors.pre_period_days).toMatch(/whole/i)
+  })
+})
+
+// ─── Schema: sequential testing ─────────────────────────────────────────────
+
+describe('experimentSchema — sequential testing', () => {
+  it('accepts the disabled default (enabled=false)', async () => {
+    const r = await validate({ sequential_testing_enabled: false })
+    expect(r.ok).toBe(true)
+  })
+
+  it('accepts a valid enabled config', async () => {
+    const r = await validate({
+      sequential_testing_enabled: true,
+      sequential_alpha: 0.01,
+      sequential_tau_squared: 0.25,
+      sequential_min_sample_size: 200,
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('rejects alpha = 0 when enabled', async () => {
+    const r = await validate({ sequential_testing_enabled: true, sequential_alpha: 0 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.sequential_alpha).toMatch(/between 0 and 1|greater than 0/i)
+  })
+
+  it('rejects alpha = 1 when enabled', async () => {
+    const r = await validate({ sequential_testing_enabled: true, sequential_alpha: 1 })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.sequential_alpha).toMatch(/between 0 and 1|less than 1/i)
+  })
+
+  it('rejects negative tau² when provided', async () => {
+    const r = await validate({
+      sequential_testing_enabled: true,
+      sequential_tau_squared: -0.5,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.sequential_tau_squared).toMatch(/greater than 0|positive/i)
+  })
+
+  it('accepts a blank (auto-derive) tau² when enabled', async () => {
+    const r = await validate({
+      sequential_testing_enabled: true,
+      sequential_tau_squared: undefined,
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('rejects a negative min sample size when enabled', async () => {
+    const r = await validate({
+      sequential_testing_enabled: true,
+      sequential_min_sample_size: -1,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.sequential_min_sample_size).toMatch(/negative/i)
+  })
+
+  it('rejects a non-integer min sample size when enabled', async () => {
+    const r = await validate({
+      sequential_testing_enabled: true,
+      sequential_min_sample_size: 10.5,
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.sequential_min_sample_size).toMatch(/whole/i)
+  })
+
+  it('does not require valid advanced knobs when disabled', async () => {
+    // With the toggle off, an out-of-range alpha / negative min sample should
+    // not block the form — the gateway ignores them when disabled.
+    const r = await validate({
+      sequential_testing_enabled: false,
+      sequential_alpha: 0,
+      sequential_min_sample_size: -5,
+    })
+    expect(r.ok).toBe(true)
+  })
+
+  it('always rejects a negative tau², even when disabled', async () => {
+    // tau is the one knob that is validated whenever a value is present,
+    // independent of the toggle (an explicit negative is never meaningful).
+    const r = await validate({
+      sequential_testing_enabled: false,
+      sequential_tau_squared: -1,
+    })
+    expect(r.ok).toBe(false)
   })
 })
 
@@ -427,6 +518,46 @@ describe('buildExperimentCreateBody', () => {
     expect(body.traffic_allocation).toBeCloseTo(0.25, 6)
   })
 
+  it('emits the sequential testing config keys with defaults', () => {
+    const body = buildExperimentCreateBody(validBase, 'env-1')
+    expect(body.sequential_testing_enabled).toBe(false)
+    expect(body.sequential_alpha).toBe(0.05)
+    expect(body.sequential_min_sample_size).toBe(100)
+  })
+
+  it('omits sequential_tau_squared when blank (auto-derive)', () => {
+    const body = buildExperimentCreateBody(
+      { ...validBase, sequential_tau_squared: undefined },
+      'env-1',
+    )
+    expect('sequential_tau_squared' in body).toBe(false)
+  })
+
+  it('sends sequential_tau_squared when provided', () => {
+    const body = buildExperimentCreateBody(
+      { ...validBase, sequential_tau_squared: 0.42 },
+      'env-1',
+    )
+    expect(body.sequential_tau_squared).toBeCloseTo(0.42, 6)
+  })
+
+  it('passes through an enabled sequential config', () => {
+    const body = buildExperimentCreateBody(
+      {
+        ...validBase,
+        sequential_testing_enabled: true,
+        sequential_alpha: 0.01,
+        sequential_tau_squared: 0.1,
+        sequential_min_sample_size: 250,
+      },
+      'env-1',
+    )
+    expect(body.sequential_testing_enabled).toBe(true)
+    expect(body.sequential_alpha).toBeCloseTo(0.01, 6)
+    expect(body.sequential_tau_squared).toBeCloseTo(0.1, 6)
+    expect(body.sequential_min_sample_size).toBe(250)
+  })
+
   it('trims and drops empty description', () => {
     const body = buildExperimentCreateBody(
       { ...validBase, description: '   ' },
@@ -467,6 +598,28 @@ describe('buildExperimentPatchBody', () => {
     expect(body.targets_default_rule).toBe(false)
     expect(body.flag_rule_id).toBe(validBase.flag_rule_id)
   })
+
+  it('carries the sequential testing config through on edit', () => {
+    const body = buildExperimentPatchBody({
+      ...validBase,
+      sequential_testing_enabled: true,
+      sequential_alpha: 0.02,
+      sequential_tau_squared: 0.3,
+      sequential_min_sample_size: 150,
+    })
+    expect(body.sequential_testing_enabled).toBe(true)
+    expect(body.sequential_alpha).toBeCloseTo(0.02, 6)
+    expect(body.sequential_tau_squared).toBeCloseTo(0.3, 6)
+    expect(body.sequential_min_sample_size).toBe(150)
+  })
+
+  it('omits sequential_tau_squared on edit when blank', () => {
+    const body = buildExperimentPatchBody({
+      ...validBase,
+      sequential_tau_squared: undefined,
+    })
+    expect('sequential_tau_squared' in body).toBe(false)
+  })
 })
 
 // ─── Module-shape grep tests ────────────────────────────────────────────────
@@ -500,6 +653,21 @@ describe('CreateExperimentModal (module shape)', () => {
     expect(SOURCE).toMatch(/unit_context_types/)
     expect(SOURCE).toMatch(/guardrail_metric_ids/)
     expect(SOURCE).toMatch(/pre_period_days/)
+  })
+
+  it('renders the sequential testing section (toggle + advanced knobs)', () => {
+    // Opt-in toggle is always present…
+    expect(SOURCE).toMatch(/sequential_testing_enabled/)
+    // …and the three advanced knobs are wired as form fields.
+    expect(SOURCE).toMatch(/sequential_alpha/)
+    expect(SOURCE).toMatch(/sequential_tau_squared/)
+    expect(SOURCE).toMatch(/sequential_min_sample_size/)
+  })
+
+  it('gates the sequential advanced knobs behind the enabled toggle', () => {
+    // The advanced inputs must be conditional on the toggle value so they
+    // only render when sequential testing is enabled.
+    expect(SOURCE).toMatch(/values\.sequential_testing_enabled\s*&&/)
   })
 
   it('does not synthesise a placeholder rule UUID from the array index (feature-flag-1p6)', () => {
