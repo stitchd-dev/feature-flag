@@ -1,10 +1,11 @@
 /**
- * Interactions tab tests (Phase 8 — xexp, P8.T3).
+ * Interactions tab tests — N-way interactions (P5, updated from P8).
  *
  * Coverage (node env + renderToString):
- *   • Pure helpers: hasSignificantInteraction, formatPValue, formatEstimate.
- *   • Table render: other experiment name, context type, metric, shared count,
- *     estimate, p-value, significance badge.
+ *   • Pure helpers: hasSignificantInteraction, formatPValue, formatEstimate,
+ *     formatBayesProb, formatBayesCI, formatTerm.
+ *   • Table render: experiment names, order badge, context type, metric,
+ *     shared count, estimate, p-value, Bayesian columns, significance badge.
  *   • Significance badge variant: "warning" + data-significant="true" when
  *     significant, "success" + data-significant="false" otherwise.
  *   • Empty + loading + error states.
@@ -16,55 +17,76 @@ import {
   hasSignificantInteraction,
   formatPValue,
   formatEstimate,
+  formatBayesProb,
+  formatBayesCI,
+  formatTerm,
 } from './Interactions'
 import type { ExperimentInteraction } from '../../../lib/api/exclusionGroups'
 
 const SIGNIFICANT: ExperimentInteraction = {
-  experiment_id_a: 'exp-a',
-  experiment_id_b: 'exp-b',
-  other_experiment_name: 'Pricing banner test',
+  experiment_ids: ['exp-a', 'exp-b'],
+  experiment_names: ['Checkout Redesign', 'Pricing banner test'],
+  interaction_order: 2,
+  term: '2way:exp-axexp-b',
   context_type: 'user',
   metric_key: 'checkout_completed',
   shared_count: 12500,
   interaction_estimate: 0.0421,
   p_value: 0.0003,
+  df: 1,
   significant: true,
   insufficient_data: false,
+  bayes_prob: 0.97,
+  bayes_expected: 0.038,
+  bayes_ci_low: 0.01,
+  bayes_ci_high: 0.07,
 }
 
 const NOT_SIGNIFICANT: ExperimentInteraction = {
-  experiment_id_a: 'exp-a',
-  experiment_id_b: 'exp-c',
-  other_experiment_name: 'Homepage hero',
+  experiment_ids: ['exp-a', 'exp-c'],
+  experiment_names: ['Checkout Redesign', 'Homepage hero'],
+  interaction_order: 2,
+  term: '2way:exp-axexp-c',
   context_type: 'account',
   metric_key: 'revenue_per_user',
   shared_count: 800,
   interaction_estimate: -0.001,
   p_value: 0.62,
+  df: 1,
   significant: false,
   insufficient_data: false,
+  bayes_prob: 0.42,
+  bayes_expected: -0.0008,
+  bayes_ci_low: -0.012,
+  bayes_ci_high: 0.010,
 }
 
 // Backend returns 0.0 sentinels + insufficient_data=true when there isn't
 // enough shared exposure. The `significant` flag may even be true on the wire,
 // but the row must never be treated as a real significant result.
 const INSUFFICIENT: ExperimentInteraction = {
-  experiment_id_a: 'exp-a',
-  experiment_id_b: 'exp-d',
-  other_experiment_name: 'New onboarding flow',
+  experiment_ids: ['exp-a', 'exp-d'],
+  experiment_names: ['Checkout Redesign', 'New onboarding flow'],
+  interaction_order: 2,
+  term: '2way:exp-axexp-d',
   context_type: 'user',
   metric_key: 'activation_rate',
   shared_count: 12,
   interaction_estimate: 0.0,
   p_value: 0.0,
+  df: 1,
   significant: true,
   insufficient_data: true,
+  bayes_prob: 0.0,
+  bayes_expected: 0.0,
+  bayes_ci_low: 0.0,
+  bayes_ci_high: 0.0,
 }
 
 // ─── Pure helpers ────────────────────────────────────────────────────────────
 
 describe('hasSignificantInteraction', () => {
-  it('returns true when any interaction is significant', () => {
+  it('returns true when any interaction is frequentist-significant', () => {
     expect(hasSignificantInteraction([NOT_SIGNIFICANT, SIGNIFICANT])).toBe(true)
   })
 
@@ -79,6 +101,23 @@ describe('hasSignificantInteraction', () => {
   it('ignores insufficient-data rows even when flagged significant', () => {
     expect(hasSignificantInteraction([INSUFFICIENT])).toBe(false)
     expect(hasSignificantInteraction([NOT_SIGNIFICANT, INSUFFICIENT])).toBe(false)
+  })
+
+  it('returns true for a row with high bayes_prob (> 0.95) even if not frequentist-significant', () => {
+    const highBayes: ExperimentInteraction = {
+      ...NOT_SIGNIFICANT,
+      significant: false,
+      bayes_prob: 0.96,
+    }
+    expect(hasSignificantInteraction([highBayes])).toBe(true)
+  })
+
+  it('returns false when bayes_prob is high but insufficient_data is set', () => {
+    const highBayesInsufficient: ExperimentInteraction = {
+      ...INSUFFICIENT,
+      bayes_prob: 0.99,
+    }
+    expect(hasSignificantInteraction([highBayesInsufficient])).toBe(false)
   })
 })
 
@@ -108,6 +147,45 @@ describe('formatEstimate', () => {
   })
 })
 
+describe('formatBayesProb', () => {
+  it('formats as a percentage to 1 decimal', () => {
+    expect(formatBayesProb(0.97)).toBe('97.0%')
+    expect(formatBayesProb(0.42)).toBe('42.0%')
+  })
+
+  it('renders "—" for null/undefined/NaN', () => {
+    expect(formatBayesProb(null)).toBe('—')
+    expect(formatBayesProb(undefined)).toBe('—')
+    expect(formatBayesProb(NaN)).toBe('—')
+  })
+})
+
+describe('formatBayesCI', () => {
+  it('formats as [low, high] to 4 decimals', () => {
+    expect(formatBayesCI(0.01, 0.07)).toBe('[0.0100, 0.0700]')
+  })
+
+  it('renders "—" when either bound is null', () => {
+    expect(formatBayesCI(null, 0.07)).toBe('—')
+    expect(formatBayesCI(0.01, null)).toBe('—')
+  })
+})
+
+describe('formatTerm', () => {
+  it('returns "Main effect" for order 1 or main: prefix', () => {
+    expect(formatTerm('main:exp-a', 1)).toBe('Main effect')
+    expect(formatTerm('main:exp-a', 2)).toBe('Main effect')
+  })
+
+  it('returns "A×B" for order 2 or 2way: prefix', () => {
+    expect(formatTerm('2way:axb', 2)).toBe('A×B')
+  })
+
+  it('returns "A×B×C" for order 3 or 3way: prefix', () => {
+    expect(formatTerm('3way:axbxc', 3)).toBe('A×B×C')
+  })
+})
+
 // ─── Render ──────────────────────────────────────────────────────────────────
 
 describe('InteractionsTab render', () => {
@@ -131,6 +209,48 @@ describe('InteractionsTab render', () => {
     expect(html).toMatch(/0\.0003/)
   })
 
+  it('renders order badges (2-way / 3-way)', () => {
+    const row3way: ExperimentInteraction = {
+      experiment_ids: ['exp-a', 'exp-b', 'exp-c'],
+      experiment_names: ['Exp A', 'Exp B', 'Exp C'],
+      interaction_order: 3,
+      term: '3way:exp-axexp-bxexp-c',
+      context_type: 'user',
+      metric_key: 'revenue',
+      shared_count: 5000,
+      interaction_estimate: 0.012,
+      p_value: 0.021,
+      df: 2,
+      significant: false,
+      insufficient_data: false,
+      bayes_prob: 0.88,
+      bayes_expected: 0.010,
+      bayes_ci_low: -0.002,
+      bayes_ci_high: 0.025,
+    }
+    const html = renderToString(
+      <InteractionsTab
+        interactions={[SIGNIFICANT, row3way]}
+        loading={false}
+        error={null}
+      />,
+    )
+    expect(html).toMatch(/data-order="2"/)
+    expect(html).toMatch(/data-order="3"/)
+    expect(html).toMatch(/2-way/)
+    expect(html).toMatch(/3-way/)
+  })
+
+  it('renders Bayesian columns (prob, expected, CI)', () => {
+    const html = renderToString(
+      <InteractionsTab interactions={[SIGNIFICANT]} loading={false} error={null} />,
+    )
+    // bayes_prob 0.97 → 97.0%
+    expect(html).toMatch(/97\.0%/)
+    // credible interval
+    expect(html).toMatch(/\[0\.0100, 0\.0700\]/)
+  })
+
   it('renders a "Significant" warning badge for significant rows', () => {
     const html = renderToString(
       <InteractionsTab interactions={[SIGNIFICANT]} loading={false} error={null} />,
@@ -149,7 +269,7 @@ describe('InteractionsTab render', () => {
     expect(html).toMatch(/badge success/)
   })
 
-  it('renders an "Insufficient data" badge instead of p=0.0 / significance', () => {
+  it('renders an "Insufficient data" badge and hides stats', () => {
     const html = renderToString(
       <InteractionsTab interactions={[INSUFFICIENT]} loading={false} error={null} />,
     )
@@ -160,6 +280,8 @@ describe('InteractionsTab render', () => {
     expect(html).not.toMatch(/data-significant/)
     expect(html).not.toMatch(/badge warning/)
     expect(html).not.toMatch(/>Significant</)
+    // Bayesian columns should also be hidden (shown as "—")
+    expect(html).not.toMatch(/0\.0%/)
   })
 
   it('renders an empty state when there are no interactions', () => {
