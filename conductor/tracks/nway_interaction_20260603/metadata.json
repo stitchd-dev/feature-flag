@@ -1,0 +1,13 @@
+{
+  "track_id": "nway_interaction_20260603",
+  "type": "feature",
+  "status": "new",
+  "priority": "medium",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-06-03T06:13:14Z",
+  "updated_at": "2026-06-03T06:13:14Z",
+  "description": "N-Way (3-way) cross-experiment interaction analysis + funnel/ratio metric coverage + Bayesian interaction modeling. Extends xexp_interaction_20260602: unified ordered-array schema (experiment_ids + interaction_order + term), full hierarchical decomposition per tuple, log-linear/multi-factor-ANOVA/ratio-delta Frequentist tests + Beta-Binomial/Normal-Normal Bayesian posteriors, BH-FDR across the term family. Order capped at 3.",
+  "git_branch": "track/nway_interaction_20260603",
+  "worktree_path": ".worktrees/nway_interaction_20260603"
+}

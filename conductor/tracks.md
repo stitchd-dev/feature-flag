@@ -84,3 +84,7 @@ This file tracks all major tracks for the project.
 <!-- ARCHIVED: xexp_interaction_20260602 (2026-06-02) — Cross-Experiment Interaction: Exclusion Groups + Interaction Analysis. (1) Mutual-exclusion groups (layers): per-env exclusion_groups with a pinned diversion unit_context_type + immutable salt; disjoint bucket-range allocation per member; in-memory rule-resident ExclusionGate on the rule's percentage allocation so evaluate_flag gates enrollment with ZERO DB lookup and stays experiment-unaware; experimentation-service stamps/clears the gate (atomic FOR UPDATE + audit), rejects default-rule-bound experiments, locks membership while running. (2) Pairwise two-way interaction analysis: self-join experiment_assignments (ITT-bounded to joint exposure), binary (2x2 Wald / RxC Pearson chi-square) + continuous (two-way ANOVA F), Benjamini-Hochberg FDR correction, insufficient_data flagged; experiment_interactions CH table → GetExperimentInteractions RPC → REST → Admin UI Interactions tab + Results warning banner. 9 phases (worker-wave) + 2 review rounds. Merged to main bdf1cef. CI green (tests 2149/0, clippy clean, admin vitest 799, sqlx check, docs idempotent, contract covered). Follow-up: feature-flag-uga (on-demand interaction recompute). See conductor/archive/xexp_interaction_20260602/ -->
 
 ---
+
+## [ ] Track: N-Way (3-Way) Cross-Experiment Interaction Analysis + Funnel/Ratio Metrics + Bayesian Interaction Modeling
+*Link: [./conductor/tracks/nway_interaction_20260603/](./conductor/tracks/nway_interaction_20260603/)*
+
