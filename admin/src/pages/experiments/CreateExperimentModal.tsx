@@ -22,6 +22,7 @@ import { Formik, Form, useFormikContext, useField } from 'formik'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
 import { FormField } from '../../components/form/FormField'
+import { FormCheckbox } from '../../components/form/FormCheckbox'
 import { FormSelect } from '../../components/form/FormSelect'
 import { FormTextarea } from '../../components/form/FormTextarea'
 import { FormErrorBanner } from '../../components/form/FormErrorBanner'
@@ -687,6 +688,64 @@ function UnitContextTypesPicker({ envId }: { envId: string }) {
   )
 }
 
+// ── Sequential testing (always-valid) section ─────────────────────────────────
+
+/**
+ * Opt-in section for sequential (always-valid) testing. A checkbox toggles the
+ * feature; when enabled, three advanced knobs appear (α, τ², minimum sample
+ * before the first look). Mirrors the gateway's `sequential_*` create-body
+ * fields. The advanced inputs are gated behind the toggle so the common case
+ * (fixed-horizon test) stays uncluttered.
+ */
+function SequentialTestingSection() {
+  const { values } = useFormikContext<ExperimentFormValues>()
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        padding: 12,
+        border: '1px solid var(--border)',
+        borderRadius: 8,
+      }}
+    >
+      <FormCheckbox
+        name="sequential_testing_enabled"
+        label="Enable sequential testing (always-valid)"
+        hint="Lets you peek at results any time without inflating the false-positive rate. Leave off for a standard fixed-horizon test."
+      />
+      {values.sequential_testing_enabled && (
+        <>
+          <FormField
+            name="sequential_alpha"
+            label="Significance level α"
+            type="number"
+            placeholder="0.05"
+            step="0.01"
+            hint="Target false-positive rate. Must be between 0 and 1 (default 0.05)."
+          />
+          <FormField
+            name="sequential_tau_squared"
+            label="Mixture variance τ² (blank = auto)"
+            type="number"
+            placeholder="auto"
+            step="any"
+            hint="Advanced: mSPRT mixing variance. Leave blank to auto-derive from the data."
+          />
+          <FormField
+            name="sequential_min_sample_size"
+            label="Min sample before first look"
+            type="number"
+            placeholder="100"
+            hint="Per-variant sample size required before a sequential verdict is allowed (default 100)."
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Exclusion-group picker (optional) ─────────────────────────────────────────
 
 /**
@@ -824,6 +883,10 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
     guardrail_metric_ids: string[]
     unit_context_types: string[]
     pre_period_days: number
+    sequential_testing_enabled: boolean
+    sequential_alpha: number
+    sequential_tau_squared?: number | null
+    sequential_min_sample_size: number
     traffic_allocation: number
     model: 'bayesian' | 'frequentist'
     exclusion_group_id: string
@@ -862,6 +925,10 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
       guardrail_metric_ids?: string[]
       unit_context_types?: string[]
       pre_period_days?: number
+      sequential_testing_enabled?: boolean
+      sequential_alpha?: number
+      sequential_tau_squared?: number | null
+      sequential_min_sample_size?: number
       traffic_allocation?: number
       model: 'bayesian' | 'frequentist'
       exclusion_group_id?: string | null
@@ -883,6 +950,20 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
           guardrail_metric_ids: data.guardrail_metric_ids ?? [],
           unit_context_types: data.unit_context_types ?? ['user'],
           pre_period_days: data.pre_period_days ?? 0,
+          sequential_testing_enabled: Boolean(data.sequential_testing_enabled),
+          // `0` from the gateway means "service default" — show 0.05 so the
+          // field is meaningful; a stored positive value prefills as-is.
+          sequential_alpha:
+            data.sequential_alpha != null && data.sequential_alpha > 0
+              ? data.sequential_alpha
+              : 0.05,
+          // Blank when absent/null → the input shows empty (= auto-derive).
+          sequential_tau_squared: data.sequential_tau_squared ?? undefined,
+          sequential_min_sample_size:
+            data.sequential_min_sample_size != null &&
+            data.sequential_min_sample_size > 0
+              ? data.sequential_min_sample_size
+              : 100,
           traffic_allocation:
             data.traffic_allocation != null ? data.traffic_allocation * 100 : 100,
           model: data.model,
@@ -913,6 +994,10 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
     guardrail_metric_ids: [],
     unit_context_types: ['user'],
     pre_period_days: 0,
+    sequential_testing_enabled: false,
+    sequential_alpha: 0.05,
+    sequential_tau_squared: undefined,
+    sequential_min_sample_size: 100,
     traffic_allocation: 100,
     model: 'bayesian',
     exclusion_group_id: '',
@@ -1104,6 +1189,8 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
             placeholder="0"
             hint="Pre-experiment lookback window for CUPED variance reduction. 0 = disabled."
           />
+
+          <SequentialTestingSection />
 
           <FormField
             name="traffic_allocation"

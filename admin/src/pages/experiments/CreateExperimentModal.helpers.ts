@@ -190,6 +190,41 @@ export function hasDefaultRuleDistribution(
   return Array.isArray(d.allocations) && d.allocations.length > 0
 }
 
+// ─── Sequential testing config ──────────────────────────────────────────────
+
+/**
+ * Assemble the sequential (always-valid) testing keys for the experiment
+ * create / patch body. The keys mirror the gateway's `CreateExperimentBody`
+ * (`crates/stitchd-gateway/src/routes/experiments.rs`):
+ *
+ *   sequential_testing_enabled: bool
+ *   sequential_alpha: f64        (0 lets the service apply 0.05)
+ *   sequential_tau_squared: f64? (OMITTED when blank → service auto-derives)
+ *   sequential_min_sample_size: i64 (0 lets the service apply 100)
+ *
+ * Number inputs hold strings in Formik; we coerce here. `tau` is omitted
+ * entirely (rather than sent as null) when the field is blank so the gateway's
+ * `Option<f64>` defaults to `None`.
+ */
+function sequentialTestingFields(
+  values: ExperimentFormValues,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    sequential_testing_enabled: Boolean(values.sequential_testing_enabled),
+    sequential_alpha: Number(values.sequential_alpha),
+    sequential_min_sample_size: Math.max(
+      0,
+      Math.floor(Number(values.sequential_min_sample_size)),
+    ),
+  }
+  const tau = values.sequential_tau_squared
+  // Blank / null / NaN → auto-derive (omit the key). Anything numeric is sent.
+  if (tau != null && `${tau}`.trim() !== '' && Number.isFinite(Number(tau))) {
+    out.sequential_tau_squared = Number(tau)
+  }
+  return out
+}
+
 // ─── Submit body ────────────────────────────────────────────────────────────
 
 /**
@@ -202,7 +237,10 @@ export function hasDefaultRuleDistribution(
  *     flag_rule_id?  XOR  targets_default_rule,
  *     metric_ids[], guardrail_metric_ids[],
  *     unit_context_types[],
- *     pre_period_days, traffic_allocation,
+ *     pre_period_days,
+ *     sequential_testing_enabled, sequential_alpha,
+ *     sequential_tau_squared?, sequential_min_sample_size,
+ *     traffic_allocation,
  *     model
  *   }
  *
@@ -227,6 +265,7 @@ export function buildExperimentCreateBody(
       .map((s) => s.trim())
       .filter(Boolean),
     pre_period_days: Math.max(0, Math.floor(values.pre_period_days)),
+    ...sequentialTestingFields(values),
     traffic_allocation: values.traffic_allocation / 100,
     model: values.model,
   }
@@ -260,6 +299,7 @@ export function buildExperimentPatchBody(
       .map((s) => s.trim())
       .filter(Boolean),
     pre_period_days: Math.max(0, Math.floor(values.pre_period_days)),
+    ...sequentialTestingFields(values),
     traffic_allocation: values.traffic_allocation / 100,
     model: values.model,
   }
