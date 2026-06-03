@@ -269,6 +269,235 @@ pub fn build_interaction_metric_cells_query(
     Ok(BuiltQuery { sql, binds })
 }
 
+/// Build a **consolidated** aggregation metric-cell query that produces the
+/// per-variant-tuple cells for EVERY candidate tuple in `tuples` — all sharing
+/// the same `Aggregation` metric, `env_id`, and `context_type` — in ONE
+/// ClickHouse query (review #12).
+///
+/// The per-tuple builder ([`build_interaction_metric_cells_query`]) issues one
+/// FINAL self-join scan of `experiment_assignments` per tuple. For `k`
+/// experiments sharing a metric on a context that is `C(k,2) + C(k,3)` separate
+/// scans (4 for k=3, 10 for k=4, …), each re-scanning + re-deduping the same
+/// assignment rows. This builder collapses them:
+///
+/// 1. **One** `experiment_assignments FINAL` scan over the *union* of every
+///    experiment id across `tuples` (env + context_type + window-bounded),
+///    pivoted per `context_key` into a `Map(exp_id → (variant_key, assigned_at))`
+///    plus the array of experiment ids present on that context.
+/// 2. **One** `events` scan for the metric (the shared `matched_events` CTE).
+/// 3. Per tuple a `g{i}` / `ce{i}` CTE pair that *replicates the per-tuple logic
+///    exactly*: it keeps only contexts whose `present` array contains ALL of
+///    THAT tuple's experiments (`hasAll` — the same intersection the per-tuple
+///    INNER JOIN computes), reads each experiment's variant via the map to build
+///    the tuple-ordered `variant_keys`, takes its own ITT lower bound
+///    `greatest(assigned_at over THAT tuple)`, and groups over its own variant
+///    tuple. The per-grid aggregations are `UNION ALL`-ed, each row tagged with
+///    its 0-based `tuple_idx` so the caller routes cells back to the right tuple.
+///
+/// The result rows carry `(tuple_idx: u32, variant_keys: Array(String), n,
+/// successes, value_sum, value_sq_sum)` — the per-tuple columns plus the routing
+/// index. Each grid branch emits the *identical* cells the per-tuple query emits
+/// for that tuple (proven by the live-CH equivalence test).
+///
+/// `tuples` must be non-empty; each tuple must be 2 or 3 distinct experiments
+/// (same contract as the per-tuple builder). The experiment ids are the sorted
+/// `Vec<&str>` the sweep already carries (tuple order is preserved in
+/// `variant_keys`).
+///
+/// All SQL is parameterized via [`push_bind`] / [`QueryBind`]; binds are pushed
+/// in SQL-appearance order (base scan, then events scan, then the optional
+/// metric `where_clause` literals, then each grid's experiment-id references).
+///
+/// # Errors
+/// Returns [`QueryBuildError::InvalidConfig`] when `tuples` is empty or any tuple
+/// is not 2 or 3 distinct experiments, or [`QueryBuildError::UnsupportedJsonLogic`]
+/// / [`QueryBuildError::InvalidJsonLogic`] when the metric `where_clause` cannot
+/// be translated.
+pub fn build_consolidated_aggregation_cells_query(
+    cfg: &AggregationConfig,
+    env_id: &str,
+    tuples: &[&[&str]],
+    context_type: &str,
+    interaction_end: DateTime<Utc>,
+) -> Result<BuiltQuery, QueryBuildError> {
+    if tuples.is_empty() {
+        return Err(QueryBuildError::InvalidConfig(
+            "consolidated aggregation query needs at least one tuple".into(),
+        ));
+    }
+    for exp_ids in tuples {
+        validate_exp_ids(exp_ids)?;
+    }
+
+    let end_ms = interaction_end.timestamp_millis();
+    let mut binds = Vec::new();
+
+    // Union of experiment ids across all tuples, deduplicated but order-stable
+    // (first appearance). Drives the single base scan's `experiment_id IN (…)`.
+    let mut union_ids: Vec<&str> = Vec::new();
+    for exp_ids in tuples {
+        for id in *exp_ids {
+            if !union_ids.contains(id) {
+                union_ids.push(id);
+            }
+        }
+    }
+
+    // ── base CTE: ONE assignment FINAL scan, pivoted per context ────────────
+    // Binds in appearance order: env, context_type, each union experiment id,
+    // assigned_at upper bound.
+    let base_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
+    let base_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
+    let in_list = union_ids
+        .iter()
+        .map(|id| {
+            let ph = push_bind(&mut binds, QueryBind::Str((*id).to_owned()));
+            format!("toUUID({ph})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let base_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
+
+    // The pivoted per-context tuple array is materialized once and reused for
+    // both the map (variant + assigned_at by experiment id) and the membership
+    // array (`present`). `assigned_at` is DateTime64(3,'UTC') in the schema.
+    let asg_array = "groupArray((toString(experiment_id), (variant_key, assigned_at)))".to_owned();
+    let base_cte = format!(
+        "    SELECT\n        \
+            context_key AS context_key,\n        \
+            CAST({asg_array}, 'Map(String, Tuple(String, DateTime64(3, \\'UTC\\')))') AS m,\n        \
+            arrayMap(x -> x.1, {asg_array}) AS present\n    \
+        FROM experiment_assignments FINAL\n    \
+        WHERE env_id = toUUID({base_env_ph})\n      \
+          AND context_type = {base_ctx_ph}\n      \
+          AND experiment_id IN ({in_list})\n      \
+          AND assigned_at < fromUnixTimestamp64Milli({base_end_ph})\n      \
+          AND variant_key != ''\n    \
+        GROUP BY context_key\n"
+    );
+
+    // ── matched_events CTE: ONE events scan for the metric ──────────────────
+    let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
+    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
+    let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
+    let ev_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
+    let value_expr = super::numeric_value_expr(cfg);
+
+    // Optional metric `where_clause` — applied once to the shared events stream
+    // (every tuple shares the SAME metric, so a single filtered scan is exactly
+    // equivalent to filtering per tuple). Its literals are the LAST binds before
+    // the per-grid experiment-id references (it sits inside matched_events, which
+    // precedes the grids in SQL-appearance order).
+    let extra_where = match cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n      AND ({frag})")
+        }
+        None => String::new(),
+    };
+
+    let matched_events_cte = format!(
+        "    SELECT\n        \
+            ctx_pair.2 AS context_key,\n        \
+            {value_expr} AS value,\n        \
+            e.occurred_at AS occurred_at\n    \
+        FROM events AS e\n    \
+        ARRAY JOIN e.contexts AS ctx_pair\n    \
+        WHERE e.env_id = toUUID({ev_env_ph})\n      \
+          AND e.metric_key = {event_ph}\n      \
+          AND ctx_pair.1 = {ev_ctx_ph}\n      \
+          AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph}){extra_where}\n"
+    );
+
+    // ── per-tuple grid CTEs (g{i} + ce{i}) ──────────────────────────────────
+    // `clickhouse-rs` binds `?` positionally — one bind is consumed per `?`, so
+    // a reused placeholder is NOT allowed. Each tuple references its experiment
+    // ids three times (the `.1` variant reads, the `.2` assigned-at reads, then
+    // the `hasAll` membership list), so we push one bind PER occurrence in exact
+    // SQL-appearance order: all `.1` reads, then all `.2` reads, then the
+    // membership list. These land after the events/where binds (the grids follow
+    // matched_events in the SQL text).
+    let mut grid_ctes: Vec<String> = Vec::with_capacity(tuples.len());
+    let mut union_selects: Vec<String> = Vec::with_capacity(tuples.len());
+    for (i, exp_ids) in tuples.iter().enumerate() {
+        let variant_array = exp_ids
+            .iter()
+            .map(|id| {
+                let ph = push_bind(&mut binds, QueryBind::Str((*id).to_owned()));
+                format!("b.m[{ph}].1")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let assigned_list = exp_ids
+            .iter()
+            .map(|id| {
+                let ph = push_bind(&mut binds, QueryBind::Str((*id).to_owned()));
+                format!("b.m[{ph}].2")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let has_all_list = exp_ids
+            .iter()
+            .map(|id| push_bind(&mut binds, QueryBind::Str((*id).to_owned())))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        grid_ctes.push(format!(
+            "g{i} AS (\n    \
+                SELECT\n        \
+                    b.context_key AS context_key,\n        \
+                    array({variant_array}) AS variant_keys,\n        \
+                    greatest({assigned_list}) AS joint_assigned_at\n    \
+                FROM base AS b\n    \
+                WHERE hasAll(b.present, array({has_all_list}))\n\
+            ),\n\
+            ce{i} AS (\n    \
+                SELECT\n        \
+                    g{i}.variant_keys AS variant_keys,\n        \
+                    countIf(me.occurred_at >= g{i}.joint_assigned_at) AS event_count,\n        \
+                    sumIf(me.value, me.occurred_at >= g{i}.joint_assigned_at) AS value_sum,\n        \
+                    sumIf(me.value * me.value, me.occurred_at >= g{i}.joint_assigned_at) AS value_sq_sum\n    \
+                FROM g{i}\n    \
+                LEFT JOIN matched_events AS me\n        \
+                    ON me.context_key = g{i}.context_key\n    \
+                GROUP BY g{i}.context_key, g{i}.variant_keys\n\
+            )"
+        ));
+
+        // `toUInt32(i)` pins the routing tag's wire type — a bare integer
+        // literal infers as UInt8 for small `i`, which the RowBinary `u32`
+        // decode rejects.
+        union_selects.push(format!(
+            "SELECT\n    \
+                toUInt32({i}) AS tuple_idx,\n    \
+                ce{i}.variant_keys AS variant_keys,\n    \
+                count() AS n,\n    \
+                countIf(ce{i}.event_count > 0) AS successes,\n    \
+                sum(ce{i}.value_sum) AS value_sum,\n    \
+                sum(ce{i}.value_sq_sum) AS value_sq_sum\n\
+            FROM ce{i}\n\
+            GROUP BY ce{i}.variant_keys"
+        ));
+    }
+
+    let grid_ctes = grid_ctes.join(",\n");
+    let union_body = union_selects.join("\nUNION ALL\n");
+
+    let sql = format!(
+        "WITH\n\
+        base AS (\n\
+        {base_cte}\
+        ),\n\
+        matched_events AS (\n\
+        {matched_events_cte}\
+        ),\n\
+        {grid_ctes}\n\
+        {union_body}"
+    );
+
+    Ok(BuiltQuery { sql, binds })
+}
+
 /// Build the per-variant-tuple **funnel** cell query for the k-way interaction
 /// among `exp_ids`.
 ///
@@ -958,6 +1187,271 @@ mod tests {
         assert_eq!(q.binds[10], QueryBind::Str("user".into()));
         assert_eq!(q.binds[11], QueryBind::I64(end().timestamp_millis()));
         assert_eq!(q.binds.len(), 12);
+    }
+
+    // ── Consolidated aggregation (review #12) ────────────────────────────────
+
+    #[test]
+    fn consolidated_single_assignment_scan_for_union_of_experiments() {
+        // Three experiments → 4 tuples (3 pairs + 1 triple). The base scan must
+        // be a SINGLE `experiment_assignments FINAL` over the UNION (A, B, C) —
+        // not one self-join per tuple.
+        let tuples: Vec<&[&str]> = vec![
+            &[EXP_A, EXP_B],
+            &[EXP_A, EXP_C],
+            &[EXP_B, EXP_C],
+            &[EXP_A, EXP_B, EXP_C],
+        ];
+        let q = build_consolidated_aggregation_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &tuples,
+            "user",
+            end(),
+        )
+        .unwrap();
+        // Exactly one assignment scan (no INNER JOIN self-joins at all).
+        assert_eq!(
+            q.sql.matches("FROM experiment_assignments FINAL").count(),
+            1,
+            "{}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains("INNER JOIN experiment_assignments"),
+            "consolidated path must not self-join assignments, got:\n{}",
+            q.sql
+        );
+        // One events scan shared across all grids.
+        assert_eq!(q.sql.matches("FROM events AS e").count(), 1, "{}", q.sql);
+        // The union IN-list binds A, B, C exactly once each (3 ids).
+        let in_pos = q.sql.find("experiment_id IN (").unwrap();
+        let in_frag = &q.sql[in_pos..in_pos + 60];
+        assert_eq!(in_frag.matches("toUUID(").count(), 3, "{in_frag}");
+    }
+
+    #[test]
+    fn consolidated_emits_one_grid_per_tuple_tagged_with_index() {
+        let tuples: Vec<&[&str]> = vec![&[EXP_A, EXP_B], &[EXP_A, EXP_B, EXP_C]];
+        let q = build_consolidated_aggregation_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &tuples,
+            "user",
+            end(),
+        )
+        .unwrap();
+        // One grid CTE pair per tuple.
+        assert!(q.sql.contains("g0 AS ("), "{}", q.sql);
+        assert!(q.sql.contains("ce0 AS ("), "{}", q.sql);
+        assert!(q.sql.contains("g1 AS ("), "{}", q.sql);
+        assert!(q.sql.contains("ce1 AS ("), "{}", q.sql);
+        // Each UNION branch tags its rows with the tuple index.
+        assert!(q.sql.contains("toUInt32(0) AS tuple_idx"), "{}", q.sql);
+        assert!(q.sql.contains("toUInt32(1) AS tuple_idx"), "{}", q.sql);
+        assert_eq!(q.sql.matches("UNION ALL").count(), 1, "{}", q.sql);
+        // Grid 0 (pair AB) over union {A,B,C}: base binds p0..p5, events p6..p9,
+        // then the pair's `.1` reads (p10,p11) and `.2` reads (p12,p13). The two
+        // assigned-at reads land in their own fresh placeholders (clickhouse-rs
+        // binds positionally, so a placeholder is never reused).
+        assert!(
+            q.sql.contains("greatest(b.m[{p12}].2, b.m[{p13}].2)"),
+            "pair grid greatest over its 2 experiments, got:\n{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn consolidated_grid_keeps_only_contexts_with_all_tuple_experiments() {
+        // The per-tuple INNER-join intersection is replicated by `hasAll` over
+        // the membership array — a context survives a grid only if ALL that
+        // tuple's experiments assigned it.
+        let tuples: Vec<&[&str]> = vec![&[EXP_A, EXP_B], &[EXP_A, EXP_B, EXP_C]];
+        let q = build_consolidated_aggregation_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &tuples,
+            "user",
+            end(),
+        )
+        .unwrap();
+        assert_eq!(
+            q.sql.matches("WHERE hasAll(b.present, array(").count(),
+            2,
+            "one hasAll membership filter per grid, got:\n{}",
+            q.sql
+        );
+        // Per-context ITT bound carried into each ce grid's aggregate gate.
+        assert!(
+            q.sql
+                .contains("countIf(me.occurred_at >= g0.joint_assigned_at)"),
+            "{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn consolidated_output_schema_matches_per_tuple_plus_index() {
+        let tuples: Vec<&[&str]> = vec![&[EXP_A, EXP_B]];
+        let q = build_consolidated_aggregation_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &tuples,
+            "user",
+            end(),
+        )
+        .unwrap();
+        for col in [
+            "AS tuple_idx",
+            "AS variant_keys",
+            "count() AS n",
+            "AS successes",
+            "AS value_sum",
+            "AS value_sq_sum",
+        ] {
+            assert!(q.sql.contains(col), "missing `{col}` in:\n{}", q.sql);
+        }
+    }
+
+    #[test]
+    fn consolidated_bind_order_base_then_events_then_grids() {
+        // Two tuples (AB, ABC) over the union (A, B, C). Binds appear in SQL
+        // order: base scan (env, ctx, A, B, C, end), then events (env, event,
+        // ctx, end), then each grid's experiment-id references pushed PER
+        // occurrence (all `.1` reads, then all `.2` reads, then the hasAll list)
+        // because clickhouse-rs binds `?` positionally and never reuses one.
+        let tuples: Vec<&[&str]> = vec![&[EXP_A, EXP_B], &[EXP_A, EXP_B, EXP_C]];
+        let q = build_consolidated_aggregation_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &tuples,
+            "user",
+            end(),
+        )
+        .unwrap();
+        let ms = end().timestamp_millis();
+        // base: env, ctx, union A/B/C, end
+        assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[1], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[2], QueryBind::Str(EXP_A.into()));
+        assert_eq!(q.binds[3], QueryBind::Str(EXP_B.into()));
+        assert_eq!(q.binds[4], QueryBind::Str(EXP_C.into()));
+        assert_eq!(q.binds[5], QueryBind::I64(ms));
+        // events: env, event_key, ctx, end
+        assert_eq!(q.binds[6], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[7], QueryBind::Str("checkout_completed".into()));
+        assert_eq!(q.binds[8], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[9], QueryBind::I64(ms));
+        // grid 0 (AB): .1 reads (A,B), .2 reads (A,B), hasAll (A,B).
+        assert_eq!(
+            &q.binds[10..16],
+            &[
+                QueryBind::Str(EXP_A.into()),
+                QueryBind::Str(EXP_B.into()),
+                QueryBind::Str(EXP_A.into()),
+                QueryBind::Str(EXP_B.into()),
+                QueryBind::Str(EXP_A.into()),
+                QueryBind::Str(EXP_B.into()),
+            ]
+        );
+        // grid 1 (ABC): .1 reads (A,B,C), .2 reads (A,B,C), hasAll (A,B,C).
+        assert_eq!(
+            &q.binds[16..25],
+            &[
+                QueryBind::Str(EXP_A.into()),
+                QueryBind::Str(EXP_B.into()),
+                QueryBind::Str(EXP_C.into()),
+                QueryBind::Str(EXP_A.into()),
+                QueryBind::Str(EXP_B.into()),
+                QueryBind::Str(EXP_C.into()),
+                QueryBind::Str(EXP_A.into()),
+                QueryBind::Str(EXP_B.into()),
+                QueryBind::Str(EXP_C.into()),
+            ]
+        );
+        assert_eq!(q.binds.len(), 25);
+    }
+
+    #[test]
+    fn consolidated_applies_where_clause_once_before_grids() {
+        // A property-filtered metric: the where literal lands inside the shared
+        // matched_events scan, before any grid experiment-id reference.
+        let cfg = AggregationConfig {
+            event_key: "checkout_completed".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: Some(serde_json::json!({"==": [{"var": "status"}, "success"]})),
+        };
+        let tuples: Vec<&[&str]> = vec![&[EXP_A, EXP_B]];
+        let q = build_consolidated_aggregation_cells_query(&cfg, ENV_ID, &tuples, "user", end())
+            .unwrap();
+        assert!(
+            q.sql.contains("AND (properties['status'] = "),
+            "where_clause must be applied to the shared events scan, got:\n{}",
+            q.sql
+        );
+        // Single tuple AB → union is just {A, B}. The where literal precedes the
+        // grid's experiment-id binds. base(env,ctx,A,B,end = 5) + events(4) +
+        // 1 where literal at index 9, then grid AB adds 3×2 = 6 → 16 total.
+        assert_eq!(q.binds[9], QueryBind::Str("success".into()));
+        assert_eq!(q.binds[10], QueryBind::Str(EXP_A.into()));
+        assert_eq!(q.binds[11], QueryBind::Str(EXP_B.into()));
+        assert_eq!(q.binds.len(), 16);
+    }
+
+    #[test]
+    fn consolidated_continuous_uses_property_value_expr() {
+        let tuples: Vec<&[&str]> = vec![&[EXP_A, EXP_B]];
+        let q =
+            build_consolidated_aggregation_cells_query(&sum_cfg(), ENV_ID, &tuples, "user", end())
+                .unwrap();
+        assert!(
+            q.sql.contains("toFloat64OrNull(e.properties['revenue'])"),
+            "{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn consolidated_rejects_empty_tuples() {
+        let tuples: Vec<&[&str]> = vec![];
+        let err = build_consolidated_aggregation_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &tuples,
+            "user",
+            end(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn consolidated_rejects_bad_tuple_arity() {
+        let tuples: Vec<&[&str]> = vec![&[EXP_A]]; // order < 2
+        let err = build_consolidated_aggregation_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &tuples,
+            "user",
+            end(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
+    }
+
+    #[test]
+    fn consolidated_context_type_is_bound_not_inlined() {
+        let tuples: Vec<&[&str]> = vec![&[EXP_A, EXP_B]];
+        let q = build_consolidated_aggregation_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &tuples,
+            "user",
+            end(),
+        )
+        .unwrap();
+        assert!(!q.sql.contains("'user'"), "{}", q.sql);
     }
 
     // ── Funnel ───────────────────────────────────────────────────────────────
