@@ -60,6 +60,11 @@ fn row_to_proto(row: ExperimentResultRow) -> ExperimentResult {
         } else {
             Some(row.bayesian_result)
         },
+        sequential_result: if row.sequential_result.is_empty() {
+            None
+        } else {
+            Some(row.sequential_result)
+        },
         recommendation: row.recommendation,
         computed_at: ms_to_rfc3339(row.computed_at),
         created_at: ms_to_rfc3339(row.created_at),
@@ -130,6 +135,17 @@ pub async fn handle_write_experiment_results(
         })
         .transpose()?;
 
+    let sequential_result = req
+        .sequential_result
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            serde_json::from_str::<serde_json::Value>(s).map_err(|e| {
+                Status::invalid_argument(format!("sequential_result not valid JSON: {e}"))
+            })
+        })
+        .transpose()?;
+
     let computed_at = if req.computed_at.is_empty() {
         chrono::Utc::now()
     } else {
@@ -150,15 +166,9 @@ pub async fn handle_write_experiment_results(
         variant_stats,
         frequentist_result,
         bayesian_result,
-        // Sequential testing results are pass-through from the request; the
-        // stats-service does not populate them yet (later phase), so they are
-        // typically absent for now.
-        sequential_p_value: req.sequential_p_value,
-        sequential_ci_lower: req.sequential_ci_lower,
-        sequential_ci_upper: req.sequential_ci_upper,
-        sequential_method: req.sequential_method.filter(|s| !s.is_empty()),
-        sequential_crossed: req.sequential_crossed,
-        sequential_insufficient_data: req.sequential_insufficient_data,
+        // Sequential testing result (per-variant JSON blob) is pass-through from
+        // the request; absent when sequential testing was not run for the row.
+        sequential_result,
         recommendation: req.recommendation,
         computed_at,
         context_type: req.context_type,
@@ -335,12 +345,10 @@ mod tests {
                         .bayesian_result
                         .map(|v| serde_json::to_string(&v).unwrap())
                         .unwrap_or_default(),
-                    sequential_p_value: r.sequential_p_value,
-                    sequential_ci_lower: r.sequential_ci_lower,
-                    sequential_ci_upper: r.sequential_ci_upper,
-                    sequential_method: r.sequential_method.unwrap_or_default(),
-                    sequential_crossed: r.sequential_crossed.map(u8::from),
-                    sequential_insufficient_data: r.sequential_insufficient_data.map(u8::from),
+                    sequential_result: r
+                        .sequential_result
+                        .map(|v| serde_json::to_string(&v).unwrap())
+                        .unwrap_or_default(),
                     recommendation: r.recommendation,
                     computed_at: r.computed_at.timestamp_millis(),
                     created_at: chrono::Utc::now().timestamp_millis(),
@@ -417,12 +425,7 @@ mod tests {
             variant_stats: r#"{"control":100,"treatment":120}"#.to_string(),
             frequentist_result: r#"{"p_value":0.03}"#.to_string(),
             bayesian_result: String::new(),
-            sequential_p_value: None,
-            sequential_ci_lower: None,
-            sequential_ci_upper: None,
-            sequential_method: String::new(),
-            sequential_crossed: None,
-            sequential_insufficient_data: None,
+            sequential_result: String::new(),
             recommendation: "ship_treatment".to_string(),
             computed_at: 1_746_057_600_000, // 2026-05-01T00:00:00Z
             created_at: 1_746_057_600_000,
@@ -441,12 +444,7 @@ mod tests {
             variant_stats: r#"{"control":100,"treatment":120}"#.to_string(),
             frequentist_result: Some(r#"{"p_value":0.03}"#.to_string()),
             bayesian_result: None,
-            sequential_p_value: None,
-            sequential_ci_lower: None,
-            sequential_ci_upper: None,
-            sequential_crossed: None,
-            sequential_insufficient_data: None,
-            sequential_method: None,
+            sequential_result: None,
             recommendation: "ship_treatment".to_string(),
             computed_at: "2026-05-01T00:00:00Z".to_string(),
             context_type: "user".to_string(),

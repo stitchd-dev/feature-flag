@@ -215,6 +215,12 @@ message ExperimentResult {
   // The attribution unit's context type (e.g. "user", "account").
   // Defaults to "user" for rows written before the Phase 5 cutover.
   string context_type    = 13;
+  // [ADDITIVE] Sequential testing (always-valid mSPRT) result for ALL variants
+  // in this row, serialised as a JSON object keyed by variant_key — mirroring
+  // frequentist_result / bayesian_result. Each entry: {always_valid_p,
+  // p_crossed, ci_lower, ci_upper, insufficient_data, method}. Absent / empty
+  // when sequential testing was not run for the row.
+  optional string sequential_result = 14;
 }
 
 // Write (upsert) one experiment result.
@@ -235,16 +241,13 @@ message WriteExperimentResultsRequest {
   // string maps to the default `'user'` on the CH side for back-compat
   // with pre-Phase-5 callers that don't supply it.
   string context_type           = 12;
-  // [ADDITIVE] Sequential testing (always-valid) result for this row.
-  // All optional — absent when sequential testing was not run. Maps to the
-  // matching Nullable / String-default columns on the CH `experiment_results`
-  // table. Populated by a later phase; left unset for now.
-  optional double sequential_p_value           = 13;
-  optional double sequential_ci_lower          = 14;
-  optional double sequential_ci_upper          = 15;
-  optional bool   sequential_crossed           = 16;
-  optional bool   sequential_insufficient_data = 17;
-  optional string sequential_method            = 18;
+  // [ADDITIVE] Sequential testing (always-valid mSPRT) result for ALL variants
+  // in this (experiment, iteration, metric_key, context_type) row, serialised
+  // as a JSON object keyed by variant_key — mirroring frequentist_result /
+  // bayesian_result (which are also per-row, multi-variant JSON blobs). Each
+  // entry: {always_valid_p, p_crossed, ci_lower, ci_upper, insufficient_data,
+  // method}. Absent / empty when sequential testing was not run for the row.
+  optional string sequential_result = 13;
 }
 
 // Empty response — Worker 3's write returns () so no result is echoed back.

@@ -19,4 +19,5 @@ pub mod recompute_trigger;
 pub mod results_writer;
 pub mod schedule_updater;
 pub mod scheduler;
+pub mod sequential_compute;
 pub mod timeseries_reader;
