@@ -56,7 +56,8 @@ use crate::dispatch::rewrite_placeholders_to_clickhouse;
 use crate::interaction_pairs::{ExperimentMeta, candidate_pairs, candidate_triples};
 use crate::queries::QueryBind;
 use crate::queries::interaction_metric::{
-    MetricCellKind, build_interaction_funnel_cells_query, build_interaction_metric_cells_query,
+    MetricCellKind, build_consolidated_aggregation_cells_query,
+    build_interaction_funnel_cells_query, build_interaction_metric_cells_query,
     build_interaction_ratio_cells_query,
 };
 
@@ -240,6 +241,35 @@ pub trait InteractionCellReader: Send + Sync {
         interaction_end: DateTime<Utc>,
     ) -> Result<Vec<NdCellAggregate>, anyhow::Error>;
 
+    /// **Consolidated** conversion / continuous cells for an `Aggregation`
+    /// metric shared by EVERY tuple in `tuples` (each a length-2-or-3 slice of
+    /// experiment ids), over one `env_id` + `context_type`, in ONE ClickHouse
+    /// query (review #12). Returns one cell grid PER tuple, in the same order as
+    /// `tuples` — `result[i]` is the grid for `tuples[i]`, identical to what
+    /// [`Self::fetch_aggregation_cells`] would return for that tuple alone.
+    ///
+    /// The default implementation falls back to issuing one
+    /// [`Self::fetch_aggregation_cells`] per tuple, so existing fakes need not
+    /// implement it; the production reader overrides it with the single
+    /// consolidated scan.
+    async fn fetch_aggregation_cells_consolidated(
+        &self,
+        cfg: &AggregationConfig,
+        env_id: &str,
+        tuples: &[&[&str]],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<Vec<NdCellAggregate>>, anyhow::Error> {
+        let mut out = Vec::with_capacity(tuples.len());
+        for exp_ids in tuples {
+            out.push(
+                self.fetch_aggregation_cells(cfg, env_id, exp_ids, context_type, interaction_end)
+                    .await?,
+            );
+        }
+        Ok(out)
+    }
+
     /// Binary funnel cells (`successes` = reached final step) for a `Funnel`
     /// metric over the shared population of `exp_ids`.
     async fn fetch_funnel_cells(
@@ -326,43 +356,121 @@ pub async fn compute_and_persist_interactions(
         tuples.push(vec![a, b, c]);
     }
 
+    // Per-tuple context resolved once: metas, the tuple's overlap-window upper
+    // bound, the metrics common to EVERY experiment in the tuple, and the
+    // stringified experiment ids (kept alive for the &str views the readers
+    // take). Tuples whose metas are not all present are dropped.
+    struct TupleCtx<'a> {
+        exp_ids: Vec<Uuid>,
+        interaction_end: DateTime<Utc>,
+        shared_metric_ids: Vec<Uuid>,
+        id_strs: Vec<String>,
+        _metas: Vec<&'a ExperimentMeta>,
+    }
+    let tuple_ctxs: Vec<TupleCtx> = tuples
+        .into_iter()
+        .filter_map(|exp_ids| {
+            let metas: Vec<&ExperimentMeta> = exp_ids
+                .iter()
+                .map(|id| by_id.get(id).copied())
+                .collect::<Option<_>>()?;
+            // Overlap-window upper bound: earliest finite end across the tuple,
+            // or "now" when all are still running. candidate_* proved the windows
+            // overlap pairwise (⇒ a common live window by Helly's theorem).
+            let interaction_end = metas.iter().fold(computed_at, |acc, m| match m.ended_at {
+                Some(end) => acc.min(end),
+                None => acc,
+            });
+            // Metrics common to EVERY experiment in the tuple.
+            let shared_metric_ids: Vec<Uuid> = metas[0]
+                .metric_ids
+                .iter()
+                .filter(|m| metas[1..].iter().all(|meta| meta.metric_ids.contains(m)))
+                .copied()
+                .collect();
+            let id_strs: Vec<String> = exp_ids.iter().map(Uuid::to_string).collect();
+            Some(TupleCtx {
+                exp_ids,
+                interaction_end,
+                shared_metric_ids,
+                id_strs,
+                _metas: metas,
+            })
+        })
+        .collect();
+
     // Phase 1 — compute every (tuple × metric × context_type) decomposition for
     // the batch. We collect all term rows before deciding significance so the
     // Benjamini–Hochberg correction can see the whole family of tests.
+    //
+    // The AGGREGATION metric path is consolidated (review #12): per
+    // (context_type, aggregation metric, interaction_end) the tuples sharing
+    // that metric are fetched in ONE ClickHouse query and routed back per tuple.
+    // FUNNEL / RATIO metrics keep the per-tuple path (their CTEs are complex and
+    // they are rarer). ALL downstream logic (decomposition, term_string,
+    // NdCellAggregate construction, BH-FDR, persist) is identical regardless of
+    // which fetch produced the cells.
     let mut rows: Vec<InteractionRow> = Vec::new();
-    for exp_ids in tuples {
-        let metas: Option<Vec<&ExperimentMeta>> =
-            exp_ids.iter().map(|id| by_id.get(id).copied()).collect();
-        let Some(metas) = metas else { continue };
 
-        // Overlap-window upper bound: earliest finite end across the tuple, or
-        // "now" when all are still running. candidate_* proved the windows
-        // overlap pairwise (⇒ a common live window by Helly's theorem).
-        let interaction_end = metas.iter().fold(computed_at, |acc, m| match m.ended_at {
-            Some(end) => acc.min(end),
-            None => acc,
-        });
+    // Emit one row per decomposition term for a tuple's computed grid. The
+    // factor index → experiment mapping is `factor i ↔ exp_ids[i]` (the query
+    // alias / tuple order, the same order the readers key `variant_keys` by).
+    let push_tuple_rows = |rows: &mut Vec<InteractionRow>,
+                           exp_ids: &[Uuid],
+                           metric_key: &str,
+                           context_type: &str,
+                           cells: &[NdCellAggregate],
+                           terms: &[TermResult]| {
+        let shared_count: u64 = cells.iter().map(|c| c.n).sum();
+        let cell_stats = cells_to_json(cells);
+        let order = exp_ids.len() as u8;
+        for t in terms {
+            let term = term_string(t.kind, exp_ids);
+            let bayes = t.bayes.unwrap_or(BayesianInteraction {
+                prob: 0.0,
+                expected: 0.0,
+                ci_low: 0.0,
+                ci_high: 0.0,
+            });
+            rows.push(InteractionRow {
+                env_id,
+                experiment_ids: exp_ids.to_vec(),
+                interaction_order: order,
+                term,
+                context_type: context_type.to_owned(),
+                metric_key: metric_key.to_owned(),
+                shared_count,
+                cell_stats: cell_stats.clone(),
+                // Insufficient-data terms keep 0.0 sentinels (the column is
+                // non-nullable Float64); the flag distinguishes them.
+                interaction_estimate: nan_to_zero(t.freq.estimate),
+                p_value: nan_to_zero(t.freq.p_value),
+                df: t.freq.df,
+                // Provisional; overwritten by the BH pass below.
+                significant: false,
+                insufficient_data: t.freq.insufficient_data,
+                bayes_prob: nan_to_zero(bayes.prob),
+                bayes_expected: nan_to_zero(bayes.expected),
+                bayes_ci_low: nan_to_zero(bayes.ci_low),
+                bayes_ci_high: nan_to_zero(bayes.ci_high),
+                computed_at,
+            });
+        }
+    };
 
-        // Metrics common to EVERY experiment in the tuple.
-        let shared_metric_ids: Vec<Uuid> = metas[0]
-            .metric_ids
-            .iter()
-            .filter(|m| metas[1..].iter().all(|meta| meta.metric_ids.contains(m)))
-            .copied()
-            .collect();
-
-        let id_strs: Vec<String> = exp_ids.iter().map(Uuid::to_string).collect();
-        let id_refs: Vec<&str> = id_strs.iter().map(String::as_str).collect();
-
-        for metric_id in shared_metric_ids {
+    // ── Pass A: funnel / ratio metrics, per-tuple (unchanged fetch path) ────
+    for ctx in &tuple_ctxs {
+        let id_refs: Vec<&str> = ctx.id_strs.iter().map(String::as_str).collect();
+        for &metric_id in &ctx.shared_metric_ids {
             let Some(def) = metrics.get(&metric_id) else {
                 tracing::debug!(%metric_id, "interaction: metric definition not resolved; skipping");
                 continue;
             };
-
+            // Aggregation metrics are handled by the consolidated pass below.
+            if matches!(def.kind, MetricKind::Aggregation(_)) {
+                continue;
+            }
             for context_type in context_types {
-                // Classify the metric, fetch the matching k-way cell grid, and
-                // run the matching N-way decomposition (Frequentist + Bayesian).
                 let computed = compute_tuple_metric(
                     reader,
                     def,
@@ -370,52 +478,92 @@ pub async fn compute_and_persist_interactions(
                     &env_str,
                     &id_refs,
                     context_type,
-                    interaction_end,
+                    ctx.interaction_end,
                 )
                 .await?;
                 let Some((cells, terms)) = computed else {
                     continue; // skipped (unresolved ratio legs) or empty grid
                 };
-
-                let shared_count: u64 = cells.iter().map(|c| c.n).sum();
-                let cell_stats = cells_to_json(&cells);
-                let order = exp_ids.len() as u8;
-
-                // One row per decomposition term. The factor index → experiment
-                // mapping is `factor i ↔ exp_ids[i]` (query alias / tuple order).
-                for t in &terms {
-                    let term = term_string(t.kind, &exp_ids);
-                    let bayes = t.bayes.unwrap_or(BayesianInteraction {
-                        prob: 0.0,
-                        expected: 0.0,
-                        ci_low: 0.0,
-                        ci_high: 0.0,
-                    });
-                    rows.push(InteractionRow {
-                        env_id,
-                        experiment_ids: exp_ids.clone(),
-                        interaction_order: order,
-                        term,
-                        context_type: context_type.clone(),
-                        metric_key: def.key.clone(),
-                        shared_count,
-                        cell_stats: cell_stats.clone(),
-                        // Insufficient-data terms keep 0.0 sentinels (the column
-                        // is non-nullable Float64); the flag distinguishes them.
-                        interaction_estimate: nan_to_zero(t.freq.estimate),
-                        p_value: nan_to_zero(t.freq.p_value),
-                        df: t.freq.df,
-                        // Provisional; overwritten by the BH pass below.
-                        significant: false,
-                        insufficient_data: t.freq.insufficient_data,
-                        bayes_prob: nan_to_zero(bayes.prob),
-                        bayes_expected: nan_to_zero(bayes.expected),
-                        bayes_ci_low: nan_to_zero(bayes.ci_low),
-                        bayes_ci_high: nan_to_zero(bayes.ci_high),
-                        computed_at,
-                    });
-                }
+                push_tuple_rows(
+                    &mut rows,
+                    &ctx.exp_ids,
+                    &def.key,
+                    context_type,
+                    &cells,
+                    &terms,
+                );
             }
+        }
+    }
+
+    // ── Pass B: aggregation metrics, consolidated per (context, metric, end) ─
+    // Group the tuples that share a given aggregation metric on a given
+    // context_type AND a given interaction_end (the consolidated query bounds
+    // the shared scans with ONE end, so tuples with different ends — only when
+    // experiments have distinct finite end dates — fall into separate groups).
+    // In the common all-running case every tuple shares `computed_at`, so the
+    // whole family collapses to one query per (context_type, metric).
+    //
+    // Key: (context_type index, metric_id, interaction_end). Value: indices into
+    // `tuple_ctxs` (insertion-ordered for a deterministic tuple_idx layout).
+    let mut groups: HashMap<(usize, Uuid, DateTime<Utc>), Vec<usize>> = HashMap::new();
+    let mut group_order: Vec<(usize, Uuid, DateTime<Utc>)> = Vec::new();
+    for (ti, ctx) in tuple_ctxs.iter().enumerate() {
+        for &metric_id in &ctx.shared_metric_ids {
+            let Some(def) = metrics.get(&metric_id) else {
+                continue; // already logged in Pass A
+            };
+            if !matches!(def.kind, MetricKind::Aggregation(_)) {
+                continue;
+            }
+            for (ci, _context_type) in context_types.iter().enumerate() {
+                let key = (ci, metric_id, ctx.interaction_end);
+                let bucket = groups.entry(key).or_insert_with(|| {
+                    group_order.push(key);
+                    Vec::new()
+                });
+                bucket.push(ti);
+            }
+        }
+    }
+
+    for key in &group_order {
+        let (ci, metric_id, interaction_end) = *key;
+        let tuple_indices = &groups[key];
+        let context_type = &context_types[ci];
+        let def = &metrics[&metric_id];
+        let MetricKind::Aggregation(cfg) = &def.kind else {
+            continue; // unreachable: only aggregation metrics keyed this map
+        };
+
+        // Build the &[&str] tuple slices for the consolidated fetch, in the
+        // same order they will be routed back (tuple_idx == position here).
+        let id_refs_per_tuple: Vec<Vec<&str>> = tuple_indices
+            .iter()
+            .map(|&ti| tuple_ctxs[ti].id_strs.iter().map(String::as_str).collect())
+            .collect();
+        let tuple_slices: Vec<&[&str]> = id_refs_per_tuple.iter().map(Vec::as_slice).collect();
+
+        let grids = reader
+            .fetch_aggregation_cells_consolidated(
+                cfg,
+                &env_str,
+                &tuple_slices,
+                context_type,
+                interaction_end,
+            )
+            .await?;
+
+        for (slot, &ti) in tuple_indices.iter().enumerate() {
+            let Some(cells) = grids.get(slot) else {
+                continue; // reader returned fewer grids than tuples (defensive)
+            };
+            if cells.is_empty() {
+                continue; // no shared population on this context_type
+            }
+            let exp_ids = &tuple_ctxs[ti].exp_ids;
+            let terms = decompose_aggregation(cfg, cells, exp_ids.len());
+            push_tuple_rows(&mut rows, exp_ids, &def.key, context_type, cells, &terms);
         }
     }
 
@@ -486,12 +634,7 @@ async fn compute_tuple_metric(
             if cells.is_empty() {
                 return Ok(None);
             }
-            let terms = match MetricCellKind::classify(cfg) {
-                MetricCellKind::Conversion => {
-                    decompose_binary(&cells, order, BinarySource::Conversion)
-                }
-                MetricCellKind::Continuous => decompose_continuous(&cells, order),
-            };
+            let terms = decompose_aggregation(cfg, &cells, order);
             Ok(Some((cells, terms)))
         }
         MetricKind::Funnel(cfg) => {
@@ -528,6 +671,21 @@ async fn compute_tuple_metric(
             let terms = decompose_ratio(&cells, order);
             Ok(Some((cells, terms)))
         }
+    }
+}
+
+/// Run the N-way decomposition for an `Aggregation` metric's cell grid,
+/// dispatching on whether the metric is a conversion (binary) or continuous
+/// outcome. Shared by the per-tuple path ([`compute_tuple_metric`]) and the
+/// consolidated path so both produce identical terms from identical cells.
+fn decompose_aggregation(
+    cfg: &AggregationConfig,
+    cells: &[NdCellAggregate],
+    order: usize,
+) -> Vec<TermResult> {
+    match MetricCellKind::classify(cfg) {
+        MetricCellKind::Conversion => decompose_binary(cells, order, BinarySource::Conversion),
+        MetricCellKind::Continuous => decompose_continuous(cells, order),
     }
 }
 
@@ -805,6 +963,19 @@ struct ChAggregationCellRow {
     value_sq_sum: f64,
 }
 
+/// Row shape deserialised from the **consolidated** aggregation metric-cells
+/// query. Identical to [`ChAggregationCellRow`] plus the leading `tuple_idx`
+/// that routes the cell back to the tuple it belongs to.
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+struct ChConsolidatedAggregationCellRow {
+    tuple_idx: u32,
+    variant_keys: Vec<String>,
+    n: u64,
+    successes: u64,
+    value_sum: f64,
+    value_sq_sum: f64,
+}
+
 /// Row shape deserialised from the funnel metric-cells query (binary path).
 #[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
 struct ChFunnelCellRow {
@@ -888,6 +1059,62 @@ impl InteractionCellReader for ClickHouseInteractionCells {
                 num_den_sum: 0.0,
             })
             .collect())
+    }
+
+    async fn fetch_aggregation_cells_consolidated(
+        &self,
+        cfg: &AggregationConfig,
+        env_id: &str,
+        tuples: &[&[&str]],
+        context_type: &str,
+        interaction_end: DateTime<Utc>,
+    ) -> Result<Vec<Vec<NdCellAggregate>>, anyhow::Error> {
+        // Empty tuple slice → nothing to fetch (the builder rejects it).
+        if tuples.is_empty() {
+            return Ok(Vec::new());
+        }
+        let built = build_consolidated_aggregation_cells_query(
+            cfg,
+            env_id,
+            tuples,
+            context_type,
+            interaction_end,
+        )?;
+        let query = bind_query(&self.client, built.sql, built.binds);
+        let rows = query
+            .fetch_all::<ChConsolidatedAggregationCellRow>()
+            .await?;
+
+        // Route each row to its tuple bucket by `tuple_idx`. Buckets line up
+        // 1:1 with `tuples` (a tuple with no shared population yields an empty
+        // grid — the same as the per-tuple path returning an empty Vec).
+        let mut grids: Vec<Vec<NdCellAggregate>> = vec![Vec::new(); tuples.len()];
+        for r in rows {
+            let idx = r.tuple_idx as usize;
+            let Some(bucket) = grids.get_mut(idx) else {
+                // The query only ever emits indices in 0..tuples.len(); a stray
+                // index would indicate a builder/reader drift — skip defensively.
+                tracing::warn!(
+                    tuple_idx = r.tuple_idx,
+                    tuples = tuples.len(),
+                    "consolidated aggregation cell with out-of-range tuple_idx; skipping"
+                );
+                continue;
+            };
+            bucket.push(NdCellAggregate {
+                variant_keys: r.variant_keys,
+                n: r.n,
+                successes: r.successes,
+                value_sum: r.value_sum,
+                value_sq_sum: r.value_sq_sum,
+                num_sum: 0.0,
+                den_sum: 0.0,
+                num_sq_sum: 0.0,
+                den_sq_sum: 0.0,
+                num_den_sum: 0.0,
+            });
+        }
+        Ok(grids)
     }
 
     async fn fetch_funnel_cells(
