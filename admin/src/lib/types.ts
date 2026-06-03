@@ -174,6 +174,25 @@ export interface VariantResultJson {
   direction_violation: boolean
   /** Attribution unit context type ("user", "account", …). */
   context_type: string
+
+  // ── Sequential (always-valid) inference (Phase 5.2) ────────────────────────
+  //
+  // Attached by the gateway only when sequential testing is enabled for the
+  // experiment. All keys are OMITTED when disabled; the CI bounds are also
+  // omitted when there is insufficient data (`sequential_insufficient_data`).
+  //
+  /** Always-valid (anytime-valid) p-value vs control. Control baseline = 1.0. */
+  sequential_p_value?: number
+  /** Lower bound of the anytime-valid confidence interval; absent when insufficient data. */
+  sequential_ci_lower?: number
+  /** Upper bound of the anytime-valid confidence interval; absent when insufficient data. */
+  sequential_ci_upper?: number
+  /** True when the always-valid p-value has crossed the significance boundary (p ≤ α). */
+  sequential_crossed?: boolean
+  /** True when there is not yet enough data for a valid sequential decision. */
+  sequential_insufficient_data?: boolean
+  /** Sequential testing method used (e.g. "msprt"). */
+  sequential_method?: string
 }
 
 /** Per-variant SRM (Sample Ratio Mismatch) row. */
