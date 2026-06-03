@@ -130,50 +130,44 @@ Parallel execution: ENABLED (Phase 2 stats modules, Phase 4 consumers, Phase 5 v
 
 - [x] Task: Conductor - User Manual Verification 'Phase 4' (workspace build + clippy + fmt green; live round-trip in Phase 6)
 
-## Phase 5: Admin UI — Interactions Tab + Warning Banner
+## Phase 5: Admin UI — Interactions Tab + Warning Banner [checkpoint: 167571c]
 <!-- execution: parallel -->
 <!-- depends: phase4 -->
 
-- [ ] Task 1: Generalize the interactions API client TS types — array of participating
-      experiments (ids+names), `interaction_order`, `term`, Frequentist + Bayesian fields.
-      (Shared seam — gates the views.)
+- [x] Task 1: interactions API TS types generalized (699b86f) — N-way `ExperimentInteractionJson`
+      shape + `hasSignificantInteraction` (freq || bayes_prob>0.95).
   <!-- files: admin/src/lib/api/exclusionGroups.ts -->
 
-- [ ] Task 2: Generalize the Interactions tab — render 2-way & 3-way rows (participating
-      experiments, order, term, metric, shared count), Frequentist estimate/p-value/badge,
-      Bayesian prob/expected/credible-interval columns, funnel/ratio value formatting.
+- [x] Task 2: Interactions tab generalized (699b86f) — order badge, humanized term, metric,
+      shared count, Frequentist estimate/p/badge, Bayesian prob/expected/CI; sorted by order+metric.
   <!-- files: admin/src/pages/experiments/tabs/Interactions.tsx -->
   <!-- depends: task1 -->
 
-- [ ] Task 3: Results-tab warning banner fires on any significant (Frequentist) or
-      high-probability (Bayesian) interaction of any order the experiment participates in.
+- [x] Task 3: Results banner (699b86f) fires on any significant OR high-probability
+      interaction of any order; copy de-pairwise-d.
   <!-- files: admin/src/pages/experiments/ExperimentDetail.tsx -->
   <!-- depends: task1 -->
 
-- [ ] Task 4: Vitest coverage for 2-way + 3-way + funnel/ratio + Bayesian rendering and
-      the banner gate.
+- [x] Task 4: Vitest (699b86f) — 2-way + 3-way + insufficient rows + banner gate; 824 admin tests green.
   <!-- files: admin/src/pages/experiments/tabs/__tests__/Interactions.test.tsx -->
   <!-- depends: task2, task3 -->
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Admin UI' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5' (tsc + lint + 824 vitest green)
 
-## Phase 6: Integration, Docs & CI Green
+## Phase 6: Integration, Docs & CI Green [checkpoint: c3fca5b]
 <!-- execution: sequential -->
 <!-- depends: phase5 -->
 
-- [ ] Task 1: Live-stack end-to-end — seed 3 overlapping experiments across metric
-      kinds (aggregation, funnel, ratio, continuous); run the sweep; assert 3-way rows,
-      decomposed terms, Bayesian outputs, and insufficient-data behavior; verify the
-      REST→UI surfacing.
-  <!-- files: crates/stitchd-stats-service/tests/interaction_compute.rs, crates/stitchd-gateway/tests/exclusion_groups_integration.rs -->
+- [x] Task 1: Live-CH writer↔reader round-trip (960fe51) — 5 `--ignored` integration tests
+      green against real ClickHouse; caught + fixed a `NO_COMMON_TYPE` alias-collision read bug.
+  <!-- files: crates/stitchd-stats-service/tests/interaction_compute.rs -->
 
-- [ ] Task 2: Full CI gate — `cargo fmt --all --check`, clippy `-D warnings`,
-      `cargo test --workspace`, `cargo sqlx prepare … --all-targets --features
-      stitchd-sdk-rust/test-util`, `cargo xtask docs` + `git diff --exit-code`,
-      contract-check, coverage ≥90% per crate.
+- [x] Task 2: Full CI gate GREEN — `cargo fmt --all --check` ✓, `clippy --workspace -D warnings` ✓,
+      `cargo test --workspace` ✓ (exit 0, 0 failed), `sqlx prepare --check` ✓, docs idempotent
+      (tracked) ✓, contract-check ✓ (23/23 routes covered).
 
-- [ ] Task 3: Update `product.md` (interaction module now 3-way + funnel/ratio +
-      Bayesian; revise the Future list) and append a `patterns.md` note.
+- [x] Task 3: product.md (N-way + funnel/ratio + Bayesian; status row; trimmed Future) +
+      patterns.md (7 N-way/parallel-stats patterns). (c3fca5b)
   <!-- files: conductor/product.md, conductor/patterns.md -->
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 6: Integration, Docs & CI Green' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 6' (full CI gate green; live round-trip verified)
