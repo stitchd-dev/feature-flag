@@ -8,7 +8,7 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use stitchd_core::{
-    experimentation::{Experiment, ExclusionGroup, ExperimentStatus},
+    experimentation::{ExclusionGroup, Experiment, ExperimentStatus},
     id::{EnvironmentId, ExclusionGroupId, ExperimentId, ExperimentIterationId, RuleId},
     rule_engine::types::ExclusionGate,
 };
@@ -881,8 +881,10 @@ impl ExperimentationService for ExperimentationServiceImpl {
         // runs when the service is wired with exclusion-group support; the
         // `free_range` call is a no-op when the experiment holds no range.
         if target_status == ExperimentStatus::Stopped
-            && let (Some(repo), Some(gate_writer)) =
-                (self.exclusion_group_repo.as_ref(), self.rule_gate_writer.as_ref())
+            && let (Some(repo), Some(gate_writer)) = (
+                self.exclusion_group_repo.as_ref(),
+                self.rule_gate_writer.as_ref(),
+            )
         {
             self.release_experiment_group(repo.as_ref(), gate_writer.as_ref(), &updated)
                 .await?;
@@ -1483,7 +1485,8 @@ impl ExperimentationService for ExperimentationServiceImpl {
     async fn delete_exclusion_group(
         &self,
         request: Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
-    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status> {
+    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status>
+    {
         let repo = self.exclusion_group_repo()?;
         let req = request.into_inner();
         let group_id = parse_group_id(&req.group_id)?;
@@ -1637,10 +1640,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
         // Return the group (post-release) when the experiment had one.
         let group_proto = if let Some(gid) = group_id {
-            repo.find_by_id(gid)
-                .await
-                .ok()
-                .map(|g| group_to_proto(&g))
+            repo.find_by_id(gid).await.ok().map(|g| group_to_proto(&g))
         } else {
             None
         };
@@ -3267,9 +3267,7 @@ mod tests {
     // GetExperimentInteractions handler tests (Phase 6 Task 2)
     // -----------------------------------------------------------------------
 
-    use crate::interactions_reader::{
-        InteractionRow as CoreInteractionRow, InteractionsReader,
-    };
+    use crate::interactions_reader::{InteractionRow as CoreInteractionRow, InteractionsReader};
 
     /// Test reader returning canned interaction rows.
     struct CannedInteractionsReader {
@@ -3327,7 +3325,11 @@ mod tests {
                 experiment_id: uuid::Uuid::new_v4().to_string(),
             },
         );
-        let resp = svc.get_experiment_interactions(req).await.unwrap().into_inner();
+        let resp = svc
+            .get_experiment_interactions(req)
+            .await
+            .unwrap()
+            .into_inner();
         assert!(resp.interactions.is_empty());
     }
 
@@ -3362,18 +3364,21 @@ mod tests {
             significant: false,
             insufficient_data: true,
         };
-        let svc = make_service(env_id).with_interactions_reader(Arc::new(
-            CannedInteractionsReader {
+        let svc =
+            make_service(env_id).with_interactions_reader(Arc::new(CannedInteractionsReader {
                 rows: vec![row_a, row_b],
-            },
-        ));
+            }));
         let req = tonic::Request::new(
             stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
                 env_id: env_str,
                 experiment_id: this_exp.to_string(),
             },
         );
-        let resp = svc.get_experiment_interactions(req).await.unwrap().into_inner();
+        let resp = svc
+            .get_experiment_interactions(req)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(resp.interactions.len(), 2);
 
         let first = &resp.interactions[0];
@@ -3561,8 +3566,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     use std::sync::Mutex;
-    use stitchd_core::experimentation::ExclusionGroup;
     use stitchd_core::evaluation::exclusion::BucketRange;
+    use stitchd_core::experimentation::ExclusionGroup;
     use stitchd_db::repository::pg::ExclusionGroupRepository;
 
     /// In-memory exclusion-group repo for service tests. Records allocate/free
@@ -3871,14 +3876,17 @@ mod tests {
         assert_eq!(created.name, "Checkout");
         assert_eq!(created.free_bp, 10_000);
 
-        let list_req = tonic::Request::new(
-            stitchd_proto::experiments::v1::ListExclusionGroupsRequest {
+        let list_req =
+            tonic::Request::new(stitchd_proto::experiments::v1::ListExclusionGroupsRequest {
                 env_id: env_str,
                 page: 0,
                 per_page: 0,
-            },
-        );
-        let listed = svc.list_exclusion_groups(list_req).await.unwrap().into_inner();
+            });
+        let listed = svc
+            .list_exclusion_groups(list_req)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(listed.total, 1);
     }
 
@@ -3916,8 +3924,8 @@ mod tests {
         });
         let gate_writer = Arc::new(MockGateWriter::default());
         // Draft experiment (AlwaysSucceedRepo) → flag not locked, has flag_rule_id.
-        let svc = make_service(env_id)
-            .with_exclusion_groups(group_repo.clone(), gate_writer.clone());
+        let svc =
+            make_service(env_id).with_exclusion_groups(group_repo.clone(), gate_writer.clone());
 
         let req = tonic::Request::new(
             stitchd_proto::experiments::v1::AssignExperimentToGroupRequest {
@@ -3927,7 +3935,11 @@ mod tests {
                 requested_bp: 2500,
             },
         );
-        let resp = svc.assign_experiment_to_group(req).await.unwrap().into_inner();
+        let resp = svc
+            .assign_experiment_to_group(req)
+            .await
+            .unwrap()
+            .into_inner();
         let exp = resp.experiment.unwrap();
         assert_eq!(exp.group_bucket_lo, Some(0));
         assert_eq!(exp.group_bucket_hi, Some(2500));
@@ -4135,10 +4147,7 @@ mod tests {
             async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
                 Ok(())
             }
-            async fn update(
-                &self,
-                experiment: &Experiment,
-            ) -> Result<Experiment, RepositoryError> {
+            async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
                 Ok(experiment.clone())
             }
             async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {
@@ -4215,12 +4224,10 @@ mod tests {
             Arc::new(MockGateWriter::default()),
         );
         let gid = ExclusionGroupId::new();
-        let req = tonic::Request::new(
-            stitchd_proto::experiments::v1::GetExclusionGroupRequest {
-                env_id: env_str,
-                group_id: gid.to_string(),
-            },
-        );
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::GetExclusionGroupRequest {
+            env_id: env_str,
+            group_id: gid.to_string(),
+        });
         let got = svc.get_exclusion_group(req).await.unwrap().into_inner();
         assert_eq!(got.id, gid.to_string());
         assert_eq!(got.unit_context_type, "user");
@@ -4292,12 +4299,10 @@ mod tests {
             Arc::new(MissingGroupRepo),
             Arc::new(MockGateWriter::default()),
         );
-        let req = tonic::Request::new(
-            stitchd_proto::experiments::v1::GetExclusionGroupRequest {
-                env_id: env_str,
-                group_id: ExclusionGroupId::new().to_string(),
-            },
-        );
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::GetExclusionGroupRequest {
+            env_id: env_str,
+            group_id: ExclusionGroupId::new().to_string(),
+        });
         let err = svc.get_exclusion_group(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::NotFound);
     }
@@ -4307,16 +4312,14 @@ mod tests {
         let (env_id, _) = env_uuid();
         let group_repo = Arc::new(MockGroupRepo::default());
         let gate_writer = Arc::new(MockGateWriter::default());
-        let svc = make_service(env_id)
-            .with_exclusion_groups(group_repo.clone(), gate_writer.clone());
+        let svc =
+            make_service(env_id).with_exclusion_groups(group_repo.clone(), gate_writer.clone());
 
         let exp_id = ExperimentId::new();
-        let req = tonic::Request::new(
-            stitchd_proto::experiments::v1::UnassignExperimentRequest {
-                env_id: env_id.to_string(),
-                experiment_id: exp_id.to_string(),
-            },
-        );
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::UnassignExperimentRequest {
+            env_id: env_id.to_string(),
+            experiment_id: exp_id.to_string(),
+        });
         let resp = svc.unassign_experiment(req).await.unwrap().into_inner();
         let exp = resp.experiment.unwrap();
         assert!(exp.exclusion_group_id.is_none());
@@ -4344,12 +4347,10 @@ mod tests {
             Arc::new(MockGateWriter::default()),
         );
 
-        let req = tonic::Request::new(
-            stitchd_proto::experiments::v1::UnassignExperimentRequest {
-                env_id: env_id.to_string(),
-                experiment_id: ExperimentId::new().to_string(),
-            },
-        );
+        let req = tonic::Request::new(stitchd_proto::experiments::v1::UnassignExperimentRequest {
+            env_id: env_id.to_string(),
+            experiment_id: ExperimentId::new().to_string(),
+        });
         let err = svc.unassign_experiment(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
     }
@@ -4359,8 +4360,8 @@ mod tests {
         let (env_id, _) = env_uuid();
         let group_repo = Arc::new(MockGroupRepo::default());
         let gate_writer = Arc::new(MockGateWriter::default());
-        let svc = make_service(env_id)
-            .with_exclusion_groups(group_repo.clone(), gate_writer.clone());
+        let svc =
+            make_service(env_id).with_exclusion_groups(group_repo.clone(), gate_writer.clone());
 
         let req = tonic::Request::new(TransitionExperimentRequest {
             experiment_id: ExperimentId::new().to_string(),

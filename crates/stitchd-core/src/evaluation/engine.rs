@@ -249,7 +249,9 @@ fn evaluate_one(
                         result_variant_value = v.value.clone();
                     }
                 }
-                RuleOutput::Percentage { targets, weights, .. } => {
+                RuleOutput::Percentage {
+                    targets, weights, ..
+                } => {
                     // Bridge old PercentageTarget shape → HashInputSpec on
                     // the fly. Phase 5/6 cuts over the storage; this
                     // internal conversion preserves byte-identity in the
@@ -2168,7 +2170,10 @@ mod tests {
         let key = key_in_bucket_range(0, 5000);
         let res = eval_one(&flag, Context::new("user", &key), TraceLevel::Off);
         assert_eq!(res.variant_key, "on", "in-range context must enroll");
-        assert!(matches!(res.outcome, EvalOutcome::RuleMatch { rule_index: 0 }));
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::RuleMatch { rule_index: 0 }
+        ));
     }
 
     #[test]
@@ -2184,7 +2189,10 @@ mod tests {
         let key = key_in_bucket_range(5000, 10000);
         let res = eval_one(&flag, Context::new("user", &key), TraceLevel::Off);
         // Held out → rule does not enroll → falls through to default "off".
-        assert_eq!(res.variant_key, "off", "out-of-range context must be held out");
+        assert_eq!(
+            res.variant_key, "off",
+            "out-of-range context must be held out"
+        );
         assert!(matches!(res.outcome, EvalOutcome::DefaultFallthrough));
     }
 
@@ -2212,7 +2220,10 @@ mod tests {
         let flag = gated_percentage_flag(None);
         let res = eval_one(&flag, Context::new("user", "anyone"), TraceLevel::Off);
         assert_eq!(res.variant_key, "on", "ungrouped rule must enroll normally");
-        assert!(matches!(res.outcome, EvalOutcome::RuleMatch { rule_index: 0 }));
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::RuleMatch { rule_index: 0 }
+        ));
     }
 
     #[test]
@@ -2242,7 +2253,10 @@ mod tests {
         let res = eval_one(&flag, Context::new("user", &key), TraceLevel::Off);
         // Held out by rule 0 → rule 1 fires → "on".
         assert_eq!(res.variant_key, "on");
-        assert!(matches!(res.outcome, EvalOutcome::RuleMatch { rule_index: 1 }));
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::RuleMatch { rule_index: 1 }
+        ));
     }
 
     #[test]

@@ -29,10 +29,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use stitchd_core::context::Context;
+use stitchd_core::context::EvaluationContext;
 use stitchd_core::evaluation::TraceLevel;
 use stitchd_core::evaluation::exclusion::group_bucket;
 use stitchd_core::evaluation::preview::evaluate_preview;
-use stitchd_core::context::EvaluationContext;
 use stitchd_core::flag::{Flag, FlagRecord, Variant};
 use stitchd_core::id::{EnvironmentId, FlagId, FlagKey, ProjectId, VariantId};
 use stitchd_core::rule_engine::types::{
@@ -41,11 +41,11 @@ use stitchd_core::rule_engine::types::{
 use stitchd_core::variants::{FlagValueType, VariantValue};
 
 use stitchd_proto::flags::v1::{
-    AllocationBucket, ContextKeySelector as ProtoCtxKey,
-    ExclusionGate as ProtoExclusionGate, FeatureFlag, FlagRule as ProtoFlagRule,
-    HashSelector as ProtoHashSelector, PercentageAllocation, Variant as ProtoVariant,
-    VariantValue as ProtoVariantValue, flag_rule::Output as ProtoOutput,
-    hash_selector::Selector as ProtoSelectorOneof, variant_value::Value as ProtoVValue,
+    AllocationBucket, ContextKeySelector as ProtoCtxKey, ExclusionGate as ProtoExclusionGate,
+    FeatureFlag, FlagRule as ProtoFlagRule, HashSelector as ProtoHashSelector,
+    PercentageAllocation, Variant as ProtoVariant, VariantValue as ProtoVariantValue,
+    flag_rule::Output as ProtoOutput, hash_selector::Selector as ProtoSelectorOneof,
+    variant_value::Value as ProtoVValue,
 };
 use stitchd_proto::sdk::v1::SyncDefinitionsResponse;
 

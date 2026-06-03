@@ -21,10 +21,7 @@ use stitchd_core::{
     id::{EnvironmentId, ExclusionGroupId, ExperimentId},
 };
 
-use crate::{
-    RepositoryError,
-    repository::AuditLogger,
-};
+use crate::{RepositoryError, repository::AuditLogger};
 
 /// Total basis-point space available to a single exclusion group.
 const BP_TOTAL: u32 = 10_000;

@@ -173,7 +173,8 @@ impl ExperimentationService for MockExpService {
     async fn delete_exclusion_group(
         &self,
         _req: tonic::Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
-    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status> {
+    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status>
+    {
         Err(Status::unimplemented("not used"))
     }
 

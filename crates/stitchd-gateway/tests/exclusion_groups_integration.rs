@@ -25,8 +25,8 @@ use stitchd_proto::auth::v1::{
 };
 use stitchd_proto::experiments::v1::{
     AssignExperimentToGroupRequest, AssignExperimentToGroupResponse, CreateExperimentRequest,
-    DeleteExperimentRequest, Experiment, ExperimentInteraction, ExperimentIteration,
-    ExperimentResults, ExclusionGroup, GetExperimentInteractionsRequest,
+    DeleteExperimentRequest, ExclusionGroup, Experiment, ExperimentInteraction,
+    ExperimentIteration, ExperimentResults, GetExperimentInteractionsRequest,
     GetExperimentInteractionsResponse, GetExperimentIterationRequest, GetExperimentRequest,
     GetResultsRequest, ListExclusionGroupsRequest, ListExclusionGroupsResponse,
     ListExperimentsRequest, ListExperimentsResponse, ListIterationsRequest, ListIterationsResponse,
@@ -151,7 +151,9 @@ impl ExperimentationService for MockExpService {
         &self,
         _req: tonic::Request<stitchd_proto::experiments::v1::CreateExclusionGroupRequest>,
     ) -> Result<Response<ExclusionGroup>, Status> {
-        Ok(Response::new(self.created_group.clone().unwrap_or_default()))
+        Ok(Response::new(
+            self.created_group.clone().unwrap_or_default(),
+        ))
     }
 
     async fn get_exclusion_group(
@@ -184,7 +186,8 @@ impl ExperimentationService for MockExpService {
     async fn delete_exclusion_group(
         &self,
         _req: tonic::Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
-    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status> {
+    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status>
+    {
         Err(Status::unimplemented("not used"))
     }
 

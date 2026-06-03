@@ -218,7 +218,10 @@ async fn test_soft_delete(pool: sqlx::PgPool) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let repo = PgExclusionGroupRepository::new(pool.clone(), audit);
 
-    let group = repo.create(deps.env_id, "to-delete", None, "user").await.unwrap();
+    let group = repo
+        .create(deps.env_id, "to-delete", None, "user")
+        .await
+        .unwrap();
     repo.soft_delete(group.id).await.unwrap();
 
     let err = repo.find_by_id(group.id).await.unwrap_err();
@@ -274,7 +277,10 @@ async fn test_allocate_disjoint_ranges(pool: sqlx::PgPool) {
     let group_repo = PgExclusionGroupRepository::new(pool.clone(), audit.clone());
     let exp_repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let group = group_repo.create(deps.env_id, "g", None, "user").await.unwrap();
+    let group = group_repo
+        .create(deps.env_id, "g", None, "user")
+        .await
+        .unwrap();
     let e1 = make_experiment(&exp_repo, &deps, 25.0).await;
     let e2 = make_experiment(&exp_repo, &deps, 25.0).await;
 
@@ -300,7 +306,10 @@ async fn test_allocate_capacity_rejection(pool: sqlx::PgPool) {
     let group_repo = PgExclusionGroupRepository::new(pool.clone(), audit.clone());
     let exp_repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let group = group_repo.create(deps.env_id, "g", None, "user").await.unwrap();
+    let group = group_repo
+        .create(deps.env_id, "g", None, "user")
+        .await
+        .unwrap();
     let e1 = make_experiment(&exp_repo, &deps, 60.0).await;
     let e2 = make_experiment(&exp_repo, &deps, 60.0).await;
 
@@ -324,11 +333,17 @@ async fn test_allocate_zero_and_oversize_rejected(pool: sqlx::PgPool) {
     let group_repo = PgExclusionGroupRepository::new(pool.clone(), audit.clone());
     let exp_repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let group = group_repo.create(deps.env_id, "g", None, "user").await.unwrap();
+    let group = group_repo
+        .create(deps.env_id, "g", None, "user")
+        .await
+        .unwrap();
     let e1 = make_experiment(&exp_repo, &deps, 0.0).await;
 
     assert!(matches!(
-        group_repo.allocate_range(group.id, e1, 0).await.unwrap_err(),
+        group_repo
+            .allocate_range(group.id, e1, 0)
+            .await
+            .unwrap_err(),
         RepositoryError::InvalidState { .. }
     ));
     assert!(matches!(
@@ -347,7 +362,10 @@ async fn test_free_and_reuse(pool: sqlx::PgPool) {
     let group_repo = PgExclusionGroupRepository::new(pool.clone(), audit.clone());
     let exp_repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let group = group_repo.create(deps.env_id, "g", None, "user").await.unwrap();
+    let group = group_repo
+        .create(deps.env_id, "g", None, "user")
+        .await
+        .unwrap();
     let e1 = make_experiment(&exp_repo, &deps, 100.0).await;
     let e2 = make_experiment(&exp_repo, &deps, 100.0).await;
 
@@ -356,14 +374,25 @@ async fn test_free_and_reuse(pool: sqlx::PgPool) {
         .allocate_range(group.id, e1, 10_000)
         .await
         .unwrap();
-    assert_eq!(group_repo.allocated_free_bp(group.id).await.unwrap(), (10_000, 0));
+    assert_eq!(
+        group_repo.allocated_free_bp(group.id).await.unwrap(),
+        (10_000, 0)
+    );
 
     // No room for e2.
-    assert!(group_repo.allocate_range(group.id, e2, 10_000).await.is_err());
+    assert!(
+        group_repo
+            .allocate_range(group.id, e2, 10_000)
+            .await
+            .is_err()
+    );
 
     // Free e1; space is reusable.
     group_repo.free_range(e1).await.unwrap();
-    assert_eq!(group_repo.allocated_free_bp(group.id).await.unwrap(), (0, 10_000));
+    assert_eq!(
+        group_repo.allocated_free_bp(group.id).await.unwrap(),
+        (0, 10_000)
+    );
 
     let r2 = group_repo
         .allocate_range(group.id, e2, 10_000)
@@ -382,7 +411,10 @@ async fn test_allocate_fills_internal_gap(pool: sqlx::PgPool) {
     let group_repo = PgExclusionGroupRepository::new(pool.clone(), audit.clone());
     let exp_repo = PgExperimentRepository::new(pool.clone(), audit);
 
-    let group = group_repo.create(deps.env_id, "g", None, "user").await.unwrap();
+    let group = group_repo
+        .create(deps.env_id, "g", None, "user")
+        .await
+        .unwrap();
     let e1 = make_experiment(&exp_repo, &deps, 25.0).await;
     let e2 = make_experiment(&exp_repo, &deps, 25.0).await;
     let e3 = make_experiment(&exp_repo, &deps, 25.0).await;

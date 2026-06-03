@@ -100,9 +100,20 @@ mod tests {
                 differ = true;
             }
         }
-        assert!(differ, "different salts produced identical buckets for all keys");
-        assert!(seen_a.len() > 900, "salt-a distribution too narrow: {}", seen_a.len());
-        assert!(seen_b.len() > 900, "salt-b distribution too narrow: {}", seen_b.len());
+        assert!(
+            differ,
+            "different salts produced identical buckets for all keys"
+        );
+        assert!(
+            seen_a.len() > 900,
+            "salt-a distribution too narrow: {}",
+            seen_a.len()
+        );
+        assert!(
+            seen_b.len() > 900,
+            "salt-b distribution too narrow: {}",
+            seen_b.len()
+        );
     }
 
     #[test]
@@ -124,7 +135,10 @@ mod tests {
     #[test]
     fn range_contains_empty_range_holds_nothing() {
         for x in [0u16, 1, 5000, 9999] {
-            assert!(!range_contains(x, x, x), "empty range [{x},{x}) should hold nothing");
+            assert!(
+                !range_contains(x, x, x),
+                "empty range [{x},{x}) should hold nothing"
+            );
         }
     }
 

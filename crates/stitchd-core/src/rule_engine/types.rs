@@ -240,9 +240,7 @@ mod tests {
         let json = r#"{"Percentage":{"targets":[],"weights":[]}}"#;
         let output: RuleOutput = serde_json::from_str(json).unwrap();
         match output {
-            RuleOutput::Percentage {
-                exclusion_gate, ..
-            } => assert!(exclusion_gate.is_none()),
+            RuleOutput::Percentage { exclusion_gate, .. } => assert!(exclusion_gate.is_none()),
             other => panic!("expected Percentage, got {other:?}"),
         }
     }

@@ -810,8 +810,12 @@ fn row_to_experiment(row: &sqlx::postgres::PgRow) -> Experiment {
         exclusion_group_id: row
             .get::<Option<uuid::Uuid>, _>("exclusion_group_id")
             .map(ExclusionGroupId::from_uuid),
-        group_bucket_lo: row.get::<Option<i32>, _>("group_bucket_lo").map(bucket_to_u16),
-        group_bucket_hi: row.get::<Option<i32>, _>("group_bucket_hi").map(bucket_to_u16),
+        group_bucket_lo: row
+            .get::<Option<i32>, _>("group_bucket_lo")
+            .map(bucket_to_u16),
+        group_bucket_hi: row
+            .get::<Option<i32>, _>("group_bucket_hi")
+            .map(bucket_to_u16),
     }
 }
 
@@ -859,8 +863,12 @@ fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, 
         exclusion_group_id: row
             .get::<Option<uuid::Uuid>, _>("exclusion_group_id")
             .map(ExclusionGroupId::from_uuid),
-        group_bucket_lo: row.get::<Option<i32>, _>("group_bucket_lo").map(bucket_to_u16),
-        group_bucket_hi: row.get::<Option<i32>, _>("group_bucket_hi").map(bucket_to_u16),
+        group_bucket_lo: row
+            .get::<Option<i32>, _>("group_bucket_lo")
+            .map(bucket_to_u16),
+        group_bucket_hi: row
+            .get::<Option<i32>, _>("group_bucket_hi")
+            .map(bucket_to_u16),
     })
 }
 

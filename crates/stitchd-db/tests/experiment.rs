@@ -169,7 +169,10 @@ async fn test_list_all_running_maps_group_columns(pool: sqlx::PgPool) {
         .unwrap();
 
     // Must NOT panic, and must surface the group columns through the mapper.
-    let running = repo.list_all_running().await.expect("list_all_running must not panic");
+    let running = repo
+        .list_all_running()
+        .await
+        .expect("list_all_running must not panic");
     let found = running
         .iter()
         .find(|e| e.id == exp.id)

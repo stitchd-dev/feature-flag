@@ -420,7 +420,8 @@ fn erf(x: f64) -> f64 {
     let t = 1.0 / (1.0 + 0.327_591_1 * x);
     let poly = t
         * (0.254_829_592
-            + t * (-0.284_496_736 + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
     sign * (1.0 - poly * (-x * x).exp())
 }
 
@@ -646,7 +647,11 @@ mod tests {
         ];
         let r = binary_interaction(&cells);
         assert!(!r.insufficient_data);
-        assert!(r.estimate.abs() < 1e-9, "est should be ≈0, got {}", r.estimate);
+        assert!(
+            r.estimate.abs() < 1e-9,
+            "est should be ≈0, got {}",
+            r.estimate
+        );
         assert!(r.p_value > 0.05, "p={}", r.p_value);
         assert!(!r.significant);
     }
