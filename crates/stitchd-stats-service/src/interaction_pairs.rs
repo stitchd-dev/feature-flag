@@ -88,6 +88,46 @@ pub fn candidate_pairs(experiments: &[ExperimentMeta]) -> Vec<(ExpId, ExpId)> {
     pairs
 }
 
+/// Enumerate the unordered experiment **triples** worth testing for a three-way
+/// interaction.
+///
+/// A triple `(a, b, c)` survives iff every constituent pair satisfies
+/// [`can_interact`] (distinct flags, overlapping windows, not same exclusion
+/// group) AND all three share at least one **common** metric (`a ∩ b ∩ c`).
+///
+/// Two notes on why pairwise checks suffice for the windows:
+/// - active windows are 1-D intervals, so by Helly's theorem pairwise overlap
+///   implies a non-empty *common* live window — no separate triple-window check
+///   is needed.
+/// - the common-metric requirement is stricter than pairwise `shares_metric`:
+///   the 3-way term is computed over a metric all three carry, so we test the
+///   three-way intersection explicitly.
+///
+/// Each surviving triple is returned once, sorted ascending by id (`lo, mid, hi`)
+/// for a stable, dedupe-friendly ordering regardless of input order.
+#[must_use]
+pub fn candidate_triples(experiments: &[ExperimentMeta]) -> Vec<(ExpId, ExpId, ExpId)> {
+    let mut triples = Vec::new();
+    let n = experiments.len();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            for k in (j + 1)..n {
+                let (a, b, c) = (&experiments[i], &experiments[j], &experiments[k]);
+                if can_interact(a, b)
+                    && can_interact(a, c)
+                    && can_interact(b, c)
+                    && shares_metric_all3(a, b, c)
+                {
+                    let mut ids = [a.id, b.id, c.id];
+                    ids.sort();
+                    triples.push((ids[0], ids[1], ids[2]));
+                }
+            }
+        }
+    }
+    triples
+}
+
 /// Whether two experiments satisfy every interaction-candidacy rule.
 fn can_interact(a: &ExperimentMeta, b: &ExperimentMeta) -> bool {
     a.flag_id != b.flag_id
@@ -111,6 +151,14 @@ fn windows_overlap(a: &ExperimentMeta, b: &ExperimentMeta) -> bool {
 /// Whether the two experiments' metric-id sets intersect.
 fn shares_metric(a: &ExperimentMeta, b: &ExperimentMeta) -> bool {
     a.metric_ids.iter().any(|m| b.metric_ids.contains(m))
+}
+
+/// Whether all three experiments share at least one common metric
+/// (`a ∩ b ∩ c != ∅`) — required for a three-way interaction term.
+fn shares_metric_all3(a: &ExperimentMeta, b: &ExperimentMeta, c: &ExperimentMeta) -> bool {
+    a.metric_ids
+        .iter()
+        .any(|m| b.metric_ids.contains(m) && c.metric_ids.contains(m))
 }
 
 /// Whether both experiments belong to the *same* exclusion group.
@@ -289,5 +337,87 @@ mod tests {
         assert!(candidate_pairs(&[]).is_empty());
         let solo = meta(Uuid::new_v4(), Uuid::new_v4(), vec![Uuid::new_v4()]);
         assert!(candidate_pairs(&[solo]).is_empty());
+    }
+
+    // ── candidate_triples (P3.T1) ────────────────────────────────────────────
+
+    #[test]
+    fn includes_valid_triple_with_common_metric() {
+        let m = Uuid::new_v4();
+        let a = meta(Uuid::from_u128(1), Uuid::new_v4(), vec![m]);
+        let b = meta(Uuid::from_u128(2), Uuid::new_v4(), vec![m]);
+        let c = meta(Uuid::from_u128(3), Uuid::new_v4(), vec![m]);
+        let triples = candidate_triples(&[c, a, b]); // unsorted input
+        assert_eq!(
+            triples,
+            vec![(Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3))]
+        );
+    }
+
+    #[test]
+    fn excludes_triple_without_a_common_metric() {
+        // Each PAIR shares a metric, but a ∩ b ∩ c is empty.
+        let m1 = Uuid::new_v4();
+        let m2 = Uuid::new_v4();
+        let m3 = Uuid::new_v4();
+        let a = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m1, m2]);
+        let b = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m1, m3]);
+        let c = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m2, m3]);
+        assert!(candidate_triples(&[a, b, c]).is_empty());
+    }
+
+    #[test]
+    fn excludes_triple_when_two_share_a_flag() {
+        let m = Uuid::new_v4();
+        let flag = Uuid::new_v4();
+        let a = meta(Uuid::new_v4(), flag, vec![m]);
+        let b = meta(Uuid::new_v4(), flag, vec![m]);
+        let c = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
+        assert!(candidate_triples(&[a, b, c]).is_empty());
+    }
+
+    #[test]
+    fn excludes_triple_when_two_share_an_exclusion_group() {
+        let m = Uuid::new_v4();
+        let g = Uuid::new_v4();
+        let mut a = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
+        let mut b = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
+        let c = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
+        a.exclusion_group_id = Some(g);
+        b.exclusion_group_id = Some(g);
+        assert!(candidate_triples(&[a, b, c]).is_empty());
+    }
+
+    #[test]
+    fn excludes_triple_when_one_pair_windows_disjoint() {
+        let m = Uuid::new_v4();
+        let a = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]); // days 1..30
+        let b = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]); // days 1..30
+        let mut c = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
+        c.started_at = ts(20);
+        c.ended_at = Some(ts(30));
+        let mut a2 = a.clone();
+        a2.ended_at = Some(ts(10)); // a2 ends before c starts → (a2,c) disjoint
+        assert!(candidate_triples(&[a2, b, c]).is_empty());
+    }
+
+    #[test]
+    fn fewer_than_three_inputs_produce_no_triples() {
+        let m = Uuid::new_v4();
+        let a = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
+        let b = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
+        assert!(candidate_triples(&[]).is_empty());
+        assert!(candidate_triples(&[a.clone()]).is_empty());
+        assert!(candidate_triples(&[a, b]).is_empty());
+    }
+
+    #[test]
+    fn enumerates_all_valid_triples_among_four() {
+        let m = Uuid::new_v4();
+        let xs: Vec<ExperimentMeta> = (1..=4)
+            .map(|i| meta(Uuid::from_u128(i), Uuid::new_v4(), vec![m]))
+            .collect();
+        // C(4,3) = 4 triples.
+        assert_eq!(candidate_triples(&xs).len(), 4);
     }
 }
