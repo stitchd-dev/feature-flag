@@ -237,11 +237,15 @@ fn three_way(cells: &[NdBinaryCell]) -> InteractionResultLocal {
     let mut total_s = 0u64;
     for cell in cells {
         let (a, b, c) = (cell.levels[0], cell.levels[1], cell.levels[2]);
-        let fail = cell.n - cell.successes;
-        obs[idx(1, a, b, c)] += cell.successes as f64;
+        // Clamp a malformed `successes > n` cell (mirrors `bayes_binary`): the
+        // failure count would otherwise underflow `u64` (panic in debug / wrap
+        // in release). The clamped success count keeps obs/margins consistent.
+        let successes = cell.successes.min(cell.n);
+        let fail = cell.n - successes;
+        obs[idx(1, a, b, c)] += successes as f64;
         obs[idx(0, a, b, c)] += fail as f64;
         total_n = total_n.saturating_add(cell.n);
-        total_s = total_s.saturating_add(cell.successes);
+        total_s = total_s.saturating_add(successes);
     }
 
     if total_n < MIN_TOTAL_N {
@@ -715,6 +719,33 @@ mod tests {
         )
         .freq;
         assert!(tw.insufficient_data);
+    }
+
+    /// A malformed cell with `successes > n` must not underflow `u64` (panic in
+    /// debug / wrap in release) when the three-way path computes failures. The
+    /// success count is clamped to `n`, so the decomposition still runs and the
+    /// three-way term resolves to a finite (non-panicking) result.
+    #[test]
+    fn three_way_successes_exceeding_n_does_not_underflow() {
+        // (0,0,0) is malformed: successes (1500) > n (1000).
+        let nd = [
+            cell(&[0, 0, 0], 1000, 1500),
+            cell(&[0, 1, 0], 1000, 400),
+            cell(&[1, 0, 0], 1000, 300),
+            cell(&[1, 1, 0], 1000, 150),
+            cell(&[0, 0, 1], 1000, 600),
+            cell(&[0, 1, 1], 1000, 500),
+            cell(&[1, 0, 1], 1000, 350),
+            cell(&[1, 1, 1], 1000, 200),
+        ];
+        // Must not panic; every term must carry a finite-or-NaN (never wrapped)
+        // result.
+        let terms = binary_terms(&nd, 3);
+        assert_eq!(terms.len(), 7);
+        let tw = pick(&terms, TermKind::ThreeWay { a: 0, b: 1, c: 2 }).freq;
+        // Clamped to a well-formed table ⇒ testable, with a finite statistic.
+        assert!(!tw.insufficient_data);
+        assert!(tw.statistic.is_finite());
     }
 
     // ── insufficient-data propagation across the whole decomposition ──────────

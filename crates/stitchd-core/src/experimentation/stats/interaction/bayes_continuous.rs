@@ -238,20 +238,27 @@ fn term_factors(kind: &TermKind) -> Vec<usize> {
     }
 }
 
-/// Enumerate every term emitted for a `k`-factor grid at the requested `order`
-/// (all main effects, all pairwise interactions, and — when `order == 3` and
-/// `k >= 3` — the three-way interaction over the first three factors).
-fn enumerate_terms(k: usize, order: usize) -> Vec<TermKind> {
+/// Enumerate exactly the terms for the requested `order`, independent of the
+/// data's factor count `k`: `Main{0..order}`, every `TwoWay{a<b}` in
+/// `0..order`, and — when `order >= 3` — the `ThreeWay{0,1,2}`. This matches the
+/// Frequentist workers ([`super::anova::continuous_terms`] /
+/// [`super::ratio::ratio_terms`]) and [`super::bayes_binary`], so the routing
+/// layer joins a consistent term set across inference models.
+///
+/// (Terms whose factor index exceeds what the data carries are still dropped
+/// downstream: [`contrast_coeffs`] returns `None` for an absent factor, so they
+/// never reach the cell collapse.)
+fn enumerate_terms(order: usize) -> Vec<TermKind> {
     let mut terms = Vec::new();
-    for f in 0..k {
+    for f in 0..order {
         terms.push(TermKind::Main { factor: f });
     }
-    for a in 0..k {
-        for b in (a + 1)..k {
+    for a in 0..order {
+        for b in (a + 1)..order {
             terms.push(TermKind::TwoWay { a, b });
         }
     }
-    if order >= 3 && k >= 3 {
+    if order >= 3 {
         terms.push(TermKind::ThreeWay { a: 0, b: 1, c: 2 });
     }
     terms
@@ -320,7 +327,7 @@ pub fn continuous_bayes(
     if dims.contains(&0) {
         return Vec::new();
     }
-    let terms = enumerate_terms(k, order);
+    let terms = enumerate_terms(order);
 
     // Collapse: sum (n, sum, sum_sq) across non-participating factors, keyed by
     // the participating-level tuple.
@@ -356,7 +363,7 @@ pub fn ratio_bayes(cells: &[NdRatioCell], order: usize) -> Vec<(TermKind, Bayesi
     if dims.contains(&0) {
         return Vec::new();
     }
-    let terms = enumerate_terms(k, order);
+    let terms = enumerate_terms(order);
 
     // Collapse: sum all six sufficient stats across non-participating factors.
     run_terms(&terms, &dims, |factors, key| {
@@ -577,6 +584,44 @@ mod tests {
         assert!(find(&out, TermKind::TwoWay { a: 0, b: 1 }).is_some());
     }
 
+    /// (#10) Term enumeration is gated by the requested `order`, NOT the data's
+    /// factor count `k`: at `order == 2`, a grid whose cells happen to carry 3
+    /// levels must still emit ONLY `Main{0}`, `Main{1}`, `TwoWay{0,1}` — no
+    /// three-way, no `Main{2}`, no `TwoWay` touching factor 2 (matching the
+    /// Frequentist workers and `bayes_binary`).
+    #[test]
+    fn continuous_order_gates_terms_by_order_not_data_factor_count() {
+        // k = 3 in the data, but we ask for order 2.
+        let mut cells = Vec::new();
+        let mut seed = 900u64;
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    let mean = 10.0 + a as f64 + 2.0 * b as f64 + 3.0 * c as f64;
+                    cells.push(cont_cell(&[a, b, c], &cont_values(seed, 60, mean, 1.0)));
+                    seed += 1;
+                }
+            }
+        }
+        let out = continuous_bayes(&cells, 2);
+
+        // Exactly the order-2 term set, regardless of the data carrying 3 factors.
+        assert!(find(&out, TermKind::Main { factor: 0 }).is_some());
+        assert!(find(&out, TermKind::Main { factor: 1 }).is_some());
+        assert!(find(&out, TermKind::TwoWay { a: 0, b: 1 }).is_some());
+        // Nothing involving factor 2, and no three-way.
+        assert!(find(&out, TermKind::Main { factor: 2 }).is_none());
+        assert!(find(&out, TermKind::TwoWay { a: 0, b: 2 }).is_none());
+        assert!(find(&out, TermKind::TwoWay { a: 1, b: 2 }).is_none());
+        assert!(find(&out, TermKind::ThreeWay { a: 0, b: 1, c: 2 }).is_none());
+        // No emitted term references a factor index >= order.
+        assert!(out.iter().all(|(k, _)| match *k {
+            TermKind::Main { factor } => factor < 2,
+            TermKind::TwoWay { a, b } => a < 2 && b < 2,
+            TermKind::ThreeWay { .. } => false,
+        }));
+    }
+
     #[test]
     fn continuous_larger_grid_two_way_averaged() {
         // 3×2 grid: the averaged elementary-2×2 contrast over i∈{1,2}, j∈{1}.
@@ -754,6 +799,29 @@ mod tests {
         );
         assert!(tw.prob > 0.9, "3way prob={}", tw.prob);
         assert!(find(&out, TermKind::Main { factor: 0 }).is_some());
+    }
+
+    /// (#10) Ratio enumeration is gated by `order`, not the data's factor count:
+    /// at `order == 2` over a 3-factor grid, no term may touch factor 2.
+    #[test]
+    fn ratio_order_gates_terms_by_order_not_data_factor_count() {
+        let mut cells = Vec::new();
+        let mut seed = 950u64;
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    let rate = 0.30 + 0.05 * a as f64 + 0.04 * b as f64 + 0.03 * c as f64;
+                    cells.push(ratio_cell(&[a, b, c], &ratio_at(seed, 120, rate, 0.05)));
+                    seed += 1;
+                }
+            }
+        }
+        let out = ratio_bayes(&cells, 2);
+        assert!(find(&out, TermKind::TwoWay { a: 0, b: 1 }).is_some());
+        assert!(find(&out, TermKind::Main { factor: 2 }).is_none());
+        assert!(find(&out, TermKind::TwoWay { a: 0, b: 2 }).is_none());
+        assert!(find(&out, TermKind::TwoWay { a: 1, b: 2 }).is_none());
+        assert!(find(&out, TermKind::ThreeWay { a: 0, b: 1, c: 2 }).is_none());
     }
 
     #[test]
