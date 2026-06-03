@@ -22,11 +22,17 @@
 //!
 //! - **Main{i}:** one-way between-level SS on factor `i`'s marginal level means,
 //!   `SS_i = Σ_l n_l·(mean_l − grand_mean)²`, `df_i = L_i − 1`.
-//! - **TwoWay{a,b}:** delegates to [`super::continuous_interaction`] on the
-//!   table collapsed onto the `(a, b)` grid. At `order == 2` this is identical
-//!   to the full-model 2-way term (and exactly reproduces the regression
-//!   baseline, gate P2.T7); at `order == 3` it is the *marginal* 2-way
-//!   interaction.
+//! - **TwoWay{a,b}:** the additive-model interaction SS on the table collapsed
+//!   onto the `(a, b)` grid,
+//!   `SS_AB = Σ_cells n·(cell_mean − row_mean − col_mean + grand_mean)²` with
+//!   `df_AB = (Lₐ−1)(L_b−1)`, tested against the *same* common error. At
+//!   `order == 2` the collapsed `(a, b)` grid IS the full table and the common
+//!   error IS [`super::continuous_interaction`]'s error, so the F / p / df are
+//!   bit-for-bit identical to the regression baseline (gate P2.T7); at
+//!   `order == 3` the numerator is the *marginal* 2-way interaction SS but the
+//!   denominator is the shared pooled within-cell error (NOT the collapsed
+//!   grid's own error), so every term in the partition shares one residual
+//!   estimate.
 //! - **ThreeWay{0,1,2}** (order 3): the residual interaction SS
 //!   `SS₃ = SS_cells − SS_A − SS_B − SS_C − SS_AB − SS_BC − SS_AC`, with
 //!   `df₃ = (Lₐ−1)(L_b−1)(L_c−1)`.
@@ -38,38 +44,89 @@ use super::{NdContinuousCell, TermKind, TermResult};
 
 /// See module contract. Returns one [`TermResult`] per main effect, pairwise
 /// interaction, and (for `order == 3`) the three-way interaction.
+///
+/// The full ANOVA SS partition is computed in essentially one pass: the common
+/// pooled within-cell error and each term's between-cell SS are evaluated once
+/// and shared. Every term — main, pairwise, three-way — is F-tested against the
+/// *same* `MS_error`, so the partition is internally consistent (no term uses a
+/// different residual estimate than another).
 pub fn continuous_terms(cells: &[NdContinuousCell], order: usize) -> Vec<TermResult> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(if order == 3 { 7 } else { 3 });
 
-    // The common error term shared by every (non-delegated) F-test.
+    // The common error term shared by *every* F-test below.
     let err = ErrorTerm::from_cells(cells, order);
 
-    // Main effects: one per factor.
-    for i in 0..order {
-        out.push(main_term(cells, i, &err));
+    // One grand mean over the full table, shared by every between-cell SS so the
+    // order-3 residual `SS₃ = SS_cells − ΣSS_main − ΣSS_2way` is an exact
+    // partition. At order 2 the (a,b) collapse equals the full table, so this is
+    // the same grand mean the legacy 2-way routine uses (bit-for-bit gate P2.T7).
+    let grand_mean = grand_mean(cells, order);
+
+    // Main effects: one per factor. Each SS is computed once and reused by the
+    // order-3 residual.
+    let mut main_ss = [0.0f64; 3];
+    for (i, slot) in main_ss.iter_mut().enumerate().take(order) {
+        let (res, ss) = main_term(cells, i, &err);
+        *slot = ss;
+        out.push(res);
     }
 
-    // Pairwise interactions: one per unordered pair a < b.
+    // Pairwise interactions: one per unordered pair a < b. Each marginal 2-way
+    // interaction SS is computed once and reused by the order-3 residual.
+    let mut two_way_ss_for = |a: usize, b: usize| -> f64 {
+        let (res, ss) = two_way_term(cells, a, b, grand_mean, &err);
+        out.push(res);
+        ss
+    };
+    let mut ss_pairs = [0.0f64; 3]; // [AB, AC, BC]
+    let mut p = 0usize;
     for a in 0..order {
         for b in (a + 1)..order {
-            out.push(two_way_term(cells, a, b));
+            ss_pairs[p] = two_way_ss_for(a, b);
+            p += 1;
         }
     }
 
-    // Three-way interaction (order 3 only).
+    // Three-way interaction (order 3 only): the residual after removing every
+    // main and pairwise term, reusing the SS already computed above.
     if order == 3 {
-        out.push(three_way_term(cells, &err));
+        // ss_pairs is filled in (a<b) iteration order: AB, AC, BC.
+        out.push(three_way_term(
+            cells,
+            grand_mean,
+            main_ss[0] + main_ss[1] + main_ss[2],
+            ss_pairs[0] + ss_pairs[1] + ss_pairs[2],
+            &err,
+        ));
     }
 
     out
 }
 
+/// Trial-weighted grand mean over every populated `order`-arity cell, or `0.0`
+/// when the table is empty (in which case all terms are insufficient anyway).
+fn grand_mean(cells: &[NdContinuousCell], order: usize) -> f64 {
+    let mut total_n = 0.0f64;
+    let mut grand_sum = 0.0f64;
+    for c in cells {
+        if c.levels.len() != order || c.n == 0 {
+            continue;
+        }
+        total_n += c.n as f64;
+        grand_sum += c.sum;
+    }
+    if total_n <= 0.0 {
+        return 0.0;
+    }
+    grand_sum / total_n
+}
+
 // ── Shared error term ────────────────────────────────────────────────────────
 
 /// The pooled within-cell error term, computed once from the full k-factor
-/// table and reused by every F-test that is *not* delegated to the legacy 2-way
-/// routine. `valid` is false when there is no replication (`df ≤ 0`) or no
-/// residual variance (`ss ≤ 0`), in which case dependent terms are insufficient.
+/// table and reused by *every* F-test (main, all pairwise, three-way). `valid`
+/// is false when there is no replication (`df ≤ 0`) or no residual variance
+/// (`ss ≤ 0`), in which case dependent terms are insufficient.
 struct ErrorTerm {
     ss: f64,
     df: f64,
@@ -112,26 +169,34 @@ impl ErrorTerm {
 // ── Main effect ──────────────────────────────────────────────────────────────
 
 /// One-way between-level F-test on factor `factor`'s trial-weighted marginal
-/// level means, tested against the common error term.
-fn main_term(cells: &[NdContinuousCell], factor: usize, err: &ErrorTerm) -> TermResult {
+/// level means, tested against the common error term. Returns the result plus
+/// the between-level `SS` (reused by the order-3 residual; `0.0` when the term
+/// is structurally degenerate).
+fn main_term(cells: &[NdContinuousCell], factor: usize, err: &ErrorTerm) -> (TermResult, f64) {
     let kind = TermKind::Main { factor };
 
     // Collapse onto the single factor: marginal (n, sum) per level.
     let levels = match marginal_1d(cells, factor) {
         Some(m) => m,
-        None => return term(kind, super::InteractionResult::insufficient(0)),
+        None => return (term(kind, super::InteractionResult::insufficient(0)), 0.0),
     };
     let n_levels = levels.len();
     let df_factor = (n_levels as u32).saturating_sub(1);
 
-    if n_levels < 2 || !err.valid {
-        return term(kind, super::InteractionResult::insufficient(df_factor));
+    if n_levels < 2 {
+        return (
+            term(kind, super::InteractionResult::insufficient(df_factor)),
+            0.0,
+        );
     }
 
     let total_n: f64 = levels.iter().map(|(n, _)| n).sum();
     let grand_sum: f64 = levels.iter().map(|(_, s)| s).sum();
     if total_n <= 0.0 {
-        return term(kind, super::InteractionResult::insufficient(df_factor));
+        return (
+            term(kind, super::InteractionResult::insufficient(df_factor)),
+            0.0,
+        );
     }
     let grand_mean = grand_sum / total_n;
 
@@ -148,48 +213,100 @@ fn main_term(cells: &[NdContinuousCell], factor: usize, err: &ErrorTerm) -> Term
         ss_factor = 0.0;
     }
 
-    f_test(kind, ss_factor, df_factor, err)
+    (f_test(kind, ss_factor, df_factor, err), ss_factor)
 }
 
 // ── Pairwise interaction ───────────────────────────────────────────────────
 
-/// Pairwise interaction on factors `a < b`, delegated to the legacy two-way
-/// routine on the collapsed `(a, b)` grid. At order 2 this is the full-model
-/// 2-way term (exact regression-baseline reproduction); at order 3 it is the
-/// marginal 2-way interaction.
-fn two_way_term(cells: &[NdContinuousCell], a: usize, b: usize) -> TermResult {
+/// Pairwise interaction on factors `a < b`: the additive-model interaction SS on
+/// the table collapsed onto the `(a, b)` grid, F-tested against the *common*
+/// error term (NOT the collapsed grid's own residual).
+///
+/// Returns the result plus the marginal 2-way interaction `SS` (reused by the
+/// order-3 residual; `0.0` when the term is degenerate / abstains).
+///
+/// The numerator (`SS_AB`, `df_AB`, grand/row/col means) is computed exactly as
+/// [`super::continuous_interaction`] computes its interaction SS, so at order 2 —
+/// where the `(a, b)` grid IS the whole table and the common error IS that
+/// routine's pooled error — the F / p / df are bit-for-bit identical to the
+/// legacy two-way test (regression gate P2.T7). At order 3 only the denominator
+/// differs: the shared pooled within-cell error replaces the marginal grid's
+/// own error, so the term participates in one consistent partition.
+fn two_way_term(
+    cells: &[NdContinuousCell],
+    a: usize,
+    b: usize,
+    grand_mean: f64,
+    err: &ErrorTerm,
+) -> (TermResult, f64) {
     let kind = TermKind::TwoWay { a, b };
 
-    // Collapse other factors away: sum (n, sum, sum_sq) onto the (a, b) grid.
-    let mut collapsed: Vec<super::ContinuousCell> = Vec::new();
+    // Collapse onto the (a, b) grid: dense `(n, sum)` per (a-level, b-level).
+    let mut rows = 0usize;
+    let mut cols = 0usize;
     for c in cells {
-        if c.levels.len() <= a.max(b) {
-            // Cell missing one of the two factors → arity mismatch; skip it
-            // rather than index out of bounds.
+        if c.levels.len() <= a.max(b) || c.n == 0 {
             continue;
         }
-        let a_level = c.levels[a];
-        let b_level = c.levels[b];
-        if let Some(slot) = collapsed
-            .iter_mut()
-            .find(|cc| cc.a_level == a_level && cc.b_level == b_level)
-        {
-            slot.n = slot.n.saturating_add(c.n);
-            slot.sum += c.sum;
-            slot.sum_sq += c.sum_sq;
-        } else {
-            collapsed.push(super::ContinuousCell {
-                a_level,
-                b_level,
-                n: c.n,
-                sum: c.sum,
-                sum_sq: c.sum_sq,
-            });
+        rows = rows.max(c.levels[a] + 1);
+        cols = cols.max(c.levels[b] + 1);
+    }
+    // Mirror the legacy guard: with <2 levels on either factor there is no
+    // interaction df (legacy returns `insufficient(0)`).
+    if rows < 2 || cols < 2 {
+        return (term(kind, super::InteractionResult::insufficient(0)), 0.0);
+    }
+    let df_inter = ((rows - 1) * (cols - 1)) as u32;
+
+    let mut cell_n = vec![vec![0.0f64; cols]; rows];
+    let mut cell_sum = vec![vec![0.0f64; cols]; rows];
+    for c in cells {
+        if c.levels.len() <= a.max(b) || c.n == 0 {
+            continue;
         }
+        cell_n[c.levels[a]][c.levels[b]] += c.n as f64;
+        cell_sum[c.levels[a]][c.levels[b]] += c.sum;
+    }
+    // An empty cell makes the additive decomposition unidentifiable — legacy
+    // abstains here, so we do too (preserving the bit-for-bit gate at order 2).
+    if cell_n.iter().flatten().any(|&x| x <= 0.0) {
+        return (
+            term(kind, super::InteractionResult::insufficient(df_inter)),
+            0.0,
+        );
     }
 
-    let freq = super::continuous_interaction(&collapsed);
-    term(kind, freq)
+    // Row / column marginals on the collapsed grid (means precomputed, matching
+    // `continuous_interaction`'s evaluation order for bit-for-bit equivalence).
+    let mut row_n = vec![0.0f64; rows];
+    let mut row_sum = vec![0.0f64; rows];
+    let mut col_n = vec![0.0f64; cols];
+    let mut col_sum = vec![0.0f64; cols];
+    for r in 0..rows {
+        for c in 0..cols {
+            row_n[r] += cell_n[r][c];
+            row_sum[r] += cell_sum[r][c];
+            col_n[c] += cell_n[r][c];
+            col_sum[c] += cell_sum[r][c];
+        }
+    }
+    let row_mean: Vec<f64> = (0..rows).map(|r| row_sum[r] / row_n[r]).collect();
+    let col_mean: Vec<f64> = (0..cols).map(|c| col_sum[c] / col_n[c]).collect();
+
+    // SS_AB = Σ_cells n · (cell_mean − row_mean − col_mean + grand_mean)².
+    let mut ss_inter = 0.0f64;
+    for r in 0..rows {
+        for c in 0..cols {
+            let cell_mean = cell_sum[r][c] / cell_n[r][c];
+            let resid = cell_mean - row_mean[r] - col_mean[c] + grand_mean;
+            ss_inter += cell_n[r][c] * resid * resid;
+        }
+    }
+    if ss_inter < 0.0 {
+        ss_inter = 0.0;
+    }
+
+    (f_test(kind, ss_inter, df_inter, err), ss_inter)
 }
 
 // ── Three-way interaction ────────────────────────────────────────────────────
@@ -197,13 +314,23 @@ fn two_way_term(cells: &[NdContinuousCell], a: usize, b: usize) -> TermResult {
 /// Full three-way interaction F-test (order 3 only): the residual cell-mean
 /// variation after removing all main effects and pairwise interactions, tested
 /// against the common error term.
-fn three_way_term(cells: &[NdContinuousCell], err: &ErrorTerm) -> TermResult {
+///
+/// `sum_main_ss` / `sum_pair_ss` are the already-computed `ΣSS_main` and
+/// `ΣSS_2way` from this same partition (passed in to avoid recomputing them),
+/// and `grand_mean` is the shared full-table grand mean. The residual is
+/// `SS₃ = SS_cells − ΣSS_main − ΣSS_2way`.
+fn three_way_term(
+    cells: &[NdContinuousCell],
+    grand_mean: f64,
+    sum_main_ss: f64,
+    sum_pair_ss: f64,
+    err: &ErrorTerm,
+) -> TermResult {
     let kind = TermKind::ThreeWay { a: 0, b: 1, c: 2 };
 
     // Level counts per factor (max index + 1), arity-checked to 3.
     let mut maxlvl = [0usize; 3];
     let mut total_n = 0.0f64;
-    let mut grand_sum = 0.0f64;
     for cell in cells {
         if cell.levels.len() != 3 {
             continue;
@@ -213,7 +340,6 @@ fn three_way_term(cells: &[NdContinuousCell], err: &ErrorTerm) -> TermResult {
         }
         if cell.n > 0 {
             total_n += cell.n as f64;
-            grand_sum += cell.sum;
         }
     }
     let l = [maxlvl[0] + 1, maxlvl[1] + 1, maxlvl[2] + 1];
@@ -241,8 +367,6 @@ fn three_way_term(cells: &[NdContinuousCell], err: &ErrorTerm) -> TermResult {
         return term(kind, super::InteractionResult::insufficient(df3));
     }
 
-    let grand_mean = grand_sum / total_n;
-
     // SS_cells = Σ_cells n · (cell_mean − grand_mean)².
     let mut ss_cells = 0.0f64;
     for p in 0..cell_n.len() {
@@ -250,18 +374,9 @@ fn three_way_term(cells: &[NdContinuousCell], err: &ErrorTerm) -> TermResult {
         ss_cells += cell_n[p] * dev * dev;
     }
 
-    // Main-effect SS on each factor's marginal.
-    let ss_a = one_way_ss(cells, 0, grand_mean);
-    let ss_b = one_way_ss(cells, 1, grand_mean);
-    let ss_c = one_way_ss(cells, 2, grand_mean);
-
-    // Pairwise interaction SS on each collapsed 2-factor marginal table.
-    let ss_ab = two_way_ss(cells, 0, 1, grand_mean);
-    let ss_ac = two_way_ss(cells, 0, 2, grand_mean);
-    let ss_bc = two_way_ss(cells, 1, 2, grand_mean);
-
-    // Residual three-way SS.
-    let mut ss3 = ss_cells - ss_a - ss_b - ss_c - ss_ab - ss_ac - ss_bc;
+    // Residual three-way SS = SS_cells − ΣSS_main − ΣSS_2way (reusing the SS
+    // already computed for the main and pairwise terms of this partition).
+    let mut ss3 = ss_cells - sum_main_ss - sum_pair_ss;
     // Clamp tiny negative SS from floating-point cancellation.
     if ss3 < 0.0 {
         ss3 = 0.0;
@@ -270,7 +385,7 @@ fn three_way_term(cells: &[NdContinuousCell], err: &ErrorTerm) -> TermResult {
     f_test(kind, ss3, df3, err)
 }
 
-// ── SS helpers (shared by the 3-way decomposition) ──────────────────────────
+// ── SS helpers ───────────────────────────────────────────────────────────────
 
 /// Trial-weighted marginal `(n, sum)` per level on `factor`. Returns `None`
 /// when no populated cell carries that factor.
@@ -290,84 +405,6 @@ fn marginal_1d(cells: &[NdContinuousCell], factor: usize) -> Option<Vec<(f64, f6
         slot.1 += c.sum;
     }
     Some(levels)
-}
-
-/// One-way between-level SS on `factor`'s marginal level means, relative to the
-/// supplied grand mean. Used inside the 3-way partition.
-fn one_way_ss(cells: &[NdContinuousCell], factor: usize, grand_mean: f64) -> f64 {
-    let Some(levels) = marginal_1d(cells, factor) else {
-        return 0.0;
-    };
-    let mut ss = 0.0f64;
-    for (n_l, sum_l) in levels {
-        if n_l <= 0.0 {
-            continue;
-        }
-        let dev = sum_l / n_l - grand_mean;
-        ss += n_l * dev * dev;
-    }
-    ss
-}
-
-/// Pairwise interaction SS on the table collapsed onto factors `(a, b)`:
-/// `Σ_cells n · (cell_mean − row_mean − col_mean + grand_mean)²`, with all means
-/// trial-weighted. Used inside the 3-way partition.
-fn two_way_ss(cells: &[NdContinuousCell], a: usize, b: usize, grand_mean: f64) -> f64 {
-    // Collapse onto the (a, b) grid.
-    let mut rows = 0usize;
-    let mut colsn = 0usize;
-    for c in cells {
-        if c.levels.len() <= a.max(b) || c.n == 0 {
-            continue;
-        }
-        rows = rows.max(c.levels[a] + 1);
-        colsn = colsn.max(c.levels[b] + 1);
-    }
-    if rows == 0 || colsn == 0 {
-        return 0.0;
-    }
-
-    let mut cell_n = vec![vec![0.0f64; colsn]; rows];
-    let mut cell_sum = vec![vec![0.0f64; colsn]; rows];
-    for c in cells {
-        if c.levels.len() <= a.max(b) || c.n == 0 {
-            continue;
-        }
-        cell_n[c.levels[a]][c.levels[b]] += c.n as f64;
-        cell_sum[c.levels[a]][c.levels[b]] += c.sum;
-    }
-
-    // Row / column marginals on the collapsed grid.
-    let mut row_n = vec![0.0f64; rows];
-    let mut row_sum = vec![0.0f64; rows];
-    let mut col_n = vec![0.0f64; colsn];
-    let mut col_sum = vec![0.0f64; colsn];
-    for r in 0..rows {
-        for c in 0..colsn {
-            row_n[r] += cell_n[r][c];
-            row_sum[r] += cell_sum[r][c];
-            col_n[c] += cell_n[r][c];
-            col_sum[c] += cell_sum[r][c];
-        }
-    }
-
-    let mut ss = 0.0f64;
-    for r in 0..rows {
-        if row_n[r] <= 0.0 {
-            continue;
-        }
-        let row_mean = row_sum[r] / row_n[r];
-        for c in 0..colsn {
-            if cell_n[r][c] <= 0.0 || col_n[c] <= 0.0 {
-                continue;
-            }
-            let cell_mean = cell_sum[r][c] / cell_n[r][c];
-            let col_mean = col_sum[c] / col_n[c];
-            let resid = cell_mean - row_mean - col_mean + grand_mean;
-            ss += cell_n[r][c] * resid * resid;
-        }
-    }
-    ss
 }
 
 // ── Result construction ──────────────────────────────────────────────────────
@@ -624,10 +661,22 @@ mod tests {
         );
     }
 
-    /// At order 3, the `TwoWay{0,1}` term is the *marginal* 2-way interaction:
-    /// it equals `continuous_interaction` on the table collapsed over factor 2.
+    /// At order 3, the `TwoWay{0,1}` term's *numerator* is the marginal 2-way
+    /// interaction SS — identical to what `continuous_interaction` computes on
+    /// the table collapsed over factor 2 — but its *denominator* is the shared
+    /// pooled within-cell error from the full table, NOT the collapsed grid's
+    /// own (interaction-contaminated) error. This is exactly the partition fix:
+    /// every term shares one `MS_error`. So the df matches the marginal
+    /// interaction, and `F · MS_error` recovers the same `SS_inter/df` from both
+    /// routines (proving identical numerator, different denominator).
     #[test]
-    fn order3_twoway_is_marginal_interaction() {
+    fn order3_twoway_uses_marginal_ss_with_common_error() {
+        // Planted 3-way (only the (1,1,1) corner bumped) makes the collapsed
+        // (a,b) grid's error differ from the full-grid common error: the (1,1)
+        // collapsed cell pools two unequal-mean c-levels, inflating its
+        // within-cell SS with the 3-way signal. The full-grid common error does
+        // not. So legacy-on-collapsed and the new TwoWay use different
+        // denominators by construction.
         let nd = full_2x2x2(|i, j, k| 10.0 + 8.0 * (i * j * k) as f64, 60);
         let terms = continuous_terms(&nd, 3);
         let two = find(&terms, TermKind::TwoWay { a: 0, b: 1 });
@@ -654,9 +703,60 @@ mod tests {
             }
         }
         let legacy = super::super::continuous_interaction(&collapsed);
-        assert_eq!(two.freq.estimate, legacy.estimate);
-        assert_eq!(two.freq.p_value, legacy.p_value);
+
+        // The interaction df (marginal 2-way) is unchanged.
         assert_eq!(two.freq.df, legacy.df);
+        assert!(!two.freq.insufficient_data && !legacy.insufficient_data);
+
+        // Pooled within-cell error MS over the FULL table (what every term in
+        // the order-3 partition is tested against).
+        let ms_err_common = {
+            let mut ss = 0.0;
+            let mut n = 0.0;
+            let mut cells = 0.0;
+            for c in &nd {
+                ss += c.sum_sq - c.sum * c.sum / c.n as f64;
+                n += c.n as f64;
+                cells += 1.0;
+            }
+            ss / (n - cells)
+        };
+        // Pooled within-cell error MS over the COLLAPSED (a,b) grid (what the
+        // legacy routine uses — contaminated by the 3-way signal here).
+        let ms_err_collapsed = {
+            let mut ss = 0.0;
+            let mut n = 0.0;
+            let mut cells = 0.0;
+            for c in &collapsed {
+                ss += c.sum_sq - c.sum * c.sum / c.n as f64;
+                n += c.n as f64;
+                cells += 1.0;
+            }
+            ss / (n - cells)
+        };
+        // The denominators genuinely differ (the fix matters on this data).
+        assert!(
+            (ms_err_common - ms_err_collapsed).abs() > 1e-6,
+            "test is only meaningful when the two errors differ: common={ms_err_common} collapsed={ms_err_collapsed}"
+        );
+
+        // F · MS_error == SS_inter / df for each routine; the numerator SS_inter
+        // is the marginal interaction SS in both, so these must coincide.
+        let ssdf_two = two.freq.statistic * ms_err_common;
+        let ssdf_legacy = legacy.statistic * ms_err_collapsed;
+        assert!(
+            (ssdf_two - ssdf_legacy).abs() <= 1e-6 * ssdf_legacy.abs().max(1.0),
+            "marginal interaction SS must match: two={ssdf_two} legacy={ssdf_legacy}"
+        );
+
+        // And the new term's F is exactly its marginal SS over the common error.
+        let expected_f = ssdf_legacy / ms_err_common;
+        assert!(
+            (two.freq.statistic - expected_f).abs() <= 1e-6 * expected_f.abs().max(1.0),
+            "TwoWay F must use the common error: got={} expected={}",
+            two.freq.statistic,
+            expected_f
+        );
     }
 
     // ── main effects ─────────────────────────────────────────────────────────
