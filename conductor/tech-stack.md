@@ -14,6 +14,23 @@ domain_boundaries_20260530 conventions (see conductor/patterns.md for the full s
   TrackEventsRequest.mark_test (proto3 optional). No breaking contract changes.
 -->
 
+<!--
+nway_interaction_20260603 additions (extends xexp_interaction_20260602):
+- Interaction analysis generalized from pairwise (2-way) to N-way, capped at order 3.
+- New pure statistics in `stitchd-core::experimentation::stats::interaction` (no new
+  deps — all math is hand-rolled on std + existing `statrs`-free helpers used by the
+  pairwise engine: chi-square SF, F-distribution SF, normal CDF):
+  * Frequentist log-linear hierarchical decomposition (binary/funnel, RxCxD).
+  * Frequentist multi-factor ANOVA decomposition (continuous).
+  * Ratio-metric interaction via the delta method.
+  * Bayesian interaction posteriors — Beta-Binomial (binary/funnel) and Normal-Normal
+    (continuous/ratio) on the interaction contrast, reported as
+    prob/expected-effect/credible-interval. Reuses the experiment-level Bayesian
+    primitives; sampling determinism keyed off cell sufficient-statistics (no RNG dep).
+- ClickHouse `experiment_interactions` superseded by a unified ordered-array schema
+  (see ClickHouse Schema section). No new infra; recomputed each 60-min tick.
+-->
+
 
 ## Architecture
 
@@ -206,7 +223,7 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 | `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`. `context_type` column (default 'user') supports per-context-type results |
 | `experiment_assignments` | ReplacingMergeTree(`_version`) | First-exposure (ITT) assignments keyed on `(experiment_id, iteration_id, context_type, context_key)`. Inverted version column (`-toUnixTimestamp64Milli(assigned_at)`) so MAX(_version) returns the MIN(assigned_at) — first exposure wins. Monthly partitions, 180-day TTL |
 | `experiment_assignments_mv` | Materialized View | Watches `flag_evaluation_log` inserts; routes rows where `targeting_on = true AND dictHas('experiment_iterations_active', (env_id, flag_id, matched_rule_id, context_type))` into `experiment_assignments` |
-| `experiment_interactions` | MergeTree | Pairwise cross-experiment interaction results, keyed `(env_id, experiment_id_a, experiment_id_b, context_type, metric_key)`. Holds `shared_count`, `cell_stats` (JSON per Aᵥ×Bᵥ cell), `interaction_estimate`, `p_value`, `significant`, `computed_at`. Written by `stitchd-stats-service` interaction sweep (60-min tick); read by `stitchd-experimentation-service` `GetExperimentInteractions`. Added in `xexp_interaction_20260602` (auto-applied on boot via `event_writer::migrations` array). |
+| `experiment_interactions` | MergeTree | **N-way** cross-experiment interaction results (superseded pairwise schema in `nway_interaction_20260603`). Keyed `(env_id, interaction_order, experiment_ids, context_type, metric_key, term)`. Holds `experiment_ids Array(UUID)` (sorted), `interaction_order UInt8`, `term LowCardinality(String)` (`main:…`/`2way:…`/`3way:…`), `shared_count`, `cell_stats` (JSON N-D variant-tuple cells), Frequentist `interaction_estimate`/`p_value`/`df`/`significant`/`insufficient_data`, Bayesian `bayes_prob`/`bayes_expected`/`bayes_ci_low`/`bayes_ci_high`, `computed_at`. Each candidate tuple emits a full hierarchical decomposition (main + all 2-way + the 3-way term). Written by `stitchd-stats-service` interaction sweep (60-min tick); read by `stitchd-experimentation-service` `GetExperimentInteractions`. Auto-applied on boot via `event_writer::migrations` array. |
 
 **ClickHouse dictionaries:**
 
@@ -235,6 +252,7 @@ All historical migrations (PostgreSQL, ClickHouse, ScyllaDB) were collapsed into
 Post-baseline incremental migrations:
 - `crates/stitchd-db/migrations/20260602000001_exclusion_groups.sql` (`xexp_interaction_20260602`): adds the `exclusion_groups` table (per-env, immutable `salt`, version/audit/soft-delete; partial unique index on `(env_id, name) WHERE deleted_at IS NULL`) and the nullable `exclusion_group_id` + `group_bucket_lo/hi` columns on `experiments` (CHECK `0 <= lo < hi <= 10000` or both NULL) and snapshot columns on `experiment_iterations`.
 - `crates/stitchd-event-writer/migrations/20260602000002_experiment_interactions.sql` (`xexp_interaction_20260602`): the ClickHouse `experiment_interactions` table (registered in the `event_writer::migrations` MIGRATIONS array so it auto-applies on analytics-service boot).
+- `crates/stitchd-event-writer/migrations/20260603000001_nway_interactions.sql` (`nway_interaction_20260603`): supersedes `experiment_interactions` with the unified N-way schema (`experiment_ids Array(UUID)` + `interaction_order` + `term` + N-D `cell_stats` + `df` + Bayesian columns). Forward-only `DROP TABLE IF EXISTS` + `CREATE` (no backfill — recomputed each tick); registered in the MIGRATIONS array.
 
 The experimentation-service proto gained additive RPCs (`CreateExclusionGroup`/`ListExclusionGroups`/`UpdateExclusionGroup`/`DeleteExclusionGroup`/`AssignExperimentToGroup`/`UnassignExperiment`/`GetExperimentInteractions`); `flags.v1.PercentageAllocation` gained an additive `exclusion_gate` (group_salt + context_type + bucket_lo/hi) carried on the existing definition-sync path.
 
