@@ -498,30 +498,51 @@ async fn assign_experiment_returns_409_when_flag_locked() {
 async fn get_interactions_maps_rows() {
     let svc = MockExpService {
         interactions: vec![
+            // A 3-way interaction the focused experiment participates in.
             ExperimentInteraction {
-                experiment_id_a: "exp-1".to_string(),
-                experiment_id_b: "exp-2".to_string(),
-                other_experiment_name: "Banner test".to_string(),
+                experiment_ids: vec![
+                    "exp-1".to_string(),
+                    "exp-2".to_string(),
+                    "exp-3".to_string(),
+                ],
+                experiment_names: vec![
+                    "Checkout test".to_string(),
+                    "Banner test".to_string(),
+                    "Pricing test".to_string(),
+                ],
+                interaction_order: 3,
+                term: "3way:exp-1xexp-2xexp-3".to_string(),
                 context_type: "user".to_string(),
                 metric_key: "conversion".to_string(),
                 shared_count: 4200,
                 interaction_estimate: 0.034,
                 p_value: 0.012,
+                df: 4,
                 significant: true,
                 insufficient_data: false,
+                bayes_prob: 0.96,
+                bayes_expected: 0.031,
+                bayes_ci_low: 0.008,
+                bayes_ci_high: 0.055,
             },
             // A pair with too few shared exposures to test: insufficient_data.
             ExperimentInteraction {
-                experiment_id_a: "exp-1".to_string(),
-                experiment_id_b: "exp-3".to_string(),
-                other_experiment_name: "Sparse test".to_string(),
+                experiment_ids: vec!["exp-1".to_string(), "exp-4".to_string()],
+                experiment_names: vec!["Checkout test".to_string(), "Sparse test".to_string()],
+                interaction_order: 2,
+                term: "2way:exp-1xexp-4".to_string(),
                 context_type: "user".to_string(),
                 metric_key: "conversion".to_string(),
                 shared_count: 12,
                 interaction_estimate: 0.0,
                 p_value: 0.0,
+                df: 1,
                 significant: false,
                 insufficient_data: true,
+                bayes_prob: 0.0,
+                bayes_expected: 0.0,
+                bayes_ci_low: 0.0,
+                bayes_ci_high: 0.0,
             },
         ],
         ..Default::default()
@@ -542,15 +563,23 @@ async fn get_interactions_maps_rows() {
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     let row = &body["interactions"][0];
-    assert_eq!(row["experiment_id_b"], "exp-2");
-    assert_eq!(row["other_experiment_name"], "Banner test");
+    assert_eq!(row["interaction_order"], 3);
+    assert_eq!(row["term"], "3way:exp-1xexp-2xexp-3");
+    assert_eq!(row["experiment_ids"][1], "exp-2");
+    assert_eq!(row["experiment_names"][1], "Banner test");
     assert_eq!(row["metric_key"], "conversion");
     assert_eq!(row["shared_count"], 4200);
+    assert_eq!(row["df"], 4);
     assert_eq!(row["significant"], true);
     assert_eq!(row["insufficient_data"], false);
-    // The sparse pair surfaces insufficient_data=true.
+    // Bayesian fields surface in the JSON.
+    assert_eq!(row["bayes_prob"], 0.96);
+    assert_eq!(row["bayes_ci_high"], 0.055);
+    // The sparse pair surfaces insufficient_data=true at order 2.
     let sparse = &body["interactions"][1];
-    assert_eq!(sparse["experiment_id_b"], "exp-3");
+    assert_eq!(sparse["interaction_order"], 2);
+    assert!(sparse["term"].as_str().unwrap().starts_with("2way:"));
+    assert_eq!(sparse["experiment_ids"][1], "exp-4");
     assert_eq!(sparse["insufficient_data"], true);
     assert_eq!(sparse["significant"], false);
 }
