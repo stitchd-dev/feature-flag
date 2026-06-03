@@ -73,7 +73,8 @@ The always-valid statistics are produced by the scheduled per-metric stats pass 
 pass executes the per-metric sufficient-statistics queries, builds per-variant `VariantStats` /
 `RatioGroupStats` under intent-to-treat semantics, and persists non-empty `experiment_results` rows
 each tick; sequential inference is computed there alongside the other statistics (gated on the
-per-experiment opt-in). CUPED variance reduction is the one remaining follow-up.
+per-experiment opt-in). CUPED variance reduction is applied to numeric metrics when a pre-period
+(`pre_period_days`) is configured.
 
 ## Out of scope
 

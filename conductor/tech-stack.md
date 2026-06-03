@@ -56,8 +56,18 @@ seqtest_20260603 additions (Sequential Testing — always-valid inference):
   unit-information pooled variance (floored 1e-9). The scheduled per-metric compute pass
   (frequentist/bayesian/sequential/SRM) is now IMPLEMENTED in stitchd-stats-service (compute.rs +
   queries/variant_stats.rs): per-metric sufficient-stats queries -> ITT VariantStats/RatioGroupStats
-  -> stats -> non-empty experiment_results (feature-flag-k1l/-2lh; live-CH integration test). CUPED
-  is the remaining follow-up (feature-flag-z7m).
+  -> stats -> non-empty experiment_results (feature-flag-k1l/-2lh; live-CH integration test).
+  Frequentist+Bayesian per family (ratio via core analyze_ratio; percentile via raw-sample bootstrap),
+  Bonferroni, SRM surfaced under variant_stats["srm"], and CUPED variance reduction for numeric metrics
+  (pre_period_days>0): cuped_fetch pre-period X + per-unit post-period Y -> pooled-theta apply_cuped ->
+  adjusted VariantStats, surfaced under variant_stats["cuped"] (feature-flag-z7m/-r07/-nsh/-891).
+-->
+<!--
+post-compute-pass follow-ups resolved on track/seqtest_20260603 (NOT yet merged to main):
+- ExperimentIteration proto gained pre_period_days (additive); stats-service enrich captures it.
+- compute.rs CUPED only adjusts the canonical numeric value (value_double/value_int); metrics whose
+  value lives in a properties[on_field] path no-op CUPED (correct, not wrong) until cuped_fetch threads
+  the value expression. Percentile display scalar is still a value_sum/n stand-in (significance is real).
 -->
 
 
