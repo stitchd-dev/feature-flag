@@ -41,4 +41,38 @@ See `conductor/patterns.md` for the full set. Seeded from the direct predecessor
 
 ---
 
+## [2026-06-03] Code-review fixes (max-effort review, 15 findings)
+
+A max-effort multi-agent review (9 finder angles + verify + sweep) of the merged
+track found 9 correctness issues + 6 cleanup. Fixed all correctness + low-risk
+cleanup; deferred 2 behavior-neutral perf/dedup refactors (`feature-flag-ef5`).
+
+- **ReplacingMergeTree dedup key must include the FULL natural key.** The
+  `experiment_interactions` ORDER BY omitted `experiment_ids`, so a `main:X` /
+  `2way:AxB` term emitted by multiple same-order tuples collided and one was
+  silently lost under FINAL. Added `experiment_ids` to the sort key. The unit
+  tests (in-memory fake writer) were blind to this — only a live-CH round-trip
+  with ≥3 overlapping experiments catches it. New test added.
+- **Interaction query builders MUST be derived from the canonical
+  `aggregation.rs`/`ratio.rs`/`funnel.rs`** — they had diverged and dropped the
+  metric `where_clause`, fanned out the ratio via a double LEFT JOIN (fix:
+  pre-aggregate each leg to one value per context before a 1:1 join), and put an
+  inequality in a funnel JOIN ON (ClickHouse rejects; fix: fold the ITT bound into
+  each windowFunnel step). All three were uncovered by tests (single-pair agg-only
+  integration test).
+- **Don't let "context" rows pollute a corrected family.** Main-effect terms are
+  single-experiment quantities; including their (tiny) p-values in the interaction
+  Benjamini–Hochberg family shifted the step-up threshold, and counting them in the
+  UI "interaction detected" banner fired it on every well-powered experiment.
+  Fix: exclude `main:` terms from FDR + the banner; never mark them significant.
+- **An uncorrected directional Bayesian prob (`Φ(|E|/sd)`, ≈0.5 under the null)
+  must not drive a page-level warning** — it fires on noise and contradicts the
+  FDR'd per-row badge. Show it per-row; gate the banner on the corrected
+  frequentist flag.
+- **Full ANOVA decomposition shares ONE pooled error term across all terms.**
+  Delegating the 2-way to the legacy pairwise fn used a different (collapsed-grid)
+  error than the main/3-way terms. The single-common-error refactor also removed
+  ~13 redundant SS passes — and still reproduces the legacy fn bit-for-bit at
+  order 2 (where the collapsed grid IS the full table).
+
 <!-- Learnings from implementation will be appended below -->
