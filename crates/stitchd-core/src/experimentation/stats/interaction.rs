@@ -23,10 +23,26 @@
 //! and the regularized incomplete beta (for the F-distribution tail) are
 //! implemented locally here to keep the module self-contained.
 
-use super::srm::chi_square_sf;
+pub(crate) use super::srm::chi_square_sf;
+
+// ── N-way decomposition submodules (Phase 2 worker-wave) ─────────────────────
+// Each owns one metric-family × inference-model. They share the contract types
+// and distribution helpers defined in this module (accessible via `super::`).
+mod anova;
+mod bayes_binary;
+mod bayes_continuous;
+mod loglinear;
+mod ratio;
+
+// Flat facade over the private submodules — the public N-way entry points.
+pub use anova::continuous_terms;
+pub use bayes_binary::binary_bayes;
+pub use bayes_continuous::{continuous_bayes, ratio_bayes};
+pub use loglinear::binary_terms;
+pub use ratio::ratio_terms;
 
 /// Significance level for the `significant` flag (two-sided, alpha = 0.05).
-const ALPHA: f64 = 0.05;
+pub(crate) const ALPHA: f64 = 0.05;
 
 // ── Public input/output types ──────────────────────────────────────────────
 
@@ -90,7 +106,7 @@ pub struct InteractionResult {
 
 impl InteractionResult {
     /// Construct the canonical "not enough data" result.
-    fn insufficient(df: u32) -> Self {
+    pub(crate) fn insufficient(df: u32) -> Self {
         InteractionResult {
             estimate: f64::NAN,
             statistic: f64::NAN,
@@ -100,6 +116,118 @@ impl InteractionResult {
             insufficient_data: true,
         }
     }
+}
+
+// ── N-way decomposition contract (Phase 2 seam) ──────────────────────────────
+//
+// The pairwise functions above ([`binary_interaction`] / [`continuous_interaction`])
+// remain the regression baseline. The N-way decomposition generalizes them: a
+// candidate tuple of `order` experiments (2 or 3) is described by a k-factor grid
+// of cells, and each decomposition emits a *set* of [`TermResult`]s — one per
+// main effect, pairwise interaction, and (order 3) the three-way interaction.
+//
+// Frequentist terms are produced by [`loglinear`] (binary/funnel), [`anova`]
+// (continuous), and [`ratio`] (ratio, delta method). Bayesian posteriors are
+// produced independently by [`bayes_binary`] and [`bayes_continuous`] and merged
+// by [`TermKind`] (so the two inference models stay decoupled across workers).
+
+/// Which decomposition term a [`TermResult`] represents. Factor indices are
+/// 0-based positions in the participating-experiment tuple (tuple order).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TermKind {
+    /// Single-experiment main effect.
+    Main { factor: usize },
+    /// Pairwise interaction between two experiments.
+    TwoWay { a: usize, b: usize },
+    /// Three-way interaction among three experiments.
+    ThreeWay { a: usize, b: usize, c: usize },
+}
+
+impl TermKind {
+    /// Interaction order of this term (1 = main, 2 = pairwise, 3 = three-way).
+    #[must_use]
+    pub fn order(&self) -> u8 {
+        match self {
+            TermKind::Main { .. } => 1,
+            TermKind::TwoWay { .. } => 2,
+            TermKind::ThreeWay { .. } => 3,
+        }
+    }
+}
+
+/// Bayesian posterior summary for one interaction term. The "effect" is the
+/// interaction contrast appropriate to the metric family (e.g. a
+/// difference-in-differences of cell rates for binary).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BayesianInteraction {
+    /// Posterior probability the interaction effect is non-negligible
+    /// (outside the region of practical equivalence around 0).
+    pub prob: f64,
+    /// Posterior mean of the interaction effect.
+    pub expected: f64,
+    /// Lower bound of the (central) credible interval.
+    pub ci_low: f64,
+    /// Upper bound of the (central) credible interval.
+    pub ci_high: f64,
+}
+
+/// One decomposed interaction term: its identity, the Frequentist result, and
+/// an optional Bayesian posterior (attached during routing once both inference
+/// workers have run).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TermResult {
+    /// Which effect/interaction this row represents.
+    pub kind: TermKind,
+    /// Frequentist test result for this term.
+    pub freq: InteractionResult,
+    /// Bayesian posterior for this term, when computed.
+    pub bayes: Option<BayesianInteraction>,
+}
+
+/// One cell of a k-factor contingency grid for a **binary** (conversion/funnel)
+/// metric. `levels[d]` is the dense 0-based level index on factor `d`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NdBinaryCell {
+    /// Dense level index per factor, in tuple order (`len()` == interaction order).
+    pub levels: Vec<usize>,
+    /// Units (trials) in this cell.
+    pub n: u64,
+    /// Successes (conversions / funnel final-step reached) in this cell.
+    pub successes: u64,
+}
+
+/// One cell of a k-factor grid for a **continuous** metric, summarised by its
+/// sufficient statistics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NdContinuousCell {
+    /// Dense level index per factor, in tuple order.
+    pub levels: Vec<usize>,
+    /// Observations in this cell.
+    pub n: u64,
+    /// Σ metric value.
+    pub sum: f64,
+    /// Σ metric value².
+    pub sum_sq: f64,
+}
+
+/// One cell of a k-factor grid for a **ratio** metric (numerator/denominator
+/// sums + the second moments the delta method needs for the contrast variance).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NdRatioCell {
+    /// Dense level index per factor, in tuple order.
+    pub levels: Vec<usize>,
+    /// Observations (denominator units) in this cell.
+    pub n: u64,
+    /// Σ numerator.
+    pub num_sum: f64,
+    /// Σ denominator.
+    pub den_sum: f64,
+    /// Σ numerator².
+    pub num_sq_sum: f64,
+    /// Σ denominator².
+    pub den_sq_sum: f64,
+    /// Σ numerator·denominator.
+    pub num_den_sum: f64,
 }
 
 // ── Binary (conversion) interaction ────────────────────────────────────────
@@ -427,18 +555,18 @@ fn erf(x: f64) -> f64 {
 
 /// Standard normal CDF: Φ(z) = ½(1 + erf(z/√2)).
 #[inline]
-fn norm_cdf(z: f64) -> f64 {
+pub(crate) fn norm_cdf(z: f64) -> f64 {
     0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
 }
 
 /// Two-tailed p-value from the standard normal distribution.
 #[inline]
-fn z_to_p(z: f64) -> f64 {
+pub(crate) fn z_to_p(z: f64) -> f64 {
     2.0 * norm_cdf(-z.abs())
 }
 
 /// Natural-log of the gamma function (Lanczos approximation, g = 7).
-fn lgamma(x: f64) -> f64 {
+pub(crate) fn lgamma(x: f64) -> f64 {
     const G: f64 = 7.0;
     const C: [f64; 9] = [
         0.999_999_999_999_809_9,
@@ -466,7 +594,7 @@ fn lgamma(x: f64) -> f64 {
 
 /// Regularized incomplete beta function `I_x(a, b)` via Lentz's
 /// continued-fraction algorithm (Numerical Recipes §6.4).
-fn betai(x: f64, a: f64, b: f64) -> f64 {
+pub(crate) fn betai(x: f64, a: f64, b: f64) -> f64 {
     if !(0.0..=1.0).contains(&x) {
         return f64::NAN;
     }
@@ -524,7 +652,7 @@ fn betai(x: f64, a: f64, b: f64) -> f64 {
 /// of freedom evaluated at `f`: `P(F ≥ f)`.
 ///
 /// Uses the relation `P(F ≥ f) = I_{d2/(d2 + d1·f)}(d2/2, d1/2)`.
-fn fdist_sf(f: f64, d1: f64, d2: f64) -> f64 {
+pub(crate) fn fdist_sf(f: f64, d1: f64, d2: f64) -> f64 {
     if f <= 0.0 {
         return 1.0;
     }
