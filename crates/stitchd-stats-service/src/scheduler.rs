@@ -7,8 +7,38 @@ use tonic::transport::Channel;
 use uuid::Uuid;
 
 use stitchd_proto::experiments::v1::{
-    ListRunningExperimentsRequest, experimentation_service_client::ExperimentationServiceClient,
+    GetExperimentIterationRequest, ListRunningExperimentsRequest,
+    experimentation_service_client::ExperimentationServiceClient,
 };
+
+/// Sequential-testing configuration snapshotted on an experiment iteration
+/// (Phase 2). Threaded from the iteration into the stats-service compute pass
+/// so the always-valid analysis uses the experiment's chosen α / τ² / min-N.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SequentialSettings {
+    /// Whether sequential testing is enabled for this experiment. When `false`
+    /// the compute pass skips sequential entirely (sends `sequential_result:
+    /// None`).
+    pub enabled: bool,
+    /// Family-wise significance level α.
+    pub alpha: f64,
+    /// Mixing-prior variance τ². `None` → derive a metric-scale default at
+    /// compute time (see [`crate::sequential_compute::default_tau_squared`]).
+    pub tau_squared: Option<f64>,
+    /// Minimum per-variant sample size before a verdict is trustworthy.
+    pub min_sample_size: i64,
+}
+
+impl Default for SequentialSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            alpha: 0.05,
+            tau_squared: None,
+            min_sample_size: 100,
+        }
+    }
+}
 
 /// A running experiment with its active iteration, ready for stats computation.
 #[derive(Debug, Clone)]
@@ -21,6 +51,10 @@ pub struct RunningExperiment {
     pub metric_ids: Vec<Uuid>,
     pub variant_keys: Vec<String>,
     pub started_at: DateTime<Utc>,
+    /// Sequential-testing configuration resolved from the iteration snapshot.
+    /// Defaults to disabled until [`enrich_sequential_settings`] fetches the
+    /// iteration; the `ListRunningExperiments` RPC does not carry these fields.
+    pub sequential: SequentialSettings,
 }
 
 /// Fetch all running experiments via `experimentation-service.ListRunningExperiments`.
@@ -66,12 +100,57 @@ pub async fn fetch_running_experiments(
                     metric_ids,
                     variant_keys: proto.variant_keys,
                     started_at,
+                    // ListRunningExperiments does not carry the sequential
+                    // config; resolved separately via the iteration snapshot.
+                    sequential: SequentialSettings::default(),
                 });
             }
         }
     }
 
     Ok(results)
+}
+
+/// Resolve the [`SequentialSettings`] for an experiment from its iteration
+/// snapshot via `GetExperimentIteration`.
+///
+/// The `ListRunningExperiments` view omits the sequential config, so the
+/// scheduler calls this to hydrate `exp.sequential` before the compute pass.
+/// On RPC failure the settings are left at their default (sequential disabled),
+/// which is the safe behaviour — a transient experimentation-service blip must
+/// not turn on (or misconfigure) always-valid testing.
+pub async fn enrich_sequential_settings(
+    client: &mut ExperimentationServiceClient<Channel>,
+    exp: &mut RunningExperiment,
+) {
+    match client
+        .get_experiment_iteration(GetExperimentIterationRequest {
+            iteration_id: exp.iteration_id.to_string(),
+        })
+        .await
+    {
+        Ok(resp) => {
+            let it = resp.into_inner();
+            exp.sequential = SequentialSettings {
+                enabled: it.sequential_testing_enabled,
+                alpha: it.sequential_alpha,
+                tau_squared: it.sequential_tau_squared,
+                min_sample_size: it.sequential_min_sample_size,
+            };
+        }
+        Err(e) => {
+            // Reset to the safe default (disabled): a transient
+            // experimentation-service blip must never leave stale/partial
+            // sequential config that could turn on or misconfigure
+            // always-valid testing.
+            exp.sequential = SequentialSettings::default();
+            tracing::warn!(
+                experiment_id = %exp.experiment_id,
+                iteration_id = %exp.iteration_id,
+                "failed to fetch iteration for sequential settings; leaving disabled: {e}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +180,9 @@ mod tests {
 
     struct MockExperimentationService {
         items: Arc<Mutex<RunningExpList>>,
+        /// Optional iteration returned by `get_experiment_iteration`; `None`
+        /// makes the RPC fail (NotFound) to exercise the fallback path.
+        iteration: Arc<Mutex<Option<ExperimentIteration>>>,
     }
 
     #[tonic::async_trait]
@@ -162,7 +244,10 @@ mod tests {
             &self,
             _req: Request<stitchd_proto::experiments::v1::GetExperimentIterationRequest>,
         ) -> Result<Response<ExperimentIteration>, Status> {
-            Err(Status::unimplemented("not used in tests"))
+            match self.iteration.lock().await.clone() {
+                Some(it) => Ok(Response::new(it)),
+                None => Err(Status::not_found("no iteration configured")),
+            }
         }
         async fn update_iteration_last_computed(
             &self,
@@ -253,10 +338,20 @@ mod tests {
     async fn make_client(
         items: Vec<ProtoRunningExperiment>,
     ) -> ExperimentationServiceClient<Channel> {
+        make_client_with_iteration(items, None).await
+    }
+
+    /// As [`make_client`] but with a configured iteration for
+    /// `get_experiment_iteration`.
+    async fn make_client_with_iteration(
+        items: Vec<ProtoRunningExperiment>,
+        iteration: Option<ExperimentIteration>,
+    ) -> ExperimentationServiceClient<Channel> {
         use tonic::transport::Server;
 
         let svc = MockExperimentationService {
             items: Arc::new(Mutex::new(items)),
+            iteration: Arc::new(Mutex::new(iteration)),
         };
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -345,5 +440,74 @@ mod tests {
         {
         }
         assert_no_pg_pool_arg(|_client| {});
+    }
+
+    // ── enrich_sequential_settings (Phase 3 config flow) ──────────────────────
+
+    fn running_exp(iteration_id: Uuid) -> RunningExperiment {
+        RunningExperiment {
+            experiment_id: Uuid::new_v4(),
+            env_id: Uuid::new_v4(),
+            iteration_id,
+            metric_ids: vec![],
+            variant_keys: vec!["control".into(), "treatment".into()],
+            started_at: Utc::now(),
+            sequential: SequentialSettings::default(),
+        }
+    }
+
+    fn iteration_with_sequential(
+        id: Uuid,
+        enabled: bool,
+        alpha: f64,
+        tau: Option<f64>,
+        min_n: i64,
+    ) -> ExperimentIteration {
+        ExperimentIteration {
+            id: id.to_string(),
+            experiment_id: Uuid::new_v4().to_string(),
+            iteration_number: 1,
+            started_at_ms: 0,
+            ended_at_ms: 0,
+            metric_ids: vec![],
+            traffic_allocation: 1.0,
+            unit_context_types: vec![],
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
+            sequential_testing_enabled: enabled,
+            sequential_alpha: alpha,
+            sequential_tau_squared: tau,
+            sequential_min_sample_size: min_n,
+        }
+    }
+
+    #[tokio::test]
+    async fn enrich_sequential_settings_reads_iteration_snapshot() {
+        let iter_id = Uuid::new_v4();
+        let it = iteration_with_sequential(iter_id, true, 0.01, Some(0.25), 250);
+        let mut client = make_client_with_iteration(vec![], Some(it)).await;
+
+        let mut exp = running_exp(iter_id);
+        enrich_sequential_settings(&mut client, &mut exp).await;
+
+        assert!(exp.sequential.enabled);
+        assert!((exp.sequential.alpha - 0.01).abs() < 1e-12);
+        assert_eq!(exp.sequential.tau_squared, Some(0.25));
+        assert_eq!(exp.sequential.min_sample_size, 250);
+    }
+
+    #[tokio::test]
+    async fn enrich_sequential_settings_falls_back_to_disabled_on_rpc_error() {
+        // No iteration configured → get_experiment_iteration returns NotFound.
+        let mut client = make_client_with_iteration(vec![], None).await;
+        let mut exp = running_exp(Uuid::new_v4());
+        // Pretend it was somehow enabled; the failed fetch must reset to default.
+        exp.sequential.enabled = true;
+        enrich_sequential_settings(&mut client, &mut exp).await;
+        assert!(
+            !exp.sequential.enabled,
+            "RPC failure must leave sequential disabled"
+        );
     }
 }
