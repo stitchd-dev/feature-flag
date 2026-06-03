@@ -85,6 +85,6 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: N-Way (3-Way) Cross-Experiment Interaction Analysis + Funnel/Ratio Metrics + Bayesian Interaction Modeling
+## [x] Track: N-Way (3-Way) Cross-Experiment Interaction Analysis + Funnel/Ratio Metrics + Bayesian Interaction Modeling
 *Link: [./conductor/tracks/nway_interaction_20260603/](./conductor/tracks/nway_interaction_20260603/)*
 
