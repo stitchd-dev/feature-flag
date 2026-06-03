@@ -143,6 +143,14 @@ pub async fn write_results(
             variant_stats: summary.variant_stats.to_string(),
             frequentist_result: summary.frequentist_result.as_ref().map(|v| v.to_string()),
             bayesian_result: summary.bayesian_result.as_ref().map(|v| v.to_string()),
+            // Sequential testing results are populated by a later phase; left
+            // unset here so the write path compiles end-to-end for now.
+            sequential_p_value: None,
+            sequential_ci_lower: None,
+            sequential_ci_upper: None,
+            sequential_crossed: None,
+            sequential_insufficient_data: None,
+            sequential_method: None,
             recommendation: summary.recommendation.clone(),
             computed_at: computed_at_rfc.clone(),
             context_type: summary.context_type.clone(),

@@ -214,6 +214,32 @@ pub struct Experiment {
     /// exclusion group, in basis points. `None` when ungrouped.
     #[serde(default)]
     pub group_bucket_hi: Option<u16>,
+    /// Whether sequential (always-valid) testing is enabled for this experiment.
+    #[serde(default)]
+    pub sequential_testing_enabled: bool,
+    /// Target type-I error rate (α) for the always-valid test. `0 < α < 1`.
+    #[serde(default = "default_sequential_alpha")]
+    pub sequential_alpha: f64,
+    /// Mixing variance (τ²) for the mSPRT mixture. `None` = auto-derive at
+    /// compute time; when set it must be `> 0`.
+    #[serde(default)]
+    pub sequential_tau_squared: Option<f64>,
+    /// Minimum per-variant sample size before the sequential test is allowed
+    /// to declare significance. `>= 0`.
+    #[serde(default = "default_sequential_min_sample_size")]
+    pub sequential_min_sample_size: i64,
+}
+
+/// Default α for sequential testing when not explicitly configured.
+/// Matches the Postgres column default (`0.05`).
+fn default_sequential_alpha() -> f64 {
+    0.05
+}
+
+/// Default minimum sample size for sequential testing when not explicitly
+/// configured. Matches the Postgres column default (`100`).
+fn default_sequential_min_sample_size() -> i64 {
+    100
 }
 
 /// A snapshot of an experiment configuration at the start of a run period.
@@ -269,6 +295,19 @@ pub struct ExperimentIteration {
     /// ungrouped.
     #[serde(default)]
     pub group_bucket_hi: Option<u16>,
+    /// Snapshot of `sequential_testing_enabled` at iteration start.
+    #[serde(default)]
+    pub sequential_testing_enabled: bool,
+    /// Snapshot of `sequential_alpha` at iteration start.
+    #[serde(default = "default_sequential_alpha")]
+    pub sequential_alpha: f64,
+    /// Snapshot of `sequential_tau_squared` at iteration start. `None` =
+    /// auto-derive at compute time.
+    #[serde(default)]
+    pub sequential_tau_squared: Option<f64>,
+    /// Snapshot of `sequential_min_sample_size` at iteration start.
+    #[serde(default = "default_sequential_min_sample_size")]
+    pub sequential_min_sample_size: i64,
 }
 
 #[cfg(test)]
@@ -503,6 +542,10 @@ mod tests {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
         };
         assert_eq!(exp.status, ExperimentStatus::Draft);
         assert_eq!(exp.metric_ids.len(), 1);
@@ -530,6 +573,10 @@ mod tests {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
         };
         assert_eq!(iter.iteration_number, 1);
         assert!(iter.ended_at.is_none());
@@ -567,6 +614,10 @@ mod tests {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
         })
         .unwrap();
         // Strip the new fields to simulate a legacy payload.
@@ -601,6 +652,10 @@ mod tests {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
         })
         .unwrap();
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();

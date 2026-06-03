@@ -78,6 +78,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.scheduled_start_at, e.scheduled_end_at,
                 e.version, e.created_at, e.updated_at, e.deleted_at,
                 e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
+                e.sequential_testing_enabled, e.sequential_alpha,
+                e.sequential_tau_squared, e.sequential_min_sample_size,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -114,6 +116,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.scheduled_start_at, e.scheduled_end_at,
                 e.version, e.created_at, e.updated_at, e.deleted_at,
                 e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
+                e.sequential_testing_enabled, e.sequential_alpha,
+                e.sequential_tau_squared, e.sequential_min_sample_size,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -162,6 +166,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.scheduled_start_at, e.scheduled_end_at,
                 e.version, e.created_at, e.updated_at, e.deleted_at,
                 e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
+                e.sequential_testing_enabled, e.sequential_alpha,
+                e.sequential_tau_squared, e.sequential_min_sample_size,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -222,9 +228,12 @@ impl ExperimentRepository for PgExperimentRepository {
                  hypothesis, status, metric_ids, guardrail_metric_ids, traffic_allocation,
                  min_sample_size, pre_period_days, unit_context_types,
                  scheduled_start_at, scheduled_end_at,
+                 sequential_testing_enabled, sequential_alpha,
+                 sequential_tau_squared, sequential_min_sample_size,
                  version, created_at, updated_at, deleted_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text, $10, $11,
-                    $12::float8::numeric, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                    $12::float8::numeric, $13, $14, $15, $16, $17,
+                    $18, $19, $20, $21, $22, $23, $24, $25)
             ",
         )
         .bind(experiment.id.as_uuid())
@@ -244,6 +253,10 @@ impl ExperimentRepository for PgExperimentRepository {
         .bind(&experiment.unit_context_types)
         .bind(experiment.scheduled_start_at)
         .bind(experiment.scheduled_end_at)
+        .bind(experiment.sequential_testing_enabled)
+        .bind(experiment.sequential_alpha)
+        .bind(experiment.sequential_tau_squared)
+        .bind(experiment.sequential_min_sample_size)
         .bind(experiment.version)
         .bind(experiment.created_at)
         .bind(experiment.updated_at)
@@ -325,9 +338,13 @@ impl ExperimentRepository for PgExperimentRepository {
                 unit_context_types = $10,
                 scheduled_start_at = $11,
                 scheduled_end_at = $12,
+                sequential_testing_enabled = $13,
+                sequential_alpha = $14,
+                sequential_tau_squared = $15,
+                sequential_min_sample_size = $16,
                 updated_at = NOW(),
-                version = $13
-            WHERE id = $14 AND version = $15 AND deleted_at IS NULL
+                version = $17
+            WHERE id = $18 AND version = $19 AND deleted_at IS NULL
             RETURNING
                 id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
                 hypothesis, status, metric_ids, guardrail_metric_ids,
@@ -335,7 +352,9 @@ impl ExperimentRepository for PgExperimentRepository {
                 min_sample_size, pre_period_days, unit_context_types,
                 scheduled_start_at, scheduled_end_at,
                 version, created_at, updated_at, deleted_at,
-                exclusion_group_id, group_bucket_lo, group_bucket_hi
+                exclusion_group_id, group_bucket_lo, group_bucket_hi,
+                sequential_testing_enabled, sequential_alpha,
+                sequential_tau_squared, sequential_min_sample_size
             ",
         )
         .bind(&experiment.name)
@@ -350,6 +369,10 @@ impl ExperimentRepository for PgExperimentRepository {
         .bind(&experiment.unit_context_types)
         .bind(experiment.scheduled_start_at)
         .bind(experiment.scheduled_end_at)
+        .bind(experiment.sequential_testing_enabled)
+        .bind(experiment.sequential_alpha)
+        .bind(experiment.sequential_tau_squared)
+        .bind(experiment.sequential_min_sample_size)
         .bind(new_version)
         .bind(experiment.id.as_uuid())
         .bind(experiment.version)
@@ -456,7 +479,9 @@ impl ExperimentRepository for PgExperimentRepository {
                 traffic_allocation::float8 AS traffic_allocation,
                 min_sample_size, targets_default_rule, pre_period_days,
                 unit_context_types, default_rule_distribution,
-                exclusion_group_id, group_bucket_lo, group_bucket_hi
+                exclusion_group_id, group_bucket_lo, group_bucket_hi,
+                sequential_testing_enabled, sequential_alpha,
+                sequential_tau_squared, sequential_min_sample_size
             FROM experiment_iterations
             WHERE experiment_id = $1
             ORDER BY iteration_number
@@ -532,7 +557,9 @@ impl ExperimentRepository for PgExperimentRepository {
                 min_sample_size, pre_period_days, unit_context_types,
                 scheduled_start_at, scheduled_end_at,
                 version, created_at, updated_at, deleted_at,
-                exclusion_group_id, group_bucket_lo, group_bucket_hi
+                exclusion_group_id, group_bucket_lo, group_bucket_hi,
+                sequential_testing_enabled, sequential_alpha,
+                sequential_tau_squared, sequential_min_sample_size
             ",
         )
         .bind(experiment_status_str(to))
@@ -609,9 +636,11 @@ impl ExperimentRepository for PgExperimentRepository {
                      guardrail_metric_ids, traffic_allocation, min_sample_size,
                      targets_default_rule, pre_period_days, unit_context_types,
                      default_rule_distribution,
-                     exclusion_group_id, group_bucket_lo, group_bucket_hi)
+                     exclusion_group_id, group_bucket_lo, group_bucket_hi,
+                     sequential_testing_enabled, sequential_alpha,
+                     sequential_tau_squared, sequential_min_sample_size)
                 VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7::float8::numeric, $8, $9, $10, $11, $12,
-                        $13, $14, $15)
+                        $13, $14, $15, $16, $17, $18, $19)
                 ",
             )
             .bind(iteration_id.as_uuid())
@@ -632,6 +661,13 @@ impl ExperimentRepository for PgExperimentRepository {
             .bind(current.exclusion_group_id.map(|g| g.as_uuid()))
             .bind(current.group_bucket_lo.map(i32::from))
             .bind(current.group_bucket_hi.map(i32::from))
+            // Snapshot the sequential-testing config at iteration start, so the
+            // analysis uses the α / τ² / min-sample that were in force at the
+            // run, not whatever the experiment row holds at compute time.
+            .bind(current.sequential_testing_enabled)
+            .bind(current.sequential_alpha)
+            .bind(current.sequential_tau_squared)
+            .bind(current.sequential_min_sample_size)
             .execute(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
@@ -689,6 +725,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 min_sample_size, pre_period_days, unit_context_types,
                 scheduled_start_at, scheduled_end_at,
                 exclusion_group_id, group_bucket_lo, group_bucket_hi,
+                sequential_testing_enabled, sequential_alpha,
+                sequential_tau_squared, sequential_min_sample_size,
                 version, created_at, updated_at, deleted_at
             FROM experiments
             WHERE status = 'running' AND deleted_at IS NULL
@@ -739,7 +777,9 @@ impl ExperimentRepository for PgExperimentRepository {
                 traffic_allocation::float8 AS traffic_allocation,
                 min_sample_size, targets_default_rule, pre_period_days,
                 unit_context_types, default_rule_distribution,
-                exclusion_group_id, group_bucket_lo, group_bucket_hi
+                exclusion_group_id, group_bucket_lo, group_bucket_hi,
+                sequential_testing_enabled, sequential_alpha,
+                sequential_tau_squared, sequential_min_sample_size
             FROM experiment_iterations
             WHERE id = $1
             ",
@@ -816,6 +856,10 @@ fn row_to_experiment(row: &sqlx::postgres::PgRow) -> Experiment {
         group_bucket_hi: row
             .get::<Option<i32>, _>("group_bucket_hi")
             .map(bucket_to_u16),
+        sequential_testing_enabled: row.get("sequential_testing_enabled"),
+        sequential_alpha: row.get("sequential_alpha"),
+        sequential_tau_squared: row.get("sequential_tau_squared"),
+        sequential_min_sample_size: row.get("sequential_min_sample_size"),
     }
 }
 
@@ -869,6 +913,10 @@ fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, 
         group_bucket_hi: row
             .get::<Option<i32>, _>("group_bucket_hi")
             .map(bucket_to_u16),
+        sequential_testing_enabled: row.get("sequential_testing_enabled"),
+        sequential_alpha: row.get("sequential_alpha"),
+        sequential_tau_squared: row.get("sequential_tau_squared"),
+        sequential_min_sample_size: row.get("sequential_min_sample_size"),
     })
 }
 

@@ -32,6 +32,15 @@ CREATE TABLE IF NOT EXISTS experiment_results
     variant_stats       String,
     frequentist_result  String,
     bayesian_result     String,
+    -- Sequential testing (always-valid mSPRT / GAVI) result.
+    -- Nullable scalars are NULL when sequential testing was not run for the row;
+    -- `sequential_method` defaults to '' (empty) for the same reason.
+    sequential_p_value        Nullable(Float64),
+    sequential_ci_lower       Nullable(Float64),
+    sequential_ci_upper       Nullable(Float64),
+    sequential_method         String DEFAULT '',
+    sequential_crossed        Nullable(UInt8),
+    sequential_insufficient_data Nullable(UInt8),
     -- Human-readable outcome
     recommendation      String,
     -- Timestamps

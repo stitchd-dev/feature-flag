@@ -383,6 +383,12 @@ CREATE TABLE IF NOT EXISTS experiments (
     unit_context_types   TEXT[]        NOT NULL DEFAULT '{user}',
     scheduled_start_at   TIMESTAMPTZ,
     scheduled_end_at     TIMESTAMPTZ,
+    -- Sequential testing (always-valid mSPRT / GAVI) configuration.
+    sequential_testing_enabled BOOLEAN          NOT NULL DEFAULT FALSE,
+    sequential_alpha           DOUBLE PRECISION NOT NULL DEFAULT 0.05,
+    -- NULLABLE: null = auto-derive the mixing variance at compute time.
+    sequential_tau_squared     DOUBLE PRECISION,
+    sequential_min_sample_size BIGINT           NOT NULL DEFAULT 100,
     version              BIGINT        NOT NULL DEFAULT 1,
     created_at           TIMESTAMPTZ   NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ   NOT NULL DEFAULT now(),
@@ -393,6 +399,15 @@ CREATE TABLE IF NOT EXISTS experiments (
     CONSTRAINT experiments_pre_period_days_nonneg CHECK (pre_period_days >= 0),
     CONSTRAINT experiments_unit_context_types_nonempty CHECK (
         cardinality(unit_context_types) > 0
+    ),
+    CONSTRAINT experiments_sequential_alpha_range CHECK (
+        sequential_alpha > 0 AND sequential_alpha < 1
+    ),
+    CONSTRAINT experiments_sequential_tau_squared_positive CHECK (
+        sequential_tau_squared IS NULL OR sequential_tau_squared > 0
+    ),
+    CONSTRAINT experiments_sequential_min_sample_size_nonneg CHECK (
+        sequential_min_sample_size >= 0
     )
 );
 
@@ -415,11 +430,25 @@ CREATE TABLE IF NOT EXISTS experiment_iterations (
     pre_period_days           INT           NOT NULL DEFAULT 0,
     unit_context_types        TEXT[]        NOT NULL DEFAULT '{user}',
     default_rule_distribution JSONB,
+    -- Sequential testing configuration snapshot at iteration start.
+    sequential_testing_enabled BOOLEAN          NOT NULL DEFAULT FALSE,
+    sequential_alpha           DOUBLE PRECISION NOT NULL DEFAULT 0.05,
+    sequential_tau_squared     DOUBLE PRECISION,
+    sequential_min_sample_size BIGINT           NOT NULL DEFAULT 100,
     UNIQUE (experiment_id, iteration_number),
     CONSTRAINT experiment_iterations_pre_period_days_nonneg
         CHECK (pre_period_days >= 0),
     CONSTRAINT experiment_iterations_unit_context_types_nonempty
-        CHECK (cardinality(unit_context_types) > 0)
+        CHECK (cardinality(unit_context_types) > 0),
+    CONSTRAINT experiment_iterations_sequential_alpha_range CHECK (
+        sequential_alpha > 0 AND sequential_alpha < 1
+    ),
+    CONSTRAINT experiment_iterations_sequential_tau_squared_positive CHECK (
+        sequential_tau_squared IS NULL OR sequential_tau_squared > 0
+    ),
+    CONSTRAINT experiment_iterations_sequential_min_sample_size_nonneg CHECK (
+        sequential_min_sample_size >= 0
+    )
 );
 
 -- ---------------------------------------------------------------------------
