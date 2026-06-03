@@ -12,26 +12,785 @@
 //! Both return a `(TermKind, BayesianInteraction)` for every term that the
 //! corresponding Frequentist worker emits; the routing layer joins by
 //! [`super::TermKind`] and leaves omitted terms' `bayes` as `None`.
-//! `BayesianInteraction`: `prob` = P(|effect| outside a small ROPE), `expected`
-//! = posterior mean, `ci_low`/`ci_high` = central credible interval (Normal
-//! quantiles via the parent's `super::norm_cdf` and its inverse).
+//! `BayesianInteraction`: `prob` = `Φ(|effect| / sd)` (posterior mass away from
+//! 0), `expected` = posterior mean of the contrast, `ci_low`/`ci_high` =
+//! `expected ± 1.96·sd` (central 95% credible interval). Terms whose contrast
+//! standard deviation is 0 / non-finite, or that reference a degenerate /
+//! too-sparse collapsed cell, are omitted.
 //!
-//! Determinism: no random RNG — derive summaries analytically / by deterministic
-//! quadrature so repeated runs are identical.
+//! ## Model
+//!
+//! Each cell estimate is given an (approximately) Normal posterior under a weak
+//! / flat prior:
+//! - **continuous:** `mean = sum/n`, `var = s²/n` with the within-cell sample
+//!   variance `s² = (sum_sq − sum²/n)/(n−1)`. Requires `n ≥ 2` and a finite
+//!   `s² > 0`.
+//! - **ratio:** `R = num_sum/den_sum` with the delta-method variance
+//!   `VarR = (1/md²)·(var_num − 2R·cov + R²·var_den)/n`, the moments recovered
+//!   from the cell's second-moment sufficient statistics. Requires
+//!   `den_sum > 0`, `md > 0`, `n ≥ 2`, and a finite `VarR > 0`.
+//!
+//! The interaction effect for a term is a **linear contrast** of the per-cell
+//! estimates (cell means for continuous, cell ratios for ratio). Because the
+//! cells are independent, the contrast posterior is
+//! `Normal(Σ coef·est, Σ coef²·var)`. Contrasts match the binary worker:
+//! - `Main{i}`: `est(top level) − est(level 0)` of the collapsed factor `i`.
+//! - `TwoWay{a,b}`: difference-in-differences on the collapsed `(a, b)` grid; for
+//!   grids larger than `2×2`, the mean of the elementary `2×2` interaction
+//!   contrasts anchored at level 0.
+//! - `ThreeWay{0,1,2}`: difference-in-differences-of-differences over the
+//!   `2×2×2` corners anchored at level 0.
+//!
+//! Collapsing sums the sufficient statistics across the non-participating
+//! factors (continuous: `n`/`sum`/`sum_sq`; ratio: all six stats).
+//!
+//! Determinism: no RNG — every summary is a closed-form Normal quantity, so
+//! repeated runs are bit-identical.
+
+use std::collections::BTreeMap;
 
 use super::{BayesianInteraction, NdContinuousCell, NdRatioCell, TermKind};
 
-/// See module contract. **Stub** — returns no posteriors until implemented (P2.T6).
+/// 95% central-interval Normal multiplier (matches the Frequentist workers).
+const Z_975: f64 = 1.96;
+
+/// A per-cell point estimate and its posterior variance.
+#[derive(Clone, Copy)]
+struct CellPost {
+    est: f64,
+    var: f64,
+}
+
+/// Normal-Normal posterior for one continuous cell mean, or `None` when the
+/// cell is degenerate (too few observations / non-finite or zero variance).
+fn continuous_cell_post(n: f64, sum: f64, sum_sq: f64) -> Option<CellPost> {
+    // `n` is a sum of integer counts, always finite ⇒ a plain comparison is safe.
+    if n < 2.0 {
+        return None;
+    }
+    let mean = sum / n;
+    // Within-cell sample variance s² = (Σx² − (Σx)²/n) / (n − 1).
+    let s2 = (sum_sq - sum * sum / n) / (n - 1.0);
+    if !s2.is_finite() || s2 <= 0.0 {
+        return None;
+    }
+    let var = s2 / n;
+    if !var.is_finite() || var <= 0.0 {
+        return None;
+    }
+    Some(CellPost { est: mean, var })
+}
+
+/// Delta-method Normal posterior for one ratio cell, or `None` when degenerate.
+fn ratio_cell_post(
+    n: f64,
+    num_sum: f64,
+    den_sum: f64,
+    num_sq_sum: f64,
+    den_sq_sum: f64,
+    num_den_sum: f64,
+) -> Option<CellPost> {
+    // `n` is a sum of integer counts, always finite ⇒ a plain comparison is safe.
+    if n < 2.0 || den_sum <= 0.0 {
+        return None;
+    }
+    let mn = num_sum / n;
+    let md = den_sum / n;
+    if md <= 0.0 {
+        return None;
+    }
+    let r = num_sum / den_sum;
+    let var_num = num_sq_sum / n - mn * mn;
+    let var_den = den_sq_sum / n - md * md;
+    let cov = num_den_sum / n - mn * md;
+    // Var(R) ≈ (1/md²)·(Var(num) − 2R·Cov + R²·Var(den)) / n.
+    let var = (var_num - 2.0 * r * cov + r * r * var_den) / (md * md) / n;
+    if !r.is_finite() || !var.is_finite() || var <= 0.0 {
+        return None;
+    }
+    Some(CellPost { est: r, var })
+}
+
+/// Summarise a linear-contrast posterior into a [`BayesianInteraction`], or
+/// `None` when the standard deviation is zero / non-finite.
+fn summarise(mean: f64, var: f64) -> Option<BayesianInteraction> {
+    if !var.is_finite() || var <= 0.0 {
+        return None;
+    }
+    let sd = var.sqrt();
+    if !sd.is_finite() || sd <= 0.0 {
+        return None;
+    }
+    if !mean.is_finite() {
+        return None;
+    }
+    // P(|effect| away from 0) under the Normal posterior: Φ(|mean| / sd).
+    let prob = super::norm_cdf(mean.abs() / sd);
+    Some(BayesianInteraction {
+        prob,
+        expected: mean,
+        ci_low: mean - Z_975 * sd,
+        ci_high: mean + Z_975 * sd,
+    })
+}
+
+/// Number of factors (interaction order of the *data*) from the cell level
+/// tuples. Returns `None` for an empty / ragged grid.
+fn factor_count(level_lens: impl Iterator<Item = usize>) -> Option<usize> {
+    let mut k = None;
+    for len in level_lens {
+        match k {
+            None => k = Some(len),
+            Some(prev) if prev == len => {}
+            Some(_) => return None, // ragged level tuples — cannot decompose.
+        }
+    }
+    k.filter(|&k| k >= 1)
+}
+
+/// Maximum level index (+1 ⇒ number of levels) present on each factor.
+fn level_dims<'a>(level_tuples: impl Iterator<Item = &'a [usize]>, k: usize) -> Vec<usize> {
+    let mut dims = vec![0usize; k];
+    for levels in level_tuples {
+        for (d, &lv) in levels.iter().enumerate() {
+            if lv + 1 > dims[d] {
+                dims[d] = lv + 1;
+            }
+        }
+    }
+    dims
+}
+
+/// Build the contrast coefficient map (`participating-level-tuple → coefficient`)
+/// for a term, given the per-factor level counts on the participating factors.
+///
+/// Mirrors the binary worker's contrasts. Returns `None` when a participating
+/// factor has fewer than two levels (no contrast is defined).
+fn contrast_coeffs(kind: &TermKind, dims: &[usize]) -> Option<BTreeMap<Vec<usize>, f64>> {
+    let mut coeffs: BTreeMap<Vec<usize>, f64> = BTreeMap::new();
+    let mut add = |key: Vec<usize>, c: f64| {
+        *coeffs.entry(key).or_insert(0.0) += c;
+    };
+
+    match *kind {
+        TermKind::Main { factor } => {
+            let levels = *dims.get(factor)?;
+            if levels < 2 {
+                return None;
+            }
+            let top = levels - 1;
+            add(vec![top], 1.0);
+            add(vec![0], -1.0);
+        }
+        TermKind::TwoWay { a, b } => {
+            let na = *dims.get(a)?;
+            let nb = *dims.get(b)?;
+            if na < 2 || nb < 2 {
+                return None;
+            }
+            // Mean of the elementary 2×2 interaction contrasts anchored at 0:
+            //   (e[i][j] − e[i][0]) − (e[0][j] − e[0][0]).
+            let pairs = ((na - 1) * (nb - 1)) as f64;
+            let w = 1.0 / pairs;
+            for i in 1..na {
+                for j in 1..nb {
+                    add(vec![i, j], w);
+                    add(vec![i, 0], -w);
+                    add(vec![0, j], -w);
+                    add(vec![0, 0], w);
+                }
+            }
+        }
+        TermKind::ThreeWay { a, b, c } => {
+            let na = *dims.get(a)?;
+            let nb = *dims.get(b)?;
+            let nc = *dims.get(c)?;
+            if na < 2 || nb < 2 || nc < 2 {
+                return None;
+            }
+            // Difference-in-differences-of-differences over the 2×2×2 corners
+            // anchored at level 0 on each factor:
+            //   [(e111−e110)−(e101−e100)] − [(e011−e010)−(e001−e000)].
+            // Expanding, a corner's sign is (−1)^(number of coords at level 0),
+            // i.e. the all-"top" corner is +1.
+            let top = [na - 1, nb - 1, nc - 1];
+            for (ia, &la) in [0, top[0]].iter().enumerate() {
+                for (ib, &lb) in [0, top[1]].iter().enumerate() {
+                    for (ic, &lc) in [0, top[2]].iter().enumerate() {
+                        let zeros = (1 - ia) + (1 - ib) + (1 - ic); // coords at level 0.
+                        let sign = if zeros % 2 == 0 { 1.0 } else { -1.0 };
+                        add(vec![la, lb, lc], sign);
+                    }
+                }
+            }
+        }
+    }
+
+    Some(coeffs)
+}
+
+/// The factor indices a term participates in (in tuple order).
+fn term_factors(kind: &TermKind) -> Vec<usize> {
+    match *kind {
+        TermKind::Main { factor } => vec![factor],
+        TermKind::TwoWay { a, b } => vec![a, b],
+        TermKind::ThreeWay { a, b, c } => vec![a, b, c],
+    }
+}
+
+/// Enumerate every term emitted for a `k`-factor grid at the requested `order`
+/// (all main effects, all pairwise interactions, and — when `order == 3` and
+/// `k >= 3` — the three-way interaction over the first three factors).
+fn enumerate_terms(k: usize, order: usize) -> Vec<TermKind> {
+    let mut terms = Vec::new();
+    for f in 0..k {
+        terms.push(TermKind::Main { factor: f });
+    }
+    for a in 0..k {
+        for b in (a + 1)..k {
+            terms.push(TermKind::TwoWay { a, b });
+        }
+    }
+    if order >= 3 && k >= 3 {
+        terms.push(TermKind::ThreeWay { a: 0, b: 1, c: 2 });
+    }
+    terms
+}
+
+/// Shared driver: for each term, collapse the grid onto the participating
+/// factors via `collapse_post`, form the linear contrast, and summarise its
+/// Normal posterior. `collapse_post` maps a participating-level key to a
+/// [`CellPost`] (or `None` if that collapsed cell is degenerate / absent).
+fn run_terms<F>(
+    terms: &[TermKind],
+    dims_full: &[usize],
+    mut collapse_post: F,
+) -> Vec<(TermKind, BayesianInteraction)>
+where
+    F: FnMut(&[usize], &[usize]) -> Option<CellPost>,
+{
+    let mut out = Vec::new();
+    for kind in terms {
+        let factors = term_factors(kind);
+        let Some(coeffs) = contrast_coeffs(kind, dims_full) else {
+            continue; // factor with < 2 levels ⇒ no contrast.
+        };
+
+        let mut mean = 0.0f64;
+        let mut var = 0.0f64;
+        let mut ok = true;
+        for (key, &coef) in &coeffs {
+            if coef == 0.0 {
+                continue;
+            }
+            match collapse_post(&factors, key) {
+                Some(post) => {
+                    mean += coef * post.est;
+                    var += coef * coef * post.var;
+                }
+                None => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if !ok {
+            continue; // degenerate / missing collapsed cell ⇒ omit the term.
+        }
+        if let Some(bi) = summarise(mean, var) {
+            out.push((*kind, bi));
+        }
+    }
+    out
+}
+
+/// See module contract. Normal-Normal interaction posteriors for a continuous
+/// metric over a `k`-factor grid.
 pub fn continuous_bayes(
     cells: &[NdContinuousCell],
     order: usize,
 ) -> Vec<(TermKind, BayesianInteraction)> {
-    let _ = (cells, order);
-    Vec::new()
+    if cells.is_empty() {
+        return Vec::new();
+    }
+    let Some(k) = factor_count(cells.iter().map(|c| c.levels.len())) else {
+        return Vec::new();
+    };
+    let dims = level_dims(cells.iter().map(|c| c.levels.as_slice()), k);
+    if dims.contains(&0) {
+        return Vec::new();
+    }
+    let terms = enumerate_terms(k, order);
+
+    // Collapse: sum (n, sum, sum_sq) across non-participating factors, keyed by
+    // the participating-level tuple.
+    run_terms(&terms, &dims, |factors, key| {
+        let mut n = 0.0f64;
+        let mut sum = 0.0f64;
+        let mut sum_sq = 0.0f64;
+        for cell in cells {
+            if factors
+                .iter()
+                .zip(key)
+                .all(|(&f, &want)| cell.levels[f] == want)
+            {
+                n += cell.n as f64;
+                sum += cell.sum;
+                sum_sq += cell.sum_sq;
+            }
+        }
+        continuous_cell_post(n, sum, sum_sq)
+    })
 }
 
-/// See module contract. **Stub** — returns no posteriors until implemented (P2.T6).
+/// See module contract. Normal-Normal interaction posteriors for a ratio metric
+/// (delta-method per-cell variance) over a `k`-factor grid.
 pub fn ratio_bayes(cells: &[NdRatioCell], order: usize) -> Vec<(TermKind, BayesianInteraction)> {
-    let _ = (cells, order);
-    Vec::new()
+    if cells.is_empty() {
+        return Vec::new();
+    }
+    let Some(k) = factor_count(cells.iter().map(|c| c.levels.len())) else {
+        return Vec::new();
+    };
+    let dims = level_dims(cells.iter().map(|c| c.levels.as_slice()), k);
+    if dims.contains(&0) {
+        return Vec::new();
+    }
+    let terms = enumerate_terms(k, order);
+
+    // Collapse: sum all six sufficient stats across non-participating factors.
+    run_terms(&terms, &dims, |factors, key| {
+        let mut n = 0.0f64;
+        let mut num_sum = 0.0f64;
+        let mut den_sum = 0.0f64;
+        let mut num_sq_sum = 0.0f64;
+        let mut den_sq_sum = 0.0f64;
+        let mut num_den_sum = 0.0f64;
+        for cell in cells {
+            if factors
+                .iter()
+                .zip(key)
+                .all(|(&f, &want)| cell.levels[f] == want)
+            {
+                n += cell.n as f64;
+                num_sum += cell.num_sum;
+                den_sum += cell.den_sum;
+                num_sq_sum += cell.num_sq_sum;
+                den_sq_sum += cell.den_sq_sum;
+                num_den_sum += cell.num_den_sum;
+            }
+        }
+        ratio_cell_post(n, num_sum, den_sum, num_sq_sum, den_sq_sum, num_den_sum)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Builders ────────────────────────────────────────────────────────────
+
+    /// Build a continuous cell from a list of observed values.
+    fn cont_cell(levels: &[usize], values: &[f64]) -> NdContinuousCell {
+        let n = values.len() as u64;
+        let sum = values.iter().sum();
+        let sum_sq = values.iter().map(|v| v * v).sum();
+        NdContinuousCell {
+            levels: levels.to_vec(),
+            n,
+            sum,
+            sum_sq,
+        }
+    }
+
+    /// Build a ratio cell from a list of `(numerator, denominator)` pairs.
+    fn ratio_cell(levels: &[usize], pairs: &[(f64, f64)]) -> NdRatioCell {
+        let n = pairs.len() as u64;
+        let mut num_sum = 0.0;
+        let mut den_sum = 0.0;
+        let mut num_sq_sum = 0.0;
+        let mut den_sq_sum = 0.0;
+        let mut num_den_sum = 0.0;
+        for &(num, den) in pairs {
+            num_sum += num;
+            den_sum += den;
+            num_sq_sum += num * num;
+            den_sq_sum += den * den;
+            num_den_sum += num * den;
+        }
+        NdRatioCell {
+            levels: levels.to_vec(),
+            n,
+            num_sum,
+            den_sum,
+            num_sq_sum,
+            den_sq_sum,
+            num_den_sum,
+        }
+    }
+
+    /// Deterministic pseudo-noise in roughly [-amp, amp] from a small LCG, so
+    /// cells carry realistic within-cell variance without an RNG dependency.
+    fn jitter(seed: u64, amp: f64) -> impl Iterator<Item = f64> {
+        let mut state = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+        std::iter::repeat_with(move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            let u = (state >> 11) as f64 / (1u64 << 53) as f64; // in [0,1)
+            (u - 0.5) * 2.0 * amp
+        })
+    }
+
+    /// Continuous values: `count` points centred on `mean` with bounded jitter.
+    fn cont_values(seed: u64, count: usize, mean: f64, amp: f64) -> Vec<f64> {
+        jitter(seed, amp).take(count).map(|e| mean + e).collect()
+    }
+
+    fn find(
+        out: &[(TermKind, BayesianInteraction)],
+        kind: TermKind,
+    ) -> Option<&BayesianInteraction> {
+        out.iter().find(|(k, _)| *k == kind).map(|(_, b)| b)
+    }
+
+    // ── continuous_bayes ─────────────────────────────────────────────────────
+
+    #[test]
+    fn continuous_planted_interaction_high_prob() {
+        // 2×2 means with a strong difference-in-differences:
+        //   (m11 − m10) − (m01 − m00) = (20 − 10) − (10 − 10) = 10.
+        let cells = vec![
+            cont_cell(&[0, 0], &cont_values(1, 60, 10.0, 1.0)),
+            cont_cell(&[0, 1], &cont_values(2, 60, 10.0, 1.0)),
+            cont_cell(&[1, 0], &cont_values(3, 60, 10.0, 1.0)),
+            cont_cell(&[1, 1], &cont_values(4, 60, 20.0, 1.0)),
+        ];
+        let out = continuous_bayes(&cells, 2);
+        let tw = find(&out, TermKind::TwoWay { a: 0, b: 1 }).expect("two-way present");
+        assert!(tw.prob > 0.95, "prob={}", tw.prob);
+        assert!((tw.expected - 10.0).abs() < 0.5, "expected={}", tw.expected);
+        // CI excludes 0.
+        assert!(
+            tw.ci_low > 0.0 && tw.ci_high > 0.0,
+            "ci=[{},{}]",
+            tw.ci_low,
+            tw.ci_high
+        );
+    }
+
+    #[test]
+    fn continuous_additive_means_prob_half() {
+        // Additive: m = base + row_eff + col_eff, no interaction.
+        //   m00=10, m01=14, m10=13, m11=17 ⇒ DiD = (17−13)−(14−10) = 0.
+        let cells = vec![
+            cont_cell(&[0, 0], &cont_values(11, 80, 10.0, 1.0)),
+            cont_cell(&[0, 1], &cont_values(12, 80, 14.0, 1.0)),
+            cont_cell(&[1, 0], &cont_values(13, 80, 13.0, 1.0)),
+            cont_cell(&[1, 1], &cont_values(14, 80, 17.0, 1.0)),
+        ];
+        let out = continuous_bayes(&cells, 2);
+        let tw = find(&out, TermKind::TwoWay { a: 0, b: 1 }).expect("two-way present");
+        assert!((tw.expected).abs() < 0.5, "expected={}", tw.expected);
+        assert!((tw.prob - 0.5).abs() < 0.2, "prob={}", tw.prob);
+        // CI includes 0.
+        assert!(
+            tw.ci_low < 0.0 && tw.ci_high > 0.0,
+            "ci=[{},{}]",
+            tw.ci_low,
+            tw.ci_high
+        );
+    }
+
+    #[test]
+    fn continuous_main_effects_returned() {
+        let cells = vec![
+            cont_cell(&[0, 0], &cont_values(21, 60, 10.0, 1.0)),
+            cont_cell(&[0, 1], &cont_values(22, 60, 12.0, 1.0)),
+            cont_cell(&[1, 0], &cont_values(23, 60, 18.0, 1.0)),
+            cont_cell(&[1, 1], &cont_values(24, 60, 20.0, 1.0)),
+        ];
+        let out = continuous_bayes(&cells, 2);
+        // Main{0}: collapse over factor 1 → top-vs-0 ≈ ((18+20)/2 − (10+12)/2) = 8.
+        let m0 = find(&out, TermKind::Main { factor: 0 }).expect("main 0 present");
+        assert!(
+            (m0.expected - 8.0).abs() < 0.6,
+            "main0 expected={}",
+            m0.expected
+        );
+        assert!(m0.prob > 0.95, "main0 prob={}", m0.prob);
+        // Main{1}: ((12+20)/2 − (10+18)/2) = 2.
+        let m1 = find(&out, TermKind::Main { factor: 1 }).expect("main 1 present");
+        assert!(
+            (m1.expected - 2.0).abs() < 0.6,
+            "main1 expected={}",
+            m1.expected
+        );
+    }
+
+    #[test]
+    fn continuous_three_way_returned() {
+        // 2×2×2 grid; ThreeWay must be present at order 3, and Main/TwoWay too.
+        let mut cells = Vec::new();
+        let mut seed = 100u64;
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    // Plant a 3-way: bump the (1,1,1) corner.
+                    let mean = 10.0 + if (a, b, c) == (1, 1, 1) { 8.0 } else { 0.0 };
+                    cells.push(cont_cell(&[a, b, c], &cont_values(seed, 50, mean, 1.0)));
+                    seed += 1;
+                }
+            }
+        }
+        let out = continuous_bayes(&cells, 3);
+        let tw = find(&out, TermKind::ThreeWay { a: 0, b: 1, c: 2 }).expect("three-way present");
+        // DiDiD over corners with only (1,1,1) bumped = +8.
+        assert!(
+            (tw.expected - 8.0).abs() < 0.6,
+            "3way expected={}",
+            tw.expected
+        );
+        assert!(tw.prob > 0.95, "3way prob={}", tw.prob);
+        // All three mains + all three pairwise present.
+        assert!(find(&out, TermKind::Main { factor: 2 }).is_some());
+        assert!(find(&out, TermKind::TwoWay { a: 1, b: 2 }).is_some());
+    }
+
+    #[test]
+    fn continuous_order_two_omits_three_way() {
+        let mut cells = Vec::new();
+        let mut seed = 200u64;
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    cells.push(cont_cell(
+                        &[a, b, c],
+                        &cont_values(seed, 50, 10.0 + a as f64, 1.0),
+                    ));
+                    seed += 1;
+                }
+            }
+        }
+        let out = continuous_bayes(&cells, 2);
+        assert!(find(&out, TermKind::ThreeWay { a: 0, b: 1, c: 2 }).is_none());
+        assert!(find(&out, TermKind::TwoWay { a: 0, b: 1 }).is_some());
+    }
+
+    #[test]
+    fn continuous_larger_grid_two_way_averaged() {
+        // 3×2 grid: the averaged elementary-2×2 contrast over i∈{1,2}, j∈{1}.
+        // m[0][0]=10 m[0][1]=10 ; m[1][0]=10 m[1][1]=16 ; m[2][0]=10 m[2][1]=14
+        // contrast_i1 = (16−10)−(10−10)=6 ; contrast_i2 = (14−10)−(10−10)=4
+        // average = 5.
+        let cells = vec![
+            cont_cell(&[0, 0], &cont_values(31, 60, 10.0, 1.0)),
+            cont_cell(&[0, 1], &cont_values(32, 60, 10.0, 1.0)),
+            cont_cell(&[1, 0], &cont_values(33, 60, 10.0, 1.0)),
+            cont_cell(&[1, 1], &cont_values(34, 60, 16.0, 1.0)),
+            cont_cell(&[2, 0], &cont_values(35, 60, 10.0, 1.0)),
+            cont_cell(&[2, 1], &cont_values(36, 60, 14.0, 1.0)),
+        ];
+        let out = continuous_bayes(&cells, 2);
+        let tw = find(&out, TermKind::TwoWay { a: 0, b: 1 }).expect("two-way present");
+        assert!((tw.expected - 5.0).abs() < 0.6, "expected={}", tw.expected);
+    }
+
+    #[test]
+    fn continuous_degenerate_cell_omits_term() {
+        // Cell (1,1) has n=1 (no within-cell variance). The 2×2 TwoWay uses that
+        // cell uncollapsed ⇒ omitted. The mains collapse over the other factor,
+        // pooling (1,1) with a well-populated cell, so they stay well-defined.
+        let cells = vec![
+            cont_cell(&[0, 0], &cont_values(41, 60, 10.0, 1.0)),
+            cont_cell(&[0, 1], &cont_values(42, 60, 12.0, 1.0)),
+            cont_cell(&[1, 0], &cont_values(43, 60, 14.0, 1.0)),
+            cont_cell(&[1, 1], &[20.0]), // n = 1 ⇒ degenerate as a standalone cell.
+        ];
+        let out = continuous_bayes(&cells, 2);
+        assert!(find(&out, TermKind::TwoWay { a: 0, b: 1 }).is_none());
+        // Main{0} collapses factor 1 (cells (1,0)+(1,1) pooled) ⇒ defined.
+        assert!(find(&out, TermKind::Main { factor: 0 }).is_some());
+    }
+
+    #[test]
+    fn continuous_degenerate_uncollapsed_main_omitted() {
+        // A degenerate cell that the main effect cannot pool away (single level
+        // on the *other* factor) ⇒ the main on factor 0 is omitted.
+        let cells = vec![
+            cont_cell(&[0, 0], &cont_values(71, 60, 10.0, 1.0)),
+            cont_cell(&[1, 0], &[20.0]), // n=1; only level 0 on factor 1 ⇒ no pooling.
+        ];
+        let out = continuous_bayes(&cells, 2);
+        assert!(find(&out, TermKind::Main { factor: 0 }).is_none());
+    }
+
+    #[test]
+    fn continuous_empty_and_single_level_handled() {
+        assert!(continuous_bayes(&[], 2).is_empty());
+        // Single level on factor 1 ⇒ no two-way / no Main{1}, but Main{0} ok.
+        let cells = vec![
+            cont_cell(&[0, 0], &cont_values(51, 60, 10.0, 1.0)),
+            cont_cell(&[1, 0], &cont_values(52, 60, 16.0, 1.0)),
+        ];
+        let out = continuous_bayes(&cells, 2);
+        assert!(find(&out, TermKind::Main { factor: 0 }).is_some());
+        assert!(find(&out, TermKind::Main { factor: 1 }).is_none());
+        assert!(find(&out, TermKind::TwoWay { a: 0, b: 1 }).is_none());
+    }
+
+    #[test]
+    fn continuous_deterministic() {
+        let cells = vec![
+            cont_cell(&[0, 0], &cont_values(61, 60, 10.0, 1.0)),
+            cont_cell(&[0, 1], &cont_values(62, 60, 10.0, 1.0)),
+            cont_cell(&[1, 0], &cont_values(63, 60, 10.0, 1.0)),
+            cont_cell(&[1, 1], &cont_values(64, 60, 20.0, 1.0)),
+        ];
+        let a = continuous_bayes(&cells, 2);
+        let b = continuous_bayes(&cells, 2);
+        assert_eq!(a.len(), b.len());
+        for ((ka, va), (kb, vb)) in a.iter().zip(b.iter()) {
+            assert_eq!(ka, kb);
+            // Bit-identical: closed-form, no RNG.
+            assert_eq!(va.expected.to_bits(), vb.expected.to_bits());
+            assert_eq!(va.prob.to_bits(), vb.prob.to_bits());
+            assert_eq!(va.ci_low.to_bits(), vb.ci_low.to_bits());
+            assert_eq!(va.ci_high.to_bits(), vb.ci_high.to_bits());
+        }
+    }
+
+    // ── ratio_bayes ──────────────────────────────────────────────────────────
+
+    /// Build a ratio cell of `count` units, each `(rate + jitter, 1.0)` so the
+    /// cell ratio ≈ `rate` with realistic (non-zero, finite) delta variance.
+    fn ratio_at(seed: u64, count: usize, rate: f64, amp: f64) -> Vec<(f64, f64)> {
+        jitter(seed, amp)
+            .take(count)
+            .map(|e| (rate + e, 1.0))
+            .collect()
+    }
+
+    #[test]
+    fn ratio_planted_interaction_high_prob() {
+        // Cell ratios (num/den with den≈1): DiD = (0.6−0.3)−(0.3−0.3)=0.3.
+        let cells = vec![
+            ratio_cell(&[0, 0], &ratio_at(1, 120, 0.30, 0.05)),
+            ratio_cell(&[0, 1], &ratio_at(2, 120, 0.30, 0.05)),
+            ratio_cell(&[1, 0], &ratio_at(3, 120, 0.30, 0.05)),
+            ratio_cell(&[1, 1], &ratio_at(4, 120, 0.60, 0.05)),
+        ];
+        let out = ratio_bayes(&cells, 2);
+        let tw = find(&out, TermKind::TwoWay { a: 0, b: 1 }).expect("two-way present");
+        assert!(tw.prob > 0.95, "prob={}", tw.prob);
+        assert!(
+            (tw.expected - 0.30).abs() < 0.03,
+            "expected={}",
+            tw.expected
+        );
+        assert!(tw.ci_low > 0.0, "ci_low={}", tw.ci_low);
+    }
+
+    #[test]
+    fn ratio_additive_prob_half() {
+        // No interaction in ratios: r00=0.30 r01=0.40 r10=0.50 r11=0.60.
+        //   DiD = (0.60−0.50)−(0.40−0.30) = 0.
+        let cells = vec![
+            ratio_cell(&[0, 0], &ratio_at(11, 150, 0.30, 0.05)),
+            ratio_cell(&[0, 1], &ratio_at(12, 150, 0.40, 0.05)),
+            ratio_cell(&[1, 0], &ratio_at(13, 150, 0.50, 0.05)),
+            ratio_cell(&[1, 1], &ratio_at(14, 150, 0.60, 0.05)),
+        ];
+        let out = ratio_bayes(&cells, 2);
+        let tw = find(&out, TermKind::TwoWay { a: 0, b: 1 }).expect("two-way present");
+        assert!(tw.expected.abs() < 0.03, "expected={}", tw.expected);
+        assert!((tw.prob - 0.5).abs() < 0.2, "prob={}", tw.prob);
+        assert!(
+            tw.ci_low < 0.0 && tw.ci_high > 0.0,
+            "ci=[{},{}]",
+            tw.ci_low,
+            tw.ci_high
+        );
+    }
+
+    #[test]
+    fn ratio_main_effects_returned() {
+        let cells = vec![
+            ratio_cell(&[0, 0], &ratio_at(21, 120, 0.30, 0.05)),
+            ratio_cell(&[0, 1], &ratio_at(22, 120, 0.32, 0.05)),
+            ratio_cell(&[1, 0], &ratio_at(23, 120, 0.50, 0.05)),
+            ratio_cell(&[1, 1], &ratio_at(24, 120, 0.52, 0.05)),
+        ];
+        let out = ratio_bayes(&cells, 2);
+        let m0 = find(&out, TermKind::Main { factor: 0 }).expect("main 0 present");
+        // ((0.50+0.52)/2 − (0.30+0.32)/2) = 0.20.
+        assert!(
+            (m0.expected - 0.20).abs() < 0.03,
+            "main0 expected={}",
+            m0.expected
+        );
+        assert!(m0.prob > 0.95, "main0 prob={}", m0.prob);
+    }
+
+    #[test]
+    fn ratio_three_way_returned() {
+        let mut cells = Vec::new();
+        let mut seed = 300u64;
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    let rate = 0.30 + if (a, b, c) == (1, 1, 1) { 0.30 } else { 0.0 };
+                    cells.push(ratio_cell(&[a, b, c], &ratio_at(seed, 120, rate, 0.05)));
+                    seed += 1;
+                }
+            }
+        }
+        let out = ratio_bayes(&cells, 3);
+        let tw = find(&out, TermKind::ThreeWay { a: 0, b: 1, c: 2 }).expect("three-way present");
+        assert!(
+            (tw.expected - 0.30).abs() < 0.04,
+            "3way expected={}",
+            tw.expected
+        );
+        assert!(tw.prob > 0.9, "3way prob={}", tw.prob);
+        assert!(find(&out, TermKind::Main { factor: 0 }).is_some());
+    }
+
+    #[test]
+    fn ratio_degenerate_cell_omitted() {
+        // Zero-denominator cell ⇒ ratio undefined ⇒ TwoWay omitted.
+        let cells = vec![
+            ratio_cell(&[0, 0], &ratio_at(41, 120, 0.30, 0.05)),
+            ratio_cell(&[0, 1], &ratio_at(42, 120, 0.30, 0.05)),
+            ratio_cell(&[1, 0], &ratio_at(43, 120, 0.30, 0.05)),
+            ratio_cell(&[1, 1], &[(0.0, 0.0); 120]), // den_sum = 0 ⇒ degenerate.
+        ];
+        let out = ratio_bayes(&cells, 2);
+        assert!(find(&out, TermKind::TwoWay { a: 0, b: 1 }).is_none());
+    }
+
+    #[test]
+    fn ratio_empty_handled() {
+        assert!(ratio_bayes(&[], 2).is_empty());
+    }
+
+    #[test]
+    fn ratio_deterministic() {
+        let cells = vec![
+            ratio_cell(&[0, 0], &ratio_at(51, 120, 0.30, 0.05)),
+            ratio_cell(&[0, 1], &ratio_at(52, 120, 0.30, 0.05)),
+            ratio_cell(&[1, 0], &ratio_at(53, 120, 0.30, 0.05)),
+            ratio_cell(&[1, 1], &ratio_at(54, 120, 0.60, 0.05)),
+        ];
+        let a = ratio_bayes(&cells, 2);
+        let b = ratio_bayes(&cells, 2);
+        assert_eq!(a.len(), b.len());
+        for ((ka, va), (kb, vb)) in a.iter().zip(b.iter()) {
+            assert_eq!(ka, kb);
+            assert_eq!(va.expected.to_bits(), vb.expected.to_bits());
+            assert_eq!(va.prob.to_bits(), vb.prob.to_bits());
+            assert_eq!(va.ci_low.to_bits(), vb.ci_low.to_bits());
+            assert_eq!(va.ci_high.to_bits(), vb.ci_high.to_bits());
+        }
+    }
 }
