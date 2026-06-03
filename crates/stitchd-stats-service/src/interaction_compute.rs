@@ -66,6 +66,109 @@ pub struct CellAggregate {
     pub value_sq_sum: f64,
 }
 
+// ── N-dimensional (N-way) interaction cell ───────────────────────────────────
+
+/// One N-dimensional interaction cell, keyed by the variant tuple across the
+/// participating experiments (in experiment-tuple order). Generalizes
+/// [`CellAggregate`] (the pairwise A×B cell) to any interaction order.
+///
+/// Carries the sufficient statistics for *every* supported metric kind so a
+/// single uniform SQL shape feeds binary (conversion/funnel), continuous, and
+/// ratio interaction tests:
+/// - **binary / funnel:** `n` + `successes`
+/// - **continuous:** `n` + `value_sum` + `value_sq_sum`
+/// - **ratio:** `n` + `num_sum` / `den_sum` (point estimate) + `num_sq_sum` /
+///   `den_sq_sum` / `num_den_sum` (delta-method variance & covariance)
+///
+/// Serialized as the JSON array stored in `experiment_interactions.cell_stats`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct NdCellAggregate {
+    /// Variant key per participating experiment, in tuple order. `len()` equals
+    /// the interaction order (2 for pairwise, 3 for three-way).
+    pub variant_keys: Vec<String>,
+    /// Shared contexts in this cell.
+    pub n: u64,
+    /// Shared contexts with ≥1 qualifying event (conversion) or that reached the
+    /// funnel's final step.
+    pub successes: u64,
+    /// Σ per-context metric value (continuous).
+    pub value_sum: f64,
+    /// Σ per-context metric value² (continuous).
+    pub value_sq_sum: f64,
+    /// Σ per-context ratio numerator (ratio metrics).
+    pub num_sum: f64,
+    /// Σ per-context ratio denominator (ratio metrics).
+    pub den_sum: f64,
+    /// Σ numerator² — ratio delta-method variance term.
+    pub num_sq_sum: f64,
+    /// Σ denominator² — ratio delta-method variance term.
+    pub den_sq_sum: f64,
+    /// Σ numerator·denominator — ratio delta-method covariance term.
+    pub num_den_sum: f64,
+}
+
+impl NdCellAggregate {
+    /// Interaction order this cell belongs to (number of participating
+    /// experiments) — the arity of its variant tuple.
+    #[must_use]
+    pub fn order(&self) -> usize {
+        self.variant_keys.len()
+    }
+}
+
+/// Serialize an N-D cell grid to the JSON string persisted in
+/// `experiment_interactions.cell_stats`. Returns the empty array `"[]"` on the
+/// (practically impossible) serialization failure, matching the pairwise path.
+#[must_use]
+pub fn cells_to_json(cells: &[NdCellAggregate]) -> String {
+    serde_json::to_string(cells).unwrap_or_else(|_| "[]".to_owned())
+}
+
+/// Parse an N-D cell grid back from a `cell_stats` JSON string.
+///
+/// # Errors
+/// Returns the `serde_json` error if the payload is not a valid cell array.
+pub fn cells_from_json(s: &str) -> Result<Vec<NdCellAggregate>, serde_json::Error> {
+    serde_json::from_str(s)
+}
+
+/// For an N-D cell set of the given `order`, return the per-dimension dense
+/// level keys: `levels[d]` is the sorted distinct variant keys observed in
+/// dimension `d`. This defines the stable 0-based level index used by the
+/// contingency-table / multi-factor-ANOVA math downstream — every consumer
+/// derives indices the same way, so the tensor layout is deterministic.
+#[must_use]
+pub fn dense_levels(cells: &[NdCellAggregate], order: usize) -> Vec<Vec<String>> {
+    let mut levels: Vec<std::collections::BTreeSet<String>> = vec![Default::default(); order];
+    for c in cells {
+        for (d, key) in c.variant_keys.iter().enumerate().take(order) {
+            levels[d].insert(key.clone());
+        }
+    }
+    levels
+        .into_iter()
+        .map(|set| set.into_iter().collect())
+        .collect()
+}
+
+/// Map a cell's variant tuple to its dense per-dimension level indices, given
+/// the `levels` returned by [`dense_levels`].
+///
+/// Returns `None` when the cell's arity disagrees with `levels.len()` or any
+/// variant key is absent from its dimension (neither happens for cells drawn
+/// from the same set `levels` was built from — the `None` is a guard for misuse).
+#[must_use]
+pub fn level_indices(cell: &NdCellAggregate, levels: &[Vec<String>]) -> Option<Vec<usize>> {
+    if cell.variant_keys.len() != levels.len() {
+        return None;
+    }
+    cell.variant_keys
+        .iter()
+        .zip(levels)
+        .map(|(key, dim)| dim.iter().position(|k| k == key))
+        .collect()
+}
+
 /// One computed interaction row, ready to persist to `experiment_interactions`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InteractionRow {
@@ -1169,5 +1272,94 @@ mod tests {
 
         assert_eq!(n, 0, "no shared population → no row");
         assert!(writer.rows.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod nd_cell_tests {
+    use super::{NdCellAggregate, cells_from_json, cells_to_json, dense_levels, level_indices};
+
+    fn cell(variants: &[&str], n: u64, successes: u64) -> NdCellAggregate {
+        NdCellAggregate {
+            variant_keys: variants.iter().map(|s| (*s).to_owned()).collect(),
+            n,
+            successes,
+            value_sum: n as f64 * 1.5,
+            value_sq_sum: n as f64 * 3.0,
+            num_sum: successes as f64,
+            den_sum: n as f64,
+            num_sq_sum: successes as f64,
+            den_sq_sum: n as f64,
+            num_den_sum: successes as f64,
+        }
+    }
+
+    #[test]
+    fn order_is_variant_arity() {
+        assert_eq!(cell(&["a", "b"], 10, 3).order(), 2);
+        assert_eq!(cell(&["a", "b", "c"], 10, 3).order(), 3);
+    }
+
+    #[test]
+    fn json_round_trips_pairwise() {
+        let cells = vec![cell(&["control", "on"], 100, 20), cell(&["t1", "off"], 50, 5)];
+        let json = cells_to_json(&cells);
+        let back = cells_from_json(&json).expect("valid json");
+        assert_eq!(cells, back);
+    }
+
+    #[test]
+    fn json_round_trips_three_way() {
+        let cells = vec![
+            cell(&["control", "on", "blue"], 100, 20),
+            cell(&["treat", "off", "red"], 80, 30),
+        ];
+        let json = cells_to_json(&cells);
+        let back = cells_from_json(&json).expect("valid json");
+        assert_eq!(cells, back);
+        // every variant tuple has arity 3
+        assert!(back.iter().all(|c| c.order() == 3));
+    }
+
+    #[test]
+    fn bad_json_is_an_error_not_a_panic() {
+        assert!(cells_from_json("not json").is_err());
+    }
+
+    #[test]
+    fn dense_levels_are_sorted_distinct_per_dimension() {
+        // dim0: {control, treat}; dim1: {off, on}; dim2: {blue, green, red}
+        let cells = vec![
+            cell(&["treat", "on", "red"], 1, 0),
+            cell(&["control", "off", "blue"], 1, 0),
+            cell(&["control", "on", "green"], 1, 0),
+        ];
+        let levels = dense_levels(&cells, 3);
+        assert_eq!(levels[0], vec!["control", "treat"]);
+        assert_eq!(levels[1], vec!["off", "on"]);
+        assert_eq!(levels[2], vec!["blue", "green", "red"]);
+    }
+
+    #[test]
+    fn level_indices_map_tuple_to_dense_grid_position() {
+        let cells = vec![
+            cell(&["treat", "on", "red"], 1, 0),
+            cell(&["control", "off", "blue"], 1, 0),
+            cell(&["control", "on", "green"], 1, 0),
+        ];
+        let levels = dense_levels(&cells, 3);
+        // ("treat","on","red") -> (1, 1, 2)
+        assert_eq!(level_indices(&cells[0], &levels), Some(vec![1, 1, 2]));
+        // ("control","off","blue") -> (0, 0, 0)
+        assert_eq!(level_indices(&cells[1], &levels), Some(vec![0, 0, 0]));
+        // ("control","on","green") -> (0, 1, 1)
+        assert_eq!(level_indices(&cells[2], &levels), Some(vec![0, 1, 1]));
+    }
+
+    #[test]
+    fn level_indices_guards_arity_mismatch() {
+        let levels = dense_levels(&[cell(&["a", "b"], 1, 0)], 2);
+        // a 3-arity cell against 2-D levels → None (misuse guard)
+        assert_eq!(level_indices(&cell(&["a", "b", "c"], 1, 0), &levels), None);
     }
 }
