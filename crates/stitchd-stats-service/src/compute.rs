@@ -42,12 +42,32 @@
 //! real [`Recommendation`]. When the raw sample cannot be fetched (or is empty)
 //! the pair falls back to `NeedsMoreData` with no frequentist/bayesian blob.
 //!
-//! ## CUPED (deferred)
+//! ## CUPED (numeric metrics)
 //!
-//! `pre_period_days` is captured on [`crate::scheduler::RunningExperiment`] but
-//! intentionally unused in this pass — CUPED variance reduction is tracked as a
-//! follow-up (it needs a pre-period per-context fetch + a `cuped_fetch`
-//! legacy-column fix).
+//! When the iteration has a pre-period window
+//! ([`crate::scheduler::RunningExperiment::pre_period_days`] `> 0`) and the
+//! metric is **Numeric** (sum/avg aggregation), the pass adjusts each assigned
+//! unit's post-period value `Y` by its pre-period covariate `X_pre` to reduce
+//! variance before the frequentist/bayesian/sequential analyses
+//! ([`compute_cuped_numeric`]):
+//!
+//! 1. the post-period per-**unit** `Y` is fetched via
+//!    [`crate::queries::variant_stats::build_unit_values_query`] (ITT, keeping
+//!    `context_key` so each unit's `Y` can be paired with its `X_pre`);
+//! 2. the pre-period covariate `X_pre` is fetched per `(context_type,
+//!    context_key)` over `[started_at − pre_period_days days, started_at)` via
+//!    [`crate::cuped_fetch::fetch_pre_period_observations`] (same coalesced
+//!    numeric expression as `Y`);
+//! 3. [`stitchd_core::experimentation::stats::cuped::apply_cuped`] is called
+//!    ONCE over all units (POOLED θ across variants for unbiasedness), then the
+//!    order-aligned `adjusted_values` are split back per variant into Numeric
+//!    [`VariantStats`] ([`cuped_adjusted_variant_stats`]);
+//! 4. the standard analyses run on those adjusted stats (the ITT `sample_size`
+//!    is unchanged), and `variance_reduction_pct` is surfaced under
+//!    `variant_stats["cuped"]` (NOT folded into the recommendation string).
+//!
+//! Count / funnel / ratio / percentile metrics SKIP CUPED, as does any metric
+//! when `pre_period_days == 0`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -73,7 +93,7 @@ use crate::dispatch::rewrite_placeholders_to_clickhouse;
 use crate::queries::QueryBind;
 use crate::queries::variant_stats::{
     build_aggregation_cells_query, build_assignment_counts_query, build_funnel_cells_query,
-    build_percentile_samples_query, build_ratio_cells_query,
+    build_percentile_samples_query, build_ratio_cells_query, build_unit_values_query,
 };
 use crate::results_writer::{MetricSummary, VariantPoint};
 use crate::scheduler::RunningExperiment;
@@ -135,6 +155,18 @@ const PERCENTILE_SAMPLE_CAP: u64 = 100_000;
 struct ChAssignmentCountRow {
     variant_key: String,
     n: u64,
+}
+
+/// Per-**unit** post-period value row (CUPED numeric path): one assigned unit's
+/// `context_key`, its `variant_key`, and its post-exposure metric sum `y`
+/// (ITT — `0` for a non-firing unit). The `context_key` is the join key against
+/// the pre-period covariate map; `context_type` is not re-projected (the query
+/// is scoped to one).
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+struct ChUnitValueRow {
+    context_key: String,
+    variant_key: String,
+    y: f64,
 }
 
 // ── Cell reader (CH-backed, mockable) ────────────────────────────────────────
@@ -206,6 +238,20 @@ pub trait CellReader: Send + Sync {
         context_type: &str,
         iteration_end: DateTime<Utc>,
     ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error>;
+
+    /// Per-assigned-unit post-period numeric values for the CUPED path. Returns
+    /// one `(context_key, variant_key, y)` per assigned unit in `context_type`
+    /// (`y` = post-exposure metric sum, `0` for non-firing units, ITT). The
+    /// `context_key` is the join key against the pre-period covariate fetch.
+    async fn unit_values(
+        &self,
+        cfg: &AggregationConfig,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+    ) -> Result<Vec<(String, String, f64)>, anyhow::Error>;
 }
 
 /// Aggregation cell: the event-side sufficient statistics for one variant
@@ -403,6 +449,32 @@ impl CellReader for ClickHouseCellReader {
             .map(|r| (r.variant_key, r.samples))
             .collect())
     }
+
+    async fn unit_values(
+        &self,
+        cfg: &AggregationConfig,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+    ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
+        let built = build_unit_values_query(
+            cfg,
+            &experiment_id.to_string(),
+            &iteration_id.to_string(),
+            &env_id.to_string(),
+            context_type,
+            iteration_end,
+        )?;
+        let rows = bind_query(&self.client, built.sql, built.binds)
+            .fetch_all::<ChUnitValueRow>()
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.context_key, r.variant_key, r.y))
+            .collect())
+    }
 }
 
 // ── Metric-type classification ───────────────────────────────────────────────
@@ -504,6 +576,110 @@ pub fn numeric_variant_stats(sample_size: u64, value_sum: f64, value_sq_sum: f64
     }
 }
 
+/// One assigned unit's CUPED inputs: its `variant_key`, post-period `y`, and
+/// the ITT denominator's `sample_size` is tracked separately. Carried in input
+/// order so [`cuped_adjusted_variant_stats`] can align `adjusted_values` back to
+/// each unit's variant.
+#[derive(Debug, Clone)]
+pub struct CupedUnit {
+    /// The variant this unit was assigned to.
+    pub variant_key: String,
+    /// Post-period metric value `Y` (ITT — `0` for a non-firing unit).
+    pub y: f64,
+    /// Pre-period covariate `X_pre` (`0` when the unit had no pre-period
+    /// events).
+    pub x_pre: f64,
+}
+
+/// Outcome of the pooled-θ CUPED adjustment over all assigned units.
+#[derive(Debug, Clone)]
+pub struct CupedAdjusted {
+    /// Per-variant adjusted [`VariantStats`] (Numeric: mean + sample variance of
+    /// the CUPED-adjusted values; `sample_size` is the ITT assigned-unit count).
+    pub variant_stats: HashMap<String, VariantStats>,
+    /// `variance_reduction_pct` from the pooled CUPED fit (negative ⇒ raw Y was
+    /// used, see [`stitchd_core::experimentation::stats::cuped::apply_cuped`]).
+    pub variance_reduction_pct: f64,
+    /// Pooled adjustment coefficient θ (carried for surfacing / debugging).
+    pub theta: f64,
+}
+
+/// Apply CUPED to a set of assigned units (POOLED θ across all variants for
+/// unbiasedness) and rebuild per-variant Numeric [`VariantStats`] from the
+/// adjusted values.
+///
+/// `units` is the per-unit `(variant_key, y, x_pre)` list in a stable order;
+/// `sample_sizes` is the ITT assigned-unit count per variant (the denominator —
+/// preserved as the rebuilt `sample_size`, NOT the count of units passed here,
+/// though for the numeric path they coincide since every assigned unit yields a
+/// `y`).
+///
+/// Calls [`apply_cuped`] ONCE over all units; `adjusted_values` is aligned to
+/// the input order, so we split it back per `variant_key` and compute each
+/// variant's adjusted mean + sample variance. `apply_cuped` already returns raw
+/// `Y` when `variance_reduction_pct <= 0`, so the adjusted values are safe to
+/// use unconditionally.
+#[must_use]
+pub fn cuped_adjusted_variant_stats(
+    units: &[CupedUnit],
+    sample_sizes: &HashMap<String, u64>,
+) -> CupedAdjusted {
+    use stitchd_core::experimentation::stats::cuped::{CupedObservation, apply_cuped};
+
+    let obs: Vec<CupedObservation> = units
+        .iter()
+        .map(|u| CupedObservation {
+            y: u.y,
+            x_pre: u.x_pre,
+        })
+        .collect();
+    let result = apply_cuped(&obs);
+
+    // Split the order-aligned adjusted values back per variant.
+    let mut adjusted_by_variant: HashMap<String, Vec<f64>> = HashMap::new();
+    for (u, &adj) in units.iter().zip(result.adjusted_values.iter()) {
+        adjusted_by_variant
+            .entry(u.variant_key.clone())
+            .or_default()
+            .push(adj);
+    }
+
+    // Rebuild Numeric VariantStats from the adjusted values. The ITT
+    // `sample_size` is the assignment count (a variant with assignments but no
+    // unit rows still gets a zero-filled stats entry); the mean + sample
+    // variance come from the ADJUSTED values.
+    let mut variant_stats: HashMap<String, VariantStats> = HashMap::new();
+    for (vk, &n) in sample_sizes {
+        let adjusted = adjusted_by_variant
+            .get(vk)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        variant_stats.insert(vk.clone(), numeric_variant_stats_from_values(n, adjusted));
+    }
+
+    CupedAdjusted {
+        variant_stats,
+        variance_reduction_pct: result.variance_reduction_pct,
+        theta: result.theta,
+    }
+}
+
+/// Build a Numeric [`VariantStats`] from a unit's already-materialised per-unit
+/// `values` (e.g. CUPED-adjusted Y'), with the ITT `sample_size` supplied
+/// separately.
+///
+/// `mean = Σvalues / sample_size`; sample variance uses the `n−1` denominator
+/// over `sample_size` (matching the Welch t-test's expectation). When
+/// `values.len() < sample_size` the missing units are treated as ITT zeros
+/// folded into both sums — but in the numeric CUPED path every assigned unit
+/// yields a value, so `values.len() == sample_size` and the two coincide.
+#[must_use]
+fn numeric_variant_stats_from_values(sample_size: u64, values: &[f64]) -> VariantStats {
+    let value_sum: f64 = values.iter().sum();
+    let value_sq_sum: f64 = values.iter().map(|v| v * v).sum();
+    numeric_variant_stats(sample_size, value_sum, value_sq_sum)
+}
+
 /// Build a funnel [`VariantStats`]: `sample_size` = top-of-funnel assigned
 /// units, `conversions = successes` (reached final step), `conversion_rate =
 /// successes / sample_size`.
@@ -598,6 +774,11 @@ struct PairResult {
     sequential: Option<Value>,
     /// Overall recommendation string.
     recommendation: String,
+    /// CUPED summary JSON (`{theta, variance_reduction_pct, applied}`) attached
+    /// under `variant_stats["cuped"]` when the numeric CUPED path ran for this
+    /// pair; `None` otherwise. Surfaced as a dedicated field (NOT folded into
+    /// the recommendation string) to keep the recommendation clean.
+    cuped: Option<Value>,
 }
 
 /// Per-comparison frequentist + bayesian entry serialized into the per-pair
@@ -620,6 +801,12 @@ struct PercentileInput {
 /// `sample_sizes` maps `variant_key → ITT sample size` (assignment count).
 /// Exactly one of `agg` / `ratio` / `funnel` is populated per the metric kind;
 /// `mt` is the resolved [`MetricType`].
+///
+/// `cuped` is `Some` ONLY for the Numeric (non-ratio) path when the experiment's
+/// `pre_period_days > 0`: it carries the pooled-CUPED-adjusted per-variant
+/// `VariantStats` (which REPLACE the raw numeric stats so frequentist / bayesian
+/// / sequential run on the adjusted values) plus the `variance_reduction_pct`
+/// surfaced under `variant_stats["cuped"]`.
 #[allow(clippy::too_many_arguments)]
 async fn compute_pair(
     ch: &Client,
@@ -632,6 +819,7 @@ async fn compute_pair(
     ratio: Option<&HashMap<String, RatioGroupStats>>,
     funnel: Option<&HashMap<String, (u64, u64)>>,
     percentile: Option<&PercentileInput>,
+    cuped: Option<&CupedAdjusted>,
     now: DateTime<Utc>,
 ) -> PairResult {
     // Build the per-variant VariantStats (and RatioGroupStats) over the UNION of
@@ -674,16 +862,28 @@ async fn compute_pair(
                 ratio_groups.insert(vk.clone(), g);
             }
             MetricType::Numeric => {
-                let cell = agg.and_then(|m| m.get(vk)).copied().unwrap_or(AggCell {
-                    event_n: 0,
-                    successes: 0,
-                    value_sum: 0.0,
-                    value_sq_sum: 0.0,
-                });
-                variant_stats.insert(
-                    vk.clone(),
-                    numeric_variant_stats(n, cell.value_sum, cell.value_sq_sum),
-                );
+                // CUPED path: use the pooled-adjusted per-variant stats when
+                // present (pre_period_days > 0). Falls back to a zero-filled
+                // numeric stat if a variant somehow has no CUPED entry.
+                if let Some(c) = cuped {
+                    let vs = c
+                        .variant_stats
+                        .get(vk)
+                        .cloned()
+                        .unwrap_or_else(|| numeric_variant_stats(n, 0.0, 0.0));
+                    variant_stats.insert(vk.clone(), vs);
+                } else {
+                    let cell = agg.and_then(|m| m.get(vk)).copied().unwrap_or(AggCell {
+                        event_n: 0,
+                        successes: 0,
+                        value_sum: 0.0,
+                        value_sq_sum: 0.0,
+                    });
+                    variant_stats.insert(
+                        vk.clone(),
+                        numeric_variant_stats(n, cell.value_sum, cell.value_sq_sum),
+                    );
+                }
             }
             MetricType::Funnel => {
                 let successes = funnel.and_then(|m| m.get(vk)).map_or(0, |&(_, s)| s);
@@ -718,6 +918,18 @@ async fn compute_pair(
         })
         .collect();
 
+    // CUPED summary JSON (attached under variant_stats["cuped"]) — present only
+    // when the numeric CUPED path produced adjusted stats for this pair.
+    let cuped_json = cuped.map(|c| {
+        serde_json::json!({
+            "theta": c.theta,
+            "variance_reduction_pct": c.variance_reduction_pct,
+            // CUPED is "applied" only when it actually reduced variance; a
+            // non-positive reduction means apply_cuped returned the raw Y.
+            "applied": c.variance_reduction_pct > 0.0,
+        })
+    });
+
     // Control selection.
     let Some(control_key) = select_control(&variant_keys) else {
         return PairResult {
@@ -726,6 +938,7 @@ async fn compute_pair(
             bayesian: None,
             sequential: None,
             recommendation: Recommendation::NeedsMoreData.to_string(),
+            cuped: cuped_json,
         };
     };
 
@@ -860,6 +1073,7 @@ async fn compute_pair(
         bayesian: Some(Value::Object(bayes_obj)),
         sequential,
         recommendation: overall.to_string(),
+        cuped: cuped_json,
     }
 }
 
@@ -891,6 +1105,7 @@ fn compute_percentile_pair(
         bayesian: None,
         sequential: None,
         recommendation: Recommendation::NeedsMoreData.to_string(),
+        cuped: None,
     };
 
     // Require the raw samples + a non-empty control sample to test against.
@@ -962,6 +1177,7 @@ fn compute_percentile_pair(
         bayesian: Some(Value::Object(bayes_obj)),
         sequential: None,
         recommendation: overall.to_string(),
+        cuped: None,
     }
 }
 
@@ -1015,6 +1231,95 @@ async fn compute_sequential(
     }
 }
 
+/// Run the numeric CUPED pipeline for one `(metric, context_type)`:
+///
+/// 1. fetch the post-period per-unit `Y` (`reader.unit_values`) — one
+///    `(context_key, variant_key, y)` per assigned unit (ITT, `y = 0` for
+///    non-firing units);
+/// 2. build `assigned_contexts = [(context_type, context_key)]` from those
+///    units and fetch the pre-period covariate `X_pre` per
+///    `(context_type, context_key)` over the window
+///    `[started_at − pre_period_days days, started_at)`
+///    ([`fetch_pre_period_observations`]);
+/// 3. assemble per-unit [`CupedUnit`]s (preserving order, `x_pre = 0` when the
+///    unit had no pre-period events);
+/// 4. call [`cuped_adjusted_variant_stats`] (pooled θ across ALL variants) → the
+///    per-variant adjusted Numeric [`VariantStats`] + `variance_reduction_pct`.
+///
+/// Returns `Ok(None)` when there are no assigned units (nothing to adjust).
+/// Pre-period fetch failures are logged and degrade to `x_pre = 0` for every
+/// unit (CUPED becomes a no-op, `apply_cuped` falls back to raw Y) rather than
+/// failing the whole compute pass.
+async fn compute_cuped_numeric(
+    reader: &dyn CellReader,
+    ch: &Client,
+    exp: &RunningExperiment,
+    cfg: &AggregationConfig,
+    context_type: &str,
+    sample_sizes: &HashMap<String, u64>,
+    iteration_end: DateTime<Utc>,
+) -> Result<Option<CupedAdjusted>, anyhow::Error> {
+    // 1. Post-period per-unit Y.
+    let unit_rows = reader
+        .unit_values(
+            cfg,
+            exp.experiment_id,
+            exp.iteration_id,
+            exp.env_id,
+            context_type,
+            iteration_end,
+        )
+        .await?;
+    if unit_rows.is_empty() {
+        return Ok(None);
+    }
+
+    // 2. Pre-period covariate X_pre per (context_type, context_key).
+    let assigned_contexts: Vec<(String, String)> = unit_rows
+        .iter()
+        .map(|(ck, _vk, _y)| (context_type.to_string(), ck.clone()))
+        .collect();
+    let pre_end = exp.started_at;
+    let pre_start = pre_end - chrono::Duration::days(i64::from(exp.pre_period_days));
+    let x_pre_map = match crate::cuped_fetch::fetch_pre_period_observations(
+        ch,
+        exp.env_id,
+        &cfg.event_key,
+        pre_start,
+        pre_end,
+        std::slice::from_ref(&context_type.to_string()),
+        &assigned_contexts,
+    )
+    .await
+    {
+        Ok(map) => map,
+        Err(e) => {
+            tracing::warn!(
+                metric_key = %cfg.event_key,
+                context_type = %context_type,
+                "compute: CUPED pre-period fetch failed; falling back to x_pre=0 (CUPED no-op): {e}"
+            );
+            HashMap::new()
+        }
+    };
+
+    // 3. Build per-unit CupedUnits (preserving order).
+    let units: Vec<CupedUnit> = unit_rows
+        .into_iter()
+        .map(|(ck, vk, y)| CupedUnit {
+            variant_key: vk,
+            y,
+            x_pre: x_pre_map
+                .get(&(context_type.to_string(), ck))
+                .copied()
+                .unwrap_or(0.0),
+        })
+        .collect();
+
+    // 4. Pooled CUPED + per-variant adjusted stats.
+    Ok(Some(cuped_adjusted_variant_stats(&units, sample_sizes)))
+}
+
 // ── Top-level entry ──────────────────────────────────────────────────────────
 
 /// Compute every per-`(metric_key, context_type)` [`MetricSummary`] for one
@@ -1064,6 +1369,10 @@ pub async fn run_stats_compute(
     let mut bayesian_per_pair: HashMap<(String, String), Value> = HashMap::new();
     let mut sequential_per_pair: HashMap<(String, String), Value> = HashMap::new();
     let mut recommendations_per_pair: HashMap<(String, String), String> = HashMap::new();
+    // CUPED summary JSON per (metric_key, context_type), attached under the
+    // `variant_stats["cuped"]` key of the matching result row. Present only for
+    // numeric metrics that ran the CUPED path (pre_period_days > 0).
+    let mut cuped_per_pair: HashMap<(String, String), Value> = HashMap::new();
     // SRM JSON per context_type (computed once over the assignment counts);
     // attached under the top-level `"srm"` key of every result row's
     // `variant_stats` in that context, which is exactly where the
@@ -1187,6 +1496,30 @@ pub async fn run_stats_compute(
                 _ => None,
             };
 
+            // CUPED (numeric / continuous metrics only). When the iteration has a
+            // pre-period window (`pre_period_days > 0`) and this is a Numeric
+            // Aggregation metric (sum/avg), adjust each unit's post-period Y by
+            // its pre-period covariate X_pre to reduce variance BEFORE the
+            // frequentist/bayesian/sequential analyses. Count/funnel/ratio/
+            // percentile metrics skip CUPED.
+            let cuped = match &def.kind {
+                MetricKind::Aggregation(cfg)
+                    if mt == MetricType::Numeric && exp.pre_period_days > 0 =>
+                {
+                    compute_cuped_numeric(
+                        reader,
+                        ch,
+                        exp,
+                        cfg,
+                        context_type,
+                        &sample_sizes,
+                        iteration_end,
+                    )
+                    .await?
+                }
+                _ => None,
+            };
+
             let pair = compute_pair(
                 ch,
                 exp,
@@ -1198,6 +1531,7 @@ pub async fn run_stats_compute(
                 ratio.as_ref(),
                 funnel.as_ref(),
                 percentile.as_ref(),
+                cuped.as_ref(),
                 now,
             )
             .await;
@@ -1215,6 +1549,9 @@ pub async fn run_stats_compute(
             }
             if let Some(s) = pair.sequential {
                 sequential_per_pair.insert(key.clone(), s);
+            }
+            if let Some(c) = pair.cuped {
+                cuped_per_pair.insert(key.clone(), c);
             }
             // The recommendation is the metric verdict ALONE — the SRM verdict
             // is now surfaced as a dedicated `variant_stats["srm"]` field
@@ -1249,6 +1586,16 @@ pub async fn run_stats_compute(
             && let Some(obj) = s.variant_stats.as_object_mut()
         {
             obj.insert("srm".to_string(), srm_json.clone());
+        }
+        // Attach the per-pair CUPED summary under `variant_stats["cuped"]` when
+        // the numeric CUPED path ran for this (metric_key, context_type). Keyed
+        // per pair (unlike SRM, which is per context) since CUPED is metric-
+        // specific. Kept off the recommendation string for cleanliness.
+        if let Some(cuped_json) =
+            cuped_per_pair.get(&(s.metric_key.clone(), s.context_type.clone()))
+            && let Some(obj) = s.variant_stats.as_object_mut()
+        {
+            obj.insert("cuped".to_string(), cuped_json.clone());
         }
     }
     Ok(summaries)
@@ -1412,6 +1759,137 @@ mod tests {
     fn numeric_variant_stats_single_unit_zero_variance() {
         let vs = numeric_variant_stats(1, 5.0, 25.0);
         assert_eq!(vs.variance, Some(0.0));
+    }
+
+    // ── CUPED adjusted VariantStats ──────────────────────────────────────────
+
+    /// A correlated covariate (x_pre ≈ y) reduces variance: the adjusted
+    /// per-variant variance is well below the raw variance, and the pooled
+    /// `variance_reduction_pct` is positive. Also proves the per-variant split
+    /// keeps each variant's units separate.
+    #[test]
+    fn cuped_adjusted_reduces_variance_and_splits_per_variant() {
+        // control: y in {0,10,20,30}; treatment shifted up by 5. x_pre tracks y
+        // closely (y + small jitter) so CUPED removes most of the spread.
+        let mk = |vk: &str, y: f64, x: f64| CupedUnit {
+            variant_key: vk.into(),
+            y,
+            x_pre: x,
+        };
+        let units = vec![
+            mk("control", 0.0, 0.5),
+            mk("control", 10.0, 9.5),
+            mk("control", 20.0, 20.5),
+            mk("control", 30.0, 29.5),
+            mk("treatment", 5.0, 4.5),
+            mk("treatment", 15.0, 15.5),
+            mk("treatment", 25.0, 24.5),
+            mk("treatment", 35.0, 35.5),
+        ];
+        let sample_sizes = HashMap::from([("control".to_string(), 4u64), ("treatment".into(), 4)]);
+        let adj = cuped_adjusted_variant_stats(&units, &sample_sizes);
+
+        assert!(
+            adj.variance_reduction_pct > 0.0,
+            "correlated covariate should reduce variance, got {}",
+            adj.variance_reduction_pct
+        );
+        // Both variants present, each with sample_size 4.
+        let c = &adj.variant_stats["control"];
+        let t = &adj.variant_stats["treatment"];
+        assert_eq!(c.sample_size, 4);
+        assert_eq!(t.sample_size, 4);
+        // Adjusted variance is far below the raw sample variance (≈166.7 for the
+        // 0/10/20/30 spread).
+        assert!(
+            c.variance.unwrap() < 166.0,
+            "adjusted control variance should be reduced, got {}",
+            c.variance.unwrap()
+        );
+        // CUPED preserves each variant's mean (control mean = 15, treatment = 20)
+        // up to the pooled-θ centering, which is mean-preserving overall; here
+        // the per-variant means stay close to raw.
+        assert!((c.mean.unwrap() - 15.0).abs() < 5.0);
+        assert!((t.mean.unwrap() - 20.0).abs() < 5.0);
+    }
+
+    /// Pooled θ: a SINGLE θ is fit across all variants (not per-variant). With
+    /// the same (y, x_pre) relationship in both arms, the adjustment is
+    /// consistent — proven by the adjusted means staying mean-preserving for the
+    /// pooled set.
+    #[test]
+    fn cuped_adjusted_pooled_theta_preserves_overall_mean() {
+        let mk = |vk: &str, y: f64, x: f64| CupedUnit {
+            variant_key: vk.into(),
+            y,
+            x_pre: x,
+        };
+        let units = vec![
+            mk("control", 1.0, 1.0),
+            mk("control", 3.0, 3.0),
+            mk("treatment", 2.0, 2.0),
+            mk("treatment", 4.0, 4.0),
+        ];
+        let sample_sizes = HashMap::from([("control".to_string(), 2u64), ("treatment".into(), 2)]);
+        let adj = cuped_adjusted_variant_stats(&units, &sample_sizes);
+        // Overall adjusted mean == overall raw mean (2.5): CUPED is
+        // mean-preserving across the POOLED sample.
+        let total_adj: f64 = adj.variant_stats["control"].mean.unwrap() * 2.0
+            + adj.variant_stats["treatment"].mean.unwrap() * 2.0;
+        assert!(
+            (total_adj / 4.0 - 2.5).abs() < 1e-9,
+            "pooled adjusted mean should equal raw mean 2.5, got {}",
+            total_adj / 4.0
+        );
+    }
+
+    /// ITT zero-fill: a variant present in `sample_sizes` but with NO units in
+    /// the adjusted list gets a zero-filled VariantStats (sample_size from the
+    /// assignment count, mean/variance 0).
+    #[test]
+    fn cuped_adjusted_zero_fills_variant_with_no_units() {
+        let units = vec![CupedUnit {
+            variant_key: "control".into(),
+            y: 5.0,
+            x_pre: 1.0,
+        }];
+        // treatment has 10 assigned units but none produced a row.
+        let sample_sizes = HashMap::from([("control".to_string(), 1u64), ("treatment".into(), 10)]);
+        let adj = cuped_adjusted_variant_stats(&units, &sample_sizes);
+        let t = &adj.variant_stats["treatment"];
+        assert_eq!(t.sample_size, 10, "ITT denominator preserved");
+        assert_eq!(t.mean, Some(0.0));
+        assert_eq!(t.variance, Some(0.0));
+    }
+
+    /// Uncorrelated covariate → `apply_cuped` returns a non-positive
+    /// `variance_reduction_pct` and the RAW Y (the adjusted values equal Y), so
+    /// the rebuilt stats match the no-CUPED numeric stats. (Constant x_pre forces
+    /// θ = 0 → Y' = Y deterministically.)
+    #[test]
+    fn cuped_adjusted_constant_xpre_falls_back_to_raw() {
+        let mk = |y: f64| CupedUnit {
+            variant_key: "control".into(),
+            y,
+            x_pre: 7.0, // constant → var(X_pre)=0 → θ=0 → Y'=Y
+        };
+        let units = vec![mk(2.0), mk(4.0), mk(6.0)];
+        let sample_sizes = HashMap::from([("control".to_string(), 3u64)]);
+        let adj = cuped_adjusted_variant_stats(&units, &sample_sizes);
+        assert!(adj.variance_reduction_pct.abs() < 1e-12);
+        // Rebuilt stats == raw numeric stats over {2,4,6}: mean 4, sample var 4.
+        let raw = numeric_variant_stats(3, 12.0, 56.0);
+        let c = &adj.variant_stats["control"];
+        assert!((c.mean.unwrap() - raw.mean.unwrap()).abs() < 1e-9);
+        assert!((c.variance.unwrap() - raw.variance.unwrap()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cuped_adjusted_empty_units_is_safe() {
+        let sample_sizes = HashMap::from([("control".to_string(), 0u64)]);
+        let adj = cuped_adjusted_variant_stats(&[], &sample_sizes);
+        assert_eq!(adj.variance_reduction_pct, 0.0);
+        assert_eq!(adj.variant_stats["control"].sample_size, 0);
     }
 
     #[test]
@@ -1804,6 +2282,17 @@ mod tests {
             _end: DateTime<Utc>,
         ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error> {
             Ok(HashMap::new())
+        }
+        async fn unit_values(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
+            Ok(Vec::new())
         }
     }
 

@@ -169,6 +169,9 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         sequential_alpha: i.sequential_alpha,
         sequential_tau_squared: i.sequential_tau_squared,
         sequential_min_sample_size: i.sequential_min_sample_size,
+        // CUPED pre-period window (days), snapshotted on the iteration. The
+        // stats-service reads this to drive numeric-metric variance reduction.
+        pre_period_days: i.pre_period_days,
     }
 }
 

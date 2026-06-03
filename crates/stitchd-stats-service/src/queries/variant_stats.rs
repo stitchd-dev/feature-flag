@@ -568,6 +568,92 @@ pub fn build_percentile_samples_query(
     Ok(BuiltQuery { sql, binds })
 }
 
+/// Build the per-**unit** post-period numeric-value query for one experiment +
+/// iteration restricted to a single `context_type` and a single `Aggregation`
+/// metric — the input the CUPED numeric path needs to pair each unit's
+/// post-period `Y` with its pre-period covariate `X_pre`.
+///
+/// Mirrors [`build_aggregation_cells_query`]'s `assignments` CTE + ITT-bounded
+/// event join + coalesced [`super::numeric_value_expr`] value exactly, but does
+/// NOT collapse to per-variant: it keeps `context_key` so each row is one
+/// assigned unit. A unit with no qualifying post-exposure event contributes
+/// `y = 0` (ITT — the LEFT JOIN keeps it).
+///
+/// Result rows carry `(context_key, variant_key, y)` where `y` is the unit's
+/// post-exposure (`occurred_at >= assigned_at AND occurred_at < iteration_end`)
+/// metric sum. The `context_type` is not re-projected (the query is already
+/// scoped to one `context_type` — the caller supplies it).
+///
+/// # Errors
+/// Returns [`QueryBuildError`] when the metric `where_clause` JsonLogic cannot
+/// be translated.
+pub fn build_unit_values_query(
+    cfg: &AggregationConfig,
+    experiment_id: &str,
+    iteration_id: &str,
+    env_id: &str,
+    context_type: &str,
+    iteration_end: DateTime<Utc>,
+) -> Result<BuiltQuery, QueryBuildError> {
+    let end_ms = iteration_end.timestamp_millis();
+    let mut binds = Vec::new();
+
+    let assignments_cte = emit_assignments_cte(
+        &mut binds,
+        experiment_id,
+        iteration_id,
+        env_id,
+        context_type,
+        iteration_end,
+    );
+
+    let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
+    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
+    let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
+    let ev_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
+    let value_expr = super::numeric_value_expr(cfg);
+
+    let extra_where = match cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n      AND ({frag})")
+        }
+        None => String::new(),
+    };
+
+    // Per-assigned-unit post-exposure metric sum (ITT — a unit with no
+    // qualifying event contributes 0), keyed by context_key so the caller can
+    // join each unit's Y to its pre-period X_pre. NOT reduced per variant.
+    let sql = format!(
+        "WITH\n\
+        assignments AS (\n\
+        {assignments_cte}\
+        ),\n\
+        matched_events AS (\n    \
+            SELECT\n        \
+                ctx_pair.2 AS context_key,\n        \
+                {value_expr} AS value,\n        \
+                e.occurred_at AS occurred_at\n    \
+            FROM events AS e\n    \
+            ARRAY JOIN e.contexts AS ctx_pair\n    \
+            WHERE e.env_id = toUUID({ev_env_ph})\n      \
+              AND e.metric_key = {event_ph}\n      \
+              AND ctx_pair.1 = {ev_ctx_ph}\n      \
+              AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph}){extra_where}\n\
+        )\n\
+        SELECT\n    \
+            asg.context_key AS context_key,\n    \
+            asg.variant_key AS variant_key,\n    \
+            sumIf(me.value, me.occurred_at >= asg.assigned_at) AS y\n\
+        FROM assignments AS asg\n\
+        LEFT JOIN matched_events AS me\n    \
+            ON me.context_key = asg.context_key\n\
+        GROUP BY asg.context_type, asg.context_key, asg.variant_key"
+    );
+
+    Ok(BuiltQuery { sql, binds })
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -855,6 +941,63 @@ mod tests {
             50,
         )
         .unwrap();
+        // assignments CTE: env, exp, iter, ctx, end
+        assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[1], QueryBind::Str(EXP_ID.into()));
+        assert_eq!(q.binds[2], QueryBind::Str(ITER_ID.into()));
+        assert_eq!(q.binds[3], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[4], QueryBind::I64(end().timestamp_millis()));
+        // events: env, event_key, ctx, end
+        assert_eq!(q.binds[5], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[6], QueryBind::Str("checkout_completed".into()));
+        assert_eq!(q.binds[7], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[8], QueryBind::I64(end().timestamp_millis()));
+        assert_eq!(q.binds.len(), 9);
+    }
+
+    // ── Per-unit values (CUPED Y) ───────────────────────────────────────────
+
+    #[test]
+    fn unit_values_keeps_context_key_and_is_itt_bounded() {
+        let q =
+            build_unit_values_query(&sum_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end()).unwrap();
+        // Per-UNIT: groups by context_key (NOT collapsed to per-variant) and
+        // projects (context_type, context_key, variant_key, y).
+        assert!(
+            q.sql
+                .contains("GROUP BY asg.context_type, asg.context_key, asg.variant_key"),
+            "{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("asg.context_key AS context_key"),
+            "{}",
+            q.sql
+        );
+        assert!(
+            q.sql
+                .contains("sumIf(me.value, me.occurred_at >= asg.assigned_at) AS y"),
+            "{}",
+            q.sql
+        );
+        // Same ITT discipline + assignments CTE as the aggregation cells query.
+        assert!(
+            q.sql.contains("FROM experiment_assignments AS a FINAL"),
+            "{}",
+            q.sql
+        );
+        // Continuous metric uses the shared coalesced value expr (same as Y).
+        assert!(
+            q.sql.contains("toFloat64OrNull(e.properties['revenue'])"),
+            "{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn unit_values_bind_order_is_left_to_right() {
+        let q =
+            build_unit_values_query(&count_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end()).unwrap();
         // assignments CTE: env, exp, iter, ctx, end
         assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
         assert_eq!(q.binds[1], QueryBind::Str(EXP_ID.into()));

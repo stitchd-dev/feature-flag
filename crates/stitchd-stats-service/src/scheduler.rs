@@ -57,10 +57,11 @@ pub struct RunningExperiment {
     /// [`enrich_sequential_settings`] hydrates it from the iteration snapshot;
     /// the `ListRunningExperiments` RPC does not carry this field.
     pub unit_context_types: Vec<String>,
-    /// Pre-period length in days for CUPED variance reduction. Captured for the
-    /// deferred CUPED pass; currently **unused** by the compute pass. Defaults to
-    /// `0`. (The `ExperimentIteration` proto does not snapshot this today, so it
-    /// stays `0` until the CUPED follow-up plumbs it through.)
+    /// Pre-period length in days for CUPED variance reduction. Hydrated from the
+    /// `ExperimentIteration` snapshot by [`enrich_sequential_settings`]; the
+    /// compute pass uses it to adjust NUMERIC metric values by their pre-period
+    /// covariate when `> 0`. Defaults to `0` (CUPED disabled), including on the
+    /// `ListRunningExperiments` view (which does not carry it).
     pub pre_period_days: u32,
     /// Sequential-testing configuration resolved from the iteration snapshot.
     /// Defaults to disabled until [`enrich_sequential_settings`] fetches the
@@ -137,8 +138,10 @@ pub async fn fetch_running_experiments(
 /// behaviour, since a transient experimentation-service blip must not turn on
 /// (or misconfigure) always-valid testing or silently drop a context dimension.
 ///
-/// `pre_period_days` is NOT carried on the `ExperimentIteration` proto today, so
-/// it is left at its `0` default (the deferred CUPED pass will plumb it).
+/// `pre_period_days` (CUPED) is snapshotted on the `ExperimentIteration` proto;
+/// this captures it onto [`RunningExperiment::pre_period_days`] so the numeric
+/// compute path can run variance reduction. On RPC failure it falls back to `0`
+/// (CUPED off) alongside the other safe defaults.
 pub async fn enrich_sequential_settings(
     client: &mut ExperimentationServiceClient<Channel>,
     exp: &mut RunningExperiment,
@@ -157,6 +160,9 @@ pub async fn enrich_sequential_settings(
                 tau_squared: it.sequential_tau_squared,
                 min_sample_size: it.sequential_min_sample_size,
             };
+            // Capture the iteration's CUPED pre-period window; drives numeric
+            // variance reduction in the compute pass (0 = disabled).
+            exp.pre_period_days = it.pre_period_days;
             // Capture the iteration's analysis unit context types; default to a
             // single "user" context when the snapshot carries none so the
             // compute pass always has at least one dimension to analyse.
@@ -173,6 +179,7 @@ pub async fn enrich_sequential_settings(
             // always-valid testing.
             exp.sequential = SequentialSettings::default();
             exp.unit_context_types = vec!["user".to_string()];
+            exp.pre_period_days = 0;
             tracing::warn!(
                 experiment_id = %exp.experiment_id,
                 iteration_id = %exp.iteration_id,
@@ -494,7 +501,7 @@ mod tests {
         tau: Option<f64>,
         min_n: i64,
     ) -> ExperimentIteration {
-        iteration_full(id, enabled, alpha, tau, min_n, vec![])
+        iteration_full(id, enabled, alpha, tau, min_n, vec![], 0)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -505,6 +512,7 @@ mod tests {
         tau: Option<f64>,
         min_n: i64,
         unit_context_types: Vec<String>,
+        pre_period_days: u32,
     ) -> ExperimentIteration {
         ExperimentIteration {
             id: id.to_string(),
@@ -522,6 +530,7 @@ mod tests {
             sequential_alpha: alpha,
             sequential_tau_squared: tau,
             sequential_min_sample_size: min_n,
+            pre_period_days,
         }
     }
 
@@ -550,6 +559,7 @@ mod tests {
             None,
             100,
             vec!["user".into(), "account".into()],
+            0,
         );
         let mut client = make_client_with_iteration(vec![], Some(it)).await;
 
@@ -562,9 +572,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enrich_captures_pre_period_days_from_iteration() {
+        let iter_id = Uuid::new_v4();
+        // Iteration snapshot carries a 14-day CUPED pre-period.
+        let it = iteration_full(iter_id, false, 0.05, None, 100, vec!["user".into()], 14);
+        let mut client = make_client_with_iteration(vec![], Some(it)).await;
+
+        let mut exp = running_exp(iter_id);
+        // Default is 0; the fetch must overwrite it from the snapshot.
+        assert_eq!(exp.pre_period_days, 0);
+        enrich_sequential_settings(&mut client, &mut exp).await;
+        assert_eq!(
+            exp.pre_period_days, 14,
+            "pre_period_days must be hydrated from the iteration snapshot"
+        );
+    }
+
+    #[tokio::test]
+    async fn enrich_resets_pre_period_days_to_zero_on_rpc_error() {
+        // No iteration configured → RPC fails; CUPED must be left off.
+        let mut client = make_client_with_iteration(vec![], None).await;
+        let mut exp = running_exp(Uuid::new_v4());
+        exp.pre_period_days = 14; // pretend a stale value
+        enrich_sequential_settings(&mut client, &mut exp).await;
+        assert_eq!(
+            exp.pre_period_days, 0,
+            "RPC failure must reset pre_period_days to 0 (CUPED off)"
+        );
+    }
+
+    #[tokio::test]
     async fn enrich_defaults_context_types_to_user_when_iteration_empty() {
         let iter_id = Uuid::new_v4();
-        let it = iteration_full(iter_id, false, 0.05, None, 100, vec![]);
+        let it = iteration_full(iter_id, false, 0.05, None, 100, vec![], 0);
         let mut client = make_client_with_iteration(vec![], Some(it)).await;
         let mut exp = running_exp(iter_id);
         exp.unit_context_types = vec![];

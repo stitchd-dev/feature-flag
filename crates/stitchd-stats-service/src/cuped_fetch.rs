@@ -9,14 +9,18 @@
 //! ## Contract
 //!
 //! - Filtered by `env_id`, `metric_key`, the pre-period bounds
-//!   `[pre_period_start, pre_period_end)`, and the experiment's
+//!   `[pre_period_start, pre_period_end)` over the event time column
+//!   **`occurred_at`** (the same column the live ITT compute gates on — NOT the
+//!   legacy `timestamp` ingestion column), and the experiment's
 //!   `unit_context_types`.
 //! - Grouped by `(context_type, context_key)` (the join key with the
 //!   post-period assignment table).
-//! - Each context's aggregated pre-value is the SUM of the metric's
-//!   numeric column (preferring `value_double`, falling back to `value_int`,
-//!   then `properties['value']` cast to Float64). Callers can switch to AVG /
-//!   COUNT by composing their own SQL — this helper covers the canonical
+//! - Each context's aggregated pre-value `X_pre` is the SUM of the metric's
+//!   canonical numeric column via the SAME coalesced expression the per-unit
+//!   post-period `Y` uses in [`crate::queries`] (`numeric_value_expr`):
+//!   `ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))),
+//!   0.0)`. Keeping the X_pre and Y extractions identical is what makes the
+//!   CUPED covariate adjustment well-defined. This helper covers the canonical
 //!   SUM-aggregation case used by the spec §3 CUPED pipeline.
 //!
 //! Returns a `HashMap<(context_type, context_key), x_pre>` so the caller
@@ -115,27 +119,26 @@ pub async fn fetch_pre_period_observations(
 
     // Per-context pre-period aggregate. We unroll `contexts` (Array(Tuple))
     // and filter to the experiment's `unit_context_types`, then SUM the
-    // metric's numeric value with priority value_double > value_int >
-    // toFloat64OrNull(properties['value']).
+    // metric's canonical numeric value via the SAME coalesced expression the
+    // post-period per-unit Y uses (`queries::numeric_value_expr`): value_double
+    // first, then value_int widened to Float64, else 0. The window is gated on
+    // `occurred_at` (event time) — the exact column the live ITT compute uses —
+    // NOT the legacy `timestamp` ingestion column, so X_pre and Y come from the
+    // same time semantics.
     let sql = format!(
         r"
         SELECT
             ctx.1 AS context_type,
             ctx.2 AS context_key,
             sum(
-              coalesce(
-                value_double,
-                toNullable(toFloat64OrZero(toString(value_int))),
-                toFloat64OrNull(properties['value']),
-                0.0
-              )
+              ifNull(coalesce(value_double, CAST(value_int AS Nullable(Float64))), 0.0)
             ) AS x_pre
         FROM events
         ARRAY JOIN contexts AS ctx
         WHERE env_id = '{env_id_str}'
           AND metric_key = '{metric_key_esc}'
-          AND timestamp >= fromUnixTimestamp64Milli({lower_ms})
-          AND timestamp <  fromUnixTimestamp64Milli({upper_ms})
+          AND occurred_at >= fromUnixTimestamp64Milli({lower_ms})
+          AND occurred_at <  fromUnixTimestamp64Milli({upper_ms})
           AND ctx.1 IN ({ctx_types_in})
           AND (ctx.1, ctx.2) IN ({assigned_in})
         GROUP BY context_type, context_key
