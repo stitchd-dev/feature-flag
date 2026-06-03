@@ -35,7 +35,7 @@ import type {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type ResultsView = 'frequentist' | 'bayesian'
+export type ResultsView = 'frequentist' | 'bayesian' | 'sequential'
 
 export type GoalDirection = 'increase' | 'decrease' | 'neutral'
 
@@ -70,7 +70,12 @@ export function readPersistedView(
     const saved = window.localStorage.getItem(
       viewToggleStorageKey(experimentId),
     )
-    if (saved === 'frequentist' || saved === 'bayesian') return saved
+    if (
+      saved === 'frequentist' ||
+      saved === 'bayesian' ||
+      saved === 'sequential'
+    )
+      return saved
   } catch {
     // Storage disabled — fall through.
   }
@@ -86,10 +91,30 @@ function fmtLift(fraction: number | null): string {
   return `${sign}${Math.abs(pct).toFixed(1)}%`
 }
 
-function fmtPValue(p: number | null): string {
+function fmtPValue(p: number | null | undefined): string {
   if (p == null || !Number.isFinite(p)) return '—'
   if (p < 0.001) return '<0.001'
   return p.toFixed(3)
+}
+
+/**
+ * Formats an anytime-valid confidence interval `[lower, upper]` as a bracketed
+ * lift range, e.g. `[+1.0%, +7.0%]`, mirroring the per-row `fmtLift` display.
+ * Returns `"insufficient"` when either bound is missing (the gateway omits CI
+ * bounds when there is not yet enough data).
+ */
+function fmtAnytimeCI(
+  lower: number | null | undefined,
+  upper: number | null | undefined,
+): string {
+  if (
+    lower == null ||
+    upper == null ||
+    !Number.isFinite(lower) ||
+    !Number.isFinite(upper)
+  )
+    return 'insufficient'
+  return `[${fmtLift(lower)}, ${fmtLift(upper)}]`
 }
 
 /** Bonferroni-corrected p-value for n simultaneous comparisons. */
@@ -118,6 +143,30 @@ function isDirectionalWinner(
   return true
 }
 
+/**
+ * Determines whether a variant is "safe to stop" under always-valid
+ * (sequential) inference. True when the anytime-valid boundary has been crossed
+ * (`sequential_crossed`) AND the observed lift is directionally aligned with the
+ * metric's goal. The control row (no meaningful crossing) and neutral-goal
+ * metrics never qualify; insufficient-data rows have `sequential_crossed` unset
+ * / false and so are excluded automatically.
+ */
+export function isSafeToStop(
+  row: VariantResultJson,
+  goalDirection: GoalDirection,
+): boolean {
+  if (row.sequential_crossed !== true) return false
+  if (goalDirection === 'increase') return row.lift > 0
+  if (goalDirection === 'decrease') return row.lift < 0
+  // neutral → never a directional "winner".
+  return false
+}
+
+/** True when any variant in the block carries always-valid (sequential) data. */
+function hasSequentialData(variants: VariantResultJson[]): boolean {
+  return variants.some((v) => v.sequential_p_value != null)
+}
+
 // ── Variant breakdown table ─────────────────────────────────────────────────
 
 function VariantTable({
@@ -130,90 +179,153 @@ function VariantTable({
   goalDirection: GoalDirection
 }) {
   const isBayesian = view === 'bayesian'
+  const isSequential = view === 'sequential'
   // Bonferroni n = number of comparisons against control = variants - 1
   // (only relevant when more than two arms).
   const comparisons = Math.max(1, variants.length - 1)
   const useBonferroni = comparisons > 1
+
+  const flavour = isSequential
+    ? 'Always-valid (sequential)'
+    : isBayesian
+      ? 'Bayesian posterior'
+      : 'Frequentist'
 
   return (
     <div className="card" style={{ marginTop: 18 }}>
       <div className="card-header">
         <div className="card-title">Variant breakdown</div>
         <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>
-          {variants.length} arm{variants.length === 1 ? '' : 's'} ·{' '}
-          {isBayesian ? 'Bayesian posterior' : 'Frequentist'}
+          {variants.length} arm{variants.length === 1 ? '' : 's'} · {flavour}
         </span>
       </div>
       <table className="table">
         <thead>
-          <tr>
-            <th>Variant</th>
-            <th>Samples</th>
-            <th>Mean</th>
-            <th>Lift</th>
-            <th>{isBayesian ? 'P(beats control)' : 'p-value'}</th>
-            <th>{isBayesian ? '95% credible' : '95% CI'}</th>
-          </tr>
+          {isSequential ? (
+            <tr>
+              <th>Variant</th>
+              <th>Samples</th>
+              <th>Lift</th>
+              <th>Always-valid p</th>
+              <th>Anytime CI</th>
+            </tr>
+          ) : (
+            <tr>
+              <th>Variant</th>
+              <th>Samples</th>
+              <th>Mean</th>
+              <th>Lift</th>
+              <th>{isBayesian ? 'P(beats control)' : 'p-value'}</th>
+              <th>{isBayesian ? '95% credible' : '95% CI'}</th>
+            </tr>
+          )}
         </thead>
         <tbody>
           {variants.map((v) => {
             const winner = isDirectionalWinner(v, goalDirection)
+            const safe = isSequential && isSafeToStop(v, goalDirection)
+            const highlight = isSequential ? safe : winner
             const pBonf = useBonferroni
               ? bonferroniAdjust(v.p_value, comparisons)
               : v.p_value
             return (
               <tr
                 key={v.variant_key}
-                data-winner={winner ? 'true' : undefined}
+                data-winner={!isSequential && winner ? 'true' : undefined}
+                data-safe-to-stop={safe ? 'true' : undefined}
                 style={{
-                  background: winner ? 'var(--accent-softer)' : 'transparent',
+                  background: highlight
+                    ? 'var(--accent-softer)'
+                    : 'transparent',
                 }}
               >
                 <td>
-                  <span className={`badge ${winner ? 'accent' : ''}`}>
+                  <span className={`badge ${highlight ? 'accent' : ''}`}>
                     {v.variant_key}
                   </span>
+                  {safe && (
+                    <span
+                      className="badge accent"
+                      style={{ marginLeft: 6, fontSize: 10 }}
+                    >
+                      ✓ Safe to stop
+                    </span>
+                  )}
                 </td>
                 <td style={{ fontFamily: 'var(--font-mono)' }}>
                   {(v.participant_count ?? 0).toLocaleString('en-US')}
                 </td>
-                <td style={{ fontFamily: 'var(--font-mono)' }}>
-                  —
-                </td>
+                {!isSequential && (
+                  <td style={{ fontFamily: 'var(--font-mono)' }}>—</td>
+                )}
                 <td
                   style={{
                     fontFamily: 'var(--font-mono)',
-                    color: winner ? 'var(--success)' : 'var(--fg-muted)',
+                    color: highlight ? 'var(--success)' : 'var(--fg-muted)',
                   }}
                 >
                   {fmtLift(v.lift)}
                 </td>
-                <td
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    fontWeight: winner ? 600 : 400,
-                  }}
-                >
-                  {isBayesian
-                    ? '—'
-                    : useBonferroni
-                      ? `${fmtPValue(pBonf)} (raw ${fmtPValue(v.p_value)})`
-                      : fmtPValue(v.p_value)}
-                </td>
-                <td
-                  style={{
-                    fontFamily: 'var(--font-mono)',
-                    color: 'var(--fg-muted)',
-                  }}
-                >
-                  —
-                </td>
+                {isSequential ? (
+                  <>
+                    <td
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontWeight: safe ? 600 : 400,
+                      }}
+                    >
+                      {/* Control baseline (p = 1.0) renders as the em-dash. */}
+                      {v.sequential_p_value == null ||
+                      v.sequential_p_value >= 1
+                        ? '—'
+                        : fmtPValue(v.sequential_p_value)}
+                    </td>
+                    <td
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        color: v.sequential_insufficient_data
+                          ? 'var(--fg-muted)'
+                          : 'var(--fg)',
+                      }}
+                    >
+                      {v.sequential_insufficient_data
+                        ? 'insufficient'
+                        : fmtAnytimeCI(
+                            v.sequential_ci_lower,
+                            v.sequential_ci_upper,
+                          )}
+                    </td>
+                  </>
+                ) : (
+                  <>
+                    <td
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontWeight: winner ? 600 : 400,
+                      }}
+                    >
+                      {isBayesian
+                        ? '—'
+                        : useBonferroni
+                          ? `${fmtPValue(pBonf)} (raw ${fmtPValue(v.p_value)})`
+                          : fmtPValue(v.p_value)}
+                    </td>
+                    <td
+                      style={{
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--fg-muted)',
+                      }}
+                    >
+                      —
+                    </td>
+                  </>
+                )}
               </tr>
             )
           })}
         </tbody>
       </table>
-      {useBonferroni && !isBayesian && (
+      {useBonferroni && !isBayesian && !isSequential && (
         <div
           style={{
             padding: '8px 14px',
@@ -224,6 +336,20 @@ function VariantTable({
         >
           P-values are Bonferroni-corrected for {comparisons} simultaneous
           comparisons against control (α/{comparisons} per test).
+        </div>
+      )}
+      {isSequential && (
+        <div
+          style={{
+            padding: '8px 14px',
+            fontSize: 11,
+            color: 'var(--fg-muted)',
+            borderTop: '1px solid var(--border-faint)',
+          }}
+        >
+          Always-valid p-values and anytime-valid CIs hold under continuous
+          monitoring — a row is marked “✓ Safe to stop” once its boundary is
+          crossed in the goal direction.
         </div>
       )}
     </div>
@@ -436,6 +562,19 @@ export function Results({
   const variants = picked?.block.variants ?? []
   const primaryMetric = metricNames[0] ?? '—'
 
+  // Always-valid (sequential) inference is only offered when the gateway
+  // attached `sequential_*` fields to at least one variant in this context.
+  const sequentialAvailable = hasSequentialData(variants)
+  // Guard a stale persisted "sequential" preference: if the active context has
+  // no sequential data, fall back to the experiment's default model so the page
+  // never renders an empty sequential table.
+  const effectiveView: ResultsView =
+    view === 'sequential' && !sequentialAvailable
+      ? defaultModel === 'sequential'
+        ? 'frequentist'
+        : defaultModel
+      : view
+
   if (variants.length === 0) {
     return (
       <div className="card" style={{ marginTop: 18 }}>
@@ -483,17 +622,20 @@ export function Results({
           <button
             role="tab"
             type="button"
-            aria-selected={view === 'frequentist'}
+            aria-selected={effectiveView === 'frequentist'}
             className="btn sm"
             onClick={() => setView('frequentist')}
             style={{
               background:
-                view === 'frequentist' ? 'var(--surface)' : 'transparent',
+                effectiveView === 'frequentist'
+                  ? 'var(--surface)'
+                  : 'transparent',
               borderColor:
-                view === 'frequentist'
+                effectiveView === 'frequentist'
                   ? 'var(--accent)'
                   : 'var(--border-strong)',
-              color: view === 'frequentist' ? 'var(--accent)' : 'var(--fg)',
+              color:
+                effectiveView === 'frequentist' ? 'var(--accent)' : 'var(--fg)',
             }}
           >
             Frequentist
@@ -501,32 +643,58 @@ export function Results({
           <button
             role="tab"
             type="button"
-            aria-selected={view === 'bayesian'}
+            aria-selected={effectiveView === 'bayesian'}
             className="btn sm"
             onClick={() => setView('bayesian')}
             style={{
               background:
-                view === 'bayesian' ? 'var(--surface)' : 'transparent',
+                effectiveView === 'bayesian' ? 'var(--surface)' : 'transparent',
               borderColor:
-                view === 'bayesian'
+                effectiveView === 'bayesian'
                   ? 'var(--accent)'
                   : 'var(--border-strong)',
-              color: view === 'bayesian' ? 'var(--accent)' : 'var(--fg)',
+              color:
+                effectiveView === 'bayesian' ? 'var(--accent)' : 'var(--fg)',
             }}
           >
             Bayesian
           </button>
+          {sequentialAvailable && (
+            <button
+              role="tab"
+              type="button"
+              aria-selected={effectiveView === 'sequential'}
+              className="btn sm"
+              onClick={() => setView('sequential')}
+              style={{
+                background:
+                  effectiveView === 'sequential'
+                    ? 'var(--surface)'
+                    : 'transparent',
+                borderColor:
+                  effectiveView === 'sequential'
+                    ? 'var(--accent)'
+                    : 'var(--border-strong)',
+                color:
+                  effectiveView === 'sequential'
+                    ? 'var(--accent)'
+                    : 'var(--fg)',
+              }}
+            >
+              Sequential
+            </button>
+          )}
         </div>
       </div>
 
       <VariantTable
         variants={variants}
-        view={view}
+        view={effectiveView}
         goalDirection={goalDirection}
       />
 
-      {variants.length > 2 && (
-        <MultiVariantMatrix variants={variants} view={view} />
+      {variants.length > 2 && effectiveView !== 'sequential' && (
+        <MultiVariantMatrix variants={variants} view={effectiveView} />
       )}
     </div>
   )

@@ -16,6 +16,8 @@ events `contexts` column) are retired — the stats pipeline no longer reads tho
 - [Default-Rule Experiments](./default-rule-experiments.md) — how to run an experiment on a
   flag's default-rule (fallthrough) path; the XOR rule-vs-default-rule binding; whole-flag
   lock interaction with the default-rule distribution.
+- [Sequential Testing](./sequential-testing.md) — always-valid inference (mSPRT always-valid
+  p-values + confidence sequences) so experiments can be peeked safely; opt-in per experiment.
 
 ## Quick Start
 
@@ -45,6 +47,7 @@ events `contexts` column) are retired — the stats pipeline no longer reads tho
 | Whole-flag lock (HTTP 409 `FLAG_LOCKED_BY_EXPERIMENT`)        | ✅ Complete |
 | Stats query cutover (JOIN on `experiment_assignments`)        | ✅ Complete |
 | Per-context-type Frequentist / Bayesian / CUPED / SRM         | ✅ Complete |
+| Sequential testing (mSPRT always-valid p + confidence sequences, opt-in) | ✅ Complete |
 | Guardrail direction-violation detection                       | ✅ Complete |
 | Gateway: `/results`, `/exposures`, `/timeseries`, `/recompute`| ✅ Complete |
 | Admin UI: Results / Exposures / Time-series / Iterations tabs | ✅ Complete |
@@ -73,7 +76,9 @@ The work landed across 11 phases tracked in `conductor/tracks/experimentation_fu
 The following remain explicitly out of scope (separate future tracks):
 
 - Multi-armed bandit / Thompson sampling auto-allocation
-- Sequential testing (always-valid p-values, mSPRT, group sequential boundaries)
+- Group-sequential / alpha-spending boundaries (O'Brien–Fleming / Pocock) — note: fully-sequential
+  always-valid inference (mSPRT + confidence sequences) is now implemented, see
+  [Sequential Testing](./sequential-testing.md)
 - Holdout group / global experiment holdback
 - Warehouse-backed (offline) event ingestion
 - Client-side (browser/mobile) SDK experiment helpers

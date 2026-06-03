@@ -14,8 +14,8 @@
 --   - String columns for UUIDs are stored as UUID native type for compact
 --     storage and fast range scans on the ORDER BY key.
 --   - JSONB equivalent in ClickHouse is String (JSON stored as serialized text).
---     variant_stats, frequentist_result, and bayesian_result follow this pattern.
---     Empty optional results are stored as empty string ''.
+--     variant_stats, frequentist_result, bayesian_result, and sequential_result
+--     follow this pattern. Empty optional results are stored as empty string ''.
 
 CREATE TABLE IF NOT EXISTS experiment_results
 (
@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS experiment_results
     variant_stats       String,
     frequentist_result  String,
     bayesian_result     String,
+    -- Sequential testing (always-valid mSPRT) result for ALL variants in this
+    -- (experiment, iteration, metric_key, context_type) row, packed as a JSON
+    -- object keyed by variant_key — mirroring frequentist_result / bayesian_result.
+    -- Each entry: {always_valid_p, p_crossed, ci_lower, ci_upper,
+    -- insufficient_data, method}. Empty string '' when sequential testing was
+    -- not run for the row.
+    sequential_result   String DEFAULT '',
     -- Human-readable outcome
     recommendation      String,
     -- Timestamps

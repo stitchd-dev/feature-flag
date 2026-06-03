@@ -24,6 +24,7 @@ import {
   Results,
   viewToggleStorageKey,
   readPersistedView,
+  isSafeToStop,
 } from './Results'
 import type { ExperimentResults, VariantResultJson } from '../../../lib/types'
 
@@ -109,6 +110,41 @@ const TREATMENT_B: VariantResultJson = {
   context_type: 'user',
 }
 
+// ── Sequential (always-valid) fixtures ───────────────────────────────────────
+//
+// When sequential testing is enabled the gateway attaches the snake_case
+// `sequential_*` fields to each variant row. Control baseline p = 1.0; the
+// crossed treatment carries an anytime-valid CI; an insufficient-data row omits
+// the CI bounds and sets `sequential_insufficient_data`.
+
+const SEQ_CONTROL: VariantResultJson = {
+  ...CONTROL,
+  sequential_p_value: 1.0,
+  sequential_crossed: false,
+  sequential_insufficient_data: false,
+  sequential_method: 'msprt',
+}
+
+/** Crossed treatment: always-valid p ≤ α, +4% lift, anytime CI present. */
+const SEQ_TREATMENT_CROSSED: VariantResultJson = {
+  ...TREATMENT_A,
+  sequential_p_value: 0.004,
+  sequential_ci_lower: 0.01,
+  sequential_ci_upper: 0.07,
+  sequential_crossed: true,
+  sequential_insufficient_data: false,
+  sequential_method: 'msprt',
+}
+
+/** Not-yet-crossed treatment with too little data → CI omitted. */
+const SEQ_TREATMENT_INSUFFICIENT: VariantResultJson = {
+  ...TREATMENT_B,
+  sequential_p_value: 0.42,
+  sequential_crossed: false,
+  sequential_insufficient_data: true,
+  sequential_method: 'msprt',
+}
+
 function buildResults(
   variants: VariantResultJson[],
 ): ExperimentResults {
@@ -165,6 +201,14 @@ describe('readPersistedView', () => {
 
   it('honours the experiment.model default when no persisted value', () => {
     expect(readPersistedView('exp-4', 'bayesian')).toBe('bayesian')
+  })
+
+  it('accepts "sequential" as a persisted view', () => {
+    globalAny.localStorage!.setItem(
+      viewToggleStorageKey('exp-seq'),
+      'sequential',
+    )
+    expect(readPersistedView('exp-seq', 'frequentist')).toBe('sequential')
   })
 })
 
@@ -336,5 +380,197 @@ describe('Results (component)', () => {
     )
     // Falls back to "user" (the only key present) — variant rows still render.
     expect(html).toMatch(/variant-a/)
+  })
+})
+
+// ── isSafeToStop helper ──────────────────────────────────────────────────────
+
+describe('isSafeToStop', () => {
+  it('is true when sequential_crossed and lift aligns with increase goal', () => {
+    expect(isSafeToStop(SEQ_TREATMENT_CROSSED, 'increase')).toBe(true)
+  })
+
+  it('is false when sequential_crossed but lift goes the wrong way (decrease goal)', () => {
+    // +4% lift is bad for a decrease metric → not safe to stop.
+    expect(isSafeToStop(SEQ_TREATMENT_CROSSED, 'decrease')).toBe(false)
+  })
+
+  it('is true when crossed and negative lift aligns with decrease goal', () => {
+    const crossedDown: VariantResultJson = {
+      ...SEQ_TREATMENT_CROSSED,
+      lift: -0.04,
+    }
+    expect(isSafeToStop(crossedDown, 'decrease')).toBe(true)
+  })
+
+  it('is false for a neutral goal even when crossed', () => {
+    expect(isSafeToStop(SEQ_TREATMENT_CROSSED, 'neutral')).toBe(false)
+  })
+
+  it('is false when sequential_crossed is false', () => {
+    expect(isSafeToStop(SEQ_TREATMENT_INSUFFICIENT, 'increase')).toBe(false)
+  })
+
+  it('is false for the control row', () => {
+    expect(isSafeToStop(SEQ_CONTROL, 'increase')).toBe(false)
+  })
+
+  it('is false when sequential fields are absent entirely', () => {
+    expect(isSafeToStop(TREATMENT_A, 'increase')).toBe(false)
+  })
+})
+
+// ── Sequential (always-valid) view ───────────────────────────────────────────
+
+describe('Results (sequential view)', () => {
+  const SEQ_TWO_VARIANT = buildResults([SEQ_CONTROL, SEQ_TREATMENT_CROSSED])
+
+  it('offers a Sequential view toggle when sequential data is present', () => {
+    const html = renderToString(
+      <Results
+        experimentId="exp-seq"
+        activeContextType="user"
+        results={SEQ_TWO_VARIANT}
+        defaultModel="frequentist"
+        goalDirection="increase"
+        metricNames={['conversion']}
+      />,
+    )
+    expect(html).toMatch(/Sequential/i)
+  })
+
+  it('does NOT offer a Sequential view toggle when sequential data is absent', () => {
+    const html = renderToString(
+      <Results
+        experimentId="exp-1"
+        activeContextType="user"
+        results={TWO_VARIANT}
+        defaultModel="frequentist"
+        goalDirection="increase"
+        metricNames={['conversion']}
+      />,
+    )
+    expect(html).not.toMatch(/Sequential/i)
+    // Other views remain available and unaffected.
+    expect(html).toMatch(/Frequentist/)
+    expect(html).toMatch(/Bayesian/)
+    expect(html).toMatch(/variant-a/)
+  })
+
+  it('renders always-valid p and anytime-CI columns in the sequential view', () => {
+    globalAny.localStorage!.setItem(
+      viewToggleStorageKey('exp-seq'),
+      'sequential',
+    )
+    const html = renderToString(
+      <Results
+        experimentId="exp-seq"
+        activeContextType="user"
+        results={SEQ_TWO_VARIANT}
+        defaultModel="frequentist"
+        goalDirection="increase"
+        metricNames={['conversion']}
+      />,
+    )
+    // Always-valid p column header + formatted value (0.004 → "0.004").
+    expect(html).toMatch(/Always-valid p/i)
+    expect(html).toMatch(/0\.004/)
+    // Anytime CI column header + bracketed range ([+1.0%, +7.0%]).
+    expect(html).toMatch(/Anytime CI/i)
+    expect(html).toMatch(/\[/)
+  })
+
+  it('shows "—" for the control always-valid p cell', () => {
+    globalAny.localStorage!.setItem(
+      viewToggleStorageKey('exp-seq'),
+      'sequential',
+    )
+    const html = renderToString(
+      <Results
+        experimentId="exp-seq"
+        activeContextType="user"
+        results={SEQ_TWO_VARIANT}
+        defaultModel="frequentist"
+        goalDirection="increase"
+        metricNames={['conversion']}
+      />,
+    )
+    // The control row p=1.0 baseline is rendered as the em-dash placeholder.
+    expect(html).toMatch(/—/)
+  })
+
+  it('renders "insufficient" for an insufficient-data row CI', () => {
+    globalAny.localStorage!.setItem(
+      viewToggleStorageKey('exp-seq2'),
+      'sequential',
+    )
+    const results = buildResults([SEQ_CONTROL, SEQ_TREATMENT_INSUFFICIENT])
+    const html = renderToString(
+      <Results
+        experimentId="exp-seq2"
+        activeContextType="user"
+        results={results}
+        defaultModel="frequentist"
+        goalDirection="increase"
+        metricNames={['conversion']}
+      />,
+    )
+    expect(html).toMatch(/insufficient/i)
+  })
+
+  it('shows the safe-to-stop badge for a crossed directional winner', () => {
+    globalAny.localStorage!.setItem(
+      viewToggleStorageKey('exp-seq'),
+      'sequential',
+    )
+    const html = renderToString(
+      <Results
+        experimentId="exp-seq"
+        activeContextType="user"
+        results={SEQ_TWO_VARIANT}
+        defaultModel="frequentist"
+        goalDirection="increase"
+        metricNames={['conversion']}
+      />,
+    )
+    expect(html).toMatch(/data-safe-to-stop="true"/)
+    expect(html).toMatch(/Safe to stop/i)
+  })
+
+  it('does NOT show the safe-to-stop badge for a wrong-direction crossed row', () => {
+    globalAny.localStorage!.setItem(
+      viewToggleStorageKey('exp-seq'),
+      'sequential',
+    )
+    const html = renderToString(
+      <Results
+        experimentId="exp-seq"
+        activeContextType="user"
+        results={SEQ_TWO_VARIANT}
+        defaultModel="frequentist"
+        goalDirection="decrease"
+        metricNames={['conversion']}
+      />,
+    )
+    expect(html).not.toMatch(/data-safe-to-stop="true"/)
+  })
+
+  it('does NOT show the safe-to-stop badge for control or insufficient rows', () => {
+    globalAny.localStorage!.setItem(
+      viewToggleStorageKey('exp-seq2'),
+      'sequential',
+    )
+    const results = buildResults([SEQ_CONTROL, SEQ_TREATMENT_INSUFFICIENT])
+    const html = renderToString(
+      <Results
+        experimentId="exp-seq2"
+        activeContextType="user"
+        results={results}
+        defaultModel="frequentist"
+        goalDirection="increase"
+        metricNames={['conversion']}
+      />,
+    )
+    expect(html).not.toMatch(/data-safe-to-stop="true"/)
   })
 })

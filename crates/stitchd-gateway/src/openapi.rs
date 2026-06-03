@@ -273,6 +273,29 @@ mod tests {
     }
 
     #[test]
+    fn variant_result_schema_documents_sequential_fields() {
+        // The Admin UI consumes these via the OpenAPI schema; the `ToSchema`
+        // derive must surface the additive sequential_* fields on VariantResultJson.
+        let doc = ApiDoc::openapi();
+        let json = doc.to_json().expect("must serialise");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let props = &parsed["components"]["schemas"]["VariantResultJson"]["properties"];
+        for field in [
+            "sequential_p_value",
+            "sequential_ci_lower",
+            "sequential_ci_upper",
+            "sequential_crossed",
+            "sequential_insufficient_data",
+            "sequential_method",
+        ] {
+            assert!(
+                props.get(field).is_some(),
+                "VariantResultJson schema must document {field}"
+            );
+        }
+    }
+
+    #[test]
     fn security_schemes_are_present() {
         let doc = ApiDoc::openapi();
         let json = doc.to_json().expect("must serialise");

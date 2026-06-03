@@ -31,6 +31,33 @@ nway_interaction_20260603 additions (extends xexp_interaction_20260602):
   (see ClickHouse Schema section). No new infra; recomputed each 60-min tick.
 -->
 
+<!--
+seqtest_20260603 additions (Sequential Testing — always-valid inference):
+- New pure module `stitchd-core::experimentation::stats::sequential` (no new deps; std
+  ln/exp/sqrt only). One normal-mixture core on (delta_hat, se):
+  * mSPRT always-valid p-value: lambda = sqrt(se2/(se2+tau2))*exp(delta^2*tau2/(2*se2*(se2+tau2)));
+    p_look = min(1, 1/lambda) computed in LOG space (avoid overflow); reported value is the
+    RUNNING MINIMUM min(prev_p, p_look) — monotone non-increasing, valid under any peeking schedule.
+  * mSPRT-dual confidence sequence (anytime-valid CI), closed form from the same mixture.
+  * Per-family adapters: count/funnel (Bernoulli diff), numeric (mean diff), ratio (delta method
+    via RatioGroupStats). split_alpha() applies Bonferroni to the THRESHOLD (alpha/(K-1)).
+- Config (opt-in): experiments + experiment_iterations gain sequential_testing_enabled BOOLEAN,
+  sequential_alpha DOUBLE PRECISION (CHECK 0<x<1), sequential_tau_squared DOUBLE PRECISION NULL
+  (auto-derive when null), sequential_min_sample_size BIGINT. Snapshotted onto iterations like
+  pre_period_days. Baselines edited in place (system not live); applied to live docker DBs.
+- Storage: per-variant results packed as a single `sequential_result String` JSON blob on the CH
+  `experiment_results` table (mirrors frequentist_result/bayesian_result), keyed by variant:
+  {variant_key: {always_valid_p, p_crossed, ci_lower, ci_upper, insufficient_data, method}}.
+- Proto (additive): Experiment/ExperimentIteration config fields; WriteExperimentResultsRequest
+  +sequential_result (tag 13) and analytics ExperimentResult +sequential_result (tag 14, read);
+  experiments.v1 VariantResult +per-variant sequential_* fields (tags 10-15, surfaced on read).
+- Compute: stats-service `sequential_compute` builds the blob from the per-variant sufficient
+  stats and threads the running-min prev_p from the prior tick's CH row. tau^2 default =
+  unit-information pooled variance (floored 1e-9). NOTE: the scheduled per-metric compute pass
+  (frequentist/bayesian/sequential) is a pre-existing scaffold (write_results(&[])); sequential is
+  wired at the build_metric_summaries seam and activates with it (follow-up feature-flag-k1l).
+-->
+
 
 ## Architecture
 
@@ -220,7 +247,7 @@ Production deploys must run `CREATE INDEX CONCURRENTLY` manually outside a trans
 | `flag_evaluation_log` | MergeTree, weekly `toMonday()` partitions + TTL | Eval log. Columns: `env_id`, `flag_id`, `flag_key`, `variant_key`, `targeting_on` (Boolean, true when flag active), `matched_rule_id` (matched rule UUID), `evaluated_at`, `context_type`, `context_key`, `params_json` |
 | `events_experiment_daily` | AggregatingMergeTree | Pre-aggregated experiment stats by `(env_id, experiment_id, variant_key, metric_key, day)` |
 | `events_experiment_daily_mv` | Materialized View | Auto-populates `events_experiment_daily` on `events` insert using `*State` combiners |
-| `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`. `context_type` column (default 'user') supports per-context-type results |
+| `experiment_results` | MergeTree | Pre-computed per-experiment results; owned by `stitchd-analytics-service`; written by `stitchd-stats-service`. `context_type` column (default 'user') supports per-context-type results. `sequential_result String` JSON blob (per-variant always-valid p / anytime-CI; `seqtest_20260603`) sits alongside `frequentist_result`/`bayesian_result` |
 | `experiment_assignments` | ReplacingMergeTree(`_version`) | First-exposure (ITT) assignments keyed on `(experiment_id, iteration_id, context_type, context_key)`. Inverted version column (`-toUnixTimestamp64Milli(assigned_at)`) so MAX(_version) returns the MIN(assigned_at) — first exposure wins. Monthly partitions, 180-day TTL |
 | `experiment_assignments_mv` | Materialized View | Watches `flag_evaluation_log` inserts; routes rows where `targeting_on = true AND dictHas('experiment_iterations_active', (env_id, flag_id, matched_rule_id, context_type))` into `experiment_assignments` |
 | `experiment_interactions` | ReplacingMergeTree(`computed_at`), 30-day TTL | **N-way** cross-experiment interaction results (superseded pairwise schema in `nway_interaction_20260603`). Keyed `(env_id, interaction_order, context_type, metric_key, term)` — `term` encodes participants, so it disambiguates rows; latest `computed_at` wins per tick (readers use `FINAL`). Holds `experiment_ids Array(UUID)` (sorted), `interaction_order UInt8`, `term LowCardinality(String)` (`main:…`/`2way:…`/`3way:…`), `shared_count`, `cell_stats` (JSON N-D variant-tuple cells), Frequentist `interaction_estimate`/`p_value`/`df`/`significant`/`insufficient_data`, Bayesian `bayes_prob`/`bayes_expected`/`bayes_ci_low`/`bayes_ci_high`, `computed_at`. Each candidate tuple emits a full hierarchical decomposition (main + all 2-way + the 3-way term). Written by `stitchd-stats-service` interaction sweep (60-min tick); read by `stitchd-experimentation-service` `GetExperimentInteractions`. Auto-applied on boot via `event_writer::migrations` array. |

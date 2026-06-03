@@ -42,6 +42,11 @@ pub struct MetricSummary {
     pub frequentist_result: Option<serde_json::Value>,
     /// Optional bayesian analysis result (JSON).
     pub bayesian_result: Option<serde_json::Value>,
+    /// Optional sequential (always-valid mSPRT) result — a JSON object keyed by
+    /// `variant_key` mirroring `frequentist_result`. `None` when sequential
+    /// testing was disabled for the experiment (or the metric family has no
+    /// always-valid analogue).
+    pub sequential_result: Option<serde_json::Value>,
     /// Human-readable recommendation string.
     pub recommendation: String,
 }
@@ -68,8 +73,8 @@ pub struct VariantPoint {
 /// `variant_stats` JSON inside the summary maps `variant_key → metric_value`
 /// for the variants observed within that context type.
 ///
-/// Frequentist / bayesian results are passed through unchanged — callers
-/// can pre-compute them per (metric_key, context_type) and look them up
+/// Frequentist / bayesian / sequential results are passed through unchanged —
+/// callers can pre-compute them per (metric_key, context_type) and look them up
 /// in the `results` maps. `None` for a pair means "no analysis available
 /// — surface as empty in the proto".
 #[must_use]
@@ -77,6 +82,7 @@ pub fn build_metric_summaries(
     points_per_metric: &HashMap<String, Vec<VariantPoint>>,
     frequentist_per_pair: &HashMap<(String, String), serde_json::Value>,
     bayesian_per_pair: &HashMap<(String, String), serde_json::Value>,
+    sequential_per_pair: &HashMap<(String, String), serde_json::Value>,
     recommendations_per_pair: &HashMap<(String, String), String>,
 ) -> Vec<MetricSummary> {
     let mut summaries = Vec::new();
@@ -99,6 +105,7 @@ pub fn build_metric_summaries(
                 variant_stats: serde_json::Value::Object(variant_stats_map),
                 frequentist_result: frequentist_per_pair.get(&key).cloned(),
                 bayesian_result: bayesian_per_pair.get(&key).cloned(),
+                sequential_result: sequential_per_pair.get(&key).cloned(),
                 recommendation: recommendations_per_pair
                     .get(&key)
                     .cloned()
@@ -143,6 +150,9 @@ pub async fn write_results(
             variant_stats: summary.variant_stats.to_string(),
             frequentist_result: summary.frequentist_result.as_ref().map(|v| v.to_string()),
             bayesian_result: summary.bayesian_result.as_ref().map(|v| v.to_string()),
+            // Sequential (always-valid) per-variant JSON blob; `None` when
+            // sequential testing was disabled or the metric has no analogue.
+            sequential_result: summary.sequential_result.as_ref().map(|v| v.to_string()),
             recommendation: summary.recommendation.clone(),
             computed_at: computed_at_rfc.clone(),
             context_type: summary.context_type.clone(),
@@ -400,6 +410,7 @@ mod tests {
             variant_stats: serde_json::json!({ "control": 50, "treatment": 70 }),
             frequentist_result: Some(serde_json::json!({ "p_value": 0.04 })),
             bayesian_result: None,
+            sequential_result: None,
             recommendation: "ship_treatment".into(),
         }];
 
@@ -427,6 +438,7 @@ mod tests {
                 variant_stats: serde_json::json!({}),
                 frequentist_result: None,
                 bayesian_result: None,
+                sequential_result: None,
                 recommendation: "wait".into(),
             },
             MetricSummary {
@@ -435,6 +447,7 @@ mod tests {
                 variant_stats: serde_json::json!({}),
                 frequentist_result: None,
                 bayesian_result: None,
+                sequential_result: None,
                 recommendation: "wait".into(),
             },
         ];
@@ -476,6 +489,7 @@ mod tests {
                 variant_stats: serde_json::json!({ "control": 10, "treatment": 14 }),
                 frequentist_result: None,
                 bayesian_result: None,
+                sequential_result: None,
                 recommendation: "wait".into(),
             },
             MetricSummary {
@@ -484,6 +498,7 @@ mod tests {
                 variant_stats: serde_json::json!({ "control": 3, "treatment": 5 }),
                 frequentist_result: None,
                 bayesian_result: None,
+                sequential_result: None,
                 recommendation: "wait".into(),
             },
         ];
@@ -544,8 +559,13 @@ mod tests {
             serde_json::json!({"p_value": 0.04}),
         );
 
-        let summaries =
-            build_metric_summaries(&points_per_metric, &freq, &HashMap::new(), &HashMap::new());
+        let summaries = build_metric_summaries(
+            &points_per_metric,
+            &freq,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
 
         // Stable ordering by (metric_key, context_type).
         assert_eq!(summaries.len(), 2);
@@ -562,5 +582,77 @@ mod tests {
         // Frequentist result attached only to the matching pair.
         assert!(summaries[1].frequentist_result.is_some());
         assert!(summaries[0].frequentist_result.is_none());
+    }
+
+    #[test]
+    fn build_metric_summaries_attaches_sequential_per_pair() {
+        use std::collections::HashMap;
+
+        let mut points_per_metric: HashMap<String, Vec<VariantPoint>> = HashMap::new();
+        points_per_metric.insert(
+            "clicks".into(),
+            vec![VariantPoint {
+                context_type: "user".into(),
+                variant_key: "control".into(),
+                metric_value: 10.0,
+            }],
+        );
+
+        let mut seq: HashMap<(String, String), serde_json::Value> = HashMap::new();
+        seq.insert(
+            ("clicks".into(), "user".into()),
+            serde_json::json!({"treatment": {"always_valid_p": 0.02, "method": "msprt"}}),
+        );
+
+        let summaries = build_metric_summaries(
+            &points_per_metric,
+            &HashMap::new(),
+            &HashMap::new(),
+            &seq,
+            &HashMap::new(),
+        );
+        assert_eq!(summaries.len(), 1);
+        let blob = summaries[0]
+            .sequential_result
+            .as_ref()
+            .expect("sequential_result attached");
+        assert_eq!(blob["treatment"]["always_valid_p"], serde_json::json!(0.02));
+    }
+
+    #[tokio::test]
+    async fn write_results_forwards_sequential_result_string() {
+        let (mut client, captured) = make_client().await;
+        let summaries = vec![MetricSummary {
+            context_type: "user".into(),
+            metric_key: "clicks".into(),
+            variant_stats: serde_json::json!({ "control": 50, "treatment": 70 }),
+            frequentist_result: None,
+            bayesian_result: None,
+            sequential_result: Some(serde_json::json!({
+                "control": {"always_valid_p": 1.0, "p_crossed": false, "method": "msprt"},
+                "treatment": {"always_valid_p": 0.01, "p_crossed": true, "method": "msprt"},
+            })),
+            recommendation: "ship_treatment".into(),
+        }];
+
+        write_results(
+            &mut client,
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Utc::now(),
+            &summaries,
+        )
+        .await
+        .expect("write_results should succeed");
+
+        let reqs = captured.lock().await;
+        assert_eq!(reqs.len(), 1);
+        let seq_str = reqs[0]
+            .sequential_result
+            .as_ref()
+            .expect("sequential_result string forwarded");
+        let parsed: serde_json::Value = serde_json::from_str(seq_str).unwrap();
+        assert_eq!(parsed["treatment"]["p_crossed"], serde_json::json!(true));
     }
 }

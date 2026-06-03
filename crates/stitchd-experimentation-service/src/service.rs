@@ -165,6 +165,10 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         exclusion_group_id: i.exclusion_group_id.map(|g| g.to_string()),
         group_bucket_lo: i.group_bucket_lo.map(u32::from),
         group_bucket_hi: i.group_bucket_hi.map(u32::from),
+        sequential_testing_enabled: i.sequential_testing_enabled,
+        sequential_alpha: i.sequential_alpha,
+        sequential_tau_squared: i.sequential_tau_squared,
+        sequential_min_sample_size: i.sequential_min_sample_size,
     }
 }
 
@@ -261,6 +265,10 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
         exclusion_group_id: e.exclusion_group_id.map(|g| g.to_string()),
         group_bucket_lo: e.group_bucket_lo.map(u32::from),
         group_bucket_hi: e.group_bucket_hi.map(u32::from),
+        sequential_testing_enabled: e.sequential_testing_enabled,
+        sequential_alpha: e.sequential_alpha,
+        sequential_tau_squared: e.sequential_tau_squared,
+        sequential_min_sample_size: e.sequential_min_sample_size,
     }
 }
 
@@ -662,6 +670,21 @@ impl ExperimentationService for ExperimentationServiceImpl {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: proto_exp.sequential_testing_enabled,
+            // proto3 scalars default to 0 when unset; fall back to the platform
+            // defaults (matching the PG column defaults) so a caller that only
+            // flips `sequential_testing_enabled` still gets a valid α / min-N.
+            sequential_alpha: if proto_exp.sequential_alpha > 0.0 {
+                proto_exp.sequential_alpha
+            } else {
+                0.05
+            },
+            sequential_tau_squared: proto_exp.sequential_tau_squared,
+            sequential_min_sample_size: if proto_exp.sequential_min_sample_size > 0 {
+                proto_exp.sequential_min_sample_size
+            } else {
+                100
+            },
         };
 
         self.experiment_repo
@@ -815,6 +838,28 @@ impl ExperimentationService for ExperimentationServiceImpl {
             }
         }
         // ─────────────────────────────────────────────────────────────────────
+
+        // ── Sequential testing config update ─────────────────────────────────
+        // proto3 cannot distinguish "unset" from "false/0" for plain scalars, so
+        // a request that enables sequential testing (or supplies an explicit
+        // tau²) is treated as managing the whole sequential config block; the
+        // 0 → default fallback mirrors create_experiment / the PG defaults.
+        let touches_sequential =
+            proto_exp.sequential_testing_enabled || proto_exp.sequential_tau_squared.is_some();
+        if touches_sequential {
+            experiment.sequential_testing_enabled = proto_exp.sequential_testing_enabled;
+            experiment.sequential_alpha = if proto_exp.sequential_alpha > 0.0 {
+                proto_exp.sequential_alpha
+            } else {
+                0.05
+            };
+            experiment.sequential_tau_squared = proto_exp.sequential_tau_squared;
+            experiment.sequential_min_sample_size = if proto_exp.sequential_min_sample_size > 0 {
+                proto_exp.sequential_min_sample_size
+            } else {
+                100
+            };
+        }
 
         experiment.updated_at = chrono::Utc::now();
 
@@ -1091,6 +1136,14 @@ impl ExperimentationService for ExperimentationServiceImpl {
                         context_type: context_type.clone(),
                         direction_violation: false,
                         lift,
+                        // Sequential testing results are populated by a later
+                        // phase; unset for now.
+                        sequential_p_value: None,
+                        sequential_ci_lower: None,
+                        sequential_ci_upper: None,
+                        sequential_crossed: None,
+                        sequential_insufficient_data: None,
+                        sequential_method: None,
                     });
 
                     // Pull p_value (+ corrected) from frequentist_result JSON.
@@ -1106,6 +1159,34 @@ impl ExperimentationService for ExperimentationServiceImpl {
                         {
                             entry.p_value_corrected = Some(p_corr);
                         }
+                    }
+
+                    // Pull sequential (always-valid mSPRT) results from the
+                    // `sequential_result` JSON blob, which is keyed by variant_key
+                    // (mirroring frequentist_result / bayesian_result). Absent /
+                    // empty when sequential testing was not run for the row, in
+                    // which case the fields stay `None`. `ci_lower`/`ci_upper` are
+                    // JSON `null` when insufficient → mapped to `None`.
+                    if let Some(seq_str) = &result.sequential_result
+                        && !seq_str.is_empty()
+                        && let Ok(seq_json) = serde_json::from_str::<serde_json::Value>(seq_str)
+                        && let Some(v) = seq_json.get(variant_key)
+                    {
+                        entry.sequential_p_value =
+                            v.get("always_valid_p").and_then(serde_json::Value::as_f64);
+                        entry.sequential_ci_lower =
+                            v.get("ci_lower").and_then(serde_json::Value::as_f64);
+                        entry.sequential_ci_upper =
+                            v.get("ci_upper").and_then(serde_json::Value::as_f64);
+                        entry.sequential_crossed =
+                            v.get("p_crossed").and_then(serde_json::Value::as_bool);
+                        entry.sequential_insufficient_data = v
+                            .get("insufficient_data")
+                            .and_then(serde_json::Value::as_bool);
+                        entry.sequential_method = v
+                            .get("method")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToString::to_string);
                     }
 
                     entry
@@ -1845,6 +1926,42 @@ mod tests {
             computed_at: "2026-05-01T00:00:00Z".to_string(),
             created_at: "2026-05-01T00:00:00Z".to_string(),
             context_type: "user".to_string(),
+            sequential_result: None,
+        }
+    }
+
+    /// Build an `ExperimentResult` proto carrying a per-variant `sequential_result`
+    /// JSON blob (mirrors the shape stats-service writes). `variant_stats` lists the
+    /// same variants so each gets a `VariantResult` entry to attach onto.
+    fn make_analytics_result_with_sequential(
+        env_id: &str,
+        experiment_id: &str,
+        metric_key: &str,
+        sequential_blob: serde_json::Value,
+    ) -> ProtoExperimentResult {
+        // Build variant_stats covering every variant key in the sequential blob so
+        // a VariantResult entry exists for each (mirrors a real metric row).
+        let mut stats = serde_json::Map::new();
+        if let Some(obj) = sequential_blob.as_object() {
+            for k in obj.keys() {
+                stats.insert(k.clone(), serde_json::json!(100));
+            }
+        }
+        ProtoExperimentResult {
+            env_id: env_id.to_string(),
+            experiment_id: experiment_id.to_string(),
+            iteration_id: Uuid::new_v4().to_string(),
+            variant_key: "control".to_string(),
+            metric_key: metric_key.to_string(),
+            metric_type: "count".to_string(),
+            variant_stats: serde_json::Value::Object(stats).to_string(),
+            frequentist_result: Some(serde_json::json!({ "p_value": 0.04 }).to_string()),
+            bayesian_result: None,
+            recommendation: "ship_treatment".to_string(),
+            computed_at: "2026-05-01T00:00:00Z".to_string(),
+            created_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
+            sequential_result: Some(sequential_blob.to_string()),
         }
     }
 
@@ -1881,6 +1998,10 @@ mod tests {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
         }
     }
 
@@ -1980,6 +2101,10 @@ mod tests {
                 exclusion_group_id: None,
                 group_bucket_lo: None,
                 group_bucket_hi: None,
+                sequential_testing_enabled: false,
+                sequential_alpha: 0.05,
+                sequential_tau_squared: None,
+                sequential_min_sample_size: 100,
             })
         }
     }
@@ -2560,6 +2685,123 @@ mod tests {
         }
     }
 
+    /// Task 4.1: a row carrying a `sequential_result` blob populates the
+    /// per-variant `VariantResult.sequential_*` fields. Covers: treatment with a
+    /// crossed verdict + CI, control baseline, and a variant with `null` CI
+    /// (insufficient data) mapping to `None`.
+    #[tokio::test]
+    async fn test_get_results_populates_sequential_fields_per_variant() {
+        let (env_id, env_id_str) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        let blob = serde_json::json!({
+            "control": {
+                "always_valid_p": 1.0,
+                "p_crossed": false,
+                "ci_lower": null,
+                "ci_upper": null,
+                "insufficient_data": false,
+                "method": "msprt"
+            },
+            "treatment": {
+                "always_valid_p": 0.012,
+                "p_crossed": true,
+                "ci_lower": 0.03,
+                "ci_upper": 0.21,
+                "insufficient_data": false,
+                "method": "msprt"
+            },
+            "treatment_b": {
+                "always_valid_p": 0.42,
+                "p_crossed": false,
+                "ci_lower": null,
+                "ci_upper": null,
+                "insufficient_data": true,
+                "method": "msprt"
+            }
+        });
+        let results = vec![make_analytics_result_with_sequential(
+            &env_id_str,
+            &exp_id.to_string(),
+            "checkout",
+            blob,
+        )];
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(AnalyticsMockWithData { results }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id_str,
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+
+        let by_key: std::collections::HashMap<&str, &VariantResult> = resp
+            .variant_results
+            .iter()
+            .map(|v| (v.variant_key.as_str(), v))
+            .collect();
+
+        // Treatment: crossed verdict with a finite CI.
+        let t = by_key.get("treatment").expect("treatment present");
+        assert_eq!(t.sequential_p_value, Some(0.012));
+        assert_eq!(t.sequential_crossed, Some(true));
+        assert_eq!(t.sequential_insufficient_data, Some(false));
+        assert_eq!(t.sequential_method.as_deref(), Some("msprt"));
+        assert_eq!(t.sequential_ci_lower, Some(0.03));
+        assert_eq!(t.sequential_ci_upper, Some(0.21));
+
+        // Control baseline: always_valid_p = 1.0, not crossed, null CI → None.
+        let c = by_key.get("control").expect("control present");
+        assert_eq!(c.sequential_p_value, Some(1.0));
+        assert_eq!(c.sequential_crossed, Some(false));
+        assert_eq!(c.sequential_insufficient_data, Some(false));
+        assert_eq!(c.sequential_ci_lower, None);
+        assert_eq!(c.sequential_ci_upper, None);
+
+        // Insufficient-data variant: null CI → None, insufficient_data = true.
+        let tb = by_key.get("treatment_b").expect("treatment_b present");
+        assert_eq!(tb.sequential_p_value, Some(0.42));
+        assert_eq!(tb.sequential_crossed, Some(false));
+        assert_eq!(tb.sequential_insufficient_data, Some(true));
+        assert_eq!(tb.sequential_ci_lower, None);
+        assert_eq!(tb.sequential_ci_upper, None);
+    }
+
+    /// Task 4.1: rows WITHOUT a sequential blob (sequential disabled) leave all
+    /// `sequential_*` fields `None`.
+    #[tokio::test]
+    async fn test_get_results_no_sequential_blob_leaves_fields_none() {
+        let (env_id, env_id_str) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        let results = vec![make_analytics_result(
+            &env_id_str,
+            &exp_id.to_string(),
+            "control",
+            "checkout",
+            100,
+        )];
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(AnalyticsMockWithData { results }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id_str,
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+        let vr = &resp.variant_results[0];
+        assert_eq!(vr.sequential_p_value, None);
+        assert_eq!(vr.sequential_ci_lower, None);
+        assert_eq!(vr.sequential_ci_upper, None);
+        assert_eq!(vr.sequential_crossed, None);
+        assert_eq!(vr.sequential_insufficient_data, None);
+        assert_eq!(vr.sequential_method, None);
+    }
+
     // -----------------------------------------------------------------------
     // Staleness tests (Phase 5)
     // -----------------------------------------------------------------------
@@ -2860,6 +3102,10 @@ mod tests {
                 exclusion_group_id: None,
                 group_bucket_lo: None,
                 group_bucket_hi: None,
+                sequential_testing_enabled: false,
+                sequential_alpha: 0.05,
+                sequential_tau_squared: None,
+                sequential_min_sample_size: 100,
             }])
         }
 
@@ -2910,6 +3156,10 @@ mod tests {
                 exclusion_group_id: None,
                 group_bucket_lo: None,
                 group_bucket_hi: None,
+                sequential_testing_enabled: false,
+                sequential_alpha: 0.05,
+                sequential_tau_squared: None,
+                sequential_min_sample_size: 100,
             })
         }
     }

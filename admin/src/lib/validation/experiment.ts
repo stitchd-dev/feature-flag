@@ -12,6 +12,10 @@
  *     guardrail_metric_ids: UUID[],  // optional; 0+
  *     unit_context_types: string[],  // min 1
  *     pre_period_days: int >= 0,     // 0 = CUPED off
+ *     sequential_testing_enabled: bool,     // opt-in; default false
+ *     sequential_alpha: 0 < α < 1,          // default 0.05
+ *     sequential_tau_squared?: > 0,         // omit = auto-derive
+ *     sequential_min_sample_size: int >= 0, // default 100
  *     traffic_allocation: 0..100 (0.1 step),
  *     model
  *   }
@@ -62,6 +66,21 @@ export interface ExperimentFormValues {
   unit_context_types: string[]
   /** 0 = CUPED disabled. */
   pre_period_days: number
+  /**
+   * Opt-in for sequential (always-valid) testing. Default false. The three
+   * advanced knobs below are only required/validated meaningfully when this
+   * is true (tau is always optional).
+   */
+  sequential_testing_enabled: boolean
+  /** Target type-I error rate (α). Validate `> 0 && < 1`. Default 0.05. */
+  sequential_alpha: number
+  /**
+   * Mixing variance (τ²) for the mSPRT mixture. Empty (undefined) = let the
+   * service auto-derive. When provided, validate `> 0`.
+   */
+  sequential_tau_squared?: number | null
+  /** Minimum per-variant sample size before a verdict. Integer `>= 0`. Default 100. */
+  sequential_min_sample_size: number
   /** 0–100 with 0.1 step. */
   traffic_allocation: number
   model: ExperimentModel
@@ -175,6 +194,57 @@ export const experimentSchema: Yup.ObjectSchema<ExperimentFormValues> = Yup.obje
     .max(365, 'Pre-period days cannot exceed 365')
     .required()
     .default(0),
+
+  // ── Sequential (always-valid) testing ───────────────────────────────────
+  // Opt-in toggle. The advanced knobs (alpha, min sample) are only validated
+  // meaningfully when this is true; tau is always optional but, when present,
+  // must be positive regardless of the toggle.
+  sequential_testing_enabled: Yup.boolean().required().default(false),
+
+  sequential_alpha: Yup.number()
+    .typeError('α must be a number')
+    // Blank input → fall back to the platform default so a disabled section
+    // (or a cleared field) doesn't block submit.
+    .transform((value, original) =>
+      original === '' || original == null ? 0.05 : value,
+    )
+    .when('sequential_testing_enabled', {
+      is: true,
+      then: (s) =>
+        s
+          .moreThan(0, 'α must be between 0 and 1')
+          .lessThan(1, 'α must be between 0 and 1')
+          .required('α is required when sequential testing is enabled'),
+      otherwise: (s) => s.notRequired(),
+    })
+    .default(0.05),
+
+  sequential_tau_squared: Yup.number()
+    .typeError('τ² must be a number')
+    // Empty input means "auto-derive" → null (not NaN).
+    .transform((value, original) =>
+      original === '' || original == null ? null : value,
+    )
+    .nullable()
+    // Always positive when a value is supplied, independent of the toggle.
+    .moreThan(0, 'τ² must be greater than 0')
+    .notRequired(),
+
+  sequential_min_sample_size: Yup.number()
+    .typeError('Minimum sample size must be a number')
+    .transform((value, original) =>
+      original === '' || original == null ? 100 : value,
+    )
+    .when('sequential_testing_enabled', {
+      is: true,
+      then: (s) =>
+        s
+          .integer('Minimum sample size must be a whole number')
+          .min(0, 'Minimum sample size cannot be negative')
+          .required('Minimum sample size is required when sequential testing is enabled'),
+      otherwise: (s) => s.notRequired(),
+    })
+    .default(100),
 
   traffic_allocation: Yup.number()
     .min(0, 'Traffic allocation must be >= 0')

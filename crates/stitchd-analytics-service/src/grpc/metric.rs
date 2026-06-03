@@ -1734,6 +1734,10 @@ mod handler_tests {
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
         }
     }
 

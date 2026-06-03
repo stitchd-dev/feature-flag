@@ -6,8 +6,9 @@
 //! # ClickHouse schema (see migrations/0001_experiment_results.sql)
 //! The table uses `MergeTree` ordered by
 //! `(env_id, experiment_id, variant_key, metric_key, iteration_id)`.
-//! JSON payloads (variant_stats, frequentist_result, bayesian_result) are
-//! stored as `String`; absent optional fields use empty string `""`.
+//! JSON payloads (variant_stats, frequentist_result, bayesian_result,
+//! sequential_result) are stored as `String`; absent optional fields use empty
+//! string `""`.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,11 @@ pub struct ExperimentResultRow {
     pub frequentist_result: String,
     /// Bayesian analysis result as JSON string; `""` when absent.
     pub bayesian_result: String,
+    /// Sequential (always-valid mSPRT) result for all variants in this row,
+    /// serialised as a JSON object keyed by `variant_key` — mirroring
+    /// `frequentist_result` / `bayesian_result`. `""` when sequential testing
+    /// was not run for the row.
+    pub sequential_result: String,
     /// Human-readable recommendation string.
     pub recommendation: String,
     /// When this result was computed (Unix milliseconds UTC).
@@ -95,6 +101,9 @@ pub struct WriteResultRow {
     pub frequentist_result: Option<serde_json::Value>,
     /// Bayesian analysis result; `None` stored as `""`.
     pub bayesian_result: Option<serde_json::Value>,
+    /// Sequential (always-valid mSPRT) result — a JSON object keyed by
+    /// `variant_key`; `None` stored as `""`.
+    pub sequential_result: Option<serde_json::Value>,
     /// Human-readable recommendation.
     pub recommendation: String,
     /// Timestamp the analysis was computed.
@@ -207,6 +216,12 @@ impl ClickHouseExperimentResultsRepository {
                 .map(serde_json::to_string)
                 .transpose()?
                 .unwrap_or_default(),
+            sequential_result: row
+                .sequential_result
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()?
+                .unwrap_or_default(),
             recommendation: row.recommendation,
             computed_at: row.computed_at.timestamp_millis(),
             created_at: chrono::Utc::now().timestamp_millis(),
@@ -239,6 +254,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
+                     sequential_result, \
                      recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? AND iteration_id = ? \
@@ -254,6 +270,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
+                     sequential_result, \
                      recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
@@ -280,6 +297,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
+                     sequential_result, \
                      recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
@@ -300,6 +318,7 @@ impl ExperimentResultsRepository for ClickHouseExperimentResultsRepository {
                 .query(
                     "SELECT env_id, experiment_id, iteration_id, variant_key, metric_key, \
                      metric_type, variant_stats, frequentist_result, bayesian_result, \
+                     sequential_result, \
                      recommendation, computed_at, created_at, context_type \
                      FROM experiment_results \
                      WHERE env_id = ? AND experiment_id = ? \
@@ -348,6 +367,7 @@ mod tests {
             variant_stats: serde_json::json!({ "control": 100, "treatment": 120 }),
             frequentist_result: Some(serde_json::json!({ "p_value": 0.03 })),
             bayesian_result: None,
+            sequential_result: None,
             recommendation: "ship_treatment".to_string(),
             computed_at: Utc::now(),
             context_type: "user".to_string(),
@@ -392,6 +412,7 @@ mod tests {
             variant_stats: serde_json::json!({}),
             frequentist_result: None,
             bayesian_result: None,
+            sequential_result: None,
             recommendation: "inconclusive".to_string(),
             computed_at: Utc::now(),
             context_type: "user".to_string(),
@@ -414,6 +435,7 @@ mod tests {
             variant_stats: serde_json::json!({ "mean": 42.5 }),
             frequentist_result: Some(serde_json::json!({ "ci_lower": 0.1 })),
             bayesian_result: Some(serde_json::json!({ "posterior_prob": 0.95 })),
+            sequential_result: None,
             recommendation: "ship".to_string(),
             computed_at: Utc::now(),
             context_type: "account".to_string(),
@@ -423,6 +445,42 @@ mod tests {
         assert_eq!(fr["ci_lower"], serde_json::json!(0.1));
         let br: serde_json::Value = serde_json::from_str(&ch_row.bayesian_result).unwrap();
         assert_eq!(br["posterior_prob"], serde_json::json!(0.95));
+        // sequential_result absent → empty string.
+        assert_eq!(ch_row.sequential_result, "");
+    }
+
+    /// `to_ch_row` serialises a present `sequential_result` JSON blob, and an
+    /// absent one becomes the empty string.
+    #[test]
+    fn to_ch_row_serialises_sequential_result() {
+        let seq = serde_json::json!({
+            "control": {
+                "always_valid_p": 1.0, "p_crossed": false,
+                "ci_lower": 0.0, "ci_upper": 0.0,
+                "insufficient_data": false, "method": "msprt"
+            },
+            "treatment": {
+                "always_valid_p": 0.012, "p_crossed": true,
+                "ci_lower": 0.01, "ci_upper": 0.09,
+                "insufficient_data": false, "method": "msprt"
+            }
+        });
+        let mut row = make_write_row(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            "control",
+            "checkout",
+        );
+        row.sequential_result = Some(seq.clone());
+        let ch_row = ClickHouseExperimentResultsRepository::to_ch_row(row).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&ch_row.sequential_result).unwrap();
+        assert_eq!(
+            parsed["treatment"]["always_valid_p"],
+            serde_json::json!(0.012)
+        );
+        assert_eq!(parsed["treatment"]["p_crossed"], serde_json::json!(true));
+        assert_eq!(parsed["control"]["method"], serde_json::json!("msprt"));
     }
 
     /// `to_ch_row` preserves all identity fields.
