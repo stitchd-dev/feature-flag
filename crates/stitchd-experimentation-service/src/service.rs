@@ -1675,46 +1675,53 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .await
             .map_err(|e| Status::internal(format!("clickhouse error: {e}")))?;
 
-        // Resolve the "other" experiment's name per row, caching lookups so a
-        // pair appearing across many (context_type, metric_key) rows costs one
-        // experiments-table read.
+        // Resolve a display name for every experiment id appearing across the
+        // returned tuples, caching lookups so an id shared by many rows costs
+        // one experiments-table read. Ids that don't resolve (deleted/missing)
+        // fall back to their uuid string rather than failing the whole read.
         let mut name_cache: std::collections::HashMap<uuid::Uuid, String> =
             std::collections::HashMap::new();
         let mut interactions = Vec::with_capacity(rows.len());
         for r in rows {
-            let other_id = if r.experiment_id_a == experiment_id {
-                r.experiment_id_b
-            } else {
-                r.experiment_id_a
-            };
-            let other_name = match name_cache.get(&other_id) {
-                Some(n) => n.clone(),
-                None => {
-                    let name = match self
-                        .experiment_repo
-                        .find_by_id(ExperimentId::from_uuid(other_id))
-                        .await
-                    {
-                        Ok(exp) => exp.name,
-                        // A deleted / missing counterpart should not fail the
-                        // whole read — surface an empty name for that row.
-                        Err(_) => String::new(),
-                    };
-                    name_cache.insert(other_id, name.clone());
-                    name
-                }
-            };
+            let mut experiment_names = Vec::with_capacity(r.experiment_ids.len());
+            for id in &r.experiment_ids {
+                let name = match name_cache.get(id) {
+                    Some(n) => n.clone(),
+                    None => {
+                        let resolved = match self
+                            .experiment_repo
+                            .find_by_id(ExperimentId::from_uuid(*id))
+                            .await
+                        {
+                            Ok(exp) => exp.name,
+                            // Fall back to the id string for an unresolvable
+                            // participant so the tuple stays aligned 1:1.
+                            Err(_) => id.to_string(),
+                        };
+                        name_cache.insert(*id, resolved.clone());
+                        resolved
+                    }
+                };
+                experiment_names.push(name);
+            }
+            let experiment_ids = r.experiment_ids.iter().map(uuid::Uuid::to_string).collect();
             interactions.push(stitchd_proto::experiments::v1::ExperimentInteraction {
-                experiment_id_a: r.experiment_id_a.to_string(),
-                experiment_id_b: r.experiment_id_b.to_string(),
-                other_experiment_name: other_name,
+                experiment_ids,
+                experiment_names,
+                interaction_order: u32::from(r.interaction_order),
+                term: r.term,
                 context_type: r.context_type,
                 metric_key: r.metric_key,
                 shared_count: r.shared_count,
                 interaction_estimate: r.interaction_estimate,
                 p_value: r.p_value,
+                df: r.df,
                 significant: r.significant,
                 insufficient_data: r.insufficient_data,
+                bayes_prob: r.bayes_prob,
+                bayes_expected: r.bayes_expected,
+                bayes_ci_low: r.bayes_ci_low,
+                bayes_ci_high: r.bayes_ci_high,
             });
         }
 
@@ -3334,39 +3341,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_interactions_maps_rows_and_resolves_other_name() {
+    async fn test_get_interactions_maps_rows_and_resolves_names() {
         let (env_id, env_str) = env_uuid();
         let this_exp = uuid::Uuid::new_v4();
-        let other_exp = uuid::Uuid::new_v4();
-        // Row where `this_exp` is side A → "other" is side B.
-        let row_a = CoreInteractionRow {
-            experiment_id_a: this_exp,
-            experiment_id_b: other_exp,
+        let exp_b = uuid::Uuid::new_v4();
+        let exp_c = uuid::Uuid::new_v4();
+        // A 3-way row in which the focused experiment participates, carrying
+        // Bayesian fields and df.
+        let row_3way = CoreInteractionRow {
+            experiment_ids: vec![this_exp, exp_b, exp_c],
+            interaction_order: 3,
+            term: format!("3way:{this_exp}x{exp_b}x{exp_c}"),
             context_type: "user".into(),
             metric_key: "checkout".into(),
             shared_count: 400,
             interaction_estimate: 0.42,
             p_value: 0.001,
+            df: 4,
             significant: true,
             insufficient_data: false,
+            bayes_prob: 0.97,
+            bayes_expected: 0.40,
+            bayes_ci_low: 0.15,
+            bayes_ci_high: 0.66,
         };
-        // Row where `this_exp` is side B → "other" is side A. This pair lacked
-        // enough shared exposures: insufficient_data=true, significant=false.
-        let third_exp = uuid::Uuid::new_v4();
-        let row_b = CoreInteractionRow {
-            experiment_id_a: third_exp,
-            experiment_id_b: this_exp,
+        // A pairwise row that lacked enough shared exposures:
+        // insufficient_data=true, significant=false.
+        let row_2way = CoreInteractionRow {
+            experiment_ids: vec![this_exp, exp_b],
+            interaction_order: 2,
+            term: format!("2way:{this_exp}x{exp_b}"),
             context_type: "account".into(),
             metric_key: "revenue".into(),
             shared_count: 50,
             interaction_estimate: 0.0,
             p_value: 0.0,
+            df: 1,
             significant: false,
             insufficient_data: true,
+            bayes_prob: 0.0,
+            bayes_expected: 0.0,
+            bayes_ci_low: 0.0,
+            bayes_ci_high: 0.0,
         };
         let svc =
             make_service(env_id).with_interactions_reader(Arc::new(CannedInteractionsReader {
-                rows: vec![row_a, row_b],
+                rows: vec![row_3way, row_2way],
             }));
         let req = tonic::Request::new(
             stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
@@ -3382,23 +3402,90 @@ mod tests {
         assert_eq!(resp.interactions.len(), 2);
 
         let first = &resp.interactions[0];
-        assert_eq!(first.experiment_id_a, this_exp.to_string());
-        assert_eq!(first.experiment_id_b, other_exp.to_string());
-        // AlwaysSucceedRepo names every experiment "Test Experiment".
-        assert_eq!(first.other_experiment_name, "Test Experiment");
+        assert_eq!(first.interaction_order, 3);
+        assert!(first.term.starts_with("3way:"));
+        assert_eq!(
+            first.experiment_ids,
+            vec![this_exp.to_string(), exp_b.to_string(), exp_c.to_string()]
+        );
+        // AlwaysSucceedRepo names every experiment "Test Experiment"; names are
+        // aligned 1:1 with experiment_ids.
+        assert_eq!(first.experiment_names.len(), 3);
+        assert!(
+            first
+                .experiment_names
+                .iter()
+                .all(|n| n == "Test Experiment")
+        );
         assert_eq!(first.context_type, "user");
         assert_eq!(first.metric_key, "checkout");
         assert_eq!(first.shared_count, 400);
+        assert_eq!(first.df, 4);
         assert!(first.significant);
         assert!(!first.insufficient_data);
+        // Bayesian fields surface unchanged.
+        assert!((first.bayes_prob - 0.97).abs() < 1e-9);
+        assert!((first.bayes_expected - 0.40).abs() < 1e-9);
+        assert!((first.bayes_ci_low - 0.15).abs() < 1e-9);
+        assert!((first.bayes_ci_high - 0.66).abs() < 1e-9);
 
         let second = &resp.interactions[1];
-        // this_exp is side B here; the "other" resolved is side A (third_exp).
-        assert_eq!(second.experiment_id_a, third_exp.to_string());
-        assert_eq!(second.experiment_id_b, this_exp.to_string());
-        assert_eq!(second.other_experiment_name, "Test Experiment");
+        assert_eq!(second.interaction_order, 2);
+        assert!(second.term.starts_with("2way:"));
+        assert_eq!(second.experiment_ids.len(), 2);
+        assert_eq!(second.experiment_names.len(), 2);
         assert!(!second.significant);
         assert!(second.insufficient_data);
+    }
+
+    /// Participants the repo cannot resolve fall back to the uuid string while
+    /// staying 1:1 with `experiment_ids`.
+    #[tokio::test]
+    async fn test_get_interactions_unresolvable_name_falls_back_to_id() {
+        let (_env_id, env_str) = env_uuid();
+        let this_exp = uuid::Uuid::new_v4();
+        let exp_b = uuid::Uuid::new_v4();
+        let row = CoreInteractionRow {
+            experiment_ids: vec![this_exp, exp_b],
+            interaction_order: 2,
+            term: format!("2way:{this_exp}x{exp_b}"),
+            context_type: "user".into(),
+            metric_key: "checkout".into(),
+            shared_count: 120,
+            interaction_estimate: 0.1,
+            p_value: 0.2,
+            df: 1,
+            significant: false,
+            insufficient_data: false,
+            bayes_prob: 0.5,
+            bayes_expected: 0.1,
+            bayes_ci_low: -0.1,
+            bayes_ci_high: 0.3,
+        };
+        // NotFoundRepo errors on every find_by_id → both names fall back to ids.
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(NotFoundRepo),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_interactions_reader(Arc::new(CannedInteractionsReader { rows: vec![row] }));
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentInteractionsRequest {
+                env_id: env_str,
+                experiment_id: this_exp.to_string(),
+            },
+        );
+        let resp = svc
+            .get_experiment_interactions(req)
+            .await
+            .unwrap()
+            .into_inner();
+        let row0 = &resp.interactions[0];
+        assert_eq!(
+            row0.experiment_names,
+            vec![this_exp.to_string(), exp_b.to_string()]
+        );
     }
 
     /// When no refresher is attached, transitions still succeed.
