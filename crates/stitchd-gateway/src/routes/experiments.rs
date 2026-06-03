@@ -168,6 +168,32 @@ pub struct VariantResultJson {
     pub direction_violation: bool,
     /// Attribution unit context type ("user", "account", …).
     pub context_type: String,
+    /// Sequential (always-valid mSPRT) p-value. Absent (omitted from JSON) when
+    /// sequential testing was disabled for the experiment. `1.0` on the control
+    /// baseline row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequential_p_value: Option<f64>,
+    /// Lower bound of the always-valid confidence sequence. Absent when
+    /// sequential testing was disabled or the variant has insufficient data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequential_ci_lower: Option<f64>,
+    /// Upper bound of the always-valid confidence sequence. Absent when
+    /// sequential testing was disabled or the variant has insufficient data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequential_ci_upper: Option<f64>,
+    /// Whether the always-valid p-value has crossed the α threshold. The
+    /// "safe to stop" decision (crossed AND lift in the goal direction) is
+    /// computed by the consumer. Absent when sequential testing was disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequential_crossed: Option<bool>,
+    /// Whether the variant has too little data for a sequential verdict yet.
+    /// Absent when sequential testing was disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequential_insufficient_data: Option<bool>,
+    /// Sequential method identifier (e.g. `"msprt"`). Absent when sequential
+    /// testing was disabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequential_method: Option<String>,
 }
 
 /// SRM (Sample Ratio Mismatch) breakdown for one context type.
@@ -294,6 +320,14 @@ fn variant_result_to_json(v: &VariantResult) -> VariantResultJson {
         } else {
             v.context_type.clone()
         },
+        // Sequential (always-valid) results pass through verbatim; each is
+        // `None` (omitted) when sequential testing was disabled for the row.
+        sequential_p_value: v.sequential_p_value,
+        sequential_ci_lower: v.sequential_ci_lower,
+        sequential_ci_upper: v.sequential_ci_upper,
+        sequential_crossed: v.sequential_crossed,
+        sequential_insufficient_data: v.sequential_insufficient_data,
+        sequential_method: v.sequential_method.clone(),
     }
 }
 
@@ -1031,6 +1065,56 @@ mod tests {
         assert_eq!(j.context_type, "account");
         assert!(j.direction_violation);
         assert!((j.lift - (-0.12)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn variant_result_to_json_surfaces_sequential_fields() {
+        let vr = VariantResult {
+            variant_key: "treatment".to_string(),
+            participant_count: 2048,
+            sequential_p_value: Some(0.012),
+            sequential_ci_lower: Some(0.03),
+            sequential_ci_upper: Some(0.21),
+            sequential_crossed: Some(true),
+            sequential_insufficient_data: Some(false),
+            sequential_method: Some("msprt".to_string()),
+            ..Default::default()
+        };
+        let j = variant_result_to_json(&vr);
+        assert_eq!(j.sequential_p_value, Some(0.012));
+        assert_eq!(j.sequential_ci_lower, Some(0.03));
+        assert_eq!(j.sequential_ci_upper, Some(0.21));
+        assert_eq!(j.sequential_crossed, Some(true));
+        assert_eq!(j.sequential_insufficient_data, Some(false));
+        assert_eq!(j.sequential_method.as_deref(), Some("msprt"));
+
+        // Lock the exact emitted JSON keys + casing (Admin UI consumes these).
+        let v = serde_json::to_value(&j).unwrap();
+        assert_eq!(v["sequential_p_value"], 0.012);
+        assert_eq!(v["sequential_ci_lower"], 0.03);
+        assert_eq!(v["sequential_ci_upper"], 0.21);
+        assert_eq!(v["sequential_crossed"], true);
+        assert_eq!(v["sequential_insufficient_data"], false);
+        assert_eq!(v["sequential_method"], "msprt");
+    }
+
+    #[test]
+    fn variant_result_to_json_omits_sequential_when_disabled() {
+        // Sequential disabled → all fields None → omitted from JSON.
+        let vr = VariantResult {
+            variant_key: "control".to_string(),
+            ..Default::default()
+        };
+        let j = variant_result_to_json(&vr);
+        assert_eq!(j.sequential_p_value, None);
+        assert_eq!(j.sequential_method, None);
+        let v = serde_json::to_value(&j).unwrap();
+        assert!(v.get("sequential_p_value").is_none());
+        assert!(v.get("sequential_ci_lower").is_none());
+        assert!(v.get("sequential_ci_upper").is_none());
+        assert!(v.get("sequential_crossed").is_none());
+        assert!(v.get("sequential_insufficient_data").is_none());
+        assert!(v.get("sequential_method").is_none());
     }
 
     #[test]
