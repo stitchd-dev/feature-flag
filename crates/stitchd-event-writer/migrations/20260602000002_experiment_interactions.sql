@@ -10,8 +10,12 @@
 --   * "main:<exp>"          — a single-experiment main effect
 --   * "2way:<a>x<b>"         — a pairwise interaction term
 --   * "3way:<a>x<b>x<c>"     — the top-order three-way interaction term
--- `term` encodes the participating experiments, so (env, order, context, metric,
--- term) uniquely identifies a row across ticks.
+-- A row is uniquely identified by (env_id, interaction_order, experiment_ids,
+-- context_type, metric_key, term) — the FULL participating tuple is in the sort
+-- key. `experiment_ids` is REQUIRED in the key: a lower-order term (e.g. main:X,
+-- or 2way:AxB) is emitted by every candidate tuple that contains it, so without
+-- experiment_ids those rows (same order, same term, different tuple) would
+-- collide and silently overwrite each other under ReplacingMergeTree FINAL.
 --
 -- cell_stats holds JSON of the N-dimensional variant-tuple cells (see
 -- stitchd-stats-service::interaction_compute::CellAggregate). Frequentist columns
@@ -29,7 +33,7 @@ CREATE TABLE IF NOT EXISTS experiment_interactions
     env_id               UUID,
     experiment_ids       Array(UUID),
     interaction_order    UInt8,
-    term                 LowCardinality(String),
+    term                 String,
     context_type         LowCardinality(String),
     metric_key           LowCardinality(String),
     shared_count         UInt64,
@@ -46,5 +50,5 @@ CREATE TABLE IF NOT EXISTS experiment_interactions
     computed_at          DateTime64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (env_id, interaction_order, context_type, metric_key, term)
+ORDER BY (env_id, interaction_order, experiment_ids, context_type, metric_key, term)
 TTL toDateTime(computed_at) + INTERVAL 30 DAY;

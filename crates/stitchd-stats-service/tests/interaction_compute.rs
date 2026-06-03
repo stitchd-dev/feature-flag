@@ -629,3 +629,123 @@ async fn pre_exposure_events_are_excluded_itt() {
         );
     }
 }
+
+/// Seed THREE experiments (distinct flags) over a shared 2×2×2 context grid —
+/// every context is assigned a variant in all three experiments. Returns
+/// `(env, exp_a, exp_b, exp_c, metric_id)`.
+async fn seed_triple(
+    ch: &Client,
+    key_prefix: &str,
+    n_per_cell: usize,
+) -> (Uuid, Uuid, Uuid, Uuid, Uuid) {
+    let env_id = Uuid::new_v4();
+    let (exp_a, exp_b, exp_c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (iter_a, iter_b, iter_c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let (flag_a, flag_b, flag_c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
+    let metric = Uuid::new_v4();
+    let at = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let evt_at = at + Duration::hours(1);
+    let variants = ["control", "treatment"];
+
+    let mut assigns = Vec::new();
+    let mut events = Vec::new();
+    for (ai, av) in variants.iter().enumerate() {
+        for (bi, bv) in variants.iter().enumerate() {
+            for (ci, cv) in variants.iter().enumerate() {
+                for k in 0..n_per_cell {
+                    let ckey = format!("{key_prefix}_{ai}{bi}{ci}_{k}");
+                    assigns.push(assignment(exp_a, iter_a, env_id, flag_a, &ckey, av, at));
+                    assigns.push(assignment(exp_b, iter_b, env_id, flag_b, &ckey, bv, at));
+                    assigns.push(assignment(exp_c, iter_c, env_id, flag_c, &ckey, cv, at));
+                    if k % 2 == 0 {
+                        events.push(conversion_event(env_id, &ckey, evt_at));
+                    }
+                }
+            }
+        }
+    }
+    insert_assignments(ch, &assigns).await;
+    insert_events(ch, &events).await;
+    (env_id, exp_a, exp_b, exp_c, metric)
+}
+
+/// Regression for the ReplacingMergeTree dedup-key fix (review #1) + the
+/// order-2/order-3 sub-term distinction (review #7): with three overlapping
+/// experiments sharing one metric, the sweep emits pairs AND the triple, and a
+/// `main:<exp>` term is produced once per tuple containing that experiment. The
+/// fix added `experiment_ids` to the table's ORDER BY, so those same-order,
+/// same-term rows from DIFFERENT tuples must NOT collapse under FINAL.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs running clickhouse"]
+async fn three_way_sweep_keeps_distinct_main_effect_rows() {
+    let ch = make_client();
+    stitchd_event_writer::migrations::run(&ch)
+        .await
+        .expect("apply CH migrations");
+
+    let (env, exp_a, exp_b, exp_c, metric) = seed_triple(&ch, "nway", 40).await;
+
+    let reader = ClickHouseInteractionCells::new(ch.clone());
+    let writer = ClickHouseInteractionWriter::new(ch.clone());
+    let mut metrics = HashMap::new();
+    metrics.insert(metric, conversion_metric(metric));
+    let started = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let mut exps = vec![
+        meta(exp_a, Uuid::new_v4(), metric, started),
+        meta(exp_b, Uuid::new_v4(), metric, started),
+        meta(exp_c, Uuid::new_v4(), metric, started),
+    ];
+    // distinct flags so all three pairwise + the triple are candidates
+    exps[0].flag_id = Uuid::new_v4();
+    exps[1].flag_id = Uuid::new_v4();
+    exps[2].flag_id = Uuid::new_v4();
+
+    let written = compute_and_persist_interactions(
+        &reader,
+        &writer,
+        env,
+        &exps,
+        &metrics,
+        &["user".to_string()],
+        Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap(),
+    )
+    .await
+    .expect("compute_and_persist should succeed");
+    // 3 pairs × (2 main + 1 two-way) + 1 triple × (3 main + 3 two-way + 1 three-way)
+    assert_eq!(written, 16, "pairs + triple full decomposition");
+
+    // Rows where exp_a participates: pairs {A,B},{A,C} and triple {A,B,C}.
+    let rows = fetch_rows(&ch, exp_a).await;
+    let main_a = format!("main:{exp_a}");
+    let main_a_rows: Vec<_> = rows.iter().filter(|r| r.term == main_a).collect();
+    // THE FIX: 3 distinct main:A rows survive FINAL (one per tuple containing A).
+    // Pre-fix, the two order-2 rows ({A,B},{A,C}) shared a dedup key and one was
+    // silently lost, leaving only 2.
+    assert_eq!(
+        main_a_rows.len(),
+        3,
+        "main:A must persist once per tuple containing A (no FINAL collapse): {main_a_rows:?}"
+    );
+    let distinct_tuples: std::collections::HashSet<_> = main_a_rows
+        .iter()
+        .map(|r| r.experiment_ids_str.clone())
+        .collect();
+    assert_eq!(
+        distinct_tuples.len(),
+        3,
+        "the 3 main:A rows name 3 distinct tuples"
+    );
+    let order2 = main_a_rows
+        .iter()
+        .filter(|r| r.interaction_order == 2)
+        .count();
+    let order3 = main_a_rows
+        .iter()
+        .filter(|r| r.interaction_order == 3)
+        .count();
+    assert_eq!(
+        (order2, order3),
+        (2, 1),
+        "two pairwise + one three-way main:A"
+    );
+}

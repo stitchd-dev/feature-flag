@@ -420,12 +420,16 @@ pub async fn compute_and_persist_interactions(
     }
 
     // Phase 2 — Benjamini–Hochberg correction across the batch's valid
-    // Frequentist tests, then persist. Only non-insufficient rows feed the
-    // correction; their (already sanitized) p-values are used. Bayesian fields
-    // are NOT part of the FDR decision.
+    // *interaction* tests (2-way / 3-way terms), then persist. Main-effect terms
+    // are single-experiment quantities, not cross-experiment interactions, so
+    // they are excluded from the interaction FDR family and never marked
+    // significant here — including their (typically tiny) p-values would inflate
+    // the family size and shift the step-up threshold for the interaction terms
+    // this analysis actually exists to surface. Only non-insufficient interaction
+    // rows feed the correction. Bayesian fields are NOT part of the FDR decision.
     let valid_pvalues: Vec<f64> = rows
         .iter()
-        .filter(|r| !r.insufficient_data)
+        .filter(|r| !r.insufficient_data && is_interaction_term(&r.term))
         .map(|r| r.p_value)
         .collect();
     let reject = benjamini_hochberg(&valid_pvalues, 0.05);
@@ -433,9 +437,10 @@ pub async fn compute_and_persist_interactions(
     let mut reject_iter = reject.into_iter();
     let mut written = 0usize;
     for mut row in rows {
-        // Each valid row consumes the next BH decision (same iteration order as
-        // `valid_pvalues` was built). Insufficient rows are never significant.
-        row.significant = if row.insufficient_data {
+        // A row consumes the next BH decision iff it fed `valid_pvalues` (a
+        // non-insufficient interaction term) — same iteration order. Insufficient
+        // rows and main-effect rows are never significant and consume nothing.
+        row.significant = if row.insufficient_data || !is_interaction_term(&row.term) {
             false
         } else {
             reject_iter.next().unwrap_or(false)
@@ -444,6 +449,13 @@ pub async fn compute_and_persist_interactions(
         written += 1;
     }
     Ok(written)
+}
+
+/// Whether a persisted `term` is a cross-experiment *interaction* term (2-way or
+/// 3-way) as opposed to a single-experiment `main:` effect. Only interaction
+/// terms participate in the Benjamini–Hochberg family and can be `significant`.
+fn is_interaction_term(term: &str) -> bool {
+    !term.starts_with("main:")
 }
 
 /// Classify `def`, fetch the matching k-way cell grid for `exp_ids`, and run the

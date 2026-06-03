@@ -1,8 +1,9 @@
 //! Candidate-pair enumeration for cross-experiment interaction detection.
 //!
-//! Before the stats service runs the (expensive) interaction-detection query
-//! (`queries::interaction`) for an environment, it must decide *which* pairs of
-//! experiments are even worth testing. Testing every unordered pair is O(n²)
+//! Before the stats service runs the (expensive) per-metric interaction cell
+//! queries (`queries::interaction_metric`) for an environment, it must decide
+//! *which* pairs (and triples) of experiments are even worth testing. Testing
+//! every unordered pair is O(n²)
 //! and mostly wasted: two experiments can only meaningfully interact when they
 //!
 //!   1. live on **distinct flags** (the same flag's experiments are mutually
