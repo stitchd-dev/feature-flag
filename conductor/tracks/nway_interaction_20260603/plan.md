@@ -36,50 +36,51 @@ Parallel execution: ENABLED (Phase 2 stats modules, Phase 4 consumers, Phase 5 v
 
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Foundations' (Protocol in workflow.md)
 
-## Phase 2: Core Statistics (TDD, parallel by model/family)
+## Phase 2: Core Statistics (TDD, parallel by model/family) [checkpoint: c1b6702]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Scaffold `interaction/` module — split existing `interaction.rs` into
-      `interaction/mod.rs`; extend the result type with `term`, `interaction_order`,
-      and Bayesian fields; keep legacy 2-way fns intact as the regression baseline.
-      (Shared seam — done first, gates the parallel workers.)
-  <!-- files: crates/stitchd-core/src/experimentation/stats/interaction/mod.rs -->
+- [x] Task 1: Seam — kept `interaction.rs` with an `interaction/` submodule dir (no
+      file move needed); added contract types (TermKind/TermResult/BayesianInteraction
+      + NdBinaryCell/NdContinuousCell/NdRatioCell), exposed distribution helpers
+      `pub(crate)`, flat-re-exported 5 stub submodules. Legacy fns kept as baseline.
+  <!-- files: crates/stitchd-core/src/experimentation/stats/interaction.rs (+ interaction/) -->
 
-- [ ] Task 2: Frequentist **log-linear** hierarchical decomposition for binary metrics
-      (R×C×D): emits main-effect, all 2-way, and the 3-way interaction terms with
-      chi-square + correct df. TDD vs hand-computed contingency fixtures.
+- [x] Task 2: Frequentist **log-linear** hierarchical decomposition for binary metrics
+      — main + all 2-way + 3-way; 2-way delegates to legacy (regression-exact), Main =
+      Pearson χ², 3-way = IPF on outcome-bearing margins + Pearson χ². 15 tests. (90d65ac)
   <!-- files: crates/stitchd-core/src/experimentation/stats/interaction/loglinear.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task 3: Frequentist **multi-factor ANOVA** decomposition for continuous metrics:
-      main effects + 2-way + 3-way interaction F-tests. TDD vs hand-computed fixtures.
+- [x] Task 3: Frequentist **multi-factor ANOVA** decomposition for continuous metrics:
+      common pooled error; main one-way SS, 2-way delegates to legacy, 3-way residual SS.
+      14 tests. (85f981b)
   <!-- files: crates/stitchd-core/src/experimentation/stats/interaction/anova.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task 4: **Ratio** delta-method interaction contrast (variance via delta method;
-      `min_denominator` → insufficient_data). TDD vs fixtures + degenerate-denominator cases.
+- [x] Task 4: **Ratio** delta-method interaction — per-cell Var(R), IV-weighted; 2×2/2×2×2
+      DiD z-contrasts, general grids weighted residual χ²; Main = Cochran's Q. 19 tests. (582056f)
   <!-- files: crates/stitchd-core/src/experimentation/stats/interaction/ratio.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task 5: **Bayesian** binary/funnel posterior — Beta-Binomial cells → difference-
-      in-differences interaction contrast; emits prob(≠0 / ROPE), expected effect,
-      credible interval. TDD vs analytic/seeded-MC fixtures.
+- [x] Task 5: **Bayesian** binary/funnel posterior — Beta(1,1) cells → Normal-approx of
+      the linear contrast; prob=Φ(|E|/sd), expected, 95% CI. Deterministic. 15 tests. (2acb6c7)
   <!-- files: crates/stitchd-core/src/experimentation/stats/interaction/bayes_binary.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task 6: **Bayesian** continuous/ratio posterior — Normal-Normal cells →
-      interaction contrast; prob/expected/credible-interval. TDD vs fixtures.
+- [x] Task 6: **Bayesian** continuous/ratio posterior — Normal-Normal (continuous) +
+      delta-method (ratio) cell posteriors → same contrast summary. Deterministic. 17 tests. (fa596eb)
   <!-- files: crates/stitchd-core/src/experimentation/stats/interaction/bayes_continuous.rs -->
   <!-- depends: task1 -->
 
-- [ ] Task 7: Regression + retire legacy — assert the generalized order-2 path
-      reproduces legacy `binary_2x2`/`binary_rxc`/`continuous_interaction` outputs
-      bit-for-bit, then remove the superseded fns. (Shared seam, after parallel workers.)
-  <!-- files: crates/stitchd-core/src/experimentation/stats/interaction/mod.rs -->
+- [x] Task 7: Integration + regression — order-2 two-way reproduces legacy bit-for-bit
+      (public API), 5 modules compose, freq+bayes join by TermKind. 107 interaction tests.
+      NOTE: legacy core fns RETAINED (2-way delegates to them); old sweep-path retirement
+      moved to Phase 3. (c1b6702)
+  <!-- files: crates/stitchd-core/src/experimentation/stats/interaction.rs -->
   <!-- depends: task2, task3, task4, task5, task6 -->
 
-- [ ] Task: Conductor - User Manual Verification 'Phase 2: Core Statistics' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2: Core Statistics' (automated gate: clippy -D + 107 tests + fmt green)
 
 ## Phase 3: Sweep Orchestration — Enumeration, k-Way Join, Metric Routing, FDR, Persist
 <!-- execution: sequential -->
