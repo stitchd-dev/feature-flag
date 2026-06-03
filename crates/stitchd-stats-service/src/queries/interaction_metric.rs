@@ -46,7 +46,7 @@
 use chrono::{DateTime, Utc};
 use stitchd_core::metric::{AggregationConfig, AggregationOperator, FunnelConfig};
 
-use super::{BuiltQuery, QueryBind, QueryBuildError, push_bind};
+use super::{BuiltQuery, QueryBind, QueryBuildError, jsonlogic_to_sql, push_bind};
 
 /// Whether a metric is treated as a **conversion** (binary) or **continuous**
 /// (numeric) outcome for interaction analysis.
@@ -214,6 +214,20 @@ pub fn build_interaction_metric_cells_query(
     // column routing.
     let value_expr = super::numeric_value_expr(cfg);
 
+    // Optional metric `where_clause` (JsonLogic) — applied to the events
+    // stream exactly as super::aggregation does so a property-filtered metric
+    // (e.g. count WHERE status=='success') is computed over the matching
+    // events only, not every event of `metric_key`. The literal binds emitted
+    // by `jsonlogic_to_sql` MUST be the LAST binds pushed (they land last in
+    // SQL-appearance order — inside the matched_events WHERE).
+    let extra_where = match cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n      AND ({frag})")
+        }
+        None => String::new(),
+    };
+
     let sql = format!(
         "WITH\n\
         shared AS (\n\
@@ -229,7 +243,7 @@ pub fn build_interaction_metric_cells_query(
             WHERE e.env_id = toUUID({ev_env_ph})\n      \
               AND e.metric_key = {event_ph}\n      \
               AND ctx_pair.1 = {ev_ctx_ph}\n      \
-              AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph})\n\
+              AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph}){extra_where}\n\
         ),\n\
         ctx_events AS (\n    \
             SELECT\n        \
@@ -298,6 +312,12 @@ pub fn build_interaction_funnel_cells_query(
     let shared_cte = emit_shared_cte(&mut binds, exp_ids, env_id, context_type, interaction_end);
 
     // ── step predicates for windowFunnel (in the SELECT list of ctx_funnel) ─
+    // The per-context ITT lower bound (`me.occurred_at >= s.joint_assigned_at`)
+    // is AND-ed into EACH step condition rather than placed in the JOIN ON:
+    // ClickHouse rejects a mixed equality+inequality `JOIN ... ON` with
+    // INVALID_JOIN_ON_EXPRESSION (see the aggregation/ratio paths, which gate
+    // inside the aggregate). Folding it into the step conditions means only
+    // post-exposure events can advance the funnel, preserving ITT semantics.
     let step_predicate_phs: Vec<String> = cfg
         .steps
         .iter()
@@ -305,11 +325,14 @@ pub fn build_interaction_funnel_cells_query(
         .collect();
     let step_predicates = step_predicate_phs
         .iter()
-        .map(|ph| format!("me.metric_key = {ph}"))
+        .map(|ph| format!("me.metric_key = {ph} AND me.occurred_at >= s.joint_assigned_at"))
         .collect::<Vec<_>>()
         .join(",\n                ");
 
     // ── matched_events bounds (env + context + metric_key OR-filter + end) ──
+    // The OR-filter prunes the event stream to the funnel's step set INSIDE the
+    // matched_events CTE, whose table is aliased `e` — so it references
+    // `e.metric_key` (NOT `me`, which only exists in the ctx_funnel join).
     let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
     let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
     let metric_key_filter_phs: Vec<String> = cfg
@@ -319,7 +342,7 @@ pub fn build_interaction_funnel_cells_query(
         .collect();
     let metric_key_filter = metric_key_filter_phs
         .iter()
-        .map(|ph| format!("me.metric_key = {ph}"))
+        .map(|ph| format!("e.metric_key = {ph}"))
         .collect::<Vec<_>>()
         .join(" OR ");
     let ev_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
@@ -333,9 +356,11 @@ pub fn build_interaction_funnel_cells_query(
     let final_level = cfg.steps.len() as i64;
 
     // ctx_funnel computes per shared context the windowFunnel level, with the
-    // step-event stream flattened from events. The per-context ITT lower bound
-    // (joint_assigned_at) gates the events via a predicate on occurred_at;
-    // matched_events is keyed by context_key.
+    // step-event stream flattened from events. matched_events is joined back to
+    // shared on context_key EQUALITY only (ClickHouse rejects a mixed
+    // equality+inequality JOIN ON); the per-context ITT lower bound
+    // (joint_assigned_at) instead gates each windowFunnel step condition, so
+    // only post-exposure events advance the funnel.
     let sql = format!(
         "WITH\n\
         shared AS (\n\
@@ -362,8 +387,7 @@ pub fn build_interaction_funnel_cells_query(
                 ) AS level\n    \
             FROM shared AS s\n    \
             LEFT JOIN matched_events AS me\n        \
-                ON me.context_key = s.context_key\n       \
-                AND me.occurred_at >= s.joint_assigned_at\n    \
+                ON me.context_key = s.context_key\n    \
             GROUP BY s.context_key, s.variant_keys\n\
         )\n\
         SELECT\n    \
@@ -411,6 +435,16 @@ pub fn build_interaction_ratio_cells_query(
     let num_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
     let num_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
     let num_value_expr = super::numeric_value_expr(num_cfg);
+    // Numerator leg's optional where_clause — literals MUST be pushed right
+    // after the numerator's own binds so they land before any denominator bind
+    // in SQL-appearance order (the num_events CTE precedes den_events).
+    let num_extra_where = match num_cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n      AND ({frag})")
+        }
+        None => String::new(),
+    };
 
     // ── denominator events ──────────────────────────────────────────────────
     let den_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
@@ -418,11 +452,25 @@ pub fn build_interaction_ratio_cells_query(
     let den_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
     let den_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
     let den_value_expr = super::numeric_value_expr(den_cfg);
+    let den_extra_where = match den_cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n      AND ({frag})")
+        }
+        None => String::new(),
+    };
 
-    // Per shared context: sum the numerator and denominator metric over
-    // post-exposure events, then per cell accumulate the five second-moment
-    // terms the delta method needs. `num`/`den` are per-context point values;
-    // the outer SELECT squares/cross-multiplies them and sums across contexts.
+    // Pre-aggregate EACH leg to ONE per-context point value FIRST (num_ctx /
+    // den_ctx), then INNER-JOIN the two on context_key 1:1 before accumulating
+    // the delta-method second moments. Joining BOTH legs to `shared`
+    // simultaneously would fan out: a context with M numerator and K
+    // denominator events yields M×K rows, inflating num by K and den by M.
+    // Because num_ctx and den_ctx both derive from the same `shared`, every
+    // shared context appears in each exactly once, so the join is lossless and
+    // each context contributes exactly one (num_ctx, den_ctx) pair. The ITT
+    // lower bound is applied inside each leg's sumIf (post-exposure events
+    // only). The outer SELECT squares / cross-multiplies the per-context totals
+    // and sums them across contexts per cell.
     let sql = format!(
         "WITH\n\
         shared AS (\n\
@@ -438,7 +486,7 @@ pub fn build_interaction_ratio_cells_query(
             WHERE e.env_id = toUUID({num_env_ph})\n      \
               AND e.metric_key = {num_event_ph}\n      \
               AND ctx_pair.1 = {num_ctx_ph}\n      \
-              AND e.occurred_at < fromUnixTimestamp64Milli({num_end_ph})\n\
+              AND e.occurred_at < fromUnixTimestamp64Milli({num_end_ph}){num_extra_where}\n\
         ),\n\
         den_events AS (\n    \
             SELECT\n        \
@@ -450,19 +498,35 @@ pub fn build_interaction_ratio_cells_query(
             WHERE e.env_id = toUUID({den_env_ph})\n      \
               AND e.metric_key = {den_event_ph}\n      \
               AND ctx_pair.1 = {den_ctx_ph}\n      \
-              AND e.occurred_at < fromUnixTimestamp64Milli({den_end_ph})\n\
+              AND e.occurred_at < fromUnixTimestamp64Milli({den_end_ph}){den_extra_where}\n\
         ),\n\
-        ctx_ratio AS (\n    \
+        num_ctx AS (\n    \
             SELECT\n        \
-                s.variant_keys AS variant_keys,\n        \
-                sumIf(ne.value, ne.occurred_at >= s.joint_assigned_at) AS num,\n        \
-                sumIf(de.value, de.occurred_at >= s.joint_assigned_at) AS den\n    \
+                s.context_key AS context_key,\n        \
+                any(s.variant_keys) AS variant_keys,\n        \
+                sumIf(ne.value, ne.occurred_at >= s.joint_assigned_at) AS num\n    \
             FROM shared AS s\n    \
             LEFT JOIN num_events AS ne\n        \
                 ON ne.context_key = s.context_key\n    \
+            GROUP BY s.context_key\n\
+        ),\n\
+        den_ctx AS (\n    \
+            SELECT\n        \
+                s.context_key AS context_key,\n        \
+                sumIf(de.value, de.occurred_at >= s.joint_assigned_at) AS den\n    \
+            FROM shared AS s\n    \
             LEFT JOIN den_events AS de\n        \
                 ON de.context_key = s.context_key\n    \
-            GROUP BY s.context_key, s.variant_keys\n\
+            GROUP BY s.context_key\n\
+        ),\n\
+        ctx_ratio AS (\n    \
+            SELECT\n        \
+                num_ctx.variant_keys AS variant_keys,\n        \
+                num_ctx.num AS num,\n        \
+                den_ctx.den AS den\n    \
+            FROM num_ctx\n    \
+            INNER JOIN den_ctx\n        \
+                ON num_ctx.context_key = den_ctx.context_key\n\
         )\n\
         SELECT\n    \
             cr.variant_keys AS variant_keys,\n    \
@@ -723,6 +787,84 @@ mod tests {
         );
     }
 
+    // ── BUG #2: where_clause must be applied to matched_events ───────────────
+
+    #[test]
+    fn agg_without_where_clause_emits_no_extra_predicate() {
+        // Baseline: a metric with no where_clause must not reference any
+        // `properties[...]` filter (count_cfg/sum_cfg use canonical columns).
+        let q = build_interaction_metric_cells_query(
+            &count_cfg(),
+            ENV_ID,
+            &[EXP_A, EXP_B],
+            "user",
+            end(),
+        )
+        .unwrap();
+        assert!(
+            !q.sql.contains("properties["),
+            "count with no where_clause must not read properties, got:\n{}",
+            q.sql
+        );
+        // Only the shared (6) + event (4) binds, no where literal.
+        assert_eq!(q.binds.len(), 10, "{:?}", q.binds);
+    }
+
+    #[test]
+    fn agg_applies_where_clause_to_matched_events() {
+        // A property-filtered count (status == 'success') must be computed
+        // over the matching events only — the where_clause predicate is
+        // appended (parenthesised) inside the matched_events WHERE, and its
+        // literal is the LAST bind (SQL-appearance order).
+        let cfg = AggregationConfig {
+            event_key: "checkout_completed".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: Some(serde_json::json!({"==": [{"var": "status"}, "success"]})),
+        };
+        let q = build_interaction_metric_cells_query(&cfg, ENV_ID, &[EXP_A, EXP_B], "user", end())
+            .unwrap();
+        // The translator emits `properties['status'] = {pN}`; the placeholder
+        // is the last bind index.
+        let last_idx = q.binds.len() - 1;
+        let expected = format!("AND (properties['status'] = {{p{last_idx}}})");
+        assert!(
+            q.sql.contains(&expected),
+            "where_clause should be appended with parens, got:\n{}",
+            q.sql
+        );
+        // The where literal must land AFTER the matched_events upper bound so
+        // it is the last bind in SQL-appearance order.
+        assert!(
+            q.sql
+                .find("fromUnixTimestamp64Milli")
+                .is_some_and(|end_pos| {
+                    q.sql
+                        .find("properties['status']")
+                        .is_some_and(|w| w > end_pos)
+                }),
+            "where_clause must appear after the event upper bound, got:\n{}",
+            q.sql
+        );
+        assert_eq!(q.binds.last(), Some(&QueryBind::Str("success".into())));
+        // shared (6) + event (4) + 1 where literal.
+        assert_eq!(q.binds.len(), 11, "{:?}", q.binds);
+    }
+
+    #[test]
+    fn agg_propagates_unsupported_jsonlogic_error() {
+        let cfg = AggregationConfig {
+            event_key: "x".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: Some(serde_json::json!({"%": [{"var": "a"}, 2]})),
+        };
+        let err =
+            build_interaction_metric_cells_query(&cfg, ENV_ID, &[EXP_A, EXP_B], "user", end())
+                .unwrap_err();
+        assert_eq!(err, QueryBuildError::UnsupportedJsonLogic("%".into()));
+    }
+
     // ── Aggregation k=3 ──────────────────────────────────────────────────────
 
     #[test]
@@ -894,6 +1036,62 @@ mod tests {
         assert!(q.sql.contains(" OR "), "{}", q.sql);
     }
 
+    // ── BUG #4: funnel JOIN ON must NOT carry an inequality ──────────────────
+
+    #[test]
+    fn funnel_join_on_is_context_key_equality_only() {
+        // ClickHouse rejects a mixed equality+inequality `JOIN ... ON`
+        // (INVALID_JOIN_ON_EXPRESSION). The matched_events join-back must key
+        // on context_key equality ONLY; the ITT lower bound moves into the
+        // windowFunnel step conditions.
+        let q = build_interaction_funnel_cells_query(
+            &funnel_cfg(),
+            ENV_ID,
+            &[EXP_A, EXP_B],
+            "user",
+            end(),
+        )
+        .unwrap();
+        assert!(
+            q.sql.contains("ON me.context_key = s.context_key"),
+            "funnel must join on context_key equality, got:\n{}",
+            q.sql
+        );
+        // Isolate the JOIN ON clause (between `ON me.context_key` and the
+        // following `GROUP BY`) and assert it contains no occurred_at bound.
+        let on_start = q.sql.find("ON me.context_key = s.context_key").unwrap();
+        let on_end = q.sql[on_start..].find("GROUP BY").unwrap() + on_start;
+        let join_on = &q.sql[on_start..on_end];
+        assert!(
+            !join_on.contains("occurred_at"),
+            "JOIN ON must NOT carry an inequality on occurred_at, got:\n{join_on}"
+        );
+    }
+
+    #[test]
+    fn funnel_itt_bound_folded_into_each_step_condition() {
+        // The per-context ITT lower bound is AND-ed into EVERY windowFunnel
+        // step condition so only post-exposure events advance the funnel.
+        let q = build_interaction_funnel_cells_query(
+            &funnel_cfg(),
+            ENV_ID,
+            &[EXP_A, EXP_B],
+            "user",
+            end(),
+        )
+        .unwrap();
+        // funnel_cfg has 2 steps → 2 gated step conditions.
+        let gated = q
+            .sql
+            .matches("AND me.occurred_at >= s.joint_assigned_at")
+            .count();
+        assert_eq!(
+            gated, 2,
+            "each of the 2 step conditions must be ITT-gated, got {gated} in:\n{}",
+            q.sql
+        );
+    }
+
     #[test]
     fn funnel_k3_chains_three_aliases() {
         let q = build_interaction_funnel_cells_query(
@@ -1001,6 +1199,165 @@ mod tests {
             "{}",
             q.sql
         );
+    }
+
+    // ── BUG #3: ratio must pre-aggregate each leg per context (no fan-out) ───
+
+    #[test]
+    fn ratio_pre_aggregates_each_leg_per_context_before_combining() {
+        // Each leg is reduced to ONE per-context point value in its own CTE
+        // (num_ctx / den_ctx), then the two are INNER-JOINed 1:1 on
+        // context_key. Joining BOTH event streams to `shared` simultaneously
+        // would fan out (M×K rows for M num + K den events per context).
+        let q = build_interaction_ratio_cells_query(
+            &count_cfg(),
+            &sum_cfg(),
+            ENV_ID,
+            &[EXP_A, EXP_B],
+            "user",
+            end(),
+        )
+        .unwrap();
+        assert!(q.sql.contains("num_ctx AS ("), "{}", q.sql);
+        assert!(q.sql.contains("den_ctx AS ("), "{}", q.sql);
+        // The combine step joins the two pre-aggregated legs 1:1 on context_key.
+        assert!(
+            q.sql
+                .contains("ON num_ctx.context_key = den_ctx.context_key"),
+            "ctx_ratio must INNER JOIN the pre-aggregated legs on context_key, got:\n{}",
+            q.sql
+        );
+        // The num/den event streams must each be joined to `shared` in their
+        // OWN leg-CTE, never both together in a single CTE body.
+        assert!(
+            !q.sql.contains("LEFT JOIN den_events AS de\n        ON de.context_key = s.context_key\n    GROUP BY s.context_key, s.variant_keys"),
+            "den must not be double-joined alongside num in one CTE, got:\n{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn ratio_legs_pre_aggregated_with_separate_shared_joins() {
+        // Structural guard against re-introducing the cartesian fan-out: the
+        // num leg and den leg each LEFT JOIN `shared` exactly once, in their
+        // own CTE (so there are two `FROM shared AS s` occurrences total).
+        let q = build_interaction_ratio_cells_query(
+            &count_cfg(),
+            &count_cfg(),
+            ENV_ID,
+            &[EXP_A, EXP_B],
+            "user",
+            end(),
+        )
+        .unwrap();
+        assert_eq!(
+            q.sql.matches("FROM shared AS s").count(),
+            2,
+            "expected exactly two per-leg shared joins (num + den), got:\n{}",
+            q.sql
+        );
+        // Per-context grouping is by context_key in each leg.
+        assert_eq!(
+            q.sql.matches("GROUP BY s.context_key\n").count(),
+            2,
+            "each leg must group per context, got:\n{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn ratio_per_cell_output_schema_unchanged() {
+        // interaction_compute deserialises by column name — the output schema
+        // (variant_keys, n, num_sum, den_sum, num_sq_sum, den_sq_sum,
+        // num_den_sum) must be preserved exactly after the fan-out fix.
+        let q = build_interaction_ratio_cells_query(
+            &count_cfg(),
+            &sum_cfg(),
+            ENV_ID,
+            &[EXP_A, EXP_B],
+            "user",
+            end(),
+        )
+        .unwrap();
+        for col in [
+            "cr.variant_keys AS variant_keys",
+            "count() AS n",
+            "sum(cr.num) AS num_sum",
+            "sum(cr.den) AS den_sum",
+            "sum(cr.num * cr.num) AS num_sq_sum",
+            "sum(cr.den * cr.den) AS den_sq_sum",
+            "sum(cr.num * cr.den) AS num_den_sum",
+        ] {
+            assert!(q.sql.contains(col), "missing `{col}` in:\n{}", q.sql);
+        }
+    }
+
+    // ── BUG #2: ratio legs must each apply their where_clause ────────────────
+
+    #[test]
+    fn ratio_applies_where_clause_to_each_leg() {
+        let num_cfg = AggregationConfig {
+            event_key: "purchase".into(),
+            aggregator: AggregationOperator::Sum,
+            on_field: Some("revenue".into()),
+            where_clause: Some(serde_json::json!({"==": [{"var": "currency"}, "USD"]})),
+        };
+        let den_cfg = AggregationConfig {
+            event_key: "session".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: Some(serde_json::json!({"==": [{"var": "platform"}, "web"]})),
+        };
+        let q = build_interaction_ratio_cells_query(
+            &num_cfg,
+            &den_cfg,
+            ENV_ID,
+            &[EXP_A, EXP_B],
+            "user",
+            end(),
+        )
+        .unwrap();
+        // Both leg filters appear in their respective CTE WHEREs.
+        assert!(
+            q.sql.contains("AND (properties['currency'] ="),
+            "numerator where_clause missing, got:\n{}",
+            q.sql
+        );
+        assert!(
+            q.sql.contains("AND (properties['platform'] ="),
+            "denominator where_clause missing, got:\n{}",
+            q.sql
+        );
+        // Both literals are bound; numerator literal precedes denominator
+        // literal in SQL-appearance order (num_events CTE precedes den_events).
+        let usd_pos = q.sql.find("properties['currency']").unwrap();
+        let web_pos = q.sql.find("properties['platform']").unwrap();
+        assert!(
+            usd_pos < web_pos,
+            "numerator filter must precede denominator"
+        );
+        assert!(q.binds.iter().any(|b| b == &QueryBind::Str("USD".into())));
+        assert!(q.binds.iter().any(|b| b == &QueryBind::Str("web".into())));
+    }
+
+    #[test]
+    fn ratio_propagates_unsupported_jsonlogic_error() {
+        let bad_den = AggregationConfig {
+            event_key: "x".into(),
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: Some(serde_json::json!({">": [{"var": "a"}, 2]})),
+        };
+        let err = build_interaction_ratio_cells_query(
+            &count_cfg(),
+            &bad_den,
+            ENV_ID,
+            &[EXP_A, EXP_B],
+            "user",
+            end(),
+        )
+        .unwrap_err();
+        assert_eq!(err, QueryBuildError::UnsupportedJsonLogic(">".into()));
     }
 
     #[test]
