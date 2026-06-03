@@ -1022,3 +1022,119 @@ mod tests {
         assert_eq!(a, b);
     }
 }
+
+#[cfg(test)]
+mod nway_integration_tests {
+    //! P2.T7 — integration check that the five worker submodules compose through
+    //! the public N-way API, that the order-2 decomposition reproduces the legacy
+    //! pairwise function (the regression gate) at the integration level, and that
+    //! the Frequentist + Bayesian results join by `TermKind` (the Phase-3 routing
+    //! pattern).
+    use super::*;
+
+    fn nb(levels: &[usize], n: u64, s: u64) -> NdBinaryCell {
+        NdBinaryCell {
+            levels: levels.to_vec(),
+            n,
+            successes: s,
+        }
+    }
+
+    #[test]
+    fn binary_terms_order3_emits_full_hierarchical_decomposition() {
+        let mut cells = Vec::new();
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    // Plant a small 3-way bump only in the (1,1,1) corner.
+                    let s = 100 + 100 * (a * b * c) as u64;
+                    cells.push(nb(&[a, b, c], 1000, s));
+                }
+            }
+        }
+        let terms = binary_terms(&cells, 3);
+        // 3 main + 3 two-way + 1 three-way.
+        assert_eq!(terms.len(), 7);
+        let kinds: Vec<TermKind> = terms.iter().map(|t| t.kind).collect();
+        for f in 0..3 {
+            assert!(kinds.contains(&TermKind::Main { factor: f }));
+        }
+        assert!(kinds.contains(&TermKind::TwoWay { a: 0, b: 1 }));
+        assert!(kinds.contains(&TermKind::TwoWay { a: 1, b: 2 }));
+        assert!(kinds.contains(&TermKind::ThreeWay { a: 0, b: 1, c: 2 }));
+        // The Frequentist worker leaves Bayesian unset; routing attaches it later.
+        assert!(terms.iter().all(|t| t.bayes.is_none()));
+    }
+
+    #[test]
+    fn order2_twoway_reproduces_legacy_binary_interaction() {
+        let cells = vec![
+            nb(&[0, 0], 1000, 100),
+            nb(&[0, 1], 1000, 100),
+            nb(&[1, 0], 1000, 100),
+            nb(&[1, 1], 1000, 400),
+        ];
+        let terms = binary_terms(&cells, 2);
+        let two = terms
+            .iter()
+            .find(|t| t.kind == TermKind::TwoWay { a: 0, b: 1 })
+            .expect("two-way term present");
+        let legacy = binary_interaction(&[
+            BinaryCell {
+                a_level: 0,
+                b_level: 0,
+                n: 1000,
+                successes: 100,
+            },
+            BinaryCell {
+                a_level: 0,
+                b_level: 1,
+                n: 1000,
+                successes: 100,
+            },
+            BinaryCell {
+                a_level: 1,
+                b_level: 0,
+                n: 1000,
+                successes: 100,
+            },
+            BinaryCell {
+                a_level: 1,
+                b_level: 1,
+                n: 1000,
+                successes: 400,
+            },
+        ]);
+        assert_eq!(two.freq, legacy, "order-2 two-way must equal the legacy fn");
+        assert!(two.freq.significant);
+    }
+
+    #[test]
+    fn frequentist_and_bayesian_join_by_termkind() {
+        let cells = vec![
+            nb(&[0, 0], 1000, 100),
+            nb(&[0, 1], 1000, 100),
+            nb(&[1, 0], 1000, 100),
+            nb(&[1, 1], 1000, 400),
+        ];
+        let mut terms = binary_terms(&cells, 2);
+        let bayes = binary_bayes(&cells, 2);
+        // The Phase-3 routing pattern: attach each posterior to its term by kind.
+        for t in &mut terms {
+            if let Some((_, b)) = bayes.iter().find(|(k, _)| *k == t.kind) {
+                t.bayes = Some(*b);
+            }
+        }
+        let two = terms
+            .iter()
+            .find(|t| t.kind == TermKind::TwoWay { a: 0, b: 1 })
+            .unwrap();
+        let b = two.bayes.expect("posterior attached to the two-way term");
+        assert!(
+            b.prob > 0.95,
+            "strong planted interaction → high posterior prob, got {}",
+            b.prob
+        );
+        assert!(b.ci_low > 0.0, "95% credible interval should exclude 0");
+    }
+}
