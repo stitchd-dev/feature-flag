@@ -407,7 +407,7 @@ mod tests {
         let a = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
         let b = meta(Uuid::new_v4(), Uuid::new_v4(), vec![m]);
         assert!(candidate_triples(&[]).is_empty());
-        assert!(candidate_triples(&[a.clone()]).is_empty());
+        assert!(candidate_triples(std::slice::from_ref(&a)).is_empty());
         assert!(candidate_triples(&[a, b]).is_empty());
     }
 
