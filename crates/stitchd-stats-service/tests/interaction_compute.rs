@@ -37,12 +37,14 @@ use uuid::Uuid;
 type AssignmentRow = SeedAssignmentRow;
 type EventRow = SeedEventRow;
 
-/// One persisted interaction **term** row. `experiment_ids` is read as
-/// `Array(String)` (the `fetch_rows` SQL stringifies the `Array(UUID)` column
-/// via `arrayMap`) to sidestep the array-UUID RowBinary serde on the read side.
+/// One persisted interaction **term** row. The `Array(UUID)` column is read as
+/// `Array(String)` under the alias `experiment_ids_str` (the `fetch_rows` SQL
+/// stringifies it via `arrayMap`) to sidestep the array-UUID RowBinary serde on
+/// the read side. clickhouse-rs matches columns by NAME, so the field name must
+/// equal the SQL alias.
 #[derive(Debug, Clone, Deserialize, clickhouse::Row)]
 struct InteractionResultRow {
-    experiment_ids: Vec<String>,
+    experiment_ids_str: Vec<String>,
     interaction_order: u8,
     term: String,
     context_type: String,
@@ -220,8 +222,12 @@ async fn fetch_rows(ch: &Client, exp: Uuid) -> Vec<InteractionResultRow> {
     // Stringify the Array(UUID) column so it reads as Array(String) — avoids the
     // array-UUID RowBinary serde on the read side. `FINAL` collapses the
     // ReplacingMergeTree window so re-inserts within a tick don't duplicate.
+    // Alias the stringified projection to a NON-colliding name: reusing
+    // `experiment_ids` makes ClickHouse try to unify the String[] alias with the
+    // UUID[] column referenced in WHERE/ORDER BY (NO_COMMON_TYPE). Row decoding is
+    // positional, so the alias name is irrelevant to deserialization.
     let sql = format!(
-        "SELECT arrayMap(x -> toString(x), experiment_ids) AS experiment_ids, \
+        "SELECT arrayMap(x -> toString(x), experiment_ids) AS experiment_ids_str, \
          interaction_order, term, context_type, metric_key, shared_count, \
          cell_stats, significant, insufficient_data
          FROM experiment_interactions FINAL
@@ -303,7 +309,7 @@ async fn significant_interaction_is_written() {
         assert_eq!(r.context_type, "user");
         assert_eq!(r.shared_count, 400);
         assert_eq!(r.interaction_order, 2);
-        assert_eq!(r.experiment_ids, vec![lo.to_string(), hi.to_string()]);
+        assert_eq!(r.experiment_ids_str, vec![lo.to_string(), hi.to_string()]);
     }
     let two = rows
         .iter()
