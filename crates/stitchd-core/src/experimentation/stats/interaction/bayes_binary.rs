@@ -52,11 +52,8 @@
 //! Determinism: there is no RNG and no iteration-order-dependent float
 //! accumulation, so repeated calls are bit-identical.
 
+use super::bayes_common::{CellPost, enumerate_terms, run_terms};
 use super::{BayesianInteraction, NdBinaryCell, TermKind};
-use std::collections::BTreeMap;
-
-/// Two-sided 95 % normal quantile (z₀.₉₇₅) for the central credible interval.
-const Z_95: f64 = 1.96;
 
 /// Posterior mean and variance of a single cell rate under a Beta(1,1) prior.
 ///
@@ -77,215 +74,55 @@ fn beta_posterior(n: u64, successes: u64) -> (f64, f64) {
     (mean, var)
 }
 
-/// A cell selector: per factor, `Some(level)` fixes that factor at a level while
-/// `None` collapses (sums) over every level of that factor.
-type Selector = Vec<Option<usize>>;
-
-/// Pool `(n, successes)` over every cell matching `sel` (the collapsed group).
-///
-/// Returns `(total_n, total_successes)`; `total_n == 0` means the participating
-/// group is empty.
-fn pool(cells: &[NdBinaryCell], sel: &Selector) -> (u64, u64) {
-    let mut n = 0u64;
-    let mut s = 0u64;
-    for cell in cells {
-        let matches = sel.iter().enumerate().all(|(d, want)| match want {
-            Some(level) => cell.levels.get(d).copied() == Some(*level),
-            None => true,
-        });
-        if matches {
-            n = n.saturating_add(cell.n);
-            s = s.saturating_add(cell.successes);
-        }
-    }
-    (n, s)
-}
-
-/// Accumulated linear-contrast weight on one pooled cell (keyed by its selector
-/// constraints). Selectors are stored as a `Vec<Option<usize>>` so equal
-/// constraints merge (a cell can appear in several elementary contrasts).
-type Contrast = BTreeMap<Selector, f64>;
-
-/// Add `coef` to the weight on the pooled cell described by `sel`.
-fn add_term(contrast: &mut Contrast, sel: Selector, coef: f64) {
-    *contrast.entry(sel).or_insert(0.0) += coef;
-}
-
-/// Evaluate a linear contrast into a Normal posterior summary, or `None` if a
-/// participating pooled cell is empty or the sd is degenerate.
-///
-/// `mean = Σ coef·m`, `var = Σ coef²·v` over the distinct pooled cells (each
-/// contributes once, with its net accumulated coefficient — this keeps the
-/// independent-cell variance correct even when a cell recurs across the
-/// elementary contrasts that were averaged into this one).
-fn summarize(cells: &[NdBinaryCell], contrast: &Contrast) -> Option<BayesianInteraction> {
-    let mut mean = 0.0f64;
-    let mut var = 0.0f64;
-    for (sel, &coef) in contrast {
-        // A net-zero coefficient cell does not participate.
-        if coef == 0.0 {
-            continue;
-        }
-        let (n, s) = pool(cells, sel);
-        if n == 0 {
-            // Empty participating cell → posterior contrast undefined here.
-            return None;
-        }
-        let (m, v) = beta_posterior(n, s);
-        mean += coef * m;
-        var += coef * coef * v;
-    }
-
-    let sd = var.sqrt();
-    if sd <= 0.0 || !sd.is_finite() || !mean.is_finite() {
-        return None;
-    }
-
-    // Posterior probability the effect is non-null in its estimated direction.
-    let prob = super::norm_cdf(mean.abs() / sd);
-    Some(BayesianInteraction {
-        prob,
-        expected: mean,
-        ci_low: mean - Z_95 * sd,
-        ci_high: mean + Z_95 * sd,
-    })
-}
-
-/// Number of levels present on each factor (max index + 1), for `n_factors`
-/// factors. A factor with no observed level has a count of 0.
-fn level_counts(cells: &[NdBinaryCell], n_factors: usize) -> Vec<usize> {
-    let mut counts = vec![0usize; n_factors];
-    for cell in cells {
-        for (d, count) in counts.iter_mut().enumerate() {
-            if let Some(&lvl) = cell.levels.get(d) {
-                *count = (*count).max(lvl + 1);
-            }
-        }
-    }
-    counts
-}
-
-/// Build the main-effect contrast for factor `i`: rate(top) − rate(level 0),
-/// collapsed over the other factors. `None` if factor `i` has fewer than 2
-/// levels (no contrast to form).
-fn main_contrast(n_factors: usize, i: usize, counts: &[usize]) -> Option<Contrast> {
-    let li = counts[i];
-    if li < 2 {
-        return None;
-    }
-    let top = li - 1;
-    let mut contrast = Contrast::new();
-    let mut sel_top: Selector = vec![None; n_factors];
-    let mut sel_base: Selector = vec![None; n_factors];
-    sel_top[i] = Some(top);
-    sel_base[i] = Some(0);
-    add_term(&mut contrast, sel_top, 1.0);
-    add_term(&mut contrast, sel_base, -1.0);
-    Some(contrast)
-}
-
-/// Build the two-way contrast for factors `(a, b)`: the mean of the
-/// `(Lₐ−1)(L_b−1)` elementary 2×2 interaction contrasts anchored at level 0,
-/// collapsed over the other factors. `None` if either factor has < 2 levels.
-fn two_way_contrast(n_factors: usize, a: usize, b: usize, counts: &[usize]) -> Option<Contrast> {
-    let (la, lb) = (counts[a], counts[b]);
-    if la < 2 || lb < 2 {
-        return None;
-    }
-    let k = ((la - 1) * (lb - 1)) as f64; // number of elementary contrasts
-    let w = 1.0 / k; // averaging weight
-    let mut contrast = Contrast::new();
-    let mk = |ai: usize, bi: usize| -> Selector {
-        let mut sel = vec![None; n_factors];
-        sel[a] = Some(ai);
-        sel[b] = Some(bi);
-        sel
-    };
-    for ai in 1..la {
-        for bi in 1..lb {
-            // Elementary 2×2 interaction contrast anchored at (0,0):
-            // (p[ai][bi] − p[ai][0]) − (p[0][bi] − p[0][0]).
-            add_term(&mut contrast, mk(ai, bi), w);
-            add_term(&mut contrast, mk(ai, 0), -w);
-            add_term(&mut contrast, mk(0, bi), -w);
-            add_term(&mut contrast, mk(0, 0), w);
-        }
-    }
-    Some(contrast)
-}
-
-/// Build the three-way contrast for factors `(a, b, c)`: the
-/// difference-in-differences-of-differences over the 2×2×2 corners, each factor
-/// taken at level 0 or its top level. `None` if any factor has < 2 levels.
-fn three_way_contrast(
-    n_factors: usize,
-    a: usize,
-    b: usize,
-    c: usize,
-    counts: &[usize],
-) -> Option<Contrast> {
-    let (la, lb, lc) = (counts[a], counts[b], counts[c]);
-    if la < 2 || lb < 2 || lc < 2 {
-        return None;
-    }
-    let (ta, tb, tc) = (la - 1, lb - 1, lc - 1);
-    let mut contrast = Contrast::new();
-    // For each factor, level 0 carries sign −1, the top level carries +1; the
-    // corner coefficient is the product of the three per-factor signs.
-    for (ai, sa) in [(0usize, -1.0f64), (ta, 1.0f64)] {
-        for (bi, sb) in [(0usize, -1.0f64), (tb, 1.0f64)] {
-            for (ci, sc) in [(0usize, -1.0f64), (tc, 1.0f64)] {
-                let mut sel = vec![None; n_factors];
-                sel[a] = Some(ai);
-                sel[b] = Some(bi);
-                sel[c] = Some(ci);
-                add_term(&mut contrast, sel, sa * sb * sc);
-            }
-        }
-    }
-    Some(contrast)
-}
-
 /// See module contract. Returns Bayesian Beta-Binomial interaction posteriors,
 /// one per emitted term (sparse/degenerate terms omitted).
+///
+/// Enumeration, contrast construction, and the Normal summary are delegated to
+/// [`super::bayes_common`]; this worker supplies only the per-cell Beta posterior
+/// and the binary cell collapse. The collapse pools `(n, successes)` over the
+/// non-participating factors (saturating, so a malformed `successes > n` cell can
+/// never underflow), then forms the pooled Beta posterior; an empty pooled cell
+/// (`n == 0`) yields `None`, which omits the term.
 pub fn binary_bayes(cells: &[NdBinaryCell], order: usize) -> Vec<(TermKind, BayesianInteraction)> {
     if cells.is_empty() || order == 0 {
         return Vec::new();
     }
 
-    let n_factors = order;
-    let counts = level_counts(cells, n_factors);
-    let mut out = Vec::new();
-
-    // Main effects: one per factor.
-    for i in 0..n_factors {
-        if let Some(contrast) = main_contrast(n_factors, i, &counts)
-            && let Some(bi) = summarize(cells, &contrast)
-        {
-            out.push((TermKind::Main { factor: i }, bi));
-        }
-    }
-
-    // Pairwise interactions: every (a < b) pair.
-    for a in 0..n_factors {
-        for b in (a + 1)..n_factors {
-            if let Some(contrast) = two_way_contrast(n_factors, a, b, &counts)
-                && let Some(bi) = summarize(cells, &contrast)
-            {
-                out.push((TermKind::TwoWay { a, b }, bi));
+    // Per-factor level counts over exactly `order` factors (max index + 1). A
+    // factor absent from a cell's tuple contributes 0 levels, so a single-level
+    // or missing factor simply yields no contrast for that term.
+    let mut dims = vec![0usize; order];
+    for cell in cells {
+        for (d, count) in dims.iter_mut().enumerate() {
+            if let Some(&lvl) = cell.levels.get(d) {
+                *count = (*count).max(lvl + 1);
             }
         }
     }
 
-    // Three-way interaction (only for order == 3): factors {0,1,2}.
-    if order == 3
-        && let Some(contrast) = three_way_contrast(n_factors, 0, 1, 2, &counts)
-        && let Some(bi) = summarize(cells, &contrast)
-    {
-        out.push((TermKind::ThreeWay { a: 0, b: 1, c: 2 }, bi));
-    }
-
-    out
+    let terms = enumerate_terms(order);
+    run_terms(&terms, &dims, |factors, key| {
+        // Pool (n, successes) over every cell matching the participating-level
+        // key, collapsing (summing) over all other factors.
+        let mut n = 0u64;
+        let mut s = 0u64;
+        for cell in cells {
+            let matches = factors
+                .iter()
+                .zip(key)
+                .all(|(&f, &want)| cell.levels.get(f).copied() == Some(want));
+            if matches {
+                n = n.saturating_add(cell.n);
+                s = s.saturating_add(cell.successes);
+            }
+        }
+        if n == 0 {
+            // Empty participating cell → posterior contrast undefined here.
+            return None;
+        }
+        let (est, var) = beta_posterior(n, s);
+        Some(CellPost { est, var })
+    })
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -536,6 +373,87 @@ mod tests {
             assert_eq!(ba.expected.to_bits(), bb.expected.to_bits());
             assert_eq!(ba.ci_low.to_bits(), bb.ci_low.to_bits());
             assert_eq!(ba.ci_high.to_bits(), bb.ci_high.to_bits());
+        }
+    }
+
+    /// Golden bit-for-bit snapshot of `binary_bayes` on a fully-populated 2×2×2
+    /// grid at order 3 (mains + all pairwise + the three-way). Captured from the
+    /// implementation before the shared-driver refactor (review #14); pins every
+    /// posterior field's exact `f64` bits so any future change to the numeric
+    /// output — the thing the refactor must NOT alter — is caught immediately.
+    #[test]
+    fn binary_bayes_golden_bits_order3() {
+        let cells = [
+            cell(&[0, 0, 0], 800, 80),
+            cell(&[0, 0, 1], 800, 120),
+            cell(&[0, 1, 0], 800, 90),
+            cell(&[0, 1, 1], 800, 160),
+            cell(&[1, 0, 0], 800, 200),
+            cell(&[1, 0, 1], 800, 240),
+            cell(&[1, 1, 0], 800, 300),
+            cell(&[1, 1, 1], 800, 440),
+        ];
+        // (kind, prob_bits, expected_bits, ci_low_bits, ci_high_bits)
+        let expected: [(TermKind, u64, u64, u64, u64); 7] = [
+            (
+                TermKind::Main { factor: 0 },
+                4607182418800017408,
+                4597381955900730207,
+                4596639774842423150,
+                4598124136959037264,
+            ),
+            (
+                TermKind::Main { factor: 1 },
+                4607182418800017408,
+                4592540797275680476,
+                4591015029078547272,
+                4593869092695359800,
+            ),
+            (
+                TermKind::Main { factor: 2 },
+                4607182418800017408,
+                4591190561284963524,
+                4589660976178398026,
+                4592720146391529022,
+            ),
+            (
+                TermKind::TwoWay { a: 0, b: 1 },
+                4607182418800017163,
+                4594790491735442412,
+                4592979283136503799,
+                4596255531943679964,
+            ),
+            (
+                TermKind::TwoWay { a: 0, b: 2 },
+                4607018327897214214,
+                4586457989054090256,
+                4568505250422810416,
+                4590762875309695190,
+            ),
+            (
+                TermKind::TwoWay { a: 1, b: 2 },
+                4607181717041538442,
+                4590511790965868192,
+                4585794322913696155,
+                4593542410329620594,
+            ),
+            (
+                TermKind::ThreeWay { a: 0, b: 1, c: 2 },
+                4607029618757127072,
+                4590953736851014000,
+                4574285018869530768,
+                4595218742831014252,
+            ),
+        ];
+
+        let got = binary_bayes(&cells, 3);
+        assert_eq!(got.len(), expected.len(), "term count drifted");
+        for ((kind, bi), (ek, ep, ee, el, eh)) in got.iter().zip(expected.iter()) {
+            assert_eq!(kind, ek, "term identity/order drifted");
+            assert_eq!(bi.prob.to_bits(), *ep, "{kind:?} prob bits drifted");
+            assert_eq!(bi.expected.to_bits(), *ee, "{kind:?} expected bits drifted");
+            assert_eq!(bi.ci_low.to_bits(), *el, "{kind:?} ci_low bits drifted");
+            assert_eq!(bi.ci_high.to_bits(), *eh, "{kind:?} ci_high bits drifted");
         }
     }
 

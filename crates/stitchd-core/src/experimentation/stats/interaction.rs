@@ -30,6 +30,7 @@ pub(crate) use super::srm::chi_square_sf;
 // and distribution helpers defined in this module (accessible via `super::`).
 mod anova;
 mod bayes_binary;
+mod bayes_common;
 mod bayes_continuous;
 mod loglinear;
 mod ratio;
