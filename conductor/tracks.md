@@ -87,7 +87,7 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Sequential Testing (Always-Valid Inference)
+## [x] Track: Sequential Testing (Always-Valid Inference)
 *Link: [./conductor/tracks/seqtest_20260603/](./conductor/tracks/seqtest_20260603/)*
 
 Add always-valid inference — mSPRT always-valid p-values + mSPRT-dual confidence sequences over a single normal-mixture core — so experiments can be peeked safely (continuous dashboard looks) without inflating false positives. All four metric families (conversion/count, continuous, ratio via delta-method, funnel); opt-in per experiment with advanced knobs (α, τ², min-sample-before-first-look); looks ride the existing 60-min tick with a persisted running-minimum p-value; "safe to stop" advisory surfaced in the Results tab. Natural extension of the mature Frequentist + Bayesian engine. Priority: 🟡 Medium. Execution: parallel (worker-wave). 6 phases.
