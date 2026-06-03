@@ -51,6 +51,17 @@ pub struct RunningExperiment {
     pub metric_ids: Vec<Uuid>,
     pub variant_keys: Vec<String>,
     pub started_at: DateTime<Utc>,
+    /// Analysis unit context types snapshotted on the iteration (proto
+    /// `ExperimentIteration.unit_context_types`, field 8). The compute pass runs
+    /// one stats analysis per context type. Defaults to `["user"]` until
+    /// [`enrich_sequential_settings`] hydrates it from the iteration snapshot;
+    /// the `ListRunningExperiments` RPC does not carry this field.
+    pub unit_context_types: Vec<String>,
+    /// Pre-period length in days for CUPED variance reduction. Captured for the
+    /// deferred CUPED pass; currently **unused** by the compute pass. Defaults to
+    /// `0`. (The `ExperimentIteration` proto does not snapshot this today, so it
+    /// stays `0` until the CUPED follow-up plumbs it through.)
+    pub pre_period_days: u32,
     /// Sequential-testing configuration resolved from the iteration snapshot.
     /// Defaults to disabled until [`enrich_sequential_settings`] fetches the
     /// iteration; the `ListRunningExperiments` RPC does not carry these fields.
@@ -100,8 +111,12 @@ pub async fn fetch_running_experiments(
                     metric_ids,
                     variant_keys: proto.variant_keys,
                     started_at,
-                    // ListRunningExperiments does not carry the sequential
-                    // config; resolved separately via the iteration snapshot.
+                    // ListRunningExperiments carries neither the unit context
+                    // types nor the sequential config / pre-period; all are
+                    // resolved separately via the iteration snapshot. Default to
+                    // a single "user" context until enriched.
+                    unit_context_types: vec!["user".to_string()],
+                    pre_period_days: 0,
                     sequential: SequentialSettings::default(),
                 });
             }
@@ -111,14 +126,19 @@ pub async fn fetch_running_experiments(
     Ok(results)
 }
 
-/// Resolve the [`SequentialSettings`] for an experiment from its iteration
-/// snapshot via `GetExperimentIteration`.
+/// Resolve the iteration-snapshotted compute-pass inputs for an experiment via
+/// `GetExperimentIteration`: the [`SequentialSettings`] AND the
+/// `unit_context_types` the compute pass scopes its analyses by.
 ///
-/// The `ListRunningExperiments` view omits the sequential config, so the
-/// scheduler calls this to hydrate `exp.sequential` before the compute pass.
-/// On RPC failure the settings are left at their default (sequential disabled),
-/// which is the safe behaviour — a transient experimentation-service blip must
-/// not turn on (or misconfigure) always-valid testing.
+/// The `ListRunningExperiments` view omits both, so the scheduler calls this to
+/// hydrate `exp.sequential` and `exp.unit_context_types` before the compute
+/// pass. On RPC failure the sequential settings are left at their default
+/// (disabled) and the context types fall back to `["user"]` — the safe
+/// behaviour, since a transient experimentation-service blip must not turn on
+/// (or misconfigure) always-valid testing or silently drop a context dimension.
+///
+/// `pre_period_days` is NOT carried on the `ExperimentIteration` proto today, so
+/// it is left at its `0` default (the deferred CUPED pass will plumb it).
 pub async fn enrich_sequential_settings(
     client: &mut ExperimentationServiceClient<Channel>,
     exp: &mut RunningExperiment,
@@ -137,6 +157,14 @@ pub async fn enrich_sequential_settings(
                 tau_squared: it.sequential_tau_squared,
                 min_sample_size: it.sequential_min_sample_size,
             };
+            // Capture the iteration's analysis unit context types; default to a
+            // single "user" context when the snapshot carries none so the
+            // compute pass always has at least one dimension to analyse.
+            if it.unit_context_types.is_empty() {
+                exp.unit_context_types = vec!["user".to_string()];
+            } else {
+                exp.unit_context_types = it.unit_context_types;
+            }
         }
         Err(e) => {
             // Reset to the safe default (disabled): a transient
@@ -144,6 +172,7 @@ pub async fn enrich_sequential_settings(
             // sequential config that could turn on or misconfigure
             // always-valid testing.
             exp.sequential = SequentialSettings::default();
+            exp.unit_context_types = vec!["user".to_string()];
             tracing::warn!(
                 experiment_id = %exp.experiment_id,
                 iteration_id = %exp.iteration_id,
@@ -452,6 +481,8 @@ mod tests {
             metric_ids: vec![],
             variant_keys: vec!["control".into(), "treatment".into()],
             started_at: Utc::now(),
+            unit_context_types: vec!["user".into()],
+            pre_period_days: 0,
             sequential: SequentialSettings::default(),
         }
     }
@@ -463,6 +494,18 @@ mod tests {
         tau: Option<f64>,
         min_n: i64,
     ) -> ExperimentIteration {
+        iteration_full(id, enabled, alpha, tau, min_n, vec![])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn iteration_full(
+        id: Uuid,
+        enabled: bool,
+        alpha: f64,
+        tau: Option<f64>,
+        min_n: i64,
+        unit_context_types: Vec<String>,
+    ) -> ExperimentIteration {
         ExperimentIteration {
             id: id.to_string(),
             experiment_id: Uuid::new_v4().to_string(),
@@ -471,7 +514,7 @@ mod tests {
             ended_at_ms: 0,
             metric_ids: vec![],
             traffic_allocation: 1.0,
-            unit_context_types: vec![],
+            unit_context_types,
             exclusion_group_id: None,
             group_bucket_lo: None,
             group_bucket_hi: None,
@@ -495,6 +538,38 @@ mod tests {
         assert!((exp.sequential.alpha - 0.01).abs() < 1e-12);
         assert_eq!(exp.sequential.tau_squared, Some(0.25));
         assert_eq!(exp.sequential.min_sample_size, 250);
+    }
+
+    #[tokio::test]
+    async fn enrich_captures_unit_context_types_from_iteration() {
+        let iter_id = Uuid::new_v4();
+        let it = iteration_full(
+            iter_id,
+            false,
+            0.05,
+            None,
+            100,
+            vec!["user".into(), "account".into()],
+        );
+        let mut client = make_client_with_iteration(vec![], Some(it)).await;
+
+        let mut exp = running_exp(iter_id);
+        // Start from a wrong default to prove the fetch overwrites it.
+        exp.unit_context_types = vec!["bogus".into()];
+        enrich_sequential_settings(&mut client, &mut exp).await;
+
+        assert_eq!(exp.unit_context_types, vec!["user", "account"]);
+    }
+
+    #[tokio::test]
+    async fn enrich_defaults_context_types_to_user_when_iteration_empty() {
+        let iter_id = Uuid::new_v4();
+        let it = iteration_full(iter_id, false, 0.05, None, 100, vec![]);
+        let mut client = make_client_with_iteration(vec![], Some(it)).await;
+        let mut exp = running_exp(iter_id);
+        exp.unit_context_types = vec![];
+        enrich_sequential_settings(&mut client, &mut exp).await;
+        assert_eq!(exp.unit_context_types, vec!["user"]);
     }
 
     #[tokio::test]

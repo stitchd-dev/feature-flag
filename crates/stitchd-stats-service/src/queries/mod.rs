@@ -25,6 +25,7 @@ pub mod funnel;
 pub mod interaction_metric;
 pub mod preview;
 pub mod ratio;
+pub mod variant_stats;
 
 use thiserror::Error;
 
