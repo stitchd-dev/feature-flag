@@ -112,6 +112,7 @@ fn bool_flag(flag_n: u128, enabled: bool, on_id: VariantId, off_id: VariantId, k
                 value: VariantValue::BoolValue(false),
             },
         ],
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     }
 }
 

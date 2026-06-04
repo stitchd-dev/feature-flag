@@ -116,6 +116,10 @@ pub enum EvalOutcome {
     DefaultRuleDistribution,
     /// Flag exists but is disabled; default variant returned.
     Disabled,
+    /// A prerequisite flag did not resolve to its required variant (or was
+    /// disabled / absent); the flag's configured fallback variant was
+    /// returned and its rules were skipped.
+    PrerequisiteFailed,
     /// Flag key not found in the current snapshot.
     FlagNotFound,
 }
@@ -127,6 +131,7 @@ impl EvalOutcome {
             Self::DefaultRule => "default_rule",
             Self::DefaultRuleDistribution => "default_rule_distribution",
             Self::Disabled => "disabled",
+            Self::PrerequisiteFailed => "prerequisite_failed",
             Self::FlagNotFound => "flag_not_found",
         }
     }
@@ -951,6 +956,7 @@ impl SdkClient {
                         EvalOutcome::DefaultRuleDistribution
                     }
                     CoreEvalOutcome::FlagDisabled => EvalOutcome::Disabled,
+                    CoreEvalOutcome::PrerequisiteFailed { .. } => EvalOutcome::PrerequisiteFailed,
                 };
                 let variant_value_json = core_variant_value_to_json(&core_res.variant_value);
                 let matched_rule_id = core_res
@@ -1234,6 +1240,10 @@ fn convert_proto_flag_to_core(proto: &FeatureFlag) -> Option<Flag> {
         hashing_config: vec![],
         rules,
         variants,
+        // Phase 7 (flag_lifecycle) wires the proto FeatureFlag.prerequisites +
+        // fallback_variant_key into this conversion so the SDK gates locally;
+        // until then the SDK carries an empty gate (no prerequisites).
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     })
 }
 

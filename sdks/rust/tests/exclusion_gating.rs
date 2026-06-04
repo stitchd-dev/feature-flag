@@ -209,6 +209,7 @@ fn build_core_flag(gate: &ExclusionGate) -> Flag {
             rule,
         }],
         variants,
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     }
 }
 

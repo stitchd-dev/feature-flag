@@ -1,7 +1,7 @@
 use crate::context::{Context, EvaluationContext};
 use crate::flag::{Flag, Variant};
 use crate::hashing::calculate_allocation;
-use crate::id::{EnvironmentId, ProjectId, SegmentId};
+use crate::id::{EnvironmentId, FlagId, ProjectId, SegmentId, VariantId};
 use crate::rule_engine::error::RuleEngineError;
 use crate::rule_engine::eval_expr::evaluate_expr;
 use crate::rule_engine::eval_rules::evaluate_rules;
@@ -16,7 +16,7 @@ use super::exclusion::{group_bucket, range_contains};
 use super::preview::{RolloutDebug, RuleOutcome, RuleTrace, VariantRange, build_condition_tree};
 use super::types::{
     EvalOutcome, EvaluationTrace, FlagEvaluationResult, HashInputSpec, HashSelector,
-    ListMembershipIndex, TraceLevel,
+    ListMembershipIndex, PrerequisiteFailureTrace, TraceLevel,
 };
 
 /// Unified pure entry point for flag variant evaluation.
@@ -79,6 +79,57 @@ pub fn evaluate_flag(
     project_id: ProjectId,
     trace: TraceLevel,
 ) -> Vec<FlagEvaluationResult> {
+    // Delegate with an EMPTY resolved cross-flag map. With no resolved
+    // prerequisite variants, any configured prerequisite is treated as
+    // *unmet* (conservative: the gate fails closed → fallback variant). This
+    // keeps every existing caller compiling and behaving safely; callers that
+    // pre-resolve prerequisite/cross-flag variants (the orchestrator, the
+    // flag service, and the SDK once snapshot-wired) call
+    // [`evaluate_flag_with_prerequisites`] directly.
+    let empty: HashMap<FlagId, Option<VariantId>> = HashMap::new();
+    evaluate_flag_with_prerequisites(
+        flag,
+        contexts,
+        rule_based_segments,
+        list_segment_memberships,
+        &empty,
+        environment_id,
+        project_id,
+        trace,
+    )
+}
+
+/// Variant of [`evaluate_flag`] that accepts pre-resolved cross-flag variants.
+///
+/// `evaluated_flags` maps each already-resolved flag's ID to the variant it
+/// resolved to (`Some(variant_id)`), or `None` when that flag was disabled or
+/// produced no variant. The orchestrator (`rule_engine::orchestrator`) and the
+/// flag-service/SDK callers build this map in dependency order so every
+/// prerequisite (and `FlagEvaluatedAs` cross-flag reference) of `flag` is
+/// already present before `flag` is evaluated.
+///
+/// Two consumers read the map:
+/// 1. The **prerequisite gate** (this function) — checked after the disabled
+///    short-circuit and *before* rule iteration. Each prerequisite must
+///    resolve to its `required_variant_id`; an absent flag, a `None`
+///    resolution (disabled / no variant), or a mismatching variant all count
+///    as **unmet** → the flag returns its fallback variant and skips its rules.
+/// 2. The **`FlagEvaluatedAs` leaf** (via [`crate::rule_engine`]) — the map is
+///    threaded into the per-context [`EvaluationInput`] so cross-flag rule
+///    conditions resolve against the same pre-computed answers.
+///
+/// `evaluate_flag` is the convenience wrapper that calls this with an empty map.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_flag_with_prerequisites(
+    flag: &Flag,
+    contexts: &[Context],
+    rule_based_segments: &[SegmentDefinition],
+    list_segment_memberships: &ListMembershipIndex,
+    evaluated_flags: &HashMap<FlagId, Option<VariantId>>,
+    environment_id: EnvironmentId,
+    project_id: ProjectId,
+    trace: TraceLevel,
+) -> Vec<FlagEvaluationResult> {
     // Each context produces an independent FlagEvaluationResult. Wrap each
     // context in a single-element bundle so rule conditions referring to
     // multiple context types still see only the calling context's bundle —
@@ -100,6 +151,7 @@ pub fn evaluate_flag(
                 contexts,
                 rule_based_segments,
                 list_segment_memberships,
+                evaluated_flags,
                 environment_id,
                 trace,
             )
@@ -111,15 +163,19 @@ pub fn evaluate_flag(
 /// bundle. Percentage-hash resolution draws from `bundle`; segment and rule
 /// evaluation see `bundle` so `find_context("device")` still works when the
 /// active subject context is `user`.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_one(
     flag: &Flag,
     _active: &Context,
     bundle: &[Context],
     rule_based_segments: &[SegmentDefinition],
     list_segment_memberships: &ListMembershipIndex,
+    evaluated_flags: &HashMap<FlagId, Option<VariantId>>,
     environment_id: EnvironmentId,
     trace: TraceLevel,
 ) -> FlagEvaluationResult {
+    let want_trace = trace == TraceLevel::Full;
+
     // ── 1. Disabled flag short-circuits to default variant ────────────────
     let default_variant = flag.get_default_variant();
     let (default_key, default_value) = default_variant
@@ -131,12 +187,51 @@ fn evaluate_one(
             variant_key: default_key,
             variant_value: default_value,
             outcome: EvalOutcome::FlagDisabled,
-            trace: if trace == TraceLevel::Full {
+            trace: if want_trace {
                 Some(EvaluationTrace {
                     rule_traces: Vec::new(),
                     rollout_debug: None,
                     fired_rule_id: None,
                     fired_rule_name: None,
+                    prerequisite_failure: None,
+                })
+            } else {
+                None
+            },
+        };
+    }
+
+    // ── 1b. Prerequisite gate — checked BEFORE rule iteration ─────────────
+    // Every configured prerequisite must resolve to its required variant. A
+    // prerequisite is *unmet* when its flag is absent from `evaluated_flags`
+    // (unknown / not yet resolved), resolved to `None` (disabled or no
+    // variant), or resolved to a different variant. On the first unmet
+    // prerequisite the gate fails: return the flag's fallback variant (the
+    // configured `fallback_variant_id`, else the off/disabled default) and
+    // skip this flag's rules entirely.
+    if let Some(failure) = check_prerequisites(flag, evaluated_flags) {
+        let (fallback_key, fallback_value) = flag
+            .prerequisite_fallback_variant()
+            .map(|v| (v.key.clone(), v.value.clone()))
+            .unwrap_or_else(|| (default_key.clone(), default_value.clone()));
+        return FlagEvaluationResult {
+            variant_key: fallback_key.clone(),
+            variant_value: fallback_value,
+            outcome: EvalOutcome::PrerequisiteFailed {
+                prerequisite_flag_id: failure.prerequisite_flag_id,
+            },
+            trace: if want_trace {
+                Some(EvaluationTrace {
+                    rule_traces: Vec::new(),
+                    rollout_debug: None,
+                    fired_rule_id: None,
+                    fired_rule_name: None,
+                    prerequisite_failure: Some(PrerequisiteFailureTrace {
+                        prerequisite_flag_id: failure.prerequisite_flag_id,
+                        required_variant_id: failure.required_variant_id,
+                        resolved_variant_id: failure.resolved_variant_id,
+                        fallback_variant_key: fallback_key,
+                    }),
                 })
             } else {
                 None
@@ -167,14 +262,22 @@ fn evaluate_one(
         }
     }
 
+    // Thread the resolved cross-flag map into the rule-evaluation input so
+    // `Condition::FlagEvaluatedAs` leaves resolve against the same answers the
+    // prerequisite gate used. Only `Some` resolutions are surfaced — a flag
+    // that resolved to `None` (disabled / no variant) is simply absent, which
+    // `FlagEvaluatedAs` already treats as "did not evaluate as <variant>".
+    let cross_flag: HashMap<FlagId, VariantId> = evaluated_flags
+        .iter()
+        .filter_map(|(id, opt)| opt.map(|v| (*id, v)))
+        .collect();
     let input = EvaluationInput {
         contexts: bundle,
         resolved_segments,
-        evaluated_flags: HashMap::new(),
+        evaluated_flags: cross_flag,
     };
 
     // ── 3. Rule iteration (first-match) + optional trace collection ───────
-    let want_trace = trace == TraceLevel::Full;
     let rules = &flag.rules;
     let mut rule_traces: Vec<RuleTrace> = if want_trace {
         Vec::with_capacity(rules.len())
@@ -403,6 +506,7 @@ fn evaluate_one(
             rollout_debug,
             fired_rule_id,
             fired_rule_name,
+            prerequisite_failure: None,
         })
     } else {
         None
@@ -471,6 +575,49 @@ fn exclusion_gate_admits(gate: &ExclusionGate, bundle: &[Context]) -> bool {
             range_contains(bucket, gate.bucket_lo, gate.bucket_hi)
         }
     }
+}
+
+/// Outcome of a failed prerequisite-gate check.
+///
+/// Carries only flag/variant identifiers — no context or parameter values —
+/// so it never risks leaking `privateParameters` through the evaluation trace.
+struct PrerequisiteFailure {
+    /// The first prerequisite flag whose check failed.
+    prerequisite_flag_id: FlagId,
+    /// The variant that prerequisite flag was required to resolve to.
+    required_variant_id: VariantId,
+    /// The variant it actually resolved to (`None` = disabled / absent).
+    resolved_variant_id: Option<VariantId>,
+}
+
+/// Evaluate a flag's prerequisite gate against the resolved cross-flag map.
+///
+/// Returns `Some(PrerequisiteFailure)` for the FIRST prerequisite that is
+/// *unmet* — i.e. its flag is absent from `evaluated_flags`, resolved to
+/// `None` (disabled / no variant), or resolved to a variant other than the
+/// required one. Returns `None` when the gate is empty or every prerequisite
+/// is satisfied. Pure: just map lookups over in-memory data.
+fn check_prerequisites(
+    flag: &Flag,
+    evaluated_flags: &HashMap<FlagId, Option<VariantId>>,
+) -> Option<PrerequisiteFailure> {
+    for prereq in &flag.prerequisites.prerequisites {
+        // `get` yields `None` when the flag is unknown; the inner `Option`
+        // is `None` when the flag was disabled / produced no variant. Both
+        // flatten to "no resolved variant" → unmet.
+        let resolved = evaluated_flags
+            .get(&prereq.prerequisite_flag_id)
+            .copied()
+            .flatten();
+        if resolved != Some(prereq.required_variant_id) {
+            return Some(PrerequisiteFailure {
+                prerequisite_flag_id: prereq.prerequisite_flag_id,
+                required_variant_id: prereq.required_variant_id,
+                resolved_variant_id: resolved,
+            });
+        }
+    }
+    None
 }
 
 /// Bridge: build a `HashInputSpec` from the legacy `PercentageTarget` list.
@@ -716,6 +863,7 @@ mod tests {
             hashing_config: vec![],
             rules,
             variants,
+            prerequisites: crate::prerequisite::PrerequisiteGate::default(),
         }
     }
 

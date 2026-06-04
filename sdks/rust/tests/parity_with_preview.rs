@@ -206,6 +206,7 @@ fn cross_context_corpus() -> (FeatureFlag, Flag) {
                 value: VariantValue::StrValue("on".into()),
             },
         ],
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     };
 
     (proto, core)
@@ -285,6 +286,7 @@ fn default_rule_distribution_corpus() -> (FeatureFlag, Flag) {
                 value: VariantValue::BoolValue(true),
             },
         ],
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     };
     (proto, core)
 }

@@ -364,6 +364,7 @@ fn build_core_flag_from_proto(proto: &FeatureFlag) -> Flag {
         hashing_config: vec![],
         rules,
         variants,
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     }
 }
 

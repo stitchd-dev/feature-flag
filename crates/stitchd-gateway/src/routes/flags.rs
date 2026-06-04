@@ -1885,6 +1885,8 @@ mod tests {
             }],
             rules: vec![],
             locked_by_experiment_id: String::new(),
+            prerequisites: vec![],
+            fallback_variant_key: String::new(),
         };
 
         let admin = flag_to_admin_json(&flag);

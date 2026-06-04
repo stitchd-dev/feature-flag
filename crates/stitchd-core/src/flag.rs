@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::id::{FlagId, FlagKey, ProjectId, SegmentId, VariantId};
+use crate::prerequisite::PrerequisiteGate;
 use crate::rollout::RolloutDistribution;
 pub use crate::rollout::{RolloutAllocation, RolloutDistributionError};
 use crate::rule_engine::types::Rule;
@@ -91,6 +92,13 @@ pub struct Flag {
     pub rules: Vec<FlagRule>,
     /// All possible variants for this flag.
     pub variants: Vec<Variant>,
+    /// Eval-time prerequisite gate. Checked *before* this flag's rules run:
+    /// every listed prerequisite must resolve to its required variant,
+    /// otherwise the flag returns the gate's fallback variant (or its
+    /// off/disabled default when no fallback is configured) and skips its
+    /// rules. An empty gate (`PrerequisiteGate::default()`) is a no-op.
+    #[serde(default)]
+    pub prerequisites: PrerequisiteGate,
 }
 
 impl Flag {
@@ -109,6 +117,20 @@ impl Flag {
     /// Returns the variant with the given `key`, if it belongs to this flag.
     pub fn get_variant_by_key(&self, key: &str) -> Option<&Variant> {
         self.variants.iter().find(|v| v.key == key)
+    }
+
+    /// Resolve the variant returned when the prerequisite gate fails.
+    ///
+    /// Prefers the gate's configured `fallback_variant_id` (if it names a
+    /// variant that exists on this flag); otherwise falls back to the flag's
+    /// off/disabled default variant. Returns `None` only when neither resolves
+    /// to a real variant (a misconfiguration the write-time validation layer
+    /// should reject).
+    pub fn prerequisite_fallback_variant(&self) -> Option<&Variant> {
+        self.prerequisites
+            .fallback_variant_id
+            .and_then(|id| self.get_variant(id))
+            .or_else(|| self.get_default_variant())
     }
 
     /// Returns all `SegmentId`s referenced in any of this flag's rules.
@@ -151,9 +173,63 @@ mod tests {
                 key: "default".to_string(),
                 value: VariantValue::BoolValue(true),
             }],
+            prerequisites: PrerequisiteGate::default(),
         };
 
         assert!(flag.get_variant(vid).is_some());
         assert_eq!(flag.get_default_variant().unwrap().id, vid);
+    }
+
+    #[test]
+    fn prerequisite_fallback_prefers_configured_then_default() {
+        use crate::prerequisite::PrerequisiteGate;
+        let default_id = VariantId::new();
+        let fallback_id = VariantId::new();
+        let mut flag = Flag {
+            record: FlagRecord {
+                id: FlagId::new(),
+                project_id: ProjectId::new(),
+                key: FlagKey::new("test").unwrap(),
+                name: String::new(),
+                description: String::new(),
+                value_type: FlagValueType::Bool,
+                enabled: true,
+                default_variant_id: Some(default_id),
+                default_rule_distribution: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                deleted_at: None,
+                version: 1,
+            },
+            hashing_config: vec![],
+            rules: vec![],
+            variants: vec![
+                Variant {
+                    id: default_id,
+                    key: "off".to_string(),
+                    value: VariantValue::BoolValue(false),
+                },
+                Variant {
+                    id: fallback_id,
+                    key: "fallback".to_string(),
+                    value: VariantValue::BoolValue(true),
+                },
+            ],
+            prerequisites: PrerequisiteGate::default(),
+        };
+
+        // No configured fallback → default variant ("off").
+        assert_eq!(flag.prerequisite_fallback_variant().unwrap().key, "off");
+
+        // Configured fallback that exists → preferred.
+        flag.prerequisites.fallback_variant_id = Some(fallback_id);
+        assert_eq!(
+            flag.prerequisite_fallback_variant().unwrap().key,
+            "fallback"
+        );
+
+        // Configured fallback that does NOT exist → falls back to default.
+        flag.prerequisites.fallback_variant_id = Some(VariantId::new());
+        assert_eq!(flag.prerequisite_fallback_variant().unwrap().key, "off");
     }
 }

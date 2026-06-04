@@ -1343,6 +1343,10 @@ impl FlagService for FlagServiceImpl {
             hashing_config: vec![],
             rules,
             variants,
+            // Phase 4 (flag_lifecycle) loads the persisted prerequisite gate +
+            // fallback variant here so preview gates identically to the SDK;
+            // until then preview carries an empty gate (no prerequisites).
+            prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
         };
 
         let segment_ids = flag.referenced_segment_ids();
