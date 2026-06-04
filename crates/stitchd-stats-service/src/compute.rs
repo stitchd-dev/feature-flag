@@ -54,17 +54,24 @@
 //! 1. the post-period per-**unit** `Y` is fetched via
 //!    [`crate::queries::variant_stats::build_unit_values_query`] (ITT, keeping
 //!    `context_key` so each unit's `Y` can be paired with its `X_pre`);
-//! 2. the pre-period covariate `X_pre` is fetched per `(context_type,
-//!    context_key)` over `[started_at − pre_period_days days, started_at)` via
-//!    [`crate::cuped_fetch::fetch_pre_period_observations`] (same coalesced
-//!    numeric expression as `Y`);
+//! 2. the pre-period covariate `X_pre` is fetched PER ASSIGNED UNIT via an
+//!    assignments-JOIN over `[started_at − pre_period_days days, started_at)`
+//!    ([`crate::queries::variant_stats::build_unit_pre_values_query`]), using
+//!    the SAME `on_field`-aware value expression as `Y` and joined to `Y` on
+//!    `context_key`. (This replaced the prior uncapped `(context_type,
+//!    context_key) IN (…)` literal fetch — see FIX 7 — which risked
+//!    `max_query_size` on large experiments and ignored `on_field`. The legacy
+//!    [`crate::cuped_fetch::fetch_pre_period_observations`] is retained but no
+//!    longer on the live path.);
 //! 3. [`stitchd_core::experimentation::stats::cuped::apply_cuped`] is called
 //!    ONCE over all units (POOLED θ across variants for unbiasedness), then the
 //!    order-aligned `adjusted_values` are split back per variant into Numeric
 //!    [`VariantStats`] ([`cuped_adjusted_variant_stats`]);
 //! 4. the standard analyses run on those adjusted stats (the ITT `sample_size`
 //!    is unchanged), and `variance_reduction_pct` is surfaced under
-//!    `variant_stats["cuped"]` (NOT folded into the recommendation string).
+//!    `variant_stats["cuped"]` (NOT folded into the recommendation string). The
+//!    reported per-variant POINT, however, is the RAW (pre-CUPED) observed mean
+//!    — CUPED tightens the CI/p but must not move the displayed number (FIX 4).
 //!
 //! Count / funnel / ratio / percentile metrics SKIP CUPED, as does any metric
 //! when `pre_period_days == 0`.
@@ -169,6 +176,16 @@ struct ChUnitValueRow {
     y: f64,
 }
 
+/// Per-**unit** pre-period covariate row (CUPED numeric path, FIX 7): one
+/// assigned unit's `context_key` and its pre-period metric sum `x_pre`
+/// (`0` for a unit with no pre-period event). The join key against
+/// [`ChUnitValueRow`] is `context_key`.
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+struct ChUnitPreValueRow {
+    context_key: String,
+    x_pre: f64,
+}
+
 // ── Cell reader (CH-backed, mockable) ────────────────────────────────────────
 
 /// Reads per-`(context_type, variant_key)` sufficient statistics + assignment
@@ -252,6 +269,25 @@ pub trait CellReader: Send + Sync {
         context_type: &str,
         iteration_end: DateTime<Utc>,
     ) -> Result<Vec<(String, String, f64)>, anyhow::Error>;
+
+    /// Per-assigned-unit PRE-period covariate `X_pre` for the CUPED path
+    /// (FIX 7): the metric's value summed over `[pre_start, pre_end)` per
+    /// assigned unit in `context_type`, via an assignments-JOIN (no inlined
+    /// IN-list) using the metric's `on_field`-aware value expression. Returns
+    /// `(context_key, x_pre)` per assigned unit (`x_pre = 0` for a unit with no
+    /// pre-period event); `context_key` is the join key against [`unit_values`].
+    #[allow(clippy::too_many_arguments)]
+    async fn unit_pre_values(
+        &self,
+        cfg: &AggregationConfig,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+        pre_start: DateTime<Utc>,
+        pre_end: DateTime<Utc>,
+    ) -> Result<Vec<(String, f64)>, anyhow::Error>;
 }
 
 /// Aggregation cell: the event-side sufficient statistics for one variant
@@ -475,6 +511,33 @@ impl CellReader for ClickHouseCellReader {
             .map(|r| (r.context_key, r.variant_key, r.y))
             .collect())
     }
+
+    async fn unit_pre_values(
+        &self,
+        cfg: &AggregationConfig,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+        pre_start: DateTime<Utc>,
+        pre_end: DateTime<Utc>,
+    ) -> Result<Vec<(String, f64)>, anyhow::Error> {
+        let built = crate::queries::variant_stats::build_unit_pre_values_query(
+            cfg,
+            &experiment_id.to_string(),
+            &iteration_id.to_string(),
+            &env_id.to_string(),
+            context_type,
+            iteration_end,
+            pre_start,
+            pre_end,
+        )?;
+        let rows = bind_query(&self.client, built.sql, built.binds)
+            .fetch_all::<ChUnitPreValueRow>()
+            .await?;
+        Ok(rows.into_iter().map(|r| (r.context_key, r.x_pre)).collect())
+    }
 }
 
 // ── Metric-type classification ───────────────────────────────────────────────
@@ -596,7 +659,14 @@ pub struct CupedUnit {
 pub struct CupedAdjusted {
     /// Per-variant adjusted [`VariantStats`] (Numeric: mean + sample variance of
     /// the CUPED-adjusted values; `sample_size` is the ITT assigned-unit count).
+    /// These feed the frequentist/bayesian/sequential analyses ONLY — CUPED
+    /// tightens the CI/p but must NOT move the reported point (see FIX 4).
     pub variant_stats: HashMap<String, VariantStats>,
+    /// Per-variant RAW (pre-CUPED) observed mean `Σy / sample_size` (ITT). The
+    /// reported per-variant point/`metric_value` is sourced from THIS, not the
+    /// adjusted mean — CUPED only sharpens significance, it does not change what
+    /// the dashboard displays (FIX 4).
+    pub raw_means: HashMap<String, f64>,
     /// `variance_reduction_pct` from the pooled CUPED fit (negative ⇒ raw Y was
     /// used, see [`stitchd_core::experimentation::stats::cuped::apply_cuped`]).
     pub variance_reduction_pct: f64,
@@ -635,13 +705,19 @@ pub fn cuped_adjusted_variant_stats(
         .collect();
     let result = apply_cuped(&obs);
 
-    // Split the order-aligned adjusted values back per variant.
+    // Split the order-aligned adjusted values back per variant, and accumulate
+    // the RAW per-variant Σy so the reported point can be the raw observed mean
+    // (FIX 4: CUPED tightens the CI/p but must NOT move the displayed point).
     let mut adjusted_by_variant: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut raw_y_sum_by_variant: HashMap<String, f64> = HashMap::new();
     for (u, &adj) in units.iter().zip(result.adjusted_values.iter()) {
         adjusted_by_variant
             .entry(u.variant_key.clone())
             .or_default()
             .push(adj);
+        *raw_y_sum_by_variant
+            .entry(u.variant_key.clone())
+            .or_default() += u.y;
     }
 
     // Rebuild Numeric VariantStats from the adjusted values. The ITT
@@ -649,16 +725,23 @@ pub fn cuped_adjusted_variant_stats(
     // unit rows still gets a zero-filled stats entry); the mean + sample
     // variance come from the ADJUSTED values.
     let mut variant_stats: HashMap<String, VariantStats> = HashMap::new();
+    let mut raw_means: HashMap<String, f64> = HashMap::new();
     for (vk, &n) in sample_sizes {
         let adjusted = adjusted_by_variant
             .get(vk)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
         variant_stats.insert(vk.clone(), numeric_variant_stats_from_values(n, adjusted));
+        // RAW observed mean = Σy / ITT denominator (0 when the arm has no
+        // assigned units).
+        let raw_sum = raw_y_sum_by_variant.get(vk).copied().unwrap_or(0.0);
+        let raw_mean = if n == 0 { 0.0 } else { raw_sum / n as f64 };
+        raw_means.insert(vk.clone(), raw_mean);
     }
 
     CupedAdjusted {
         variant_stats,
+        raw_means,
         variance_reduction_pct: result.variance_reduction_pct,
         theta: result.theta,
     }
@@ -732,7 +815,52 @@ pub fn select_control(variant_keys: &[String]) -> Option<String> {
     variant_keys.iter().min().cloned()
 }
 
+/// The minimum per-variant sample size gate applied to the per-variant
+/// [`Recommendation`].
+///
+/// FIX 8: the `min_sample_size` knob lives on the SEQUENTIAL config; it must
+/// only gate the recommendation when sequential testing is ENABLED. With
+/// sequential disabled the frequentist recommendation has no business being
+/// throttled by a sequential setting, so this returns `None`.
+#[must_use]
+fn sequential_min_n(exp: &RunningExperiment) -> Option<i64> {
+    if exp.sequential.enabled && exp.sequential.min_sample_size > 0 {
+        Some(exp.sequential.min_sample_size)
+    } else {
+        None
+    }
+}
+
 // ── Per-context-per-metric computation ───────────────────────────────────────
+
+/// The empirical `q`-th percentile (`q` in `[0, 100]`) of a per-unit sample via
+/// linear interpolation between order statistics (the standard "type-7" /
+/// `quantile`-style rule ClickHouse's `quantile` also defaults to), so the
+/// displayed percentile point matches the significance test's own sample
+/// (FIX 5). Returns `0.0` for an empty sample; clamps `q` into `[0, 100]`.
+#[must_use]
+fn empirical_quantile(samples: &[f64], q: f64) -> f64 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let mut sorted: Vec<f64> = samples.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = sorted.len();
+    if n == 1 {
+        return sorted[0];
+    }
+    let q = q.clamp(0.0, 100.0) / 100.0;
+    // Position on [0, n-1] (type-7): rank = q*(n-1), interpolate between floor
+    // and ceil.
+    let rank = q * (n - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    if lo == hi {
+        return sorted[lo];
+    }
+    let frac = rank - lo as f64;
+    sorted[lo] + (sorted[hi] - sorted[lo]) * frac
+}
 
 /// The point `metric_value` rendered per variant for a metric+context (the
 /// scalar surfaced in `variant_stats` JSON / the timeseries):
@@ -890,31 +1018,58 @@ async fn compute_pair(
                 variant_stats.insert(vk.clone(), funnel_variant_stats(n, successes));
             }
             MetricType::Percentile => {
-                let point = agg.and_then(|m| m.get(vk)).map_or(0.0, |c| {
-                    // For percentile the cells query stored the point in value_sum
-                    // path is not meaningful — we instead use mean of the per-unit
-                    // value (value_sum / n) as a coarse stand-in point. (Real
-                    // percentile point comes from the scalar aggregation builder;
-                    // see module docs — significance is skipped regardless.)
-                    if n == 0 { 0.0 } else { c.value_sum / n as f64 }
-                });
+                // FIX 5: the reported point is the EMPIRICAL quantile of the
+                // already-fetched per-unit `percentile_samples` (P50/P90/P99) —
+                // NOT `value_sum / n` (the mean). Significance already uses the
+                // real samples; the displayed point now matches. Falls back to
+                // the per-unit mean only when the raw samples are unavailable
+                // (the fetch failed / no samples for the variant).
+                let point = percentile
+                    .and_then(|p| p.samples.get(vk))
+                    .filter(|s| !s.is_empty())
+                    .map_or_else(
+                        || {
+                            agg.and_then(|m| m.get(vk))
+                                .map_or(0.0, |c| if n == 0 { 0.0 } else { c.value_sum / n as f64 })
+                        },
+                        |samples| {
+                            empirical_quantile(samples, percentile.map_or(50.0, |p| p.percentile))
+                        },
+                    );
                 variant_stats.insert(vk.clone(), percentile_variant_stats(n, point));
             }
         }
     }
     variant_keys.sort();
 
-    // Points (rendered metric_value per variant).
+    // Points (rendered metric_value per variant). For a CUPED'd numeric metric
+    // the reported point is the RAW observed mean (FIX 4): CUPED only tightens
+    // the CI/p via the adjusted `variant_stats`, it must NOT move the displayed
+    // point. `cuped.raw_means` carries the pre-adjustment per-variant mean.
     let points: Vec<VariantPoint> = variant_keys
         .iter()
-        .map(|vk| VariantPoint {
-            context_type: context_type.to_string(),
-            variant_key: vk.clone(),
-            metric_value: point_value(
-                mt,
-                variant_stats.get(vk).expect("vk present"),
-                ratio_groups.get(vk),
-            ),
+        .map(|vk| {
+            let metric_value = match cuped {
+                Some(c) if mt == MetricType::Numeric => {
+                    c.raw_means.get(vk).copied().unwrap_or_else(|| {
+                        point_value(
+                            mt,
+                            variant_stats.get(vk).expect("vk present"),
+                            ratio_groups.get(vk),
+                        )
+                    })
+                }
+                _ => point_value(
+                    mt,
+                    variant_stats.get(vk).expect("vk present"),
+                    ratio_groups.get(vk),
+                ),
+            };
+            VariantPoint {
+                context_type: context_type.to_string(),
+                variant_key: vk.clone(),
+                metric_value,
+            }
         })
         .collect();
 
@@ -1027,11 +1182,10 @@ async fn compute_pair(
     }
 
     // Recommendation per variant, then overall winner.
-    let min_n = if exp.sequential.min_sample_size > 0 {
-        Some(exp.sequential.min_sample_size)
-    } else {
-        None
-    };
+    // FIX 8: the sequential min-sample gate only applies when sequential testing
+    // is ENABLED for the experiment. With sequential disabled the frequentist
+    // recommendation must not be gated by an (irrelevant) sequential config knob.
+    let min_n = sequential_min_n(exp);
     let mut recs: Vec<(String, Recommendation)> = Vec::new();
     for vk in &ordered_non_control {
         let c = &comparisons[vk];
@@ -1125,11 +1279,8 @@ fn compute_percentile_pair(
         .collect();
     ordered_non_control.sort();
 
-    let min_n = if exp.sequential.min_sample_size > 0 {
-        Some(exp.sequential.min_sample_size)
-    } else {
-        None
-    };
+    // FIX 8: gate the min-sample recommendation knob on sequential being enabled.
+    let min_n = sequential_min_n(exp);
 
     let mut freq_obj = serde_json::Map::new();
     let mut bayes_obj = serde_json::Map::new();
@@ -1236,15 +1387,20 @@ async fn compute_sequential(
 /// 1. fetch the post-period per-unit `Y` (`reader.unit_values`) — one
 ///    `(context_key, variant_key, y)` per assigned unit (ITT, `y = 0` for
 ///    non-firing units);
-/// 2. build `assigned_contexts = [(context_type, context_key)]` from those
-///    units and fetch the pre-period covariate `X_pre` per
-///    `(context_type, context_key)` over the window
+/// 2. fetch the pre-period covariate `X_pre` per assigned unit via an
+///    assignments-JOIN over the window
 ///    `[started_at − pre_period_days days, started_at)`
-///    ([`fetch_pre_period_observations`]);
+///    (`reader.unit_pre_values` → [`crate::queries::variant_stats::build_unit_pre_values_query`]).
+///    This REPLACES the prior uncapped `(context_type, context_key) IN (…)`
+///    literal fetch (FIX 7): the JOIN is bounded by the assignment set (no
+///    `max_query_size` blow-up on large experiments) AND uses the metric's
+///    `on_field`-aware value expression (a property-valued metric is no longer
+///    silently `X_pre = 0`);
 /// 3. assemble per-unit [`CupedUnit`]s (preserving order, `x_pre = 0` when the
-///    unit had no pre-period events);
+///    unit had no pre-period events) by joining `Y` and `X_pre` on `context_key`;
 /// 4. call [`cuped_adjusted_variant_stats`] (pooled θ across ALL variants) → the
-///    per-variant adjusted Numeric [`VariantStats`] + `variance_reduction_pct`.
+///    per-variant adjusted Numeric [`VariantStats`] + raw means +
+///    `variance_reduction_pct`.
 ///
 /// Returns `Ok(None)` when there are no assigned units (nothing to adjust).
 /// Pre-period fetch failures are logged and degrade to `x_pre = 0` for every
@@ -1252,7 +1408,6 @@ async fn compute_sequential(
 /// failing the whole compute pass.
 async fn compute_cuped_numeric(
     reader: &dyn CellReader,
-    ch: &Client,
     exp: &RunningExperiment,
     cfg: &AggregationConfig,
     context_type: &str,
@@ -1274,45 +1429,45 @@ async fn compute_cuped_numeric(
         return Ok(None);
     }
 
-    // 2. Pre-period covariate X_pre per (context_type, context_key).
-    let assigned_contexts: Vec<(String, String)> = unit_rows
-        .iter()
-        .map(|(ck, _vk, _y)| (context_type.to_string(), ck.clone()))
-        .collect();
+    // 2. Pre-period covariate X_pre per assigned unit (assignments-JOIN, no
+    // IN-list, on_field-aware — FIX 7) over [started_at − pre_period_days,
+    // started_at). A fetch failure degrades to x_pre = 0 (CUPED no-op) rather
+    // than aborting the compute pass.
     let pre_end = exp.started_at;
     let pre_start = pre_end - chrono::Duration::days(i64::from(exp.pre_period_days));
-    let x_pre_map = match crate::cuped_fetch::fetch_pre_period_observations(
-        ch,
-        exp.env_id,
-        &cfg.event_key,
-        pre_start,
-        pre_end,
-        std::slice::from_ref(&context_type.to_string()),
-        &assigned_contexts,
-    )
-    .await
+    let x_pre_rows = match reader
+        .unit_pre_values(
+            cfg,
+            exp.experiment_id,
+            exp.iteration_id,
+            exp.env_id,
+            context_type,
+            iteration_end,
+            pre_start,
+            pre_end,
+        )
+        .await
     {
-        Ok(map) => map,
+        Ok(rows) => rows,
         Err(e) => {
             tracing::warn!(
                 metric_key = %cfg.event_key,
                 context_type = %context_type,
                 "compute: CUPED pre-period fetch failed; falling back to x_pre=0 (CUPED no-op): {e}"
             );
-            HashMap::new()
+            Vec::new()
         }
     };
+    let x_pre_map: HashMap<String, f64> = x_pre_rows.into_iter().collect();
 
-    // 3. Build per-unit CupedUnits (preserving order).
+    // 3. Build per-unit CupedUnits (preserving order), joining Y (post) to
+    // X_pre (pre) by context_key.
     let units: Vec<CupedUnit> = unit_rows
         .into_iter()
         .map(|(ck, vk, y)| CupedUnit {
             variant_key: vk,
             y,
-            x_pre: x_pre_map
-                .get(&(context_type.to_string(), ck))
-                .copied()
-                .unwrap_or(0.0),
+            x_pre: x_pre_map.get(&ck).copied().unwrap_or(0.0),
         })
         .collect();
 
@@ -1394,9 +1549,12 @@ pub async fn run_stats_compute(
         let sample_sizes: HashMap<String, u64> = counts.iter().cloned().collect();
 
         // SRM once per context over the assignment counts (equal-split
-        // expected). Stored to attach under `variant_stats["srm"]` after the
-        // summaries are built — NOT folded into the recommendation string.
-        if let Some(srm_json) = srm_json_for(&counts) {
+        // expected). The FULL configured variant set is passed so a starved
+        // (zero-assignment) arm is zero-filled and visible (FIX 3) — without it
+        // ClickHouse emits no row for the starved arm and the split reads green.
+        // Stored to attach under `variant_stats["srm"]` after the summaries are
+        // built — NOT folded into the recommendation string.
+        if let Some(srm_json) = srm_json_for(&counts, &exp.variant_keys) {
             srm_per_ctx.insert(context_type.clone(), srm_json);
         }
 
@@ -1508,7 +1666,6 @@ pub async fn run_stats_compute(
                 {
                     compute_cuped_numeric(
                         reader,
-                        ch,
                         exp,
                         cfg,
                         context_type,
@@ -1636,22 +1793,52 @@ fn metric_type_str(mt: MetricType) -> &'static str {
 /// expected` is computed here because the core [`SrmPerVariant`] exposes
 /// `deviation_pct` rather than the contribution the proto field wants.
 ///
-/// Returns `None` when SRM is undefined for the context (< 2 variants or zero
-/// total assignments) so no `"srm"` key is emitted in that case.
-fn srm_json_for(counts: &[(String, u64)]) -> Option<Value> {
-    if counts.len() < 2 {
+/// `configured_variants` is the FULL set of variant keys the experiment was
+/// configured with (sourced from `RunningExperiment::variant_keys`). FIX 3:
+/// ClickHouse `count()` emits no row for a variant with zero assignments, so a
+/// starved arm would otherwise be invisible — `K` and `expected` would be
+/// computed over only the firing arms and a starved split would read green.
+/// We therefore zero-fill any configured variant absent from `counts`
+/// (`observed: 0`) so `K` (= the configured arm count) and `expected = total/K`
+/// reflect ALL arms and the core `compute_srm` Red-on-starvation path
+/// (`observed == 0` with `expected > 0`) is reachable. When `configured_variants`
+/// is empty (e.g. the snapshot could not source it) we fall back to the observed
+/// `counts` keys alone — the prior behaviour.
+///
+/// Returns `None` when SRM is undefined for the context (< 2 variants in the
+/// effective set or zero total assignments) so no `"srm"` key is emitted.
+fn srm_json_for(counts: &[(String, u64)], configured_variants: &[String]) -> Option<Value> {
+    // Effective variant set = configured variants ∪ any variant that actually
+    // produced a count (defensive: a count for an unexpected key still shows).
+    // Zero-fill the observed count for any configured variant with no row.
+    let observed_by_key: HashMap<&str, u64> =
+        counts.iter().map(|(vk, n)| (vk.as_str(), *n)).collect();
+    let mut keys: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for vk in configured_variants
+        .iter()
+        .chain(counts.iter().map(|(vk, _)| vk))
+    {
+        if seen.insert(vk.clone()) {
+            keys.push(vk.clone());
+        }
+    }
+
+    if keys.len() < 2 {
         return None;
     }
     let total: u64 = counts.iter().map(|(_, n)| n).sum();
     if total == 0 {
         return None;
     }
-    let expected = total as f64 / counts.len() as f64;
-    let observations: Vec<SrmObservation> = counts
+    // K reflects ALL configured arms (incl. any starved to 0), so a zero arm
+    // is visible and expected is the balanced per-arm share over the full set.
+    let expected = total as f64 / keys.len() as f64;
+    let observations: Vec<SrmObservation> = keys
         .iter()
-        .map(|(vk, n)| SrmObservation {
+        .map(|vk| SrmObservation {
             variant_key: vk.clone(),
-            observed: *n,
+            observed: observed_by_key.get(vk.as_str()).copied().unwrap_or(0),
             expected,
         })
         .collect();
@@ -1890,6 +2077,50 @@ mod tests {
         let adj = cuped_adjusted_variant_stats(&[], &sample_sizes);
         assert_eq!(adj.variance_reduction_pct, 0.0);
         assert_eq!(adj.variant_stats["control"].sample_size, 0);
+        assert_eq!(adj.raw_means.get("control"), Some(&0.0));
+    }
+
+    /// FIX 4: the reported point must be the RAW observed mean, NOT the
+    /// CUPED-adjusted mean. With a correlated covariate the adjusted mean drifts
+    /// from the raw mean (pooled-θ centering), but `raw_means` stays pinned to
+    /// `Σy / n`. We assert the raw mean equals the observed mean AND that the
+    /// adjusted `variant_stats` mean differs (proving they are not the same
+    /// number — so reporting the adjusted one would have moved the point).
+    #[test]
+    fn cuped_adjusted_raw_means_are_observed_not_adjusted() {
+        let mk = |vk: &str, y: f64, x: f64| CupedUnit {
+            variant_key: vk.into(),
+            y,
+            x_pre: x,
+        };
+        // control raw mean = (0+10+20+30)/4 = 15; treatment = (5+15+25+35)/4 = 20.
+        // x_pre tracks y so θ ≈ 1 and the pooled centering shifts the adjusted
+        // per-variant means away from {15, 20}.
+        let units = vec![
+            mk("control", 0.0, 0.5),
+            mk("control", 10.0, 9.5),
+            mk("control", 20.0, 20.5),
+            mk("control", 30.0, 29.5),
+            mk("treatment", 5.0, 60.5),
+            mk("treatment", 15.0, 70.5),
+            mk("treatment", 25.0, 80.5),
+            mk("treatment", 35.0, 90.5),
+        ];
+        let sample_sizes = HashMap::from([("control".to_string(), 4u64), ("treatment".into(), 4)]);
+        let adj = cuped_adjusted_variant_stats(&units, &sample_sizes);
+
+        // Raw means are exactly the observed per-variant means.
+        assert!((adj.raw_means["control"] - 15.0).abs() < 1e-9);
+        assert!((adj.raw_means["treatment"] - 20.0).abs() < 1e-9);
+        // The adjusted treatment mean differs from the raw mean here (the
+        // covariate's between-arm offset moves it) — so the point MUST come from
+        // raw_means, not the adjusted variant_stats.mean.
+        let adj_t = adj.variant_stats["treatment"].mean.unwrap();
+        assert!(
+            (adj_t - 20.0).abs() > 1e-6,
+            "adjusted treatment mean ({adj_t}) coincidentally equals the raw mean; \
+             pick inputs that separate them"
+        );
     }
 
     #[test]
@@ -2019,6 +2250,53 @@ mod tests {
         assert!(b.prob_best > 0.99, "prob_best={}", b.prob_best);
     }
 
+    // ── empirical_quantile (FIX 5) ────────────────────────────────────────────
+
+    #[test]
+    fn empirical_quantile_empty_is_zero() {
+        assert_eq!(empirical_quantile(&[], 90.0), 0.0);
+    }
+
+    #[test]
+    fn empirical_quantile_p50_is_median() {
+        // odd count → exact middle order statistic.
+        let s = [5.0, 1.0, 3.0, 2.0, 4.0];
+        assert!((empirical_quantile(&s, 50.0) - 3.0).abs() < 1e-9);
+    }
+
+    /// FIX 5 CORE: a right-skewed sample's high quantile is FAR above its mean —
+    /// the displayed point must track the quantile, not the mean. 90 values of
+    /// 1.0 and 10 values of 100.0: mean = 10.9, but the P95 quantile lands
+    /// INSIDE the high cluster (= 100.0), ~10× the mean. (P50 stays at the 1.0
+    /// bulk.) This is exactly the gap the old "render the mean" bug masked.
+    #[test]
+    fn empirical_quantile_skewed_tracks_quantile_not_mean() {
+        let mut s = vec![1.0_f64; 90];
+        s.extend(vec![100.0_f64; 10]);
+        let mean: f64 = s.iter().sum::<f64>() / s.len() as f64; // = 10.9
+        let p95 = empirical_quantile(&s, 95.0);
+        let p50 = empirical_quantile(&s, 50.0);
+        // P95 sits in the high cluster (= 100.0), an order of magnitude above
+        // the mean — the displayed point must follow the quantile, not the mean.
+        assert!(
+            (p95 - 100.0).abs() < 1e-9,
+            "P95 {p95} should land in the high cluster (100.0), not near the mean {mean}"
+        );
+        assert!(
+            p95 > mean * 5.0,
+            "P95 {p95} must be well above the mean {mean}"
+        );
+        assert!(
+            (p50 - 1.0).abs() < 1e-9,
+            "P50 {p50} should be 1.0 (the bulk)"
+        );
+    }
+
+    #[test]
+    fn empirical_quantile_single_value() {
+        assert!((empirical_quantile(&[42.0], 90.0) - 42.0).abs() < 1e-9);
+    }
+
     // ── point_value ──────────────────────────────────────────────────────────
 
     #[test]
@@ -2128,6 +2406,64 @@ mod tests {
         assert!(bayes["treatment"]["prob_best"].as_f64().unwrap() > 0.95);
     }
 
+    /// FIX 5 end-to-end (via `compute_pair`): a right-skewed per-unit sample's
+    /// rendered point is the EMPIRICAL P90 quantile, not the per-unit mean. The
+    /// percentile path returns before any sequential work, so the default
+    /// `Client` is never queried.
+    #[tokio::test]
+    async fn compute_pair_percentile_point_is_quantile_not_mean() {
+        // control: 99 units at 1.0 + one at 1000.0 (mean ≈ 11.0, P90 = 1.0).
+        // treatment: a uniform 100..199 spread (P90 ≈ 190, mean ≈ 149.5).
+        let mut control: Vec<f64> = vec![1.0; 99];
+        control.push(1000.0);
+        let treatment: Vec<f64> = (0..100).map(|i| 100.0 + i as f64).collect();
+        let control_mean = control.iter().sum::<f64>() / control.len() as f64;
+
+        let mut samples = HashMap::new();
+        samples.insert("control".to_string(), control.clone());
+        samples.insert("treatment".to_string(), treatment);
+        let pct = PercentileInput {
+            samples,
+            percentile: 90.0,
+        };
+
+        let sample_sizes =
+            HashMap::from([("control".to_string(), 100u64), ("treatment".into(), 100)]);
+        let ch = Client::default();
+        let now = Utc::now();
+        let pair = compute_pair(
+            &ch,
+            &pct_running_exp(),
+            "latency_p90",
+            "user",
+            MetricType::Percentile,
+            &sample_sizes,
+            None,
+            None,
+            None,
+            Some(&pct),
+            None,
+            now,
+        )
+        .await;
+
+        let control_point = pair
+            .points
+            .iter()
+            .find(|p| p.variant_key == "control")
+            .expect("control point")
+            .metric_value;
+        // The point is the P90 (= 1.0 for this sample), NOT the mean (≈ 11.0).
+        assert!(
+            (control_point - 1.0).abs() < 1e-9,
+            "percentile point should be the P90 quantile (1.0), got {control_point}"
+        );
+        assert!(
+            (control_point - control_mean).abs() > 1.0,
+            "point ({control_point}) must NOT be the mean ({control_mean})"
+        );
+    }
+
     /// Missing raw samples (the fetch yielded nothing) → fall back to the prior
     /// `NeedsMoreData`, blob-less behaviour.
     #[test]
@@ -2158,7 +2494,8 @@ mod tests {
             ("control".to_string(), 1000),
             ("treatment".to_string(), 1000),
         ];
-        let srm = srm_json_for(&counts).expect("srm json for 2 variants");
+        let configured = vec!["control".to_string(), "treatment".to_string()];
+        let srm = srm_json_for(&counts, &configured).expect("srm json for 2 variants");
         assert_eq!(srm["health"], "green");
         assert!(srm["overall_chi_sq"].as_f64().unwrap() < 1e-9);
         assert!(srm["overall_chi_sq_p"].as_f64().unwrap() > 0.99);
@@ -2179,7 +2516,8 @@ mod tests {
     #[test]
     fn srm_json_for_mismatch_is_red_with_contributions() {
         let counts = vec![("a".to_string(), 800), ("b".to_string(), 1200)];
-        let srm = srm_json_for(&counts).expect("srm json");
+        let configured = vec!["a".to_string(), "b".to_string()];
+        let srm = srm_json_for(&counts, &configured).expect("srm json");
         assert_eq!(srm["health"], "red");
         assert!((srm["overall_chi_sq"].as_f64().unwrap() - 80.0).abs() < 1e-6);
         let pv = srm["per_variant"].as_array().unwrap();
@@ -2195,11 +2533,78 @@ mod tests {
     /// Fewer than 2 variants (or zero total) → no SRM key emitted.
     #[test]
     fn srm_json_for_single_variant_is_none() {
-        assert!(srm_json_for(&[("only".to_string(), 100)]).is_none());
+        assert!(srm_json_for(&[("only".to_string(), 100)], &["only".to_string()]).is_none());
         assert!(
-            srm_json_for(&[("a".to_string(), 0), ("b".to_string(), 0)]).is_none(),
+            srm_json_for(
+                &[("a".to_string(), 0), ("b".to_string(), 0)],
+                &["a".to_string(), "b".to_string()]
+            )
+            .is_none(),
             "zero total → no SRM"
         );
+    }
+
+    /// FIX 3: a configured variant that received ZERO assignments (so ClickHouse
+    /// emits no count row for it) is zero-filled into the SRM observations, so
+    /// `K`/`expected` reflect ALL configured arms and the starved split is NOT
+    /// reported healthy. Here 2 of 3 configured arms split 1000/1000 and the
+    /// third ("starved") got 0 — expected = 2000/3 ≈ 666.7 per arm; the zero arm
+    /// alone contributes ≈666.7 to χ², so the result is RED (not green).
+    #[test]
+    fn srm_json_for_zero_assignment_variant_is_visible_and_not_green() {
+        // counts only carries the 2 firing arms (CH emits no row for the starved
+        // arm), but the experiment was configured with 3 variants.
+        let counts = vec![
+            ("control".to_string(), 1000),
+            ("treatment".to_string(), 1000),
+        ];
+        let configured = vec![
+            "control".to_string(),
+            "treatment".to_string(),
+            "starved".to_string(),
+        ];
+        let srm = srm_json_for(&counts, &configured).expect("srm json for 3 configured variants");
+
+        // The zero arm is present in the observations (K = 3, not 2).
+        let pv = srm["per_variant"].as_array().expect("per_variant array");
+        assert_eq!(
+            pv.len(),
+            3,
+            "all 3 configured arms surfaced, incl. the zero one"
+        );
+        let starved = pv
+            .iter()
+            .find(|r| r["variant_key"] == "starved")
+            .expect("starved arm present");
+        assert_eq!(
+            starved["observed"].as_u64().unwrap(),
+            0,
+            "zero-filled observed"
+        );
+        assert!(
+            starved["expected"].as_f64().unwrap() > 0.0,
+            "expected reflects the full configured set (>0), reaching the starvation path"
+        );
+
+        // The starved split must NOT read healthy/green.
+        assert_ne!(
+            srm["health"], "green",
+            "a starved arm must not be reported healthy; got {}",
+            srm["health"]
+        );
+    }
+
+    /// Without the configured set (empty), `srm_json_for` falls back to the
+    /// observed `counts` keys alone — the prior behaviour (no zero-fill).
+    #[test]
+    fn srm_json_for_empty_configured_falls_back_to_counts() {
+        let counts = vec![
+            ("control".to_string(), 1000),
+            ("treatment".to_string(), 1000),
+        ];
+        let srm = srm_json_for(&counts, &[]).expect("falls back to counts keys");
+        assert_eq!(srm["per_variant"].as_array().unwrap().len(), 2);
+        assert_eq!(srm["health"], "green");
     }
 
     // ── run_stats_compute SRM attachment + round-trip (891) ───────────────────
@@ -2292,6 +2697,19 @@ mod tests {
             _ct: &str,
             _end: DateTime<Utc>,
         ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
+            Ok(Vec::new())
+        }
+        async fn unit_pre_values(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+            _ps: DateTime<Utc>,
+            _pe: DateTime<Utc>,
+        ) -> Result<Vec<(String, f64)>, anyhow::Error> {
             Ok(Vec::new())
         }
     }

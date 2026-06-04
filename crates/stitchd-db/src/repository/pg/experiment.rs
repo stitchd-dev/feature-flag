@@ -716,21 +716,34 @@ impl ExperimentRepository for PgExperimentRepository {
     }
 
     async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+        // Resolve `variant_keys` via the variants subquery (mirroring
+        // `find_by_id` / `list_by_environment`) so the stats-service compute
+        // pass can source the FULL configured variant set for SRM zero-fill — a
+        // starved (zero-assignment) arm is otherwise invisible. (See the
+        // stats-service `srm_json_for` FIX.)
         let rows = sqlx::query(
             r"
             SELECT
-                id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
-                hypothesis, status, metric_ids, guardrail_metric_ids,
-                traffic_allocation::float8 AS traffic_allocation,
-                min_sample_size, pre_period_days, unit_context_types,
-                scheduled_start_at, scheduled_end_at,
-                exclusion_group_id, group_bucket_lo, group_bucket_hi,
-                sequential_testing_enabled, sequential_alpha,
-                sequential_tau_squared, sequential_min_sample_size,
-                version, created_at, updated_at, deleted_at
-            FROM experiments
-            WHERE status = 'running' AND deleted_at IS NULL
-            ORDER BY created_at
+                e.id, e.env_id, e.flag_id, e.flag_rule_id, e.targets_default_rule,
+                e.name, e.description, e.hypothesis, e.status,
+                e.metric_ids, e.guardrail_metric_ids,
+                e.traffic_allocation::float8 AS traffic_allocation,
+                e.min_sample_size, e.pre_period_days, e.unit_context_types,
+                e.scheduled_start_at, e.scheduled_end_at,
+                e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
+                e.sequential_testing_enabled, e.sequential_alpha,
+                e.sequential_tau_squared, e.sequential_min_sample_size,
+                e.version, e.created_at, e.updated_at, e.deleted_at,
+                f.key AS flag_key,
+                COALESCE((
+                    SELECT ARRAY_AGG(v.key ORDER BY v.id)
+                    FROM variants v
+                    WHERE v.flag_id = e.flag_id
+                ), '{}') AS variant_keys
+            FROM experiments e
+            LEFT JOIN feature_flags f ON f.id = e.flag_id AND f.deleted_at IS NULL
+            WHERE e.status = 'running' AND e.deleted_at IS NULL
+            ORDER BY e.created_at
             ",
         )
         .fetch_all(&self.pool)

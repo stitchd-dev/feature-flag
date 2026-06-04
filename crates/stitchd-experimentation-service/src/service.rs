@@ -1108,25 +1108,19 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
             if let Some(obj) = variant_stats.as_object() {
                 for (variant_key, val) in obj {
-                    if variant_key == "srm" {
+                    // FIX 2: real variants are encoded as NUMBER values
+                    // (`variant_key → metric_value`); sideband payloads the
+                    // compute pass attaches into this same object — `srm`,
+                    // `cuped`, and any future one — are JSON OBJECTS. Skip any
+                    // non-number entry structurally (instead of string-matching
+                    // individual sideband keys) so a `cuped` sideband no longer
+                    // leaks as a phantom zero-count variant, AND a variant
+                    // literally named "srm"/"cuped" is still surfaced.
+                    if !val.is_number() {
                         continue;
                     }
-                    let (participant_count, lift) = match val {
-                        serde_json::Value::Number(n) => (n.as_u64().unwrap_or(0), 0.0_f64),
-                        serde_json::Value::Object(map) => {
-                            let count = map
-                                .get("count")
-                                .or_else(|| map.get("participant_count"))
-                                .and_then(serde_json::Value::as_u64)
-                                .unwrap_or(0);
-                            let lift = map
-                                .get("lift")
-                                .and_then(serde_json::Value::as_f64)
-                                .unwrap_or(0.0);
-                            (count, lift)
-                        }
-                        _ => (0, 0.0),
-                    };
+                    let participant_count = val.as_u64().unwrap_or(0);
+                    let lift = 0.0_f64;
 
                     let key = (context_type.clone(), variant_key.clone());
                     let entry = target.entry(key).or_insert_with(|| VariantResult {
@@ -1337,7 +1331,11 @@ impl ExperimentationService for ExperimentationServiceImpl {
                     experiment_id: exp.id.to_string(),
                     environment_id: exp.environment_id.to_string(),
                     iteration_id: iter.id.to_string(),
-                    variant_keys: vec![], // variants live on the flag; not denormalised here
+                    // The full configured variant set, resolved from the bound
+                    // flag's variants (`list_all_running` JOINs them). The
+                    // stats-service compute pass needs this for SRM zero-fill: a
+                    // starved (zero-assignment) arm is otherwise invisible (FIX 3).
+                    variant_keys: exp.variant_keys.clone(),
                     metric_ids: iter.metric_ids.iter().map(ToString::to_string).collect(),
                     started_at_ms: iter.started_at.timestamp_millis(),
                     status: "running".to_string(),
@@ -2739,6 +2737,92 @@ mod tests {
             );
             assert!((vr.p_value - 0.04).abs() < 1e-9);
         }
+    }
+
+    /// FIX 2: the compute pass attaches `srm` AND `cuped` SIDEBAND objects into
+    /// the same `variant_stats` object as the real (number-valued) variants. The
+    /// read must surface ONLY the real variants — never a phantom
+    /// `srm`/`cuped` variant (the prior bug skipped only `"srm"`, so a `cuped`
+    /// sideband leaked as a zero-count variant for every CUPED experiment).
+    #[tokio::test]
+    async fn test_get_results_skips_srm_and_cuped_sidebands() {
+        let (env_id, env_id_str) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        // variant_stats carries 2 real number-valued variants + srm + cuped
+        // OBJECT sidebands — exactly what `run_stats_compute` writes.
+        let variant_stats = serde_json::json!({
+            "control": 10.0,
+            "treatment": 14.0,
+            "srm": {
+                "per_variant": [],
+                "overall_chi_sq": 0.0,
+                "overall_chi_sq_p": 1.0,
+                "health": "green"
+            },
+            "cuped": { "theta": 0.8, "variance_reduction_pct": 12.5, "applied": true }
+        })
+        .to_string();
+        let result = ProtoExperimentResult {
+            env_id: env_id_str.clone(),
+            experiment_id: exp_id.to_string(),
+            iteration_id: Uuid::new_v4().to_string(),
+            variant_key: String::new(),
+            metric_key: "checkout".to_string(),
+            metric_type: "numeric".to_string(),
+            variant_stats,
+            frequentist_result: Some(serde_json::json!({ "p_value": 0.04 }).to_string()),
+            bayesian_result: None,
+            recommendation: "ship_treatment".to_string(),
+            computed_at: "2026-05-01T00:00:00Z".to_string(),
+            created_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
+            sequential_result: None,
+        };
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(AnalyticsMockWithData {
+                results: vec![result],
+            }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id_str,
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+
+        // Only the 2 REAL variants surface — no phantom srm/cuped variant.
+        let keys: std::collections::HashSet<&str> = resp
+            .variant_results
+            .iter()
+            .map(|vr| vr.variant_key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["control", "treatment"].into_iter().collect(),
+            "only real variants should surface; got {keys:?}"
+        );
+        assert!(
+            !keys.contains("cuped"),
+            "cuped sideband must NOT leak as a variant"
+        );
+        assert!(
+            !keys.contains("srm"),
+            "srm sideband must NOT leak as a variant"
+        );
+        assert_eq!(resp.variant_results.len(), 2);
+
+        // The srm sideband is still consumed into the per-context SRM result.
+        let user_ctx = resp
+            .results_by_context_type
+            .iter()
+            .find(|c| c.context_type == "user")
+            .expect("user context present");
+        assert!(
+            user_ctx.srm.is_some(),
+            "srm sideband should still populate ContextTypeResults.srm"
+        );
     }
 
     /// Task 4.1: a row carrying a `sequential_result` blob populates the

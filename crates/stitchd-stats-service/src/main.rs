@@ -188,12 +188,18 @@ async fn main() -> anyhow::Result<()> {
                     let computed_at = chrono::Utc::now();
 
                     // Hydrate the iteration-snapshotted inputs the compute pass
-                    // needs (sequential config + unit context types). On RPC
-                    // failure this leaves sequential disabled + a single "user"
-                    // context — the safe fallback.
+                    // needs (sequential config + CUPED pre-period + unit context
+                    // types). FIX 6: on RPC failure SKIP this experiment this
+                    // tick rather than computing with guessed settings — a wrong
+                    // `unit_context_types` guess would query the wrong context,
+                    // silently overwrite good results with zeros, and freeze the
+                    // sequential running minimum. The prior results stay intact.
                     {
                         let mut client = exp_client_for_enrich.lock().await;
-                        enrich_sequential_settings(&mut client, &mut exp).await;
+                        if let Err(e) = enrich_sequential_settings(&mut client, &mut exp).await {
+                            warn!(experiment_id = %exp.experiment_id, "Skipping experiment this tick: {e}");
+                            return;
+                        }
                     }
 
                     // Resolve every referenced metric definition in one batch.
