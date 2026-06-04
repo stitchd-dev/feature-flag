@@ -19,6 +19,15 @@ const FLAG_LOCKED_STATUS_PREFIX: &str = "flag_locked_by_experiment:";
 /// Mirrors `stitchd_flag_service::error::INVALID_DISTRIBUTION_STATUS_PREFIX`.
 const INVALID_DISTRIBUTION_STATUS_PREFIX: &str = "invalid_distribution:";
 
+/// Sentinel prefix the flag-service stamps onto a `FAILED_PRECONDITION` status
+/// when an entity delete/archive is blocked because other entities still
+/// reference it as a prerequisite/dependency, so the gateway can rebuild the
+/// structured `409 DEPENDENCY_EXISTS` body. Mirrors
+/// `stitchd_flag_service::prerequisites::DEPENDENCY_EXISTS_STATUS_PREFIX`.
+///
+/// Format: `"dependency_exists:<comma-separated dependent ids>"`.
+const DEPENDENCY_EXISTS_STATUS_PREFIX: &str = "dependency_exists:";
+
 /// Structured error variants returned by gateway handlers. The
 /// `*StructuredCode` variants surface a stable `error` discriminator in
 /// the JSON body so the admin UI / SDK can branch without parsing the
@@ -51,6 +60,18 @@ pub enum GatewayError {
     /// `stitchd_flag_service::error::FLAG_LOCKED_STATUS_PREFIX`.
     #[error("flag locked by experiment {experiment_id}")]
     FlagLockedByExperiment { experiment_id: String },
+
+    /// The targeted entity cannot be deleted/archived because other entities
+    /// still reference it as a prerequisite/dependency. Surfaced as HTTP 409
+    /// with body
+    /// `{ "error": "dependency_exists", "dependents": ["<id>", ...], "message": "..." }`.
+    ///
+    /// The downstream flag-service produces this via the
+    /// `dependency_exists:<ids>` sentinel prefix on its
+    /// `tonic::Status::failed_precondition` message; see
+    /// `stitchd_flag_service::prerequisites::DEPENDENCY_EXISTS_STATUS_PREFIX`.
+    #[error("dependency exists: {dependents:?}")]
+    DependencyExists { dependents: Vec<String> },
 
     /// One of the experiment-binding invariants was violated at create /
     /// update time. Mapped to HTTP 422 with body
@@ -103,6 +124,19 @@ impl From<tonic::Status> for GatewayError {
                 experiment_id: rest.trim().to_string(),
             };
         }
+        // Decode the dependency-exists sentinel before the generic
+        // FailedPrecondition → Conflict mapping kicks in.
+        if s.code() == tonic::Code::FailedPrecondition
+            && let Some(rest) = s.message().strip_prefix(DEPENDENCY_EXISTS_STATUS_PREFIX)
+        {
+            let dependents = rest
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect();
+            return GatewayError::DependencyExists { dependents };
+        }
         // Decode the invalid-distribution sentinel before the generic
         // InvalidArgument → BadRequest mapping so it surfaces as a structured 422.
         if s.code() == tonic::Code::InvalidArgument
@@ -131,6 +165,15 @@ impl IntoResponse for GatewayError {
                         "This flag is locked by experiment {experiment_id} (running or paused). Stop the experiment to modify the flag."
                     ),
                     "experiment_id": experiment_id,
+                }));
+                (StatusCode::CONFLICT, body).into_response()
+            }
+            GatewayError::DependencyExists { dependents } => {
+                let body = Json(json!({
+                    "error": "dependency_exists",
+                    "message":
+                        "This entity cannot be deleted or archived while other entities reference it as a prerequisite. Remove the references first.",
+                    "dependents": dependents,
                 }));
                 (StatusCode::CONFLICT, body).into_response()
             }
@@ -171,6 +214,7 @@ impl IntoResponse for GatewayError {
                     GatewayError::Upstream(m) => (StatusCode::BAD_GATEWAY, m.clone()),
                     GatewayError::InvalidBody(m) => (StatusCode::UNPROCESSABLE_ENTITY, m.clone()),
                     GatewayError::FlagLockedByExperiment { .. }
+                    | GatewayError::DependencyExists { .. }
                     | GatewayError::ExperimentBindingInvalid { .. }
                     | GatewayError::MissingContextType
                     | GatewayError::MissingMetricId
@@ -307,6 +351,31 @@ mod tests {
         };
         let resp = err.into_response();
         assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn dependency_exists_status_decodes_to_structured_variant() {
+        let s = tonic::Status::failed_precondition(format!(
+            "{DEPENDENCY_EXISTS_STATUS_PREFIX}11111111-1111-1111-1111-111111111111,22222222-2222-2222-2222-222222222222"
+        ));
+        let err = GatewayError::from(s);
+        match err {
+            GatewayError::DependencyExists { dependents } => {
+                assert_eq!(dependents.len(), 2);
+                assert_eq!(dependents[0], "11111111-1111-1111-1111-111111111111");
+                assert_eq!(dependents[1], "22222222-2222-2222-2222-222222222222");
+            }
+            other => panic!("expected DependencyExists, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_exists_response_is_409() {
+        let err = GatewayError::DependencyExists {
+            dependents: vec!["flag-1".to_string()],
+        };
+        let resp = err.into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[test]

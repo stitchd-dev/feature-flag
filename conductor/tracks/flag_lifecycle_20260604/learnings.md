@@ -257,3 +257,60 @@ Patterns, gotchas, and context discovered during implementation.
   `RepositoryError → tonic::Status` (`From` impl) is available in the gRPC service.
 - No `cargo sqlx prepare` needed (zero `query!`/`query_as!` macros). NOTE for Phase 9: this crate
   must be added to docker-compose + the CI build/test matrix (it is NOT yet there).
+
+## 2026-06-04 — Phase 4 (prerequisites: persistence, service, gateway, snapshot, delete-block)
+- SHAs: 4.1 db repo `58ea071`; 4.2+4.3-service `b115625`; 4.3-gateway-decode+4.4-routes `b8fefa2`.
+- **`dependency_exists:` sentinel convention** (mirrors `flag_locked_by_experiment:<uuid>`):
+  - PRODUCED by flag-service in `crate::prerequisites::DEPENDENCY_EXISTS_STATUS_PREFIX`
+    (`"dependency_exists:"`) on a `tonic::Status::failed_precondition`, payload =
+    comma-separated dependent flag UUIDs. Helper `dependency_exists_message(&[FlagId])`.
+  - DECODED in `stitchd-gateway/src/error.rs` (its own `const DEPENDENCY_EXISTS_STATUS_PREFIX`
+    copy — there is NO shared const crate, same as the flag-lock + invalid_distribution
+    sentinels) into `GatewayError::DependencyExists { dependents }` → HTTP 409 body
+    `{ "error": "dependency_exists", "dependents": [...], "message": ... }`. Decoded BEFORE the
+    generic FailedPrecondition→Conflict mapping (order matters, like the flag-lock decode).
+  - The delete-block guard (`FlagServiceImpl::ensure_no_dependents`) runs in the MutateFlag
+    Delete/Archive branch AFTER the experiment-lock check, BEFORE the version check.
+- **Write-time cycle detection reuses the eval-time orchestrator.** `crate::prerequisites::
+  detect_prerequisite_cycle(&[(FlagId, Vec<FlagId>)])` builds a `HashMap<FlagId,HashSet<FlagId>>`
+  and runs core `rule_engine::dependency::topological_sort` (the same Kahn pass the gate uses) —
+  `CyclicFlagDependency { involved }` → reject with `Status::invalid_argument` carrying the cycle
+  path joined by ` -> ` (HTTP 400 at the gateway, NOT 409/422). The graph fed in is existing edges
+  (from `PrerequisiteRepository::edges_for_flags(project_flag_uuids)`, minus the edited flag's row
+  which is fully replaced) + the proposed edges. Self-prereq is rejected up front.
+- **Preview now resolves real prerequisites** (the key wiring): `evaluate_preview` RPC loads the
+  persisted gate via `load_prerequisite_gate` into `Flag.prerequisites`, then PER evaluation
+  context BFS-walks the transitive prerequisite-flag closure (`resolve_prerequisite_variant_map`),
+  loads each closure flag's rules + its own prereqs, resolves their segments, and runs core
+  `orchestrator::evaluate_flags_with_prerequisites` to get the `evaluated_flags` map. That map is
+  threaded into a NEW core `evaluation::preview::evaluate_preview_with_prerequisites` (old
+  `evaluate_preview` delegates with an empty map = fail-closed). Result: preview returns the
+  configured fallback variant when a prerequisite is unmet. Added
+  `ContextPreviewResult.prerequisite_failure: Option<PrerequisiteFailureTrace>` (serde-default,
+  skip-if-none) so the preview trace NAMES the failing prerequisite (spec B3) — populated from the
+  engine's `EvaluationTrace.prerequisite_failure`.
+- **Snapshot population in 3 places**: `get_flag` + `list_flags` (admin, `populate_prerequisites_proto`)
+  and the `get_flag_definitions` SDK-sync STREAM (uses a free fn `build_prerequisite_protos_with`
+  because the spawned task moves cloned `Arc` repos — can't borrow `&self`). All carry BOTH UUIDs
+  (admin) + resolved keys (SDK local resolution) per the FlagPrerequisite proto's dual-id/key shape.
+- **`PrerequisiteRepository` is a concrete `PgPool` struct, NOT a trait.** Wired into
+  `FlagServiceImpl` as `Option<PrerequisiteRepository>` via `with_prerequisite_repo` (None ⇒ RPCs
+  return UNIMPLEMENTED, delete-block is a no-op — for targeted unit tests). flag-service tests are
+  otherwise mock-based; the prereq RPCs need a real pool, so they live in a NEW
+  `tests/prerequisites_integration.rs` using `#[sqlx::test(migrations = "../stitchd-db/migrations")]`
+  with `PgFlagRepository`/`PgVariantRepository`/`PgSegmentRepository` (PgSegmentRepository impls
+  SegmentRepository directly — no Scylla composite needed since prereq RPCs never touch segments).
+  Added `sqlx`+`uuid`+`async-trait`+`chrono` to flag-service `[dev-dependencies]`.
+- **`feature_flags` has NO `environment_id` column** (project-scoped); `projects`/`environments`
+  have no `key` column. Test fixtures insert org→project→flag→variant directly.
+- **router.rs SHARED SEAM** — added EXACTLY these lines (after the `/hashing` route, before
+  `// Segments — write`), so Phase 5 can anticipate the merge:
+  ```
+          // --- prerequisites (flag_lifecycle) ---
+          .route(
+              "/v1/projects/{project_id}/flags/{flag_id}/prerequisites",
+              get(flags::get_prerequisites).put(flags::set_prerequisites),
+          )
+          // --- end prerequisites (flag_lifecycle) ---
+  ```
+- No `cargo sqlx prepare` needed (zero compile-time macros; all runtime `sqlx::query`/`query_as`).

@@ -46,6 +46,9 @@ use utoipa::{
         crate::routes::flags::update_rules,
         crate::routes::flags::update_flag_hashing,
         crate::routes::flags::set_default_rule_distribution,
+        // Prerequisites (flag_lifecycle)
+        crate::routes::flags::get_prerequisites,
+        crate::routes::flags::set_prerequisites,
         // Segments (JWT)
         crate::routes::segments::list_segments,
         crate::routes::segments::create_segment,
@@ -129,6 +132,10 @@ use utoipa::{
             crate::routes::flags::DefaultRuleDistributionBody,
             crate::routes::flags::SetDefaultRuleDistributionBody,
             crate::routes::flags::SetDefaultRuleDistributionResponseJson,
+            // Prerequisites (flag_lifecycle_20260604).
+            crate::routes::flags::PrerequisiteJson,
+            crate::routes::flags::SetPrerequisitesBody,
+            crate::routes::flags::PrerequisitesResponseJson,
             // Phase 4 (flag_eval_unify_20260522) — rule CRUD DTOs.
             crate::routes::flags::HashSelectorJson,
             crate::routes::flags::RuleBody,

@@ -35,6 +35,10 @@ pub use repository::{
         PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository, PgMetricRepository,
         PgOrganisationRepository, PgProjectRepository, PgRoleRepository, PgSdkKeyRepository,
         PgSegmentRepository, PgUserRepository, PgVariantRepository,
+        prerequisites::{
+            DEPENDENCY_KIND_PREREQUISITE, DependentRow, ENTITY_TYPE_FLAG, FlagPrerequisiteRow,
+            NewFlagPrerequisite, PrerequisiteRepository,
+        },
         scheduled_changes::{
             NewScheduledChange, RunOutcome, ScheduleKind, ScheduleStatus,
             ScheduledChangeRepository, ScheduledChangeRow, ScheduledChangeRunRow,
