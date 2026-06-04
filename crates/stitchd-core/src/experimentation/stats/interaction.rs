@@ -18,12 +18,17 @@
 //!   two-way ANOVA interaction F-test using only per-cell `(n, sum, sum_sq)`
 //!   sufficient statistics.
 //!
-//! Both return the shared [`InteractionResult`] shape. All distribution math
-//! reuses [`super::srm::chi_square_sf`] for chi-square tails; the normal CDF
-//! and the regularized incomplete beta (for the F-distribution tail) are
-//! implemented locally here to keep the module self-contained.
+//! Both return the shared [`InteractionResult`] shape. Distribution math reuses
+//! the shared primitives in [`super`] — [`super::srm::chi_square_sf`] for
+//! chi-square tails and [`super::norm_cdf`] (A&S 7.1.26) for the normal CDF; the
+//! regularized incomplete beta (for the F-distribution tail) is implemented
+//! locally here.
 
 pub(crate) use super::srm::chi_square_sf;
+// Re-export the shared normal CDF so this module (and its `interaction::*`
+// submodules, which reach it via `super::norm_cdf`) route through the single
+// A&S 7.1.26 implementation in `stats::mod` rather than a private copy.
+pub(crate) use super::norm_cdf;
 
 // ── N-way decomposition submodules (Phase 2 worker-wave) ─────────────────────
 // Each owns one metric-family × inference-model. They share the contract types
@@ -541,26 +546,10 @@ pub fn continuous_interaction(cells: &[ContinuousCell]) -> InteractionResult {
 
 // ── Local distribution helpers ─────────────────────────────────────────────
 
-/// Approximation of the error function (Abramowitz & Stegun 7.1.26).
-/// Maximum absolute error < 1.5 × 10⁻⁷.
-fn erf(x: f64) -> f64 {
-    let sign = if x < 0.0 { -1.0_f64 } else { 1.0_f64 };
-    let x = x.abs();
-    let t = 1.0 / (1.0 + 0.327_591_1 * x);
-    let poly = t
-        * (0.254_829_592
-            + t * (-0.284_496_736
-                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
-    sign * (1.0 - poly * (-x * x).exp())
-}
-
-/// Standard normal CDF: Φ(z) = ½(1 + erf(z/√2)).
-#[inline]
-pub(crate) fn norm_cdf(z: f64) -> f64 {
-    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
-}
-
 /// Two-tailed p-value from the standard normal distribution.
+///
+/// Uses the shared [`norm_cdf`] (re-exported from `stats::mod`, A&S 7.1.26) so
+/// the normal-CDF approximation lives in exactly one place across the engines.
 #[inline]
 pub(crate) fn z_to_p(z: f64) -> f64 {
     2.0 * norm_cdf(-z.abs())
@@ -712,6 +701,9 @@ mod tests {
 
     #[test]
     fn norm_cdf_at_196_is_975() {
+        // Now routed through the shared `stats::norm_cdf` (re-exported as
+        // `super::norm_cdf`); the interaction-local copy was removed in favour
+        // of the single source of truth.
         assert!((norm_cdf(1.96) - 0.975).abs() < 1e-3);
     }
 

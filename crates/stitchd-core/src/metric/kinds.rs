@@ -23,7 +23,40 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::MetricId;
 
-use super::MetricValidationError;
+use super::{MetricValidationError, validate_field_name};
+
+/// Recursively validates every JsonLogic `{"var": "<field>"}` reference inside
+/// `expr`, rejecting any field name that is unsafe to interpolate into a
+/// ClickHouse `properties['<field>']` map-key literal (see
+/// [`validate_field_name`]).
+///
+/// The walker is deliberately structure-agnostic: it descends into every object
+/// value and array element looking for `var` nodes, so it stays correct even if
+/// the stats-service grows new JsonLogic operators. A `{"var": …}` node whose
+/// value is a (non-string) is ignored here — the stats-service rejects those
+/// structurally at query-build time.
+fn validate_jsonlogic_vars(expr: &serde_json::Value) -> Result<(), MetricValidationError> {
+    match expr {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if key == "var"
+                    && let Some(field) = value.as_str()
+                {
+                    validate_field_name(field)?;
+                }
+                validate_jsonlogic_vars(value)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                validate_jsonlogic_vars(item)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
 
 // ── MetricKind (discriminated union) ──────────────────────────────────────────
 
@@ -134,9 +167,19 @@ pub struct AggregationConfig {
 impl AggregationConfig {
     /// Returns `Ok` if the config is well-formed, else a typed error.
     ///
-    /// `on_field` is now optional for all aggregators — validation no
-    /// longer rejects a missing field.
+    /// `on_field` is optional for all aggregators — validation no longer
+    /// rejects a missing field. When present, both `on_field` and every
+    /// JsonLogic `{"var": …}` reference in `where_clause` are checked for
+    /// characters that are unsafe to splice into a ClickHouse
+    /// `properties['<field>']` map-key literal (SQL-injection / placeholder
+    /// collision hardening — see [`validate_field_name`]).
     pub fn validate(&self) -> Result<(), MetricValidationError> {
+        if let Some(field) = &self.on_field {
+            validate_field_name(field)?;
+        }
+        if let Some(where_clause) = &self.where_clause {
+            validate_jsonlogic_vars(where_clause)?;
+        }
         Ok(())
     }
 }
@@ -210,6 +253,12 @@ pub struct FunnelConfig {
 
 impl FunnelConfig {
     /// Returns `Ok` if the config is well-formed, else a typed error.
+    ///
+    /// In addition to the shape checks (≥2 steps, positive window), every
+    /// step's JsonLogic `where_clause` `{"var": …}` references are validated
+    /// for map-key-safe characters — the funnel `where_clause` flows through
+    /// the same ClickHouse `properties['<field>']` interpolation as the
+    /// aggregation one.
     pub fn validate(&self) -> Result<(), MetricValidationError> {
         if self.steps.len() < 2 {
             return Err(MetricValidationError::FunnelTooFewSteps(self.steps.len()));
@@ -218,6 +267,11 @@ impl FunnelConfig {
             return Err(MetricValidationError::FunnelNonPositiveWindow(
                 self.window_seconds,
             ));
+        }
+        for step in &self.steps {
+            if let Some(where_clause) = &step.where_clause {
+                validate_jsonlogic_vars(where_clause)?;
+            }
         }
         Ok(())
     }
@@ -288,6 +342,136 @@ mod tests {
             where_clause: Some(json!({ "==": [{ "var": "currency" }, "USD"] })),
         };
         assert!(cfg.validate().is_ok());
+    }
+
+    // ── on_field / JsonLogic `var` charset hardening (SQL-injection /
+    //    placeholder-collision) ─────────────────────────────────────────────
+
+    /// Helper: an aggregation config with a given `on_field`, no where-clause.
+    fn agg_with_on_field(on_field: Option<&str>) -> AggregationConfig {
+        AggregationConfig {
+            event_key: "purchase".into(),
+            aggregator: AggregationOperator::Sum,
+            on_field: on_field.map(Into::into),
+            where_clause: None,
+        }
+    }
+
+    #[test]
+    fn on_field_with_single_quote_and_bracket_is_rejected() {
+        // `x']` would break out of the `properties['x']` map-key literal.
+        let cfg = agg_with_on_field(Some("x']"));
+        assert_eq!(
+            cfg.validate().unwrap_err(),
+            MetricValidationError::UnsafeFieldName("x']".into()),
+        );
+    }
+
+    #[test]
+    fn on_field_with_placeholder_substring_is_rejected() {
+        // `a{p0}b` collides with the `{pN}` → `?` placeholder rewrite.
+        let cfg = agg_with_on_field(Some("a{p0}b"));
+        assert_eq!(
+            cfg.validate().unwrap_err(),
+            MetricValidationError::UnsafeFieldName("a{p0}b".into()),
+        );
+    }
+
+    #[test]
+    fn on_field_with_backslash_is_rejected() {
+        let cfg = agg_with_on_field(Some("foo\\bar"));
+        assert!(matches!(
+            cfg.validate().unwrap_err(),
+            MetricValidationError::UnsafeFieldName(_)
+        ));
+    }
+
+    #[test]
+    fn normal_on_field_names_are_accepted() {
+        // A plain identifier and a dotted path must both validate.
+        assert!(agg_with_on_field(Some("revenue")).validate().is_ok());
+        assert!(agg_with_on_field(Some("cart.total")).validate().is_ok());
+        // Hyphen / underscore / space are allowed too.
+        assert!(agg_with_on_field(Some("latency_ms")).validate().is_ok());
+        assert!(agg_with_on_field(Some("a-b c")).validate().is_ok());
+        // Absent on_field stays valid.
+        assert!(agg_with_on_field(None).validate().is_ok());
+    }
+
+    #[test]
+    fn where_clause_var_with_single_quote_is_rejected() {
+        let cfg = AggregationConfig {
+            event_key: "purchase".into(),
+            aggregator: AggregationOperator::Sum,
+            on_field: Some("revenue".into()),
+            where_clause: Some(json!({ "==": [{ "var": "currency'--" }, "USD"] })),
+        };
+        assert_eq!(
+            cfg.validate().unwrap_err(),
+            MetricValidationError::UnsafeFieldName("currency'--".into()),
+        );
+    }
+
+    #[test]
+    fn where_clause_var_inside_nested_combinator_is_rejected() {
+        // Unsafe `var` buried under `and` → `or` must still be caught (the
+        // walker descends the whole tree).
+        let cfg = AggregationConfig {
+            event_key: "purchase".into(),
+            aggregator: AggregationOperator::Sum,
+            on_field: None,
+            where_clause: Some(json!({
+                "and": [
+                    { "==": [{ "var": "country" }, "US"] },
+                    { "or": [
+                        { "==": [{ "var": "tier" }, "gold"] },
+                        { "in": [{ "var": "bad{p0}" }, ["x", "y"]] },
+                    ] },
+                ]
+            })),
+        };
+        assert_eq!(
+            cfg.validate().unwrap_err(),
+            MetricValidationError::UnsafeFieldName("bad{p0}".into()),
+        );
+    }
+
+    #[test]
+    fn where_clause_with_only_safe_vars_validates() {
+        let cfg = AggregationConfig {
+            event_key: "purchase".into(),
+            aggregator: AggregationOperator::Sum,
+            on_field: None,
+            where_clause: Some(json!({
+                "and": [
+                    { "==": [{ "var": "country" }, "US"] },
+                    { "in": [{ "var": "tier" }, ["gold", "silver"]] },
+                ]
+            })),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn funnel_step_where_clause_unsafe_var_is_rejected() {
+        let cfg = FunnelConfig {
+            steps: vec![
+                FunnelStep {
+                    event_key: "start".into(),
+                    where_clause: None,
+                },
+                FunnelStep {
+                    event_key: "complete".into(),
+                    where_clause: Some(json!({ "==": [{ "var": "plan']" }, "pro"] })),
+                },
+            ],
+            window_seconds: 3600,
+            count_repeats: false,
+        };
+        assert_eq!(
+            cfg.validate().unwrap_err(),
+            MetricValidationError::UnsafeFieldName("plan']".into()),
+        );
     }
 
     // ── RatioConfig::validate ────────────────────────────────────────────────

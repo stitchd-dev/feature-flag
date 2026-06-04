@@ -430,15 +430,10 @@ pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> Frequen
 pub fn analyze_ratio(control: &RatioGroupStats, variant: &RatioGroupStats) -> FrequentistResult {
     let (Some((r_c, var_c)), Some((r_t, var_t))) = (control.ratio_var(), variant.ratio_var())
     else {
-        return FrequentistResult {
-            p_value: 1.0,
-            p_value_corrected: None,
-            confidence_interval: ConfidenceInterval {
-                lower: f64::NEG_INFINITY,
-                upper: f64::INFINITY,
-            },
-            significant: false,
-        };
+        // Degenerate group(s): emit the canonical insufficient-data result
+        // (p = 1, whole-line CI, not significant) — identical to the inline
+        // struct this used to build.
+        return insufficient_frequentist();
     };
     let diff = r_t - r_c;
     let se = (var_c + var_t).sqrt();
