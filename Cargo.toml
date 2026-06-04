@@ -13,6 +13,7 @@ members = [
     "crates/stitchd-experimentation-service",
     "crates/stitchd-gateway",
     "crates/stitchd-stats-service",
+    "crates/stitchd-schedule-service",
     "sdks/rust",
 ]
 
