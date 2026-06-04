@@ -30,12 +30,16 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use stitchd_core::util::grpc_connect::connect_with_retry_default;
 use stitchd_db::ScheduledChangeRepository;
+use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::schedule::v1::schedule_service_server::ScheduleServiceServer;
+use stitchd_proto::segments::v1::segmentation_service_client::SegmentationServiceClient;
 use stitchd_schedule_service::{
     apply::{
         Dispatcher,
+        experiment::{ExperimentApplier, GrpcExperimentTransitioner},
         flag::{FlagApplier, GrpcFlagMutator},
+        segment::{GrpcSegmentUpdater, SegmentApplier},
     },
     config::ScheduleConfig,
     grpc::ScheduleServiceImpl,
@@ -76,17 +80,62 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to connect to flag-service gRPC")?;
     let flag_client = Arc::new(Mutex::new(FlagServiceClient::new(flag_channel)));
 
+    // ── experimentation-service gRPC client ───────────────────────────────────
+    info!(
+        url = %config.experimentation_service_grpc_url,
+        "Connecting to experimentation-service gRPC"
+    );
+    let exp_endpoint = Channel::from_shared(config.experimentation_service_grpc_url.clone())
+        .context("Invalid STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL")?;
+    let exp_channel = connect_with_retry_default(
+        "experimentation-service",
+        &config.experimentation_service_grpc_url,
+        || {
+            let endpoint = exp_endpoint.clone();
+            async move { endpoint.connect().await }
+        },
+    )
+    .await
+    .context("Failed to connect to experimentation-service gRPC")?;
+    let experiment_client = Arc::new(Mutex::new(ExperimentationServiceClient::new(exp_channel)));
+
+    // ── segmentation-service gRPC client ──────────────────────────────────────
+    info!(
+        url = %config.segmentation_service_grpc_url,
+        "Connecting to segmentation-service gRPC"
+    );
+    let seg_endpoint = Channel::from_shared(config.segmentation_service_grpc_url.clone())
+        .context("Invalid STITCHD_SEGMENTATION_SERVICE_GRPC_URL")?;
+    let seg_channel = connect_with_retry_default(
+        "segmentation-service",
+        &config.segmentation_service_grpc_url,
+        || {
+            let endpoint = seg_endpoint.clone();
+            async move { endpoint.connect().await }
+        },
+    )
+    .await
+    .context("Failed to connect to segmentation-service gRPC")?;
+    let segment_client = Arc::new(Mutex::new(SegmentationServiceClient::new(seg_channel)));
+
     // ── Scheduler loop ────────────────────────────────────────────────────────
     let scheduler_repo = repo.clone();
     let interval = config.scheduler_interval;
     let batch = config.claim_batch;
     let scheduler_flag_client = flag_client.clone();
+    let scheduler_experiment_client = experiment_client.clone();
+    let scheduler_segment_client = segment_client.clone();
     tokio::spawn(async move {
-        // Phase 3: flag changes dispatch to flag-service `MutateFlag` via the
-        // entity-type `Dispatcher`; segment/experiment changes are recorded as
-        // unsupported until Phase 5.
+        // Entity-type `Dispatcher`: flag changes → flag-service `MutateFlag`,
+        // experiment changes → experimentation-service `TransitionExperiment`,
+        // segment changes → segmentation-service `UpdateAdminSegment`.
         let flag_applier = FlagApplier::new(GrpcFlagMutator::new(scheduler_flag_client));
-        let dispatcher = Dispatcher::new(flag_applier);
+        let experiment_applier = ExperimentApplier::new(GrpcExperimentTransitioner::new(
+            scheduler_experiment_client,
+        ));
+        let segment_applier =
+            SegmentApplier::new(GrpcSegmentUpdater::new(scheduler_segment_client));
+        let dispatcher = Dispatcher::new(flag_applier, experiment_applier, segment_applier);
         let clock = SystemClock;
         let mut ticker = tokio::time::interval(interval);
         loop {

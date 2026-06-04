@@ -5,12 +5,15 @@
 //! returns an [`ApplyOutcome`] the scheduler records in the run history and uses
 //! to decide the row's next state.
 //!
-//! Phase 3 implements only the `flag` arm ([`flag`]); `segment` and `experiment`
-//! are Phase 5 and currently return [`ApplyOutcome::Failed`] with a clear
-//! "unsupported entity type" detail so a misrouted change is recorded rather
-//! than silently dropped.
+//! Phase 3 implemented the `flag` arm ([`flag`]); Phase 5 fills in the
+//! `experiment` ([`experiment`]) and `segment` ([`segment`]) arms. An entity type
+//! the dispatcher does not recognize returns [`ApplyOutcome::Failed`] with a clear
+//! "unsupported entity type" detail so a misrouted change is recorded rather than
+//! silently dropped.
 
+pub mod experiment;
 pub mod flag;
+pub mod segment;
 
 use async_trait::async_trait;
 use stitchd_db::ScheduledChangeRow;
@@ -40,26 +43,35 @@ pub trait Applier: Send + Sync {
 }
 
 /// Entity-type router: the top-level [`Applier`] the scheduler loop calls. Keyed
-/// on `change.entity_type`, it forwards to the owning per-entity applier. Only
-/// `flag` is implemented in Phase 3; `segment` / `experiment` are Phase 5.
-pub struct Dispatcher<F: Applier> {
+/// on `change.entity_type`, it forwards to the owning per-entity applier
+/// (`flag` → [`flag::FlagApplier`], `experiment` → [`experiment::ExperimentApplier`],
+/// `segment` → [`segment::SegmentApplier`]).
+pub struct Dispatcher<F: Applier, E: Applier, S: Applier> {
     flag: F,
+    experiment: E,
+    segment: S,
 }
 
-impl<F: Applier> Dispatcher<F> {
+impl<F: Applier, E: Applier, S: Applier> Dispatcher<F, E, S> {
     /// Construct a dispatcher over the per-entity appliers.
-    pub const fn new(flag: F) -> Self {
-        Self { flag }
+    pub const fn new(flag: F, experiment: E, segment: S) -> Self {
+        Self {
+            flag,
+            experiment,
+            segment,
+        }
     }
 }
 
 #[async_trait]
-impl<F: Applier> Applier for Dispatcher<F> {
+impl<F: Applier, E: Applier, S: Applier> Applier for Dispatcher<F, E, S> {
     async fn apply(&self, change: &ScheduledChangeRow) -> anyhow::Result<ApplyOutcome> {
         match change.entity_type.as_str() {
             "flag" => self.flag.apply(change).await,
+            "experiment" => self.experiment.apply(change).await,
+            "segment" => self.segment.apply(change).await,
             other => Ok(ApplyOutcome::Failed(format!(
-                "unsupported entity type '{other}' (segment/experiment apply is Phase 5)"
+                "unsupported entity type '{other}'"
             ))),
         }
     }
