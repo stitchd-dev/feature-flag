@@ -68,9 +68,8 @@ impl ScheduleConfig {
             std::env::var("STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL")
                 .unwrap_or_else(|_| "http://localhost:50055".to_string());
 
-        let segmentation_service_grpc_url =
-            std::env::var("STITCHD_SEGMENTATION_SERVICE_GRPC_URL")
-                .unwrap_or_else(|_| "http://localhost:50053".to_string());
+        let segmentation_service_grpc_url = std::env::var("STITCHD_SEGMENTATION_SERVICE_GRPC_URL")
+            .unwrap_or_else(|_| "http://localhost:50053".to_string());
 
         Ok(Self {
             database_url,

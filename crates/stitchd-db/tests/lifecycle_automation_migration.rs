@@ -75,7 +75,10 @@ async fn experiment_start_prerequisites_table_and_index_exist(pool: PgPool) {
     .fetch_one(&pool)
     .await
     .expect("schema query failed");
-    assert!(index_exists, "idx_experiment_start_prereq_experiment should exist");
+    assert!(
+        index_exists,
+        "idx_experiment_start_prereq_experiment should exist"
+    );
 }
 
 /// The partial due-change index exists.

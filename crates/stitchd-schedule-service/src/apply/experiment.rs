@@ -18,6 +18,7 @@
 //!   * the run is recorded `skipped` (never `failed` — it is recoverable),
 //!   * the scheduler loop does NOT error, and
 //!   * a **recurring** schedule still advances to its next window.
+//!
 //! Any other RPC error (transport, internal) maps to [`ApplyOutcome::Failed`].
 //!
 //! ## Mutation payload
@@ -43,8 +44,7 @@ use crate::apply::{Applier, ApplyOutcome};
 pub trait ExperimentTransitioner: Send + Sync {
     /// Invoke `TransitionExperiment`. Returns the gRPC status on failure (the
     /// apply path inspects its code to classify the outcome).
-    async fn transition_experiment(&self, req: TransitionExperimentRequest)
-    -> Result<(), Status>;
+    async fn transition_experiment(&self, req: TransitionExperimentRequest) -> Result<(), Status>;
 }
 
 /// Production [`ExperimentTransitioner`] backed by a tonic experimentation-service
@@ -79,10 +79,7 @@ impl GrpcExperimentTransitioner {
 
 #[async_trait]
 impl ExperimentTransitioner for GrpcExperimentTransitioner {
-    async fn transition_experiment(
-        &self,
-        req: TransitionExperimentRequest,
-    ) -> Result<(), Status> {
+    async fn transition_experiment(&self, req: TransitionExperimentRequest) -> Result<(), Status> {
         let mut client = self.client.lock().await;
         client
             .transition_experiment(tonic::Request::new(req))
@@ -302,16 +299,18 @@ mod tests {
         // Spec A9 / A3: starting an already-running experiment is an invalid
         // transition at fire time — experimentation-service returns
         // FAILED_PRECONDITION. It must be SKIPPED (recoverable; recurring advances).
-        let status = Status::failed_precondition(
-            "Invalid status transition from Running to Running",
-        );
+        let status =
+            Status::failed_precondition("Invalid status transition from Running to Running");
         let change = experiment_change(serde_json::json!({ "transition": "start" }));
         let applier = ExperimentApplier::new(StubTransitioner::err(status));
         let outcome = applier.apply(&change).await.unwrap();
 
         match outcome {
             ApplyOutcome::Skipped(reason) => {
-                assert!(reason.contains("Invalid status transition"), "reason: {reason}");
+                assert!(
+                    reason.contains("Invalid status transition"),
+                    "reason: {reason}"
+                );
             }
             other => panic!("expected Skipped, got {other:?}"),
         }

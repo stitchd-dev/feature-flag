@@ -81,7 +81,12 @@ impl PgStartPrerequisiteRepository {
             StartPrerequisite::FlagVariant {
                 flag_id,
                 required_variant_id,
-            } => ("flag_variant", Some(*flag_id), Some(*required_variant_id), None),
+            } => (
+                "flag_variant",
+                Some(*flag_id),
+                Some(*required_variant_id),
+                None,
+            ),
             StartPrerequisite::ExperimentDone { experiment_id } => {
                 ("experiment_done", None, None, Some(*experiment_id))
             }
@@ -177,10 +182,7 @@ pub trait StartPrerequisiteResolver: Send + Sync {
 
     /// Is the experiment-done prerequisite currently met — i.e. is
     /// `experiment_id` stopped/concluded?
-    async fn experiment_is_done(
-        &self,
-        experiment_id: Uuid,
-    ) -> Result<PrereqCheck, tonic::Status>;
+    async fn experiment_is_done(&self, experiment_id: Uuid) -> Result<PrereqCheck, tonic::Status>;
 }
 
 /// Evaluate every prerequisite for `experiment_id`. Returns `Ok(None)` when all
@@ -264,10 +266,7 @@ impl StartPrerequisiteResolver for ServiceStartPrerequisiteResolver {
         )))
     }
 
-    async fn experiment_is_done(
-        &self,
-        experiment_id: Uuid,
-    ) -> Result<PrereqCheck, tonic::Status> {
+    async fn experiment_is_done(&self, experiment_id: Uuid) -> Result<PrereqCheck, tonic::Status> {
         let exp_id = stitchd_core::id::ExperimentId::from_uuid(experiment_id);
         let exp = self
             .experiment_repo
@@ -514,7 +513,12 @@ mod tests {
     async fn pg_repo_experiment_with_no_prereqs_is_empty(pool: PgPool) {
         let exp = seed_experiment(&pool).await;
         let repo = PgStartPrerequisiteRepository::new(pool);
-        assert!(repo.list_for_experiment(exp).await.expect("list").is_empty());
+        assert!(
+            repo.list_for_experiment(exp)
+                .await
+                .expect("list")
+                .is_empty()
+        );
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]
@@ -534,7 +538,10 @@ mod tests {
         .bind(Uuid::new_v4()) // experiment id set on a flag_variant → violates shape
         .execute(&pool)
         .await;
-        assert!(res.is_err(), "shape constraint must reject mismatched columns");
+        assert!(
+            res.is_err(),
+            "shape constraint must reject mismatched columns"
+        );
     }
 
     #[tokio::test]

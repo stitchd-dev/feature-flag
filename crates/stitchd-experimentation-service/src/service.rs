@@ -472,8 +472,10 @@ pub struct ExperimentationServiceImpl {
     /// rejected with `FAILED_PRECONDITION` if any is unmet. `None` (the default)
     /// skips the gate — preserving behaviour for service instances that do not
     /// configure prerequisites.
-    start_prereq:
-        Option<(Arc<dyn StartPrerequisiteRepository>, Arc<dyn StartPrerequisiteResolver>)>,
+    start_prereq: Option<(
+        Arc<dyn StartPrerequisiteRepository>,
+        Arc<dyn StartPrerequisiteResolver>,
+    )>,
 }
 
 impl ExperimentationServiceImpl {
@@ -3882,7 +3884,11 @@ mod tests {
             "msg: {}",
             err.message()
         );
-        assert!(err.message().contains("kill-switch"), "msg: {}", err.message());
+        assert!(
+            err.message().contains("kill-switch"),
+            "msg: {}",
+            err.message()
+        );
     }
 
     /// A start with all prerequisites MET proceeds normally.

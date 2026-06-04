@@ -185,7 +185,10 @@ pub enum SegmentMutationKind {
 impl SegmentMutationPayload {
     /// Build the `UpdateAdminSegmentRequest` for `change`. Rejects the
     /// not-yet-supported `list_generation` kind with a clear reason.
-    fn into_request(self, change: &ScheduledChangeRow) -> Result<UpdateAdminSegmentRequest, String> {
+    fn into_request(
+        self,
+        change: &ScheduledChangeRow,
+    ) -> Result<UpdateAdminSegmentRequest, String> {
         match self.kind {
             SegmentMutationKind::ListGeneration => Err(
                 "list-generation activation is not supported by the scheduler: \

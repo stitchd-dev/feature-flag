@@ -100,6 +100,13 @@ use utoipa::{
         crate::routes::stats::get_timeseries,
         crate::routes::stats::trigger_recompute_env_scoped,
         crate::routes::stats::get_recompute_job_status,
+        // Schedules (flag_lifecycle, JWT)
+        crate::routes::schedules::create_schedule,
+        crate::routes::schedules::list_schedules,
+        crate::routes::schedules::get_schedule,
+        crate::routes::schedules::cancel_schedule,
+        crate::routes::schedules::pause_schedule,
+        crate::routes::schedules::resume_schedule,
     ),
     components(
         schemas(
@@ -210,6 +217,11 @@ use utoipa::{
             crate::routes::stats::GetTimeseriesQuery,
             crate::routes::stats::TimeseriesBucketJson,
             crate::routes::stats::GetTimeseriesResponseJson,
+            // Schedules (flag_lifecycle)
+            crate::routes::schedules::CreateScheduleBody,
+            crate::routes::schedules::ScheduleVersionBody,
+            crate::routes::schedules::ScheduleJson,
+            crate::routes::schedules::ScheduleRunJson,
         )
     ),
     modifiers(&SecurityAddon)

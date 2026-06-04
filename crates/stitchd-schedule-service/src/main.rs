@@ -130,9 +130,8 @@ async fn main() -> anyhow::Result<()> {
         // experiment changes → experimentation-service `TransitionExperiment`,
         // segment changes → segmentation-service `UpdateAdminSegment`.
         let flag_applier = FlagApplier::new(GrpcFlagMutator::new(scheduler_flag_client));
-        let experiment_applier = ExperimentApplier::new(GrpcExperimentTransitioner::new(
-            scheduler_experiment_client,
-        ));
+        let experiment_applier =
+            ExperimentApplier::new(GrpcExperimentTransitioner::new(scheduler_experiment_client));
         let segment_applier =
             SegmentApplier::new(GrpcSegmentUpdater::new(scheduler_segment_client));
         let dispatcher = Dispatcher::new(flag_applier, experiment_applier, segment_applier);
