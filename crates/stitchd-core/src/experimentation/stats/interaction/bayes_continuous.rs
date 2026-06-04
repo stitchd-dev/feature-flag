@@ -71,6 +71,12 @@ fn continuous_cell_post(n: f64, sum: f64, sum_sq: f64) -> Option<CellPost> {
 }
 
 /// Delta-method Normal posterior for one ratio cell, or `None` when degenerate.
+///
+/// Delegates to the shared [`super::super::ratio_delta_var`] (the single source
+/// of truth, also used by `interaction::ratio` and
+/// `sequential::RatioGroupStats::ratio_var`) so the delta-method variance lives
+/// in exactly one place. `n` arrives as an integer-valued `f64` (a sum of cell
+/// counts); it is converted losslessly to `i64` for the shared signature.
 fn ratio_cell_post(
     n: f64,
     num_sum: f64,
@@ -79,24 +85,14 @@ fn ratio_cell_post(
     den_sq_sum: f64,
     num_den_sum: f64,
 ) -> Option<CellPost> {
-    // `n` is a sum of integer counts, always finite ⇒ a plain comparison is safe.
-    if n < 2.0 || den_sum <= 0.0 {
-        return None;
-    }
-    let mn = num_sum / n;
-    let md = den_sum / n;
-    if md <= 0.0 {
-        return None;
-    }
-    let r = num_sum / den_sum;
-    let var_num = num_sq_sum / n - mn * mn;
-    let var_den = den_sq_sum / n - md * md;
-    let cov = num_den_sum / n - mn * md;
-    // Var(R) ≈ (1/md²)·(Var(num) − 2R·Cov + R²·Var(den)) / n.
-    let var = (var_num - 2.0 * r * cov + r * r * var_den) / (md * md) / n;
-    if !r.is_finite() || !var.is_finite() || var <= 0.0 {
-        return None;
-    }
+    let (r, var) = super::super::ratio_delta_var(
+        n as i64,
+        num_sum,
+        den_sum,
+        num_sq_sum,
+        den_sq_sum,
+        num_den_sum,
+    )?;
     Some(CellPost { est: r, var })
 }
 
