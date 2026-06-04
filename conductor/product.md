@@ -1,6 +1,6 @@
 # Initial Concept
 Stitchd Feature Flag is a self-hosted platform for feature flagging and experimentation.
-<!-- Last refreshed: 2026-05-31 (post domain_boundaries_20260530 — pagination page/per_page canonical, frozen column dropped, refactor logged in status table) -->
+<!-- Last refreshed: 2026-06-04 (post seqtest_20260603 — sequential testing + live per-metric stats compute pass; xexp/nway cross-experiment interaction. Status rows 76-78 + experimentation detail 130-133 synced during the tracks; verified current.) -->
 
 # Product Guide
 

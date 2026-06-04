@@ -1,29 +1,32 @@
 {
-  "last_refreshed": "2026-05-31T00:00:00Z",
+  "last_refreshed": "2026-06-04T00:00:00Z",
   "scope": "all",
-  "previous_refresh": "2026-05-27T15:47:00Z",
+  "previous_refresh": "2026-05-31T00:00:00Z",
   "changes": {
     "tech-stack.md": [
-      "No change — already refreshed during domain_boundaries_20260530 Phase 5 (marker 2026-05-30: lean-gateway boundary, canonical error mapping, tonic optional feature on stitchd-db, backward-compatible proto additions, page/per_page pagination)."
+      "No body change — stats/table additions were already synced during the tracks themselves (nway: 6114c3c; seqtest: 2693abc/2c287aa/4240284/3c09639). nway interaction (18-34), seqtest sequential + live compute pass (35-76), experiment_results.sequential_result + N-way experiment_interactions table rows (270-304) all verified current. Bumped the stale 'Last refreshed' marker 2026-05-30 -> 2026-06-04."
     ],
     "product.md": [
-      "Pagination section corrected: page-based page/per_page is now the single canonical contract (the /v1/metrics offset/limit envelope was retired in domain_boundaries_20260530).",
-      "Whole-flag lock note: the old per-rule frozen column + write path were removed (PROP-001).",
-      "Added the completed domain_boundaries_20260530 (Domain-Boundary Refactor) row to the Implementation Status table."
+      "No body change — Implementation Status rows 76-78 (xexp/nway/seqtest) + experimentation detail 130-133 (exclusion groups, N-way interaction, sequential testing, now-live per-metric compute pass, future-work list incl. feature-flag-uga) were synced during the tracks (efc0415, c3fca5b, 2693abc, 2c287aa, 4240284). Verified current. Bumped the stale marker 2026-05-31 -> 2026-06-04."
     ],
     "workflow.md": [
-      "Fixed the `cargo sqlx prepare` command in 'Before Committing' to use `--all-targets --features stitchd-sdk-rust/test-util` (matching CI's sqlx-check job) instead of the narrower `-- --tests`, which could leave queries uncached and fail CI — the exact gotcha hit during domain_boundaries_20260530 verification."
+      "Added a CI Environment Notes bullet documenting the separate 'Live-ClickHouse integration tests (stats-service)' Coverage-job step with its EXPLICIT per-file --test list (8 targets): adding/renaming/removing a self-seeding tests/*.rs file in stitchd-stats-service without updating ci.yml makes cargo exit 101 and reddens CI on the next push, invisible to local 'cargo test --workspace'. Root-caused/fixed in cce4819. Bumped marker 2026-05-31 -> 2026-06-04."
     ],
     "patterns.md": [
-      "No change in this refresh — already consolidated during the domain_boundaries_20260530 archive: added central error-sentinel decode, UI<->domain translation is gateway work, typed deserialization of opaque-JSON-over-gRPC, and the Verification & CI Gotchas section (live-DB gate, sqlx-cache flag-match)."
+      "Per-track sections already present (Cross-Experiment Interaction / N-Way Interaction-Parallel-Stats / Sequential Testing & Live Stats Compute, lines 233-265, added during the tracks). Consolidation pass added ONE cross-track gotcha to 'Verification & CI Gotchas': the live-CH explicit --test-target CI step (recurs across the nway file rename + the seqtest compute test files + the cce4819 fix), tied to the sibling event_writer::migrations hardcoded-include_str!-array desync pattern."
     ]
   },
   "tracks_completed_since_last_refresh": [
-    "domain_boundaries_20260530"
+    "xexp_interaction_20260602",
+    "nway_interaction_20260603",
+    "seqtest_20260603"
   ],
   "follow_up_drift_notes": [
-    "No Beads-vs-Conductor drift: epic feature-flag-8i6 and all children CLOSED; 0 open / 0 in_progress / 0 blocked (1193 closed). Archived plan.md ([x]) matches Beads.",
-    "Minor historical artifact: epic feature-flag-8i6's close reason says 'GL-06/GL-07/PROP-001 deferred' — those were actually completed in follow-up work AFTER the epic was closed; later bd notes on the epic record the completions. Not reopened.",
-    "Carried over from prior refresh (still true): reference-only ClickHouse migration folders (crates/stitchd-db/clickhouse-migrations/, crates/stitchd-analytics-service/clickhouse-migrations/) still exist."
+    "Beads sync (Conductor -> Beads): CLOSED feature-flag-uo4 ('Exploration: CI failing on main after seqtest merge') — an open spike whose work already landed in git via cce4819 (the live-CH --test-target fix). Now 0 open spikes for that issue.",
+    "feature-flag-uga ('Wire interaction sweep into on-demand TriggerRecompute') intentionally left OPEN — documented as future work in product.md:133; the 60-min tick is the only recompute path today.",
+    "Dependency drift: NONE among real crates. The only Cargo.toml change since the last refresh is sdks/rust/Cargo.toml adding the exclusion_gating [[test]] target (xexp_interaction_20260602). No new dependencies.",
+    "MAJOR pre-existing-state correction landed in seqtest_20260603: the scheduled per-metric stats compute had been a scaffold (write_results(exp, &[]) with empty summaries; no service called any stitchd-core stats fn), so NO live experiment_results were computed despite the storage/read/UI looking complete. It is now LIVE end-to-end (frequentist+Bonferroni / bayesian / sequential / weighted-allocation SRM / CUPED / percentile bootstrap). product.md + tech-stack.md reflect this.",
+    "Carried over (still true): reference-only ClickHouse migration folders (crates/stitchd-db/clickhouse-migrations/, crates/stitchd-analytics-service/clickhouse-migrations/) still exist; the experiment_interactions CH migration was rewritten-in-place in nway_interaction_20260603 (clean N-way cutover, system not live, no backfill).",
+    "seqtest_20260603 was merged to main LOCALLY (74a2810) and not pushed at archive time; the follow-up cce4819 CI fix is also local. Confirm a push when ready."
   ]
 }

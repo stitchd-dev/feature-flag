@@ -1,5 +1,5 @@
 # Project Workflow
-<!-- Last refreshed: 2026-05-31 (post domain_boundaries_20260530 — fixed sqlx-prepare command to match CI's --all-targets --features test-util check) -->
+<!-- Last refreshed: 2026-06-04 (post seqtest_20260603 — documented the separate live-ClickHouse explicit --test-target CI step gotcha that root-caused the red-CI fixed in cce4819) -->
 
 ## Guiding Principles
 
@@ -258,6 +258,7 @@ git diff --exit-code
 - CI only starts `postgres` and `clickhouse` containers; the six microservice containers are exercised by E2E Step CI workflows in `tests/e2e/`
 - Coverage threshold: ≥90% per crate (cargo-tarpaulin/cargo-llvm-cov, uploaded to Codecov per crate flag)
 - `contract-check` job verifies the gateway covers the pre-decomposition OpenAPI surface (`scripts/check_openapi_contract.py`)
+- **Live-ClickHouse stats tests run in a SEPARATE Coverage-job step with an EXPLICIT `--test` list — keep it in sync.** `cargo llvm-cov` (the Coverage job's main pass) does NOT run `#[ignore]`d tests, so the self-seeding live-CH integration tests in `stitchd-stats-service` (they call `event_writer::migrations::run` to build their own tables) run in a dedicated **"Live-ClickHouse integration tests (stats-service)"** step that names each `--test` target by filename and passes `-- --ignored`. **When you add, rename, or remove a self-seeding `tests/*.rs` file in `stitchd-stats-service`, update that step's `--test` list in `.github/workflows/ci.yml`** — a stale target makes cargo exit 101 (`no test target named X`), turning the Coverage job (and all of CI) red on the *next* push, **invisible to local `cargo test --workspace`** (which never runs that step). Current set: `aggregation_query, ratio_query, funnel_query, preview_query, interaction_compute, compute_pass, cuped_compute, percentile_significance`. (A stale `interaction_query` left by the N-way rename reddened CI from the nway merge through the seqtest merge until `cce4819` rebuilt the full 8-target list.)
 
 ## Testing Requirements
 

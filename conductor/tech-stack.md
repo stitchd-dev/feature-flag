@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-05-30 (post domain_boundaries_20260530 — lean-gateway boundary enforced, canonical error mapping) -->
+<!-- Last refreshed: 2026-06-04 (post seqtest_20260603 — sequential testing stats core + live per-metric compute pass; nway interaction stats; cross-experiment exclusion groups. Stats/table additions synced during the tracks; verified current.) -->
 
 <!--
 domain_boundaries_20260530 conventions (see conductor/patterns.md for the full set):
