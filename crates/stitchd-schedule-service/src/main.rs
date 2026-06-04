@@ -16,20 +16,27 @@
 //!   (default `http://localhost:50051`).
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context as _;
 use axum::{Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tokio::signal;
-use tonic::transport::Server;
+use tokio::sync::Mutex;
+use tonic::transport::{Channel, Server};
 use tonic_health::server::health_reporter;
 use tracing::{error, info};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
+use stitchd_core::util::grpc_connect::connect_with_retry_default;
 use stitchd_db::ScheduledChangeRepository;
+use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::schedule::v1::schedule_service_server::ScheduleServiceServer;
 use stitchd_schedule_service::{
-    apply::{Dispatcher, flag::FlagApplier},
+    apply::{
+        Dispatcher,
+        flag::{FlagApplier, GrpcFlagMutator},
+    },
     config::ScheduleConfig,
     grpc::ScheduleServiceImpl,
     scheduler::{SystemClock, process_due_changes},
@@ -56,15 +63,30 @@ async fn main() -> anyhow::Result<()> {
 
     let repo = ScheduledChangeRepository::new(pg_pool.clone());
 
+    // ── flag-service gRPC client ──────────────────────────────────────────────
+    info!(url = %config.flag_service_grpc_url, "Connecting to flag-service gRPC");
+    let flag_endpoint = Channel::from_shared(config.flag_service_grpc_url.clone())
+        .context("Invalid STITCHD_FLAG_SERVICE_GRPC_URL")?;
+    let flag_channel =
+        connect_with_retry_default("flag-service", &config.flag_service_grpc_url, || {
+            let endpoint = flag_endpoint.clone();
+            async move { endpoint.connect().await }
+        })
+        .await
+        .context("Failed to connect to flag-service gRPC")?;
+    let flag_client = Arc::new(Mutex::new(FlagServiceClient::new(flag_channel)));
+
     // ── Scheduler loop ────────────────────────────────────────────────────────
     let scheduler_repo = repo.clone();
     let interval = config.scheduler_interval;
     let batch = config.claim_batch;
+    let scheduler_flag_client = flag_client.clone();
     tokio::spawn(async move {
-        // Phase 3: the flag apply path is dispatched via `FlagApplier`; the
-        // entity-type `Dispatcher` routes flag changes there and records
-        // segment/experiment changes as unsupported until Phase 5.
-        let dispatcher = Dispatcher::new(FlagApplier);
+        // Phase 3: flag changes dispatch to flag-service `MutateFlag` via the
+        // entity-type `Dispatcher`; segment/experiment changes are recorded as
+        // unsupported until Phase 5.
+        let flag_applier = FlagApplier::new(GrpcFlagMutator::new(scheduler_flag_client));
+        let dispatcher = Dispatcher::new(flag_applier);
         let clock = SystemClock;
         let mut ticker = tokio::time::interval(interval);
         loop {
