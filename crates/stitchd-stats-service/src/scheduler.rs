@@ -2,6 +2,8 @@
 //!
 //! No direct PostgreSQL access to `experiments` or `experiment_iterations` tables.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, TimeZone, Utc};
 use tonic::transport::Channel;
 use uuid::Uuid;
@@ -64,6 +66,15 @@ pub struct RunningExperiment {
     /// Sequential-testing configuration snapshotted on the iteration and carried
     /// directly on the `ListRunningExperiments` response (FIX C3).
     pub sequential: SequentialSettings,
+    /// Designed per-variant assignment split in basis points (`variant_key` →
+    /// bp), sourced from the experiment's bound rule (`RuleOutput::Percentage`
+    /// weights) or the flag's `default_rule_distribution`. Carried on the
+    /// `ListRunningExperiments` response (`variant_expected_bp`) so the SRM check
+    /// tests observed assignments against the CONFIGURED split rather than a
+    /// uniform `1/K` baseline. Empty when the server could not source it (older
+    /// server, or neither a rule nor a default distribution carried weights), in
+    /// which case the SRM check falls back to the uniform split.
+    pub variant_expected_bp: HashMap<String, u32>,
 }
 
 /// Fetch all running experiments via `experimentation-service.ListRunningExperiments`.
@@ -130,6 +141,10 @@ pub async fn fetch_running_experiments(
                         tau_squared: proto.sequential_tau_squared,
                         min_sample_size: proto.sequential_min_sample_size,
                     },
+                    // Designed per-variant split (bp) for weighted SRM; empty
+                    // when the server did not source it (older server / no
+                    // rule+default-rule weights) → uniform SRM fallback.
+                    variant_expected_bp: proto.variant_expected_bp,
                 });
             }
         }
@@ -390,6 +405,10 @@ mod tests {
             sequential_alpha: 0.01,
             sequential_tau_squared: Some(0.25),
             sequential_min_sample_size: 250,
+            variant_expected_bp: HashMap::from([
+                ("control".to_string(), 9000),
+                ("treatment".to_string(), 1000),
+            ]),
         };
 
         let mut client = make_client(vec![proto]).await;
@@ -409,6 +428,9 @@ mod tests {
         assert!((results[0].sequential.alpha - 0.01).abs() < 1e-12);
         assert_eq!(results[0].sequential.tau_squared, Some(0.25));
         assert_eq!(results[0].sequential.min_sample_size, 250);
+        // Designed split (bp) for weighted SRM rides on the response.
+        assert_eq!(results[0].variant_expected_bp.get("control"), Some(&9000));
+        assert_eq!(results[0].variant_expected_bp.get("treatment"), Some(&1000));
     }
 
     #[tokio::test]
@@ -428,6 +450,7 @@ mod tests {
                 sequential_alpha: 0.05,
                 sequential_tau_squared: None,
                 sequential_min_sample_size: 100,
+                variant_expected_bp: HashMap::new(),
             })
             .collect();
 
@@ -474,6 +497,7 @@ mod tests {
             sequential_alpha: 0.05,
             sequential_tau_squared: None,
             sequential_min_sample_size: 100,
+            variant_expected_bp: HashMap::new(),
         };
         let mut client = make_client(vec![proto]).await;
         let results = fetch_running_experiments(&mut client).await.unwrap();

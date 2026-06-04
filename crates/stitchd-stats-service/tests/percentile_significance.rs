@@ -184,6 +184,7 @@ fn running_experiment(s: &Seeded) -> RunningExperiment {
             tau_squared: None,
             min_sample_size: 100,
         },
+        variant_expected_bp: HashMap::new(),
     }
 }
 

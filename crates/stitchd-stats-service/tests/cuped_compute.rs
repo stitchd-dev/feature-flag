@@ -229,6 +229,7 @@ fn running_experiment(s: &Seeded, pre_period_days: u32) -> RunningExperiment {
             tau_squared: None,
             min_sample_size: 100,
         },
+        variant_expected_bp: HashMap::new(),
     }
 }
 
@@ -457,6 +458,7 @@ async fn cuped_on_field_property_metric_reduces_variance() {
             tau_squared: None,
             min_sample_size: 100,
         },
+        variant_expected_bp: HashMap::new(),
     };
     let reader = ClickHouseCellReader::new(Arc::new(ch.clone()));
     let after = iter_end + Duration::days(1);

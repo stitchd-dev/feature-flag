@@ -260,6 +260,18 @@ message RunningExperiment {
   double          sequential_alpha           = 11;
   optional double sequential_tau_squared     = 12;
   int64           sequential_min_sample_size = 13;
+  // [ADDITIVE] Designed per-variant assignment split in basis points
+  // (`variant_key` → bp; 1 = 0.01%, 10000 = 100%), sourced from the experiment's
+  // bound flag rule (`RuleOutput::Percentage` weights) or the flag's
+  // `default_rule_distribution` snapshot. The stats-service SRM check tests
+  // observed assignment counts against THIS configured split (expected[v] =
+  // total * weight[v] / Σweight) rather than a uniform `1/K` baseline — so a
+  // healthy 95/5 canary no longer reads as a massive SRM mismatch. Only the
+  // relative split among the experiment's variants is meaningful (a rule may
+  // allocate <100% of traffic to the experiment). Empty when the server could
+  // not source it (no rule/default-rule weights), in which case the SRM check
+  // falls back to the uniform split.
+  map<string, uint32> variant_expected_bp        = 14;
 }
 
 message ListRunningExperimentsRequest {
