@@ -128,24 +128,26 @@ pub async fn fetch_running_experiments(
 }
 
 /// Resolve the iteration-snapshotted compute-pass inputs for an experiment via
-/// `GetExperimentIteration`: the [`SequentialSettings`] AND the
-/// `unit_context_types` the compute pass scopes its analyses by.
+/// `GetExperimentIteration`: the [`SequentialSettings`], the `pre_period_days`
+/// (CUPED) window, AND the `unit_context_types` the compute pass scopes its
+/// analyses by.
 ///
-/// The `ListRunningExperiments` view omits both, so the scheduler calls this to
-/// hydrate `exp.sequential` and `exp.unit_context_types` before the compute
-/// pass. On RPC failure the sequential settings are left at their default
-/// (disabled) and the context types fall back to `["user"]` — the safe
-/// behaviour, since a transient experimentation-service blip must not turn on
-/// (or misconfigure) always-valid testing or silently drop a context dimension.
+/// The `ListRunningExperiments` view omits all three, so the scheduler calls
+/// this to hydrate them before the compute pass.
 ///
-/// `pre_period_days` (CUPED) is snapshotted on the `ExperimentIteration` proto;
-/// this captures it onto [`RunningExperiment::pre_period_days`] so the numeric
-/// compute path can run variance reduction. On RPC failure it falls back to `0`
-/// (CUPED off) alongside the other safe defaults.
+/// # Errors
+///
+/// FIX 6: on RPC failure this returns `Err` so the caller can SKIP the
+/// experiment this tick and NOT write results with guessed settings. Previously
+/// it silently substituted `unit_context_types = ["user"]`; for an experiment
+/// randomized on another unit (e.g. `account`) that guess queries the WRONG
+/// context, silently produces zero results, and freezes the sequential
+/// running-minimum. Skipping leaves the prior results untouched until the
+/// snapshot is fetchable again. `exp` is left unmodified on error.
 pub async fn enrich_sequential_settings(
     client: &mut ExperimentationServiceClient<Channel>,
     exp: &mut RunningExperiment,
-) {
+) -> Result<(), anyhow::Error> {
     match client
         .get_experiment_iteration(GetExperimentIterationRequest {
             iteration_id: exp.iteration_id.to_string(),
@@ -171,20 +173,24 @@ pub async fn enrich_sequential_settings(
             } else {
                 exp.unit_context_types = it.unit_context_types;
             }
+            Ok(())
         }
         Err(e) => {
-            // Reset to the safe default (disabled): a transient
-            // experimentation-service blip must never leave stale/partial
-            // sequential config that could turn on or misconfigure
-            // always-valid testing.
-            exp.sequential = SequentialSettings::default();
-            exp.unit_context_types = vec!["user".to_string()];
-            exp.pre_period_days = 0;
+            // SKIP this experiment this tick (FIX 6): do NOT guess settings.
+            // Substituting `unit_context_types = ["user"]` would query the wrong
+            // context for an experiment randomized on another unit, silently
+            // overwriting good results with zeros and freezing the sequential
+            // running minimum. Leave `exp` untouched and signal the caller to
+            // `continue` without writing.
             tracing::warn!(
                 experiment_id = %exp.experiment_id,
                 iteration_id = %exp.iteration_id,
-                "failed to fetch iteration for sequential settings; leaving disabled: {e}"
+                "failed to fetch iteration snapshot; SKIPPING this experiment this tick (not writing guessed-settings results): {e}"
             );
+            Err(anyhow::anyhow!(
+                "GetExperimentIteration failed for iteration {}: {e}",
+                exp.iteration_id
+            ))
         }
     }
 }
@@ -541,7 +547,9 @@ mod tests {
         let mut client = make_client_with_iteration(vec![], Some(it)).await;
 
         let mut exp = running_exp(iter_id);
-        enrich_sequential_settings(&mut client, &mut exp).await;
+        enrich_sequential_settings(&mut client, &mut exp)
+            .await
+            .expect("enrich succeeds when the iteration is fetchable");
 
         assert!(exp.sequential.enabled);
         assert!((exp.sequential.alpha - 0.01).abs() < 1e-12);
@@ -566,7 +574,9 @@ mod tests {
         let mut exp = running_exp(iter_id);
         // Start from a wrong default to prove the fetch overwrites it.
         exp.unit_context_types = vec!["bogus".into()];
-        enrich_sequential_settings(&mut client, &mut exp).await;
+        enrich_sequential_settings(&mut client, &mut exp)
+            .await
+            .expect("enrich succeeds");
 
         assert_eq!(exp.unit_context_types, vec!["user", "account"]);
     }
@@ -581,23 +591,50 @@ mod tests {
         let mut exp = running_exp(iter_id);
         // Default is 0; the fetch must overwrite it from the snapshot.
         assert_eq!(exp.pre_period_days, 0);
-        enrich_sequential_settings(&mut client, &mut exp).await;
+        enrich_sequential_settings(&mut client, &mut exp)
+            .await
+            .expect("enrich succeeds");
         assert_eq!(
             exp.pre_period_days, 14,
             "pre_period_days must be hydrated from the iteration snapshot"
         );
     }
 
+    /// FIX 6: on RPC failure `enrich_sequential_settings` returns `Err` (so the
+    /// scheduler skips the experiment) and leaves `exp` UNTOUCHED — it does NOT
+    /// substitute guessed settings. Previously it reset `pre_period_days`/
+    /// `unit_context_types`/`sequential` to defaults and let the pass run with
+    /// the wrong context.
     #[tokio::test]
-    async fn enrich_resets_pre_period_days_to_zero_on_rpc_error() {
-        // No iteration configured → RPC fails; CUPED must be left off.
+    async fn enrich_returns_err_and_leaves_exp_untouched_on_rpc_error() {
+        // No iteration configured → get_experiment_iteration returns NotFound.
         let mut client = make_client_with_iteration(vec![], None).await;
         let mut exp = running_exp(Uuid::new_v4());
-        exp.pre_period_days = 14; // pretend a stale value
-        enrich_sequential_settings(&mut client, &mut exp).await;
+        // Seed non-default values that must SURVIVE the failed fetch (proving we
+        // skip rather than overwrite with a guess).
+        exp.pre_period_days = 14;
+        exp.sequential.enabled = true;
+        exp.unit_context_types = vec!["account".into()];
+
+        let res = enrich_sequential_settings(&mut client, &mut exp).await;
+
+        assert!(
+            res.is_err(),
+            "RPC failure must return Err so the caller skips"
+        );
+        // exp is left exactly as it was — NOT reset to ["user"] / disabled / 0.
         assert_eq!(
-            exp.pre_period_days, 0,
-            "RPC failure must reset pre_period_days to 0 (CUPED off)"
+            exp.unit_context_types,
+            vec!["account"],
+            "must NOT guess unit_context_types = [\"user\"] on failure"
+        );
+        assert!(
+            exp.sequential.enabled,
+            "exp must be left untouched on failure"
+        );
+        assert_eq!(
+            exp.pre_period_days, 14,
+            "exp must be left untouched on failure"
         );
     }
 
@@ -608,21 +645,9 @@ mod tests {
         let mut client = make_client_with_iteration(vec![], Some(it)).await;
         let mut exp = running_exp(iter_id);
         exp.unit_context_types = vec![];
-        enrich_sequential_settings(&mut client, &mut exp).await;
+        enrich_sequential_settings(&mut client, &mut exp)
+            .await
+            .expect("enrich succeeds (empty context types default to user)");
         assert_eq!(exp.unit_context_types, vec!["user"]);
-    }
-
-    #[tokio::test]
-    async fn enrich_sequential_settings_falls_back_to_disabled_on_rpc_error() {
-        // No iteration configured → get_experiment_iteration returns NotFound.
-        let mut client = make_client_with_iteration(vec![], None).await;
-        let mut exp = running_exp(Uuid::new_v4());
-        // Pretend it was somehow enabled; the failed fetch must reset to default.
-        exp.sequential.enabled = true;
-        enrich_sequential_settings(&mut client, &mut exp).await;
-        assert!(
-            !exp.sequential.enabled,
-            "RPC failure must leave sequential disabled"
-        );
     }
 }

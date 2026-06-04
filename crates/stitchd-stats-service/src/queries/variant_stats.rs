@@ -357,18 +357,15 @@ pub fn build_funnel_cells_query(
         iteration_end,
     );
 
-    // step predicates for windowFunnel (ITT bound folded into each step)
-    let step_predicate_phs: Vec<String> = cfg
-        .steps
-        .iter()
-        .map(|step| push_bind(&mut binds, QueryBind::Str(step.event_key.clone())))
-        .collect();
-    let step_predicates = step_predicate_phs
-        .iter()
-        .map(|ph| format!("me.metric_key = {ph} AND me.occurred_at >= asg.assigned_at"))
-        .collect::<Vec<_>>()
-        .join(",\n                ");
-
+    // CRITICAL: bind push order MUST match the order the `{pN}` placeholders
+    // appear TEXTUALLY in the assembled SQL, because
+    // `dispatch::rewrite_placeholders_to_clickhouse` rewrites `{pN}` → `?` in
+    // text order and ClickHouse binds positionally. The emitted SQL lays out
+    // `matched_events` (env / ctx / metric-key filters / end) BEFORE
+    // `ctx_funnel` (the windowFunnel step predicates), so the matched_events
+    // WHERE binds are pushed FIRST and the step-predicate binds LAST. (A prior
+    // version pushed the step predicates before the matched_events binds, which
+    // cross-bound every funnel query.)
     let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
     let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
     let metric_key_filter_phs: Vec<String> = cfg
@@ -382,6 +379,19 @@ pub fn build_funnel_cells_query(
         .collect::<Vec<_>>()
         .join(" OR ");
     let ev_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
+
+    // step predicates for windowFunnel (ITT bound folded into each step) —
+    // pushed LAST since `ctx_funnel` is the last CTE textually.
+    let step_predicate_phs: Vec<String> = cfg
+        .steps
+        .iter()
+        .map(|step| push_bind(&mut binds, QueryBind::Str(step.event_key.clone())))
+        .collect();
+    let step_predicates = step_predicate_phs
+        .iter()
+        .map(|ph| format!("me.metric_key = {ph} AND me.occurred_at >= asg.assigned_at"))
+        .collect::<Vec<_>>()
+        .join(",\n                ");
 
     let mode_arg = if cfg.count_repeats {
         String::new()
@@ -654,6 +664,105 @@ pub fn build_unit_values_query(
     Ok(BuiltQuery { sql, binds })
 }
 
+/// Build the per-**unit** PRE-period covariate query for the CUPED numeric path:
+/// each assigned unit's `X_pre`, summed over the metric's value in the
+/// pre-experiment window `[pre_start, pre_end)`.
+///
+/// This is the assignments-JOIN analogue of [`build_unit_values_query`] but over
+/// the pre-period window — it REPLACES the prior uncapped
+/// `(context_type, context_key) IN (…)` literal fetch (which risked
+/// `max_query_size` on large experiments AND ignored the metric's `on_field`).
+/// Like [`build_unit_values_query`] it:
+///
+/// * reuses the `assignments` CTE so only the experiment's assigned units in
+///   `context_type` are scanned (bounded by the assignment set, not an inlined
+///   IN-list), and
+/// * uses [`super::numeric_value_expr`] for the value expression — so a
+///   property-valued metric (`on_field`) reads `properties[on_field]` instead of
+///   silently summing the canonical `value_double`/`value_int` to 0.
+///
+/// The pre-period events are gated on the ABSOLUTE window
+/// `occurred_at >= pre_start AND occurred_at < pre_end` (NOT on `assigned_at` —
+/// the covariate is measured BEFORE exposure). A unit with no qualifying
+/// pre-period event contributes `x_pre = 0` (the LEFT JOIN keeps it).
+///
+/// Result rows carry `(context_key, x_pre)`; the caller joins each unit's
+/// `x_pre` to its post-period `Y` by `context_key`.
+///
+/// # Errors
+/// Returns [`QueryBuildError`] when the metric `where_clause` JsonLogic cannot
+/// be translated.
+#[allow(clippy::too_many_arguments)]
+pub fn build_unit_pre_values_query(
+    cfg: &AggregationConfig,
+    experiment_id: &str,
+    iteration_id: &str,
+    env_id: &str,
+    context_type: &str,
+    iteration_end: DateTime<Utc>,
+    pre_start: DateTime<Utc>,
+    pre_end: DateTime<Utc>,
+) -> Result<BuiltQuery, QueryBuildError> {
+    let pre_start_ms = pre_start.timestamp_millis();
+    let pre_end_ms = pre_end.timestamp_millis();
+    let mut binds = Vec::new();
+
+    let assignments_cte = emit_assignments_cte(
+        &mut binds,
+        experiment_id,
+        iteration_id,
+        env_id,
+        context_type,
+        iteration_end,
+    );
+
+    let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
+    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
+    let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
+    let pre_lo_ph = push_bind(&mut binds, QueryBind::I64(pre_start_ms));
+    let pre_hi_ph = push_bind(&mut binds, QueryBind::I64(pre_end_ms));
+    let value_expr = super::numeric_value_expr(cfg);
+
+    let extra_where = match cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n      AND ({frag})")
+        }
+        None => String::new(),
+    };
+
+    // Per-assigned-unit PRE-period metric sum over the absolute window
+    // [pre_start, pre_end). Keyed by context_key so the caller joins each
+    // unit's X_pre to its post-period Y. NOT reduced per variant.
+    let sql = format!(
+        "WITH\n\
+        assignments AS (\n\
+        {assignments_cte}\
+        ),\n\
+        pre_events AS (\n    \
+            SELECT\n        \
+                ctx_pair.2 AS context_key,\n        \
+                {value_expr} AS value\n    \
+            FROM events AS e\n    \
+            ARRAY JOIN e.contexts AS ctx_pair\n    \
+            WHERE e.env_id = toUUID({ev_env_ph})\n      \
+              AND e.metric_key = {event_ph}\n      \
+              AND ctx_pair.1 = {ev_ctx_ph}\n      \
+              AND e.occurred_at >= fromUnixTimestamp64Milli({pre_lo_ph})\n      \
+              AND e.occurred_at <  fromUnixTimestamp64Milli({pre_hi_ph}){extra_where}\n\
+        )\n\
+        SELECT\n    \
+            asg.context_key AS context_key,\n    \
+            sum(pe.value) AS x_pre\n\
+        FROM assignments AS asg\n\
+        LEFT JOIN pre_events AS pe\n    \
+            ON pe.context_key = asg.context_key\n\
+        GROUP BY asg.context_key"
+    );
+
+    Ok(BuiltQuery { sql, binds })
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -896,6 +1005,88 @@ mod tests {
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
+    /// Collect the `{pN}` placeholder indices in the order they appear
+    /// TEXTUALLY in the SQL string (first char of each `{pN}` token).
+    fn placeholder_order(sql: &str) -> Vec<usize> {
+        let mut out = Vec::new();
+        let bytes = sql.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'{' && bytes.get(i + 1) == Some(&b'p') {
+                let mut j = i + 2;
+                let mut num = String::new();
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    num.push(bytes[j] as char);
+                    j += 1;
+                }
+                if bytes.get(j) == Some(&b'}') && !num.is_empty() {
+                    out.push(num.parse().unwrap());
+                    i = j + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        out
+    }
+
+    /// FIX 1 REGRESSION GUARD: the funnel query's `{pN}` placeholders must
+    /// appear in STRICTLY ASCENDING order in the emitted SQL, and each bind in
+    /// `binds[N]` must be the value referenced at textual position N.
+    /// `dispatch::rewrite_placeholders_to_clickhouse` rewrites `{pN}` → `?` in
+    /// TEXT order and ClickHouse binds positionally, so any out-of-order `{pN}`
+    /// (the prior bug — step predicates pushed before the matched_events WHERE
+    /// binds even though `ctx_funnel` is emitted after `matched_events`)
+    /// cross-binds every funnel query.
+    #[test]
+    fn funnel_bind_order_is_left_to_right() {
+        let q = build_funnel_cells_query(&funnel_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end())
+            .unwrap();
+
+        // (a) placeholders appear textually in strictly ascending order.
+        let order = placeholder_order(&q.sql);
+        assert_eq!(
+            order,
+            (0..order.len()).collect::<Vec<_>>(),
+            "funnel {{pN}} must be textually ascending (push order == text order); got {order:?}\n{}",
+            q.sql
+        );
+
+        // (b) the bind vector aligns with that textual order.
+        // assignments CTE: env, exp, iter, ctx, end
+        assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[1], QueryBind::Str(EXP_ID.into()));
+        assert_eq!(q.binds[2], QueryBind::Str(ITER_ID.into()));
+        assert_eq!(q.binds[3], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[4], QueryBind::I64(end().timestamp_millis()));
+        // matched_events WHERE: env, ctx, step metric_key filters (view, checkout), end
+        assert_eq!(q.binds[5], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[6], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[7], QueryBind::Str("view".into()));
+        assert_eq!(q.binds[8], QueryBind::Str("checkout".into()));
+        assert_eq!(q.binds[9], QueryBind::I64(end().timestamp_millis()));
+        // ctx_funnel windowFunnel step predicates (view, checkout) — LAST.
+        assert_eq!(q.binds[10], QueryBind::Str("view".into()));
+        assert_eq!(q.binds[11], QueryBind::Str("checkout".into()));
+        assert_eq!(q.binds.len(), 12);
+
+        // The two windowFunnel step placeholders are the highest-numbered ones
+        // and live inside the windowFunnel(...) call (textually after the
+        // matched_events WHERE), proving the ordering fix concretely.
+        assert!(
+            q.sql
+                .contains("me.metric_key = {p10} AND me.occurred_at >= asg.assigned_at"),
+            "{}",
+            q.sql
+        );
+        assert!(
+            q.sql
+                .contains("me.metric_key = {p11} AND me.occurred_at >= asg.assigned_at"),
+            "{}",
+            q.sql
+        );
+    }
+
     // ── Percentile raw samples ─────────────────────────────────────────────
 
     #[test]
@@ -1010,6 +1201,105 @@ mod tests {
         assert_eq!(q.binds[7], QueryBind::Str("user".into()));
         assert_eq!(q.binds[8], QueryBind::I64(end().timestamp_millis()));
         assert_eq!(q.binds.len(), 9);
+    }
+
+    // ── Per-unit pre-period values (CUPED X_pre) — FIX 7 ────────────────────
+
+    fn pre_window() -> (DateTime<Utc>, DateTime<Utc>) {
+        // started_at = end()-30d, pre-period = 14d before that.
+        let started = Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap();
+        let pre_start = started - chrono::Duration::days(14);
+        (pre_start, started)
+    }
+
+    /// The pre-period query joins assignments (no IN-list), gates on the
+    /// ABSOLUTE `[pre_start, pre_end)` window (NOT `assigned_at`), and projects
+    /// `(context_key, x_pre)` per assigned unit.
+    #[test]
+    fn unit_pre_values_joins_assignments_and_uses_abs_window() {
+        let (lo, hi) = pre_window();
+        let q =
+            build_unit_pre_values_query(&sum_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end(), lo, hi)
+                .unwrap();
+        // Assignments-JOIN (bounded by the assignment set), NOT an inlined
+        // `(context_type, context_key) IN (...)` literal.
+        assert!(
+            q.sql.contains("FROM experiment_assignments AS a FINAL"),
+            "{}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains(" IN ("),
+            "must not inline an IN-list; got:\n{}",
+            q.sql
+        );
+        // Absolute pre-period bounds, NOT the ITT assigned_at bound.
+        assert!(
+            q.sql.contains("e.occurred_at >= fromUnixTimestamp64Milli")
+                && q.sql.contains("e.occurred_at <  fromUnixTimestamp64Milli"),
+            "{}",
+            q.sql
+        );
+        assert!(
+            !q.sql.contains("occurred_at >= asg.assigned_at"),
+            "pre-period is gated on the absolute window, not exposure; got:\n{}",
+            q.sql
+        );
+        // Per-unit projection.
+        assert!(
+            q.sql.contains("asg.context_key AS context_key"),
+            "{}",
+            q.sql
+        );
+        assert!(q.sql.contains("sum(pe.value) AS x_pre"), "{}", q.sql);
+        assert!(q.sql.contains("GROUP BY asg.context_key"), "{}", q.sql);
+    }
+
+    /// FIX 7: a property-valued metric (`on_field`) reads
+    /// `properties[on_field]` via `numeric_value_expr`, so X_pre is non-zero for
+    /// property-valued metrics (the old IN-list fetch read only value_double →
+    /// X_pre always 0 → CUPED no-op).
+    #[test]
+    fn unit_pre_values_honours_on_field_property_metric() {
+        let (lo, hi) = pre_window();
+        // sum_cfg has on_field = Some("revenue").
+        let q =
+            build_unit_pre_values_query(&sum_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end(), lo, hi)
+                .unwrap();
+        assert!(
+            q.sql.contains("toFloat64OrNull(e.properties['revenue'])"),
+            "property-valued metric must read properties[on_field]; got:\n{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn unit_pre_values_bind_order_is_left_to_right() {
+        let (lo, hi) = pre_window();
+        let q = build_unit_pre_values_query(
+            &count_cfg(),
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            "user",
+            end(),
+            lo,
+            hi,
+        )
+        .unwrap();
+        // assignments CTE: env, exp, iter, ctx, end
+        assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[1], QueryBind::Str(EXP_ID.into()));
+        assert_eq!(q.binds[2], QueryBind::Str(ITER_ID.into()));
+        assert_eq!(q.binds[3], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[4], QueryBind::I64(end().timestamp_millis()));
+        // pre_events: env, event_key, ctx, pre_lo, pre_hi
+        assert_eq!(q.binds[5], QueryBind::Str(ENV_ID.into()));
+        assert_eq!(q.binds[6], QueryBind::Str("checkout_completed".into()));
+        assert_eq!(q.binds[7], QueryBind::Str("user".into()));
+        assert_eq!(q.binds[8], QueryBind::I64(lo.timestamp_millis()));
+        assert_eq!(q.binds[9], QueryBind::I64(hi.timestamp_millis()));
+        assert_eq!(q.binds.len(), 10);
     }
 
     // ── Assignment counts ──────────────────────────────────────────────────

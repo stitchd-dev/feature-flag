@@ -343,3 +343,139 @@ async fn cuped_reduces_variance_and_tightens_ci() {
         cuped_blob["theta"].as_f64().unwrap_or(f64::NAN)
     );
 }
+
+/// FIX 7 (live): a PROPERTY-VALUED metric (`on_field = Some("amount")`) — the
+/// value lives in `properties['amount']`, NOT the canonical `value_double`.
+/// The old IN-list pre-period fetch read `value_double`, so X_pre was always 0
+/// for such metrics → CUPED silently no-op'd. The new assignments-JOIN
+/// pre-period query uses `numeric_value_expr` (`properties[on_field]`), so X_pre
+/// is real and CUPED reduces variance. We assert a positive
+/// `variance_reduction_pct` for a property-valued metric — impossible under the
+/// old path.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs running clickhouse"]
+async fn cuped_on_field_property_metric_reduces_variance() {
+    let ch = make_client();
+    stitchd_event_writer::migrations::run(&ch)
+        .await
+        .expect("apply CH migrations");
+
+    let env_id = Uuid::new_v4();
+    let exp_id = Uuid::new_v4();
+    let iter_id = Uuid::new_v4();
+    let flag_id = Uuid::new_v4();
+    let started_at = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let iter_end = Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap();
+    let assigned_at = started_at;
+    let post_event_at = started_at + Duration::hours(1);
+    let pre_event_at = started_at - Duration::days(7);
+    let metric_key = format!("amount_{}", &exp_id.to_string()[..8]);
+    let n_per_variant = 800usize;
+
+    let mk_assignment = |variant: &str, key: String| AssignmentRow {
+        experiment_id: exp_id,
+        iteration_id: iter_id,
+        env_id,
+        flag_id,
+        matched_rule_id: None,
+        context_type: "user".into(),
+        context_key: key,
+        variant_key: variant.into(),
+        assigned_at,
+        version: -assigned_at.timestamp_millis(),
+    };
+    let mut assignments = Vec::with_capacity(2 * n_per_variant);
+    for i in 0..n_per_variant {
+        assignments.push(mk_assignment("control", format!("pc_{i}")));
+        assignments.push(mk_assignment("treatment", format!("pt_{i}")));
+    }
+    insert_assignments(&ch, &assignments).await;
+
+    // Value carried ONLY in properties['amount'] (value_double is None) — the
+    // metric reads `on_field = "amount"`.
+    let mk_prop_event = |key: String, at: chrono::DateTime<Utc>, amount: f64| EventRow {
+        env_id,
+        contexts: vec![("user".into(), key)],
+        metric_key: metric_key.clone(),
+        value_bool: None,
+        value_int: None,
+        value_double: None,
+        timestamp: at,
+        ingested_at: at,
+        properties: vec![("amount".into(), format!("{amount}"))],
+        occurred_at: at,
+    };
+    let mut events = Vec::with_capacity(4 * n_per_variant);
+    for i in 0..n_per_variant {
+        let spread = (i % 50) as f64;
+        let jitter = ((i % 7) as f64) * 0.1;
+        let y_c = 100.0 + spread;
+        let y_t = 120.0 + spread;
+        let x_pre = spread - jitter;
+        events.push(mk_prop_event(format!("pc_{i}"), post_event_at, y_c));
+        events.push(mk_prop_event(format!("pc_{i}"), pre_event_at, x_pre));
+        events.push(mk_prop_event(format!("pt_{i}"), post_event_at, y_t));
+        events.push(mk_prop_event(format!("pt_{i}"), pre_event_at, x_pre));
+    }
+    insert_events(&ch, &events).await;
+
+    let now = Utc::now();
+    let metric = MetricDefinition {
+        id: MetricId::new(),
+        environment_id: EnvironmentId::from_uuid(env_id),
+        key: metric_key.clone(),
+        name: "amount".into(),
+        description: None,
+        kind: MetricKind::Aggregation(AggregationConfig {
+            event_key: metric_key.clone(),
+            aggregator: AggregationOperator::Sum,
+            on_field: Some("amount".into()), // PROPERTY-valued
+            where_clause: None,
+        }),
+        goal_direction: GoalDirection::Increase,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    };
+    let metrics: HashMap<Uuid, MetricDefinition> = [(metric.id.as_uuid(), metric.clone())]
+        .into_iter()
+        .collect();
+
+    let exp = RunningExperiment {
+        experiment_id: exp_id,
+        env_id,
+        iteration_id: iter_id,
+        metric_ids: vec![metric.id.as_uuid()],
+        variant_keys: vec!["control".into(), "treatment".into()],
+        started_at,
+        unit_context_types: vec!["user".into()],
+        pre_period_days: 14,
+        sequential: SequentialSettings {
+            enabled: false,
+            alpha: 0.05,
+            tau_squared: None,
+            min_sample_size: 100,
+        },
+    };
+    let reader = ClickHouseCellReader::new(Arc::new(ch.clone()));
+    let after = iter_end + Duration::days(1);
+    let summaries = run_stats_compute(&reader, &ch, &exp, &metrics, iter_end, after)
+        .await
+        .expect("CUPED compute pass over a property-valued metric should succeed");
+    let s = &summaries[0];
+    let vstats = s.variant_stats.as_object().expect("variant_stats object");
+    let cuped_blob = vstats
+        .get("cuped")
+        .expect("variant_stats carries the cuped summary");
+    let vrp = cuped_blob["variance_reduction_pct"]
+        .as_f64()
+        .expect("variance_reduction_pct");
+    assert!(
+        vrp > 0.0,
+        "property-valued (on_field) X_pre must be read from properties[...] so CUPED reduces \
+         variance; got {vrp} (old IN-list fetch read value_double → X_pre=0 → no-op)"
+    );
+    // Frequentist + bayesian still produced on the adjusted stats.
+    assert!(s.frequentist_result.is_some(), "freq on adjusted stats");
+}
