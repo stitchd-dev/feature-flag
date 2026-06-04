@@ -65,9 +65,17 @@ seqtest_20260603 additions (Sequential Testing — always-valid inference):
 <!--
 post-compute-pass follow-ups resolved on track/seqtest_20260603 (NOT yet merged to main):
 - ExperimentIteration proto gained pre_period_days (additive); stats-service enrich captures it.
-- compute.rs CUPED only adjusts the canonical numeric value (value_double/value_int); metrics whose
-  value lives in a properties[on_field] path no-op CUPED (correct, not wrong) until cuped_fetch threads
-  the value expression. Percentile display scalar is still a value_sum/n stand-in (significance is real).
+- A max-effort code review (feature-flag-06o) fixed 15 findings, incl: funnel sufficient-stats bind-order
+  misalignment (all funnel queries were erroring); phantom variant_stats["cuped"]/["srm"] leaking as a
+  variant on the read path (read now skips non-number values); analyze_numeric/count/funnel now guard
+  n<2/n<1 -> insufficient (no NaN->false-significance); SRM zero-fills configured-but-absent variants
+  (variant_keys now plumbed PG list_all_running -> ListRunningExperiments -> scheduler); CUPED + percentile
+  POINT values are now the observed-mean / real empirical quantile (not the adjusted mean / per-unit mean);
+  CUPED now honors the metric on_field via an assignments-JOIN per-unit pre-period query (was canonical-
+  column-only + an uncapped IN-list); GetExperimentIteration RPC failure now SKIPS the experiment that
+  tick (no silent ["user"] fallback); the sequential min-sample gate no longer applies when sequential is
+  disabled; on_field / JsonLogic var field names are escaped before properties['...'] interpolation; and
+  erf/norm_cdf/Z95/ratio-delta-var/bayes-normal-contrast were de-duplicated in stitchd-core.
 -->
 
 
