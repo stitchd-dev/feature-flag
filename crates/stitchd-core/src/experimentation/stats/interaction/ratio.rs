@@ -95,6 +95,18 @@ impl RatioAgg {
     }
 }
 
+/// Test-only accessor exercising the **real** interaction-frequentist per-cell
+/// ratio-variance path (the production [`RatioAgg::add`] + [`RatioAgg::ratio_var`]
+/// used by every term's collapse) for a single cell. Lets the cross-engine
+/// single-source pin in `bayes_continuous` assert this path against the canonical
+/// [`super::super::ratio_delta_var`] without re-deriving the formula.
+#[cfg(test)]
+pub(super) fn freq_cell_ratio_var(cell: &NdRatioCell) -> Option<(f64, f64)> {
+    let mut agg = RatioAgg::default();
+    agg.add(cell);
+    agg.ratio_var()
+}
+
 /// Public entry point — see the module contract.
 pub fn ratio_terms(cells: &[NdRatioCell], order: usize) -> Vec<TermResult> {
     if cells.is_empty() || order < 2 {

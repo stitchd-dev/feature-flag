@@ -22,7 +22,8 @@
 //! We summarise that Normal:
 //!
 //! - `expected` = contrast mean,
-//! - `ci_low` / `ci_high` = `expected ± 1.96·sd` (central 95 % credible interval),
+//! - `ci_low` / `ci_high` = `expected ± Z95·sd` (central 95 % credible interval,
+//!   with the shared `Z95 = Φ⁻¹(0.975) ≈ 1.959964`),
 //! - `prob` = posterior probability the effect is non-null *in its estimated
 //!   direction* = `Φ(|expected|/sd)` via [`super::norm_cdf`]. A clear interaction
 //!   drives `prob → 1`; pure noise → `prob ≈ 0.5`.
@@ -377,10 +378,15 @@ mod tests {
     }
 
     /// Golden bit-for-bit snapshot of `binary_bayes` on a fully-populated 2×2×2
-    /// grid at order 3 (mains + all pairwise + the three-way). Captured from the
-    /// implementation before the shared-driver refactor (review #14); pins every
-    /// posterior field's exact `f64` bits so any future change to the numeric
-    /// output — the thing the refactor must NOT alter — is caught immediately.
+    /// grid at order 3 (mains + all pairwise + the three-way). Pins every
+    /// posterior field's exact `f64` bits so any unintended change to the numeric
+    /// output is caught immediately.
+    ///
+    /// The `prob` / `expected` bits are unchanged from the original snapshot
+    /// (review #14, pre shared-driver refactor); the `ci_low` / `ci_high` bits
+    /// were re-captured when the credible-interval multiplier was unified from
+    /// the local `1.96` onto the shared `Z95 = Φ⁻¹(0.975) ≈ 1.959964` — the only
+    /// intended numeric shift (≈0.002 % on the CI half-width).
     #[test]
     fn binary_bayes_golden_bits_order3() {
         let cells = [
@@ -399,50 +405,50 @@ mod tests {
                 TermKind::Main { factor: 0 },
                 4607182418800017408,
                 4597381955900730207,
-                4596639774842423150,
-                4598124136959037264,
+                4596639788474320140,
+                4598124123327140274,
             ),
             (
                 TermKind::Main { factor: 1 },
                 4607182418800017408,
                 4592540797275680476,
-                4591015029078547272,
-                4593869092695359800,
+                4591015057102861097,
+                4593869078683202887,
             ),
             (
                 TermKind::Main { factor: 2 },
                 4607182418800017408,
                 4591190561284963524,
-                4589660976178398026,
-                4592720146391529022,
+                4589661004272818350,
+                4592720118297108698,
             ),
             (
                 TermKind::TwoWay { a: 0, b: 1 },
                 4607182418800017163,
                 4594790491735442412,
-                4592979283136503799,
-                4596255531943679964,
+                4592979336954307367,
+                4596255505034778180,
             ),
             (
                 TermKind::TwoWay { a: 0, b: 2 },
                 4607018327897214214,
                 4586457989054090256,
-                4568505250422810416,
-                4590762875309695190,
+                4568506984224327904,
+                4590762821128397769,
             ),
             (
                 TermKind::TwoWay { a: 1, b: 2 },
                 4607181717041538442,
                 4590511790965868192,
-                4585794322913696155,
-                4593542410329620594,
+                4585794434242570741,
+                4593542354665183302,
             ),
             (
                 TermKind::ThreeWay { a: 0, b: 1, c: 2 },
                 4607029618757127072,
                 4590953736851014000,
-                4574285018869530768,
-                4595218742831014252,
+                4574286726923736080,
+                4595218689454320336,
             ),
         ];
 
@@ -508,7 +514,7 @@ mod tests {
         assert!(find(&terms, TermKind::TwoWay { a: 0, b: 1 }).is_none());
     }
 
-    /// CI is symmetric about `expected` at ±1.96·sd, and width is positive.
+    /// CI is symmetric about `expected` at ±Z95·sd, and width is positive.
     #[test]
     fn credible_interval_is_symmetric() {
         let cells = [
