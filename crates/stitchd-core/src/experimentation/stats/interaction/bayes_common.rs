@@ -23,7 +23,8 @@
 //! 4. **Form the contrast posterior** `Normal(Σ coef·estᵢ, Σ coef²·varᵢ)` over the
 //!    distinct participating cells ([`run_terms`]).
 //! 5. **Summarise** that Normal ([`summarise`]):
-//!    `prob = Φ(|mean|/sd)`, `expected = mean`, `ci = mean ± 1.96·sd`; a term is
+//!    `prob = Φ(|mean|/sd)`, `expected = mean`, `ci = mean ± Z95·sd` (the shared
+//!    `Φ⁻¹(0.975) ≈ 1.959964`); a term is
 //!    omitted when a participating factor has < 2 levels, a participating cell is
 //!    degenerate / absent, or the contrast sd is 0 / non-finite.
 //!
@@ -32,10 +33,8 @@
 
 use std::collections::BTreeMap;
 
+use super::super::Z95;
 use super::{BayesianInteraction, TermKind};
-
-/// Two-sided 95 % normal quantile (z₀.₉₇₅) for the central credible interval.
-pub(super) const Z_95: f64 = 1.96;
 
 /// A per-cell point estimate and its posterior variance, as produced by a
 /// worker's collapse closure.
@@ -211,8 +210,8 @@ pub(super) fn summarise(mean: f64, var: f64) -> Option<BayesianInteraction> {
     Some(BayesianInteraction {
         prob,
         expected: mean,
-        ci_low: mean - Z_95 * sd,
-        ci_high: mean + Z_95 * sd,
+        ci_low: mean - Z95 * sd,
+        ci_high: mean + Z95 * sd,
     })
 }
 

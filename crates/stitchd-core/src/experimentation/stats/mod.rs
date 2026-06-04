@@ -63,11 +63,15 @@ pub(crate) fn norm_cdf(z: f64) -> f64 {
 /// Var(R) ≈ (1 / mean_den²) · (var_num − 2·R·cov + R²·var_den) / n
 /// ```
 ///
-/// This is the single source of truth for the ratio delta-method variance,
-/// shared by [`sequential::RatioGroupStats::ratio_var`], the frequentist /
-/// Bayesian `analyze_ratio` contrasts (via that method), and the
-/// [`interaction`] ratio paths (`interaction::ratio` and the ratio branch of
-/// `interaction::bayes_continuous`).
+/// This is the **single canonical source** for ALL ratio-variance computations
+/// across every engine: every caller routes its delta-method `Var(R)` through
+/// here so the formula can never silently diverge. The callers are
+/// [`sequential::RatioGroupStats::ratio_var`], the frequentist / Bayesian
+/// `analyze_ratio` contrasts (via that method), and the [`interaction`] ratio
+/// paths (`interaction::ratio`'s `RatioAgg`/`NdRatioCell::ratio_var` and the
+/// ratio branch of `interaction::bayes_continuous`, i.e. `ratio_cell_post`). A
+/// regression test (`ratio_delta_var_is_the_single_ratio_variance_source`) pins
+/// that these paths stay numerically identical.
 ///
 /// Returns `None` when the group is degenerate: `n < 2`, `den_sum ≤ 0`,
 /// `mean_den` non-finite or `≤ 0`, or a non-finite / non-positive `Var(R)`.
