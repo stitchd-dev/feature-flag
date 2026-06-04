@@ -51,18 +51,16 @@
 //! variance before the frequentist/bayesian/sequential analyses
 //! ([`compute_cuped_numeric`]):
 //!
-//! 1. the post-period per-**unit** `Y` is fetched via
-//!    [`crate::queries::variant_stats::build_unit_values_query`] (ITT, keeping
-//!    `context_key` so each unit's `Y` can be paired with its `X_pre`);
-//! 2. the pre-period covariate `X_pre` is fetched PER ASSIGNED UNIT via an
-//!    assignments-JOIN over `[started_at − pre_period_days days, started_at)`
-//!    ([`crate::queries::variant_stats::build_unit_pre_values_query`]), using
-//!    the SAME `on_field`-aware value expression as `Y` and joined to `Y` on
-//!    `context_key`. (This replaced the prior uncapped `(context_type,
-//!    context_key) IN (…)` literal fetch — see FIX 7 — which risked
-//!    `max_query_size` on large experiments and ignored `on_field`. The legacy
-//!    [`crate::cuped_fetch::fetch_pre_period_observations`] is retained but no
-//!    longer on the live path.);
+//! 1. the post-period per-**unit** `Y` AND the pre-period covariate `X_pre` are
+//!    fetched together in ONE query over ONE shared `events` scan
+//!    ([`crate::queries::variant_stats::build_unit_values_with_pre_query`],
+//!    FIX B5), keyed per assigned unit (`context_key`). `X_pre` is measured over
+//!    `[started_at − pre_period_days days, started_at)` using the SAME
+//!    `on_field`-aware value expression as `Y`, via an assignments-JOIN. (This
+//!    replaced the prior uncapped `(context_type, context_key) IN (…)` literal
+//!    fetch — see FIX 7 — which risked `max_query_size` on large experiments and
+//!    ignored `on_field`; the two former per-unit scans were then merged into one
+//!    to halve the ClickHouse reads and drop the Rust re-join.);
 //! 3. [`stitchd_core::experimentation::stats::cuped::apply_cuped`] is called
 //!    ONCE over all units (POOLED θ across variants for unbiasedness), then the
 //!    order-aligned `adjusted_values` are split back per variant into Numeric
@@ -100,7 +98,7 @@ use crate::dispatch::rewrite_placeholders_to_clickhouse;
 use crate::queries::QueryBind;
 use crate::queries::variant_stats::{
     build_aggregation_cells_query, build_assignment_counts_query, build_funnel_cells_query,
-    build_percentile_samples_query, build_ratio_cells_query, build_unit_values_query,
+    build_percentile_samples_query, build_ratio_cells_query, build_unit_values_with_pre_query,
 };
 use crate::results_writer::{MetricSummary, VariantPoint};
 use crate::scheduler::RunningExperiment;
@@ -164,25 +162,16 @@ struct ChAssignmentCountRow {
     n: u64,
 }
 
-/// Per-**unit** post-period value row (CUPED numeric path): one assigned unit's
-/// `context_key`, its `variant_key`, and its post-exposure metric sum `y`
-/// (ITT — `0` for a non-firing unit). The `context_key` is the join key against
-/// the pre-period covariate map; `context_type` is not re-projected (the query
-/// is scoped to one).
+/// Per-**unit** CUPED row (single merged query — FIX B5): one assigned unit's
+/// `context_key`, its `variant_key`, its post-exposure metric sum `y`
+/// (ITT — `0` for a non-firing unit), and its pre-period covariate `x_pre`
+/// (`0` for a unit with no pre-period event). Both sums come from one shared
+/// `events` scan; `context_type` is not re-projected (the query is scoped to one).
 #[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
-struct ChUnitValueRow {
+struct ChUnitValueWithPreRow {
     context_key: String,
     variant_key: String,
     y: f64,
-}
-
-/// Per-**unit** pre-period covariate row (CUPED numeric path, FIX 7): one
-/// assigned unit's `context_key` and its pre-period metric sum `x_pre`
-/// (`0` for a unit with no pre-period event). The join key against
-/// [`ChUnitValueRow`] is `context_key`.
-#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
-struct ChUnitPreValueRow {
-    context_key: String,
     x_pre: f64,
 }
 
@@ -256,28 +245,23 @@ pub trait CellReader: Send + Sync {
         iteration_end: DateTime<Utc>,
     ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error>;
 
-    /// Per-assigned-unit post-period numeric values for the CUPED path. Returns
-    /// one `(context_key, variant_key, y)` per assigned unit in `context_type`
-    /// (`y` = post-exposure metric sum, `0` for non-firing units, ITT). The
-    /// `context_key` is the join key against the pre-period covariate fetch.
-    async fn unit_values(
-        &self,
-        cfg: &AggregationConfig,
-        experiment_id: Uuid,
-        iteration_id: Uuid,
-        env_id: Uuid,
-        context_type: &str,
-        iteration_end: DateTime<Utc>,
-    ) -> Result<Vec<(String, String, f64)>, anyhow::Error>;
-
-    /// Per-assigned-unit PRE-period covariate `X_pre` for the CUPED path
-    /// (FIX 7): the metric's value summed over `[pre_start, pre_end)` per
-    /// assigned unit in `context_type`, via an assignments-JOIN (no inlined
-    /// IN-list) using the metric's `on_field`-aware value expression. Returns
-    /// `(context_key, x_pre)` per assigned unit (`x_pre = 0` for a unit with no
-    /// pre-period event); `context_key` is the join key against [`unit_values`].
+    /// Per-assigned-unit post-period `Y` AND pre-period covariate `X_pre` for the
+    /// CUPED path, fetched in ONE query over ONE shared `events` scan (FIX B5).
+    /// Returns one `(context_key, variant_key, y, x_pre)` per assigned unit in
+    /// `context_type`, where:
+    ///
+    /// * `y` = post-exposure metric sum over `[assigned_at, iteration_end)`
+    ///   (`0` for non-firing units, ITT);
+    /// * `x_pre` = pre-period metric sum over the ABSOLUTE window
+    ///   `[pre_start, pre_end)` (`0` for a unit with no pre-period event), via an
+    ///   assignments-JOIN (no inlined IN-list) using the metric's `on_field`-aware
+    ///   value expression (FIX 7 — a property-valued metric is not silently 0).
+    ///
+    /// Because each row carries both values, the caller needs no Rust `HashMap`
+    /// re-join. The two windows are disjoint by construction (`pre_end <=
+    /// assigned_at`), so no event is double-counted.
     #[allow(clippy::too_many_arguments)]
-    async fn unit_pre_values(
+    async fn unit_values_with_pre(
         &self,
         cfg: &AggregationConfig,
         experiment_id: Uuid,
@@ -287,7 +271,7 @@ pub trait CellReader: Send + Sync {
         iteration_end: DateTime<Utc>,
         pre_start: DateTime<Utc>,
         pre_end: DateTime<Utc>,
-    ) -> Result<Vec<(String, f64)>, anyhow::Error>;
+    ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error>;
 }
 
 /// Aggregation cell: the event-side sufficient statistics for one variant
@@ -486,33 +470,8 @@ impl CellReader for ClickHouseCellReader {
             .collect())
     }
 
-    async fn unit_values(
-        &self,
-        cfg: &AggregationConfig,
-        experiment_id: Uuid,
-        iteration_id: Uuid,
-        env_id: Uuid,
-        context_type: &str,
-        iteration_end: DateTime<Utc>,
-    ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
-        let built = build_unit_values_query(
-            cfg,
-            &experiment_id.to_string(),
-            &iteration_id.to_string(),
-            &env_id.to_string(),
-            context_type,
-            iteration_end,
-        )?;
-        let rows = bind_query(&self.client, built.sql, built.binds)
-            .fetch_all::<ChUnitValueRow>()
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| (r.context_key, r.variant_key, r.y))
-            .collect())
-    }
-
-    async fn unit_pre_values(
+    #[allow(clippy::too_many_arguments)]
+    async fn unit_values_with_pre(
         &self,
         cfg: &AggregationConfig,
         experiment_id: Uuid,
@@ -522,8 +481,8 @@ impl CellReader for ClickHouseCellReader {
         iteration_end: DateTime<Utc>,
         pre_start: DateTime<Utc>,
         pre_end: DateTime<Utc>,
-    ) -> Result<Vec<(String, f64)>, anyhow::Error> {
-        let built = crate::queries::variant_stats::build_unit_pre_values_query(
+    ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error> {
+        let built = build_unit_values_with_pre_query(
             cfg,
             &experiment_id.to_string(),
             &iteration_id.to_string(),
@@ -534,9 +493,12 @@ impl CellReader for ClickHouseCellReader {
             pre_end,
         )?;
         let rows = bind_query(&self.client, built.sql, built.binds)
-            .fetch_all::<ChUnitPreValueRow>()
+            .fetch_all::<ChUnitValueWithPreRow>()
             .await?;
-        Ok(rows.into_iter().map(|r| (r.context_key, r.x_pre)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.context_key, r.variant_key, r.y, r.x_pre))
+            .collect())
     }
 }
 
@@ -843,7 +805,15 @@ fn empirical_quantile(samples: &[f64], q: f64) -> f64 {
     if samples.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f64> = samples.to_vec();
+    // FIX B3: drop non-finite samples (NaN / ±Inf) BEFORE sorting. `partial_cmp`
+    // returns `None` for any NaN comparison, so with `.unwrap_or(Equal)` a stray
+    // NaN/Inf can sort to (or near) the interpolation index and be returned as
+    // the displayed quantile. Filtering first keeps the type-7 math operating on
+    // a totally-ordered finite set; an all-non-finite sample degrades to 0.0.
+    let mut sorted: Vec<f64> = samples.iter().copied().filter(|x| x.is_finite()).collect();
+    if sorted.is_empty() {
+        return 0.0;
+    }
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = sorted.len();
     if n == 1 {
@@ -1384,28 +1354,30 @@ async fn compute_sequential(
 
 /// Run the numeric CUPED pipeline for one `(metric, context_type)`:
 ///
-/// 1. fetch the post-period per-unit `Y` (`reader.unit_values`) — one
-///    `(context_key, variant_key, y)` per assigned unit (ITT, `y = 0` for
-///    non-firing units);
-/// 2. fetch the pre-period covariate `X_pre` per assigned unit via an
-///    assignments-JOIN over the window
-///    `[started_at − pre_period_days days, started_at)`
-///    (`reader.unit_pre_values` → [`crate::queries::variant_stats::build_unit_pre_values_query`]).
-///    This REPLACES the prior uncapped `(context_type, context_key) IN (…)`
-///    literal fetch (FIX 7): the JOIN is bounded by the assignment set (no
-///    `max_query_size` blow-up on large experiments) AND uses the metric's
-///    `on_field`-aware value expression (a property-valued metric is no longer
-///    silently `X_pre = 0`);
-/// 3. assemble per-unit [`CupedUnit`]s (preserving order, `x_pre = 0` when the
-///    unit had no pre-period events) by joining `Y` and `X_pre` on `context_key`;
-/// 4. call [`cuped_adjusted_variant_stats`] (pooled θ across ALL variants) → the
+/// 1. fetch the post-period per-unit `Y` AND the pre-period covariate `X_pre` in
+///    ONE query over ONE shared `events` scan
+///    (`reader.unit_values_with_pre` →
+///    [`crate::queries::variant_stats::build_unit_values_with_pre_query`], FIX B5)
+///    — one `(context_key, variant_key, y, x_pre)` per assigned unit (ITT,
+///    `y = 0` for non-firing units; `x_pre = 0` for units with no pre-period
+///    event). `Y` is the post-exposure sum over `[assigned_at, iteration_end)`;
+///    `X_pre` is the sum over `[started_at − pre_period_days days, started_at)`.
+///    Both use the metric's `on_field`-aware value expression via an
+///    assignments-JOIN (no inlined `(context_type, context_key) IN (…)` literal,
+///    so no `max_query_size` blow-up and no silent `X_pre = 0` for property
+///    metrics — FIX 7). Merging the two former scans halves the ClickHouse reads
+///    and removes the Rust `HashMap` re-join;
+/// 2. assemble per-unit [`CupedUnit`]s (preserving order) — `Y` and `X_pre`
+///    already arrive paired per row;
+/// 3. call [`cuped_adjusted_variant_stats`] (pooled θ across ALL variants) → the
 ///    per-variant adjusted Numeric [`VariantStats`] + raw means +
 ///    `variance_reduction_pct`.
 ///
-/// Returns `Ok(None)` when there are no assigned units (nothing to adjust).
-/// Pre-period fetch failures are logged and degrade to `x_pre = 0` for every
-/// unit (CUPED becomes a no-op, `apply_cuped` falls back to raw Y) rather than
-/// failing the whole compute pass.
+/// Returns `Ok(None)` when there are no assigned units (nothing to adjust). A
+/// ClickHouse failure of the (single) per-unit fetch propagates and aborts the
+/// pass — there is no longer a separate pre-period fetch that can fail
+/// independently, so the prior "degrade `X_pre` to 0 on pre-fetch error" path is
+/// gone (the merged query yields both `Y` and `X_pre` atomically or neither).
 async fn compute_cuped_numeric(
     reader: &dyn CellReader,
     exp: &RunningExperiment,
@@ -1414,29 +1386,16 @@ async fn compute_cuped_numeric(
     sample_sizes: &HashMap<String, u64>,
     iteration_end: DateTime<Utc>,
 ) -> Result<Option<CupedAdjusted>, anyhow::Error> {
-    // 1. Post-period per-unit Y.
-    let unit_rows = reader
-        .unit_values(
-            cfg,
-            exp.experiment_id,
-            exp.iteration_id,
-            exp.env_id,
-            context_type,
-            iteration_end,
-        )
-        .await?;
-    if unit_rows.is_empty() {
-        return Ok(None);
-    }
-
-    // 2. Pre-period covariate X_pre per assigned unit (assignments-JOIN, no
-    // IN-list, on_field-aware — FIX 7) over [started_at − pre_period_days,
-    // started_at). A fetch failure degrades to x_pre = 0 (CUPED no-op) rather
-    // than aborting the compute pass.
+    // 1+2. Post-period per-unit Y AND pre-period covariate X_pre in ONE query /
+    // ONE shared events scan (FIX B5): each row already carries both, so no Rust
+    // HashMap re-join is needed. The pre window is
+    // [started_at − pre_period_days, started_at); X_pre is on_field-aware
+    // (assignments-JOIN, no IN-list — FIX 7). The two windows are carved by two
+    // sumIf and are disjoint by construction (pre_end <= assigned_at).
     let pre_end = exp.started_at;
     let pre_start = pre_end - chrono::Duration::days(i64::from(exp.pre_period_days));
-    let x_pre_rows = match reader
-        .unit_pre_values(
+    let unit_rows = reader
+        .unit_values_with_pre(
             cfg,
             exp.experiment_id,
             exp.iteration_id,
@@ -1446,28 +1405,19 @@ async fn compute_cuped_numeric(
             pre_start,
             pre_end,
         )
-        .await
-    {
-        Ok(rows) => rows,
-        Err(e) => {
-            tracing::warn!(
-                metric_key = %cfg.event_key,
-                context_type = %context_type,
-                "compute: CUPED pre-period fetch failed; falling back to x_pre=0 (CUPED no-op): {e}"
-            );
-            Vec::new()
-        }
-    };
-    let x_pre_map: HashMap<String, f64> = x_pre_rows.into_iter().collect();
+        .await?;
+    if unit_rows.is_empty() {
+        return Ok(None);
+    }
 
-    // 3. Build per-unit CupedUnits (preserving order), joining Y (post) to
-    // X_pre (pre) by context_key.
+    // 3. Build per-unit CupedUnits, preserving order. Y and X_pre arrive paired
+    // per unit (no join).
     let units: Vec<CupedUnit> = unit_rows
         .into_iter()
-        .map(|(ck, vk, y)| CupedUnit {
+        .map(|(_ck, vk, y, x_pre)| CupedUnit {
             variant_key: vk,
             y,
-            x_pre: x_pre_map.get(&ck).copied().unwrap_or(0.0),
+            x_pre,
         })
         .collect();
 
@@ -2297,6 +2247,39 @@ mod tests {
         assert!((empirical_quantile(&[42.0], 90.0) - 42.0).abs() < 1e-9);
     }
 
+    /// FIX B3: a stray non-finite sample (NaN / ±Inf) must NOT land at the
+    /// interpolation index and be returned as the displayed quantile. Non-finite
+    /// samples are filtered out before sorting, so the result is the finite
+    /// quantile of the remaining values.
+    #[test]
+    fn empirical_quantile_filters_non_finite_samples() {
+        // NaN mixed into the bulk: without the filter, `partial_cmp` returns
+        // `None` for NaN comparisons (→ treated as Equal) and the NaN can sort
+        // to the interpolation index, returning NaN. After the filter the P50 of
+        // {1,2,3,4,5} is 3.0.
+        let s = [
+            1.0,
+            f64::NAN,
+            3.0,
+            2.0,
+            f64::INFINITY,
+            5.0,
+            4.0,
+            f64::NEG_INFINITY,
+        ];
+        let p50 = empirical_quantile(&s, 50.0);
+        assert!(p50.is_finite(), "quantile must be finite, got {p50}");
+        assert!(
+            (p50 - 3.0).abs() < 1e-9,
+            "P50 of the finite subset {{1,2,3,4,5}} should be 3.0, got {p50}"
+        );
+
+        // A sample that is ENTIRELY non-finite degrades to the empty-sample
+        // result (0.0) rather than propagating NaN/Inf.
+        let all_bad = [f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+        assert_eq!(empirical_quantile(&all_bad, 90.0), 0.0);
+    }
+
     // ── point_value ──────────────────────────────────────────────────────────
 
     #[test]
@@ -2688,18 +2671,8 @@ mod tests {
         ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error> {
             Ok(HashMap::new())
         }
-        async fn unit_values(
-            &self,
-            _cfg: &AggregationConfig,
-            _e: Uuid,
-            _i: Uuid,
-            _v: Uuid,
-            _ct: &str,
-            _end: DateTime<Utc>,
-        ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
-            Ok(Vec::new())
-        }
-        async fn unit_pre_values(
+        #[allow(clippy::too_many_arguments)]
+        async fn unit_values_with_pre(
             &self,
             _cfg: &AggregationConfig,
             _e: Uuid,
@@ -2709,7 +2682,7 @@ mod tests {
             _end: DateTime<Utc>,
             _ps: DateTime<Utc>,
             _pe: DateTime<Utc>,
-        ) -> Result<Vec<(String, f64)>, anyhow::Error> {
+        ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error> {
             Ok(Vec::new())
         }
     }

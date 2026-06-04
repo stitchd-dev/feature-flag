@@ -56,8 +56,8 @@ pub(crate) fn numeric_value_expr(cfg: &stitchd_core::metric::AggregationConfig) 
 /// Escape a value for interpolation inside a single-quoted ClickHouse string
 /// literal (backslash + single-quote). Used for the `properties['…']` map-key
 /// when the key comes from admin-controlled free-form input (`on_field`,
-/// JsonLogic `var` field names) — see FIX 9. Mirrors the same escaping
-/// `cuped_fetch::clickhouse_escape` applies to the string literals it emits.
+/// JsonLogic `var` field names) — see FIX 9. Backslash + single-quote is the
+/// same escaping the per-unit CUPED value-expression path relies on.
 pub(crate) fn clickhouse_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
 }

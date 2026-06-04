@@ -246,7 +246,13 @@ fn on_field_expr(cfg: &AggregationConfig) -> Result<String, QueryBuildError> {
     Ok(if use_canonical {
         "coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64)))".to_owned()
     } else {
-        let field = cfg.on_field.as_deref().unwrap();
+        // FIX B1: `on_field` is admin-controlled free-form (its `validate()` is a
+        // no-op), so it MUST be escaped before being interpolated into the
+        // `properties['…']` map-key string literal — an unescaped `'` would
+        // otherwise break out of the literal (SQL injection). This is the `uniq`
+        // operand path; the `Sum`/`Avg`/percentile operands go through
+        // `super::numeric_value_expr`, which already escapes (FIX 9).
+        let field = super::clickhouse_escape(cfg.on_field.as_deref().unwrap_or_default());
         format!("e.properties['{field}']")
     })
 }
@@ -456,6 +462,38 @@ mod tests {
             q.sql
                 .contains("toFloat64(uniq(e.properties['user_id'])) AS metric_value"),
             "uniq aggregator missing or wrong (must be wrapped in toFloat64), got:\n{}",
+            q.sql
+        );
+    }
+
+    /// FIX B1 (SQL injection): a `Uniq` metric whose `on_field` carries a single
+    /// quote must be ESCAPED inside the `properties['…']` map-key literal — the
+    /// `on_field` is admin-controlled free-form (its `validate()` is a no-op), so
+    /// an unescaped `'` would break out of the literal and inject arbitrary SQL.
+    /// Mirrors `queries::mod::numeric_value_expr_escapes_quote_in_on_field` but
+    /// for the `uniq(...)` operand (the only aggregator that reads `on_field`
+    /// through `on_field_expr` rather than `numeric_value_expr`).
+    #[test]
+    fn uniq_on_field_escapes_quote() {
+        let cfg = AggregationConfig {
+            event_key: "page_view".into(),
+            aggregator: AggregationOperator::Uniq,
+            on_field: Some("uid'); DROP TABLE events;--".into()),
+            where_clause: None,
+        };
+        let q = build_aggregation_query(&cfg, EXP_ID, ITER_ID, ENV_ID, &variants(), iter_end())
+            .unwrap();
+        // The quote is backslash-escaped; the literal is not broken out of.
+        assert!(
+            q.sql
+                .contains("uniq(e.properties['uid\\'); DROP TABLE events;--'])"),
+            "uniq on_field quote must be escaped, got:\n{}",
+            q.sql
+        );
+        // Sanity: no UNescaped breakout sequence slipped through.
+        assert!(
+            !q.sql.contains("['uid'); DROP"),
+            "unescaped injection slipped through:\n{}",
             q.sql
         );
     }

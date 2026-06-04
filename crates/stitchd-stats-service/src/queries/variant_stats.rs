@@ -578,34 +578,57 @@ pub fn build_percentile_samples_query(
     Ok(BuiltQuery { sql, binds })
 }
 
-/// Build the per-**unit** post-period numeric-value query for one experiment +
-/// iteration restricted to a single `context_type` and a single `Aggregation`
-/// metric — the input the CUPED numeric path needs to pair each unit's
-/// post-period `Y` with its pre-period covariate `X_pre`.
+/// Build the per-**unit** CUPED query for one experiment + iteration restricted
+/// to a single `context_type` and a single `Aggregation` metric: each assigned
+/// unit's post-period `Y` AND its pre-period covariate `X_pre`, in **one** query
+/// over **one** shared `events` scan.
 ///
-/// Mirrors [`build_aggregation_cells_query`]'s `assignments` CTE + ITT-bounded
-/// event join + coalesced [`super::numeric_value_expr`] value exactly, but does
-/// NOT collapse to per-variant: it keeps `context_key` so each row is one
-/// assigned unit. A unit with no qualifying post-exposure event contributes
-/// `y = 0` (ITT — the LEFT JOIN keeps it).
+/// This MERGES what used to be two separate per-unit scans (FIX B5):
 ///
-/// Result rows carry `(context_key, variant_key, y)` where `y` is the unit's
-/// post-exposure (`occurred_at >= assigned_at AND occurred_at < iteration_end`)
-/// metric sum. The `context_type` is not re-projected (the query is already
-/// scoped to one `context_type` — the caller supplies it).
+/// * `Y`  — post-exposure metric sum over `[assigned_at, iteration_end)` (ITT);
+/// * `X_pre` — pre-period metric sum over the ABSOLUTE window
+///   `[pre_start, pre_end)` (measured BEFORE exposure, NOT gated on `assigned_at`).
+///
+/// Both windows are carved out of a single `matched_events` CTE whose WHERE spans
+/// their **union** `[pre_start, iteration_end)`, then split with two `sumIf`s in
+/// one `GROUP BY (context_type, context_key, variant_key)`. The two windows stay
+/// disjoint because `pre_end <= assigned_at` (the pre-period ends at the
+/// experiment start, exposure happens at/after it): a pre event has
+/// `occurred_at < pre_end <= assigned_at` so it can never satisfy the `Y`
+/// predicate `occurred_at >= assigned_at`, and a post event has
+/// `occurred_at >= assigned_at >= pre_end` so it can never satisfy the `X_pre`
+/// predicate `occurred_at < pre_end`. This halves the ClickHouse reads vs. the
+/// two-query version and lets the caller skip the Rust `HashMap` re-join (each
+/// row already carries both `y` and `x_pre`).
+///
+/// Mirrors [`build_aggregation_cells_query`]'s `assignments` CTE + coalesced
+/// [`super::numeric_value_expr`] value exactly, but keeps `context_key` so each
+/// row is one assigned unit (NOT reduced per variant). A unit with no qualifying
+/// event in a window contributes `0` for that window (ITT — the LEFT JOIN keeps
+/// it). The `on_field`-aware value expression means a property-valued metric
+/// reads `properties[on_field]` for BOTH `Y` and `X_pre` (no silent `X_pre = 0`).
+///
+/// Result rows carry `(context_key, variant_key, y, x_pre)`. The `context_type`
+/// is not re-projected (the query is already scoped to one `context_type` — the
+/// caller supplies it).
 ///
 /// # Errors
 /// Returns [`QueryBuildError`] when the metric `where_clause` JsonLogic cannot
 /// be translated.
-pub fn build_unit_values_query(
+#[allow(clippy::too_many_arguments)]
+pub fn build_unit_values_with_pre_query(
     cfg: &AggregationConfig,
     experiment_id: &str,
     iteration_id: &str,
     env_id: &str,
     context_type: &str,
     iteration_end: DateTime<Utc>,
+    pre_start: DateTime<Utc>,
+    pre_end: DateTime<Utc>,
 ) -> Result<BuiltQuery, QueryBuildError> {
     let end_ms = iteration_end.timestamp_millis();
+    let pre_start_ms = pre_start.timestamp_millis();
+    let pre_end_ms = pre_end.timestamp_millis();
     let mut binds = Vec::new();
 
     let assignments_cte = emit_assignments_cte(
@@ -617,12 +640,25 @@ pub fn build_unit_values_query(
         iteration_end,
     );
 
+    // Binds pushed in SQL-appearance order (clickhouse-rs binds `?` positionally):
+    //   …assignments CTE binds…,
+    //   ev_env, event_key, ev_ctx, span_lo (= pre_start), span_hi (= iter_end),
+    //   y_hi (= iter_end, the post upper bound inside the sumIf),
+    //   x_lo (= pre_start), x_hi (= pre_end),
+    //   then any where_clause literals.
     let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
     let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
     let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
-    let ev_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
+    // Union span for the single scan: [pre_start, iteration_end).
+    let span_lo_ph = push_bind(&mut binds, QueryBind::I64(pre_start_ms));
+    let span_hi_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
     let value_expr = super::numeric_value_expr(cfg);
 
+    // The where_clause literals must be the LAST binds, but they are emitted
+    // textually INSIDE the `matched_events` WHERE (before the SELECT's sumIf
+    // bounds). To keep push order == textual order, the sumIf-bound binds
+    // (y_hi / x_lo / x_hi) are pushed AFTER the where fragment. We therefore
+    // build the fragment first, then push the sumIf bounds.
     let extra_where = match cfg.where_clause.as_ref() {
         Some(expr) => {
             let frag = jsonlogic_to_sql(expr, &mut binds)?;
@@ -631,9 +667,17 @@ pub fn build_unit_values_query(
         None => String::new(),
     };
 
-    // Per-assigned-unit post-exposure metric sum (ITT — a unit with no
-    // qualifying event contributes 0), keyed by context_key so the caller can
-    // join each unit's Y to its pre-period X_pre. NOT reduced per variant.
+    // Post upper bound (Y is `[assigned_at, iteration_end)`; the lower bound is
+    // the per-row `asg.assigned_at`, not a bind) and the absolute pre window
+    // bounds for X_pre.
+    let y_hi_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
+    let x_lo_ph = push_bind(&mut binds, QueryBind::I64(pre_start_ms));
+    let x_hi_ph = push_bind(&mut binds, QueryBind::I64(pre_end_ms));
+
+    // One scan over the union span [pre_start, iteration_end); two sumIf carve
+    // out the post (Y) and pre (X_pre) windows per assigned unit. The windows
+    // are disjoint by construction (pre_end <= assigned_at), so no event is
+    // double-counted across Y and X_pre.
     let sql = format!(
         "WITH\n\
         assignments AS (\n\
@@ -649,115 +693,26 @@ pub fn build_unit_values_query(
             WHERE e.env_id = toUUID({ev_env_ph})\n      \
               AND e.metric_key = {event_ph}\n      \
               AND ctx_pair.1 = {ev_ctx_ph}\n      \
-              AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph}){extra_where}\n\
+              AND e.occurred_at >= fromUnixTimestamp64Milli({span_lo_ph})\n      \
+              AND e.occurred_at <  fromUnixTimestamp64Milli({span_hi_ph}){extra_where}\n\
         )\n\
         SELECT\n    \
             asg.context_key AS context_key,\n    \
             asg.variant_key AS variant_key,\n    \
-            sumIf(me.value, me.occurred_at >= asg.assigned_at) AS y\n\
+            sumIf(\n        \
+                me.value,\n        \
+                me.occurred_at >= asg.assigned_at\n          \
+                  AND me.occurred_at < fromUnixTimestamp64Milli({y_hi_ph})\n    \
+            ) AS y,\n    \
+            sumIf(\n        \
+                me.value,\n        \
+                me.occurred_at >= fromUnixTimestamp64Milli({x_lo_ph})\n          \
+                  AND me.occurred_at < fromUnixTimestamp64Milli({x_hi_ph})\n    \
+            ) AS x_pre\n\
         FROM assignments AS asg\n\
         LEFT JOIN matched_events AS me\n    \
             ON me.context_key = asg.context_key\n\
         GROUP BY asg.context_type, asg.context_key, asg.variant_key"
-    );
-
-    Ok(BuiltQuery { sql, binds })
-}
-
-/// Build the per-**unit** PRE-period covariate query for the CUPED numeric path:
-/// each assigned unit's `X_pre`, summed over the metric's value in the
-/// pre-experiment window `[pre_start, pre_end)`.
-///
-/// This is the assignments-JOIN analogue of [`build_unit_values_query`] but over
-/// the pre-period window — it REPLACES the prior uncapped
-/// `(context_type, context_key) IN (…)` literal fetch (which risked
-/// `max_query_size` on large experiments AND ignored the metric's `on_field`).
-/// Like [`build_unit_values_query`] it:
-///
-/// * reuses the `assignments` CTE so only the experiment's assigned units in
-///   `context_type` are scanned (bounded by the assignment set, not an inlined
-///   IN-list), and
-/// * uses [`super::numeric_value_expr`] for the value expression — so a
-///   property-valued metric (`on_field`) reads `properties[on_field]` instead of
-///   silently summing the canonical `value_double`/`value_int` to 0.
-///
-/// The pre-period events are gated on the ABSOLUTE window
-/// `occurred_at >= pre_start AND occurred_at < pre_end` (NOT on `assigned_at` —
-/// the covariate is measured BEFORE exposure). A unit with no qualifying
-/// pre-period event contributes `x_pre = 0` (the LEFT JOIN keeps it).
-///
-/// Result rows carry `(context_key, x_pre)`; the caller joins each unit's
-/// `x_pre` to its post-period `Y` by `context_key`.
-///
-/// # Errors
-/// Returns [`QueryBuildError`] when the metric `where_clause` JsonLogic cannot
-/// be translated.
-#[allow(clippy::too_many_arguments)]
-pub fn build_unit_pre_values_query(
-    cfg: &AggregationConfig,
-    experiment_id: &str,
-    iteration_id: &str,
-    env_id: &str,
-    context_type: &str,
-    iteration_end: DateTime<Utc>,
-    pre_start: DateTime<Utc>,
-    pre_end: DateTime<Utc>,
-) -> Result<BuiltQuery, QueryBuildError> {
-    let pre_start_ms = pre_start.timestamp_millis();
-    let pre_end_ms = pre_end.timestamp_millis();
-    let mut binds = Vec::new();
-
-    let assignments_cte = emit_assignments_cte(
-        &mut binds,
-        experiment_id,
-        iteration_id,
-        env_id,
-        context_type,
-        iteration_end,
-    );
-
-    let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
-    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
-    let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
-    let pre_lo_ph = push_bind(&mut binds, QueryBind::I64(pre_start_ms));
-    let pre_hi_ph = push_bind(&mut binds, QueryBind::I64(pre_end_ms));
-    let value_expr = super::numeric_value_expr(cfg);
-
-    let extra_where = match cfg.where_clause.as_ref() {
-        Some(expr) => {
-            let frag = jsonlogic_to_sql(expr, &mut binds)?;
-            format!("\n      AND ({frag})")
-        }
-        None => String::new(),
-    };
-
-    // Per-assigned-unit PRE-period metric sum over the absolute window
-    // [pre_start, pre_end). Keyed by context_key so the caller joins each
-    // unit's X_pre to its post-period Y. NOT reduced per variant.
-    let sql = format!(
-        "WITH\n\
-        assignments AS (\n\
-        {assignments_cte}\
-        ),\n\
-        pre_events AS (\n    \
-            SELECT\n        \
-                ctx_pair.2 AS context_key,\n        \
-                {value_expr} AS value\n    \
-            FROM events AS e\n    \
-            ARRAY JOIN e.contexts AS ctx_pair\n    \
-            WHERE e.env_id = toUUID({ev_env_ph})\n      \
-              AND e.metric_key = {event_ph}\n      \
-              AND ctx_pair.1 = {ev_ctx_ph}\n      \
-              AND e.occurred_at >= fromUnixTimestamp64Milli({pre_lo_ph})\n      \
-              AND e.occurred_at <  fromUnixTimestamp64Milli({pre_hi_ph}){extra_where}\n\
-        )\n\
-        SELECT\n    \
-            asg.context_key AS context_key,\n    \
-            sum(pe.value) AS x_pre\n\
-        FROM assignments AS asg\n\
-        LEFT JOIN pre_events AS pe\n    \
-            ON pe.context_key = asg.context_key\n\
-        GROUP BY asg.context_key"
     );
 
     Ok(BuiltQuery { sql, binds })
@@ -1146,14 +1101,33 @@ mod tests {
         assert_eq!(q.binds.len(), 9);
     }
 
-    // ── Per-unit values (CUPED Y) ───────────────────────────────────────────
+    // ── Per-unit CUPED Y + X_pre (single merged query — FIX B5) ─────────────
 
+    fn pre_window() -> (DateTime<Utc>, DateTime<Utc>) {
+        // started_at = end()-30d, pre-period = 14d before that.
+        let started = Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap();
+        let pre_start = started - chrono::Duration::days(14);
+        (pre_start, started)
+    }
+
+    /// The merged query keeps per-unit granularity, emits BOTH `y` and `x_pre`
+    /// from ONE shared `matched_events` scan via two `sumIf`s, and groups once.
     #[test]
-    fn unit_values_keeps_context_key_and_is_itt_bounded() {
-        let q =
-            build_unit_values_query(&sum_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end()).unwrap();
+    fn unit_values_with_pre_emits_both_sums_from_one_scan() {
+        let (lo, hi) = pre_window();
+        let q = build_unit_values_with_pre_query(
+            &sum_cfg(),
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            "user",
+            end(),
+            lo,
+            hi,
+        )
+        .unwrap();
         // Per-UNIT: groups by context_key (NOT collapsed to per-variant) and
-        // projects (context_type, context_key, variant_key, y).
+        // projects (context_key, variant_key, y, x_pre).
         assert!(
             q.sql
                 .contains("GROUP BY asg.context_type, asg.context_key, asg.variant_key"),
@@ -1166,63 +1140,36 @@ mod tests {
             q.sql
         );
         assert!(
-            q.sql
-                .contains("sumIf(me.value, me.occurred_at >= asg.assigned_at) AS y"),
+            q.sql.contains("asg.variant_key AS variant_key"),
             "{}",
             q.sql
         );
-        // Same ITT discipline + assignments CTE as the aggregation cells query.
+        // BOTH sums present.
         assert!(
-            q.sql.contains("FROM experiment_assignments AS a FINAL"),
-            "{}",
+            q.sql.contains(") AS y,"),
+            "missing y sumIf; got:\n{}",
             q.sql
         );
-        // Continuous metric uses the shared coalesced value expr (same as Y).
         assert!(
-            q.sql.contains("toFloat64OrNull(e.properties['revenue'])"),
-            "{}",
+            q.sql.contains(") AS x_pre"),
+            "missing x_pre sumIf; got:\n{}",
             q.sql
         );
-    }
-
-    #[test]
-    fn unit_values_bind_order_is_left_to_right() {
-        let q =
-            build_unit_values_query(&count_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end()).unwrap();
-        // assignments CTE: env, exp, iter, ctx, end
-        assert_eq!(q.binds[0], QueryBind::Str(ENV_ID.into()));
-        assert_eq!(q.binds[1], QueryBind::Str(EXP_ID.into()));
-        assert_eq!(q.binds[2], QueryBind::Str(ITER_ID.into()));
-        assert_eq!(q.binds[3], QueryBind::Str("user".into()));
-        assert_eq!(q.binds[4], QueryBind::I64(end().timestamp_millis()));
-        // events: env, event_key, ctx, end
-        assert_eq!(q.binds[5], QueryBind::Str(ENV_ID.into()));
-        assert_eq!(q.binds[6], QueryBind::Str("checkout_completed".into()));
-        assert_eq!(q.binds[7], QueryBind::Str("user".into()));
-        assert_eq!(q.binds[8], QueryBind::I64(end().timestamp_millis()));
-        assert_eq!(q.binds.len(), 9);
-    }
-
-    // ── Per-unit pre-period values (CUPED X_pre) — FIX 7 ────────────────────
-
-    fn pre_window() -> (DateTime<Utc>, DateTime<Utc>) {
-        // started_at = end()-30d, pre-period = 14d before that.
-        let started = Utc.with_ymd_and_hms(2026, 5, 2, 0, 0, 0).unwrap();
-        let pre_start = started - chrono::Duration::days(14);
-        (pre_start, started)
-    }
-
-    /// The pre-period query joins assignments (no IN-list), gates on the
-    /// ABSOLUTE `[pre_start, pre_end)` window (NOT `assigned_at`), and projects
-    /// `(context_key, x_pre)` per assigned unit.
-    #[test]
-    fn unit_pre_values_joins_assignments_and_uses_abs_window() {
-        let (lo, hi) = pre_window();
-        let q =
-            build_unit_pre_values_query(&sum_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end(), lo, hi)
-                .unwrap();
-        // Assignments-JOIN (bounded by the assignment set), NOT an inlined
-        // `(context_type, context_key) IN (...)` literal.
+        // ONE event scan / ONE LEFT JOIN — not two CTEs.
+        assert_eq!(
+            q.sql.matches("FROM events AS e").count(),
+            1,
+            "must be a single events scan; got:\n{}",
+            q.sql
+        );
+        assert_eq!(
+            q.sql.matches("LEFT JOIN matched_events").count(),
+            1,
+            "must be a single join; got:\n{}",
+            q.sql
+        );
+        // Same ITT discipline + assignments CTE as the aggregation cells query,
+        // no inlined IN-list.
         assert!(
             q.sql.contains("FROM experiment_assignments AS a FINAL"),
             "{}",
@@ -1233,39 +1180,8 @@ mod tests {
             "must not inline an IN-list; got:\n{}",
             q.sql
         );
-        // Absolute pre-period bounds, NOT the ITT assigned_at bound.
-        assert!(
-            q.sql.contains("e.occurred_at >= fromUnixTimestamp64Milli")
-                && q.sql.contains("e.occurred_at <  fromUnixTimestamp64Milli"),
-            "{}",
-            q.sql
-        );
-        assert!(
-            !q.sql.contains("occurred_at >= asg.assigned_at"),
-            "pre-period is gated on the absolute window, not exposure; got:\n{}",
-            q.sql
-        );
-        // Per-unit projection.
-        assert!(
-            q.sql.contains("asg.context_key AS context_key"),
-            "{}",
-            q.sql
-        );
-        assert!(q.sql.contains("sum(pe.value) AS x_pre"), "{}", q.sql);
-        assert!(q.sql.contains("GROUP BY asg.context_key"), "{}", q.sql);
-    }
-
-    /// FIX 7: a property-valued metric (`on_field`) reads
-    /// `properties[on_field]` via `numeric_value_expr`, so X_pre is non-zero for
-    /// property-valued metrics (the old IN-list fetch read only value_double →
-    /// X_pre always 0 → CUPED no-op).
-    #[test]
-    fn unit_pre_values_honours_on_field_property_metric() {
-        let (lo, hi) = pre_window();
-        // sum_cfg has on_field = Some("revenue").
-        let q =
-            build_unit_pre_values_query(&sum_cfg(), EXP_ID, ITER_ID, ENV_ID, "user", end(), lo, hi)
-                .unwrap();
+        // Continuous / property-valued metric uses the shared coalesced value
+        // expr for BOTH y and x_pre (FIX 7 — no silent X_pre=0).
         assert!(
             q.sql.contains("toFloat64OrNull(e.properties['revenue'])"),
             "property-valued metric must read properties[on_field]; got:\n{}",
@@ -1273,10 +1189,49 @@ mod tests {
         );
     }
 
+    /// The two windows are disjoint by construction: Y is gated on the per-row
+    /// `asg.assigned_at` (post-exposure), X_pre on the ABSOLUTE pre window. The
+    /// single CTE WHERE spans their union `[pre_start, iteration_end)`.
     #[test]
-    fn unit_pre_values_bind_order_is_left_to_right() {
+    fn unit_values_with_pre_windows_are_disjoint() {
         let (lo, hi) = pre_window();
-        let q = build_unit_pre_values_query(
+        let q = build_unit_values_with_pre_query(
+            &count_cfg(),
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            "user",
+            end(),
+            lo,
+            hi,
+        )
+        .unwrap();
+        // Y sumIf is gated on exposure (assigned_at).
+        assert!(
+            q.sql.contains("me.occurred_at >= asg.assigned_at"),
+            "Y must be post-exposure; got:\n{}",
+            q.sql
+        );
+        // X_pre sumIf uses absolute bounds, NOT assigned_at.
+        assert!(
+            q.sql.contains("me.occurred_at >= fromUnixTimestamp64Milli")
+                && q.sql.contains("me.occurred_at < fromUnixTimestamp64Milli"),
+            "X_pre must use the absolute pre window; got:\n{}",
+            q.sql
+        );
+        // The shared scan spans the union [pre_start, iteration_end).
+        assert!(
+            q.sql.contains("e.occurred_at >= fromUnixTimestamp64Milli")
+                && q.sql.contains("e.occurred_at <  fromUnixTimestamp64Milli"),
+            "scan must span the union window; got:\n{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn unit_values_with_pre_bind_order_is_left_to_right() {
+        let (lo, hi) = pre_window();
+        let q = build_unit_values_with_pre_query(
             &count_cfg(),
             EXP_ID,
             ITER_ID,
@@ -1293,13 +1248,17 @@ mod tests {
         assert_eq!(q.binds[2], QueryBind::Str(ITER_ID.into()));
         assert_eq!(q.binds[3], QueryBind::Str("user".into()));
         assert_eq!(q.binds[4], QueryBind::I64(end().timestamp_millis()));
-        // pre_events: env, event_key, ctx, pre_lo, pre_hi
+        // matched_events: env, event_key, ctx, span_lo (=pre_start), span_hi (=iter_end)
         assert_eq!(q.binds[5], QueryBind::Str(ENV_ID.into()));
         assert_eq!(q.binds[6], QueryBind::Str("checkout_completed".into()));
         assert_eq!(q.binds[7], QueryBind::Str("user".into()));
         assert_eq!(q.binds[8], QueryBind::I64(lo.timestamp_millis()));
-        assert_eq!(q.binds[9], QueryBind::I64(hi.timestamp_millis()));
-        assert_eq!(q.binds.len(), 10);
+        assert_eq!(q.binds[9], QueryBind::I64(end().timestamp_millis()));
+        // SELECT sumIf bounds: y_hi (=iter_end), x_lo (=pre_start), x_hi (=pre_end)
+        assert_eq!(q.binds[10], QueryBind::I64(end().timestamp_millis()));
+        assert_eq!(q.binds[11], QueryBind::I64(lo.timestamp_millis()));
+        assert_eq!(q.binds[12], QueryBind::I64(hi.timestamp_millis()));
+        assert_eq!(q.binds.len(), 13);
     }
 
     // ── Assignment counts ──────────────────────────────────────────────────
