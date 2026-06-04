@@ -48,13 +48,13 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 ## Phase 2: Flag Prerequisites — Eval-Time Gate (stitchd-core)
 <!-- depends: phase1 -->
 
-- [ ] Task 1: (Red) Failing unit tests — gate returns fallback variant when a prerequisite
+- [x] Task 1: (Red) Failing unit tests — gate returns fallback variant when a prerequisite
   is unmet; transitive chains; disabled prerequisite flag ⇒ unmet; missing prerequisite flag
-  ⇒ unmet; trace names the failing prerequisite + fallback taken.
-- [ ] Task 2: (Green) Add prerequisites to the `Flag` aggregate; implement the gate in
+  ⇒ unmet; trace names the failing prerequisite + fallback taken. (5349fff)
+- [x] Task 2: (Green) Add prerequisites to the `Flag` aggregate; implement the gate in
   `engine.rs` before rule iteration; reuse the `evaluated_flags` map; extend
-  `orchestrator.rs` topo-sort + cycle detection to include prerequisite edges.
-- [ ] Task 3: Emit prerequisite decision into `EvaluationTrace`; refactor; verify ≥90%.
+  `orchestrator.rs` topo-sort + cycle detection to include prerequisite edges. (99e9bed)
+- [x] Task 3: Emit prerequisite decision into `EvaluationTrace`; refactor; verify ≥90%. (6e851c4)
   <!-- files: crates/stitchd-core/src/evaluation/engine.rs, crates/stitchd-core/src/rule_engine/orchestrator.rs, crates/stitchd-core/src/evaluation/types.rs, crates/stitchd-core/src/flag.rs -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Prerequisites Core' (Protocol in workflow.md)
 

@@ -95,6 +95,7 @@ fn cross_context_flag() -> Flag {
                 value: VariantValue::BoolValue(false),
             },
         ],
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     }
 }
 

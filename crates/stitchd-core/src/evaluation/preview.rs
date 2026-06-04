@@ -491,6 +491,7 @@ mod tests {
             hashing_config: vec![],
             rules: vec![],
             variants,
+            prerequisites: crate::prerequisite::PrerequisiteGate::default(),
         };
         (flag, on_id, off_id)
     }

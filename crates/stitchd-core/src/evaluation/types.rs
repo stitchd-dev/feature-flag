@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::SegmentId;
+use crate::id::{FlagId, SegmentId};
 use crate::variants::VariantValue;
 
 use super::preview::{RolloutDebug, RuleTrace};
@@ -192,6 +192,36 @@ pub enum EvalOutcome {
     /// No custom rule matched; a variant was selected from the flag's
     /// `default_rule_distribution` via hash-based assignment.
     DefaultRuleDistribution,
+    /// A prerequisite flag did not resolve to its required variant (or was
+    /// disabled / absent). The flag's rules were skipped and the configured
+    /// fallback variant (or off/disabled default) was returned.
+    PrerequisiteFailed {
+        /// The first prerequisite flag whose gate check failed.
+        prerequisite_flag_id: FlagId,
+    },
+}
+
+/// Trace detail recorded when the prerequisite gate fails for a flag.
+///
+/// Names the failing prerequisite flag and the fallback variant that was
+/// returned in place of the flag's own rule evaluation. Carries no
+/// context/parameter values, so it never leaks `privateParameters`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct PrerequisiteFailureTrace {
+    /// The prerequisite flag whose gate check failed (the first failing one
+    /// when multiple prerequisites are configured).
+    pub prerequisite_flag_id: FlagId,
+    /// The variant the prerequisite flag was required to resolve to for the
+    /// gate to pass.
+    pub required_variant_id: crate::id::VariantId,
+    /// The variant the prerequisite flag actually resolved to, if any.
+    /// `None` means the prerequisite flag was disabled or absent from the
+    /// resolved cross-flag map (both treated as "unmet").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_variant_id: Option<crate::id::VariantId>,
+    /// The `key` of the fallback variant that was returned.
+    pub fallback_variant_key: String,
 }
 
 /// Bundle of trace artifacts returned when [`TraceLevel::Full`] is requested.
@@ -216,6 +246,11 @@ pub struct EvaluationTrace {
     /// Human-friendly rule name, if the matched rule has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fired_rule_name: Option<String>,
+    /// Populated when the prerequisite gate failed: names the failing
+    /// prerequisite flag and the fallback variant taken. `None` when the gate
+    /// passed (or no prerequisites are configured).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prerequisite_failure: Option<PrerequisiteFailureTrace>,
 }
 
 /// Per-context result returned by [`evaluate_flag`].
@@ -442,11 +477,69 @@ mod tests {
             EvalOutcome::RuleMatch { rule_index: 3 },
             EvalOutcome::DefaultFallthrough,
             EvalOutcome::DefaultRuleDistribution,
+            EvalOutcome::PrerequisiteFailed {
+                prerequisite_flag_id: FlagId::new(),
+            },
         ] {
             let json = serde_json::to_string(&outcome).unwrap();
             let back: EvalOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(outcome, back);
         }
+    }
+
+    #[test]
+    fn prerequisite_failed_outcome_uses_snake_case_kind_tag() {
+        let outcome = EvalOutcome::PrerequisiteFailed {
+            prerequisite_flag_id: FlagId::new(),
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(
+            json.contains("\"prerequisite_failed\""),
+            "kind tag must be snake_case: {json}"
+        );
+        assert!(json.contains("prerequisite_flag_id"));
+    }
+
+    #[test]
+    fn prerequisite_failure_trace_serde_round_trip_with_and_without_resolved() {
+        let pf = PrerequisiteFailureTrace {
+            prerequisite_flag_id: FlagId::new(),
+            required_variant_id: crate::id::VariantId::new(),
+            resolved_variant_id: Some(crate::id::VariantId::new()),
+            fallback_variant_key: "off".to_string(),
+        };
+        let json = serde_json::to_string(&pf).unwrap();
+        let back: PrerequisiteFailureTrace = serde_json::from_str(&json).unwrap();
+        assert_eq!(pf, back);
+
+        // `resolved_variant_id: None` is skipped on the wire.
+        let pf_none = PrerequisiteFailureTrace {
+            resolved_variant_id: None,
+            ..pf
+        };
+        let json_none = serde_json::to_string(&pf_none).unwrap();
+        assert!(
+            !json_none.contains("resolved_variant_id"),
+            "None resolved variant must be skipped: {json_none}"
+        );
+        let back_none: PrerequisiteFailureTrace = serde_json::from_str(&json_none).unwrap();
+        assert_eq!(pf_none, back_none);
+    }
+
+    #[test]
+    fn evaluation_trace_skips_none_prerequisite_failure_in_json() {
+        let trace = EvaluationTrace {
+            rule_traces: Vec::new(),
+            rollout_debug: None,
+            fired_rule_id: None,
+            fired_rule_name: None,
+            prerequisite_failure: None,
+        };
+        let json = serde_json::to_string(&trace).unwrap();
+        assert!(
+            !json.contains("prerequisite_failure"),
+            "None prerequisite_failure must be skipped: {json}"
+        );
     }
 
     #[test]
