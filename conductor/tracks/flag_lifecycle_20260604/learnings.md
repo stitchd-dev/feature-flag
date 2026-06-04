@@ -133,3 +133,18 @@ Patterns, gotchas, and context discovered during implementation.
   UTC-5); post-spring-forward (after 2026-03-08) = 13:00 UTC (EDT, UTC-4). UTC hour shifts
   14→13 while local stays 09:00 → DST-correct. `chrono::Duration` is NOT std Duration (already
   in inherited learnings) — used `chrono::Duration::seconds` directly on a `DateTime<Utc>`.
+
+## 2026-06-04 — Phase 1 final-verification compile fixes (flag-service)
+- The additive proto changes from Task 3 surfaced two REQUIRED downstream edits in
+  `stitchd-flag-service` (caught by `cargo build --workspace`, fixed inline per the
+  fix-gaps-as-discovered rule):
+  1. The production proto-mapping literal `build_feature_flag_proto` (mapping.rs:447)
+     constructs `FeatureFlag` exhaustively (no `..Default::default()`), so the new
+     `prerequisites` + `fallback_variant_key` fields had to be added explicitly (left empty —
+     populated in Phase 4 once FlagRecord carries the gate). Test-side literals already used
+     `..Default::default()` and needed no change.
+  2. Adding `SetPrerequisites`/`GetPrerequisites` RPCs to the FlagService proto service made
+     the generated trait require those methods on `FlagServiceImpl`. Added `unimplemented!`-style
+     stubs (return `Status::unimplemented`) so the contract is satisfied in Phase 1; real impl
+     is Phase 4. gateway / experimentation-service / SDK FeatureFlag literals already used
+     `..Default::default()` and compiled unchanged.

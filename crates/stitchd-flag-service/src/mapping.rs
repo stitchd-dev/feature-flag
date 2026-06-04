@@ -461,6 +461,10 @@ pub fn build_feature_flag_proto(
         // Populated by callers that resolve the lock state (admin RPCs).
         // SDK paths leave this empty.
         locked_by_experiment_id: String::new(),
+        // Populated by the prerequisites resolver (flag_lifecycle_20260604
+        // Phase 4); left empty here until the FlagRecord carries the gate.
+        prerequisites: Vec::new(),
+        fallback_variant_key: String::new(),
     }
 }
 

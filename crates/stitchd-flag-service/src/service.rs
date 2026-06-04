@@ -11,9 +11,11 @@ use stitchd_db::{
 };
 use stitchd_proto::flags::v1::{
     EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
-    GetFlagRequest, ListFlagsRequest, ListFlagsResponse, MutateFlagRequest, MutateFlagResponse,
-    MutationKind, SetDefaultRuleDistributionRequest, SetDefaultRuleDistributionResponse,
-    UpdateFlagHashingRequest, UpdateFlagHashingResponse, flag_service_server::FlagService,
+    GetFlagRequest, GetPrerequisitesRequest, GetPrerequisitesResponse, ListFlagsRequest,
+    ListFlagsResponse, MutateFlagRequest, MutateFlagResponse, MutationKind,
+    SetDefaultRuleDistributionRequest, SetDefaultRuleDistributionResponse, SetPrerequisitesRequest,
+    SetPrerequisitesResponse, UpdateFlagHashingRequest, UpdateFlagHashingResponse,
+    flag_service_server::FlagService,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -1508,6 +1510,28 @@ impl FlagService for FlagServiceImpl {
             flag: Some(proto_flag),
             version: new_version,
         }))
+    }
+
+    // Prerequisites (flag_lifecycle_20260604). The full implementation —
+    // persistence, write-time cycle detection, and population into the
+    // definition-sync + preview snapshots — lands in Phase 4. These stubs
+    // satisfy the gRPC contract added in Phase 1 so the workspace compiles.
+    async fn set_prerequisites(
+        &self,
+        _request: Request<SetPrerequisitesRequest>,
+    ) -> Result<Response<SetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented(
+            "SetPrerequisites is not yet implemented (flag_lifecycle_20260604 Phase 4)",
+        ))
+    }
+
+    async fn get_prerequisites(
+        &self,
+        _request: Request<GetPrerequisitesRequest>,
+    ) -> Result<Response<GetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented(
+            "GetPrerequisites is not yet implemented (flag_lifecycle_20260604 Phase 4)",
+        ))
     }
 }
 
