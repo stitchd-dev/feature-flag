@@ -148,3 +148,67 @@ Patterns, gotchas, and context discovered during implementation.
      stubs (return `Status::unimplemented`) so the contract is satisfied in Phase 1; real impl
      is Phase 4. gateway / experimentation-service / SDK FeatureFlag literals already used
      `..Default::default()` and compiled unchanged.
+
+## 2026-06-04 — Phase 2 (prerequisite eval-time gate, stitchd-core)
+- SHAs: Red 5349fff (test), Green 99e9bed (feat), Refactor 6e851c4 (refactor).
+- **Two evaluation paths exist and were NOT previously connected.** `evaluate_flag`/
+  `evaluate_one` (engine.rs) evaluate a SINGLE flag and built an EMPTY `evaluated_flags`
+  map internally — so cross-flag `FlagEvaluatedAs` always resolved false on the unified
+  preview/SDK path. The multi-flag `orchestrator::evaluate_flags` is a separate
+  `(FlagId, Vec<Rule>)` resolver that DOES populate the map + topo-sort. The gate needs
+  the resolved prereq variants, so the design threads a pre-resolved
+  `&HashMap<FlagId, Option<VariantId>>` into a NEW entry point rather than rewiring 27
+  `evaluate_flag(` call sites.
+- **Signature-stability trick:** added `evaluate_flag_with_prerequisites(...)` taking the
+  resolved map; `evaluate_flag` delegates with an EMPTY map. Empty map ⇒ any configured
+  prerequisite is treated as unmet ⇒ gate fails CLOSED → fallback. This keeps every
+  existing caller (preview.rs, sdk client.rs, parity tests) compiling + behaving safely;
+  Phase 4 (flag-service snapshot) and Phase 7 (SDK snapshot) call the new entry point with
+  a populated map. The new map is ALSO fed into `EvaluationInput.evaluated_flags` so
+  `FlagEvaluatedAs` finally resolves on the unified path too (latent fix).
+- **Unmet = absent OR None OR mismatched variant.** `evaluated_flags.get(id).copied().flatten()`
+  collapses "unknown flag" (outer None) and "disabled / no variant" (inner None) into the
+  same "no resolved variant" → both ≠ required ⇒ unmet. Disabled flag short-circuits BEFORE
+  the gate (FlagDisabled wins over PrerequisiteFailed).
+- **Gate slots at engine.rs §1b** — after the `!flag.record.enabled` check, before segment
+  resolution + rule iteration. First failing prereq is reported (later satisfied prereqs do
+  NOT rescue the gate). Fallback variant = `flag.prerequisites.fallback_variant_id` if it
+  names a real variant, else the off/disabled default (`Flag::prerequisite_fallback_variant`).
+- **Trace shape:** `EvaluationTrace.prerequisite_failure: Option<PrerequisiteFailureTrace>`
+  (skip_serializing_if None). `PrerequisiteFailureTrace { prerequisite_flag_id,
+  required_variant_id, resolved_variant_id: Option, fallback_variant_key }` — IDENTIFIERS
+  ONLY, no context/parameter values, so the NFR "prerequisite traces must not leak
+  privateParameters" holds by construction. New `EvalOutcome::PrerequisiteFailed {
+  prerequisite_flag_id }` (snake_case kind tag `prerequisite_failed`).
+- **Orchestrator extension:** new `build_dependency_graph(&[(FlagId, Vec<Rule>,
+  Vec<FlagPrerequisite>)])` merges `extract_flag_deps` (FlagEvaluatedAs rule edges) with
+  prerequisite edges into the same `HashMap<FlagId, HashSet<FlagId>>` that Kahn's
+  topological_sort consumes — so prereq flags resolve first AND prereq cycles raise the
+  existing `RuleEngineError::CyclicFlagDependency`. `evaluate_flags` delegates to
+  `evaluate_flags_with_prerequisites` with empty prereq lists (zero behaviour change).
+- **Flag-aggregate field ripple (the field-add blast radius):** adding `Flag.prerequisites:
+  PrerequisiteGate` (#[serde(default)]) forced updating EVERY full `Flag { record,
+  hashing_config, rules, variants, .. }` literal. Sites fixed (all = empty
+  `PrerequisiteGate::default()`):
+    - crates/stitchd-flag-service/src/service.rs (preview path — Phase 4 loads the real gate)
+    - sdks/rust/src/client.rs `convert_proto_flag_to_core` (Phase 7 wires proto→gate)
+    - crates/stitchd-core/src/{flag.rs, evaluation/engine.rs, evaluation/preview.rs} test literals
+    - crates/stitchd-flag-service/tests/{evaluate_preview_byte_equivalence,preview_cross_context_bundle}.rs
+    - sdks/rust/tests/{parity_with_preview (×2), exclusion_gating, e2e_cross_context_hashing}.rs
+  GOTCHA: `cargo build --workspace --all-targets` did NOT surface the FEATURE-GATED sdk test
+  targets (parity/exclusion/e2e need `--features test-util`); use
+  `cargo test --workspace --all-targets --all-features --no-run` to compile EVERY test target
+  before declaring the field-add green.
+- **SDK `EvalOutcome` is a separate taxonomy** (client.rs) — adding core
+  `PrerequisiteFailed` made the SDK's `match core_res.outcome` non-exhaustive. Added a SDK
+  `EvalOutcome::PrerequisiteFailed` (string `prerequisite_failed`) + the match arm. Phase 7
+  fills in SDK prereq tests; the variant is in place now.
+- **Gateway mock FlagService impls** (tests/flag_admin_metadata.rs, tests/flag_lock_integration.rs
+  ×3 impls) needed `set_prerequisites`/`get_prerequisites` stubs (the Phase-1 proto RPCs) to
+  satisfy the generated trait; and one gateway `FeatureFlag {…}` test literal (routes/flags.rs)
+  that enumerates fields needed the new `prerequisites: vec![]` + `fallback_variant_key:
+  String::new()` proto fields. Kept the build green for the Phase-3 worker.
+- **Coverage:** `cargo llvm-cov -p stitchd-core --lib` on new paths — engine.rs 99.1% lines /
+  98.1% regions, types.rs 100%, orchestrator.rs 100% lines, prerequisite.rs 100%, flag.rs new
+  `prerequisite_fallback_variant` fully covered. The purity test (`evaluation/purity.rs`) still
+  passes — the gate is pure map-lookups, no I/O.
