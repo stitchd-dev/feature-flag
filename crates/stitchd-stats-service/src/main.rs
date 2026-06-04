@@ -38,7 +38,7 @@ use stitchd_stats_service::{
     grpc::service::StatsServiceImpl,
     results_writer::write_results,
     schedule_updater::update_schedule_after_run,
-    scheduler::{enrich_sequential_settings, fetch_running_experiments},
+    scheduler::fetch_running_experiments,
 };
 
 #[tokio::main]
@@ -159,8 +159,9 @@ async fn main() -> anyhow::Result<()> {
     // Per-experiment live-stats compute pass dependencies. `ch_client` is cheap
     // to clone (it shares the underlying HTTP client); clone it BEFORE it is
     // moved into the timeseries reader below. `metric_repo` is cloned for the
-    // batch metric-definition resolve, and `exp_client` for the per-experiment
-    // iteration enrichment (sequential config + unit context types).
+    // batch metric-definition resolve. The per-experiment iteration settings now
+    // ride along on `ListRunningExperiments` (FIX C3), so `exp_client` is only
+    // used for that one streaming call.
     let scheduler_ch = ch_client.clone();
     let scheduler_compute_metric_repo = metric_repo.clone();
     tokio::spawn(async move {
@@ -178,29 +179,21 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            for mut exp in experiments {
+            for exp in experiments {
                 let pool = scheduler_pool.clone();
                 let analytics = scheduler_analytics_client.clone();
-                let exp_client_for_enrich = scheduler_exp_client.clone();
                 let ch = scheduler_ch.clone();
                 let metric_repo = scheduler_compute_metric_repo.clone();
                 tokio::spawn(async move {
                     let computed_at = chrono::Utc::now();
 
-                    // Hydrate the iteration-snapshotted inputs the compute pass
-                    // needs (sequential config + CUPED pre-period + unit context
-                    // types). FIX 6: on RPC failure SKIP this experiment this
-                    // tick rather than computing with guessed settings — a wrong
-                    // `unit_context_types` guess would query the wrong context,
-                    // silently overwrite good results with zeros, and freeze the
-                    // sequential running minimum. The prior results stay intact.
-                    {
-                        let mut client = exp_client_for_enrich.lock().await;
-                        if let Err(e) = enrich_sequential_settings(&mut client, &mut exp).await {
-                            warn!(experiment_id = %exp.experiment_id, "Skipping experiment this tick: {e}");
-                            return;
-                        }
-                    }
+                    // FIX C3: the iteration-snapshotted compute-pass inputs
+                    // (sequential config + CUPED pre-period + unit context types)
+                    // now ride along on the `ListRunningExperiments` response, so
+                    // there is no longer a per-experiment `GetExperimentIteration`
+                    // round-trip here — and no skip-on-failure that could freeze a
+                    // persistently-unfetchable experiment as stale. `exp` already
+                    // carries everything the compute pass needs.
 
                     // Resolve every referenced metric definition in one batch.
                     let metric_ids: Vec<stitchd_core::id::MetricId> = exp

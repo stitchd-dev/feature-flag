@@ -1108,15 +1108,20 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
             if let Some(obj) = variant_stats.as_object() {
                 for (variant_key, val) in obj {
-                    // FIX 2: real variants are encoded as NUMBER values
-                    // (`variant_key → metric_value`); sideband payloads the
-                    // compute pass attaches into this same object — `srm`,
-                    // `cuped`, and any future one — are JSON OBJECTS. Skip any
-                    // non-number entry structurally (instead of string-matching
-                    // individual sideband keys) so a `cuped` sideband no longer
-                    // leaks as a phantom zero-count variant, AND a variant
-                    // literally named "srm"/"cuped" is still surfaced.
-                    if !val.is_number() {
+                    // FIX C1: skip only OBJECT-valued entries. The sideband
+                    // payloads the compute pass attaches into this same object —
+                    // `srm`, `cuped`, and any future one — are JSON OBJECTS; real
+                    // variants are encoded as `variant_key → metric_value`
+                    // NUMBERS. Skipping structurally on `is_object()` (rather than
+                    // string-matching sideband keys) keeps a `cuped` sideband from
+                    // leaking as a phantom zero-count variant AND surfaces a
+                    // variant literally named "srm"/"cuped". Crucially, a REAL
+                    // variant whose point `metric_value` was non-finite (NaN/Inf)
+                    // serializes via `serde_json::Value::from(f64)` to JSON `null`
+                    // — `null` is not an object, so it is KEPT here (as a
+                    // 0/placeholder) instead of being dropped by the old
+                    // `!is_number()` guard.
+                    if val.is_object() {
                         continue;
                     }
                     let participant_count = val.as_u64().unwrap_or(0);
@@ -1189,6 +1194,38 @@ impl ExperimentationService for ExperimentationServiceImpl {
                     entry
                         .metric_values
                         .insert(result.metric_key.clone(), participant_count as f64);
+                }
+            }
+        }
+
+        // FIX C2: override each variant's `participant_count` with the SRM blob's
+        // per-variant `observed` ASSIGNMENT count. The value seeded above came
+        // from the metric POINT (`metric_value`), which is the wrong quantity:
+        // for a rate metric (mean < 1) it rounds to 0, and for a numeric metric
+        // it is a rounded mean. The true assignment count per `(context_type,
+        // variant_key)` lives in the per-context `srm` blob's `per_variant`
+        // (`{variant_key, observed, ...}`), which stats-service attaches whenever
+        // there are ≥ 2 variants. When no srm blob is present (e.g. < 2 variants)
+        // the metric-point fallback above is left in place. A second pass (rather
+        // than reading srm inline) is robust to srm rows arriving before/after the
+        // metric rows they describe.
+        for (context_type, srm_val) in &srm_by_ctx {
+            let Some(per_variant) = srm_val.get("per_variant").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for row in per_variant {
+                let Some(variant_key) = row.get("variant_key").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let Some(observed) = row.get("observed").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let key = (context_type.clone(), variant_key.to_string());
+                if let Some(vr) = by_ctx_variant.get_mut(&key) {
+                    vr.participant_count = observed;
+                }
+                if let Some(vr) = guardrails_by_ctx_variant.get_mut(&key) {
+                    vr.participant_count = observed;
                 }
             }
         }
@@ -1339,6 +1376,17 @@ impl ExperimentationService for ExperimentationServiceImpl {
                     metric_ids: iter.metric_ids.iter().map(ToString::to_string).collect(),
                     started_at_ms: iter.started_at.timestamp_millis(),
                     status: "running".to_string(),
+                    // FIX C3: carry the active iteration's compute-pass inputs
+                    // directly so the stats-service scheduler does not need a
+                    // second `GetExperimentIteration` round-trip per experiment.
+                    // `iter` is the same snapshot row that `metric_ids` came from,
+                    // so these add no extra query.
+                    unit_context_types: iter.unit_context_types.clone(),
+                    pre_period_days: iter.pre_period_days,
+                    sequential_testing_enabled: iter.sequential_testing_enabled,
+                    sequential_alpha: iter.sequential_alpha,
+                    sequential_tau_squared: iter.sequential_tau_squared,
+                    sequential_min_sample_size: iter.sequential_min_sample_size,
                 }));
             }
         }
@@ -2822,6 +2870,160 @@ mod tests {
         assert!(
             user_ctx.srm.is_some(),
             "srm sideband should still populate ContextTypeResults.srm"
+        );
+    }
+
+    /// FIX C1: the variant-skip guard must reject only OBJECT-valued entries
+    /// (the `srm`/`cuped` sidebands), NOT every non-number entry. A REAL variant
+    /// whose point `metric_value` was non-finite (NaN/Inf) serializes via
+    /// `serde_json::Value::from(f64)` to JSON `null`; the prior `!is_number()`
+    /// guard DROPPED it. With `is_object()` the degenerate `null` variant is kept
+    /// (as a 0/placeholder) while sidebands are still skipped.
+    #[tokio::test]
+    async fn test_get_results_keeps_null_variant_skips_object_sidebands() {
+        let (env_id, env_id_str) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        // control = number; treatment = null (degenerate non-finite point);
+        // srm + cuped = object sidebands.
+        let variant_stats = serde_json::json!({
+            "control": 10.0,
+            "treatment": serde_json::Value::Null,
+            "srm": {
+                "per_variant": [],
+                "overall_chi_sq": 0.0,
+                "overall_chi_sq_p": 1.0,
+                "health": "green"
+            },
+            "cuped": { "theta": 0.8, "variance_reduction_pct": 12.5, "applied": true }
+        })
+        .to_string();
+        let result = ProtoExperimentResult {
+            env_id: env_id_str.clone(),
+            experiment_id: exp_id.to_string(),
+            iteration_id: Uuid::new_v4().to_string(),
+            variant_key: String::new(),
+            metric_key: "checkout".to_string(),
+            metric_type: "numeric".to_string(),
+            variant_stats,
+            frequentist_result: Some(serde_json::json!({ "p_value": 0.04 }).to_string()),
+            bayesian_result: None,
+            recommendation: "ship_treatment".to_string(),
+            computed_at: "2026-05-01T00:00:00Z".to_string(),
+            created_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
+            sequential_result: None,
+        };
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(AnalyticsMockWithData {
+                results: vec![result],
+            }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id_str,
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+
+        let keys: std::collections::HashSet<&str> = resp
+            .variant_results
+            .iter()
+            .map(|vr| vr.variant_key.as_str())
+            .collect();
+        // BOTH real variants surface — control (number) AND treatment (null).
+        assert_eq!(
+            keys,
+            ["control", "treatment"].into_iter().collect(),
+            "control AND the null-point treatment variant must both surface; got {keys:?}"
+        );
+        // Sidebands still skipped.
+        assert!(!keys.contains("srm"), "srm sideband must NOT leak");
+        assert!(!keys.contains("cuped"), "cuped sideband must NOT leak");
+
+        // The null variant gets a 0/placeholder participant_count (no srm blob
+        // per_variant here, so it falls back to the metric-point path).
+        let treatment = resp
+            .variant_results
+            .iter()
+            .find(|vr| vr.variant_key == "treatment")
+            .expect("null-point treatment variant present");
+        assert_eq!(
+            treatment.participant_count, 0,
+            "degenerate null variant gets a 0 placeholder count"
+        );
+    }
+
+    /// FIX C2: `VariantResult.participant_count` must come from the SRM blob's
+    /// per-variant `observed` ASSIGNMENT count, NOT from the metric POINT value.
+    /// For a rate metric (mean < 1) the point rounds to 0 via `as_u64`; for a
+    /// numeric metric it is a rounded mean — both wrong as a participant count.
+    /// With an srm blob present, the count must equal the srm `observed`.
+    #[tokio::test]
+    async fn test_get_results_participant_count_from_srm_observed() {
+        let (env_id, env_id_str) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        // Rate metric: control mean 0.10, treatment mean 0.14 — both round to 0
+        // as a u64 metric point. The REAL assignment counts live in srm.observed.
+        let variant_stats = serde_json::json!({
+            "control": 0.10,
+            "treatment": 0.14,
+            "srm": {
+                "per_variant": [
+                    { "variant_key": "control",   "observed": 5000, "expected": 5000.0, "chi_sq_contribution": 0.0 },
+                    { "variant_key": "treatment", "observed": 4800, "expected": 5000.0, "chi_sq_contribution": 8.0 }
+                ],
+                "overall_chi_sq": 8.0,
+                "overall_chi_sq_p": 0.5,
+                "health": "green"
+            }
+        })
+        .to_string();
+        let result = ProtoExperimentResult {
+            env_id: env_id_str.clone(),
+            experiment_id: exp_id.to_string(),
+            iteration_id: Uuid::new_v4().to_string(),
+            variant_key: String::new(),
+            metric_key: "purchase_rate".to_string(),
+            metric_type: "rate".to_string(),
+            variant_stats,
+            frequentist_result: Some(serde_json::json!({ "p_value": 0.04 }).to_string()),
+            bayesian_result: None,
+            recommendation: "ship_treatment".to_string(),
+            computed_at: "2026-05-01T00:00:00Z".to_string(),
+            created_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
+            sequential_result: None,
+        };
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(AnalyticsMockWithData {
+                results: vec![result],
+            }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id_str,
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+
+        let by_key: std::collections::HashMap<&str, &VariantResult> = resp
+            .variant_results
+            .iter()
+            .map(|v| (v.variant_key.as_str(), v))
+            .collect();
+        let c = by_key.get("control").expect("control present");
+        let t = by_key.get("treatment").expect("treatment present");
+        assert_eq!(
+            c.participant_count, 5000,
+            "control participant_count must come from srm observed, not the 0.10 metric point"
+        );
+        assert_eq!(
+            t.participant_count, 4800,
+            "treatment participant_count must come from srm observed, not the 0.14 metric point"
         );
     }
 
