@@ -1458,6 +1458,171 @@ fn map_preview_results(
         .collect())
 }
 
+// ─── Prerequisites (flag_lifecycle_20260604) ────────────────────────────────
+
+/// A single prerequisite-gate edge in the REST API: the dependent flag requires
+/// `prerequisite_flag_key` to resolve to `required_variant_key`.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
+pub struct PrerequisiteJson {
+    /// UUID of the prerequisite flag (admin metadata; optional on write — the
+    /// key is sufficient).
+    #[serde(default)]
+    pub prerequisite_flag_id: String,
+    /// Key of the prerequisite flag.
+    pub prerequisite_flag_key: String,
+    /// UUID of the required variant (admin metadata; optional on write).
+    #[serde(default)]
+    pub required_variant_id: String,
+    /// Key of the variant the prerequisite flag must resolve to.
+    pub required_variant_key: String,
+}
+
+/// Request body for `PUT /v1/projects/{project_id}/flags/{flag_id}/prerequisites`.
+///
+/// Replaces the flag's full prerequisite set. Empty `prerequisites` clears all
+/// prerequisites. `fallback_variant_key` empty means "fall back to the flag's
+/// off/disabled variant".
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetPrerequisitesBody {
+    /// The full replacement prerequisite set.
+    #[serde(default)]
+    pub prerequisites: Vec<PrerequisiteJson>,
+    /// Key of the fallback variant; empty = the off/disabled variant.
+    #[serde(default)]
+    pub fallback_variant_key: String,
+    /// Optimistic-locking version (matches the flag's current `version`).
+    #[serde(default)]
+    pub version: u64,
+}
+
+/// Response body for the prerequisite endpoints.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PrerequisitesResponseJson {
+    /// The flag's prerequisite edges.
+    pub prerequisites: Vec<PrerequisiteJson>,
+    /// Key of the configured fallback variant, or empty for the off/disabled variant.
+    pub fallback_variant_key: String,
+}
+
+fn proto_prereq_to_json(p: &stitchd_proto::flags::v1::FlagPrerequisite) -> PrerequisiteJson {
+    PrerequisiteJson {
+        prerequisite_flag_id: p.prerequisite_flag_id.clone(),
+        prerequisite_flag_key: p.prerequisite_flag_key.clone(),
+        required_variant_id: p.required_variant_id.clone(),
+        required_variant_key: p.required_variant_key.clone(),
+    }
+}
+
+/// `GET /v1/projects/{project_id}/flags/{flag_id}/prerequisites`
+///
+/// Read a flag's prerequisite gate (deps + fallback variant).
+#[utoipa::path(
+    get,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/prerequisites",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    responses(
+        (status = 200, description = "Prerequisite gate", body = PrerequisitesResponseJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Flag not found"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_prerequisites(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    use stitchd_proto::flags::v1::GetPrerequisitesRequest;
+
+    let req = tonic::Request::new(GetPrerequisitesRequest {
+        project_id,
+        flag_key,
+    });
+    let mut client = state.flag_client.lock().await;
+    let resp = client
+        .get_prerequisites(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    Ok(Json(PrerequisitesResponseJson {
+        prerequisites: inner
+            .prerequisites
+            .iter()
+            .map(proto_prereq_to_json)
+            .collect(),
+        fallback_variant_key: inner.fallback_variant_key,
+    }))
+}
+
+/// `PUT /v1/projects/{project_id}/flags/{flag_id}/prerequisites`
+///
+/// Replace a flag's prerequisite gate. Returns 409 when the flag is locked by a
+/// running/paused experiment, and 400 (with the cycle path) when the edge set
+/// would form a cycle in the prerequisite DAG.
+#[utoipa::path(
+    put,
+    path = "/v1/projects/{project_id}/flags/{flag_id}/prerequisites",
+    tag = "flags",
+    params(
+        ("project_id" = String, Path, description = "Project ID"),
+        ("flag_id" = String, Path, description = "Flag key"),
+    ),
+    request_body = SetPrerequisitesBody,
+    responses(
+        (status = 200, description = "Prerequisite gate updated", body = PrerequisitesResponseJson),
+        (status = 400, description = "Prerequisite cycle / invalid input"),
+        (status = 401, description = "Unauthorized"),
+        (status = 409, description = "Flag locked by an experiment"),
+        (status = 502, description = "Flag service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn set_prerequisites(
+    State(state): State<Arc<GatewayState>>,
+    Path((project_id, flag_key)): Path<(String, String)>,
+    Json(body): Json<SetPrerequisitesBody>,
+) -> Result<impl IntoResponse, GatewayError> {
+    use stitchd_proto::flags::v1::{FlagPrerequisite, SetPrerequisitesRequest};
+
+    let prerequisites: Vec<FlagPrerequisite> = body
+        .prerequisites
+        .into_iter()
+        .map(|p| FlagPrerequisite {
+            prerequisite_flag_id: p.prerequisite_flag_id,
+            prerequisite_flag_key: p.prerequisite_flag_key,
+            required_variant_id: p.required_variant_id,
+            required_variant_key: p.required_variant_key,
+        })
+        .collect();
+
+    let req = tonic::Request::new(SetPrerequisitesRequest {
+        project_id,
+        flag_key,
+        prerequisites,
+        fallback_variant_key: body.fallback_variant_key,
+        version: body.version,
+    });
+
+    let mut client = state.flag_client.lock().await;
+    let resp = client
+        .set_prerequisites(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let flag = resp.into_inner().flag.unwrap_or_default();
+    Ok(Json(PrerequisitesResponseJson {
+        prerequisites: flag
+            .prerequisites
+            .iter()
+            .map(proto_prereq_to_json)
+            .collect(),
+        fallback_variant_key: flag.fallback_variant_key,
+    }))
+}
+
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
 /// Build a minimal router for unit testing.
@@ -1542,6 +1707,7 @@ mod tests {
                     }),
                 }],
                 rollout_debug: None,
+                prerequisite_failure: None,
             },
             ContextPreviewResult {
                 context_index: 1,
@@ -1572,6 +1738,7 @@ mod tests {
                         },
                     ],
                 }),
+                prerequisite_failure: None,
             },
         ];
         let results_json = serde_json::to_string(&core_results).unwrap();

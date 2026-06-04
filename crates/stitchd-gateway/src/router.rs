@@ -349,6 +349,12 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/projects/{project_id}/flags/{flag_id}/hashing",
             put(flags::update_flag_hashing),
         )
+        // --- prerequisites (flag_lifecycle) ---
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/prerequisites",
+            get(flags::get_prerequisites).put(flags::set_prerequisites),
+        )
+        // --- end prerequisites (flag_lifecycle) ---
         // Segments — write
         .route(
             "/v1/segments",
