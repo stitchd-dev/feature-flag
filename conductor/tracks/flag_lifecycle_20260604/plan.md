@@ -80,17 +80,18 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 ## Phase 4: Prerequisites — Persistence, Service, Gateway, Snapshot, Flag Delete-Block
 <!-- depends: phase1, phase2 -->
 
-- [ ] Task 1: (Red→Green) Repository — prerequisites CRUD + `entity_dependencies` edge writes.
+- [x] Task 1: (Red→Green) Repository — prerequisites CRUD + `entity_dependencies` edge writes. (SHA 58ea071)
   <!-- files: crates/stitchd-db/src/repository/pg/prerequisites.rs -->
-- [ ] Task 2: flag-service — `SetPrerequisites`/`GetPrerequisites` with write-time cycle
-  detection (reject `409`/`422` + cycle path); populate prerequisites + fallback into BOTH
-  definition-sync and evaluate-preview snapshots. TDD.
+- [x] Task 2: flag-service — `SetPrerequisites`/`GetPrerequisites` with write-time cycle
+  detection (reject `400` INVALID_ARGUMENT + cycle path); populate prerequisites + fallback into
+  BOTH definition-sync and evaluate-preview snapshots. TDD. (SHA b115625)
   <!-- files: crates/stitchd-flag-service/src/service.rs, crates/stitchd-flag-service/src/prerequisites.rs -->
-- [ ] Task 3: Flag referential integrity — block flag delete/archive while referenced as a
-  prerequisite (`409 DEPENDENCY_EXISTS` + dependents). TDD.
-  <!-- files: crates/stitchd-flag-service/src/flag_lock.rs, crates/stitchd-flag-service/src/service.rs -->
+- [x] Task 3: Flag referential integrity — block flag delete/archive while referenced as a
+  prerequisite (`409 DEPENDENCY_EXISTS` + dependents). TDD. (service-side SHA b115625; gateway
+  decode SHA b8fefa2)
+  <!-- files: crates/stitchd-flag-service/src/service.rs, crates/stitchd-gateway/src/error.rs -->
   <!-- depends: task1 -->
-- [ ] Task 4: Gateway `/v1/projects/{pid}/flags/{fid}/prerequisites` routes + OpenAPI. TDD.
+- [x] Task 4: Gateway `/v1/projects/{pid}/flags/{fid}/prerequisites` routes + OpenAPI. TDD. (SHA b8fefa2)
   <!-- files: crates/stitchd-gateway/src/routes/flags.rs, crates/stitchd-gateway/src/router.rs -->
   <!-- depends: task2 -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 4: Prerequisites Backend' (Protocol in workflow.md)
