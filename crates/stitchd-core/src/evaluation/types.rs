@@ -477,11 +477,69 @@ mod tests {
             EvalOutcome::RuleMatch { rule_index: 3 },
             EvalOutcome::DefaultFallthrough,
             EvalOutcome::DefaultRuleDistribution,
+            EvalOutcome::PrerequisiteFailed {
+                prerequisite_flag_id: FlagId::new(),
+            },
         ] {
             let json = serde_json::to_string(&outcome).unwrap();
             let back: EvalOutcome = serde_json::from_str(&json).unwrap();
             assert_eq!(outcome, back);
         }
+    }
+
+    #[test]
+    fn prerequisite_failed_outcome_uses_snake_case_kind_tag() {
+        let outcome = EvalOutcome::PrerequisiteFailed {
+            prerequisite_flag_id: FlagId::new(),
+        };
+        let json = serde_json::to_string(&outcome).unwrap();
+        assert!(
+            json.contains("\"prerequisite_failed\""),
+            "kind tag must be snake_case: {json}"
+        );
+        assert!(json.contains("prerequisite_flag_id"));
+    }
+
+    #[test]
+    fn prerequisite_failure_trace_serde_round_trip_with_and_without_resolved() {
+        let pf = PrerequisiteFailureTrace {
+            prerequisite_flag_id: FlagId::new(),
+            required_variant_id: crate::id::VariantId::new(),
+            resolved_variant_id: Some(crate::id::VariantId::new()),
+            fallback_variant_key: "off".to_string(),
+        };
+        let json = serde_json::to_string(&pf).unwrap();
+        let back: PrerequisiteFailureTrace = serde_json::from_str(&json).unwrap();
+        assert_eq!(pf, back);
+
+        // `resolved_variant_id: None` is skipped on the wire.
+        let pf_none = PrerequisiteFailureTrace {
+            resolved_variant_id: None,
+            ..pf
+        };
+        let json_none = serde_json::to_string(&pf_none).unwrap();
+        assert!(
+            !json_none.contains("resolved_variant_id"),
+            "None resolved variant must be skipped: {json_none}"
+        );
+        let back_none: PrerequisiteFailureTrace = serde_json::from_str(&json_none).unwrap();
+        assert_eq!(pf_none, back_none);
+    }
+
+    #[test]
+    fn evaluation_trace_skips_none_prerequisite_failure_in_json() {
+        let trace = EvaluationTrace {
+            rule_traces: Vec::new(),
+            rollout_debug: None,
+            fired_rule_id: None,
+            fired_rule_name: None,
+            prerequisite_failure: None,
+        };
+        let json = serde_json::to_string(&trace).unwrap();
+        assert!(
+            !json.contains("prerequisite_failure"),
+            "None prerequisite_failure must be skipped: {json}"
+        );
     }
 
     #[test]
