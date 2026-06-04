@@ -22,6 +22,12 @@ pub struct ScheduleConfig {
     /// gRPC endpoint for flag-service
     /// (`STITCHD_FLAG_SERVICE_GRPC_URL`, default: `http://localhost:50051`).
     pub flag_service_grpc_url: String,
+    /// gRPC endpoint for experimentation-service
+    /// (`STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL`, default: `http://localhost:50055`).
+    pub experimentation_service_grpc_url: String,
+    /// gRPC endpoint for segmentation-service
+    /// (`STITCHD_SEGMENTATION_SERVICE_GRPC_URL`, default: `http://localhost:50053`).
+    pub segmentation_service_grpc_url: String,
 }
 
 impl ScheduleConfig {
@@ -58,6 +64,13 @@ impl ScheduleConfig {
         let flag_service_grpc_url = std::env::var("STITCHD_FLAG_SERVICE_GRPC_URL")
             .unwrap_or_else(|_| "http://localhost:50051".to_string());
 
+        let experimentation_service_grpc_url =
+            std::env::var("STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL")
+                .unwrap_or_else(|_| "http://localhost:50055".to_string());
+
+        let segmentation_service_grpc_url = std::env::var("STITCHD_SEGMENTATION_SERVICE_GRPC_URL")
+            .unwrap_or_else(|_| "http://localhost:50053".to_string());
+
         Ok(Self {
             database_url,
             scheduler_interval: Duration::from_secs(scheduler_interval_secs),
@@ -65,6 +78,8 @@ impl ScheduleConfig {
             http_port,
             grpc_port,
             flag_service_grpc_url,
+            experimentation_service_grpc_url,
+            segmentation_service_grpc_url,
         })
     }
 }
@@ -121,6 +136,8 @@ mod tests {
         let _g_hp = EnvGuard::new("STITCHD_SCHEDULE_SERVICE_HTTP_PORT");
         let _g_gp = EnvGuard::new("STITCHD_SCHEDULE_SERVICE_GRPC_PORT");
         let _g_fs = EnvGuard::new("STITCHD_FLAG_SERVICE_GRPC_URL");
+        let _g_es = EnvGuard::new("STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL");
+        let _g_ss = EnvGuard::new("STITCHD_SEGMENTATION_SERVICE_GRPC_URL");
         let _g_cb = EnvGuard::new("STITCHD_SCHEDULE_CLAIM_BATCH");
         unsafe {
             std::env::set_var("STITCHD_DATABASE_URL", "postgresql://x:x@localhost/x");
@@ -128,6 +145,8 @@ mod tests {
             std::env::remove_var("STITCHD_SCHEDULE_SERVICE_HTTP_PORT");
             std::env::remove_var("STITCHD_SCHEDULE_SERVICE_GRPC_PORT");
             std::env::remove_var("STITCHD_FLAG_SERVICE_GRPC_URL");
+            std::env::remove_var("STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL");
+            std::env::remove_var("STITCHD_SEGMENTATION_SERVICE_GRPC_URL");
             std::env::remove_var("STITCHD_SCHEDULE_CLAIM_BATCH");
         }
         let config = ScheduleConfig::from_env().unwrap();
@@ -136,6 +155,14 @@ mod tests {
         assert_eq!(config.grpc_port, 50057);
         assert_eq!(config.claim_batch, 100);
         assert_eq!(config.flag_service_grpc_url, "http://localhost:50051");
+        assert_eq!(
+            config.experimentation_service_grpc_url,
+            "http://localhost:50055"
+        );
+        assert_eq!(
+            config.segmentation_service_grpc_url,
+            "http://localhost:50053"
+        );
     }
 
     #[test]

@@ -62,6 +62,18 @@ async fn main() -> anyhow::Result<()> {
     let exclusion_group_repo =
         Arc::new(PgExclusionGroupRepository::new(pool.clone(), audit.clone()));
     let flag_repo = Arc::new(PgFlagRepository::new(pool.clone(), audit));
+    // Start-time prerequisite gate (Phase 5): repo over
+    // `experiment_start_prerequisites` + a resolver backed by the experiment repo.
+    let start_prereq_repo = Arc::new(
+        stitchd_experimentation_service::start_prerequisites::PgStartPrerequisiteRepository::new(
+            pool.clone(),
+        ),
+    );
+    let start_prereq_resolver = Arc::new(
+        stitchd_experimentation_service::start_prerequisites::ServiceStartPrerequisiteResolver::new(
+            experiment_repo.clone(),
+        ),
+    );
     let schedule_repo = Arc::new(PgStatsScheduleRepository::new(pool));
 
     // ── Analytics Service gRPC client ─────────────────────────────────────────
@@ -134,7 +146,8 @@ async fn main() -> anyhow::Result<()> {
     )
     .with_exposure_reader(exposure_reader)
     .with_interactions_reader(interactions_reader)
-    .with_exclusion_groups(exclusion_group_repo, flag_repo);
+    .with_exclusion_groups(exclusion_group_repo, flag_repo)
+    .with_start_prerequisites(start_prereq_repo, start_prereq_resolver);
 
     let (health_reporter, health_service) = health_reporter();
     health_reporter

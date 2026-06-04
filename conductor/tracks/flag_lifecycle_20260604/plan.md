@@ -99,15 +99,17 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 ## Phase 5: Scheduler — Experiments + Segments + Routes + Experiment Start-Prereqs
 <!-- depends: phase3 -->
 
-- [ ] Task 1: Experiment apply path — schedule start/pause/resume/stop/archive transitions;
-  validate transition at fire time. TDD incl. invalid-transition skip.
+- [x] Task 1: Experiment apply path — schedule start/pause/resume/stop/archive transitions;
+  validate transition at fire time. TDD incl. invalid-transition skip. (SHA c223ba0)
   <!-- files: crates/stitchd-schedule-service/src/apply/experiment.rs -->
-- [ ] Task 2: Experiment **start-time prerequisites** (flag-in-variant / experiment-stopped) —
-  enforced on manual AND scheduled start (`409`/reason if unmet). TDD.
-  <!-- files: crates/stitchd-experimentation-service/src/service.rs -->
-- [ ] Task 3: Segment apply path — scheduled definition update / list-generation activation. TDD.
+- [x] Task 2: Experiment **start-time prerequisites** (flag-in-variant / experiment-stopped) —
+  enforced on manual AND scheduled start (`409`/reason if unmet). TDD. (SHA 1d7160a)
+  <!-- files: crates/stitchd-experimentation-service/src/service.rs, crates/stitchd-experimentation-service/src/start_prerequisites.rs, crates/stitchd-db/migrations/20260604000002_experiment_start_prerequisites.sql -->
+- [x] Task 3: Segment apply path — scheduled definition update / list-generation activation. TDD.
+  (SHA fca5f66; list-generation NOT supported — no activation RPC; rejected w/ reason)
   <!-- files: crates/stitchd-schedule-service/src/apply/segment.rs -->
-- [ ] Task 4: Gateway `/schedules` sub-routes for flags, segments, experiments + OpenAPI. TDD.
+- [x] Task 4: Gateway `/schedules` sub-routes for flags, segments, experiments + OpenAPI. TDD.
+  (SHA 12f6f18)
   <!-- files: crates/stitchd-gateway/src/routes/schedules.rs, crates/stitchd-gateway/src/router.rs -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Scheduling — All Entities' (Protocol in workflow.md)
 

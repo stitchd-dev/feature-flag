@@ -13,6 +13,7 @@ use stitchd_proto::auth::v1::{
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::flags::v1::flag_service_client::FlagServiceClient;
 use stitchd_proto::management::v1::management_service_client::ManagementServiceClient;
+use stitchd_proto::schedule::v1::schedule_service_client::ScheduleServiceClient;
 use stitchd_proto::sdk::v1::{
     flag_sdk_backend_service_client::FlagSdkBackendServiceClient,
     segmentation_sdk_backend_service_client::SegmentationSdkBackendServiceClient,
@@ -47,6 +48,9 @@ pub struct GatewayState {
     pub flag_sdk_backend_client: Arc<Mutex<FlagSdkBackendServiceClient<Channel>>>,
     /// SDK backend client for segmentation-service (BatchCheckListMembership).
     pub segmentation_sdk_backend_client: Arc<Mutex<SegmentationSdkBackendServiceClient<Channel>>>,
+    /// Schedule service gRPC client (scheduled-change CRUD/lifecycle).
+    /// (flag_lifecycle_20260604)
+    pub schedule_client: Arc<Mutex<ScheduleServiceClient<Channel>>>,
 }
 
 impl GatewayState {
@@ -61,6 +65,7 @@ impl GatewayState {
         analytics_addr: String,
         experimentation_addr: String,
         stats_addr: String,
+        schedule_addr: String,
     ) -> Result<Self, anyhow::Error> {
         let auth_channel = Channel::from_shared(auth_addr.clone())
             .map_err(|e| anyhow::anyhow!("invalid Auth Service URI: {e}"))?
@@ -122,6 +127,12 @@ impl GatewayState {
             .await
             .map_err(|e| anyhow::anyhow!("connect to Stats Service: {e}"))?;
 
+        let schedule_channel = Channel::from_shared(schedule_addr)
+            .map_err(|e| anyhow::anyhow!("invalid Schedule Service URI: {e}"))?
+            .connect()
+            .await
+            .map_err(|e| anyhow::anyhow!("connect to Schedule Service: {e}"))?;
+
         let flag_channel_for_sdk = flag_channel.clone();
         let seg_channel_for_sdk = seg_channel.clone();
 
@@ -150,6 +161,7 @@ impl GatewayState {
             segmentation_sdk_backend_client: Arc::new(Mutex::new(
                 SegmentationSdkBackendServiceClient::new(seg_channel_for_sdk),
             )),
+            schedule_client: Arc::new(Mutex::new(ScheduleServiceClient::new(schedule_channel))),
         })
     }
 
@@ -187,7 +199,20 @@ impl GatewayState {
             segmentation_sdk_backend_client: Arc::new(Mutex::new(
                 SegmentationSdkBackendServiceClient::new(segmentation_channel),
             )),
+            // Lazy placeholder: tests that exercise schedule routes override this
+            // via `with_schedule_client`; others never dial it.
+            schedule_client: Arc::new(Mutex::new(ScheduleServiceClient::new(
+                Channel::from_static("http://127.0.0.1:1").connect_lazy(),
+            ))),
         }
+    }
+
+    /// Override the schedule-service client (used by schedule-route tests to
+    /// point the gateway at an in-process mock `ScheduleService`).
+    #[must_use]
+    pub fn with_schedule_client(mut self, client: ScheduleServiceClient<Channel>) -> Self {
+        self.schedule_client = Arc::new(Mutex::new(client));
+        self
     }
 }
 

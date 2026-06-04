@@ -35,6 +35,7 @@ pub mod management;
 pub mod metrics;
 pub mod oidc;
 pub mod saml;
+pub mod schedules;
 pub mod sdk_backend;
 pub mod segments;
 pub mod stats;
