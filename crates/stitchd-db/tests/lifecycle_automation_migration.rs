@@ -49,6 +49,35 @@ async fn feature_flags_has_fallback_variant_id(pool: PgPool) {
     assert!(exists, "feature_flags.fallback_variant_id should exist");
 }
 
+/// `experiment_start_prerequisites` (migration `20260604000002`) exists with its
+/// index after migrations run.
+#[sqlx::test(migrations = "./migrations")]
+async fn experiment_start_prerequisites_table_and_index_exist(pool: PgPool) {
+    let table_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = 'experiment_start_prerequisites'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("schema query failed");
+    assert!(table_exists, "experiment_start_prerequisites should exist");
+
+    let index_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE schemaname = 'public'
+              AND indexname = 'idx_experiment_start_prereq_experiment'
+        )",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("schema query failed");
+    assert!(index_exists, "idx_experiment_start_prereq_experiment should exist");
+}
+
 /// The partial due-change index exists.
 #[sqlx::test(migrations = "./migrations")]
 async fn due_change_partial_index_exists(pool: PgPool) {

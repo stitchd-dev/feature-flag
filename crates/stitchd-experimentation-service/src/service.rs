@@ -31,6 +31,9 @@ use stitchd_proto::experiments::v1::{
 use crate::analytics_client::AnalyticsResultsPort;
 use crate::dict_refresh::{DictionaryRefresher, spawn_refresh};
 use crate::flag_client::FlagClient;
+use crate::start_prerequisites::{
+    StartPrerequisiteRepository, StartPrerequisiteResolver, evaluate_start_prerequisites,
+};
 
 // ---------------------------------------------------------------------------
 // Experiment binding validation (GL-08)
@@ -463,6 +466,14 @@ pub struct ExperimentationServiceImpl {
     /// Assign/Unassign to push the gate onto the rule's `rule_def` so the
     /// flag snapshot picks it up. `None` makes those RPCs return `Unimplemented`.
     rule_gate_writer: Option<Arc<dyn RuleGateWriter>>,
+    /// Optional experiment start-time prerequisite repo + resolver. When both are
+    /// present, a transition **into running** (manual or scheduled start)
+    /// evaluates the experiment's declared start-time prerequisites and is
+    /// rejected with `FAILED_PRECONDITION` if any is unmet. `None` (the default)
+    /// skips the gate — preserving behaviour for service instances that do not
+    /// configure prerequisites.
+    start_prereq:
+        Option<(Arc<dyn StartPrerequisiteRepository>, Arc<dyn StartPrerequisiteResolver>)>,
 }
 
 impl ExperimentationServiceImpl {
@@ -484,7 +495,22 @@ impl ExperimentationServiceImpl {
             interactions_reader: None,
             exclusion_group_repo: None,
             rule_gate_writer: None,
+            start_prereq: None,
         }
+    }
+
+    /// Attach the experiment start-time prerequisite repo + resolver. When set, a
+    /// transition into `running` (manual or scheduled start) enforces the
+    /// experiment's declared start-time prerequisites and rejects the start with
+    /// `FAILED_PRECONDITION` if any is unmet. Without it, the gate is skipped.
+    #[must_use]
+    pub fn with_start_prerequisites(
+        mut self,
+        repo: Arc<dyn StartPrerequisiteRepository>,
+        resolver: Arc<dyn StartPrerequisiteResolver>,
+    ) -> Self {
+        self.start_prereq = Some((repo, resolver));
+        self
     }
 
     /// Attach a ClickHouse-backed reader for `experiment_interactions`. Without
@@ -1023,6 +1049,31 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
         let exp_id = stitchd_core::id::ExperimentId::from_uuid(exp_uuid);
         let target_status = proto_status_to_core(req.new_status)?;
+
+        // ── Start-time prerequisites (spec C4) ────────────────────────────────
+        // A transition INTO running is a "start" (manual OR scheduled — both
+        // issue this same RPC). When prerequisites are configured, evaluate the
+        // experiment's declared start-time prerequisites and reject the start
+        // with FAILED_PRECONDITION (→ 409 on a gateway path) if any is unmet.
+        // `apply_transition` separately rejects an invalid *transition* (e.g. a
+        // start of an already-running experiment); this gate only fires for a
+        // would-be-valid start.
+        if target_status == ExperimentStatus::Running
+            && let Some((prereq_repo, resolver)) = self.start_prereq.as_ref()
+            && let Some(reason) = evaluate_start_prerequisites(
+                prereq_repo.as_ref(),
+                resolver.as_ref(),
+                &req.environment_id,
+                exp_uuid,
+            )
+            .await?
+        {
+            metrics::counter!("experimentation_service.transition_experiment.prereq_unmet")
+                .increment(1);
+            return Err(Status::failed_precondition(format!(
+                "experiment start prerequisite unmet: {reason}"
+            )));
+        }
 
         let updated = self
             .experiment_repo
@@ -3754,6 +3805,148 @@ mod tests {
         });
         let result = svc.update_iteration_last_computed(req).await;
         assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // transition_experiment start-time prerequisite gate tests (Phase 5)
+    // -----------------------------------------------------------------------
+
+    use crate::start_prerequisites::{
+        PrereqCheck, StartPrerequisite, StartPrerequisiteRepository, StartPrerequisiteResolver,
+    };
+
+    struct StubPrereqRepo(Vec<StartPrerequisite>);
+    #[async_trait]
+    impl StartPrerequisiteRepository for StubPrereqRepo {
+        async fn list_for_experiment(
+            &self,
+            _experiment_id: uuid::Uuid,
+        ) -> Result<Vec<StartPrerequisite>, RepositoryError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    struct StubPrereqResolver {
+        flag: PrereqCheck,
+        experiment: PrereqCheck,
+    }
+    #[async_trait]
+    impl StartPrerequisiteResolver for StubPrereqResolver {
+        async fn flag_serves_variant(
+            &self,
+            _environment_id: &str,
+            _flag_id: uuid::Uuid,
+            _required_variant_id: uuid::Uuid,
+        ) -> Result<PrereqCheck, Status> {
+            Ok(self.flag.clone())
+        }
+        async fn experiment_is_done(
+            &self,
+            _experiment_id: uuid::Uuid,
+        ) -> Result<PrereqCheck, Status> {
+            Ok(self.experiment.clone())
+        }
+    }
+
+    /// Spec C4: a start (draft→running) with an UNMET start-time prerequisite is
+    /// refused with FAILED_PRECONDITION; the underlying transition never runs.
+    #[tokio::test]
+    async fn transition_into_running_refused_when_start_prereq_unmet() {
+        let (env_id, env_str) = env_uuid();
+        let repo = Arc::new(StubPrereqRepo(vec![StartPrerequisite::FlagVariant {
+            flag_id: uuid::Uuid::new_v4(),
+            required_variant_id: uuid::Uuid::new_v4(),
+        }]));
+        let resolver = Arc::new(StubPrereqResolver {
+            flag: PrereqCheck::Unmet("flag 'kill-switch' serves 'off'".to_string()),
+            experiment: PrereqCheck::Met,
+        });
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_start_prerequisites(repo, resolver);
+
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: ExperimentId::new().to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
+            environment_id: env_str,
+            reason: String::new(),
+        });
+        let err = svc.transition_experiment(req).await.expect_err("refused");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            err.message().contains("start prerequisite unmet"),
+            "msg: {}",
+            err.message()
+        );
+        assert!(err.message().contains("kill-switch"), "msg: {}", err.message());
+    }
+
+    /// A start with all prerequisites MET proceeds normally.
+    #[tokio::test]
+    async fn transition_into_running_allowed_when_prereqs_met() {
+        let (env_id, env_str) = env_uuid();
+        let repo = Arc::new(StubPrereqRepo(vec![StartPrerequisite::ExperimentDone {
+            experiment_id: uuid::Uuid::new_v4(),
+        }]));
+        let resolver = Arc::new(StubPrereqResolver {
+            flag: PrereqCheck::Met,
+            experiment: PrereqCheck::Met,
+        });
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_start_prerequisites(repo, resolver);
+
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: ExperimentId::new().to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
+            environment_id: env_str,
+            reason: String::new(),
+        });
+        svc.transition_experiment(req).await.expect("start allowed");
+    }
+
+    /// A NON-start transition (e.g. running→paused) does NOT evaluate start-time
+    /// prerequisites, even when unmet.
+    #[tokio::test]
+    async fn non_start_transition_skips_prereq_gate() {
+        let (env_id, env_str) = env_uuid();
+        let repo = Arc::new(StubPrereqRepo(vec![StartPrerequisite::FlagVariant {
+            flag_id: uuid::Uuid::new_v4(),
+            required_variant_id: uuid::Uuid::new_v4(),
+        }]));
+        let resolver = Arc::new(StubPrereqResolver {
+            flag: PrereqCheck::Unmet("would block a start".to_string()),
+            experiment: PrereqCheck::Met,
+        });
+        // AlwaysSucceedRepo reports the experiment as Draft; to make running→paused
+        // a valid transition we rely on apply_transition's stub accepting any `to`.
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_start_prerequisites(repo, resolver);
+
+        // Paused is not "into running" → the gate is skipped; AlwaysSucceedRepo's
+        // apply_transition accepts it.
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: ExperimentId::new().to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Paused as i32,
+            environment_id: env_str,
+            reason: String::new(),
+        });
+        svc.transition_experiment(req)
+            .await
+            .expect("pause not gated by start prereqs");
     }
 
     // -----------------------------------------------------------------------
