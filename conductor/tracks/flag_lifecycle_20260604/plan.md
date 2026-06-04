@@ -38,7 +38,7 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
   (`SetPrerequisites`/`GetPrerequisites`); new `proto/schedule/v1/*.proto`; experiment +
   segment lifecycle/schedule messages; `DEPENDENCY_EXISTS` error code. Regenerate stubs.
   <!-- files: proto/flags/v1/flag_sync.proto, proto/flags/v1/flag_service.proto, proto/schedule/v1/schedule_service.proto, proto/experiments/v1/experiment_service.proto, proto/segments/v1/segment_service.proto -->
-- [ ] Task 4: Core domain types in `stitchd-core` — `PrerequisiteGate`/`FlagPrerequisite`,
+- [x] Task 4: Core domain types in `stitchd-core` — `PrerequisiteGate`/`FlagPrerequisite`,
   `ScheduledChange`/`RecurrenceSpec` (RRULE+tz next-occurrence, DST-aware),
   `EntityRef`/`DependencyEdge`. TDD: (de)serialization + recurrence-across-DST tests.
   <!-- files: crates/stitchd-core/src/schedule.rs, crates/stitchd-core/src/prerequisite.rs, crates/stitchd-core/src/lib.rs -->

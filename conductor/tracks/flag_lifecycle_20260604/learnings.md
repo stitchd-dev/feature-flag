@@ -112,3 +112,24 @@ Patterns, gotchas, and context discovered during implementation.
   as epoch-ms int64 (no google.protobuf well-known types anywhere in the tree).
 - `cargo build -p stitchd-proto` regenerates stubs; 25 proto compilation tests green
   (added FlagPrerequisite round-trip, prerequisite RPC types, schedule types + enums + stubs).
+
+## 2026-06-04 — Phase 1 Task 4 (core domain types)
+- `crates/stitchd-core/src/prerequisite.rs`: `FlagPrerequisite { prerequisite_flag_id,
+  required_variant_id }` + `PrerequisiteGate { prerequisites, fallback_variant_id }`,
+  serde + openapi-gated `utoipa::ToSchema` like sibling types. (Gate APPLICATION in
+  evaluate_flag is Phase 2 — only the types here.)
+- `crates/stitchd-core/src/schedule.rs`: `ScheduleKind`/`ScheduleStatus`/`ScheduleEntityType`
+  enums (snake_case serde), `RecurrenceSpec { rrule, tz }`, `ScheduledChange` summary,
+  `RecurrenceSpec::next_occurrence(after) -> Result<Option<DateTime<Utc>>, RecurrenceError>`.
+- rrule 0.14 API: `RRuleSet::from_str(full_rfc5545)` parses a `DTSTART;TZID=...` + `RRULE:` body
+  in one go (the DTSTART carries the IANA TZID — that zone, not the redundant `tz` field, is
+  authoritative for the math). `rrule::Tz` wraps `chrono_tz::Tz` (`.into()`); `.after(dt)` then
+  `.all(1)` gives the next occurrence. Convert results back to UTC with `.with_timezone(&Utc)`.
+- GOTCHA: `RRuleSet::all()`'s `after` bound is INCLUSIVE (the 4th arg to internal
+  `collect_with_error` is `inclusive=true`). For strict "next AFTER" semantics (so re-querying
+  at the exact fire instant returns the *next* window) bump the bound by
+  `chrono::Duration::seconds(1)` — RRULE occurrences are second-granular so this never skips.
+- DST proof test: weekday 09:00 America/New_York. Pre-spring-forward fire = 14:00 UTC (EST,
+  UTC-5); post-spring-forward (after 2026-03-08) = 13:00 UTC (EDT, UTC-4). UTC hour shifts
+  14→13 while local stays 09:00 → DST-correct. `chrono::Duration` is NOT std Duration (already
+  in inherited learnings) — used `chrono::Duration::seconds` directly on a `DateTime<Utc>`.
