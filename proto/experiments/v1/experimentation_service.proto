@@ -244,6 +244,22 @@ message RunningExperiment {
   int64           started_at_ms = 6;
   // Always "running" for results returned by this RPC.
   string          status        = 7;
+  // [ADDITIVE] Active-iteration snapshot of the compute-pass inputs, carried here
+  // so the stats-service scheduler does not need a second `GetExperimentIteration`
+  // round-trip per experiment. Mirrors the corresponding `ExperimentIteration`
+  // fields; the handler already loads the active iteration to populate
+  // `metric_ids`/`variant_keys`, so these are populated from the same row.
+  //
+  // Analysis unit context types (the compute pass runs one analysis per type).
+  // Empty decodes to "user" downstream for back-compat with older servers.
+  repeated string unit_context_types         = 8;
+  // CUPED pre-period window in days (0 = disabled).
+  uint32          pre_period_days            = 9;
+  // Sequential-testing configuration snapshot.
+  bool            sequential_testing_enabled = 10;
+  double          sequential_alpha           = 11;
+  optional double sequential_tau_squared     = 12;
+  int64           sequential_min_sample_size = 13;
 }
 
 message ListRunningExperimentsRequest {
