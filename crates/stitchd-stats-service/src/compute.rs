@@ -1498,13 +1498,16 @@ pub async fn run_stats_compute(
             .await?;
         let sample_sizes: HashMap<String, u64> = counts.iter().cloned().collect();
 
-        // SRM once per context over the assignment counts (equal-split
-        // expected). The FULL configured variant set is passed so a starved
-        // (zero-assignment) arm is zero-filled and visible (FIX 3) — without it
-        // ClickHouse emits no row for the starved arm and the split reads green.
-        // Stored to attach under `variant_stats["srm"]` after the summaries are
-        // built — NOT folded into the recommendation string.
-        if let Some(srm_json) = srm_json_for(&counts, &exp.variant_keys) {
+        // SRM once per context over the assignment counts. The FULL configured
+        // variant set is passed so a starved (zero-assignment) arm is zero-filled
+        // and visible (FIX 3) — without it ClickHouse emits no row for the
+        // starved arm and the split reads green. `variant_expected_bp` carries
+        // the experiment's DESIGNED per-variant split (from the bound rule or
+        // default-rule distribution) so a non-uniform design (e.g. 95/5) is
+        // tested against its real proportions; empty → uniform `total/K`
+        // fallback. Stored to attach under `variant_stats["srm"]` after the
+        // summaries are built — NOT folded into the recommendation string.
+        if let Some(srm_json) = srm_json_for(&counts, &exp.variant_keys, &exp.variant_expected_bp) {
             srm_per_ctx.insert(context_type.clone(), srm_json);
         }
 
@@ -1749,15 +1752,32 @@ fn metric_type_str(mt: MetricType) -> &'static str {
 /// starved arm would otherwise be invisible — `K` and `expected` would be
 /// computed over only the firing arms and a starved split would read green.
 /// We therefore zero-fill any configured variant absent from `counts`
-/// (`observed: 0`) so `K` (= the configured arm count) and `expected = total/K`
-/// reflect ALL arms and the core `compute_srm` Red-on-starvation path
-/// (`observed == 0` with `expected > 0`) is reachable. When `configured_variants`
-/// is empty (e.g. the snapshot could not source it) we fall back to the observed
-/// `counts` keys alone — the prior behaviour.
+/// (`observed: 0`) so `K` (= the configured arm count) and the per-arm
+/// `expected` reflect ALL arms and the core `compute_srm` Red-on-starvation path
+/// is reachable. When `configured_variants` is empty (e.g. the snapshot could
+/// not source it) we fall back to the observed `counts` keys alone — the prior
+/// behaviour.
+///
+/// `expected_bp` carries the experiment's DESIGNED per-variant split in basis
+/// points (`variant_key` → bp), sourced from the bound rule's
+/// `RuleOutput::Percentage` weights or the flag's `default_rule_distribution`.
+/// When non-empty with a positive sum, the expected count for variant `v` is
+/// `total * (weight[v] / Σweight)` over the FULL configured set — a 95/5 canary
+/// reads healthy when observed matches 95/5, instead of failing SRM against a
+/// uniform `1/K` baseline. Only the RELATIVE split among the experiment's
+/// variants matters (the rule may allocate <100% to the experiment), so the
+/// weights are normalised within the configured set; any configured variant
+/// absent from `expected_bp` gets weight 0 (→ expected 0 → the zero-allocation
+/// edge in `compute_srm`). When `expected_bp` is empty or sums to zero we FALL
+/// BACK to the uniform `expected = total / K` (legacy behaviour).
 ///
 /// Returns `None` when SRM is undefined for the context (< 2 variants in the
 /// effective set or zero total assignments) so no `"srm"` key is emitted.
-fn srm_json_for(counts: &[(String, u64)], configured_variants: &[String]) -> Option<Value> {
+fn srm_json_for(
+    counts: &[(String, u64)],
+    configured_variants: &[String],
+    expected_bp: &HashMap<String, u32>,
+) -> Option<Value> {
     // Effective variant set = configured variants ∪ any variant that actually
     // produced a count (defensive: a count for an unexpected key still shows).
     // Zero-fill the observed count for any configured variant with no row.
@@ -1781,15 +1801,35 @@ fn srm_json_for(counts: &[(String, u64)], configured_variants: &[String]) -> Opt
     if total == 0 {
         return None;
     }
-    // K reflects ALL configured arms (incl. any starved to 0), so a zero arm
-    // is visible and expected is the balanced per-arm share over the full set.
-    let expected = total as f64 / keys.len() as f64;
+    // Designed split: sum the basis-point weights restricted to the effective
+    // variant set (only the relative split among THESE arms matters — the rule
+    // may route <100% of traffic to the experiment). A positive sum activates
+    // the weighted expected; otherwise we fall back to the uniform per-arm share
+    // (K reflects ALL configured arms incl. any starved to 0, so a zero arm is
+    // visible either way).
+    let weight_sum: u64 = keys
+        .iter()
+        .map(|vk| u64::from(expected_bp.get(vk).copied().unwrap_or(0)))
+        .sum();
+    let uniform_expected = total as f64 / keys.len() as f64;
     let observations: Vec<SrmObservation> = keys
         .iter()
-        .map(|vk| SrmObservation {
-            variant_key: vk.clone(),
-            observed: observed_by_key.get(vk.as_str()).copied().unwrap_or(0),
-            expected,
+        .map(|vk| {
+            // expected[v] = total * weight[v] / Σweight when the design carries
+            // weights; uniform total/K otherwise. A configured variant absent
+            // from the weights gets weight 0 → expected 0 (handled by the
+            // core zero-allocation edge in `compute_srm`).
+            let expected = if weight_sum > 0 {
+                let w = u64::from(expected_bp.get(vk).copied().unwrap_or(0));
+                total as f64 * (w as f64 / weight_sum as f64)
+            } else {
+                uniform_expected
+            };
+            SrmObservation {
+                variant_key: vk.clone(),
+                observed: observed_by_key.get(vk.as_str()).copied().unwrap_or(0),
+                expected,
+            }
         })
         .collect();
     let result = compute_srm(&observations);
@@ -2344,6 +2384,7 @@ mod tests {
                 tau_squared: None,
                 min_sample_size: 0,
             },
+            variant_expected_bp: HashMap::new(),
         }
     }
 
@@ -2478,7 +2519,8 @@ mod tests {
             ("treatment".to_string(), 1000),
         ];
         let configured = vec!["control".to_string(), "treatment".to_string()];
-        let srm = srm_json_for(&counts, &configured).expect("srm json for 2 variants");
+        let srm =
+            srm_json_for(&counts, &configured, &HashMap::new()).expect("srm json for 2 variants");
         assert_eq!(srm["health"], "green");
         assert!(srm["overall_chi_sq"].as_f64().unwrap() < 1e-9);
         assert!(srm["overall_chi_sq_p"].as_f64().unwrap() > 0.99);
@@ -2500,7 +2542,7 @@ mod tests {
     fn srm_json_for_mismatch_is_red_with_contributions() {
         let counts = vec![("a".to_string(), 800), ("b".to_string(), 1200)];
         let configured = vec!["a".to_string(), "b".to_string()];
-        let srm = srm_json_for(&counts, &configured).expect("srm json");
+        let srm = srm_json_for(&counts, &configured, &HashMap::new()).expect("srm json");
         assert_eq!(srm["health"], "red");
         assert!((srm["overall_chi_sq"].as_f64().unwrap() - 80.0).abs() < 1e-6);
         let pv = srm["per_variant"].as_array().unwrap();
@@ -2516,11 +2558,19 @@ mod tests {
     /// Fewer than 2 variants (or zero total) → no SRM key emitted.
     #[test]
     fn srm_json_for_single_variant_is_none() {
-        assert!(srm_json_for(&[("only".to_string(), 100)], &["only".to_string()]).is_none());
+        assert!(
+            srm_json_for(
+                &[("only".to_string(), 100)],
+                &["only".to_string()],
+                &HashMap::new()
+            )
+            .is_none()
+        );
         assert!(
             srm_json_for(
                 &[("a".to_string(), 0), ("b".to_string(), 0)],
-                &["a".to_string(), "b".to_string()]
+                &["a".to_string(), "b".to_string()],
+                &HashMap::new()
             )
             .is_none(),
             "zero total → no SRM"
@@ -2546,7 +2596,8 @@ mod tests {
             "treatment".to_string(),
             "starved".to_string(),
         ];
-        let srm = srm_json_for(&counts, &configured).expect("srm json for 3 configured variants");
+        let srm = srm_json_for(&counts, &configured, &HashMap::new())
+            .expect("srm json for 3 configured variants");
 
         // The zero arm is present in the observations (K = 3, not 2).
         let pv = srm["per_variant"].as_array().expect("per_variant array");
@@ -2585,9 +2636,154 @@ mod tests {
             ("control".to_string(), 1000),
             ("treatment".to_string(), 1000),
         ];
-        let srm = srm_json_for(&counts, &[]).expect("falls back to counts keys");
+        let srm = srm_json_for(&counts, &[], &HashMap::new()).expect("falls back to counts keys");
         assert_eq!(srm["per_variant"].as_array().unwrap().len(), 2);
         assert_eq!(srm["health"], "green");
+    }
+
+    // ── srm_json_for WEIGHTED expected split (non-uniform designs) ─────────────
+
+    /// A 90/10 canary design with observed counts that MATCH the design
+    /// (900/100) must read healthy/green — under the old uniform `total/K`
+    /// expected (500/500) this same split was a massive RED false positive.
+    /// expected[control] = 1000 * 9000/10000 = 900; expected[treatment] = 100.
+    /// observed == expected → χ² = 0 → green.
+    #[test]
+    fn srm_json_for_weighted_90_10_matching_design_is_green() {
+        let counts = vec![("control".to_string(), 900), ("treatment".to_string(), 100)];
+        let configured = vec!["control".to_string(), "treatment".to_string()];
+        let weights: HashMap<String, u32> = [
+            ("control".to_string(), 9000),
+            ("treatment".to_string(), 1000),
+        ]
+        .into_iter()
+        .collect();
+        let srm = srm_json_for(&counts, &configured, &weights).expect("weighted srm json");
+        assert_eq!(
+            srm["health"], "green",
+            "a 90/10 split that matches the 90/10 design is healthy"
+        );
+        assert!(
+            srm["overall_chi_sq"].as_f64().unwrap() < 1e-9,
+            "observed == weighted-expected → χ² ≈ 0"
+        );
+        // Verify the expected split is the WEIGHTED one (900/100), not uniform.
+        let pv = srm["per_variant"].as_array().expect("per_variant");
+        let ctrl = pv.iter().find(|r| r["variant_key"] == "control").unwrap();
+        let trt = pv.iter().find(|r| r["variant_key"] == "treatment").unwrap();
+        assert!((ctrl["expected"].as_f64().unwrap() - 900.0).abs() < 1e-9);
+        assert!((trt["expected"].as_f64().unwrap() - 100.0).abs() < 1e-9);
+    }
+
+    /// A 90/10 design whose observed split is actually 500/500 is a genuine SRM
+    /// violation → RED. expected = 900/100; χ² = (500-900)²/900 + (500-100)²/100
+    /// = 160000/900 + 160000/100 = 177.78 + 1600 = 1777.78 → p ≪ 0.001 → red.
+    #[test]
+    fn srm_json_for_weighted_90_10_with_5050_observed_is_red() {
+        let counts = vec![("control".to_string(), 500), ("treatment".to_string(), 500)];
+        let configured = vec!["control".to_string(), "treatment".to_string()];
+        let weights: HashMap<String, u32> = [
+            ("control".to_string(), 9000),
+            ("treatment".to_string(), 1000),
+        ]
+        .into_iter()
+        .collect();
+        let srm = srm_json_for(&counts, &configured, &weights).expect("weighted srm json");
+        assert_eq!(
+            srm["health"], "red",
+            "a 50/50 observed split under a 90/10 design is a real SRM mismatch"
+        );
+        let chi = srm["overall_chi_sq"].as_f64().unwrap();
+        assert!(
+            (chi - 1_777.777_777_78).abs() < 1e-3,
+            "χ² should be ≈1777.78, got {chi}"
+        );
+    }
+
+    /// An 80/10/10 design with one arm STARVED to 0 assignments: the starved
+    /// arm has a NON-zero design weight (10%), so its expected count is positive
+    /// (total * 0.10) and its full mass becomes a chi-square deviation → the arm
+    /// is visible (zero-filled observed) AND the split is flagged (not green).
+    /// observed 800/100/0 (total 900); expected = 900*{0.8,0.1,0.1} = 720/90/90;
+    /// the starved arm alone contributes 90²/90 = 90 to χ² → red.
+    #[test]
+    fn srm_json_for_weighted_80_10_10_starved_arm_visible_and_flagged() {
+        // CH emits no row for the starved arm; counts carries only the 2 firing.
+        let counts = vec![("a".to_string(), 800), ("b".to_string(), 100)];
+        let configured = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let weights: HashMap<String, u32> = [
+            ("a".to_string(), 8000),
+            ("b".to_string(), 1000),
+            ("c".to_string(), 1000),
+        ]
+        .into_iter()
+        .collect();
+        let srm = srm_json_for(&counts, &configured, &weights).expect("weighted srm json");
+
+        let pv = srm["per_variant"].as_array().expect("per_variant array");
+        assert_eq!(pv.len(), 3, "all 3 configured arms surfaced, incl. starved");
+        let starved = pv
+            .iter()
+            .find(|r| r["variant_key"] == "c")
+            .expect("starved arm present");
+        assert_eq!(
+            starved["observed"].as_u64().unwrap(),
+            0,
+            "zero-filled observed for the starved arm"
+        );
+        // Weighted expected for the starved arm is positive (900 * 0.10 = 90),
+        // so it is a real chi-square deviation (not the zero-expected edge).
+        assert!(
+            (starved["expected"].as_f64().unwrap() - 90.0).abs() < 1e-9,
+            "starved arm expected = total*weight = 90, got {}",
+            starved["expected"]
+        );
+        assert_ne!(
+            srm["health"], "green",
+            "a starved arm under a non-uniform design must not read healthy"
+        );
+    }
+
+    /// Empty weights map → uniform `total/K` fallback (unchanged legacy
+    /// behaviour). A balanced 1000/1000 with no weights stays green, identical
+    /// to `srm_json_for_balanced_is_green_with_read_shape`.
+    #[test]
+    fn srm_json_for_empty_weights_falls_back_to_uniform() {
+        let counts = vec![
+            ("control".to_string(), 1000),
+            ("treatment".to_string(), 1000),
+        ];
+        let configured = vec!["control".to_string(), "treatment".to_string()];
+        let srm =
+            srm_json_for(&counts, &configured, &HashMap::new()).expect("uniform-fallback srm json");
+        assert_eq!(srm["health"], "green");
+        // Uniform expected = total/K = 1000 each.
+        let pv = srm["per_variant"].as_array().unwrap();
+        for row in pv {
+            assert!((row["expected"].as_f64().unwrap() - 1000.0).abs() < 1e-9);
+        }
+    }
+
+    /// A weights map whose entries all sum to zero (degenerate) falls back to
+    /// the uniform split rather than dividing by zero.
+    #[test]
+    fn srm_json_for_zero_sum_weights_falls_back_to_uniform() {
+        let counts = vec![
+            ("control".to_string(), 1000),
+            ("treatment".to_string(), 1000),
+        ];
+        let configured = vec!["control".to_string(), "treatment".to_string()];
+        let weights: HashMap<String, u32> =
+            [("control".to_string(), 0), ("treatment".to_string(), 0)]
+                .into_iter()
+                .collect();
+        let srm =
+            srm_json_for(&counts, &configured, &weights).expect("zero-sum falls back to uniform");
+        assert_eq!(srm["health"], "green");
+        let pv = srm["per_variant"].as_array().unwrap();
+        for row in pv {
+            assert!((row["expected"].as_f64().unwrap() - 1000.0).abs() < 1e-9);
+        }
     }
 
     // ── run_stats_compute SRM attachment + round-trip (891) ───────────────────
@@ -2717,6 +2913,7 @@ mod tests {
                 tau_squared: None,
                 min_sample_size: 0,
             },
+            variant_expected_bp: HashMap::new(),
         };
 
         // Heavy 800/1200 mismatch → SRM should be RED.

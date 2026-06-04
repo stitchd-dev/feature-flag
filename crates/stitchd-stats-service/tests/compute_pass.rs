@@ -189,6 +189,9 @@ fn running_experiment(s: &Seeded, sequential_enabled: bool) -> RunningExperiment
             tau_squared: None,
             min_sample_size: 100,
         },
+        // Default: no designed split → uniform SRM fallback. The weighted-SRM
+        // integration test below overrides this on the returned struct.
+        variant_expected_bp: HashMap::new(),
     }
 }
 
@@ -392,5 +395,169 @@ async fn compute_pass_itt_denominator_counts_non_firing_units() {
         (vstats["treatment"].as_f64().unwrap() - 0.30).abs() < 1e-6,
         "treatment ITT rate 60/200=0.30, got {}",
         vstats["treatment"]
+    );
+}
+
+/// Seed an experiment whose two arms receive a NON-uniform assignment count
+/// (`control_n` / `treatment_n` units), each with one conversion, so the SRM
+/// observed split matches a designed canary ratio. Returns the IDs + metric.
+async fn seed_assignment_split(ch: &Client, control_n: usize, treatment_n: usize) -> Seeded {
+    let env_id = Uuid::new_v4();
+    let exp_id = Uuid::new_v4();
+    let iter_id = Uuid::new_v4();
+    let flag_id = Uuid::new_v4();
+    let assigned_at = Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap();
+    let iter_end = Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap();
+    let event_at = assigned_at + Duration::hours(1);
+    let metric_key = format!("canary_metric_{}", &exp_id.to_string()[..8]);
+
+    let mk_assignment = |variant: &str, key: String| AssignmentRow {
+        experiment_id: exp_id,
+        iteration_id: iter_id,
+        env_id,
+        flag_id,
+        matched_rule_id: None,
+        context_type: "user".into(),
+        context_key: key,
+        variant_key: variant.into(),
+        assigned_at,
+        version: -assigned_at.timestamp_millis(),
+    };
+    let mut assignments = Vec::with_capacity(control_n + treatment_n);
+    for i in 0..control_n {
+        assignments.push(mk_assignment("control", format!("c_{i}")));
+    }
+    for i in 0..treatment_n {
+        assignments.push(mk_assignment("treatment", format!("t_{i}")));
+    }
+    insert_assignments(ch, &assignments).await;
+
+    // One conversion per unit (keeps the metric well-defined; SRM uses the
+    // ASSIGNMENT counts, not events).
+    let mk_event = |key: String| EventRow {
+        env_id,
+        contexts: vec![("user".into(), key)],
+        metric_key: metric_key.clone(),
+        value_bool: None,
+        value_int: None,
+        value_double: None,
+        timestamp: event_at,
+        ingested_at: event_at,
+        properties: vec![],
+        occurred_at: event_at,
+    };
+    let mut events = Vec::new();
+    for i in 0..control_n {
+        events.push(mk_event(format!("c_{i}")));
+    }
+    for i in 0..treatment_n {
+        events.push(mk_event(format!("t_{i}")));
+    }
+    insert_events(ch, &events).await;
+
+    let now = Utc::now();
+    let metric = MetricDefinition {
+        id: MetricId::new(),
+        environment_id: EnvironmentId::from_uuid(env_id),
+        key: metric_key.clone(),
+        name: "canary".into(),
+        description: None,
+        kind: MetricKind::Aggregation(AggregationConfig {
+            event_key: metric_key,
+            aggregator: AggregationOperator::Count,
+            on_field: None,
+            where_clause: None,
+        }),
+        goal_direction: GoalDirection::Increase,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    };
+    Seeded {
+        env_id,
+        exp_id,
+        iter_id,
+        metric,
+        iter_end,
+    }
+}
+
+/// Read the SRM blob from the (single) metric summary's `variant_stats["srm"]`.
+fn srm_blob(
+    summaries: &[stitchd_stats_service::results_writer::MetricSummary],
+) -> serde_json::Value {
+    summaries[0]
+        .variant_stats
+        .as_object()
+        .expect("variant_stats object")
+        .get("srm")
+        .expect("srm blob attached")
+        .clone()
+}
+
+/// WEIGHTED SRM end-to-end: a 90/10 design with an observed 900/100 assignment
+/// split is HEALTHY when `variant_expected_bp` carries the 90/10 design, but the
+/// SAME observed split is a RED mismatch under the uniform `total/K` baseline
+/// (expected 500/500). Proves the designed split flows from the proto field
+/// through `run_stats_compute` into the SRM verdict against the real database.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs running clickhouse"]
+async fn compute_pass_weighted_srm_canary_matches_design_is_green() {
+    let ch = make_client();
+    stitchd_event_writer::migrations::run(&ch)
+        .await
+        .expect("apply CH migrations");
+
+    // 900 control + 100 treatment assignments → a 90/10 observed split.
+    let seeded = seed_assignment_split(&ch, 900, 100).await;
+    let metrics: HashMap<Uuid, MetricDefinition> =
+        [(seeded.metric.id.as_uuid(), seeded.metric.clone())]
+            .into_iter()
+            .collect();
+    let reader = ClickHouseCellReader::new(Arc::new(ch.clone()));
+    let now = seeded.iter_end + Duration::days(1);
+
+    // (1) WITH the designed 90/10 weights → SRM healthy (green).
+    let mut exp_weighted = running_experiment(&seeded, false);
+    exp_weighted.variant_expected_bp = HashMap::from([
+        ("control".to_string(), 9000),
+        ("treatment".to_string(), 1000),
+    ]);
+    let summaries = run_stats_compute(&reader, &ch, &exp_weighted, &metrics, seeded.iter_end, now)
+        .await
+        .expect("weighted compute pass should succeed");
+    let srm = srm_blob(&summaries);
+    assert_eq!(
+        srm["health"], "green",
+        "a 900/100 split under a 90/10 design must be healthy; got {srm}"
+    );
+    assert!(
+        srm["overall_chi_sq"].as_f64().unwrap() < 1e-6,
+        "observed == weighted-expected → χ² ≈ 0, got {}",
+        srm["overall_chi_sq"]
+    );
+    // The weighted expected split is 900/100, not the uniform 500/500.
+    let pv = srm["per_variant"].as_array().unwrap();
+    let ctrl = pv.iter().find(|r| r["variant_key"] == "control").unwrap();
+    assert!(
+        (ctrl["expected"].as_f64().unwrap() - 900.0).abs() < 1e-6,
+        "control expected should be the weighted 900, got {}",
+        ctrl["expected"]
+    );
+
+    // (2) Same data, EMPTY weights → uniform baseline (500/500) → RED mismatch.
+    let exp_uniform = running_experiment(&seeded, false); // variant_expected_bp empty
+    let summaries_u = run_stats_compute(&reader, &ch, &exp_uniform, &metrics, seeded.iter_end, now)
+        .await
+        .expect("uniform compute pass should succeed");
+    let srm_u = srm_blob(&summaries_u);
+    assert_eq!(
+        srm_u["health"], "red",
+        "without the design weights the 90/10 split is a uniform-baseline SRM violation; got {srm_u}"
+    );
+    println!(
+        "weighted SRM: weighted.health={} chi_sq={} | uniform.health={} chi_sq={}",
+        srm["health"], srm["overall_chi_sq"], srm_u["health"], srm_u["overall_chi_sq"]
     );
 }

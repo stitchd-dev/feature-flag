@@ -1,5 +1,6 @@
 //! gRPC service implementation for `ExperimentationService`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,8 +9,9 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use stitchd_core::{
-    experimentation::{ExclusionGroup, Experiment, ExperimentStatus},
+    experimentation::{ExclusionGroup, Experiment, ExperimentIteration, ExperimentStatus},
     id::{EnvironmentId, ExclusionGroupId, ExperimentId, ExperimentIterationId, RuleId},
+    rollout::RolloutDistribution,
     rule_engine::types::ExclusionGate,
 };
 use stitchd_db::{
@@ -349,6 +351,54 @@ fn parse_experiment_id(s: &str) -> Result<ExperimentId, Status> {
 }
 
 // ---------------------------------------------------------------------------
+// SRM expected-allocation sourcing
+// ---------------------------------------------------------------------------
+
+/// Per-variant designed split (basis points) from a flag's default-rule
+/// distribution. Keyed by `variant_key`; values are `percentage_bp` (1 = 0.01%).
+///
+/// Used for experiments bound to the flag's default-rule fall-through
+/// (`targets_default_rule == true`); the snapshot lives on the iteration so the
+/// expected split matches the design that was in force when the run started.
+fn default_rule_expected_bp(dist: &RolloutDistribution) -> HashMap<String, u32> {
+    dist.allocations
+        .iter()
+        .map(|a| (a.variant_key.clone(), a.percentage_bp))
+        .collect()
+}
+
+/// Per-variant designed split (basis points) from a rule-bound experiment's
+/// percentage allocation. Finds the `FlagRule` whose `rule_id` matches the
+/// experiment's `flag_rule_id` and reads its `allocation.buckets`
+/// (`variant_key` → `weight_bp`). The flag-service already resolves each
+/// bucket's `variant_key` (the underlying rule stores `VariantId`s), so no
+/// further mapping is needed here.
+///
+/// Returns an empty map when no matching rule is found, the rule has no
+/// percentage allocation, or the allocation has no buckets — the caller then
+/// falls back to the uniform SRM split.
+fn rule_allocation_expected_bp(
+    flag: &stitchd_proto::flags::v1::FeatureFlag,
+    flag_rule_id: &str,
+) -> HashMap<String, u32> {
+    use stitchd_proto::flags::v1::flag_rule::Output;
+    flag.rules
+        .iter()
+        .find(|r| r.rule_id == flag_rule_id)
+        .and_then(|r| match &r.output {
+            Some(Output::Allocation(alloc)) => Some(
+                alloc
+                    .buckets
+                    .iter()
+                    .map(|b| (b.variant_key.clone(), b.weight_bp))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
 // Rule-gate writer port
 // ---------------------------------------------------------------------------
 
@@ -498,6 +548,63 @@ impl ExperimentationServiceImpl {
                 .map_err(Status::from)?;
         }
         Ok(())
+    }
+
+    /// Source the experiment's DESIGNED per-variant assignment split in basis
+    /// points (`variant_key` → bp) for the weighted SRM check, carried on the
+    /// `RunningExperiment.variant_expected_bp` field.
+    ///
+    /// XOR on the binding:
+    /// - `targets_default_rule` → the iteration's snapshotted
+    ///   `default_rule_distribution` (loaded already; no extra query).
+    /// - `flag_rule_id` → the bound flag rule's percentage allocation, fetched
+    ///   via the Flag Service (`get_flag`) and matched by `rule_id`. Requires a
+    ///   `flag_client` and the experiment's `flag_key`.
+    ///
+    /// Returns an empty map (→ stats-service uniform SRM fallback) when the
+    /// source is unavailable: no flag client, missing flag key, the rule carries
+    /// no percentage allocation, or a transient Flag Service error. Sourcing is
+    /// best-effort — a fetch failure degrades SRM to the uniform split rather
+    /// than failing the whole `ListRunningExperiments` stream.
+    async fn sourced_variant_expected_bp(
+        &self,
+        exp: &Experiment,
+        iter: &ExperimentIteration,
+    ) -> HashMap<String, u32> {
+        if exp.targets_default_rule {
+            // Default-rule split: use the iteration snapshot already in hand.
+            return iter
+                .default_rule_distribution
+                .as_ref()
+                .map(default_rule_expected_bp)
+                .unwrap_or_default();
+        }
+
+        // Rule-bound split: read the bound rule's allocation from the flag.
+        let (Some(flag_rule_id), Some(flag_key), Some(flag_client)) = (
+            exp.flag_rule_id,
+            exp.flag_key.as_deref(),
+            self.flag_client.as_ref(),
+        ) else {
+            return HashMap::new();
+        };
+
+        match flag_client
+            .get_flag(&exp.environment_id.to_string(), flag_key)
+            .await
+        {
+            Ok(flag) => rule_allocation_expected_bp(&flag, &flag_rule_id.to_string()),
+            Err(status) => {
+                // Best-effort: log and degrade to the uniform split.
+                tracing::warn!(
+                    experiment_id = %exp.id,
+                    flag_key,
+                    error = %status,
+                    "failed to source rule allocation for weighted SRM; falling back to uniform split"
+                );
+                HashMap::new()
+            }
+        }
     }
 
     /// Attach a ClickHouse dictionary refresher. Every successful
@@ -1364,6 +1471,12 @@ impl ExperimentationService for ExperimentationServiceImpl {
             let active = iterations.into_iter().rfind(|i| i.ended_at.is_none());
 
             if let Some(iter) = active {
+                // Designed per-variant split (bp) for the weighted SRM check:
+                // the bound rule's percentage allocation, or (for default-rule
+                // experiments) the iteration's snapshotted
+                // `default_rule_distribution`. Empty → stats-service uniform
+                // SRM fallback.
+                let variant_expected_bp = self.sourced_variant_expected_bp(&exp, &iter).await;
                 items.push(Ok(RunningExperiment {
                     experiment_id: exp.id.to_string(),
                     environment_id: exp.environment_id.to_string(),
@@ -1387,6 +1500,9 @@ impl ExperimentationService for ExperimentationServiceImpl {
                     sequential_alpha: iter.sequential_alpha,
                     sequential_tau_squared: iter.sequential_tau_squared,
                     sequential_min_sample_size: iter.sequential_min_sample_size,
+                    // Designed split for weighted SRM (rule allocation or
+                    // default-rule distribution); empty → uniform SRM fallback.
+                    variant_expected_bp,
                 }));
             }
         }
@@ -5069,5 +5185,95 @@ mod tests {
         );
         let err = svc.get_experiment_interactions(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    // -----------------------------------------------------------------------
+    // SRM expected-allocation sourcing (pure helpers)
+    // -----------------------------------------------------------------------
+
+    /// A default-rule distribution maps straight to `variant_key → percentage_bp`.
+    #[test]
+    fn default_rule_expected_bp_maps_allocations() {
+        use stitchd_core::rollout::{RolloutAllocation, RolloutDistribution};
+        let dist = RolloutDistribution {
+            allocations: vec![
+                RolloutAllocation {
+                    variant_key: "control".to_string(),
+                    percentage_bp: 9000,
+                },
+                RolloutAllocation {
+                    variant_key: "treatment".to_string(),
+                    percentage_bp: 1000,
+                },
+            ],
+        };
+        let bp = default_rule_expected_bp(&dist);
+        assert_eq!(bp.len(), 2);
+        assert_eq!(bp.get("control"), Some(&9000));
+        assert_eq!(bp.get("treatment"), Some(&1000));
+    }
+
+    /// A rule-bound allocation is read from the matching `FlagRule.rule_id`'s
+    /// `allocation.buckets` (variant_key → weight_bp).
+    #[test]
+    fn rule_allocation_expected_bp_reads_matching_rule_buckets() {
+        use stitchd_proto::flags::v1::{
+            AllocationBucket, FeatureFlag, FlagRule, PercentageAllocation, flag_rule::Output,
+        };
+        let rule_id = Uuid::new_v4().to_string();
+        let flag = FeatureFlag {
+            rules: vec![FlagRule {
+                rule_payload: vec![],
+                output: Some(Output::Allocation(PercentageAllocation {
+                    context_hash_specs: Default::default(),
+                    buckets: vec![
+                        AllocationBucket {
+                            variant_key: "a".to_string(),
+                            weight_bp: 8000,
+                        },
+                        AllocationBucket {
+                            variant_key: "b".to_string(),
+                            weight_bp: 1000,
+                        },
+                        AllocationBucket {
+                            variant_key: "c".to_string(),
+                            weight_bp: 1000,
+                        },
+                    ],
+                    hash_inputs: vec![],
+                    exclusion_gate: None,
+                })),
+                name: String::new(),
+                rule_id: rule_id.clone(),
+            }],
+            ..Default::default()
+        };
+        let bp = rule_allocation_expected_bp(&flag, &rule_id);
+        assert_eq!(bp.len(), 3);
+        assert_eq!(bp.get("a"), Some(&8000));
+        assert_eq!(bp.get("b"), Some(&1000));
+        assert_eq!(bp.get("c"), Some(&1000));
+    }
+
+    /// No rule matches the id, or the rule is a specific-variant (non-allocation)
+    /// output → empty map (caller falls back to the uniform SRM split).
+    #[test]
+    fn rule_allocation_expected_bp_empty_when_no_match_or_not_percentage() {
+        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, flag_rule::Output};
+        // (a) variant-output rule → not a percentage allocation.
+        let rule_id = Uuid::new_v4().to_string();
+        let flag = FeatureFlag {
+            rules: vec![FlagRule {
+                rule_payload: vec![],
+                output: Some(Output::VariantKey("control".to_string())),
+                name: String::new(),
+                rule_id: rule_id.clone(),
+            }],
+            ..Default::default()
+        };
+        assert!(rule_allocation_expected_bp(&flag, &rule_id).is_empty());
+
+        // (b) no rule with the requested id at all.
+        assert!(rule_allocation_expected_bp(&flag, &Uuid::new_v4().to_string()).is_empty());
     }
 }
