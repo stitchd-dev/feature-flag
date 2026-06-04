@@ -2313,4 +2313,363 @@ mod tests {
         let v2 = FlagEvaluator::evaluate(&flag2, &ctx2, &segments, env).unwrap();
         assert_eq!(v2.key, "on");
     }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Phase 2 (flag_lifecycle): prerequisite gate
+    // ────────────────────────────────────────────────────────────────────────
+
+    use crate::prerequisite::{FlagPrerequisite, PrerequisiteGate};
+
+    /// Build a flag with a configured prerequisite gate. Reuses `setup_flag`
+    /// (rule: user.beta == true → "on"; default variant "off").
+    fn flag_with_prereq_gate(gate: PrerequisiteGate) -> Flag {
+        let mut f = setup_flag();
+        f.prerequisites = gate;
+        f
+    }
+
+    /// Evaluate a single context with a pre-resolved cross-flag map.
+    fn eval_with_prereqs(
+        flag: &Flag,
+        ctx: Context,
+        evaluated_flags: &HashMap<FlagId, Option<VariantId>>,
+        trace: TraceLevel,
+    ) -> FlagEvaluationResult {
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+        let mut results = evaluate_flag_with_prerequisites(
+            flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            evaluated_flags,
+            env,
+            proj,
+            trace,
+        );
+        results.remove(0)
+    }
+
+    // (a) unmet prerequisite → configured fallback variant.
+    #[test]
+    fn prereq_unmet_returns_configured_fallback_variant() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        // setup_flag's variants: [on (v1), off (v2)]. Use "on" (v1) as fallback.
+        let mut flag = setup_flag();
+        let on_variant_id = flag.variants[0].id; // "on"
+        flag.prerequisites = PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: Some(on_variant_id),
+        };
+
+        // Prerequisite resolved to a DIFFERENT variant → gate fails.
+        let mut resolved = HashMap::new();
+        resolved.insert(prereq_flag, Some(VariantId::new()));
+
+        // Context would otherwise fire the rule (beta=true → "on") — but the
+        // fallback also happens to be "on"; to prove the gate short-circuits
+        // BEFORE rules, set beta=false so the rule would NOT fire (→ "off")
+        // and assert we still get the fallback "on".
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false));
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Off);
+        assert_eq!(res.variant_key, "on", "unmet prereq must return fallback");
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::PrerequisiteFailed { prerequisite_flag_id } if prerequisite_flag_id == prereq_flag
+        ));
+    }
+
+    // (a') unmet prerequisite with no configured fallback → off/default variant.
+    #[test]
+    fn prereq_unmet_with_no_fallback_returns_default_variant() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        let flag = flag_with_prereq_gate(PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: None,
+        });
+
+        // Prereq absent from the resolved map → unmet.
+        let resolved = HashMap::new();
+        // beta=true would fire the rule (→ "on"); gate must override to default "off".
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Off);
+        assert_eq!(
+            res.variant_key, "off",
+            "unmet prereq with no fallback returns the flag's default/off variant"
+        );
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::PrerequisiteFailed { prerequisite_flag_id } if prerequisite_flag_id == prereq_flag
+        ));
+    }
+
+    // (b) met prerequisite → rules run normally.
+    #[test]
+    fn prereq_met_lets_rules_run() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        let flag = flag_with_prereq_gate(PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: None,
+        });
+
+        let mut resolved = HashMap::new();
+        resolved.insert(prereq_flag, Some(required)); // exactly the required variant
+
+        // beta=true → the rule fires → "on" (proves rules ran, gate passed).
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Off);
+        assert_eq!(res.variant_key, "on");
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::RuleMatch { rule_index: 0 }
+        ));
+    }
+
+    // (c) transitive: A requires B=on, B requires C=on; C off ⇒ A falls back.
+    // Modelled here at the flag-A level: A's prerequisite B resolved to None
+    // (because B itself fell back when C was off — the orchestrator resolves
+    // B before A). So from A's perspective B is unmet ⇒ A falls back.
+    #[test]
+    fn prereq_transitive_chain_falls_back_when_root_off() {
+        let flag_b = FlagId::new();
+        let b_on = VariantId::new();
+        let mut flag_a = setup_flag();
+        let a_fallback = flag_a.variants[1].id; // "off"
+        flag_a.prerequisites = PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: flag_b,
+                required_variant_id: b_on,
+            }],
+            fallback_variant_id: Some(a_fallback),
+        };
+
+        // B fell back (its own prereq C was off) → B resolved to a non-`b_on`
+        // variant. From A's perspective B != b_on ⇒ A's gate fails.
+        let mut resolved = HashMap::new();
+        resolved.insert(flag_b, Some(VariantId::new())); // B's fallback, not b_on
+
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let res = eval_with_prereqs(&flag_a, ctx, &resolved, TraceLevel::Off);
+        assert_eq!(res.variant_key, "off");
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::PrerequisiteFailed { prerequisite_flag_id } if prerequisite_flag_id == flag_b
+        ));
+    }
+
+    // (d) a disabled prerequisite flag ⇒ treated as unmet. A disabled flag
+    // resolves to None in the orchestrator's map (it never enrolls a variant),
+    // so the dependent's gate sees None ≠ required ⇒ fails.
+    #[test]
+    fn prereq_disabled_flag_treated_as_unmet() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        let mut flag = setup_flag();
+        let fallback = flag.variants[1].id; // "off"
+        flag.prerequisites = PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: Some(fallback),
+        };
+
+        // Disabled prerequisite → resolved to None.
+        let mut resolved = HashMap::new();
+        resolved.insert(prereq_flag, None);
+
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Off);
+        assert_eq!(res.variant_key, "off");
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::PrerequisiteFailed { prerequisite_flag_id } if prerequisite_flag_id == prereq_flag
+        ));
+    }
+
+    // (e) a missing/unknown prerequisite flag (absent from the map) ⇒ unmet ⇒ fallback.
+    #[test]
+    fn prereq_missing_flag_treated_as_unmet() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        let mut flag = setup_flag();
+        let fallback = flag.variants[1].id; // "off"
+        flag.prerequisites = PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: Some(fallback),
+        };
+
+        // Empty map — prerequisite flag entirely absent (unknown to the snapshot).
+        let resolved = HashMap::new();
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Off);
+        assert_eq!(res.variant_key, "off");
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::PrerequisiteFailed { prerequisite_flag_id } if prerequisite_flag_id == prereq_flag
+        ));
+    }
+
+    // (f) trace names the failing prerequisite + fallback taken.
+    #[test]
+    fn prereq_full_trace_names_failing_prerequisite_and_fallback() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        let mut flag = setup_flag();
+        let fallback = flag.variants[0].id; // "on"
+        flag.prerequisites = PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: Some(fallback),
+        };
+
+        let resolved = HashMap::new(); // unmet
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(false));
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Full);
+        assert_eq!(res.variant_key, "on");
+        let trace = res.trace.as_ref().expect("Full trace must be present");
+        let pf = trace
+            .prerequisite_failure
+            .as_ref()
+            .expect("prerequisite_failure must be populated when the gate fails");
+        assert_eq!(pf.prerequisite_flag_id, prereq_flag);
+        assert_eq!(pf.fallback_variant_key, "on");
+        // No rules ran — rule_traces empty because the gate short-circuited.
+        assert!(trace.rule_traces.is_empty());
+    }
+
+    // Met prerequisite leaves the trace's prerequisite_failure as None.
+    #[test]
+    fn prereq_met_full_trace_has_no_prerequisite_failure() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        let flag = flag_with_prereq_gate(PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: None,
+        });
+        let mut resolved = HashMap::new();
+        resolved.insert(prereq_flag, Some(required));
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Full);
+        let trace = res.trace.as_ref().unwrap();
+        assert!(trace.prerequisite_failure.is_none());
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::RuleMatch { rule_index: 0 }
+        ));
+    }
+
+    // A disabled flag short-circuits BEFORE the prerequisite gate (disabled
+    // wins): even with an unmet prerequisite, a disabled flag reports
+    // FlagDisabled, not PrerequisiteFailed.
+    #[test]
+    fn disabled_flag_short_circuits_before_prereq_gate() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        let mut flag = flag_with_prereq_gate(PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: None,
+        });
+        flag.record.enabled = false;
+        let resolved = HashMap::new(); // prereq unmet, but flag disabled
+        let ctx = Context::new("user", "u1");
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Off);
+        assert_eq!(res.variant_key, "off");
+        assert!(matches!(res.outcome, EvalOutcome::FlagDisabled));
+    }
+
+    // The plain `evaluate_flag` entry point (no prereq map) treats any
+    // configured prerequisite as unmet → fallback — i.e. it delegates with an
+    // empty resolved map. This guarantees existing callers gate conservatively.
+    #[test]
+    fn plain_evaluate_flag_treats_configured_prereq_as_unmet() {
+        let prereq_flag = FlagId::new();
+        let required = VariantId::new();
+        let mut flag = setup_flag();
+        let fallback = flag.variants[1].id; // "off"
+        flag.prerequisites = PrerequisiteGate {
+            prerequisites: vec![FlagPrerequisite {
+                prerequisite_flag_id: prereq_flag,
+                required_variant_id: required,
+            }],
+            fallback_variant_id: Some(fallback),
+        };
+        let memberships = ListMembershipIndex::new();
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+        let proj = ProjectId::new();
+        let ctx = Context::new("user", "u1").with_parameter("beta", ParameterValue::Bool(true));
+        let results = evaluate_flag(
+            &flag,
+            std::slice::from_ref(&ctx),
+            &[],
+            &memberships,
+            env,
+            proj,
+            TraceLevel::Off,
+        );
+        assert_eq!(results[0].variant_key, "off");
+        assert!(matches!(
+            results[0].outcome,
+            EvalOutcome::PrerequisiteFailed { .. }
+        ));
+    }
+
+    // Multiple prerequisites: the FIRST failing one is reported; a later
+    // satisfied prerequisite does not rescue the gate.
+    #[test]
+    fn prereq_multiple_reports_first_failure() {
+        let p1 = FlagId::new();
+        let p2 = FlagId::new();
+        let r1 = VariantId::new();
+        let r2 = VariantId::new();
+        let mut flag = setup_flag();
+        let fallback = flag.variants[1].id;
+        flag.prerequisites = PrerequisiteGate {
+            prerequisites: vec![
+                FlagPrerequisite {
+                    prerequisite_flag_id: p1,
+                    required_variant_id: r1,
+                },
+                FlagPrerequisite {
+                    prerequisite_flag_id: p2,
+                    required_variant_id: r2,
+                },
+            ],
+            fallback_variant_id: Some(fallback),
+        };
+        // p1 unmet (resolved to other), p2 met.
+        let mut resolved = HashMap::new();
+        resolved.insert(p1, Some(VariantId::new()));
+        resolved.insert(p2, Some(r2));
+        let ctx = Context::new("user", "u1");
+        let res = eval_with_prereqs(&flag, ctx, &resolved, TraceLevel::Off);
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::PrerequisiteFailed { prerequisite_flag_id } if prerequisite_flag_id == p1
+        ));
+    }
 }
