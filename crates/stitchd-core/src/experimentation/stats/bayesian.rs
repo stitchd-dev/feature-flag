@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::sequential::RatioGroupStats;
-use super::{BayesianResult, ConfidenceInterval, VariantStats};
+use super::{BayesianResult, ConfidenceInterval, VariantStats, Z95, norm_cdf};
 
 // ── Per-variant Bayesian result (spec §3) ─────────────────────────────────────
 
@@ -78,32 +78,6 @@ impl Rng for Lcg {
     fn next_f64(&mut self) -> f64 {
         self.next_f64()
     }
-}
-
-// ── Normal CDF ───────────────────────────────────────────────────────────────
-
-/// Standard normal CDF Φ(x) approximated via the error function.
-///
-/// Uses the identity: Φ(x) = (1 + erf(x / √2)) / 2
-fn normal_cdf(x: f64) -> f64 {
-    0.5 * (1.0 + erf(x / std::f64::consts::SQRT_2))
-}
-
-/// Abramowitz & Stegun approximation of erf(x) (maximum error ≈ 1.5e-7).
-fn erf(x: f64) -> f64 {
-    // Handle negative x via symmetry
-    if x < 0.0 {
-        return -erf(-x);
-    }
-
-    // Constants for the rational approximation
-    let t = 1.0 / (1.0 + 0.3275911 * x);
-    let poly = t
-        * (0.254_829_592
-            + t * (-0.284_496_736
-                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
-
-    1.0 - poly * (-x * x).exp()
 }
 
 // ── Gamma / Beta sampling ────────────────────────────────────────────────────
@@ -194,6 +168,54 @@ pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> Bayesian
     beta_binomial_mc(alpha_c, beta_c, alpha_v, beta_v, 10_000, 42)
 }
 
+/// A `Normal(diff, se²)` posterior on a lift, summarised as a [`BayesianResult`].
+///
+/// Shared by [`analyze_numeric`] and [`analyze_ratio`] (which differ only in how
+/// they derive `diff` / `se`): the treatment-minus-control effect is modelled as
+/// `N(diff, se²)`, giving
+/// - `prob_best = P(effect > 0) = 1 − Φ(−diff / se)`,
+/// - a 95 % credible interval `diff ± Z95·se`,
+/// - and a closed-form expected loss `E[max(−effect, 0)] = se·φ(d) − diff·(1 −
+///   Φ(d))` with `d = diff / se`, clamped to `≥ 0`.
+///
+/// The `se == 0` (point-mass posterior) branch degrades gracefully: `prob_best`
+/// is the sign indicator of `diff`, the CI collapses to `[diff, diff]`, and the
+/// expected loss is `max(−diff, 0)`.
+fn bayes_normal_contrast(diff: f64, se: f64) -> BayesianResult {
+    // P(effect > 0) = 1 - Φ(-diff / se)
+    let prob_best = if se == 0.0 {
+        if diff > 0.0 {
+            1.0
+        } else if diff < 0.0 {
+            0.0
+        } else {
+            0.5
+        }
+    } else {
+        1.0 - norm_cdf(-diff / se)
+    };
+
+    // 95% credible interval for the effect.
+    let lower = diff - Z95 * se;
+    let upper = diff + Z95 * se;
+
+    // Expected loss = E[max(-effect, 0)] for effect ~ N(diff, se²).
+    // = se·φ(d) - diff·(1 - Φ(d)) with d = diff / se (φ = standard normal PDF).
+    let expected_loss = if se == 0.0 {
+        (-diff).max(0.0)
+    } else {
+        let d = diff / se;
+        let phi_d = (-0.5 * d * d).exp() / (2.0 * std::f64::consts::PI).sqrt();
+        se * phi_d + (-diff) * (1.0 - norm_cdf(d))
+    };
+
+    BayesianResult {
+        prob_best,
+        credible_interval: ConfidenceInterval { lower, upper },
+        expected_loss: expected_loss.max(0.0),
+    }
+}
+
 /// Bayesian analysis of a **numeric** metric using a Normal-Normal conjugate approximation.
 ///
 /// Uses empirical mean and variance. `prob_best` is derived from the CDF of the
@@ -212,42 +234,7 @@ pub fn analyze_numeric(control: &VariantStats, variant: &VariantStats) -> Bayesi
 
     let mean_diff = mean_v - mean_c;
 
-    // P(variant > control) = P(diff > 0) = 1 - Φ(-mean_diff / se)
-    let prob_best = if se == 0.0 {
-        if mean_diff > 0.0 {
-            1.0
-        } else if mean_diff < 0.0 {
-            0.0
-        } else {
-            0.5
-        }
-    } else {
-        1.0 - normal_cdf(-mean_diff / se)
-    };
-
-    // 95% credible interval for the difference
-    let z95 = 1.959_964; // Φ^{-1}(0.975)
-    let lower = mean_diff - z95 * se;
-    let upper = mean_diff + z95 * se;
-
-    // Expected loss = E[max(mean_c - mean_v, 0)] — analytic formula for normal distribution
-    // If X ~ N(mu, sigma^2), E[max(-X, 0)] = sigma * phi(-mu/sigma) - mu * (1 - Phi(mu/sigma))
-    // where we set X = diff = mean_v - mean_c, so max(mean_c - mean_v, 0) = max(-X, 0)
-    let expected_loss = if se == 0.0 {
-        (-mean_diff).max(0.0)
-    } else {
-        let d = mean_diff / se;
-        // E[max(-X, 0)] where X ~ N(mean_diff, se^2)
-        // = se * phi(d) - mean_diff * (1 - Phi(d))   … where phi is standard normal PDF
-        let phi_d = (-0.5 * d * d).exp() / (2.0 * std::f64::consts::PI).sqrt();
-        se * phi_d + (-mean_diff) * (1.0 - normal_cdf(d))
-    };
-
-    BayesianResult {
-        prob_best,
-        credible_interval: ConfidenceInterval { lower, upper },
-        expected_loss: expected_loss.max(0.0),
-    }
+    bayes_normal_contrast(mean_diff, se)
 }
 
 /// Bayesian analysis of a **percentile** metric via bootstrap posterior approximation.
@@ -367,9 +354,10 @@ pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> Bayesia
 /// source of truth for the delta-method point + variance). The effect is
 /// `diff = R_t − R_c` with `SE = sqrt(Var(R_c) + Var(R_t))`. We then place a
 /// `N(diff, SE²)` posterior on the lift: `prob_best = P(R_t > R_c)`, the 95 %
-/// credible interval is `diff ± 1.96·SE`, and the expected loss
-/// `E[max(R_c − R_t, 0)]` uses the closed-form normal tail expectation
-/// (matching [`analyze_numeric`]).
+/// credible interval is `diff ± Z95·SE`, and the expected loss
+/// `E[max(R_c − R_t, 0)]` uses the closed-form normal tail expectation. The
+/// `N(diff, SE²)` summary is computed by the shared [`bayes_normal_contrast`]
+/// (the same helper [`analyze_numeric`] uses), so the two paths cannot drift.
 ///
 /// Returns the neutral `prob_best = 0.5`, zero-width-CI result when either
 /// group is degenerate (see [`RatioGroupStats::ratio_var`]).
@@ -387,32 +375,7 @@ pub fn analyze_ratio(control: &RatioGroupStats, variant: &RatioGroupStats) -> Ba
     };
     let diff = r_t - r_c;
     let se = (var_c + var_t).sqrt();
-    let prob_best = if se == 0.0 {
-        if diff > 0.0 {
-            1.0
-        } else if diff < 0.0 {
-            0.0
-        } else {
-            0.5
-        }
-    } else {
-        1.0 - normal_cdf(-diff / se)
-    };
-    let z95 = 1.959_964;
-    let lower = diff - z95 * se;
-    let upper = diff + z95 * se;
-    let expected_loss = if se == 0.0 {
-        (-diff).max(0.0)
-    } else {
-        let d = diff / se;
-        let phi_d = (-0.5 * d * d).exp() / (2.0 * std::f64::consts::PI).sqrt();
-        (se * phi_d + (-diff) * (1.0 - normal_cdf(d))).max(0.0)
-    };
-    BayesianResult {
-        prob_best,
-        credible_interval: ConfidenceInterval { lower, upper },
-        expected_loss,
-    }
+    bayes_normal_contrast(diff, se)
 }
 
 // ── Shared Monte Carlo helper ─────────────────────────────────────────────────
@@ -586,7 +549,7 @@ pub fn normal_normal(inputs: &[NormalNormalInput]) -> Vec<BayesianVariantResult>
     if inputs.is_empty() {
         return vec![];
     }
-    const Z95: f64 = 1.959_964; // Φ⁻¹(0.975)
+    // 95 % z-multiplier from the shared `super::Z95` (imported at module top).
     let control = &inputs[0];
     let control_post_var = posterior_variance(control.variance, control.n);
 
@@ -615,7 +578,7 @@ pub fn normal_normal(inputs: &[NormalNormalInput]) -> Vec<BayesianVariantResult>
                         0.5
                     }
                 } else {
-                    1.0 - normal_cdf(-diff / diff_se)
+                    1.0 - norm_cdf(-diff / diff_se)
                 };
                 (ptb, diff)
             };
@@ -949,18 +912,19 @@ mod tests {
 
     #[test]
     fn normal_cdf_at_zero_is_half() {
-        assert!((normal_cdf(0.0) - 0.5).abs() < 1e-6);
+        // Bayesian now uses the shared `super::norm_cdf`.
+        assert!((norm_cdf(0.0) - 0.5).abs() < 1e-6);
     }
 
     #[test]
     fn normal_cdf_at_plus_infinity_ish() {
-        assert!((normal_cdf(10.0) - 1.0) < 1e-6);
+        assert!((norm_cdf(10.0) - 1.0) < 1e-6);
     }
 
     #[test]
     fn normal_cdf_symmetry() {
         for x in [0.5, 1.0, 1.645, 1.96, 2.576] {
-            let sum = normal_cdf(x) + normal_cdf(-x);
+            let sum = norm_cdf(x) + norm_cdf(-x);
             assert!((sum - 1.0).abs() < 1e-6, "symmetry failed at x={x}: {sum}");
         }
     }

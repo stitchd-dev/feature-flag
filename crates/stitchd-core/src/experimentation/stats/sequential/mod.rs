@@ -350,29 +350,19 @@ impl RatioGroupStats {
     /// SAME delta-method point + variance — this is the single source of truth
     /// for the ratio formula across the fixed-horizon, sequential, and Bayesian
     /// views (see [`super::frequentist::analyze_ratio`]).
+    ///
+    /// Thin wrapper over the shared [`super::ratio_delta_var`] free function
+    /// (which the interaction ratio paths also delegate to), so the formula
+    /// lives in exactly one place.
     pub(crate) fn ratio_var(&self) -> Option<(f64, f64)> {
-        if self.n < 2 || self.den_sum <= 0.0 {
-            return None;
-        }
-        let n = self.n as f64;
-        let mean_num = self.num_sum / n;
-        let mean_den = self.den_sum / n;
-        if !mean_den.is_finite() || mean_den <= 0.0 {
-            return None;
-        }
-        let r = self.num_sum / self.den_sum;
-
-        let var_num = self.num_sq_sum / n - mean_num * mean_num;
-        let var_den = self.den_sq_sum / n - mean_den * mean_den;
-        let cov = self.num_den_sum / n - mean_num * mean_den;
-
-        // Delta method: Var(R) ≈ (1/mean_den²)·(var_num − 2R·cov + R²·var_den)/n.
-        let var_r = (var_num - 2.0 * r * cov + r * r * var_den) / (mean_den * mean_den * n);
-
-        if !var_r.is_finite() || var_r <= 0.0 || !r.is_finite() {
-            return None;
-        }
-        Some((r, var_r))
+        super::ratio_delta_var(
+            self.n,
+            self.num_sum,
+            self.den_sum,
+            self.num_sq_sum,
+            self.den_sq_sum,
+            self.num_den_sum,
+        )
     }
 }
 
