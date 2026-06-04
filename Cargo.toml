@@ -73,6 +73,10 @@ anyhow = { version = "1.0" }
 # Utilities
 uuid = { version = "1.23", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+# IANA timezone database for chrono (DST-aware scheduled changes).
+chrono-tz = { version = "0.10" }
+# RFC-5545 recurrence rules for recurring scheduled-change windows.
+rrule = { version = "0.14" }
 semver = { version = "1.0", features = ["serde"] }
 secrecy = { version = "0.10", features = ["serde"] }
 smallvec = { version = "1.15" }

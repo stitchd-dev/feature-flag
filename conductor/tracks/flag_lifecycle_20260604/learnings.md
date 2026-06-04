@@ -59,3 +59,14 @@ Patterns, gotchas, and context discovered during implementation.
 ---
 
 <!-- Learnings from implementation will be appended below -->
+
+## 2026-06-04 — Phase 1 Task 1 (deps + tech-stack)
+- Added `chrono-tz = "0.10"` + `rrule = "0.14"` to `[workspace.dependencies]`. Both are
+  compatible with workspace `chrono` 0.4; rrule 0.14 depends on chrono 0.4 + chrono-tz 0.10.
+- `cargo metadata` does NOT pull a `[workspace.dependencies]` entry into the graph (or
+  Cargo.lock) until a member crate actually consumes it via `dep = { workspace = true }`.
+  So after this task alone the deps are absent from Cargo.lock — that is expected; they
+  appear once task 4 wires them into `stitchd-core`. Verified `cargo metadata` resolves clean.
+- Documented both deps + the `stitchd-schedule-service` architecture decision in
+  `conductor/tech-stack.md` (comment block + Key Dependencies rows) per the workflow
+  tech-stack-before-use rule.

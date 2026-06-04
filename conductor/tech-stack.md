@@ -78,6 +78,28 @@ post-compute-pass follow-ups resolved on track/seqtest_20260603 (NOT yet merged 
   erf/norm_cdf/Z95/ratio-delta-var/bayes-normal-contrast were de-duplicated in stitchd-core.
 -->
 
+<!--
+flag_lifecycle_20260604 additions (Phase 1 foundation — deps + architecture decision):
+- Two new workspace deps (declared in [workspace.dependencies]; wired into stitchd-core
+  in Phase 1, scheduler service in Phase 3):
+  * `chrono-tz` 0.10 — IANA timezone database for `chrono`. Scheduled changes store the
+    author-chosen IANA zone (e.g. `America/New_York`) and the canonical UTC instant;
+    recurring-window next-occurrence math resolves wall-clock times in the stored zone so
+    DST transitions (spring-forward / fall-back) shift the UTC offset correctly.
+  * `rrule` 0.14 — pure-Rust RFC-5545 recurrence rules. Recurring scheduled changes carry
+    an RRULE string + IANA tz; `stitchd_core::schedule::RecurrenceSpec::next_occurrence`
+    computes the next firing instant DST-aware. One-shot changes do not use `rrule`.
+- Architecture decision: a NEW `stitchd-schedule-service` binary crate (built in Phase 3)
+  is a gRPC-only scheduled consumer that mirrors `stitchd-stats-service`'s tokio-interval
+  loop (see "Scheduler Pattern" below). On each tick it queries PostgreSQL for due changes
+  (`next_run_at <= now()`, status pending/active), then dispatches each to the OWNING
+  service's existing mutation/lifecycle RPC (flag → `FlagService.MutateFlag`; experiment →
+  `ExperimentationService.TransitionExperiment`; segment → `SegmentationService` admin
+  update). It is entity-agnostic and holds no domain logic of its own — application flows
+  through each entity's canonical path so version bumps + audit entries happen exactly as
+  for human mutations. All scheduler state lives in PostgreSQL (`scheduled_changes` +
+  `scheduled_change_runs`) so it is restart-safe and idempotent (a missed tick catches up).
+-->
 
 ## Architecture
 
@@ -202,6 +224,8 @@ Routes in `stitchd-gateway/src/routes/context_intel.rs`:
 | `governor` + `tower_governor` | 0.10 / 0.8 | Auth endpoint rate limiting |
 | `secrecy` | 0.10 | Zero-on-drop secret wrapping |
 | `siphasher` + `murmur3` + `sha2` | 1.0 / 0.5 / 0.11 | Consistent hashing (flag evaluation) |
+| `chrono-tz` | 0.10 | IANA timezone DB for `chrono` — DST-aware scheduled-change windows (`flag_lifecycle_20260604`) |
+| `rrule` | 0.14 | RFC-5545 recurrence rules — recurring scheduled changes (`flag_lifecycle_20260604`) |
 | `scylla` | 1.6 | ScyllaDB async CQL driver (`metrics` feature enabled) |
 | `utoipa` + `utoipa-axum` | 5.5 / 0.2 | OpenAPI 3.1 spec generation |
 | `rand` / `reqwest` | 0.10 / 0.13 | RNG (`rand::rng()` + `RngExt::random_range`) / HTTP client (`rustls` + `form` + `http2` features; `default-features = false`) |

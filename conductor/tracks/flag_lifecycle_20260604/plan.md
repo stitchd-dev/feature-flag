@@ -23,9 +23,9 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task 1: Add `chrono-tz` + `rrule` to workspace `Cargo.toml`; document both deps
+- [x] Task 1: Add `chrono-tz` + `rrule` to workspace `Cargo.toml`; document both deps
   and the new `stitchd-schedule-service` decision in `tech-stack.md`. TDD: tz/RRULE
-  next-occurrence sanity test.
+  next-occurrence sanity test. (next-occurrence test lives in core task 4, where the deps are wired)
   <!-- files: Cargo.toml, conductor/tech-stack.md -->
 - [ ] Task 2: PG migration `20260604000001_lifecycle_automation.sql` — `scheduled_changes`
   (entity_type, entity_id, env_id, mutation_payload JSONB, schedule_kind, scheduled_at,
