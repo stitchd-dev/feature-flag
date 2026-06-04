@@ -3,7 +3,9 @@
 
 #[cfg(test)]
 mod compilation_tests {
-    use crate::{analytics, auth, common, experiments, flags, management, sdk, segments, stats};
+    use crate::{
+        analytics, auth, common, experiments, flags, management, schedule, sdk, segments, stats,
+    };
 
     // ── Existing SDK-facing types ─────────────────────────────────────────────
 
@@ -299,6 +301,70 @@ mod compilation_tests {
     fn stats_service_client_and_server_stubs_generated() {
         type _Client<T> = stats::v1::stats_service_client::StatsServiceClient<T>;
         type _Server<T> = stats::v1::stats_service_server::StatsServiceServer<T>;
+    }
+
+    // ── Prerequisites + schedule (flag_lifecycle_20260604) ──────────────────
+
+    #[test]
+    fn flag_prerequisite_field_present_and_round_trips() {
+        use prost::Message;
+
+        // FlagPrerequisite message and the new FeatureFlag fields are reachable.
+        let flag = flags::v1::FeatureFlag {
+            key: "checkout".to_string(),
+            prerequisites: vec![flags::v1::FlagPrerequisite {
+                prerequisite_flag_id: String::new(),
+                prerequisite_flag_key: "billing-enabled".to_string(),
+                required_variant_id: String::new(),
+                required_variant_key: "on".to_string(),
+            }],
+            fallback_variant_key: "off".to_string(),
+            ..Default::default()
+        };
+        let mut buf = Vec::new();
+        flag.encode(&mut buf).expect("encode");
+        let decoded = flags::v1::FeatureFlag::decode(&buf[..]).expect("decode");
+        assert_eq!(decoded.prerequisites.len(), 1);
+        assert_eq!(
+            decoded.prerequisites[0].prerequisite_flag_key,
+            "billing-enabled"
+        );
+        assert_eq!(decoded.prerequisites[0].required_variant_key, "on");
+        assert_eq!(decoded.fallback_variant_key, "off");
+    }
+
+    #[test]
+    fn flag_service_prerequisite_rpc_types_accessible() {
+        let _: Option<flags::v1::SetPrerequisitesRequest> = None;
+        let _: Option<flags::v1::SetPrerequisitesResponse> = None;
+        let _: Option<flags::v1::GetPrerequisitesRequest> = None;
+        let _: Option<flags::v1::GetPrerequisitesResponse> = None;
+    }
+
+    #[test]
+    fn schedule_service_types_accessible() {
+        let _: Option<schedule::v1::ScheduledChange> = None;
+        let _: Option<schedule::v1::ScheduledChangeRun> = None;
+        let _: Option<schedule::v1::CreateScheduledChangeRequest> = None;
+        let _: Option<schedule::v1::ListScheduledChangesRequest> = None;
+        let _: Option<schedule::v1::ListScheduledChangesResponse> = None;
+        let _: Option<schedule::v1::GetScheduledChangeRequest> = None;
+        let _: Option<schedule::v1::CancelScheduledChangeRequest> = None;
+        let _: Option<schedule::v1::PauseScheduledChangeRequest> = None;
+        let _: Option<schedule::v1::ResumeScheduledChangeRequest> = None;
+        let _: Option<schedule::v1::ListDueChangesRequest> = None;
+        let _: Option<schedule::v1::ListDueChangesResponse> = None;
+        // Enums.
+        let _ = schedule::v1::ScheduleEntityType::Flag;
+        let _ = schedule::v1::ScheduleKind::OneShot;
+        let _ = schedule::v1::ScheduleStatus::Pending;
+        let _ = schedule::v1::ScheduleRunOutcome::Applied;
+    }
+
+    #[test]
+    fn schedule_service_client_and_server_stubs_generated() {
+        type _Client<T> = schedule::v1::schedule_service_client::ScheduleServiceClient<T>;
+        type _Server<T> = schedule::v1::schedule_service_server::ScheduleServiceServer<T>;
     }
 
     // ── SDK contracts (sdks/spec/proto/sdk/v1/) ─────────────────────────────

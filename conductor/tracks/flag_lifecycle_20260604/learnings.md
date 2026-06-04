@@ -89,3 +89,26 @@ Patterns, gotchas, and context discovered during implementation.
 - Postgres reachable at `postgres://stitchd:stitchd@localhost:5432/stitchd`; the
   `$STITCHD_DATABASE_URL` env var is set by the user profile but does NOT persist into the
   agent's bash shell — export it explicitly per command.
+
+## 2026-06-04 — Phase 1 Task 3 (proto)
+- flag_sync.proto: new `FlagPrerequisite` message (prerequisite_flag_id/key,
+  required_variant_id/key) + `FeatureFlag.prerequisites` (tag 15, repeated) +
+  `FeatureFlag.fallback_variant_key` (tag 16). Carries both UUID + key so it rides BOTH
+  SDK definition-sync (keys) and admin/preview (UUIDs) snapshots — they gate identically.
+- flag_service.proto: `SetPrerequisites`/`GetPrerequisites` RPCs + req/resp messages.
+- NEW proto/schedule/v1/schedule_service.proto: ScheduledChange + ScheduledChangeRun +
+  4 enums (ScheduleEntityType/ScheduleKind/ScheduleStatus/ScheduleRunOutcome); RPCs
+  Create/List/Get/Cancel/Pause/ResumeScheduledChange + internal ListDueChanges. Registered
+  in build.rs + lib.rs (`pub mod schedule::v1`).
+- GOTCHA: there is NO proto error enum in this codebase. 409 FLAG_LOCKED_BY_EXPERIMENT is a
+  gateway-side sentinel STRING (`flag_locked_by_experiment:<uuid>` on a tonic
+  FailedPrecondition status, decoded in stitchd-gateway/src/error.rs into a structured
+  variant). DEPENDENCY_EXISTS mirrors this as a `dependency_exists:` sentinel — that's a
+  Phase 4/6 service+gateway concern, NOT a proto change. Documented the sentinel convention
+  in the schedule proto's ScheduledChangeRun.detail comment.
+- NO experiment/segment proto changes needed: `TransitionExperiment` (full ExperimentStatus
+  = start/pause/resume/stop/archive) and segment `UpdateAdminSegment`/`MutateSegment` already
+  exist for the scheduler to dispatch to. Convention: payloads as JSON strings + timestamps
+  as epoch-ms int64 (no google.protobuf well-known types anywhere in the tree).
+- `cargo build -p stitchd-proto` regenerates stubs; 25 proto compilation tests green
+  (added FlagPrerequisite round-trip, prerequisite RPC types, schedule types + enums + stubs).

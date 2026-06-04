@@ -33,7 +33,7 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
   `flag_prerequisites` (+ `fallback_variant_id` on feature_flags), `entity_dependencies`
   edge table; partial index on `next_run_at WHERE status='active'`. TDD: repo smoke test.
   <!-- files: crates/stitchd-db/migrations/20260604000001_lifecycle_automation.sql -->
-- [ ] Task 3: Proto additions (backward-compatible) — `flag_sync.proto` (`FlagPrerequisite`
+- [x] Task 3: Proto additions (backward-compatible) — `flag_sync.proto` (`FlagPrerequisite`
   + `repeated prerequisites` + `fallback_variant_key` on `FeatureFlag`); `flag_service.proto`
   (`SetPrerequisites`/`GetPrerequisites`); new `proto/schedule/v1/*.proto`; experiment +
   segment lifecycle/schedule messages; `DEPENDENCY_EXISTS` error code. Regenerate stubs.
