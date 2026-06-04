@@ -270,6 +270,22 @@ fn extract_aggregation_config<'a>(
 /// inlined).
 #[must_use]
 pub fn rewrite_placeholders_to_clickhouse(sql: String) -> String {
+    // FIX B2: structural bind-order guard. `clickhouse-rs` binds `?` placeholders
+    // by SQL *position*, not by `Vec<QueryBind>` index — so every builder must
+    // push its binds in the same order the `{pN}` placeholders appear in the
+    // emitted SQL (push order == textual order). That invariant is hand-maintained
+    // per builder and was the root of the funnel bind-order bug (re-review finding
+    // #13). Rather than a risky reorder, assert it cheaply: the `{pN}` numbers must
+    // appear in strictly ASCENDING textual order. Debug-only (`debug_assert!`) so
+    // it fails loudly in tests / debug builds without touching release behaviour.
+    debug_assert!(
+        placeholders_strictly_ascending(&sql),
+        "bind-order invariant violated: {{pN}} placeholders are not in strictly \
+         ascending textual order — a builder's push order does not match SQL \
+         appearance order (clickhouse-rs binds positionally), so binds will be \
+         mismatched. SQL:\n{sql}"
+    );
+
     // Walk the string once; any time we see `{p<digits>}`, emit `?`.
     // Anything else is copied byte-for-byte.
     let bytes = sql.as_bytes();
@@ -298,6 +314,50 @@ pub fn rewrite_placeholders_to_clickhouse(sql: String) -> String {
         i += 1;
     }
     out
+}
+
+/// Return `true` iff every `{pN}` placeholder in `sql` appears in strictly
+/// ascending textual order (`{p0}` before `{p1}` before `{p2}` …).
+///
+/// This is the cheap structural witness for the bind-order invariant checked by
+/// [`rewrite_placeholders_to_clickhouse`]'s `debug_assert!` (FIX B2). The pure
+/// builders push their `Vec<QueryBind>` in the order they intend the values to
+/// bind; `clickhouse-rs` binds `?` positionally, so the Nth placeholder in the
+/// SQL must be the Nth bind. If a builder weaves placeholders out of push order
+/// (e.g. emits `{p2}` before `{p0}`), the binds silently mismatch — this catches
+/// exactly that case. Same single-pass `{p<digits>}` scan as the rewriter, but
+/// instead of emitting `?` it records each placeholder number and verifies the
+/// sequence is strictly increasing. Non-placeholder text is ignored.
+#[must_use]
+fn placeholders_strictly_ascending(sql: &str) -> bool {
+    let bytes = sql.as_bytes();
+    let mut i = 0;
+    // `None` until the first placeholder is seen; thereafter the previous index.
+    let mut prev: Option<u64> = None;
+    while i < bytes.len() {
+        if bytes[i] == b'{' && i + 1 < bytes.len() && bytes[i + 1] == b'p' {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 2 && j < bytes.len() && bytes[j] == b'}' {
+                // `j > i + 2` guarantees ≥1 ASCII digit, so this parses.
+                let n: u64 = sql[i + 2..j]
+                    .parse()
+                    .expect("digits-only run parses as u64");
+                if let Some(p) = prev
+                    && n <= p
+                {
+                    return false;
+                }
+                prev = Some(n);
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    true
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -662,8 +722,13 @@ mod tests {
         let input = "SELECT {p0}, {p1}, {p10}".to_owned();
         assert_eq!(rewrite_placeholders_to_clickhouse(input), "SELECT ?, ?, ?");
 
-        // Bind ORDER is preserved — the rewrite is purely positional.
-        let input = "WHERE a = {p2} AND b = {p0} AND c = {p1}".to_owned();
+        // Each `{pN}` is rewritten to `?` independently of its number and of
+        // any gaps between numbers — the rewrite is purely positional. (The
+        // placeholders stay in ascending textual order so the FIX B2 bind-order
+        // `debug_assert!` is satisfied; out-of-order rejection is covered by
+        // `placeholders_strictly_ascending_rejects_out_of_order` and
+        // `rewrite_panics_on_out_of_order_placeholders_in_debug`.)
+        let input = "WHERE a = {p0} AND b = {p5} AND c = {p12}".to_owned();
         assert_eq!(
             rewrite_placeholders_to_clickhouse(input),
             "WHERE a = ? AND b = ? AND c = ?"
@@ -685,5 +750,50 @@ mod tests {
             rewrite_placeholders_to_clickhouse("SELECT 1 + 1".into()),
             "SELECT 1 + 1"
         );
+    }
+
+    // ── FIX B2: bind-order structural guard ──────────────────────────────────
+
+    #[test]
+    fn placeholders_strictly_ascending_accepts_in_order() {
+        // Ascending, contiguous.
+        assert!(placeholders_strictly_ascending("SELECT {p0}, {p1}, {p2}"));
+        // Ascending but non-contiguous (gaps are fine — only order matters).
+        assert!(placeholders_strictly_ascending(
+            "WHERE a = {p0} AND b = {p5} AND c = {p10}"
+        ));
+        // Multi-digit ascending.
+        assert!(placeholders_strictly_ascending("{p9}, {p10}, {p123}"));
+        // No placeholders at all is vacuously ascending.
+        assert!(placeholders_strictly_ascending("SELECT 1 + 1"));
+        assert!(placeholders_strictly_ascending(""));
+        // Tokens that look like placeholders but aren't are ignored.
+        assert!(placeholders_strictly_ascending(
+            "SELECT {p} AS x, {pq} AS y, {p3 AS z"
+        ));
+    }
+
+    #[test]
+    fn placeholders_strictly_ascending_rejects_out_of_order() {
+        // `{p2}` appears before `{p0}` — push order ≠ textual order.
+        assert!(!placeholders_strictly_ascending(
+            "WHERE a = {p2} AND b = {p0} AND c = {p1}"
+        ));
+        // A duplicate is not strictly increasing.
+        assert!(!placeholders_strictly_ascending("{p0}, {p0}"));
+        // Multi-digit out of order: {p10} before {p9}.
+        assert!(!placeholders_strictly_ascending("{p10}, {p9}"));
+    }
+
+    /// The `debug_assert!` in [`rewrite_placeholders_to_clickhouse`] fires on
+    /// deliberately out-of-order SQL (the exact funnel-style failure mode it
+    /// guards). Debug-only, so this test is itself debug-only.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "bind-order invariant violated")]
+    fn rewrite_panics_on_out_of_order_placeholders_in_debug() {
+        // `{p1}` precedes `{p0}` — a builder pushed binds in a different order
+        // than it emitted placeholders. clickhouse-rs would mis-bind these.
+        let _ = rewrite_placeholders_to_clickhouse("SELECT {p1}, {p0}".to_owned());
     }
 }
