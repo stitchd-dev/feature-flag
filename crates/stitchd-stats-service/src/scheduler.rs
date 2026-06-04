@@ -2,13 +2,14 @@
 //!
 //! No direct PostgreSQL access to `experiments` or `experiment_iterations` tables.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, TimeZone, Utc};
 use tonic::transport::Channel;
 use uuid::Uuid;
 
 use stitchd_proto::experiments::v1::{
-    GetExperimentIterationRequest, ListRunningExperimentsRequest,
-    experimentation_service_client::ExperimentationServiceClient,
+    ListRunningExperimentsRequest, experimentation_service_client::ExperimentationServiceClient,
 };
 
 /// Sequential-testing configuration snapshotted on an experiment iteration
@@ -51,10 +52,29 @@ pub struct RunningExperiment {
     pub metric_ids: Vec<Uuid>,
     pub variant_keys: Vec<String>,
     pub started_at: DateTime<Utc>,
-    /// Sequential-testing configuration resolved from the iteration snapshot.
-    /// Defaults to disabled until [`enrich_sequential_settings`] fetches the
-    /// iteration; the `ListRunningExperiments` RPC does not carry these fields.
+    /// Analysis unit context types snapshotted on the iteration (proto
+    /// `ExperimentIteration.unit_context_types`). The compute pass runs one stats
+    /// analysis per context type. Carried directly on the `ListRunningExperiments`
+    /// response (FIX C3); [`fetch_running_experiments`] defaults it to `["user"]`
+    /// when the field arrives empty so there is always at least one dimension.
+    pub unit_context_types: Vec<String>,
+    /// Pre-period length in days for CUPED variance reduction. Snapshotted on the
+    /// iteration and carried directly on the `ListRunningExperiments` response
+    /// (FIX C3); the compute pass uses it to adjust NUMERIC metric values by their
+    /// pre-period covariate when `> 0`. `0` = CUPED disabled.
+    pub pre_period_days: u32,
+    /// Sequential-testing configuration snapshotted on the iteration and carried
+    /// directly on the `ListRunningExperiments` response (FIX C3).
     pub sequential: SequentialSettings,
+    /// Designed per-variant assignment split in basis points (`variant_key` →
+    /// bp), sourced from the experiment's bound rule (`RuleOutput::Percentage`
+    /// weights) or the flag's `default_rule_distribution`. Carried on the
+    /// `ListRunningExperiments` response (`variant_expected_bp`) so the SRM check
+    /// tests observed assignments against the CONFIGURED split rather than a
+    /// uniform `1/K` baseline. Empty when the server could not source it (older
+    /// server, or neither a rule nor a default distribution carried weights), in
+    /// which case the SRM check falls back to the uniform split.
+    pub variant_expected_bp: HashMap<String, u32>,
 }
 
 /// Fetch all running experiments via `experimentation-service.ListRunningExperiments`.
@@ -93,6 +113,19 @@ pub async fn fetch_running_experiments(
                             .map_err(|e| anyhow::anyhow!("invalid metric_id UUID {s}: {e}"))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                // FIX C3: the active-iteration compute-pass inputs now ride along
+                // on the `ListRunningExperiments` response (populated from the same
+                // iteration row the handler already loads), so there is no second
+                // `GetExperimentIteration` round-trip — and no skip-on-failure that
+                // could freeze a persistently-unfetchable experiment as stale.
+                // Default `unit_context_types` to `["user"]` when the field is
+                // empty (older server, or an iteration with none snapshotted) so
+                // the compute pass always has at least one dimension to analyse.
+                let unit_context_types = if proto.unit_context_types.is_empty() {
+                    vec!["user".to_string()]
+                } else {
+                    proto.unit_context_types
+                };
                 results.push(RunningExperiment {
                     experiment_id,
                     env_id,
@@ -100,57 +133,24 @@ pub async fn fetch_running_experiments(
                     metric_ids,
                     variant_keys: proto.variant_keys,
                     started_at,
-                    // ListRunningExperiments does not carry the sequential
-                    // config; resolved separately via the iteration snapshot.
-                    sequential: SequentialSettings::default(),
+                    unit_context_types,
+                    pre_period_days: proto.pre_period_days,
+                    sequential: SequentialSettings {
+                        enabled: proto.sequential_testing_enabled,
+                        alpha: proto.sequential_alpha,
+                        tau_squared: proto.sequential_tau_squared,
+                        min_sample_size: proto.sequential_min_sample_size,
+                    },
+                    // Designed per-variant split (bp) for weighted SRM; empty
+                    // when the server did not source it (older server / no
+                    // rule+default-rule weights) → uniform SRM fallback.
+                    variant_expected_bp: proto.variant_expected_bp,
                 });
             }
         }
     }
 
     Ok(results)
-}
-
-/// Resolve the [`SequentialSettings`] for an experiment from its iteration
-/// snapshot via `GetExperimentIteration`.
-///
-/// The `ListRunningExperiments` view omits the sequential config, so the
-/// scheduler calls this to hydrate `exp.sequential` before the compute pass.
-/// On RPC failure the settings are left at their default (sequential disabled),
-/// which is the safe behaviour — a transient experimentation-service blip must
-/// not turn on (or misconfigure) always-valid testing.
-pub async fn enrich_sequential_settings(
-    client: &mut ExperimentationServiceClient<Channel>,
-    exp: &mut RunningExperiment,
-) {
-    match client
-        .get_experiment_iteration(GetExperimentIterationRequest {
-            iteration_id: exp.iteration_id.to_string(),
-        })
-        .await
-    {
-        Ok(resp) => {
-            let it = resp.into_inner();
-            exp.sequential = SequentialSettings {
-                enabled: it.sequential_testing_enabled,
-                alpha: it.sequential_alpha,
-                tau_squared: it.sequential_tau_squared,
-                min_sample_size: it.sequential_min_sample_size,
-            };
-        }
-        Err(e) => {
-            // Reset to the safe default (disabled): a transient
-            // experimentation-service blip must never leave stale/partial
-            // sequential config that could turn on or misconfigure
-            // always-valid testing.
-            exp.sequential = SequentialSettings::default();
-            tracing::warn!(
-                experiment_id = %exp.experiment_id,
-                iteration_id = %exp.iteration_id,
-                "failed to fetch iteration for sequential settings; leaving disabled: {e}"
-            );
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -180,8 +180,10 @@ mod tests {
 
     struct MockExperimentationService {
         items: Arc<Mutex<RunningExpList>>,
-        /// Optional iteration returned by `get_experiment_iteration`; `None`
-        /// makes the RPC fail (NotFound) to exercise the fallback path.
+        /// Backs the `get_experiment_iteration` trait method (required to satisfy
+        /// the gRPC trait). `None` makes that RPC return NotFound. The scheduler no
+        /// longer calls it — iteration settings now ride on `ListRunningExperiments`
+        /// (FIX C3) — so tests always construct this with `None` via `make_client`.
         iteration: Arc<Mutex<Option<ExperimentIteration>>>,
     }
 
@@ -397,6 +399,16 @@ mod tests {
             metric_ids: vec![metric_id.to_string()],
             started_at_ms: 1_700_000_000_000,
             status: "running".into(),
+            unit_context_types: vec!["user".into(), "account".into()],
+            pre_period_days: 14,
+            sequential_testing_enabled: true,
+            sequential_alpha: 0.01,
+            sequential_tau_squared: Some(0.25),
+            sequential_min_sample_size: 250,
+            variant_expected_bp: HashMap::from([
+                ("control".to_string(), 9000),
+                ("treatment".to_string(), 1000),
+            ]),
         };
 
         let mut client = make_client(vec![proto]).await;
@@ -408,6 +420,17 @@ mod tests {
         assert_eq!(results[0].iteration_id, iter_id);
         assert_eq!(results[0].metric_ids, vec![metric_id]);
         assert_eq!(results[0].variant_keys, vec!["control", "treatment"]);
+        // FIX C3: iteration compute-pass inputs are hydrated directly from the
+        // ListRunningExperiments response (no second GetExperimentIteration RPC).
+        assert_eq!(results[0].unit_context_types, vec!["user", "account"]);
+        assert_eq!(results[0].pre_period_days, 14);
+        assert!(results[0].sequential.enabled);
+        assert!((results[0].sequential.alpha - 0.01).abs() < 1e-12);
+        assert_eq!(results[0].sequential.tau_squared, Some(0.25));
+        assert_eq!(results[0].sequential.min_sample_size, 250);
+        // Designed split (bp) for weighted SRM rides on the response.
+        assert_eq!(results[0].variant_expected_bp.get("control"), Some(&9000));
+        assert_eq!(results[0].variant_expected_bp.get("treatment"), Some(&1000));
     }
 
     #[tokio::test]
@@ -421,6 +444,13 @@ mod tests {
                 metric_ids: vec![Uuid::new_v4().to_string()],
                 started_at_ms: 0,
                 status: "running".into(),
+                unit_context_types: vec!["user".into()],
+                pre_period_days: 0,
+                sequential_testing_enabled: false,
+                sequential_alpha: 0.05,
+                sequential_tau_squared: None,
+                sequential_min_sample_size: 100,
+                variant_expected_bp: HashMap::new(),
             })
             .collect();
 
@@ -442,72 +472,43 @@ mod tests {
         assert_no_pg_pool_arg(|_client| {});
     }
 
-    // ── enrich_sequential_settings (Phase 3 config flow) ──────────────────────
+    // ── FIX C3: iteration settings carried on ListRunningExperiments ──────────
 
-    fn running_exp(iteration_id: Uuid) -> RunningExperiment {
-        RunningExperiment {
-            experiment_id: Uuid::new_v4(),
-            env_id: Uuid::new_v4(),
-            iteration_id,
-            metric_ids: vec![],
-            variant_keys: vec!["control".into(), "treatment".into()],
-            started_at: Utc::now(),
-            sequential: SequentialSettings::default(),
-        }
-    }
-
-    fn iteration_with_sequential(
-        id: Uuid,
-        enabled: bool,
-        alpha: f64,
-        tau: Option<f64>,
-        min_n: i64,
-    ) -> ExperimentIteration {
-        ExperimentIteration {
-            id: id.to_string(),
+    /// FIX C3: when the `RunningExperiment` proto carries an EMPTY
+    /// `unit_context_types` (older server, or an iteration with none
+    /// snapshotted), `fetch_running_experiments` defaults it to `["user"]` so the
+    /// compute pass always has at least one dimension — while still reading the
+    /// sequential / pre-period fields straight off the proto. This is the
+    /// defaulting that used to live in the now-deleted `enrich_sequential_settings`.
+    #[tokio::test]
+    async fn fetch_defaults_empty_context_types_to_user() {
+        let proto = ProtoRunningExperiment {
             experiment_id: Uuid::new_v4().to_string(),
-            iteration_number: 1,
-            started_at_ms: 0,
-            ended_at_ms: 0,
+            environment_id: Uuid::new_v4().to_string(),
+            iteration_id: Uuid::new_v4().to_string(),
+            variant_keys: vec!["control".into(), "treatment".into()],
             metric_ids: vec![],
-            traffic_allocation: 1.0,
+            started_at_ms: 0,
+            status: "running".into(),
+            // Empty on the wire → must default to ["user"].
             unit_context_types: vec![],
-            exclusion_group_id: None,
-            group_bucket_lo: None,
-            group_bucket_hi: None,
-            sequential_testing_enabled: enabled,
-            sequential_alpha: alpha,
-            sequential_tau_squared: tau,
-            sequential_min_sample_size: min_n,
-        }
-    }
+            pre_period_days: 0,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
+            variant_expected_bp: HashMap::new(),
+        };
+        let mut client = make_client(vec![proto]).await;
+        let results = fetch_running_experiments(&mut client).await.unwrap();
 
-    #[tokio::test]
-    async fn enrich_sequential_settings_reads_iteration_snapshot() {
-        let iter_id = Uuid::new_v4();
-        let it = iteration_with_sequential(iter_id, true, 0.01, Some(0.25), 250);
-        let mut client = make_client_with_iteration(vec![], Some(it)).await;
-
-        let mut exp = running_exp(iter_id);
-        enrich_sequential_settings(&mut client, &mut exp).await;
-
-        assert!(exp.sequential.enabled);
-        assert!((exp.sequential.alpha - 0.01).abs() < 1e-12);
-        assert_eq!(exp.sequential.tau_squared, Some(0.25));
-        assert_eq!(exp.sequential.min_sample_size, 250);
-    }
-
-    #[tokio::test]
-    async fn enrich_sequential_settings_falls_back_to_disabled_on_rpc_error() {
-        // No iteration configured → get_experiment_iteration returns NotFound.
-        let mut client = make_client_with_iteration(vec![], None).await;
-        let mut exp = running_exp(Uuid::new_v4());
-        // Pretend it was somehow enabled; the failed fetch must reset to default.
-        exp.sequential.enabled = true;
-        enrich_sequential_settings(&mut client, &mut exp).await;
-        assert!(
-            !exp.sequential.enabled,
-            "RPC failure must leave sequential disabled"
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].unit_context_types,
+            vec!["user"],
+            "empty unit_context_types must default to [\"user\"]"
         );
+        assert!(!results[0].sequential.enabled);
+        assert_eq!(results[0].pre_period_days, 0);
     }
 }

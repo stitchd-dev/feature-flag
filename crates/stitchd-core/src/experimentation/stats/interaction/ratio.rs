@@ -79,30 +79,32 @@ impl RatioAgg {
     /// Returns `None` when the cell is degenerate (`den_sum ≤ 0`,
     /// `mean_den ≤ 0`, `n < 2`, or a non-finite / non-positive variance), in
     /// which case the enclosing term is reported insufficient.
+    ///
+    /// Delegates to the shared [`super::super::ratio_delta_var`] (the single
+    /// source of truth, also used by `sequential::RatioGroupStats::ratio_var`)
+    /// so the interaction and two-group ratio paths cannot diverge.
     fn ratio_var(&self) -> Option<(f64, f64)> {
-        let n = self.n as f64;
-        if self.n < 2 || self.den_sum <= 0.0 {
-            return None;
-        }
-        let mean_num = self.num_sum / n;
-        let mean_den = self.den_sum / n;
-        if !positive(mean_den) {
-            return None;
-        }
-        let r = self.num_sum / self.den_sum;
-
-        let var_num = self.num_sq_sum / n - mean_num * mean_num;
-        let var_den = self.den_sq_sum / n - mean_den * mean_den;
-        let cov = self.num_den_sum / n - mean_num * mean_den;
-
-        // Delta method: Var(R) ≈ (1/mean_den²)·(var_num − 2R·cov + R²·var_den)/n.
-        let var_r = (var_num - 2.0 * r * cov + r * r * var_den) / (mean_den * mean_den * n);
-
-        if !var_r.is_finite() || var_r <= 0.0 || !r.is_finite() {
-            return None;
-        }
-        Some((r, var_r))
+        super::super::ratio_delta_var(
+            self.n as i64,
+            self.num_sum,
+            self.den_sum,
+            self.num_sq_sum,
+            self.den_sq_sum,
+            self.num_den_sum,
+        )
     }
+}
+
+/// Test-only accessor exercising the **real** interaction-frequentist per-cell
+/// ratio-variance path (the production [`RatioAgg::add`] + [`RatioAgg::ratio_var`]
+/// used by every term's collapse) for a single cell. Lets the cross-engine
+/// single-source pin in `bayes_continuous` assert this path against the canonical
+/// [`super::super::ratio_delta_var`] without re-deriving the formula.
+#[cfg(test)]
+pub(super) fn freq_cell_ratio_var(cell: &NdRatioCell) -> Option<(f64, f64)> {
+    let mut agg = RatioAgg::default();
+    agg.add(cell);
+    agg.ratio_var()
 }
 
 /// Public entry point — see the module contract.

@@ -19,6 +19,95 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// ── Shared statistical primitives ─────────────────────────────────────────────
+//
+// Single definitions reused by the [`frequentist`], [`bayesian`], and
+// [`interaction`] engines so their numbers stay identical. (`interaction`
+// re-exports [`norm_cdf`] under its own path for its submodules; see that
+// module.)
+
+/// The 97.5th-percentile standard-normal quantile `Φ⁻¹(0.975)`, i.e. the
+/// two-sided 95 % z-multiplier. Defined once so every 95 % normal-approximation
+/// CI margin across the engines uses the *same* constant (previously a mix of
+/// `1.96` and `1.959964`).
+pub(crate) const Z95: f64 = 1.959_964;
+
+/// Approximation of the error function using Horner's method (Abramowitz &
+/// Stegun, formula 7.1.26). Maximum absolute error < 1.5 × 10⁻⁷.
+///
+/// Shared by [`frequentist`] and [`bayesian`] so both produce bit-identical
+/// normal-CDF values.
+pub(crate) fn erf(x: f64) -> f64 {
+    // Preserve sign, evaluate the rational approximation on |x|.
+    let sign = if x < 0.0 { -1.0_f64 } else { 1.0_f64 };
+    let x = x.abs();
+
+    let t = 1.0 / (1.0 + 0.3275911 * x);
+    let poly = t
+        * (0.254829592
+            + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+    sign * (1.0 - poly * (-x * x).exp())
+}
+
+/// Standard normal CDF: `Φ(z) = 0.5 · (1 + erf(z / √2))`. Shared by
+/// [`frequentist`] and [`bayesian`].
+#[inline]
+pub(crate) fn norm_cdf(z: f64) -> f64 {
+    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
+}
+
+/// Delta-method variance of a ratio metric `R = num_sum / den_sum` for one
+/// independent group, given its first/second-moment sufficient statistics:
+///
+/// ```text
+/// Var(R) ≈ (1 / mean_den²) · (var_num − 2·R·cov + R²·var_den) / n
+/// ```
+///
+/// This is the **single canonical source** for ALL ratio-variance computations
+/// across every engine: every caller routes its delta-method `Var(R)` through
+/// here so the formula can never silently diverge. The callers are
+/// [`sequential::RatioGroupStats::ratio_var`], the frequentist / Bayesian
+/// `analyze_ratio` contrasts (via that method), and the [`interaction`] ratio
+/// paths (`interaction::ratio`'s `RatioAgg`/`NdRatioCell::ratio_var` and the
+/// ratio branch of `interaction::bayes_continuous`, i.e. `ratio_cell_post`). A
+/// regression test (`ratio_delta_var_is_the_single_ratio_variance_source`) pins
+/// that these paths stay numerically identical.
+///
+/// Returns `None` when the group is degenerate: `n < 2`, `den_sum ≤ 0`,
+/// `mean_den` non-finite or `≤ 0`, or a non-finite / non-positive `Var(R)`.
+/// `R` itself is returned alongside so callers need not recompute it.
+pub(crate) fn ratio_delta_var(
+    n: i64,
+    num_sum: f64,
+    den_sum: f64,
+    num_sq_sum: f64,
+    den_sq_sum: f64,
+    num_den_sum: f64,
+) -> Option<(f64, f64)> {
+    if n < 2 || den_sum <= 0.0 {
+        return None;
+    }
+    let nf = n as f64;
+    let mean_num = num_sum / nf;
+    let mean_den = den_sum / nf;
+    if !mean_den.is_finite() || mean_den <= 0.0 {
+        return None;
+    }
+    let r = num_sum / den_sum;
+
+    let var_num = num_sq_sum / nf - mean_num * mean_num;
+    let var_den = den_sq_sum / nf - mean_den * mean_den;
+    let cov = num_den_sum / nf - mean_num * mean_den;
+
+    // Delta method: Var(R) ≈ (1/mean_den²)·(var_num − 2R·cov + R²·var_den)/n.
+    let var_r = (var_num - 2.0 * r * cov + r * r * var_den) / (mean_den * mean_den * nf);
+
+    if !var_r.is_finite() || var_r <= 0.0 || !r.is_finite() {
+        return None;
+    }
+    Some((r, var_r))
+}
+
 // ── AnalysisType ─────────────────────────────────────────────────────────────
 
 /// The statistical methodology used to analyse experiment results.
@@ -238,6 +327,96 @@ pub struct IterationResults {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── Shared primitives (Z95 / erf / norm_cdf / ratio_delta_var) ────────────
+
+    #[test]
+    fn z95_constant_is_the_975_quantile() {
+        // Φ(Z95) must be ≈ 0.975 with this erf approximation.
+        assert!(
+            (norm_cdf(Z95) - 0.975).abs() < 1e-6,
+            "Φ(Z95)={}",
+            norm_cdf(Z95)
+        );
+    }
+
+    #[test]
+    fn shared_norm_cdf_matches_known_points() {
+        // The A&S 7.1.26 approximation has max abs error ~1.5e-7.
+        assert!((norm_cdf(0.0) - 0.5).abs() < 1e-6);
+        assert!((norm_cdf(1.96) - 0.975).abs() < 1e-3);
+        for z in [-3.0, -1.0, 0.0, 1.0, 1.96, 3.0] {
+            assert!(
+                (norm_cdf(z) + norm_cdf(-z) - 1.0).abs() < 1e-6,
+                "symmetry z={z}"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_erf_is_odd_and_zero_at_origin() {
+        // A&S 7.1.26 returns erf(0) ≈ 1e-9 (not exactly 0); within its error bound.
+        assert!(
+            erf(0.0).abs() < 1e-6,
+            "erf(0) should be ≈0, got {}",
+            erf(0.0)
+        );
+        for x in [0.25_f64, 0.5, 1.0, 2.0] {
+            // erf is odd: erf(-x) == -erf(x), bit-for-bit under this impl.
+            assert_eq!(erf(-x).to_bits(), (-erf(x)).to_bits(), "odd at x={x}");
+        }
+    }
+
+    #[test]
+    fn ratio_delta_var_matches_hand_computation() {
+        // Two observations: (num, den) = (2, 4) and (4, 4).
+        // num_sum=6 den_sum=8 → R=0.75, n=2. var_num=1, var_den=0, cov=0.
+        // Var(R) = (1 − 0 + 0)/(4²·2) = 1/32.
+        let (r, var) = ratio_delta_var(
+            2,
+            6.0,
+            8.0,
+            2.0 * 2.0 + 4.0 * 4.0,
+            4.0 * 4.0 + 4.0 * 4.0,
+            2.0 * 4.0 + 4.0 * 4.0,
+        )
+        .expect("non-degenerate");
+        assert!((r - 0.75).abs() < 1e-12, "R={r}");
+        assert!((var - 1.0 / 32.0).abs() < 1e-12, "Var={var}");
+    }
+
+    #[test]
+    fn ratio_delta_var_rejects_degenerate() {
+        // n < 2
+        assert!(ratio_delta_var(1, 1.0, 2.0, 1.0, 4.0, 2.0).is_none());
+        // den_sum <= 0
+        assert!(ratio_delta_var(5, 0.0, 0.0, 0.0, 0.0, 0.0).is_none());
+    }
+
+    /// Pure-refactor pin: the shared fn reproduces the original inline
+    /// delta-method formula bit-for-bit for a non-trivial input (the formula the
+    /// sequential / interaction paths previously each carried). The denominator
+    /// is the single product `mean_den²·n` (sequential's canonical form).
+    #[test]
+    fn ratio_delta_var_is_bit_identical_to_inline_formula() {
+        // Arbitrary non-degenerate statistics.
+        let (n, num_sum, den_sum, num_sq, den_sq, num_den) = (
+            1000_i64, 1500.0_f64, 2000.0_f64, 2800.0_f64, 5000.0_f64, 3300.0_f64,
+        );
+        let nf = n as f64;
+        let mean_num = num_sum / nf;
+        let mean_den = den_sum / nf;
+        let r = num_sum / den_sum;
+        let var_num = num_sq / nf - mean_num * mean_num;
+        let var_den = den_sq / nf - mean_den * mean_den;
+        let cov = num_den / nf - mean_num * mean_den;
+        let want_var = (var_num - 2.0 * r * cov + r * r * var_den) / (mean_den * mean_den * nf);
+
+        let (got_r, got_var) =
+            ratio_delta_var(n, num_sum, den_sum, num_sq, den_sq, num_den).expect("non-degenerate");
+        assert_eq!(got_r.to_bits(), r.to_bits(), "R bits differ");
+        assert_eq!(got_var.to_bits(), want_var.to_bits(), "Var bits differ");
+    }
 
     // ── AnalysisType ─────────────────────────────────────────────────────────
 

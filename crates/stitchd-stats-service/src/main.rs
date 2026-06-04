@@ -32,6 +32,7 @@ use stitchd_proto::analytics::v1::analytics_service_client::AnalyticsServiceClie
 use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
 use stitchd_proto::stats::v1::stats_service_server::StatsServiceServer;
 use stitchd_stats_service::{
+    compute::{ClickHouseCellReader, run_stats_compute},
     config::StatsConfig,
     context_refresher::{ClickHouseEvalLogSource, ContextRegistryRefresher},
     grpc::service::StatsServiceImpl,
@@ -155,6 +156,14 @@ async fn main() -> anyhow::Result<()> {
     let sweep_metric_repo = metric_repo.clone();
     let sweep_cells = interaction_cells.clone();
     let sweep_writer = interaction_writer.clone();
+    // Per-experiment live-stats compute pass dependencies. `ch_client` is cheap
+    // to clone (it shares the underlying HTTP client); clone it BEFORE it is
+    // moved into the timeseries reader below. `metric_repo` is cloned for the
+    // batch metric-definition resolve. The per-experiment iteration settings now
+    // ride along on `ListRunningExperiments` (FIX C3), so `exp_client` is only
+    // used for that one streaming call.
+    let scheduler_ch = ch_client.clone();
+    let scheduler_compute_metric_repo = metric_repo.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(scheduler_interval);
         loop {
@@ -173,10 +182,59 @@ async fn main() -> anyhow::Result<()> {
             for exp in experiments {
                 let pool = scheduler_pool.clone();
                 let analytics = scheduler_analytics_client.clone();
+                let ch = scheduler_ch.clone();
+                let metric_repo = scheduler_compute_metric_repo.clone();
                 tokio::spawn(async move {
                     let computed_at = chrono::Utc::now();
-                    // Stats computation is deferred to Phase 3 full implementation.
-                    // For scaffold: just update the schedule to record that we ran.
+
+                    // FIX C3: the iteration-snapshotted compute-pass inputs
+                    // (sequential config + CUPED pre-period + unit context types)
+                    // now ride along on the `ListRunningExperiments` response, so
+                    // there is no longer a per-experiment `GetExperimentIteration`
+                    // round-trip here — and no skip-on-failure that could freeze a
+                    // persistently-unfetchable experiment as stale. `exp` already
+                    // carries everything the compute pass needs.
+
+                    // Resolve every referenced metric definition in one batch.
+                    let metric_ids: Vec<stitchd_core::id::MetricId> = exp
+                        .metric_ids
+                        .iter()
+                        .copied()
+                        .map(stitchd_core::id::MetricId::from_uuid)
+                        .collect();
+                    let metrics = match metric_repo.find_batch_by_ids(&metric_ids).await {
+                        Ok(defs) => defs
+                            .into_iter()
+                            .map(|m| (m.id.as_uuid(), m))
+                            .collect::<std::collections::HashMap<_, _>>(),
+                        Err(e) => {
+                            warn!(experiment_id = %exp.experiment_id, "Failed to resolve metric definitions: {e}");
+                            std::collections::HashMap::new()
+                        }
+                    };
+
+                    // Run the live per-metric compute pass. `iteration_end` is
+                    // "now" for a still-running iteration (the scheduler only
+                    // pulls running experiments). A failure here is logged but
+                    // must not abort the schedule update.
+                    let reader = ClickHouseCellReader::new(std::sync::Arc::new(ch.clone()));
+                    let summaries = match run_stats_compute(
+                        &reader,
+                        &ch,
+                        &exp,
+                        &metrics,
+                        computed_at,
+                        computed_at,
+                    )
+                    .await
+                    {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(experiment_id = %exp.experiment_id, "Stats compute pass failed: {e}");
+                            Vec::new()
+                        }
+                    };
+
                     {
                         let mut ac = analytics.lock().await;
                         if let Err(e) = write_results(
@@ -185,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
                             exp.experiment_id,
                             exp.iteration_id,
                             computed_at,
-                            &[],
+                            &summaries,
                         )
                         .await
                         {

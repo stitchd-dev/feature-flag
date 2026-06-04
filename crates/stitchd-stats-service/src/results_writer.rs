@@ -35,6 +35,12 @@ pub struct MetricSummary {
     pub context_type: String,
     /// The metric being summarised.
     pub metric_key: String,
+    /// The metric's analysis type discriminant (`"count"`, `"numeric"`,
+    /// `"percentile"`, `"funnel"`) — forwarded verbatim as the result row's
+    /// `metric_type`. Defaults to `"count"` (see [`Default`]); the live compute
+    /// pass threads the real type from the metric kind via
+    /// [`crate::compute::metric_type_for`].
+    pub metric_type: String,
     /// JSON object mapping `variant_key` → per-variant statistics
     /// (count / sum / quantiles / …) within the `context_type`.
     pub variant_stats: serde_json::Value,
@@ -102,6 +108,9 @@ pub fn build_metric_summaries(
             summaries.push(MetricSummary {
                 context_type: context_type.clone(),
                 metric_key: metric_key.clone(),
+                // Default discriminant; the live compute pass overwrites this
+                // from the metric kind after building the summaries.
+                metric_type: "count".to_string(),
                 variant_stats: serde_json::Value::Object(variant_stats_map),
                 frequentist_result: frequentist_per_pair.get(&key).cloned(),
                 bayesian_result: bayesian_per_pair.get(&key).cloned(),
@@ -146,7 +155,7 @@ pub async fn write_results(
             iteration_id: iteration_id.to_string(),
             variant_key: String::new(), // variant breakdown is encoded in variant_stats JSON
             metric_key: summary.metric_key.clone(),
-            metric_type: "count".to_string(),
+            metric_type: summary.metric_type.clone(),
             variant_stats: summary.variant_stats.to_string(),
             frequentist_result: summary.frequentist_result.as_ref().map(|v| v.to_string()),
             bayesian_result: summary.bayesian_result.as_ref().map(|v| v.to_string()),
@@ -407,6 +416,7 @@ mod tests {
         let summaries = vec![MetricSummary {
             context_type: "user".into(),
             metric_key: "clicks".into(),
+            metric_type: "count".into(),
             variant_stats: serde_json::json!({ "control": 50, "treatment": 70 }),
             frequentist_result: Some(serde_json::json!({ "p_value": 0.04 })),
             bayesian_result: None,
@@ -435,6 +445,7 @@ mod tests {
             MetricSummary {
                 context_type: "user".into(),
                 metric_key: "clicks".into(),
+                metric_type: "count".into(),
                 variant_stats: serde_json::json!({}),
                 frequentist_result: None,
                 bayesian_result: None,
@@ -444,6 +455,7 @@ mod tests {
             MetricSummary {
                 context_type: "user".into(),
                 metric_key: "revenue".into(),
+                metric_type: "numeric".into(),
                 variant_stats: serde_json::json!({}),
                 frequentist_result: None,
                 bayesian_result: None,
@@ -486,6 +498,7 @@ mod tests {
             MetricSummary {
                 context_type: "user".into(),
                 metric_key: "clicks".into(),
+                metric_type: "count".into(),
                 variant_stats: serde_json::json!({ "control": 10, "treatment": 14 }),
                 frequentist_result: None,
                 bayesian_result: None,
@@ -495,6 +508,7 @@ mod tests {
             MetricSummary {
                 context_type: "account".into(),
                 metric_key: "clicks".into(),
+                metric_type: "count".into(),
                 variant_stats: serde_json::json!({ "control": 3, "treatment": 5 }),
                 frequentist_result: None,
                 bayesian_result: None,
@@ -625,6 +639,7 @@ mod tests {
         let summaries = vec![MetricSummary {
             context_type: "user".into(),
             metric_key: "clicks".into(),
+            metric_type: "count".into(),
             variant_stats: serde_json::json!({ "control": 50, "treatment": 70 }),
             frequentist_result: None,
             bayesian_result: None,

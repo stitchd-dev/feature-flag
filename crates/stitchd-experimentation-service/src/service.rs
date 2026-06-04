@@ -1,5 +1,6 @@
 //! gRPC service implementation for `ExperimentationService`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,8 +9,9 @@ use tonic::{Request, Response, Status};
 use tracing::instrument;
 
 use stitchd_core::{
-    experimentation::{ExclusionGroup, Experiment, ExperimentStatus},
+    experimentation::{ExclusionGroup, Experiment, ExperimentIteration, ExperimentStatus},
     id::{EnvironmentId, ExclusionGroupId, ExperimentId, ExperimentIterationId, RuleId},
+    rollout::RolloutDistribution,
     rule_engine::types::ExclusionGate,
 };
 use stitchd_db::{
@@ -169,6 +171,9 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         sequential_alpha: i.sequential_alpha,
         sequential_tau_squared: i.sequential_tau_squared,
         sequential_min_sample_size: i.sequential_min_sample_size,
+        // CUPED pre-period window (days), snapshotted on the iteration. The
+        // stats-service reads this to drive numeric-metric variance reduction.
+        pre_period_days: i.pre_period_days,
     }
 }
 
@@ -346,6 +351,54 @@ fn parse_experiment_id(s: &str) -> Result<ExperimentId, Status> {
 }
 
 // ---------------------------------------------------------------------------
+// SRM expected-allocation sourcing
+// ---------------------------------------------------------------------------
+
+/// Per-variant designed split (basis points) from a flag's default-rule
+/// distribution. Keyed by `variant_key`; values are `percentage_bp` (1 = 0.01%).
+///
+/// Used for experiments bound to the flag's default-rule fall-through
+/// (`targets_default_rule == true`); the snapshot lives on the iteration so the
+/// expected split matches the design that was in force when the run started.
+fn default_rule_expected_bp(dist: &RolloutDistribution) -> HashMap<String, u32> {
+    dist.allocations
+        .iter()
+        .map(|a| (a.variant_key.clone(), a.percentage_bp))
+        .collect()
+}
+
+/// Per-variant designed split (basis points) from a rule-bound experiment's
+/// percentage allocation. Finds the `FlagRule` whose `rule_id` matches the
+/// experiment's `flag_rule_id` and reads its `allocation.buckets`
+/// (`variant_key` → `weight_bp`). The flag-service already resolves each
+/// bucket's `variant_key` (the underlying rule stores `VariantId`s), so no
+/// further mapping is needed here.
+///
+/// Returns an empty map when no matching rule is found, the rule has no
+/// percentage allocation, or the allocation has no buckets — the caller then
+/// falls back to the uniform SRM split.
+fn rule_allocation_expected_bp(
+    flag: &stitchd_proto::flags::v1::FeatureFlag,
+    flag_rule_id: &str,
+) -> HashMap<String, u32> {
+    use stitchd_proto::flags::v1::flag_rule::Output;
+    flag.rules
+        .iter()
+        .find(|r| r.rule_id == flag_rule_id)
+        .and_then(|r| match &r.output {
+            Some(Output::Allocation(alloc)) => Some(
+                alloc
+                    .buckets
+                    .iter()
+                    .map(|b| (b.variant_key.clone(), b.weight_bp))
+                    .collect(),
+            ),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
 // Rule-gate writer port
 // ---------------------------------------------------------------------------
 
@@ -495,6 +548,63 @@ impl ExperimentationServiceImpl {
                 .map_err(Status::from)?;
         }
         Ok(())
+    }
+
+    /// Source the experiment's DESIGNED per-variant assignment split in basis
+    /// points (`variant_key` → bp) for the weighted SRM check, carried on the
+    /// `RunningExperiment.variant_expected_bp` field.
+    ///
+    /// XOR on the binding:
+    /// - `targets_default_rule` → the iteration's snapshotted
+    ///   `default_rule_distribution` (loaded already; no extra query).
+    /// - `flag_rule_id` → the bound flag rule's percentage allocation, fetched
+    ///   via the Flag Service (`get_flag`) and matched by `rule_id`. Requires a
+    ///   `flag_client` and the experiment's `flag_key`.
+    ///
+    /// Returns an empty map (→ stats-service uniform SRM fallback) when the
+    /// source is unavailable: no flag client, missing flag key, the rule carries
+    /// no percentage allocation, or a transient Flag Service error. Sourcing is
+    /// best-effort — a fetch failure degrades SRM to the uniform split rather
+    /// than failing the whole `ListRunningExperiments` stream.
+    async fn sourced_variant_expected_bp(
+        &self,
+        exp: &Experiment,
+        iter: &ExperimentIteration,
+    ) -> HashMap<String, u32> {
+        if exp.targets_default_rule {
+            // Default-rule split: use the iteration snapshot already in hand.
+            return iter
+                .default_rule_distribution
+                .as_ref()
+                .map(default_rule_expected_bp)
+                .unwrap_or_default();
+        }
+
+        // Rule-bound split: read the bound rule's allocation from the flag.
+        let (Some(flag_rule_id), Some(flag_key), Some(flag_client)) = (
+            exp.flag_rule_id,
+            exp.flag_key.as_deref(),
+            self.flag_client.as_ref(),
+        ) else {
+            return HashMap::new();
+        };
+
+        match flag_client
+            .get_flag(&exp.environment_id.to_string(), flag_key)
+            .await
+        {
+            Ok(flag) => rule_allocation_expected_bp(&flag, &flag_rule_id.to_string()),
+            Err(status) => {
+                // Best-effort: log and degrade to the uniform split.
+                tracing::warn!(
+                    experiment_id = %exp.id,
+                    flag_key,
+                    error = %status,
+                    "failed to source rule allocation for weighted SRM; falling back to uniform split"
+                );
+                HashMap::new()
+            }
+        }
     }
 
     /// Attach a ClickHouse dictionary refresher. Every successful
@@ -1105,25 +1215,24 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
             if let Some(obj) = variant_stats.as_object() {
                 for (variant_key, val) in obj {
-                    if variant_key == "srm" {
+                    // FIX C1: skip only OBJECT-valued entries. The sideband
+                    // payloads the compute pass attaches into this same object —
+                    // `srm`, `cuped`, and any future one — are JSON OBJECTS; real
+                    // variants are encoded as `variant_key → metric_value`
+                    // NUMBERS. Skipping structurally on `is_object()` (rather than
+                    // string-matching sideband keys) keeps a `cuped` sideband from
+                    // leaking as a phantom zero-count variant AND surfaces a
+                    // variant literally named "srm"/"cuped". Crucially, a REAL
+                    // variant whose point `metric_value` was non-finite (NaN/Inf)
+                    // serializes via `serde_json::Value::from(f64)` to JSON `null`
+                    // — `null` is not an object, so it is KEPT here (as a
+                    // 0/placeholder) instead of being dropped by the old
+                    // `!is_number()` guard.
+                    if val.is_object() {
                         continue;
                     }
-                    let (participant_count, lift) = match val {
-                        serde_json::Value::Number(n) => (n.as_u64().unwrap_or(0), 0.0_f64),
-                        serde_json::Value::Object(map) => {
-                            let count = map
-                                .get("count")
-                                .or_else(|| map.get("participant_count"))
-                                .and_then(serde_json::Value::as_u64)
-                                .unwrap_or(0);
-                            let lift = map
-                                .get("lift")
-                                .and_then(serde_json::Value::as_f64)
-                                .unwrap_or(0.0);
-                            (count, lift)
-                        }
-                        _ => (0, 0.0),
-                    };
+                    let participant_count = val.as_u64().unwrap_or(0);
+                    let lift = 0.0_f64;
 
                     let key = (context_type.clone(), variant_key.clone());
                     let entry = target.entry(key).or_insert_with(|| VariantResult {
@@ -1192,6 +1301,38 @@ impl ExperimentationService for ExperimentationServiceImpl {
                     entry
                         .metric_values
                         .insert(result.metric_key.clone(), participant_count as f64);
+                }
+            }
+        }
+
+        // FIX C2: override each variant's `participant_count` with the SRM blob's
+        // per-variant `observed` ASSIGNMENT count. The value seeded above came
+        // from the metric POINT (`metric_value`), which is the wrong quantity:
+        // for a rate metric (mean < 1) it rounds to 0, and for a numeric metric
+        // it is a rounded mean. The true assignment count per `(context_type,
+        // variant_key)` lives in the per-context `srm` blob's `per_variant`
+        // (`{variant_key, observed, ...}`), which stats-service attaches whenever
+        // there are ≥ 2 variants. When no srm blob is present (e.g. < 2 variants)
+        // the metric-point fallback above is left in place. A second pass (rather
+        // than reading srm inline) is robust to srm rows arriving before/after the
+        // metric rows they describe.
+        for (context_type, srm_val) in &srm_by_ctx {
+            let Some(per_variant) = srm_val.get("per_variant").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for row in per_variant {
+                let Some(variant_key) = row.get("variant_key").and_then(|v| v.as_str()) else {
+                    continue;
+                };
+                let Some(observed) = row.get("observed").and_then(serde_json::Value::as_u64) else {
+                    continue;
+                };
+                let key = (context_type.clone(), variant_key.to_string());
+                if let Some(vr) = by_ctx_variant.get_mut(&key) {
+                    vr.participant_count = observed;
+                }
+                if let Some(vr) = guardrails_by_ctx_variant.get_mut(&key) {
+                    vr.participant_count = observed;
                 }
             }
         }
@@ -1330,14 +1471,38 @@ impl ExperimentationService for ExperimentationServiceImpl {
             let active = iterations.into_iter().rfind(|i| i.ended_at.is_none());
 
             if let Some(iter) = active {
+                // Designed per-variant split (bp) for the weighted SRM check:
+                // the bound rule's percentage allocation, or (for default-rule
+                // experiments) the iteration's snapshotted
+                // `default_rule_distribution`. Empty → stats-service uniform
+                // SRM fallback.
+                let variant_expected_bp = self.sourced_variant_expected_bp(&exp, &iter).await;
                 items.push(Ok(RunningExperiment {
                     experiment_id: exp.id.to_string(),
                     environment_id: exp.environment_id.to_string(),
                     iteration_id: iter.id.to_string(),
-                    variant_keys: vec![], // variants live on the flag; not denormalised here
+                    // The full configured variant set, resolved from the bound
+                    // flag's variants (`list_all_running` JOINs them). The
+                    // stats-service compute pass needs this for SRM zero-fill: a
+                    // starved (zero-assignment) arm is otherwise invisible (FIX 3).
+                    variant_keys: exp.variant_keys.clone(),
                     metric_ids: iter.metric_ids.iter().map(ToString::to_string).collect(),
                     started_at_ms: iter.started_at.timestamp_millis(),
                     status: "running".to_string(),
+                    // FIX C3: carry the active iteration's compute-pass inputs
+                    // directly so the stats-service scheduler does not need a
+                    // second `GetExperimentIteration` round-trip per experiment.
+                    // `iter` is the same snapshot row that `metric_ids` came from,
+                    // so these add no extra query.
+                    unit_context_types: iter.unit_context_types.clone(),
+                    pre_period_days: iter.pre_period_days,
+                    sequential_testing_enabled: iter.sequential_testing_enabled,
+                    sequential_alpha: iter.sequential_alpha,
+                    sequential_tau_squared: iter.sequential_tau_squared,
+                    sequential_min_sample_size: iter.sequential_min_sample_size,
+                    // Designed split for weighted SRM (rule allocation or
+                    // default-rule distribution); empty → uniform SRM fallback.
+                    variant_expected_bp,
                 }));
             }
         }
@@ -2383,6 +2548,59 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // srm_json_to_proto — the read side of bead 891. Proves the dedicated SRM
+    // JSON the stats-service compute pass attaches under `variant_stats["srm"]`
+    // parses into a populated `SrmResult`. The fixture below is the EXACT shape
+    // `stitchd_stats_service::compute::srm_json_for` emits (per_variant rows
+    // with observed/expected/chi_sq_contribution, overall_chi_sq[_p], health).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn srm_json_to_proto_parses_stats_service_shape() {
+        // Mirror of compute::srm_json_for for an 800/1200 mismatch (expected
+        // 1000 each → χ² = 80, red).
+        let srm_json = serde_json::json!({
+            "per_variant": [
+                {"variant_key": "control", "observed": 800, "expected": 1000.0, "chi_sq_contribution": 40.0},
+                {"variant_key": "treatment", "observed": 1200, "expected": 1000.0, "chi_sq_contribution": 40.0}
+            ],
+            "overall_chi_sq": 80.0,
+            "overall_chi_sq_p": 0.0,
+            "health": "red"
+        });
+        let proto = srm_json_to_proto(&srm_json).expect("srm json parses into SrmResult");
+        assert_eq!(proto.health, "red");
+        assert!((proto.overall_chi_sq - 80.0).abs() < 1e-6);
+        assert!((proto.overall_chi_sq_p - 0.0).abs() < 1e-9);
+        assert_eq!(proto.per_variant.len(), 2);
+        let control = proto
+            .per_variant
+            .iter()
+            .find(|p| p.variant_key == "control")
+            .expect("control row present");
+        assert_eq!(control.observed, 800);
+        assert!((control.expected - 1000.0).abs() < 1e-9);
+        assert!((control.chi_sq_contribution - 40.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn srm_json_to_proto_balanced_green() {
+        // The shape compute::srm_json_for emits for a balanced split.
+        let srm_json = serde_json::json!({
+            "per_variant": [
+                {"variant_key": "control", "observed": 1000, "expected": 1000.0, "chi_sq_contribution": 0.0},
+                {"variant_key": "treatment", "observed": 1000, "expected": 1000.0, "chi_sq_contribution": 0.0}
+            ],
+            "overall_chi_sq": 0.0,
+            "overall_chi_sq_p": 1.0,
+            "health": "green"
+        });
+        let proto = srm_json_to_proto(&srm_json).expect("parses");
+        assert_eq!(proto.health, "green");
+        assert_eq!(proto.per_variant.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
     // RepositoryError → Status conversion tests (via From impl in stitchd-db)
     // -----------------------------------------------------------------------
 
@@ -2683,6 +2901,246 @@ mod tests {
             );
             assert!((vr.p_value - 0.04).abs() < 1e-9);
         }
+    }
+
+    /// FIX 2: the compute pass attaches `srm` AND `cuped` SIDEBAND objects into
+    /// the same `variant_stats` object as the real (number-valued) variants. The
+    /// read must surface ONLY the real variants — never a phantom
+    /// `srm`/`cuped` variant (the prior bug skipped only `"srm"`, so a `cuped`
+    /// sideband leaked as a zero-count variant for every CUPED experiment).
+    #[tokio::test]
+    async fn test_get_results_skips_srm_and_cuped_sidebands() {
+        let (env_id, env_id_str) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        // variant_stats carries 2 real number-valued variants + srm + cuped
+        // OBJECT sidebands — exactly what `run_stats_compute` writes.
+        let variant_stats = serde_json::json!({
+            "control": 10.0,
+            "treatment": 14.0,
+            "srm": {
+                "per_variant": [],
+                "overall_chi_sq": 0.0,
+                "overall_chi_sq_p": 1.0,
+                "health": "green"
+            },
+            "cuped": { "theta": 0.8, "variance_reduction_pct": 12.5, "applied": true }
+        })
+        .to_string();
+        let result = ProtoExperimentResult {
+            env_id: env_id_str.clone(),
+            experiment_id: exp_id.to_string(),
+            iteration_id: Uuid::new_v4().to_string(),
+            variant_key: String::new(),
+            metric_key: "checkout".to_string(),
+            metric_type: "numeric".to_string(),
+            variant_stats,
+            frequentist_result: Some(serde_json::json!({ "p_value": 0.04 }).to_string()),
+            bayesian_result: None,
+            recommendation: "ship_treatment".to_string(),
+            computed_at: "2026-05-01T00:00:00Z".to_string(),
+            created_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
+            sequential_result: None,
+        };
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(AnalyticsMockWithData {
+                results: vec![result],
+            }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id_str,
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+
+        // Only the 2 REAL variants surface — no phantom srm/cuped variant.
+        let keys: std::collections::HashSet<&str> = resp
+            .variant_results
+            .iter()
+            .map(|vr| vr.variant_key.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["control", "treatment"].into_iter().collect(),
+            "only real variants should surface; got {keys:?}"
+        );
+        assert!(
+            !keys.contains("cuped"),
+            "cuped sideband must NOT leak as a variant"
+        );
+        assert!(
+            !keys.contains("srm"),
+            "srm sideband must NOT leak as a variant"
+        );
+        assert_eq!(resp.variant_results.len(), 2);
+
+        // The srm sideband is still consumed into the per-context SRM result.
+        let user_ctx = resp
+            .results_by_context_type
+            .iter()
+            .find(|c| c.context_type == "user")
+            .expect("user context present");
+        assert!(
+            user_ctx.srm.is_some(),
+            "srm sideband should still populate ContextTypeResults.srm"
+        );
+    }
+
+    /// FIX C1: the variant-skip guard must reject only OBJECT-valued entries
+    /// (the `srm`/`cuped` sidebands), NOT every non-number entry. A REAL variant
+    /// whose point `metric_value` was non-finite (NaN/Inf) serializes via
+    /// `serde_json::Value::from(f64)` to JSON `null`; the prior `!is_number()`
+    /// guard DROPPED it. With `is_object()` the degenerate `null` variant is kept
+    /// (as a 0/placeholder) while sidebands are still skipped.
+    #[tokio::test]
+    async fn test_get_results_keeps_null_variant_skips_object_sidebands() {
+        let (env_id, env_id_str) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        // control = number; treatment = null (degenerate non-finite point);
+        // srm + cuped = object sidebands.
+        let variant_stats = serde_json::json!({
+            "control": 10.0,
+            "treatment": serde_json::Value::Null,
+            "srm": {
+                "per_variant": [],
+                "overall_chi_sq": 0.0,
+                "overall_chi_sq_p": 1.0,
+                "health": "green"
+            },
+            "cuped": { "theta": 0.8, "variance_reduction_pct": 12.5, "applied": true }
+        })
+        .to_string();
+        let result = ProtoExperimentResult {
+            env_id: env_id_str.clone(),
+            experiment_id: exp_id.to_string(),
+            iteration_id: Uuid::new_v4().to_string(),
+            variant_key: String::new(),
+            metric_key: "checkout".to_string(),
+            metric_type: "numeric".to_string(),
+            variant_stats,
+            frequentist_result: Some(serde_json::json!({ "p_value": 0.04 }).to_string()),
+            bayesian_result: None,
+            recommendation: "ship_treatment".to_string(),
+            computed_at: "2026-05-01T00:00:00Z".to_string(),
+            created_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
+            sequential_result: None,
+        };
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(AnalyticsMockWithData {
+                results: vec![result],
+            }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id_str,
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+
+        let keys: std::collections::HashSet<&str> = resp
+            .variant_results
+            .iter()
+            .map(|vr| vr.variant_key.as_str())
+            .collect();
+        // BOTH real variants surface — control (number) AND treatment (null).
+        assert_eq!(
+            keys,
+            ["control", "treatment"].into_iter().collect(),
+            "control AND the null-point treatment variant must both surface; got {keys:?}"
+        );
+        // Sidebands still skipped.
+        assert!(!keys.contains("srm"), "srm sideband must NOT leak");
+        assert!(!keys.contains("cuped"), "cuped sideband must NOT leak");
+
+        // The null variant gets a 0/placeholder participant_count (no srm blob
+        // per_variant here, so it falls back to the metric-point path).
+        let treatment = resp
+            .variant_results
+            .iter()
+            .find(|vr| vr.variant_key == "treatment")
+            .expect("null-point treatment variant present");
+        assert_eq!(
+            treatment.participant_count, 0,
+            "degenerate null variant gets a 0 placeholder count"
+        );
+    }
+
+    /// FIX C2: `VariantResult.participant_count` must come from the SRM blob's
+    /// per-variant `observed` ASSIGNMENT count, NOT from the metric POINT value.
+    /// For a rate metric (mean < 1) the point rounds to 0 via `as_u64`; for a
+    /// numeric metric it is a rounded mean — both wrong as a participant count.
+    /// With an srm blob present, the count must equal the srm `observed`.
+    #[tokio::test]
+    async fn test_get_results_participant_count_from_srm_observed() {
+        let (env_id, env_id_str) = env_uuid();
+        let exp_id = Uuid::new_v4();
+        // Rate metric: control mean 0.10, treatment mean 0.14 — both round to 0
+        // as a u64 metric point. The REAL assignment counts live in srm.observed.
+        let variant_stats = serde_json::json!({
+            "control": 0.10,
+            "treatment": 0.14,
+            "srm": {
+                "per_variant": [
+                    { "variant_key": "control",   "observed": 5000, "expected": 5000.0, "chi_sq_contribution": 0.0 },
+                    { "variant_key": "treatment", "observed": 4800, "expected": 5000.0, "chi_sq_contribution": 8.0 }
+                ],
+                "overall_chi_sq": 8.0,
+                "overall_chi_sq_p": 0.5,
+                "health": "green"
+            }
+        })
+        .to_string();
+        let result = ProtoExperimentResult {
+            env_id: env_id_str.clone(),
+            experiment_id: exp_id.to_string(),
+            iteration_id: Uuid::new_v4().to_string(),
+            variant_key: String::new(),
+            metric_key: "purchase_rate".to_string(),
+            metric_type: "rate".to_string(),
+            variant_stats,
+            frequentist_result: Some(serde_json::json!({ "p_value": 0.04 }).to_string()),
+            bayesian_result: None,
+            recommendation: "ship_treatment".to_string(),
+            computed_at: "2026-05-01T00:00:00Z".to_string(),
+            created_at: "2026-05-01T00:00:00Z".to_string(),
+            context_type: "user".to_string(),
+            sequential_result: None,
+        };
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(AnalyticsMockWithData {
+                results: vec![result],
+            }),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(GetResultsRequest {
+            environment_id: env_id_str,
+            experiment_id: exp_id.to_string(),
+        });
+        let resp = svc.get_results(req).await.unwrap().into_inner();
+
+        let by_key: std::collections::HashMap<&str, &VariantResult> = resp
+            .variant_results
+            .iter()
+            .map(|v| (v.variant_key.as_str(), v))
+            .collect();
+        let c = by_key.get("control").expect("control present");
+        let t = by_key.get("treatment").expect("treatment present");
+        assert_eq!(
+            c.participant_count, 5000,
+            "control participant_count must come from srm observed, not the 0.10 metric point"
+        );
+        assert_eq!(
+            t.participant_count, 4800,
+            "treatment participant_count must come from srm observed, not the 0.14 metric point"
+        );
     }
 
     /// Task 4.1: a row carrying a `sequential_result` blob populates the
@@ -4727,5 +5185,95 @@ mod tests {
         );
         let err = svc.get_experiment_interactions(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    // -----------------------------------------------------------------------
+    // SRM expected-allocation sourcing (pure helpers)
+    // -----------------------------------------------------------------------
+
+    /// A default-rule distribution maps straight to `variant_key → percentage_bp`.
+    #[test]
+    fn default_rule_expected_bp_maps_allocations() {
+        use stitchd_core::rollout::{RolloutAllocation, RolloutDistribution};
+        let dist = RolloutDistribution {
+            allocations: vec![
+                RolloutAllocation {
+                    variant_key: "control".to_string(),
+                    percentage_bp: 9000,
+                },
+                RolloutAllocation {
+                    variant_key: "treatment".to_string(),
+                    percentage_bp: 1000,
+                },
+            ],
+        };
+        let bp = default_rule_expected_bp(&dist);
+        assert_eq!(bp.len(), 2);
+        assert_eq!(bp.get("control"), Some(&9000));
+        assert_eq!(bp.get("treatment"), Some(&1000));
+    }
+
+    /// A rule-bound allocation is read from the matching `FlagRule.rule_id`'s
+    /// `allocation.buckets` (variant_key → weight_bp).
+    #[test]
+    fn rule_allocation_expected_bp_reads_matching_rule_buckets() {
+        use stitchd_proto::flags::v1::{
+            AllocationBucket, FeatureFlag, FlagRule, PercentageAllocation, flag_rule::Output,
+        };
+        let rule_id = Uuid::new_v4().to_string();
+        let flag = FeatureFlag {
+            rules: vec![FlagRule {
+                rule_payload: vec![],
+                output: Some(Output::Allocation(PercentageAllocation {
+                    context_hash_specs: Default::default(),
+                    buckets: vec![
+                        AllocationBucket {
+                            variant_key: "a".to_string(),
+                            weight_bp: 8000,
+                        },
+                        AllocationBucket {
+                            variant_key: "b".to_string(),
+                            weight_bp: 1000,
+                        },
+                        AllocationBucket {
+                            variant_key: "c".to_string(),
+                            weight_bp: 1000,
+                        },
+                    ],
+                    hash_inputs: vec![],
+                    exclusion_gate: None,
+                })),
+                name: String::new(),
+                rule_id: rule_id.clone(),
+            }],
+            ..Default::default()
+        };
+        let bp = rule_allocation_expected_bp(&flag, &rule_id);
+        assert_eq!(bp.len(), 3);
+        assert_eq!(bp.get("a"), Some(&8000));
+        assert_eq!(bp.get("b"), Some(&1000));
+        assert_eq!(bp.get("c"), Some(&1000));
+    }
+
+    /// No rule matches the id, or the rule is a specific-variant (non-allocation)
+    /// output → empty map (caller falls back to the uniform SRM split).
+    #[test]
+    fn rule_allocation_expected_bp_empty_when_no_match_or_not_percentage() {
+        use stitchd_proto::flags::v1::{FeatureFlag, FlagRule, flag_rule::Output};
+        // (a) variant-output rule → not a percentage allocation.
+        let rule_id = Uuid::new_v4().to_string();
+        let flag = FeatureFlag {
+            rules: vec![FlagRule {
+                rule_payload: vec![],
+                output: Some(Output::VariantKey("control".to_string())),
+                name: String::new(),
+                rule_id: rule_id.clone(),
+            }],
+            ..Default::default()
+        };
+        assert!(rule_allocation_expected_bp(&flag, &rule_id).is_empty());
+
+        // (b) no rule with the requested id at all.
+        assert!(rule_allocation_expected_bp(&flag, &Uuid::new_v4().to_string()).is_empty());
     }
 }

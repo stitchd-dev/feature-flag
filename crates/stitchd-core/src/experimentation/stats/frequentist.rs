@@ -10,31 +10,13 @@
 //! | [`analyze_percentile`]  | Bootstrap CI (delegates to bootstrap)  |
 //! | [`analyze_funnel`]      | Two-proportion z-test on final step    |
 
-use super::{ConfidenceInterval, FrequentistResult, VariantStats};
+use super::sequential::RatioGroupStats;
+use super::{ConfidenceInterval, FrequentistResult, VariantStats, Z95, norm_cdf};
 
 // ── Normal CDF helpers ────────────────────────────────────────────────────────
 
-/// Approximation of the error function using Horner's method (Abramowitz &
-/// Stegun, formula 7.1.26).  Maximum absolute error < 1.5 × 10⁻⁷.
-fn erf(x: f64) -> f64 {
-    // Preserve sign
-    let sign = if x < 0.0 { -1.0_f64 } else { 1.0_f64 };
-    let x = x.abs();
-
-    let t = 1.0 / (1.0 + 0.3275911 * x);
-    let poly = t
-        * (0.254829592
-            + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
-    sign * (1.0 - poly * (-x * x).exp())
-}
-
-/// Standard normal CDF:  Φ(z) = 0.5 · (1 + erf(z / √2))
-#[inline]
-fn norm_cdf(z: f64) -> f64 {
-    0.5 * (1.0 + erf(z / std::f64::consts::SQRT_2))
-}
-
-/// Two-tailed p-value from the standard normal distribution.
+/// Two-tailed p-value from the standard normal distribution. Uses the shared
+/// [`super::norm_cdf`] so frequentist and Bayesian engines agree bit-for-bit.
 #[inline]
 fn z_to_p(z: f64) -> f64 {
     2.0 * norm_cdf(-z.abs())
@@ -199,6 +181,31 @@ pub fn bonferroni_correct(p_values: &[f64]) -> Vec<f64> {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/// The canonical "insufficient data / undefined statistics" frequentist result:
+/// `p_value = 1.0` (never significant), `significant = false`, and a whole-line
+/// confidence interval `(-∞, +∞)` which trivially covers any true effect rather
+/// than collapsing to a misleading point. Mirrors the degenerate branch of
+/// [`analyze_ratio`].
+///
+/// Used by the count / numeric / funnel paths when an arm carries no usable
+/// information: a sample size too small for the statistic to be defined (e.g.
+/// `n < 2` makes the Welch t-test's sample variance undefined → `0/0 = NaN`
+/// degrees of freedom → a *false* `p = 0` / `significant = true`; `n < 1` makes
+/// a proportion `c/n = 0/0 = NaN`). Returning this instead avoids emitting
+/// spurious significance or NaN.
+#[inline]
+fn insufficient_frequentist() -> FrequentistResult {
+    FrequentistResult {
+        p_value: 1.0,
+        p_value_corrected: None,
+        confidence_interval: ConfidenceInterval {
+            lower: f64::NEG_INFINITY,
+            upper: f64::INFINITY,
+        },
+        significant: false,
+    }
+}
+
 /// Two-proportion z-test for count / binary metrics.
 ///
 /// Uses the pooled proportion under H₀ to compute the z-statistic, then
@@ -206,10 +213,16 @@ pub fn bonferroni_correct(p_values: &[f64]) -> Vec<f64> {
 /// confidence interval is computed on the *lift* (p₂ − p₁) using the
 /// unpooled standard error.
 ///
+/// Returns an [`insufficient_frequentist`] result (`p = 1`, not significant,
+/// whole-line CI) when either arm has `sample_size < 1`, since a proportion
+/// `c / n` is then `0 / 0 = NaN`.
+///
 /// # Panics
-/// Panics if `control.sample_size` or `variant.sample_size` is zero, or if
-/// `conversions` is `None` on either variant.
+/// Panics if `conversions` is `None` on either variant.
 pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> FrequentistResult {
+    if control.sample_size < 1 || variant.sample_size < 1 {
+        return insufficient_frequentist();
+    }
     let n1 = control.sample_size as f64;
     let n2 = variant.sample_size as f64;
     let c1 = control
@@ -234,7 +247,7 @@ pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> Frequent
 
     // 95 % CI on lift using unpooled SE
     let se_lift = (p1 * (1.0 - p1) / n1 + p2 * (1.0 - p2) / n2).sqrt();
-    let margin = 1.96 * se_lift;
+    let margin = Z95 * se_lift;
     let lift = p2 - p1;
 
     FrequentistResult {
@@ -255,10 +268,20 @@ pub fn analyze_count(control: &VariantStats, variant: &VariantStats) -> Frequent
 /// t-distribution.  The 95 % confidence interval is built using the same
 /// approximate degrees of freedom.
 ///
+/// Returns an [`insufficient_frequentist`] result (`p = 1`, not significant,
+/// whole-line CI) when either arm has `sample_size < 2`. With `n < 2` an arm's
+/// sample variance is undefined, so the Welch-Satterthwaite denominator
+/// `s⁴/(n−1)` is `0/0 = NaN`; that NaN flows into `t_to_p(_, NaN) → 0.0` and
+/// `t_critical_95(NaN)`, producing a *false* `p = 0` / `significant = true` and
+/// a degenerate `[diff, diff]` CI. The `se == 0` early-exit below does not catch
+/// this when the *other* arm still carries variance, so the guard must be here.
+///
 /// # Panics
-/// Panics if `mean` or `variance` is `None` on either variant, or if
-/// `sample_size` is zero.
+/// Panics if `mean` or `variance` is `None` on either variant.
 pub fn analyze_numeric(control: &VariantStats, variant: &VariantStats) -> FrequentistResult {
+    if control.sample_size < 2 || variant.sample_size < 2 {
+        return insufficient_frequentist();
+    }
     let n1 = control.sample_size as f64;
     let n2 = variant.sample_size as f64;
     let mean1 = control
@@ -342,10 +365,16 @@ pub fn analyze_percentile(
 /// the end-to-end funnel completion rate.  The sample-size denominator is the
 /// top-of-funnel exposure count (`sample_size`).
 ///
+/// Returns an [`insufficient_frequentist`] result (`p = 1`, not significant,
+/// whole-line CI) when either arm has `sample_size < 1`, since the pooled SE's
+/// `1 / n` term is then `1 / 0 = ∞` and the statistic is `NaN`.
+///
 /// # Panics
-/// Panics if `conversion_rate` is `None` on either variant, or if
-/// `sample_size` is zero.
+/// Panics if `conversion_rate` is `None` on either variant.
 pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> FrequentistResult {
+    if control.sample_size < 1 || variant.sample_size < 1 {
+        return insufficient_frequentist();
+    }
     let n1 = control.sample_size as f64;
     let n2 = variant.sample_size as f64;
     let p1 = control
@@ -370,7 +399,7 @@ pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> Frequen
     let p_value = z_to_p(z);
 
     let se_lift = (p1 * (1.0 - p1) / n1 + p2 * (1.0 - p2) / n2).sqrt();
-    let margin = 1.96 * se_lift;
+    let margin = Z95 * se_lift;
     let lift = p2 - p1;
 
     FrequentistResult {
@@ -379,6 +408,44 @@ pub fn analyze_funnel(control: &VariantStats, variant: &VariantStats) -> Frequen
         confidence_interval: ConfidenceInterval {
             lower: lift - margin,
             upper: lift + margin,
+        },
+        significant: p_value < 0.05,
+    }
+}
+
+/// Delta-method contrast for a **ratio** metric (treatment vs control).
+///
+/// A ratio metric's per-group point estimate is `R = num_sum / den_sum`; its
+/// variance comes from the delta method ([`RatioGroupStats::ratio_var`], the
+/// single source of truth shared with [`super::sequential::sequential_ratio`]).
+/// Because the two groups are independent, the effect `R₂ − R₁` has variance
+/// `Var(R₁) + Var(R₂)`, so `SE = sqrt(Var(R_c) + Var(R_t))`. The two-tailed
+/// p-value is `2·Φ(−|z|)` with `z = (R_t − R_c) / SE`, and the 95 % CI is
+/// `(R_t − R_c) ± Z95·SE`.
+///
+/// Returns a non-significant, whole-line-CI result when either group is
+/// degenerate (`n < 2`, `den_sum ≤ 0`, non-finite variance) — mirroring the
+/// insufficient-data convention of the count / numeric paths.
+#[must_use]
+pub fn analyze_ratio(control: &RatioGroupStats, variant: &RatioGroupStats) -> FrequentistResult {
+    let (Some((r_c, var_c)), Some((r_t, var_t))) = (control.ratio_var(), variant.ratio_var())
+    else {
+        // Degenerate group(s): emit the canonical insufficient-data result
+        // (p = 1, whole-line CI, not significant) — identical to the inline
+        // struct this used to build.
+        return insufficient_frequentist();
+    };
+    let diff = r_t - r_c;
+    let se = (var_c + var_t).sqrt();
+    let z = if se == 0.0 { 0.0 } else { diff / se };
+    let p_value = z_to_p(z);
+    let margin = Z95 * se;
+    FrequentistResult {
+        p_value,
+        p_value_corrected: None,
+        confidence_interval: ConfidenceInterval {
+            lower: diff - margin,
+            upper: diff + margin,
         },
         significant: p_value < 0.05,
     }
@@ -762,6 +829,95 @@ mod tests {
         assert!(v3.is_finite(), "lgamma(0.25) should be finite, got {v3}");
     }
 
+    // ── FIX 1: n<2 / n<1 insufficient-data guards (no false significance) ─────
+
+    /// An arm with `sample_size == 1` (variance 0) crossed with a large,
+    /// high-variance arm previously produced Welch `df = 0/0 = NaN`, which made
+    /// `t_to_p(_, NaN) = 0.0` → a *false* `p = 0` / `significant = true`, and
+    /// `t_critical_95(NaN)` collapsed the CI to `[diff, diff]`. The guard must
+    /// short-circuit to the insufficient-data result instead.
+    #[test]
+    fn analyze_numeric_control_n1_is_insufficient_not_significant() {
+        let control = VariantStats {
+            sample_size: 1,
+            conversions: None,
+            mean: Some(100.0),
+            variance: Some(0.0),
+            conversion_rate: None,
+            percentiles: None,
+        };
+        let variant = make_numeric_stats(500, 110.0, 100.0);
+        let result = analyze_numeric(&control, &variant);
+
+        assert!(!result.significant, "n=1 arm must NOT be significant");
+        assert_ne!(result.p_value, 0.0, "p_value must not be the false 0.0");
+        assert_eq!(result.p_value, 1.0, "insufficient-data p_value is 1.0");
+        // CI must NOT collapse to [diff, diff] (= [10, 10] here).
+        let diff = 110.0 - 100.0;
+        assert!(
+            !(result.confidence_interval.lower == diff && result.confidence_interval.upper == diff),
+            "CI must not collapse to [diff, diff]; got [{}, {}]",
+            result.confidence_interval.lower,
+            result.confidence_interval.upper
+        );
+        assert_eq!(result.confidence_interval.lower, f64::NEG_INFINITY);
+        assert_eq!(result.confidence_interval.upper, f64::INFINITY);
+    }
+
+    /// Same failure mode when the degenerate (`n == 1`) arm is the VARIANT.
+    #[test]
+    fn analyze_numeric_variant_n1_is_insufficient_not_significant() {
+        let control = make_numeric_stats(500, 110.0, 100.0);
+        let variant = VariantStats {
+            sample_size: 1,
+            conversions: None,
+            mean: Some(100.0),
+            variance: Some(0.0),
+            conversion_rate: None,
+            percentiles: None,
+        };
+        let result = analyze_numeric(&control, &variant);
+
+        assert!(!result.significant);
+        assert_ne!(result.p_value, 0.0);
+        assert_eq!(result.p_value, 1.0);
+        let diff = 100.0 - 110.0;
+        assert!(
+            !(result.confidence_interval.lower == diff && result.confidence_interval.upper == diff),
+            "CI must not collapse to [diff, diff]"
+        );
+    }
+
+    /// `analyze_count` with `sample_size == 0` previously emitted NaN (`c/n =
+    /// 0/0`); it must now return the insufficient-data result.
+    #[test]
+    fn analyze_count_n0_is_insufficient_not_nan() {
+        let control = make_count_stats(0, 0);
+        let variant = make_count_stats(500, 80);
+        let result = analyze_count(&control, &variant);
+
+        assert!(!result.significant);
+        assert!(!result.p_value.is_nan(), "p_value must not be NaN");
+        assert_eq!(result.p_value, 1.0);
+        assert!(!result.confidence_interval.lower.is_nan());
+        assert!(!result.confidence_interval.upper.is_nan());
+        assert_eq!(result.confidence_interval.lower, f64::NEG_INFINITY);
+        assert_eq!(result.confidence_interval.upper, f64::INFINITY);
+    }
+
+    /// `analyze_funnel` with `sample_size == 0` must likewise be insufficient,
+    /// not NaN.
+    #[test]
+    fn analyze_funnel_n0_is_insufficient_not_nan() {
+        let control = make_funnel_stats(0, 0.0);
+        let variant = make_funnel_stats(500, 0.15);
+        let result = analyze_funnel(&control, &variant);
+
+        assert!(!result.significant);
+        assert!(!result.p_value.is_nan());
+        assert_eq!(result.p_value, 1.0);
+    }
+
     // ── analyze_numeric with zero variance (se == 0.0) ───────────────────────
 
     #[test]
@@ -884,6 +1040,84 @@ mod tests {
             "Bonferroni multiplier for K=2 should be 2"
         );
         assert!((corrected[1] - (raw[1] * 2.0).min(1.0)).abs() < 1e-12);
+    }
+
+    // ── analyze_ratio (delta method) ──────────────────────────────────────────
+
+    /// Clear ratio difference: R_c = 0.5, R_t = 0.75 on 1000 units each with
+    /// spread. Mirrors the prior inline `compute::ratio_frequentist` fixture —
+    /// the numbers must not change. CI midpoint = R_t − R_c = 0.25; significant.
+    #[test]
+    fn analyze_ratio_detects_clear_difference() {
+        let control = RatioGroupStats {
+            n: 1000,
+            num_sum: 1000.0,
+            den_sum: 2000.0,
+            num_sq_sum: 1500.0,
+            den_sq_sum: 5000.0,
+            num_den_sum: 2400.0,
+        };
+        let treatment = RatioGroupStats {
+            n: 1000,
+            num_sum: 1500.0,
+            den_sum: 2000.0,
+            num_sq_sum: 2800.0,
+            den_sq_sum: 5000.0,
+            num_den_sum: 3300.0,
+        };
+        let r = analyze_ratio(&control, &treatment);
+        let mid = (r.confidence_interval.lower + r.confidence_interval.upper) / 2.0;
+        assert!(
+            (mid - 0.25).abs() < 1e-9,
+            "CI midpoint {mid} should be 0.25"
+        );
+        assert!(r.significant, "p={}", r.p_value);
+        assert!(r.p_value < 0.05);
+    }
+
+    /// Degenerate groups (n = 1) → insufficient: p = 1.0, not significant,
+    /// whole-line CI. Matches the prior inline convention exactly.
+    #[test]
+    fn analyze_ratio_degenerate_is_not_significant() {
+        let degenerate = RatioGroupStats {
+            n: 1,
+            num_sum: 1.0,
+            den_sum: 2.0,
+            num_sq_sum: 1.0,
+            den_sq_sum: 4.0,
+            num_den_sum: 2.0,
+        };
+        let r = analyze_ratio(&degenerate, &degenerate);
+        assert!(!r.significant);
+        assert!((r.p_value - 1.0).abs() < 1e-12);
+        assert_eq!(r.confidence_interval.lower, f64::NEG_INFINITY);
+        assert_eq!(r.confidence_interval.upper, f64::INFINITY);
+    }
+
+    /// Identical non-degenerate groups → zero lift, z = 0, p = 1.0, CI centred
+    /// on zero (the SE is finite so the CI is finite too).
+    #[test]
+    fn analyze_ratio_identical_groups_zero_lift() {
+        let g = RatioGroupStats {
+            n: 100,
+            num_sum: 50.0,
+            den_sum: 100.0,
+            num_sq_sum: 30.0,
+            den_sq_sum: 120.0,
+            num_den_sum: 55.0,
+        };
+        let r = analyze_ratio(&g, &g);
+        let mid = (r.confidence_interval.lower + r.confidence_interval.upper) / 2.0;
+        assert!((mid - 0.0).abs() < 1e-12, "lift should be 0, got {mid}");
+        // z = 0 → p = 2·Φ(0); the erf approximation yields ~1.000000001, so
+        // allow a small slack (the prior inline norm_cdf had the same property).
+        assert!(
+            (r.p_value - 1.0).abs() < 1e-6,
+            "p should be ≈1.0, got {}",
+            r.p_value
+        );
+        assert!(!r.significant);
+        assert!(r.confidence_interval.lower.is_finite());
     }
 
     /// analyze_funnel and analyze_count should give identical results when

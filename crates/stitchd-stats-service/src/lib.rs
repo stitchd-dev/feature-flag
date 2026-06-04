@@ -6,9 +6,9 @@
 //! interface for triggering on-demand recomputes.
 
 pub mod clickhouse_query;
+pub mod compute;
 pub mod config;
 pub mod context_refresher;
-pub mod cuped_fetch;
 pub mod dispatch;
 pub mod grpc;
 pub mod interaction_compute;

@@ -25,6 +25,7 @@ pub mod funnel;
 pub mod interaction_metric;
 pub mod preview;
 pub mod ratio;
+pub mod variant_stats;
 
 use thiserror::Error;
 
@@ -43,9 +44,22 @@ pub(crate) fn numeric_value_expr(cfg: &stitchd_core::metric::AggregationConfig) 
     if use_canonical {
         "ifNull(coalesce(e.value_double, CAST(e.value_int AS Nullable(Float64))), 0.0)".to_owned()
     } else {
-        let field = cfg.on_field.as_deref().unwrap_or_default();
+        // FIX 9: `on_field` is admin-controlled free-form (its validate() is a
+        // no-op), so it MUST be escaped before being interpolated into the
+        // `properties['…']` map-key string literal — an unescaped `'` would
+        // otherwise break out of the literal (SQL injection).
+        let field = clickhouse_escape(cfg.on_field.as_deref().unwrap_or_default());
         format!("ifNull(toFloat64OrNull(e.properties['{field}']), 0.0)")
     }
+}
+
+/// Escape a value for interpolation inside a single-quoted ClickHouse string
+/// literal (backslash + single-quote). Used for the `properties['…']` map-key
+/// when the key comes from admin-controlled free-form input (`on_field`,
+/// JsonLogic `var` field names) — see FIX 9. Backslash + single-quote is the
+/// same escaping the per-unit CUPED value-expression path relies on.
+pub(crate) fn clickhouse_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 // ── BuiltQuery ───────────────────────────────────────────────────────────────
@@ -220,7 +234,11 @@ fn emit_binary_cmp(
             args.len()
         )));
     }
-    let field = extract_var(&args[0])?;
+    // FIX 9: the JsonLogic `var` field name is admin-controlled free-form and is
+    // interpolated into a `properties['…']` map-key literal, so escape it (the
+    // RHS literal is bound, but the field name is not). An unescaped `'` would
+    // break out of the literal.
+    let field = clickhouse_escape(&extract_var(&args[0])?);
     let literal = extract_literal(&args[1])?;
     let placeholder = push_bind(binds, QueryBind::Str(literal));
     let sql_op = if op == "==" { "=" } else { "!=" };
@@ -238,7 +256,10 @@ fn emit_in(
             args.len()
         )));
     }
-    let field = extract_var(&args[0])?;
+    // FIX 9: escape the admin-controlled `var` field name before interpolating
+    // it into the `properties['…']` map-key literal (the needle literals are
+    // bound, but the field name is not).
+    let field = clickhouse_escape(&extract_var(&args[0])?);
     let needle_list = args[1]
         .as_array()
         .ok_or_else(|| QueryBuildError::InvalidJsonLogic("`in` RHS must be an array".into()))?;
@@ -507,5 +528,57 @@ mod tests {
         let sql = jsonlogic_to_sql(&json!({"==": [{"var": "active"}, true]}), &mut binds).unwrap();
         assert_eq!(sql, "properties['active'] = {p0}");
         assert_eq!(binds, vec![QueryBind::Str("true".into())]);
+    }
+
+    // ── FIX 9: field-name escaping (SQL injection guard) ─────────────────────
+
+    #[test]
+    fn clickhouse_escape_escapes_quote_and_backslash() {
+        assert_eq!(clickhouse_escape("plain"), "plain");
+        assert_eq!(clickhouse_escape("o'brien"), "o\\'brien");
+        assert_eq!(clickhouse_escape("a\\b"), "a\\\\b");
+    }
+
+    /// A metric `on_field` containing a single quote is ESCAPED inside the
+    /// `properties['…']` map-key literal, not injected. Without the escape the
+    /// `'` would close the literal and inject arbitrary SQL.
+    #[test]
+    fn numeric_value_expr_escapes_quote_in_on_field() {
+        use stitchd_core::metric::{AggregationConfig, AggregationOperator};
+        let cfg = AggregationConfig {
+            event_key: "purchase".into(),
+            aggregator: AggregationOperator::Sum,
+            on_field: Some("rev'); DROP TABLE events;--".into()),
+            where_clause: None,
+        };
+        let expr = numeric_value_expr(&cfg);
+        // The quote is backslash-escaped; the literal is not broken out of.
+        assert!(
+            expr.contains("properties['rev\\'); DROP TABLE events;--']"),
+            "on_field quote must be escaped, got: {expr}"
+        );
+        // Sanity: no UNescaped `'` appears between the map-key brackets that
+        // would terminate the literal early. The only `'` chars are the two
+        // delimiters plus the escaped one (preceded by a backslash).
+        assert!(
+            !expr.contains("['rev'); DROP"),
+            "unescaped injection slipped through: {expr}"
+        );
+    }
+
+    /// A JsonLogic `var` field name containing a single quote is escaped in the
+    /// emitted `properties['…']` reference (the `==`/`in` LHS).
+    #[test]
+    fn jsonlogic_escapes_quote_in_var_field_name() {
+        let mut binds = Vec::new();
+        let sql = jsonlogic_to_sql(&json!({"==": [{"var": "x'] = 'y"}, "z"]}), &mut binds).unwrap();
+        assert_eq!(sql, "properties['x\\'] = \\'y'] = {p0}");
+        // The literal RHS is still bound (not inlined).
+        assert_eq!(binds, vec![QueryBind::Str("z".into())]);
+
+        // `in` LHS is escaped too.
+        let mut binds2 = Vec::new();
+        let sql2 = jsonlogic_to_sql(&json!({"in": [{"var": "f'oo"}, ["a"]]}), &mut binds2).unwrap();
+        assert_eq!(sql2, "properties['f\\'oo'] IN ({p0})");
     }
 }

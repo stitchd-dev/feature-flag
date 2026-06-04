@@ -14,7 +14,8 @@
 //! [`super::TermKind`] and leaves omitted terms' `bayes` as `None`.
 //! `BayesianInteraction`: `prob` = `Φ(|effect| / sd)` (posterior mass away from
 //! 0), `expected` = posterior mean of the contrast, `ci_low`/`ci_high` =
-//! `expected ± 1.96·sd` (central 95% credible interval). Terms whose contrast
+//! `expected ± Z95·sd` (central 95% credible interval, with the shared
+//! `Z95 = Φ⁻¹(0.975) ≈ 1.959964`). Terms whose contrast
 //! standard deviation is 0 / non-finite, or that reference a degenerate /
 //! too-sparse collapsed cell, are omitted.
 //!
@@ -71,6 +72,12 @@ fn continuous_cell_post(n: f64, sum: f64, sum_sq: f64) -> Option<CellPost> {
 }
 
 /// Delta-method Normal posterior for one ratio cell, or `None` when degenerate.
+///
+/// Delegates to the shared [`super::super::ratio_delta_var`] (the single source
+/// of truth, also used by `interaction::ratio` and
+/// `sequential::RatioGroupStats::ratio_var`) so the delta-method variance lives
+/// in exactly one place. `n` arrives as an integer-valued `f64` (a sum of cell
+/// counts); it is converted losslessly to `i64` for the shared signature.
 fn ratio_cell_post(
     n: f64,
     num_sum: f64,
@@ -79,24 +86,14 @@ fn ratio_cell_post(
     den_sq_sum: f64,
     num_den_sum: f64,
 ) -> Option<CellPost> {
-    // `n` is a sum of integer counts, always finite ⇒ a plain comparison is safe.
-    if n < 2.0 || den_sum <= 0.0 {
-        return None;
-    }
-    let mn = num_sum / n;
-    let md = den_sum / n;
-    if md <= 0.0 {
-        return None;
-    }
-    let r = num_sum / den_sum;
-    let var_num = num_sq_sum / n - mn * mn;
-    let var_den = den_sq_sum / n - md * md;
-    let cov = num_den_sum / n - mn * md;
-    // Var(R) ≈ (1/md²)·(Var(num) − 2R·Cov + R²·Var(den)) / n.
-    let var = (var_num - 2.0 * r * cov + r * r * var_den) / (md * md) / n;
-    if !r.is_finite() || !var.is_finite() || var <= 0.0 {
-        return None;
-    }
+    let (r, var) = super::super::ratio_delta_var(
+        n as i64,
+        num_sum,
+        den_sum,
+        num_sq_sum,
+        den_sq_sum,
+        num_den_sum,
+    )?;
     Some(CellPost { est: r, var })
 }
 
@@ -649,5 +646,110 @@ mod tests {
             assert_eq!(va.ci_low.to_bits(), vb.ci_low.to_bits());
             assert_eq!(va.ci_high.to_bits(), vb.ci_high.to_bits());
         }
+    }
+
+    // ── single-source pin for the ratio delta-method variance ────────────────
+
+    /// Regression pin: for one known sufficient-stat input, the per-cell ratio
+    /// variance produced by EVERY engine's path is **bit-for-bit identical** to
+    /// the canonical [`super::super::ratio_delta_var`]. This locks in the
+    /// single-source unification so the formula cannot silently diverge again:
+    ///
+    /// * the interaction-**Bayes** ratio path — [`ratio_cell_post`];
+    /// * the interaction-**frequentist** ratio path — the real `RatioAgg::add` +
+    ///   `RatioAgg::ratio_var` collapse (via `ratio::freq_cell_ratio_var`);
+    /// * the **sequential** path — [`super::super::sequential::RatioGroupStats::ratio_var`].
+    ///
+    /// No formula is exercised here other than the shared one each path delegates
+    /// to; if any path is ever re-implemented inline, the `to_bits` equality fails.
+    #[test]
+    fn ratio_delta_var_is_the_single_ratio_variance_source() {
+        // A fixed, non-degenerate sufficient-stat input (n ≥ 2, den_sum > 0,
+        // non-trivial second moments so var_num / var_den / cov are all non-zero).
+        let (n, num_sum, den_sum, num_sq_sum, den_sq_sum, num_den_sum) = (
+            500_i64,
+            1234.0_f64,
+            3210.0_f64,
+            4321.0_f64,
+            21_500.0_f64,
+            8765.0_f64,
+        );
+
+        // Canonical source of truth.
+        let (want_r, want_var) = crate::experimentation::stats::ratio_delta_var(
+            n,
+            num_sum,
+            den_sum,
+            num_sq_sum,
+            den_sq_sum,
+            num_den_sum,
+        )
+        .expect("non-degenerate canonical");
+
+        // Interaction-Bayes path.
+        let bayes = ratio_cell_post(
+            n as f64,
+            num_sum,
+            den_sum,
+            num_sq_sum,
+            den_sq_sum,
+            num_den_sum,
+        )
+        .expect("non-degenerate bayes cell");
+        assert_eq!(
+            bayes.est.to_bits(),
+            want_r.to_bits(),
+            "bayes ratio-cell point estimate diverged from ratio_delta_var"
+        );
+        assert_eq!(
+            bayes.var.to_bits(),
+            want_var.to_bits(),
+            "bayes ratio-cell variance diverged from ratio_delta_var"
+        );
+
+        // Interaction-frequentist path (the real RatioAgg collapse).
+        let cell = NdRatioCell {
+            levels: vec![0],
+            n: n as u64,
+            num_sum,
+            den_sum,
+            num_sq_sum,
+            den_sq_sum,
+            num_den_sum,
+        };
+        let (freq_r, freq_var) =
+            crate::experimentation::stats::interaction::ratio::freq_cell_ratio_var(&cell)
+                .expect("non-degenerate freq cell");
+        assert_eq!(
+            freq_r.to_bits(),
+            want_r.to_bits(),
+            "frequentist ratio point estimate diverged from ratio_delta_var"
+        );
+        assert_eq!(
+            freq_var.to_bits(),
+            want_var.to_bits(),
+            "frequentist ratio variance diverged from ratio_delta_var"
+        );
+
+        // Sequential path (RatioGroupStats with the identical stats).
+        let group = crate::experimentation::stats::sequential::RatioGroupStats {
+            n,
+            num_sum,
+            den_sum,
+            num_sq_sum,
+            den_sq_sum,
+            num_den_sum,
+        };
+        let (seq_r, seq_var) = group.ratio_var().expect("non-degenerate sequential group");
+        assert_eq!(
+            seq_r.to_bits(),
+            want_r.to_bits(),
+            "sequential ratio point estimate diverged from ratio_delta_var"
+        );
+        assert_eq!(
+            seq_var.to_bits(),
+            want_var.to_bits(),
+            "sequential ratio variance diverged from ratio_delta_var"
+        );
     }
 }

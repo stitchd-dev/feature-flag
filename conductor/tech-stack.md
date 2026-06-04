@@ -53,9 +53,29 @@ seqtest_20260603 additions (Sequential Testing — always-valid inference):
   experiments.v1 VariantResult +per-variant sequential_* fields (tags 10-15, surfaced on read).
 - Compute: stats-service `sequential_compute` builds the blob from the per-variant sufficient
   stats and threads the running-min prev_p from the prior tick's CH row. tau^2 default =
-  unit-information pooled variance (floored 1e-9). NOTE: the scheduled per-metric compute pass
-  (frequentist/bayesian/sequential) is a pre-existing scaffold (write_results(&[])); sequential is
-  wired at the build_metric_summaries seam and activates with it (follow-up feature-flag-k1l).
+  unit-information pooled variance (floored 1e-9). The scheduled per-metric compute pass
+  (frequentist/bayesian/sequential/SRM) is now IMPLEMENTED in stitchd-stats-service (compute.rs +
+  queries/variant_stats.rs): per-metric sufficient-stats queries -> ITT VariantStats/RatioGroupStats
+  -> stats -> non-empty experiment_results (feature-flag-k1l/-2lh; live-CH integration test).
+  Frequentist+Bayesian per family (ratio via core analyze_ratio; percentile via raw-sample bootstrap),
+  Bonferroni, SRM surfaced under variant_stats["srm"], and CUPED variance reduction for numeric metrics
+  (pre_period_days>0): cuped_fetch pre-period X + per-unit post-period Y -> pooled-theta apply_cuped ->
+  adjusted VariantStats, surfaced under variant_stats["cuped"] (feature-flag-z7m/-r07/-nsh/-891).
+-->
+<!--
+post-compute-pass follow-ups resolved on track/seqtest_20260603 (NOT yet merged to main):
+- ExperimentIteration proto gained pre_period_days (additive); stats-service enrich captures it.
+- A max-effort code review (feature-flag-06o) fixed 15 findings, incl: funnel sufficient-stats bind-order
+  misalignment (all funnel queries were erroring); phantom variant_stats["cuped"]/["srm"] leaking as a
+  variant on the read path (read now skips non-number values); analyze_numeric/count/funnel now guard
+  n<2/n<1 -> insufficient (no NaN->false-significance); SRM zero-fills configured-but-absent variants
+  (variant_keys now plumbed PG list_all_running -> ListRunningExperiments -> scheduler); CUPED + percentile
+  POINT values are now the observed-mean / real empirical quantile (not the adjusted mean / per-unit mean);
+  CUPED now honors the metric on_field via an assignments-JOIN per-unit pre-period query (was canonical-
+  column-only + an uncapped IN-list); GetExperimentIteration RPC failure now SKIPS the experiment that
+  tick (no silent ["user"] fallback); the sequential min-sample gate no longer applies when sequential is
+  disabled; on_field / JsonLogic var field names are escaped before properties['...'] interpolation; and
+  erf/norm_cdf/Z95/ratio-delta-var/bayes-normal-contrast were de-duplicated in stitchd-core.
 -->
 
 
