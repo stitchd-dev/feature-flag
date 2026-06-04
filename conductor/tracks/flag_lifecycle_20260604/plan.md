@@ -27,7 +27,7 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
   and the new `stitchd-schedule-service` decision in `tech-stack.md`. TDD: tz/RRULE
   next-occurrence sanity test. (next-occurrence test lives in core task 4, where the deps are wired)
   <!-- files: Cargo.toml, conductor/tech-stack.md -->
-- [ ] Task 2: PG migration `20260604000001_lifecycle_automation.sql` — `scheduled_changes`
+- [x] Task 2: PG migration `20260604000001_lifecycle_automation.sql` — `scheduled_changes`
   (entity_type, entity_id, env_id, mutation_payload JSONB, schedule_kind, scheduled_at,
   rrule, tz, next_run_at, last_run_at, status), `scheduled_change_runs` (history),
   `flag_prerequisites` (+ `fallback_variant_id` on feature_flags), `entity_dependencies`

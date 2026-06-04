@@ -70,3 +70,22 @@ Patterns, gotchas, and context discovered during implementation.
 - Documented both deps + the `stitchd-schedule-service` architecture decision in
   `conductor/tech-stack.md` (comment block + Key Dependencies rows) per the workflow
   tech-stack-before-use rule.
+
+## 2026-06-04 — Phase 1 Task 2 (PG migration)
+- `20260604000001_lifecycle_automation.sql`: `scheduled_changes`,
+  `scheduled_change_runs`, `flag_prerequisites` (+ `feature_flags.fallback_variant_id`),
+  `entity_dependencies`. Matched baseline conventions: `gen_random_uuid()` PK default,
+  `TIMESTAMPTZ NOT NULL DEFAULT now()`, soft-delete via `deleted_at TIMESTAMPTZ`,
+  `version BIGINT DEFAULT 1`, named `CHECK` constraints, partial soft-delete indexes.
+- `created_by` does not exist as a column convention elsewhere (audit_log uses `actor_id`);
+  used a nullable `created_by UUID` per spec (system/scheduler actor = NULL).
+- GOTCHA: `cargo sqlx migrate run` against the shared dev Postgres FAILS with
+  "migration 20260525000001 ... has been modified" — the shared DB's `_sqlx_migrations`
+  history was recorded against a different baseline checksum (sibling worktree). This is
+  NOT a problem with the new migration. `#[sqlx::test(migrations = "./migrations")]`
+  provisions a FRESH isolated DB and runs every migration from scratch, so it both proves
+  the new migration applies cleanly on top of the full baseline AND sidesteps the shared-DB
+  checksum drift. 5 runtime-query smoke tests pass (no `query!` macros — offline cache empty).
+- Postgres reachable at `postgres://stitchd:stitchd@localhost:5432/stitchd`; the
+  `$STITCHD_DATABASE_URL` env var is set by the user profile but does NOT persist into the
+  agent's bash shell — export it explicitly per command.
