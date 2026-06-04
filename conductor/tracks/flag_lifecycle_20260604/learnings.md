@@ -148,3 +148,48 @@ Patterns, gotchas, and context discovered during implementation.
      stubs (return `Status::unimplemented`) so the contract is satisfied in Phase 1; real impl
      is Phase 4. gateway / experimentation-service / SDK FeatureFlag literals already used
      `..Default::default()` and compiled unchanged.
+
+## 2026-06-04 — Phase 3 (scheduler core + flag scheduling) — NEW crate stitchd-schedule-service
+- **NEW crate `crates/stitchd-schedule-service`** (binary `stitchd-schedule-service`), added to
+  workspace `[workspace.members]`. Env vars (all `STITCHD_` prefixed):
+  `STITCHD_DATABASE_URL` (req), `STITCHD_SCHEDULE_SCHEDULER_INTERVAL_SECS` (default 60),
+  `STITCHD_SCHEDULE_CLAIM_BATCH` (default 100), `STITCHD_SCHEDULE_SERVICE_HTTP_PORT` (9201),
+  `STITCHD_SCHEDULE_SERVICE_GRPC_PORT` (50057), `STITCHD_FLAG_SERVICE_GRPC_URL`
+  (`http://localhost:50051`). Mirrors stats-service main.rs (tokio interval, Prometheus,
+  graceful shutdown ctrl_c+SIGTERM). SHAs: 3.1 db repo `257a655`, 3.2 crate+loop `a818fc5`,
+  3.3 flag apply `4e1ee90`.
+- **`ScheduledChangeRepository`** (`repository/pg/scheduled_changes.rs`, registered in pg/mod.rs
+  + re-exported from db lib.rs): runtime `sqlx::query_as::<_,Row>` (no `query!` macros — offline
+  cache empty, per inherited learning). Text-backed `sqlx::Type` enums (ScheduleStatus/
+  ScheduleKind/RunOutcome) mirror the migration's `CHECK` values. 13 `#[sqlx::test]` cases.
+- **Restart-safe claim** = `claim_due(&mut tx, as_of, limit)` runs
+  `... WHERE status IN ('pending','active') AND next_run_at <= $1 ... FOR UPDATE SKIP LOCKED`.
+  The scheduler does apply + `append_run_tx` + `advance_recurring`/`finalize_one_shot` ALL
+  inside that same claim tx, so the row stays row-locked for the whole apply; a concurrent
+  replica SKIP-LOCKs past it; a crash mid-apply rolls back → re-claimed next tick (missed-tick
+  catch-up). One-shot → terminal status; recurring `next_run_at` always moves strictly forward
+  → neither double-applies. Tested via two overlapping txns on the shared pool (skip-locked) +
+  a second-tick idempotency assertion.
+- **Testable scheduler core**: `scheduler::process_due_changes` takes an injected `Clock`
+  (FixedClock in tests) + an injected `Applier` (StubApplier) — no wall-clock sleeps. Recurring
+  next-run recompute calls core `RecurrenceSpec::next_occurrence(now)` (DST-correct); exhausted
+  rule (None) → row marked `applied`. **A9**: a skip/fail on a RECURRING change still advances to
+  the next window (only one-shot goes terminal-failed on skip).
+- **Locked-flag skip (3.3)**: `apply/flag.rs` `classify_status` keys on
+  `Status::code()==FailedPrecondition && message().starts_with("flag_locked_by_experiment:")`
+  → `ApplyOutcome::Skipped(sentinel)` (run recorded `skipped`, loop never errors). The sentinel
+  prefix is duplicated as a `pub const` here (matching `stitchd_flag_service::error::
+  FLAG_LOCKED_STATUS_PREFIX` + the gateway decode) — there is no shared const crate for it.
+- **prost messages are NOT serde** → the JSONB `mutation_payload` is a hand-written serde mirror
+  (`FlagMutationPayload` + `FlagBody`/`VariantBody`/`VariantValueBody`) rebuilt into
+  `MutateFlagRequest`. Covers enable/disable (`enabled_override`), kind, version, project/env
+  scope, and variant replacement; rules-replacement is a documented future extension on the
+  mirror. Apply seam = `apply::Applier` trait + entity-type `Dispatcher` (flag only; segment/
+  experiment Phase 5 return `Failed("unsupported entity type")` rather than silently dropping).
+- **Actor attribution**: the scheduler is just a flag-service gRPC client carrying no end-user
+  identity; flag-service's existing MutateFlag path does the audit-write + version-bump and
+  attributes to the system/scheduler actor. No extra plumbing needed in this crate.
+- `stitchd-schedule-service` depends on `stitchd-db` with `features = ["tonic"]` so
+  `RepositoryError → tonic::Status` (`From` impl) is available in the gRPC service.
+- No `cargo sqlx prepare` needed (zero `query!`/`query_as!` macros). NOTE for Phase 9: this crate
+  must be added to docker-compose + the CI build/test matrix (it is NOT yet there).
