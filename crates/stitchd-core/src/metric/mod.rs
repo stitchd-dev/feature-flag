@@ -140,6 +140,43 @@ pub enum MetricValidationError {
     /// Ratio `min_denominator` must be non-negative.
     #[error("ratio min_denominator must be non-negative (got {0})")]
     RatioNegativeMinDenominator(i64),
+    /// A field name (aggregation `on_field` or a JsonLogic `{"var": …}`
+    /// reference) contained a character that is unsafe to interpolate into a
+    /// ClickHouse `properties['<field>']` map-key literal. The offending field
+    /// name is carried for diagnostics.
+    ///
+    /// The forbidden characters are `'`, `\`, `{`, `}`, `[`, `]`. A single
+    /// quote or backslash would break out of the single-quoted map-key string
+    /// literal (SQL injection); `{` / `}` collide with the query builder's
+    /// `{pN}` → `?` placeholder rewrite; `[` / `]` are rejected as a hardening
+    /// measure since they delimit the `properties[…]` index syntax itself.
+    #[error(
+        "field name `{0}` contains a forbidden character (one of ' \\ {{ }} [ ]); \
+         these are unsafe to interpolate into a ClickHouse map-key literal"
+    )]
+    UnsafeFieldName(String),
+}
+
+/// Characters forbidden in a field name that is interpolated into a ClickHouse
+/// `properties['<field>']` map-key literal — see [`MetricValidationError::UnsafeFieldName`].
+const FORBIDDEN_FIELD_CHARS: [char; 6] = ['\'', '\\', '{', '}', '[', ']'];
+
+/// Validates that `field` is safe to interpolate into a ClickHouse
+/// `properties['<field>']` map-key literal.
+///
+/// Both the aggregation `on_field` and every JsonLogic `{"var": "<field>"}`
+/// reference are admin-controlled free-form strings that the stats-service
+/// splices directly into the SQL it builds. A `'` or `\` would break out of the
+/// single-quoted literal (SQL injection); a `{pN}` substring would be mangled
+/// by the `{pN}` → `?` placeholder rewrite. We reject the small denylist of
+/// characters in [`FORBIDDEN_FIELD_CHARS`] rather than allowlisting so that
+/// legitimate existing property keys (which may contain `:`, `/`, etc.) keep
+/// validating.
+pub(crate) fn validate_field_name(field: &str) -> Result<(), MetricValidationError> {
+    if field.contains(FORBIDDEN_FIELD_CHARS) {
+        return Err(MetricValidationError::UnsafeFieldName(field.to_owned()));
+    }
+    Ok(())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

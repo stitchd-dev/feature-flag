@@ -21,9 +21,10 @@ use uuid::Uuid;
 
 // ── Shared statistical primitives ─────────────────────────────────────────────
 //
-// Single definitions reused by the [`frequentist`] and [`bayesian`] engines so
-// their numbers stay identical (the [`interaction`] submodule keeps its own copy
-// for self-containment; see that module).
+// Single definitions reused by the [`frequentist`], [`bayesian`], and
+// [`interaction`] engines so their numbers stay identical. (`interaction`
+// re-exports [`norm_cdf`] under its own path for its submodules; see that
+// module.)
 
 /// The 97.5th-percentile standard-normal quantile `Φ⁻¹(0.975)`, i.e. the
 /// two-sided 95 % z-multiplier. Defined once so every 95 % normal-approximation
