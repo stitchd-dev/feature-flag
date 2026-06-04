@@ -251,6 +251,34 @@ impl PrerequisiteRepository {
         .await
         .map_err(RepositoryError::Database)
     }
+
+    /// Return every `flag → prerequisite_flag` edge whose **dependent** flag is
+    /// in `flag_ids`. Used to assemble the existing prerequisite graph for
+    /// write-time cycle detection (the proposed edge set for the flag being
+    /// edited is merged on top by the caller).
+    ///
+    /// # Errors
+    /// [`RepositoryError::Database`] on SQL failure.
+    pub async fn edges_for_flags(
+        &self,
+        flag_ids: &[Uuid],
+    ) -> Result<Vec<(Uuid, Uuid)>, RepositoryError> {
+        if flag_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            r"
+            SELECT flag_id, prerequisite_flag_id
+            FROM flag_prerequisites
+            WHERE flag_id = ANY($1)
+            ",
+        )
+        .bind(flag_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+        Ok(rows)
+    }
 }
 
 /// Map a sqlx error to a structured [`RepositoryError`], translating a
@@ -512,6 +540,42 @@ mod tests {
         let ids: std::collections::HashSet<Uuid> = deps.iter().map(|d| d.from_id).collect();
         assert!(ids.contains(&d1));
         assert!(ids.contains(&d2));
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn edges_for_flags_returns_only_requested_dependents(pool: PgPool) {
+        let prereq = insert_flag(&pool, "prereq").await;
+        let variant = insert_variant(&pool, prereq, "on").await;
+        let d1 = insert_flag(&pool, "d1").await;
+        let d2 = insert_flag(&pool, "d2").await;
+        let repo = PrerequisiteRepository::new(pool);
+
+        for dep in [d1, d2] {
+            repo.replace(
+                dep,
+                &[NewFlagPrerequisite {
+                    prerequisite_flag_id: prereq,
+                    required_variant_id: variant,
+                }],
+                None,
+            )
+            .await
+            .unwrap();
+        }
+
+        // Only ask for d1's edges.
+        let edges = repo.edges_for_flags(&[d1]).await.unwrap();
+        assert_eq!(edges, vec![(d1, prereq)]);
+
+        // Both.
+        let mut both = repo.edges_for_flags(&[d1, d2]).await.unwrap();
+        both.sort();
+        let mut expected = vec![(d1, prereq), (d2, prereq)];
+        expected.sort();
+        assert_eq!(both, expected);
+
+        // Empty input → empty output.
+        assert!(repo.edges_for_flags(&[]).await.unwrap().is_empty());
     }
 
     #[sqlx::test(migrations = "./migrations")]

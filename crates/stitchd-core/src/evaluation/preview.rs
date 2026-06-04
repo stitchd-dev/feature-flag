@@ -22,7 +22,7 @@ use crate::rule_engine::types::{ConditionExpr, EvaluationInput};
 use crate::segment::SegmentDefinition;
 use crate::variants::VariantValue;
 
-use super::engine::evaluate_flag;
+use super::engine::evaluate_flag_with_prerequisites;
 use super::types::{EvalOutcome, ListMembershipIndex, TraceLevel};
 
 // ── Output types ──────────────────────────────────────────────────────────────
@@ -113,6 +113,13 @@ pub struct ContextPreviewResult {
     pub fired_rule_id: Option<RuleId>,
     pub rule_traces: Vec<RuleTrace>,
     pub rollout_debug: Option<RolloutDebug>,
+    /// Set when a prerequisite gate failed: this flag returned its fallback
+    /// variant (`variant_key`) and skipped its rules because the named
+    /// prerequisite flag did not resolve to its required variant. `None` when no
+    /// gate failed. (flag_lifecycle_20260604: the preview trace names the
+    /// failing prerequisite so the admin UI can explain the fallback.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prerequisite_failure: Option<crate::evaluation::types::PrerequisiteFailureTrace>,
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -138,6 +145,45 @@ pub fn evaluate_preview(
     segment_definitions: &[SegmentDefinition],
     env_id: EnvironmentId,
     pre_resolved_list_memberships: &[HashSet<SegmentId>],
+) -> Vec<ContextPreviewResult> {
+    // Delegate with an EMPTY resolved-prerequisite map. With no resolved
+    // prerequisite variants any configured prerequisite is treated as unmet
+    // (the gate fails closed → fallback). Callers that pre-resolve the
+    // prerequisite flags' variants (the flag-service preview path,
+    // flag_lifecycle_20260604 Phase 4) call
+    // [`evaluate_preview_with_prerequisites`] directly.
+    let empty: std::collections::HashMap<crate::id::FlagId, Option<crate::id::VariantId>> =
+        std::collections::HashMap::new();
+    evaluate_preview_with_prerequisites(
+        flag,
+        evaluation_contexts,
+        segment_definitions,
+        env_id,
+        pre_resolved_list_memberships,
+        &empty,
+    )
+}
+
+/// Variant of [`evaluate_preview`] that threads pre-resolved cross-flag /
+/// prerequisite variants into the gate.
+///
+/// `evaluated_flags` maps each already-resolved flag's ID to the variant it
+/// resolved to (`Some`) or `None` (disabled / no variant). The flag-service
+/// preview path resolves the dependent flag's (transitive) prerequisite flags
+/// in dependency order via
+/// [`crate::rule_engine::orchestrator::evaluate_flags_with_prerequisites`] and
+/// passes the result here so the gate can see whether each prerequisite met its
+/// required variant — returning the configured fallback variant (with the
+/// failing prerequisite named in the trace) when it did not.
+///
+/// Identical per-context shape to [`evaluate_preview`].
+pub fn evaluate_preview_with_prerequisites(
+    flag: &Flag,
+    evaluation_contexts: &[EvaluationContext],
+    segment_definitions: &[SegmentDefinition],
+    env_id: EnvironmentId,
+    pre_resolved_list_memberships: &[HashSet<SegmentId>],
+    evaluated_flags: &std::collections::HashMap<crate::id::FlagId, Option<crate::id::VariantId>>,
 ) -> Vec<ContextPreviewResult> {
     // Phase 2 of `flag_eval_unify_20260522`: delegate to the unified core
     // entry point. Each `EvaluationContext` here corresponds to one
@@ -195,11 +241,12 @@ pub fn evaluate_preview(
             continue;
         }
 
-        let results = evaluate_flag(
+        let results = evaluate_flag_with_prerequisites(
             flag,
             &ec.contexts,
             segment_definitions,
             &memberships,
+            evaluated_flags,
             env_id,
             project_id,
             TraceLevel::Full,
@@ -249,6 +296,7 @@ fn from_flag_eval_result(
             fired_rule_id: None,
             rule_traces: vec![],
             rollout_debug: None,
+            prerequisite_failure: None,
         };
     };
 
@@ -256,17 +304,18 @@ fn from_flag_eval_result(
         EvalOutcome::RuleMatch { rule_index } => Some(*rule_index),
         _ => None,
     };
-    let (fired_rule_name, fired_rule_id, rule_traces, rollout_debug) = if let Some(trace) = r.trace
-    {
-        (
-            trace.fired_rule_name,
-            trace.fired_rule_id,
-            trace.rule_traces,
-            trace.rollout_debug,
-        )
-    } else {
-        (None, None, vec![], None)
-    };
+    let (fired_rule_name, fired_rule_id, rule_traces, rollout_debug, prerequisite_failure) =
+        if let Some(trace) = r.trace {
+            (
+                trace.fired_rule_name,
+                trace.fired_rule_id,
+                trace.rule_traces,
+                trace.rollout_debug,
+                trace.prerequisite_failure,
+            )
+        } else {
+            (None, None, vec![], None, None)
+        };
 
     ContextPreviewResult {
         context_index,
@@ -277,6 +326,7 @@ fn from_flag_eval_result(
         fired_rule_id,
         rule_traces,
         rollout_debug,
+        prerequisite_failure,
     }
 }
 
