@@ -257,3 +257,61 @@ Patterns, gotchas, and context discovered during implementation.
   `RepositoryError → tonic::Status` (`From` impl) is available in the gRPC service.
 - No `cargo sqlx prepare` needed (zero `query!`/`query_as!` macros). NOTE for Phase 9: this crate
   must be added to docker-compose + the CI build/test matrix (it is NOT yet there).
+
+## 2026-06-04 — Phase 5 (scheduler experiments+segments+routes + experiment start-prereqs)
+- SHAs: 5.1 experiment apply `c223ba0`, 5.2 start-prereqs `1d7160a`, 5.3 segment apply `fca5f66`,
+  5.4 gateway routes `12f6f18`. Beads hp5.5.1–5.5.4 closed; milestone feature-flag-hp5.5 left OPEN.
+- **Dispatcher generalized to 3 arms** (`apply/mod.rs`): `Dispatcher<F,E,S>` over flag/experiment/
+  segment appliers; unknown entity_type → `Failed`. main.rs now dials experimentation-service
+  (`STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL`, default :50055 — NOT :50054 which is analytics) +
+  segmentation-service (`STITCHD_SEGMENTATION_SERVICE_GRPC_URL`, default :50053).
+- **Experiment apply (5.1)** mirrors flag apply: `ExperimentTransitioner` trait + JSON payload
+  `{transition: start|pause|resume|stop|archive, reason?}`. `start`/`resume`→Active, `stop`/
+  `archive`→Concluded (the experiment model has only Draft/Running/Paused/Stopped — no separate
+  archived state; Concluded IS terminal/archived). **Outcome classification key insight:** an
+  invalid transition at fire time surfaces as `FAILED_PRECONDITION` (validate_transition →
+  RepositoryError::InvalidState → failed_precondition) OR `ALREADY_EXISTS` (the one-running-per-flag
+  uniqueness guard → UniqueViolation → already_exists). BOTH map to `Skipped` (recoverable; recurring
+  advances). Unmet start-prereq is also failed_precondition → Skipped. Everything else → Failed.
+- **Experiment start-prereqs (5.2)** = migration `20260604000002` + `experiment_start_prerequisites`
+  (kind CHECK flag_variant|experiment_done; a `chk_experiment_start_prereq_shape` CHECK keeps each
+  kind's columns exclusive: flag_variant sets flag_id+variant_id, experiment_done sets
+  prerequisite_experiment_id) + `PgStartPrerequisiteRepository` (runtime queries, in
+  experimentation-service NOT stitchd-db — `#[sqlx::test(migrations = "../stitchd-db/migrations")]`
+  reaches the shared migration dir). Enforced in `transition_experiment` when `target==Running`
+  (covers manual AND scheduled start — both issue the same RPC), BEFORE `apply_transition`, rejecting
+  unmet with `FAILED_PRECONDITION` (→409 via gateway GatewayError::Conflict). Wired as an OPTIONAL
+  collaborator (`with_start_prerequisites` builder, like `with_dictionary_refresher`) so the ~6 other
+  `ExperimentationServiceImpl::new(...)` test sites compile unchanged.
+- **Evaluation is behind a `StartPrerequisiteResolver` trait** (2 bool-ish checks) so the gate is
+  unit-testable with stubs (no live flag-service). Production `ServiceStartPrerequisiteResolver`:
+  `experiment_done` fully resolved via `experiment_repo.find_by_id().status == Stopped`;
+  **`flag_variant` FAILS CLOSED** (reports Unmet → refuses start) because flag-service's
+  GetFlag/FeatureFlag proto exposes variants by KEY only (no variant UUIDs) and the prereq stores
+  `required_variant_id` (UUID per spec) — can't match. Filed a P2 bead (deps
+  discovered-from:feature-flag-hp5.5.2) to add variant IDs to the FeatureFlag proto.
+- **Segment apply (5.3)** dispatches a definition update via `UpdateAdminSegment` (segment_id +
+  condition_expr bytes + version/name/tags/context_type/excluded_keys). condition_expr travels in the
+  JSON payload as a string → `.into_bytes()`. stale-version (Aborted/FailedPrecondition)→Skipped,
+  NotFound→Failed. **LIMITATION:** list-generation activation is NOT dispatchable —
+  segmentation-service exposes only entry-level AddEntries/RemoveEntries/PatchSegmentEntries, no
+  "activate prepared generation" RPC; the payload `kind: list_generation` is rejected with that
+  explicit reason (recorded as a Failed run).
+- **Gateway routes (5.4)** — added `schedule_client` to `GatewayState`. `connect` gained a
+  `schedule_addr` param (default :50057; only 1 prod call site, in gateway main). To avoid rippling
+  the 8 `from_channels` test call sites, `from_channels` builds the schedule_client from a lazy
+  placeholder channel + a `with_schedule_client(c)` builder lets schedule-route tests inject a mock.
+  One direct `GatewayState { … }` struct literal (routes/events.rs test) needed the new field added.
+- **SHARED SEAM router.rs:** added schedules in TWO clearly-commented `// --- schedules
+  (flag_lifecycle) ---` / `// --- end schedules ---` blocks — one in `resource_read` (list+get, before
+  its `.with_state`), one in `resource_write` (create+cancel+pause+resume, before its `.with_state` +
+  `require_write_permission` layer). Also one line added to the `use crate::routes::{…}` import list
+  (inserted `schedules` alphabetically between `saml,` and `sdk_backend,`). Phase-4 worker also edits
+  router.rs (prerequisites routes) — these blocks are disjoint from any flag-prereq routes.
+- URL shape chosen ENV-scoped (a scheduled change carries env_id; mirrors experiment/segment reads):
+  `/v1/environments/{eid}/{flags|segments|experiments}/{entity_id}/schedules` (create/list) +
+  `/v1/environments/{eid}/schedules/{sid}[/cancel|/pause|/resume]` (by-id ops). The `{entity_kind}`
+  path segment maps flags→Flag etc.; unknown kind → 400.
+- Gateway route handlers on the write tree do NOT call `require_permission` — authz is the
+  `require_write_permission` middleware layer on `resource_write`. Read handlers likewise rely on
+  `auth_middleware`. So schedule handlers just proxy the gRPC call + `GatewayError::from`.
