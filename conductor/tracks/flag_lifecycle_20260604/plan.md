@@ -62,17 +62,17 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task 1: (Red→Green) `ScheduledChangeRepository` in `stitchd-db` — CRUD + due-query
-  (`next_run_at <= now()`), run-history append, restart-safe state. TDD repo tests.
+- [x] Task 1: (Red→Green) `ScheduledChangeRepository` in `stitchd-db` — CRUD + due-query
+  (`next_run_at <= now()`), run-history append, restart-safe state. TDD repo tests. (SHA 257a655)
   <!-- files: crates/stitchd-db/src/repository/pg/scheduled_changes.rs -->
-- [ ] Task 2: New `stitchd-schedule-service` binary — tokio interval loop (stats-service
+- [x] Task 2: New `stitchd-schedule-service` binary — tokio interval loop (stats-service
   pattern); one-shot + recurring (RRULE+chrono-tz, DST, catch-up, idempotent); recompute
-  `next_run_at`. TDD with a controllable clock.
+  `next_run_at`. TDD with a controllable clock. (SHA a818fc5)
   <!-- files: crates/stitchd-schedule-service/src/main.rs, crates/stitchd-schedule-service/src/scheduler.rs, crates/stitchd-schedule-service/Cargo.toml -->
   <!-- depends: task1 -->
-- [ ] Task 3: Flag apply path — dispatch a due flag change via canonical `MutateFlag`;
+- [x] Task 3: Flag apply path — dispatch a due flag change via canonical `MutateFlag`;
   honor the experiment lock (skip + record `failed`/`deferred` with reason); audit as
-  system actor; version-bump. TDD incl. locked-flag skip.
+  system actor; version-bump. TDD incl. locked-flag skip. (SHA 4e1ee90)
   <!-- files: crates/stitchd-schedule-service/src/apply/flag.rs -->
   <!-- depends: task2 -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Scheduler Core' (Protocol in workflow.md)

@@ -35,6 +35,10 @@ pub use repository::{
         PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository, PgMetricRepository,
         PgOrganisationRepository, PgProjectRepository, PgRoleRepository, PgSdkKeyRepository,
         PgSegmentRepository, PgUserRepository, PgVariantRepository,
+        scheduled_changes::{
+            NewScheduledChange, RunOutcome, ScheduleKind, ScheduleStatus,
+            ScheduledChangeRepository, ScheduledChangeRow, ScheduledChangeRunRow,
+        },
     },
 };
 pub use stats_jobs::{

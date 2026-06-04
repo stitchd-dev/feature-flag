@@ -4219,6 +4219,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "stitchd-schedule-service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "chrono",
+ "metrics",
+ "metrics-exporter-prometheus",
+ "prost",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "stitchd-core",
+ "stitchd-db",
+ "stitchd-proto",
+ "thiserror 2.0.18",
+ "tokio",
+ "tonic",
+ "tonic-health",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "stitchd-sdk-rust"
 version = "0.1.0"
 dependencies = [
