@@ -25,6 +25,7 @@ pub mod admin;
 pub mod auth;
 pub mod auth_providers;
 pub mod context_intel;
+pub mod dependencies;
 pub mod eval_stats;
 pub mod event_admin;
 pub mod events;
