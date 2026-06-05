@@ -301,3 +301,147 @@ export interface RolloutDistribution {
    */
   hash_inputs?: import('./hashInputTypes').HashSelector[]
 }
+
+// ── Flag-lifecycle automation types (flag_lifecycle_20260604, Phase 8) ────────
+//
+// Mirror the gateway DTOs in `crates/stitchd-gateway/src/routes/{schedules,
+// dependencies,flags}.rs`. Scheduled changes are ENVIRONMENT-scoped
+// (`/v1/environments/{env_id}/...`); prerequisites + the dependency graph are
+// PROJECT-scoped (`/v1/projects/{project_id}/...`).
+
+/** Entity kinds a schedule / dependency endpoint accepts in its URL path. */
+export const LIFECYCLE_ENTITY_KINDS = ['flags', 'segments', 'experiments'] as const
+export type LifecycleEntityKind = (typeof LIFECYCLE_ENTITY_KINDS)[number]
+
+/** Schedule recurrence kind. */
+export type ScheduleKind = 'one_shot' | 'recurring'
+
+/**
+ * Schedule lifecycle status. One-shot: `pending → applied | failed | cancelled`.
+ * Recurring: `active ⇄ paused`.
+ */
+export type ScheduleStatus =
+  | 'pending'
+  | 'active'
+  | 'paused'
+  | 'applied'
+  | 'failed'
+  | 'cancelled'
+  | 'unspecified'
+
+/** Outcome of a single scheduled firing. */
+export type ScheduleRunOutcome = 'applied' | 'skipped' | 'failed' | 'unspecified'
+
+/** One firing of a scheduled change (run history). */
+export interface ScheduleRun {
+  id: string
+  /** Epoch-ms instant the run fired. */
+  fired_at_ms: number
+  outcome: ScheduleRunOutcome
+  /** Free-text reason / error detail (e.g. "skipped: flag locked by experiment"). */
+  detail: string
+}
+
+/**
+ * A scheduled change. Mirrors the gateway `ScheduleJson`. `mutation_payload` is
+ * the entity-specific JSON the owning service's RPC consumes at fire time
+ * (flag → MutateFlag, experiment → transition, segment → definition update).
+ */
+export interface ScheduledChange {
+  id: string
+  /** `flag` | `segment` | `experiment` (singular, per the gateway). */
+  entity_type: 'flag' | 'segment' | 'experiment' | 'unspecified'
+  entity_id: string
+  env_id: string
+  mutation_payload: unknown
+  schedule_kind: ScheduleKind | 'unspecified'
+  /** One-shot: epoch-ms instant the change fires (UTC). 0 for recurring. */
+  scheduled_at_ms: number
+  /** Recurring: RFC-5545 RRULE string. Empty for one-shot. */
+  rrule: string
+  /** Recurring: IANA timezone the RRULE is evaluated in. */
+  tz: string
+  status: ScheduleStatus
+  /** Epoch-ms of the next scheduled firing (0 when none pending). */
+  next_run_at_ms: number
+  /** Epoch-ms of the most recent firing (0 when never fired). */
+  last_run_at_ms: number
+  created_at_ms: number
+  updated_at_ms: number
+  /** Optimistic-concurrency version (passed back on cancel/pause/resume). */
+  version: number
+  /** Run history (most-recent-first); populated on `get`, empty on `list`. */
+  runs: ScheduleRun[]
+}
+
+/** Request body to create a scheduled change (gateway `CreateScheduleBody`). */
+export interface CreateScheduleBody {
+  mutation_payload: unknown
+  schedule_kind: ScheduleKind
+  /** Required for `one_shot` — epoch-ms instant (UTC). */
+  scheduled_at_ms?: number
+  /** Required for `recurring` — RFC-5545 RRULE string. */
+  rrule?: string
+  /** Required for `recurring` — IANA timezone. */
+  tz?: string
+}
+
+/** One prerequisite-gate edge (gateway `PrerequisiteJson`). */
+export interface Prerequisite {
+  /** UUID of the prerequisite flag (optional on write; the key is sufficient). */
+  prerequisite_flag_id?: string
+  prerequisite_flag_key: string
+  /** UUID of the required variant (optional on write). */
+  required_variant_id?: string
+  required_variant_key: string
+}
+
+/** A flag's prerequisite gate (gateway `PrerequisitesResponseJson`). */
+export interface PrerequisiteGate {
+  prerequisites: Prerequisite[]
+  /** Key of the configured fallback variant; empty = the off/disabled variant. */
+  fallback_variant_key: string
+}
+
+/** Request body to replace a flag's prerequisite gate (gateway `SetPrerequisitesBody`). */
+export interface SetPrerequisitesBody {
+  prerequisites: Prerequisite[]
+  fallback_variant_key: string
+  /** Optimistic-locking version matching the flag's current `version`. */
+  version: number
+}
+
+/** One edge in the dependency graph (gateway `DependencyEdge`). */
+export interface DependencyEdge {
+  /** Entity kind of the referenced entity: `flag` | `segment` | `experiment`. */
+  entity_kind: 'flag' | 'segment' | 'experiment'
+  /** Stable id of the referenced entity (UUID or key, per kind). */
+  id: string
+  /** Human-readable key, when known (else empty). */
+  key: string
+  /** Relationship kind: `prerequisite_flag` | `segment_ref` | `dependent_flag`. */
+  kind: 'prerequisite_flag' | 'segment_ref' | 'dependent_flag' | string
+}
+
+/** The dependency graph for one entity (gateway `DependencyGraphJson`). */
+export interface DependencyGraph {
+  entity_kind: 'flag' | 'segment' | 'experiment'
+  entity_id: string
+  /** Entities the subject depends on. */
+  upstream: DependencyEdge[]
+  /** Entities that depend on the subject. */
+  downstream: DependencyEdge[]
+  /** Note describing edges that could not be computed (empty when complete). */
+  note?: string
+}
+
+/**
+ * The structured `409 dependency_exists` body returned when deleting/archiving a
+ * still-referenced entity. Mirrors the gateway error envelope.
+ */
+export interface DependencyExistsError {
+  error: 'dependency_exists'
+  /** Blocking dependent entity ids — references must be removed first. */
+  dependents: string[]
+  message: string
+}

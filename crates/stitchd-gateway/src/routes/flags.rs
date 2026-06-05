@@ -1247,6 +1247,33 @@ pub struct PreviewResultJson {
     pub rule_traces: Vec<RuleTraceJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollout_debug: Option<RolloutDebugJson>,
+    /// Set when a flag prerequisite gate failed for this context: the flag
+    /// returned its configured fallback variant (`variant_key`) and skipped its
+    /// rules because the named prerequisite flag did not resolve to its required
+    /// variant. `None` when no prerequisite gate failed. Lets the admin
+    /// evaluate-preview "Test" panel explain why the fallback was returned.
+    /// (flag_lifecycle_20260604, Phase 8 Task 4.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prerequisite_failure: Option<PrerequisiteFailureJson>,
+}
+
+/// Wire shape for a failed prerequisite gate in the evaluate-preview trace.
+/// Mirrors `stitchd_core::evaluation::types::PrerequisiteFailureTrace` (IDs are
+/// stringified UUIDs).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct PrerequisiteFailureJson {
+    /// UUID of the prerequisite flag whose gate check failed (the first failing
+    /// one when several prerequisites are configured).
+    pub prerequisite_flag_id: String,
+    /// UUID of the variant the prerequisite flag was required to resolve to for
+    /// the gate to pass.
+    pub required_variant_id: String,
+    /// UUID of the variant the prerequisite flag actually resolved to, if any;
+    /// omitted when the prerequisite flag was disabled or absent (both "unmet").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_variant_id: Option<String>,
+    /// Key of the fallback variant that was returned.
+    pub fallback_variant_key: String,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1453,6 +1480,12 @@ fn map_preview_results(
                         to: vr.to,
                     })
                     .collect(),
+            }),
+            prerequisite_failure: r.prerequisite_failure.map(|pf| PrerequisiteFailureJson {
+                prerequisite_flag_id: pf.prerequisite_flag_id.to_string(),
+                required_variant_id: pf.required_variant_id.to_string(),
+                resolved_variant_id: pf.resolved_variant_id.map(|v| v.to_string()),
+                fallback_variant_key: pf.fallback_variant_key,
             }),
         })
         .collect())
