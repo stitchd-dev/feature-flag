@@ -127,11 +127,11 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 ## Phase 7: SDK Support (Rust)
 <!-- depends: phase2, phase4 -->
 
-- [ ] Task 1: (Red) SDK failing tests — fallback on unmet prerequisite; transitive chain;
-  disabled prerequisite; prerequisite flag absent from snapshot.
-- [ ] Task 2: (Green) SDK snapshot carries prerequisites + fallback; supply all prerequisite
+- [x] Task 1: (Red) SDK failing tests — fallback on unmet prerequisite; transitive chain;
+  disabled prerequisite; prerequisite flag absent from snapshot. (af91d9d)
+- [x] Task 2: (Green) SDK snapshot carries prerequisites + fallback; supply all prerequisite
   flag definitions for transitive local resolution; confirm parity with preview via shared
-  `evaluate_flag`. Verify ≥90%.
+  `evaluate_flag`. Verify ≥90%. (c320a18)
   <!-- files: sdks/rust/src/snapshot.rs, sdks/rust/src/client.rs, sdks/rust/tests/prerequisites.rs -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 7: SDK' (Protocol in workflow.md)
 
