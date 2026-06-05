@@ -4,6 +4,7 @@
 #![deny(warnings, missing_docs, clippy::all)]
 #![warn(clippy::pedantic, clippy::nursery)]
 
+pub mod dependency_scan;
 pub mod error;
 pub mod grpc;
 pub mod segment;

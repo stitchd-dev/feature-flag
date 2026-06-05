@@ -40,6 +40,28 @@ pub enum StartPrerequisite {
     },
 }
 
+/// Sentinel prefix encoding the blocking dependents into a
+/// `tonic::Status::failed_precondition` message so the gateway can rebuild the
+/// structured `409 DEPENDENCY_EXISTS` body. Mirrors
+/// `stitchd_flag_service::prerequisites::DEPENDENCY_EXISTS_STATUS_PREFIX`
+/// exactly — there is no shared const crate (same convention as the
+/// `flag_locked_by_experiment:<uuid>` sentinel).
+///
+/// Format: `"dependency_exists:<comma-separated dependent experiment ids>"`.
+pub const DEPENDENCY_EXISTS_STATUS_PREFIX: &str = "dependency_exists:";
+
+/// Format the `dependency_exists:` sentinel message from blocking dependent
+/// experiment ids.
+#[must_use]
+pub fn dependency_exists_message(dependents: &[Uuid]) -> String {
+    let ids = dependents
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{DEPENDENCY_EXISTS_STATUS_PREFIX}{ids}")
+}
+
 /// Loads the start-time prerequisites declared for an experiment.
 #[async_trait]
 pub trait StartPrerequisiteRepository: Send + Sync {
@@ -49,6 +71,16 @@ pub trait StartPrerequisiteRepository: Send + Sync {
         &self,
         experiment_id: Uuid,
     ) -> Result<Vec<StartPrerequisite>, RepositoryError>;
+
+    /// Return the experiments that declare `experiment_id` as an
+    /// `experiment_done` start-time prerequisite — i.e. the experiments that
+    /// would be blocked from starting if `experiment_id` were deleted. Used by
+    /// the delete-block referential-integrity guard (Phase 6). Empty when no
+    /// experiment references it.
+    async fn dependents_experiment_done(
+        &self,
+        experiment_id: Uuid,
+    ) -> Result<Vec<Uuid>, RepositoryError>;
 }
 
 /// Postgres-backed [`StartPrerequisiteRepository`] over
@@ -151,6 +183,26 @@ impl StartPrerequisiteRepository for PgStartPrerequisiteRepository {
             }
         }
         Ok(out)
+    }
+
+    async fn dependents_experiment_done(
+        &self,
+        experiment_id: Uuid,
+    ) -> Result<Vec<Uuid>, RepositoryError> {
+        let rows = sqlx::query(
+            r"
+            SELECT DISTINCT experiment_id
+            FROM experiment_start_prerequisites
+            WHERE kind = 'experiment_done'
+              AND prerequisite_experiment_id = $1
+            ORDER BY experiment_id
+            ",
+        )
+        .bind(experiment_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+        Ok(rows.into_iter().map(|r| r.get("experiment_id")).collect())
     }
 }
 
@@ -298,6 +350,12 @@ mod tests {
             _experiment_id: Uuid,
         ) -> Result<Vec<StartPrerequisite>, RepositoryError> {
             Ok(self.0.clone())
+        }
+        async fn dependents_experiment_done(
+            &self,
+            _experiment_id: Uuid,
+        ) -> Result<Vec<Uuid>, RepositoryError> {
+            Ok(vec![])
         }
     }
 
@@ -507,6 +565,39 @@ mod tests {
                 experiment_id: other_exp,
             }
         );
+    }
+
+    #[sqlx::test(migrations = "../stitchd-db/migrations")]
+    async fn pg_repo_dependents_experiment_done(pool: PgPool) {
+        // exp_a is referenced by exp_b's experiment_done prerequisite; exp_c is
+        // referenced by nobody. dependents_experiment_done(exp_a) must return
+        // [exp_b]; dependents_experiment_done(exp_c) must be empty.
+        let exp_a = seed_experiment(&pool).await;
+        let exp_b = seed_experiment(&pool).await;
+        let exp_c = seed_experiment(&pool).await;
+        let repo = PgStartPrerequisiteRepository::new(pool);
+
+        repo.insert(
+            exp_b,
+            &StartPrerequisite::ExperimentDone {
+                experiment_id: exp_a,
+            },
+            0,
+        )
+        .await
+        .expect("insert experiment_done");
+
+        let deps_a = repo
+            .dependents_experiment_done(exp_a)
+            .await
+            .expect("dependents a");
+        assert_eq!(deps_a, vec![exp_b]);
+
+        let deps_c = repo
+            .dependents_experiment_done(exp_c)
+            .await
+            .expect("dependents c");
+        assert!(deps_c.is_empty());
     }
 
     #[sqlx::test(migrations = "../stitchd-db/migrations")]

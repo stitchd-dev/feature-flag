@@ -448,9 +448,7 @@ pub mod tests {
     }
 
     fn make_service(repo: MockSegmentRepoForTest) -> SegmentationServiceImpl {
-        SegmentationServiceImpl::new(AppState {
-            segment_repo: Arc::new(repo),
-        })
+        SegmentationServiceImpl::new(AppState::new(Arc::new(repo)))
     }
 
     fn env_id() -> (EnvironmentId, String) {

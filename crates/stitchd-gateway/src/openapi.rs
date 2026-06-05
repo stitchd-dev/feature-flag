@@ -110,6 +110,8 @@ use utoipa::{
         crate::routes::schedules::cancel_schedule,
         crate::routes::schedules::pause_schedule,
         crate::routes::schedules::resume_schedule,
+        // Dependency graph (flag_lifecycle Phase 6)
+        crate::routes::dependencies::get_dependencies,
     ),
     components(
         schemas(
@@ -229,6 +231,9 @@ use utoipa::{
             crate::routes::schedules::ScheduleVersionBody,
             crate::routes::schedules::ScheduleJson,
             crate::routes::schedules::ScheduleRunJson,
+            // Dependency graph (flag_lifecycle Phase 6)
+            crate::routes::dependencies::DependencyGraphJson,
+            crate::routes::dependencies::DependencyEdge,
         )
     ),
     modifiers(&SecurityAddon)
