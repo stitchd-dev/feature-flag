@@ -116,12 +116,12 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 ## Phase 6: Cross-Entity Dependency Graph + Referential Integrity (Segments/Experiments)
 <!-- depends: phase4 -->
 
-- [ ] Task 1: Segment & experiment delete/archive blocking (`409 DEPENDENCY_EXISTS`) when
-  referenced (flag→segment, segment→segment, experiment→flag). TDD.
-  <!-- files: crates/stitchd-segmentation-service/src/service.rs, crates/stitchd-experimentation-service/src/service.rs -->
-- [ ] Task 2: Dependency-graph read API (upstream/downstream for an entity) — gateway
-  orchestration over services. TDD.
-  <!-- files: crates/stitchd-gateway/src/routes/dependencies.rs, crates/stitchd-gateway/src/router.rs -->
+- [x] Task 1: Segment & experiment delete/archive blocking (`409 DEPENDENCY_EXISTS`) when
+  referenced (flag→segment, segment→segment, experiment→flag). TDD. (SHA dea4283)
+  <!-- files: crates/stitchd-segmentation-service/src/grpc/service.rs, crates/stitchd-segmentation-service/src/dependency_scan.rs, crates/stitchd-experimentation-service/src/service.rs, crates/stitchd-experimentation-service/src/start_prerequisites.rs -->
+- [x] Task 2: Dependency-graph read API (upstream/downstream for an entity) — gateway
+  orchestration over services. TDD. (SHA d751524)
+  <!-- files: crates/stitchd-gateway/src/routes/dependencies.rs, crates/stitchd-gateway/src/router.rs, crates/stitchd-gateway/src/openapi.rs -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 6: Dependency Integrity' (Protocol in workflow.md)
 
 ## Phase 7: SDK Support (Rust)

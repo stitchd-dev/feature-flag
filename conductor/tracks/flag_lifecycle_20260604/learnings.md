@@ -372,3 +372,72 @@ Patterns, gotchas, and context discovered during implementation.
 - Gateway route handlers on the write tree do NOT call `require_permission` — authz is the
   `require_write_permission` middleware layer on `resource_write`. Read handlers likewise rely on
   `auth_middleware`. So schedule handlers just proxy the gRPC call + `GatewayError::from`.
+
+## 2026-06-05 — Phase 6 (segment/experiment delete-block + dependency read API)
+- SHAs: 6.1 delete-block `dea4283`, 6.2 dependency read API `d751524`. Beads hp5.6.1 closed,
+  hp5.6.2 in_progress→closed; milestone feature-flag-hp5.6 left OPEN.
+- **The `dependency_exists:` sentinel is now produced by THREE services**, each with its own
+  PRIVATE `pub const DEPENDENCY_EXISTS_STATUS_PREFIX = "dependency_exists:"` copy (no shared const
+  crate, same as `flag_locked_by_experiment:`): flag-service (`prerequisites.rs`, Phase 4),
+  segmentation-service (`dependency_scan.rs`), experimentation-service (`start_prerequisites.rs`).
+  The gateway `error.rs` decode is source-agnostic — it strips the prefix off any
+  FailedPrecondition status → `GatewayError::DependencyExists { dependents }` → HTTP 409. So NO
+  gateway change was needed for the two new producers; the Phase-4 decode already covers them.
+- **Segment dependents computed authoritatively at delete time** (`dependency_scan.rs`), NOT from
+  `entity_dependencies` (only flag→flag is populated there). flag→segment: candidate
+  `feature_flag_rules` rows via `WHERE rule_def::text LIKE '%<seg-uuid>%'`, then deserialize each
+  `rule_def` as a core `ConditionExpr` and confirm with `ConditionExpr::collect_segment_ids`
+  (already existed in core/types.rs) — DISTINCT `flag_id`. segment→segment: same text-prefilter +
+  collect over OTHER live `segments.condition_expr` (`deleted_at IS NULL AND id <> $1`). The
+  text-LIKE prefilter is just a cheap candidate narrower — the Rust walk is the source of truth
+  (a UUID could appear in an unrelated JSON position). **`Condition::InSegment`/`NotInSegment`
+  serialize externally-tagged as `{"InSegment":"<uuid>"}`** inside the `{"Leaf":{…}}` ConditionExpr
+  node. NOTE: the segment write path FORBIDS InSegment/NotInSegment inside a segment's own
+  condition_expr (`SEGMENT_FORBIDDEN_OPS` in grpc/service.rs), so segment→segment is empty for
+  service-written data — we still scan it so a ref inserted by any other path blocks the delete.
+- **The segmentation "service.rs" is actually `crates/stitchd-segmentation-service/src/grpc/service.rs`**
+  (the prompt's path was nominal). It holds `AppState { segment_repo }` only — added an OPTIONAL
+  `dependency_pool: Option<sqlx::PgPool>` (flag rules + segments share ONE Postgres DB, so the
+  service's own pool can scan flag_rules) + `AppState::new(repo)`/`with_dependency_pool(pool)`
+  builders so the ~4 mock-repo unit-test sites switch to `AppState::new(...)` (pool None ⇒ guard
+  is a no-op, existing delete tests unchanged). main.rs passes `Some(pool.clone())`. Guard wired
+  into BOTH delete paths: `MutateSegment(Delete)` (resolve seg by key first) AND
+  `DeleteAdminSegment` (has the id directly). There is NO segment "archive" — only soft-delete.
+- **Experiment delete-block** = new `StartPrerequisiteRepository::dependents_experiment_done(exp)`
+  (`SELECT DISTINCT experiment_id FROM experiment_start_prerequisites WHERE kind='experiment_done'
+  AND prerequisite_experiment_id=$1`), enforced in `delete_experiment` AFTER find_by_id, BEFORE
+  soft_delete, via the EXISTING optional `start_prereq` collaborator (no new field). The
+  `StubPrereqRepo` tuple-struct in service.rs tests became `{prereqs, dependents}` with
+  `::new(prereqs)` / `::with_dependents(ids)` ctors. "Archive" for experiments = transition to
+  Concluded (normal lifecycle) — NOT blocked; only delete is guarded (blocking a stop would be wrong).
+- **Dependency read API is gateway-only, NO proto/RPC additions** (those are Phase-1-owned + would
+  ripple the parallel wave). Computed entirely from EXISTING RPCs:
+  - flag: `GetFlag` returns BOTH `prerequisites` (upstream flags) AND `rules` (whose
+    `rule_payload` = serialized ConditionExpr → segment_ref upstream); downstream = `ListFlags`
+    (project-scoped, also populates prerequisites) filtered to flags whose `prerequisites` name
+    the subject by key OR id.
+  - segment: downstream = `ListFlags` rule-scan for the segment id; segment→segment nesting needs
+    env-scoped `ListSegments` (the URL is project-scoped) AND is forbidden anyway → reported via a
+    `note` field, empty set.
+  - experiment: start-prereq edges have NO read RPC → empty graph + `note`. (Integrity is still
+    enforced at delete time by 6.1.) Filed as a known gap — a future `GetStartPrerequisites` RPC
+    would let the gateway populate the experiment branch.
+  Response shape: `DependencyGraphJson { entity_kind, entity_id, upstream: [DependencyEdge],
+  downstream: [DependencyEdge], note? }`; `DependencyEdge { entity_kind, id, key, kind }` where
+  `kind ∈ {prerequisite_flag, segment_ref, dependent_flag}`.
+- **router.rs lines added (resource_read, after the `// --- end schedules ---` block, before
+  `.with_state`):**
+  ```
+          // --- dependency graph (flag_lifecycle Phase 6) ---
+          .route(
+              "/v1/projects/{project_id}/{entity_kind}/{entity_id}/dependencies",
+              get(dependencies::get_dependencies),
+          )
+          // --- end dependency graph ---
+  ```
+  Plus `dependencies` added to the `use crate::routes::{…}` import list (alphabetical, between
+  `context_intel,` and `eval_stats,`) and `pub mod dependencies;` in routes/mod.rs; openapi.rs
+  registers `get_dependencies` in `paths(...)` and `DependencyGraphJson`+`DependencyEdge` in
+  `components(schemas(...))`. The route is env-agnostic READ-only so it lives in `resource_read`
+  (JWT auth via the tree's `auth_middleware`, no `require_write_permission`).
+- No `cargo sqlx prepare` needed anywhere in Phase 6 (all runtime `sqlx::query`, zero macros).
