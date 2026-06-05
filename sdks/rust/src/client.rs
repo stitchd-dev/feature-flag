@@ -35,13 +35,15 @@ use uuid::Uuid;
 use stitchd_core::context::Context;
 use stitchd_core::evaluation::{
     EvalOutcome as CoreEvalOutcome, EvaluationTrace, HashInputSpec, HashSelector,
-    ListMembershipIndex, TraceLevel, evaluate_flag,
+    ListMembershipIndex, TraceLevel, evaluate_flag, evaluate_flag_with_prerequisites,
 };
 use stitchd_core::flag::{Flag, FlagRecord, FlagRule as CoreFlagRule, Variant as CoreVariant};
 use stitchd_core::id::{EnvironmentId, FlagId, FlagKey, ProjectId, RuleId, SegmentId, VariantId};
+use stitchd_core::prerequisite::{FlagPrerequisite as CorePrerequisite, PrerequisiteGate};
 use stitchd_core::rule_engine::condition::Condition;
+use stitchd_core::rule_engine::orchestrator::evaluate_flags_with_prerequisites;
 use stitchd_core::rule_engine::types::{
-    ConditionExpr, ExclusionGate, PercentageTarget, Rule, RuleOutput, TargetField,
+    ConditionExpr, EvaluationInput, ExclusionGate, PercentageTarget, Rule, RuleOutput, TargetField,
 };
 use stitchd_core::segment::{RuleBasedSegment, SegmentDefinition};
 use stitchd_core::variants::{FlagValueType, VariantValue as CoreVariantValue};
@@ -932,15 +934,51 @@ impl SdkClient {
                 .collect();
         };
 
-        let core_results = evaluate_flag(
-            &core_flag,
-            &req.contexts,
-            &rule_based_segments,
-            &memberships,
-            env_id,
-            project_id,
-            trace,
-        );
+        // ── Evaluate, gating on prerequisites resolved from the snapshot ─
+        //
+        // When the flag has NO prerequisites, the cheap batch path
+        // (`evaluate_flag` over the whole context bundle) is used unchanged.
+        //
+        // When it DOES, prerequisites are resolved LOCALLY + TRANSITIVELY
+        // from the snapshot (the SDK holds every flag definition). Resolution
+        // is per-context — a prerequisite flag may itself resolve to a
+        // different variant for a different subject — so we evaluate each
+        // context with its own pre-resolved `evaluated_flags` map and call
+        // `evaluate_flag_with_prerequisites`. A prerequisite flag missing from
+        // the snapshot is simply absent from the map ⇒ unmet ⇒ the engine
+        // returns the fallback variant (fail-closed), matching the preview
+        // path (Phase 4).
+        let core_results = if core_flag.prerequisites.is_empty() {
+            evaluate_flag(
+                &core_flag,
+                &req.contexts,
+                &rule_based_segments,
+                &memberships,
+                env_id,
+                project_id,
+                trace,
+            )
+        } else {
+            let mut acc = Vec::with_capacity(req.contexts.len());
+            for ctx in &req.contexts {
+                let single = std::slice::from_ref(ctx);
+                let evaluated_flags = self
+                    .resolve_prerequisite_map(snapshot, &core_flag, single, env_id, project_id)
+                    .await;
+                let mut one = evaluate_flag_with_prerequisites(
+                    &core_flag,
+                    single,
+                    &rule_based_segments,
+                    &memberships,
+                    &evaluated_flags,
+                    env_id,
+                    project_id,
+                    trace,
+                );
+                acc.append(&mut one);
+            }
+            acc
+        };
 
         // ── Map core results → SDK results, emit one event per entry ────
         core_results
@@ -1062,11 +1100,259 @@ impl SdkClient {
 
         index
     }
+
+    /// Resolve the cross-flag `evaluated_flags` map for `flag`'s prerequisite
+    /// gate, transitively, from the local snapshot.
+    ///
+    /// Mirrors the flag-service preview path
+    /// ([`stitchd_flag_service`]'s `resolve_prerequisite_variant_map`) but
+    /// reads every flag definition from the SDK's in-memory snapshot rather
+    /// than a database:
+    ///
+    /// 1. BFS the transitive prerequisite-flag closure (by key) starting from
+    ///    `flag`'s own prerequisites; the dependent flag itself is excluded.
+    /// 2. Convert each closure flag to a core `Flag` (deterministic IDs), and
+    ///    gather the union of segments they reference.
+    /// 3. Resolve those segments' rule-based + list-segment membership for the
+    ///    context bundle (reusing the LRU + on-demand fetcher).
+    /// 4. Run [`evaluate_flags_with_prerequisites`] over the closure to get the
+    ///    dependency-ordered resolved-variant map.
+    ///
+    /// A prerequisite flag missing from the snapshot is silently dropped from
+    /// the closure ⇒ absent from the returned map ⇒ the engine's gate treats it
+    /// as **unmet** (fail-closed → fallback). A prerequisite *cycle* makes the
+    /// orchestrator return an error; we treat that conservatively as an empty
+    /// map (every prerequisite unmet → fallback) and log a warning.
+    async fn resolve_prerequisite_map(
+        &self,
+        snapshot: &DefinitionSnapshot,
+        flag: &Flag,
+        contexts: &[Context],
+        env_id: EnvironmentId,
+        project_id: ProjectId,
+    ) -> HashMap<FlagId, Option<VariantId>> {
+        // ── 1. BFS the prerequisite-flag closure by KEY ──────────────────
+        //
+        // The core gate carries IDs only; the BFS walks on KEYS, which live on
+        // the proto `FeatureFlag.prerequisites`. Seed from the target flag's
+        // proto prerequisite keys, then walk transitively.
+        let own_key = flag.record.key.as_str().to_string();
+        let mut closure_keys: HashSet<String> = HashSet::new();
+        let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+        if let Some(proto) = snapshot.flag(&own_key) {
+            for p in &proto.prerequisites {
+                queue.push_back(p.prerequisite_flag_key.clone());
+            }
+        }
+        while let Some(key) = queue.pop_front() {
+            if key == own_key || key.is_empty() || !closure_keys.insert(key.clone()) {
+                continue;
+            }
+            // Missing-from-snapshot prerequisite ⇒ leave it out of the closure
+            // (absent ⇒ unmet at the gate). Enqueue its own prerequisites.
+            if let Some(proto) = snapshot.flag(&key) {
+                for p in &proto.prerequisites {
+                    if !closure_keys.contains(&p.prerequisite_flag_key) {
+                        queue.push_back(p.prerequisite_flag_key.clone());
+                    }
+                }
+            }
+        }
+
+        if closure_keys.is_empty() {
+            return HashMap::new();
+        }
+
+        // ── 2. Convert closure flags + gather referenced segments ─────────
+        let mut flag_entries: Vec<(FlagId, Vec<Rule>, Vec<CorePrerequisite>)> =
+            Vec::with_capacity(closure_keys.len());
+        // Per closure-flag gate, retained to FOLD the prerequisite fallback into
+        // the resolved map after the orchestrator runs (see step 4) — the
+        // orchestrator resolves variants from rules ONLY and does not itself
+        // apply the gate, so transitive fallback must be folded by the caller.
+        let mut closure_gates: HashMap<FlagId, PrerequisiteGate> = HashMap::new();
+        let mut all_seg_ids: HashSet<SegmentId> = HashSet::new();
+        for key in &closure_keys {
+            let Some(proto) = snapshot.flag(key) else {
+                continue;
+            };
+            // Skip disabled flags: a disabled flag resolves to NO variant, so
+            // it's correctly absent from the map ⇒ any gate requiring it is
+            // unmet. (Including it would risk its rules resolving a variant.)
+            if !proto.enabled || proto.archived {
+                continue;
+            }
+            let Some(core) = convert_proto_flag_to_core(proto) else {
+                continue;
+            };
+            for rule in &proto.rules {
+                if let Ok(cond) = serde_json::from_slice::<ConditionExpr>(&rule.rule_payload) {
+                    collect_segment_ids(&cond, &mut all_seg_ids);
+                }
+            }
+            let rules: Vec<Rule> = core.rules.iter().map(|r| r.rule.clone()).collect();
+            let prereqs = core.prerequisites.prerequisites.clone();
+            // Key the closure flag by its DETERMINISTIC-from-key FlagId (NOT
+            // its wire UUID): the dependent flag's gate references prerequisite
+            // flags by key (SDK-sync leaves the prereq `_id` empty), so its
+            // `prerequisite_flag_id` is also deterministic-from-key. Both sides
+            // must agree for the resolved-variant map lookup to hit.
+            let closure_flag_id = resolve_flag_id("", key);
+            // The fallback variant must be re-keyed onto this flag's own
+            // variants (it was resolved by `build_prerequisite_gate` against the
+            // proto's variant keys → deterministic ids); we recompute it here
+            // for the fold using the proto's `fallback_variant_key`.
+            let fallback_variant_id = if proto.fallback_variant_key.is_empty() {
+                None
+            } else {
+                Some(deterministic_variant_id(key, &proto.fallback_variant_key))
+            };
+            closure_gates.insert(
+                closure_flag_id,
+                PrerequisiteGate {
+                    prerequisites: prereqs.clone(),
+                    fallback_variant_id,
+                },
+            );
+            flag_entries.push((closure_flag_id, rules, prereqs));
+        }
+
+        if flag_entries.is_empty() {
+            return HashMap::new();
+        }
+
+        // ── 3. Resolve segments for the closure ──────────────────────────
+        let mut rule_based_segments: Vec<SegmentDefinition> = Vec::new();
+        let mut list_segment_ids: Vec<String> = Vec::new();
+        for seg_id in &all_seg_ids {
+            let id_str = seg_id.as_uuid().to_string();
+            if let Some(rule_seg) = snapshot.rule_segment(&id_str) {
+                let rules: Vec<Rule> =
+                    serde_json::from_slice(&rule_seg.rule_payload).unwrap_or_default();
+                rule_based_segments.push(SegmentDefinition::RuleBased(RuleBasedSegment {
+                    id: *seg_id,
+                    rules,
+                }));
+            } else if snapshot.list_segment(&id_str).is_some() {
+                list_segment_ids.push(id_str);
+            }
+        }
+        let list_memberships = self
+            .resolve_list_memberships(contexts, &list_segment_ids)
+            .await;
+        let resolved_segments =
+            resolve_segments_for_bundle(contexts, &rule_based_segments, &list_memberships);
+
+        // ── 4. Topo-sort + resolve in dependency order ───────────────────
+        let _ = project_id; // env-only salt today; kept for signature parity
+        let base_input = EvaluationInput {
+            contexts,
+            resolved_segments,
+            evaluated_flags: HashMap::new(),
+        };
+        let _ = env_id;
+        match evaluate_flags_with_prerequisites(&flag_entries, &base_input) {
+            Ok(mut map) => {
+                fold_prerequisite_fallbacks(&mut map, &flag_entries, &closure_gates);
+                map
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    flag = %own_key,
+                    "prerequisite resolution failed (cycle?); treating all prerequisites as unmet"
+                );
+                HashMap::new()
+            }
+        }
+    }
 }
 
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Fold each closure flag's prerequisite-gate fallback into the resolved
+/// variant map, in dependency order.
+///
+/// [`evaluate_flags_with_prerequisites`] resolves each flag's variant from its
+/// **rules only** — it deliberately does NOT apply the prerequisite fallback
+/// gate (see its rustdoc). So an intermediate flag B whose own prerequisite C
+/// is unmet still appears in the map as its *rule* output, which would let B's
+/// dependent A incorrectly proceed.
+///
+/// This pass walks the closure in topological order (prerequisites before
+/// dependents) and, for any flag whose gate is unmet given the
+/// already-folded map, overrides its entry with the gate's fallback variant
+/// (`None` ⇒ no resolved variant, i.e. the off/disabled default). Because the
+/// walk is dependency-ordered, a folded fallback is visible when a later
+/// dependent's gate is checked — so fallback propagates transitively.
+///
+/// This mirrors the semantics the core engine's gate expects of its caller
+/// (`prereq_transitive_chain_falls_back_when_root_off`): the map fed to a
+/// dependent must already carry each prerequisite's gate-applied variant.
+fn fold_prerequisite_fallbacks(
+    map: &mut HashMap<FlagId, Option<VariantId>>,
+    flag_entries: &[(FlagId, Vec<Rule>, Vec<CorePrerequisite>)],
+    closure_gates: &HashMap<FlagId, PrerequisiteGate>,
+) {
+    let graph = stitchd_core::rule_engine::orchestrator::build_dependency_graph(flag_entries);
+    let order = match stitchd_core::rule_engine::dependency::topological_sort(&graph) {
+        Ok(o) => o,
+        // A cycle here was already rejected by the orchestrator; defensively
+        // skip folding (leave the rules-only map) rather than panicking.
+        Err(_) => return,
+    };
+
+    for flag_id in order {
+        let Some(gate) = closure_gates.get(&flag_id) else {
+            continue;
+        };
+        if gate.prerequisites.is_empty() {
+            continue;
+        }
+        // Unmet = any prerequisite whose resolved variant (after prior folds)
+        // is absent / None / != required.
+        let unmet = gate.prerequisites.iter().any(|p| {
+            map.get(&p.prerequisite_flag_id).copied().flatten() != Some(p.required_variant_id)
+        });
+        if unmet {
+            map.insert(flag_id, gate.fallback_variant_id);
+        }
+    }
+}
+
+/// Resolve the set of segments a single context bundle belongs to, merging
+/// rule-based segment membership (evaluated via the core segment evaluator)
+/// with the pre-resolved list-segment membership index.
+///
+/// Mirrors the flag-service preview's `resolve_segments_for_bundle`, but the
+/// SDK's list memberships come from a [`ListMembershipIndex`] (keyed by
+/// `(context_type, context_key)`) rather than a per-context `HashSet`.
+fn resolve_segments_for_bundle(
+    contexts: &[Context],
+    rule_based_segments: &[SegmentDefinition],
+    list_memberships: &ListMembershipIndex,
+) -> HashSet<SegmentId> {
+    let mut resolved: HashSet<SegmentId> = HashSet::new();
+    // Rule-based segments: evaluate each against the FULL bundle (segment
+    // rules may reference multiple context types) — matching preview semantics.
+    for seg in rule_based_segments {
+        if let SegmentDefinition::RuleBased(rb) = seg
+            && rb.evaluate(contexts).map(|m| m.matched).unwrap_or(false)
+        {
+            resolved.insert(rb.id);
+        }
+    }
+    // List segments: fold in any membership the index recorded for each
+    // (context_type, context_key) in the bundle.
+    for ctx in contexts {
+        if let Some(set) = list_memberships.get(&ctx.context_type, &ctx.key) {
+            resolved.extend(set.iter().copied());
+        }
+    }
+    resolved
+}
 
 /// Build the gRPC URI (scheme + host + grpc_port) from `SdkConfig`.
 fn grpc_uri_from_config(config: &SdkConfig) -> Result<String, SdkError> {
@@ -1164,13 +1450,21 @@ fn proto_variant_value_to_json(v: &stitchd_proto::flags::v1::VariantValue) -> se
 /// populate it from the wire.
 fn convert_proto_flag_to_core(proto: &FeatureFlag) -> Option<Flag> {
     // ── Variants ──────────────────────────────────────────────────────────
+    //
+    // VariantIds are derived deterministically from `(flag_key, variant_key)`
+    // — NOT minted fresh — so the same variant resolves to the same
+    // `VariantId` across separate conversions of *different* flags. This is
+    // what makes the cross-flag prerequisite gate work in the SDK: a
+    // dependent flag's `required_variant_id` (built from the prerequisite
+    // flag's `(key, variant_key)`) must equal the `VariantId` that the
+    // prerequisite flag's own conversion produces for that variant.
     let variants: Vec<CoreVariant> = proto
         .variants
         .iter()
         .filter_map(|v| {
             let value = proto_variant_value_to_core(v.value.as_ref()?)?;
             Some(CoreVariant {
-                id: VariantId::new(),
+                id: deterministic_variant_id(&proto.key, &v.key),
                 key: v.key.clone(),
                 value,
             })
@@ -1194,9 +1488,13 @@ fn convert_proto_flag_to_core(proto: &FeatureFlag) -> Option<Flag> {
     };
 
     // ── Flag id ──────────────────────────────────────────────────────────
-    let flag_id = Uuid::parse_str(&proto.flag_id)
-        .map(FlagId::from_uuid)
-        .unwrap_or_else(|_| FlagId::new());
+    // Resolve the flag's `FlagId` consistently across conversions: prefer the
+    // wire `flag_id` UUID (populated in SDK definition-sync), else derive
+    // deterministically from the flag key. Determinism matters because a flag
+    // referenced as a *prerequisite* (by key) must resolve to the SAME
+    // `FlagId` whether it's converted as the eval target or as a closure
+    // member during cross-flag prerequisite resolution.
+    let flag_id = resolve_flag_id(&proto.flag_id, &proto.key);
 
     // ── Rules ────────────────────────────────────────────────────────────
     let mut rules: Vec<CoreFlagRule> = Vec::with_capacity(proto.rules.len());
@@ -1235,16 +1533,134 @@ fn convert_proto_flag_to_core(proto: &FeatureFlag) -> Option<Flag> {
         version: proto.version as i64,
     };
 
+    // ── Prerequisite gate (Phase 7, flag_lifecycle_20260604) ─────────────
+    //
+    // SDK definition-sync carries prerequisites by KEY (the `_id` fields are
+    // empty on the wire), so we resolve them to the deterministic IDs above:
+    //
+    // - `prerequisite_flag_id`  ← `resolve_flag_id(key)` of the prereq flag.
+    // - `required_variant_id`   ← `deterministic_variant_id(prereq_flag_key,
+    //                              required_variant_key)` — keyed on the
+    //                              prerequisite flag so it matches that flag's
+    //                              own converted variant IDs.
+    // - `fallback_variant_id`   ← THIS flag's own variant named by
+    //                              `fallback_variant_key` (empty ⇒ None ⇒ the
+    //                              engine uses the off/disabled default).
+    let prerequisites = build_prerequisite_gate(proto, &variant_id_by_key);
+
     Some(Flag {
         record,
         hashing_config: vec![],
         rules,
         variants,
-        // Phase 7 (flag_lifecycle) wires the proto FeatureFlag.prerequisites +
-        // fallback_variant_key into this conversion so the SDK gates locally;
-        // until then the SDK carries an empty gate (no prerequisites).
-        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
+        prerequisites,
     })
+}
+
+/// Build the core [`PrerequisiteGate`] from a proto [`FeatureFlag`]'s
+/// `prerequisites` + `fallback_variant_key`.
+///
+/// IDs are resolved deterministically from keys (see
+/// [`convert_proto_flag_to_core`]); the prerequisite flag's `required_variant`
+/// is keyed on the *prerequisite* flag (not this flag), and the fallback
+/// variant resolves against THIS flag's own variant map.
+fn build_prerequisite_gate(
+    proto: &FeatureFlag,
+    own_variant_id_by_key: &HashMap<String, VariantId>,
+) -> PrerequisiteGate {
+    let prerequisites: Vec<CorePrerequisite> = proto
+        .prerequisites
+        .iter()
+        .map(|p| {
+            // Prefer the wire `_id` fields when populated (admin/preview
+            // snapshots), else resolve from keys (SDK definition-sync).
+            let prerequisite_flag_id = if p.prerequisite_flag_id.is_empty() {
+                resolve_flag_id("", &p.prerequisite_flag_key)
+            } else {
+                resolve_flag_id(&p.prerequisite_flag_id, &p.prerequisite_flag_key)
+            };
+            let required_variant_id = if p.required_variant_id.is_empty() {
+                deterministic_variant_id(&p.prerequisite_flag_key, &p.required_variant_key)
+            } else {
+                Uuid::parse_str(&p.required_variant_id)
+                    .map(VariantId::from_uuid)
+                    .unwrap_or_else(|_| {
+                        deterministic_variant_id(&p.prerequisite_flag_key, &p.required_variant_key)
+                    })
+            };
+            CorePrerequisite {
+                prerequisite_flag_id,
+                required_variant_id,
+            }
+        })
+        .collect();
+
+    // Empty `fallback_variant_key` ⇒ None ⇒ the gate uses the flag's
+    // off/disabled default variant (per `Flag::prerequisite_fallback_variant`).
+    let fallback_variant_id = if proto.fallback_variant_key.is_empty() {
+        None
+    } else {
+        own_variant_id_by_key
+            .get(&proto.fallback_variant_key)
+            .copied()
+    };
+
+    PrerequisiteGate {
+        prerequisites,
+        fallback_variant_id,
+    }
+}
+
+/// Resolve a flag's `FlagId` from its wire UUID (preferred) or deterministically
+/// from its key. Used for both the flag itself and prerequisite-flag references
+/// so cross-flag IDs line up regardless of conversion order.
+fn resolve_flag_id(wire_uuid: &str, flag_key: &str) -> FlagId {
+    Uuid::parse_str(wire_uuid)
+        .map(FlagId::from_uuid)
+        .unwrap_or_else(|_| FlagId::from_uuid(deterministic_uuid("flag", flag_key, "")))
+}
+
+/// Deterministically derive a [`VariantId`] from `(flag_key, variant_key)`.
+fn deterministic_variant_id(flag_key: &str, variant_key: &str) -> VariantId {
+    VariantId::from_uuid(deterministic_uuid("variant", flag_key, variant_key))
+}
+
+/// Derive a stable v4-shaped [`Uuid`] from a domain tag + up to two key parts.
+///
+/// This is a deterministic, collision-resistant fold (FNV-1a over the tagged,
+/// length-prefixed inputs into a 128-bit value) — NOT a cryptographic hash and
+/// NOT a real UUIDv5 (the crate's `v5` feature isn't enabled), but it's stable
+/// across processes and conversions, which is all the SDK's local prerequisite
+/// resolution needs: the same key always maps to the same ID so a dependent
+/// flag's `required_variant_id` matches the prerequisite flag's converted
+/// variant. The version/variant nibbles are set so the value is a well-formed
+/// RFC-4122 UUID.
+fn deterministic_uuid(tag: &str, part_a: &str, part_b: &str) -> Uuid {
+    // FNV-1a 64-bit, run twice with different seeds to fill 128 bits.
+    fn fnv1a(seed: u64, bytes: &[u8]) -> u64 {
+        let mut hash = seed;
+        for &b in bytes {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash
+    }
+    // Length-prefix each part so distinct splits can't collide (e.g.
+    // ("ab","c") vs ("a","bc")).
+    let mut buf: Vec<u8> = Vec::new();
+    for part in [tag, part_a, part_b] {
+        buf.extend_from_slice(&(part.len() as u64).to_le_bytes());
+        buf.extend_from_slice(part.as_bytes());
+    }
+    let hi = fnv1a(0xcbf2_9ce4_8422_2325, &buf);
+    let lo = fnv1a(0x84222325_cbf29ce4, &buf);
+    let mut value = (u128::from(hi) << 64) | u128::from(lo);
+    // Force RFC-4122 version 4 + variant bits so it's a valid UUID.
+    value &= !(0xF000_u128 << 64);
+    value |= 0x4000_u128 << 64;
+    value &= !(0xC000_u128 << 48);
+    value |= 0x8000_u128 << 48;
+    Uuid::from_u128(value)
 }
 
 /// Convert a proto [`ProtoFlagRule`] to a core [`CoreFlagRule`].
@@ -2962,6 +3378,239 @@ mod tests {
             .await
             .expect("shutdown ok on bufferless client");
         assert_eq!(report, FlushReport::default());
+    }
+
+    // ── Prerequisite-gate helpers (Phase 7, flag_lifecycle) ──────────────────
+
+    use stitchd_proto::flags::v1::FlagPrerequisite as ProtoPrereq;
+
+    #[test]
+    fn deterministic_uuid_is_stable_and_distinct() {
+        // Same inputs → same UUID across calls.
+        let a1 = deterministic_uuid("variant", "flagA", "on");
+        let a2 = deterministic_uuid("variant", "flagA", "on");
+        assert_eq!(a1, a2);
+        // Different parts → different UUIDs.
+        assert_ne!(a1, deterministic_uuid("variant", "flagA", "off"));
+        assert_ne!(a1, deterministic_uuid("variant", "flagB", "on"));
+        // Length-prefixing prevents the ("ab","c") vs ("a","bc") collision.
+        assert_ne!(
+            deterministic_uuid("variant", "ab", "c"),
+            deterministic_uuid("variant", "a", "bc")
+        );
+        // Well-formed RFC-4122 v4 shape.
+        assert_eq!(a1.get_version_num(), 4);
+    }
+
+    #[test]
+    fn deterministic_variant_id_matches_across_conversions() {
+        // The id a dependent flag derives for a prereq's required variant must
+        // equal the id the prereq flag's own conversion mints for that variant.
+        let from_gate = deterministic_variant_id("prereq", "on");
+        let proto = FeatureFlag {
+            key: "prereq".into(),
+            enabled: true,
+            variants: vec![string_variant("on", "ON")],
+            ..Default::default()
+        };
+        let core = convert_proto_flag_to_core(&proto).unwrap();
+        let from_flag = core.variants.iter().find(|v| v.key == "on").unwrap().id;
+        assert_eq!(from_gate, from_flag);
+    }
+
+    #[test]
+    fn resolve_flag_id_prefers_wire_uuid_else_key() {
+        let uuid = "00000000-0000-0000-0000-0000000000ff";
+        assert_eq!(
+            resolve_flag_id(uuid, "ignored"),
+            FlagId::from_uuid(Uuid::parse_str(uuid).unwrap())
+        );
+        // Empty / malformed wire id → deterministic-from-key (stable).
+        assert_eq!(resolve_flag_id("", "k"), resolve_flag_id("not-a-uuid", "k"));
+    }
+
+    #[test]
+    fn build_prerequisite_gate_resolves_keys_and_wire_ids() {
+        let req_uuid = "00000000-0000-0000-0000-0000000000c9";
+        let pre_uuid = "00000000-0000-0000-0000-0000000000ca";
+        let proto = FeatureFlag {
+            key: "dep".into(),
+            enabled: true,
+            variants: vec![string_variant("fb", "FB")],
+            fallback_variant_key: "fb".into(),
+            prerequisites: vec![
+                // key-only (SDK-sync shape)
+                ProtoPrereq {
+                    prerequisite_flag_id: String::new(),
+                    prerequisite_flag_key: "p1".into(),
+                    required_variant_id: String::new(),
+                    required_variant_key: "on".into(),
+                },
+                // wire-id-populated (admin/preview shape)
+                ProtoPrereq {
+                    prerequisite_flag_id: pre_uuid.into(),
+                    prerequisite_flag_key: "p2".into(),
+                    required_variant_id: req_uuid.into(),
+                    required_variant_key: "on".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let own_map: HashMap<String, VariantId> =
+            [("fb".to_string(), deterministic_variant_id("dep", "fb"))]
+                .into_iter()
+                .collect();
+        let gate = build_prerequisite_gate(&proto, &own_map);
+
+        assert_eq!(gate.prerequisites.len(), 2);
+        // key-only → deterministic-from-key resolution
+        assert_eq!(
+            gate.prerequisites[0].prerequisite_flag_id,
+            resolve_flag_id("", "p1")
+        );
+        assert_eq!(
+            gate.prerequisites[0].required_variant_id,
+            deterministic_variant_id("p1", "on")
+        );
+        // wire-id populated → parsed UUIDs win
+        assert_eq!(
+            gate.prerequisites[1].prerequisite_flag_id,
+            FlagId::from_uuid(Uuid::parse_str(pre_uuid).unwrap())
+        );
+        assert_eq!(
+            gate.prerequisites[1].required_variant_id,
+            VariantId::from_uuid(Uuid::parse_str(req_uuid).unwrap())
+        );
+        // fallback resolves against THIS flag's own variant map
+        assert_eq!(
+            gate.fallback_variant_id,
+            Some(deterministic_variant_id("dep", "fb"))
+        );
+    }
+
+    #[test]
+    fn build_prerequisite_gate_empty_fallback_is_none() {
+        let proto = FeatureFlag {
+            key: "dep".into(),
+            enabled: true,
+            variants: vec![string_variant("fb", "FB")],
+            fallback_variant_key: String::new(),
+            ..Default::default()
+        };
+        let gate = build_prerequisite_gate(&proto, &HashMap::new());
+        assert!(gate.fallback_variant_id.is_none());
+        assert!(gate.prerequisites.is_empty());
+    }
+
+    #[test]
+    fn fold_prerequisite_fallbacks_propagates_in_dependency_order() {
+        // a -> b -> c. c unmet (resolves to a non-required variant) so b folds
+        // to its fallback, which in turn makes a fold to its fallback.
+        let a = resolve_flag_id("", "a");
+        let b = resolve_flag_id("", "b");
+        let c = resolve_flag_id("", "c");
+        let b_on = deterministic_variant_id("b", "on");
+        let c_on = deterministic_variant_id("c", "on");
+        let b_fb = deterministic_variant_id("b", "fb");
+        let a_fb = deterministic_variant_id("a", "fb");
+
+        let entries: Vec<(FlagId, Vec<Rule>, Vec<CorePrerequisite>)> = vec![
+            (
+                a,
+                vec![],
+                vec![CorePrerequisite {
+                    prerequisite_flag_id: b,
+                    required_variant_id: b_on,
+                }],
+            ),
+            (
+                b,
+                vec![],
+                vec![CorePrerequisite {
+                    prerequisite_flag_id: c,
+                    required_variant_id: c_on,
+                }],
+            ),
+            (c, vec![], vec![]),
+        ];
+        let mut gates: HashMap<FlagId, PrerequisiteGate> = HashMap::new();
+        gates.insert(
+            a,
+            PrerequisiteGate {
+                prerequisites: entries[0].2.clone(),
+                fallback_variant_id: Some(a_fb),
+            },
+        );
+        gates.insert(
+            b,
+            PrerequisiteGate {
+                prerequisites: entries[1].2.clone(),
+                fallback_variant_id: Some(b_fb),
+            },
+        );
+
+        // Rules-only map: c resolved to its `off` variant (≠ c_on); b resolved
+        // its rule output `on`; a resolved its rule output `on`.
+        let mut map: HashMap<FlagId, Option<VariantId>> = HashMap::new();
+        map.insert(c, Some(deterministic_variant_id("c", "off")));
+        map.insert(b, Some(b_on));
+        map.insert(a, Some(deterministic_variant_id("a", "on")));
+
+        fold_prerequisite_fallbacks(&mut map, &entries, &gates);
+
+        // b's gate (needs c=on) unmet → b folds to b_fb; a's gate (needs b=on)
+        // now sees b_fb ≠ b_on → a folds to a_fb.
+        assert_eq!(map.get(&b).copied().flatten(), Some(b_fb));
+        assert_eq!(map.get(&a).copied().flatten(), Some(a_fb));
+        assert_eq!(
+            map.get(&c).copied().flatten(),
+            Some(deterministic_variant_id("c", "off"))
+        );
+    }
+
+    #[test]
+    fn resolve_segments_for_bundle_matches_rule_and_list() {
+        use stitchd_core::rule_engine::condition::Condition;
+
+        let rb_id = SegmentId::new();
+        let list_id = SegmentId::new();
+        // A rule-based segment that always matches (empty AND).
+        let rb = SegmentDefinition::RuleBased(RuleBasedSegment {
+            id: rb_id,
+            rules: vec![Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Variant(VariantId::new()),
+            }],
+        });
+        // A rule-based segment that never matches.
+        let never = SegmentDefinition::RuleBased(RuleBasedSegment {
+            id: SegmentId::new(),
+            rules: vec![Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::Leaf(Condition::Eq {
+                    context_type: "user".into(),
+                    param: "x".into(),
+                    value: CoreParam::Str("nope".into()),
+                }),
+                output: RuleOutput::Variant(VariantId::new()),
+            }],
+        });
+
+        let ctx = Context::new("user", "u-1");
+        let mut idx = ListMembershipIndex::new();
+        idx.insert(
+            "user".to_string(),
+            "u-1".to_string(),
+            [list_id].into_iter().collect(),
+        );
+
+        let resolved = resolve_segments_for_bundle(std::slice::from_ref(&ctx), &[rb, never], &idx);
+        assert!(resolved.contains(&rb_id));
+        assert!(resolved.contains(&list_id));
+        assert_eq!(resolved.len(), 2);
     }
 }
 

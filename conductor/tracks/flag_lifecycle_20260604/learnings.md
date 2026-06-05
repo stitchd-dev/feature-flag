@@ -441,3 +441,54 @@ Patterns, gotchas, and context discovered during implementation.
   `components(schemas(...))`. The route is env-agnostic READ-only so it lives in `resource_read`
   (JWT auth via the tree's `auth_middleware`, no `require_write_permission`).
 - No `cargo sqlx prepare` needed anywhere in Phase 6 (all runtime `sqlx::query`, zero macros).
+
+## 2026-06-05 — Phase 7 (SDK prerequisite support, Rust) — crate `stitchd-sdk-rust`
+- SHAs: 7.1 Red `af91d9d` (`sdks/rust/tests/prerequisites.rs`), 7.2 Green `c320a18`
+  (`sdks/rust/src/client.rs`). Beads hp5.7.1/hp5.7.2 closed; milestone feature-flag-hp5.7 OPEN.
+- **The key↔id problem & its fix.** SDK definition-sync carries prerequisites by KEY only
+  (`prerequisite_flag_key` + `required_variant_key`; the `*_id` fields are empty on the wire), but
+  core `PrerequisiteGate` is keyed by `FlagId`/`VariantId` UUIDs, and the old SDK conversion minted
+  `VariantId::new()` per variant + parsed `proto.flag_id` for the flag. A dependent flag's
+  `required_variant_id` would NEVER match the prerequisite flag's freshly-minted variant id. FIX:
+  derive IDs DETERMINISTICALLY from keys — `deterministic_uuid(tag, part_a, part_b)` (length-prefixed
+  FNV-1a fold into a v4-shaped Uuid; the `uuid` crate's `v5` feature is NOT enabled so we don't use
+  real UUIDv5), wrapped by `deterministic_variant_id(flag_key, variant_key)` and
+  `resolve_flag_id(wire_uuid, flag_key)` (prefers a populated wire UUID, else deterministic-from-key).
+  Now `(flag_key, variant_key)` → the same `VariantId` across separate conversions of DIFFERENT flags,
+  so the gate matches. `build_prerequisite_gate(proto, own_variant_map)` resolves each prereq's
+  required-variant against the PREREQUISITE flag's key (not the dependent's) and the fallback against
+  the dependent flag's OWN variant map.
+- **Closure flags must use deterministic-from-key FlagId.** In `resolve_prerequisite_map` the closure
+  flags are keyed by `resolve_flag_id("", key)` (forced deterministic), NOT `core.record.id` (which
+  would use the wire UUID) — because the dependent's gate references prereqs deterministic-from-key
+  (their wire ids are empty in the gate). Both sides must agree for the map lookup to hit. The eval
+  TARGET flag keeps its own wire-UUID FlagId (irrelevant to gating; it references prereqs, not self).
+- **CRITICAL transitive gap — the orchestrator does NOT apply the gate.**
+  `orchestrator::evaluate_flags_with_prerequisites` resolves each flag's variant from its RULES ONLY
+  (its own rustdoc says so) — it does NOT fold a flag's prerequisite fallback into the returned map.
+  So in A→B→C with C unmet, B still appears as its rule output (`on`), and A would wrongly proceed.
+  The core engine's gate test (`engine.rs::prereq_transitive_chain_falls_back_when_root_off`) proves
+  the CALLER must pre-fold each prerequisite's gate-applied variant into the map. SOLUTION (in SDK
+  scope): `fold_prerequisite_fallbacks` re-walks the closure in topological order
+  (`build_dependency_graph` + `dependency::topological_sort`, both public) and overrides any flag whose
+  gate is unmet-given-the-folded-map with its fallback variant — so fallback propagates transitively.
+- **The flag-service PREVIEW path has the SAME gap** (it feeds the orchestrator's rules-only map
+  straight into `evaluate_preview_with_prerequisites` with no fold — service.rs:1804). Filed as a
+  cross-scope bead (deps discovered-from:feature-flag-hp5.7.2): preview/orchestrator need the same
+  transitive fold, or `evaluate_flags_with_prerequisites` should fold gates itself, so SDK + preview
+  truly match on transitive-unmet chains (spec D2 "identically to preview").
+- **Per-context resolution.** Like preview, prerequisites resolve PER context (a prereq flag may
+  resolve differently per subject), so the SDK evaluates each context with its own pre-resolved
+  `evaluated_flags` map via `evaluate_flag_with_prerequisites` (the no-prereq path keeps the cheap
+  batch `evaluate_flag` over the whole bundle). Cycles/self-references degrade to fail-closed fallback:
+  the closure BFS excludes the target flag, breaking direct cycles; the fold then makes the dependent
+  unmet → fallback. Missing/disabled/archived prereq flag ⇒ absent from the closure/map ⇒ unmet.
+- **No snapshot.rs change needed** — the snapshot already stores the proto `FeatureFlag` verbatim
+  (prerequisites + fallback_variant_key ride it from Phase 4's `get_flag_definitions`); all wiring is
+  in `client.rs`. The SDK's `EvalOutcome::PrerequisiteFailed` (Phase 2) already maps from
+  `CoreEvalOutcome::PrerequisiteFailed`.
+- Coverage: integration tests (9 cases a–h: unmet/met/transitive×2/disabled/missing/empty-fallback/
+  cycle/self) + 7 helper unit tests (deterministic_uuid stability+collision, build_prerequisite_gate
+  key↔wire-id branches, fold dependency-order propagation, resolve_segments_for_bundle). New paths
+  >90%; remaining gaps are defensive branches (conversion-fail continue, orchestrator-cycle warn —
+  hard to reach since closures exclude the target).
