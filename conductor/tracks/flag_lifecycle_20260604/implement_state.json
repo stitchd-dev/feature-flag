@@ -1,6 +1,6 @@
 {
-  "current_phase": "Wave E: Phase 8 — Admin UI (Full Parity)",
-  "current_phase_index": 7,
+  "current_phase": "Wave F: Phase 9 — Docs, CI, Final Integration",
+  "current_phase_index": 8,
   "current_task_index": 0,
   "completed_phases": [
     "Phase 1: Foundation — Deps, Schema, Proto, Core Types",
@@ -10,8 +10,9 @@
     "Phase 5: Scheduler — Experiments + Segments + Routes + Experiment Start-Prereqs",
     "Phase 6: Cross-Entity Dependency Graph + Referential Integrity",
     "Phase 7: SDK Support (Rust)",
-    "Core fix: transitive prerequisite fallback fold (preview + SDK correct)"
+    "Core fix: transitive prerequisite fallback fold",
+    "Phase 8: Admin UI — Full Parity"
   ],
-  "last_updated": "2026-06-05T10:00:00Z",
+  "last_updated": "2026-06-05T10:30:00Z",
   "status": "in_progress"
 }

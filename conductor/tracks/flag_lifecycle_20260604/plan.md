@@ -139,18 +139,18 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 <!-- execution: parallel -->
 <!-- depends: phase4, phase5, phase6 -->
 
-- [ ] Task 1: API client + types for schedules, prerequisites, dependency graph.
+- [x] Task 1: API client + types for schedules, prerequisites, dependency graph. (102c455)
   <!-- files: admin/src/lib/api.ts, admin/src/lib/validation/lifecycle.ts -->
-- [ ] Task 2: Schedule builder (flag/segment/experiment pages) — one-shot + recurring, IANA
-  tz picker, pending/active list, cancel/pause/resume, diff preview, run status. Formik+Yup, vitest.
+- [x] Task 2: Schedule builder (flag/segment/experiment pages) — one-shot + recurring, IANA
+  tz picker, pending/active list, cancel/pause/resume, diff preview, run status. Formik+Yup, vitest. (c4231b8, 6bee41a)
   <!-- files: admin/src/pages/flags/ScheduleBuilder.tsx, admin/src/components/schedule -->
   <!-- depends: task1 -->
-- [ ] Task 3: Prerequisites editor (flag page) — add/remove (flag, required variant), fallback
-  picker, live cycle warning. Formik+Yup, vitest.
+- [x] Task 3: Prerequisites editor (flag page) — add/remove (flag, required variant), fallback
+  picker, live cycle warning. Formik+Yup, vitest. (47e5aa9)
   <!-- files: admin/src/pages/flags/PrerequisitesEditor.tsx -->
   <!-- depends: task1 -->
-- [ ] Task 4: Dependency-graph visualization (recharts) + delete-blocked UX (`409` surfacing)
-  + badges + preview-trace prerequisite surfacing. vitest.
+- [x] Task 4: Dependency-graph visualization (recharts) + delete-blocked UX (`409` surfacing)
+  + badges + preview-trace prerequisite surfacing. vitest. (fd1ae2a)
   <!-- files: admin/src/components/dependency/DependencyGraph.tsx, admin/src/pages/flags/FlagDetail.tsx -->
   <!-- depends: task1 -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 8: Admin UI' (Protocol in workflow.md)

@@ -521,3 +521,19 @@ Patterns, gotchas, and context discovered during implementation.
   prereq, which is absent from the closure map regardless — it never exercised the transitive-fold
   bug. The new test keeps every flag *enabled* and uses a rule that resolves the intermediate to a
   non-required variant, which is the only shape that reproduces it.
+
+## 2026-06-05 — Phase 8 (Admin UI full parity)
+- SHAs: 8.1 api/types/Yup `102c455`; 8.2 schedule builder `c4231b8` + experiment/segment mount `6bee41a`;
+  8.3 prerequisites editor `47e5aa9`; 8.4 dependency graph + delete-block UX + badges + preview `fd1ae2a`.
+- **Badges need a backend field, not a new query:** the proto `FeatureFlag` already carries
+  `prerequisites` + `fallback_variant_key` (Phase 1/4), and gateway `flag_to_admin_json` already had
+  them in scope — surfacing them on `AdminFlagJson` (list/get DTO) was a ~6-line mapping, no extra
+  round-trip. This lets the UI render "has prerequisites"/"is a prerequisite" badges and resolve
+  reverse-dep cycles client-side without the dependencies endpoint.
+- Delete-blocked UX keys on the gateway 409 `{error:"dependency_exists", dependents:[...]}` body
+  (surfaced in `DeleteSegmentModal` etc.); cycle warning on the prereq editor keys on the 400 cycle
+  path. Dependency graph component under `admin/src/components/dependency/` (recharts present, ^3.8).
+- Verified: tsc clean, lint 0 errors (70 pre-existing react-hooks warnings unrelated), vitest
+  **924/924** across 58 files, `npm run build` ✓ (chunk-size warning pre-existing/informational).
+- Resume note: the Phase 8 worker was interrupted right after implementing 8.4 (uncommitted) and
+  before bookkeeping; orchestrator verified the frontend+gateway gate and committed 8.4 as fd1ae2a.
