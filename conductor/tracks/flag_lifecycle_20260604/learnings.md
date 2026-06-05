@@ -537,3 +537,64 @@ Patterns, gotchas, and context discovered during implementation.
   **924/924** across 58 files, `npm run build` ✓ (chunk-size warning pre-existing/informational).
 - Resume note: the Phase 8 worker was interrupted right after implementing 8.4 (uncommitted) and
   before bookkeeping; orchestrator verified the frontend+gateway gate and committed 8.4 as fd1ae2a.
+
+## 2026-06-05 — Phase 9 (docs, CI, final integration)
+- SHAs: 9.1 docs+compose `5ee323d`; 9.2 generated-docs `e855658`, coverage-tests `d0ae7dc`,
+  fmt `1bf240c`. Beads hp5.9.1/hp5.9.2 closed; milestone feature-flag-hp5.9 left OPEN for orchestrator.
+- **CI needed ZERO edits.** Every Rust CI job (`fmt`, `sqlx-check`, `clippy`, `coverage`) is
+  workspace-wide (`--workspace`), so `stitchd-schedule-service` was already covered the moment it
+  joined `[workspace.members]`. There is NO per-crate build/test matrix to extend. The coverage job
+  excludes `main.rs` via `--ignore-filename-regex 'main\.rs'` (so the binary entrypoint isn't a
+  coverage liability) and excludes `stitchd-proto`/`xtask`. The only per-crate `--test` list in
+  ci.yml is the stats-service live-ClickHouse step — this track adds no self-seeding live-CH tests,
+  so that list is correctly untouched. E2E (`tests/e2e/*.yaml`) just runs `docker compose up -d
+  --wait` then exercises REST, so the new compose service is picked up automatically.
+- **docker-compose flag-service port gotcha:** the prompt said
+  `STITCHD_FLAG_SERVICE_GRPC_URL=http://flag-service:50051`, but in compose flag-service actually
+  listens on **50052** (50051 is auth-service). Used `http://flag-service:50052` (+ exp :50055 /
+  seg :50053) so the wired URL matches the real container port. (The crate's config default of
+  :50051 is a localhost dev default, irrelevant in compose where the env var is set explicitly.)
+- **cargo-rdme does NOT create a README — it fills between markers in an EXISTING file.** Adding
+  the crate to xtask's `CRATE_README_TARGETS` alone fails with "crate's README file not found";
+  you must first hand-create `README.md` with `# <crate>\n\n<!-- cargo-rdme start -->\n\n<!--
+  cargo-rdme end -->\n`, THEN the generator fills the body from `lib.rs`'s `//!` preamble. The
+  README is generated from the **lib target** (`src/lib.rs`), not `main.rs` — so the lib.rs
+  preamble is the source of truth for the published README. Polished it to drop phase-internal
+  language ("Phase 3/5") and name the per-entity dispatch RPCs + the `apply::Applier` seam.
+- **Docs idempotency: tracked vs ephemeral.** `cargo xtask docs` then `git diff --exit-code` is the
+  CI gate, but generator-owned files under `docs/src/grpc/*` (except README.md) + `docs/src/api/
+  openapi.json` are **gitignored** (`git check-ignore` confirms). So the new
+  `schedule_v1_schedule_service.md` page + the flag-prereq RPC additions don't show in `git status`
+  — verify them by grepping the generated page directly; the TRACKED idempotency surface is
+  crate READMEs + `docs/src/deployment/env-vars.md` + `docs/src/SUMMARY.md` + `docs/src/grpc/
+  README.md` + quickstart. Confirmed a second run produces byte-identical tracked output.
+- **env-vars page auto-discovers `STITCHD_*` by source-scraping** `env::var("STITCHD_…")` /
+  `env_or(...)` across `crates/` + `sdks/` — no manual edit. The schedule-service's `config.rs`
+  uses `std::env::var`, so all `STITCHD_SCHEDULE_*` (+ the gateway's `STITCHD_SCHEDULE_SERVICE_ADDR`)
+  appeared automatically grouped under their crate.
+- **sqlx: zero drift** — the whole track used runtime `sqlx::query`/`query_as` (no `query!`
+  macros), so `cargo sqlx prepare --workspace -- --all-targets --features
+  stitchd-sdk-rust/test-util` produced no `.sqlx/` change and `--check` passes. (`#[sqlx::test]`
+  in the new `tests/grpc_service.rs` is a macro, not a cached compile-time query.)
+- **schedule-service coverage gap was the gRPC + dispatch + mapping layer (82%→92.59%).** The
+  scheduler core, apply paths, and config had tests, but `grpc.rs` (0%), `apply/mod.rs` Dispatcher
+  (0%), and `mapping.rs::change_to_proto`/`run_to_proto` (61%) had none. Fixed with: a
+  `tests/grpc_service.rs` `#[sqlx::test]` suite over the full ScheduleService surface (the service
+  is a thin wrapper over `ScheduledChangeRepository`, which needs a real PgPool — mocking it would
+  test nothing), Dispatcher unit tests (incl. the unknown-entity-type → `Failed` not-dropped
+  branch), and mapping unit tests (row→proto + exhaustive enum arms). GOTCHA: recurring RRULEs need
+  a `DTSTART` (rrule 0.14 errors "Missing start date" on a bare `RRULE:FREQ=DAILY`); and
+  pause/resume require an **active** row — only RECURRING changes are created `active` (one-shot →
+  `pending`, which only `cancel` accepts), so pause/resume must be exercised on a recurring change.
+- **Full CI-mirror gate (all green):** clippy `--workspace --all-targets --features
+  stitchd-sdk-rust/test-util -D warnings` ✓; `cargo fmt --all --check` ✓ (rustfmt rewrapped the new
+  test's long chained `.await.unwrap_err()` lines — committed); `cargo test --workspace` ✓ 2625
+  passed; `check_openapi_contract.py` ✓ (23 baseline routes all covered by 116 gateway routes —
+  the new prereq/schedule/dependency routes are additive); admin tsc ✓, lint ✓ (0 errors / 70
+  pre-existing react-hooks warnings), vitest ✓ 924/924, build ✓ (pre-existing chunk-size warning).
+- **Known environmental failure (NOT a regression):** `stitchd-flag-service`'s
+  `tests/eval_preview_clickhouse::evaluate_preview_writes_rows_to_clickhouse` connects to a live
+  flag-service daemon on `STITCHD_FLAG_SERVICE_ADDR` (default :50052). It self-skips when the var is
+  UNSET, but `.env.local` sets it → it attempts a connect and fails `ConnectionRefused` with no
+  daemon running. Not in CI's auto path (CI starts only postgres+clickhouse; this is an E2E
+  concern). Unrelated to this track. With the var unset the entire workspace suite is green.

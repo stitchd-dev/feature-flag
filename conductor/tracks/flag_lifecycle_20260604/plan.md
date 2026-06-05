@@ -158,10 +158,15 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
 ## Phase 9: Docs, CI, Final Integration
 <!-- depends: phase5, phase6, phase7, phase8 -->
 
-- [ ] Task 1: Update `product.md` (modules + status row), `tech-stack.md` (schedule-service,
+- [x] Task 1: Update `product.md` (modules + status row), `tech-stack.md` (schedule-service,
   tables, deps, env-vars). Add `stitchd-schedule-service` to docker-compose + CI build/test
-  matrix + E2E where applicable.
+  matrix + E2E where applicable. (5ee323d) — CI already covers the crate via the
+  workspace-wide build/test/coverage jobs (no per-crate matrix exists); no self-seeding
+  live-CH tests so the stats-service `--test` list is untouched.
   <!-- files: conductor/product.md, conductor/tech-stack.md, docker-compose.yml, .github/workflows/ci.yml -->
-- [ ] Task 2: `cargo sqlx prepare` offline cache; `cargo run -p xtask -- docs` idempotent;
-  full gates — workspace tests, clippy -D warnings, contract, vitest, tsc.
+- [x] Task 2: `cargo sqlx prepare` offline cache (zero `.sqlx/` drift — runtime queries);
+  `cargo xtask docs` idempotent (clean 2nd-run diff; schedule README generated);
+  schedule-service coverage 82.18%→92.59% (≥90%); full gates green — clippy -D, fmt,
+  workspace tests (2625 pass; only env-only `eval_preview_clickhouse` needs a live
+  daemon), contract, admin tsc/lint/vitest 924/build. (docs e855658, tests d0ae7dc, fmt 1bf240c)
 - [ ] Task: Conductor - User Manual Verification 'Phase 9: Docs & CI' (Protocol in workflow.md)
