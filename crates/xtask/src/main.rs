@@ -300,6 +300,7 @@ const CRATE_README_TARGETS: &[&str] = &[
     "stitchd-flag-service",
     "stitchd-gateway",
     "stitchd-proto",
+    "stitchd-schedule-service",
     "stitchd-segmentation-service",
     "stitchd-stats-service",
     "stitchd-sdk-rust",

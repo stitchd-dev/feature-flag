@@ -4,11 +4,16 @@
 //! flags, segments, and experiments at their scheduled time. A background tokio
 //! interval loop (mirroring `stitchd-stats-service`) claims due changes from
 //! PostgreSQL with `FOR UPDATE SKIP LOCKED` — restart-safe and idempotent — and
-//! dispatches each to the owning service's canonical mutation RPC. Exposes the
-//! gRPC `ScheduleService` plus a health/metrics HTTP endpoint.
+//! dispatches each to the owning service's canonical mutation RPC (flag →
+//! flag-service `MutateFlag`, experiment → experimentation-service
+//! `TransitionExperiment`, segment → segmentation-service `UpdateAdminSegment`).
+//! It honors the whole-flag experiment lock and validates each transition at
+//! fire time, recording every attempt in the `scheduled_change_runs` history.
+//! Exposes the gRPC `ScheduleService` (create/list/get/cancel/pause/resume) plus
+//! a health/metrics HTTP endpoint.
 //!
-//! Phase 3 implements the scheduler core + the flag apply path; segment and
-//! experiment apply paths arrive in Phase 5 via the [`apply::Applier`] seam.
+//! Entity-specific apply logic lives behind the `apply::Applier` seam; the
+//! scheduler core is generic over an injected clock and applier for testing.
 
 pub mod apply;
 pub mod config;

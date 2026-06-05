@@ -27,6 +27,7 @@
   - [Segmentation Service](./grpc/segments_v1_segmentation_service.md)
   - [Analytics](./grpc/analytics_v1_analytics.md)
   - [Experimentation Service](./grpc/experiments_v1_experimentation_service.md)
+  - [Schedule Service](./grpc/schedule_v1_schedule_service.md)
   - [Stats Service](./grpc/stats_v1_stats_service.md)
 
 # Service Coordination Flows

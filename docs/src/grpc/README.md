@@ -23,4 +23,5 @@ Run `cargo xtask docs` to regenerate.
 
 - [Analytics](analytics_v1_analytics.md)
 - [Experimentation Service](experiments_v1_experimentation_service.md)
+- [Schedule Service](schedule_v1_schedule_service.md)
 - [Stats Service](stats_v1_stats_service.md)
