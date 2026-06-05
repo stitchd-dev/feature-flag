@@ -14,6 +14,7 @@ import type { AdminFlagResponse, VariantJson } from '../../lib/types'
 import { PreviewTab } from './PreviewTab'
 import { AnalyticsTab } from './AnalyticsTab'
 import { FlagScheduleTab } from './FlagScheduleTab'
+import { PrerequisitesEditor } from './PrerequisitesEditor'
 import { EditFlagDefaultRule } from './EditFlagDefaultRule'
 import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
 import { localId, allocationSum, isCatchAll, defaultCatchAll, normalizeOutput } from '../../lib/ruleTypes'
@@ -642,6 +643,7 @@ type Tab =
   | 'targeting'
   | 'variants'
   | 'default_rule'
+  | 'prerequisites'
   | 'schedule'
   | 'evals'
   | 'preview'
@@ -799,6 +801,9 @@ export function FlagDetail() {
           <button className={`tab ${tab === 'default_rule' ? 'active' : ''}`} onClick={() => setTab('default_rule')}>
             <I.toggle size={13} /> Default rule
           </button>
+          <button className={`tab ${tab === 'prerequisites' ? 'active' : ''}`} onClick={() => setTab('prerequisites')}>
+            <I.layers size={13} /> Prerequisites
+          </button>
           <button className={`tab ${tab === 'schedule' ? 'active' : ''}`} onClick={() => setTab('schedule')}>
             <I.history size={13} /> Schedule
           </button>
@@ -839,6 +844,13 @@ export function FlagDetail() {
             canWrite={canWrite}
             onSaved={(updated) => { setFlag(updated); toast('Default rule saved', 'success') }}
             onConflict={handleConflict}
+          />
+        )}
+        {tab === 'prerequisites' && (
+          <PrerequisitesEditor
+            flag={flag}
+            canWrite={canWrite}
+            onSaved={() => toast('Prerequisites saved', 'success')}
           />
         )}
         {tab === 'schedule' && <FlagScheduleTab flag={flag} />}
