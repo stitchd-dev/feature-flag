@@ -183,10 +183,7 @@ mod tests {
             kind_to_proto("recurring"),
             pb::ScheduleKind::Recurring as i32
         );
-        assert_eq!(
-            kind_to_proto("bogus"),
-            pb::ScheduleKind::Unspecified as i32
-        );
+        assert_eq!(kind_to_proto("bogus"), pb::ScheduleKind::Unspecified as i32);
     }
 
     #[test]

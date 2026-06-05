@@ -42,7 +42,11 @@ async fn create_one_shot_then_get_with_runs(pool: PgPool) {
     let at = Utc::now() + chrono::Duration::hours(1);
 
     let created = svc
-        .create_scheduled_change(Request::new(one_shot_req(env_id, entity_id, at.timestamp_millis())))
+        .create_scheduled_change(Request::new(one_shot_req(
+            env_id,
+            entity_id,
+            at.timestamp_millis(),
+        )))
         .await
         .unwrap()
         .into_inner();
@@ -53,15 +57,22 @@ async fn create_one_shot_then_get_with_runs(pool: PgPool) {
 
     let id: Uuid = created.id.parse().unwrap();
     // Append a run so Get hydrates run history.
-    repo.append_run(id, RunOutcome::Applied, Some("ok")).await.unwrap();
+    repo.append_run(id, RunOutcome::Applied, Some("ok"))
+        .await
+        .unwrap();
 
     let fetched = svc
-        .get_scheduled_change(Request::new(GetScheduledChangeRequest { id: created.id.clone() }))
+        .get_scheduled_change(Request::new(GetScheduledChangeRequest {
+            id: created.id.clone(),
+        }))
         .await
         .unwrap()
         .into_inner();
     assert_eq!(fetched.runs.len(), 1);
-    assert_eq!(fetched.runs[0].outcome, pb::ScheduleRunOutcome::Applied as i32);
+    assert_eq!(
+        fetched.runs[0].outcome,
+        pb::ScheduleRunOutcome::Applied as i32
+    );
     assert_eq!(fetched.runs[0].detail, "ok");
 }
 
@@ -85,7 +96,10 @@ async fn create_recurring_computes_next_run(pool: PgPool) {
         .into_inner();
     assert_eq!(created.schedule_kind, pb::ScheduleKind::Recurring as i32);
     assert_eq!(created.tz, "America/New_York");
-    assert!(created.next_run_at_ms > 0, "recurring change must have a computed next_run_at");
+    assert!(
+        created.next_run_at_ms > 0,
+        "recurring change must have a computed next_run_at"
+    );
 }
 
 #[sqlx::test(migrations = "../stitchd-db/migrations")]
@@ -95,9 +109,13 @@ async fn list_by_entity_and_by_env(pool: PgPool) {
     let env_id = Uuid::new_v4();
     let entity_id = Uuid::new_v4();
     let at = Utc::now() + chrono::Duration::hours(1);
-    svc.create_scheduled_change(Request::new(one_shot_req(env_id, entity_id, at.timestamp_millis())))
-        .await
-        .unwrap();
+    svc.create_scheduled_change(Request::new(one_shot_req(
+        env_id,
+        entity_id,
+        at.timestamp_millis(),
+    )))
+    .await
+    .unwrap();
 
     // Entity-scoped (entity_type specified).
     let by_entity = svc
@@ -202,7 +220,11 @@ async fn list_due_changes_peeks_without_mutating(pool: PgPool) {
     // Due in the past so it's claimable now.
     let past = Utc::now() - chrono::Duration::minutes(5);
     let created = svc
-        .create_scheduled_change(Request::new(one_shot_req(env_id, entity_id, past.timestamp_millis())))
+        .create_scheduled_change(Request::new(one_shot_req(
+            env_id,
+            entity_id,
+            past.timestamp_millis(),
+        )))
         .await
         .unwrap()
         .into_inner();
@@ -231,25 +253,37 @@ async fn invalid_arguments_are_rejected(pool: PgPool) {
     // Unspecified entity_type.
     let mut bad = one_shot_req(env_id, Uuid::new_v4(), Utc::now().timestamp_millis());
     bad.entity_type = pb::ScheduleEntityType::Unspecified as i32;
-    let err = svc.create_scheduled_change(Request::new(bad)).await.unwrap_err();
+    let err = svc
+        .create_scheduled_change(Request::new(bad))
+        .await
+        .unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
 
     // Bad entity_id UUID.
     let mut bad = one_shot_req(env_id, Uuid::new_v4(), Utc::now().timestamp_millis());
     bad.entity_id = "not-a-uuid".to_string();
-    let err = svc.create_scheduled_change(Request::new(bad)).await.unwrap_err();
+    let err = svc
+        .create_scheduled_change(Request::new(bad))
+        .await
+        .unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
 
     // Invalid mutation payload JSON.
     let mut bad = one_shot_req(env_id, Uuid::new_v4(), Utc::now().timestamp_millis());
     bad.mutation_payload_json = "{not json".to_string();
-    let err = svc.create_scheduled_change(Request::new(bad)).await.unwrap_err();
+    let err = svc
+        .create_scheduled_change(Request::new(bad))
+        .await
+        .unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
 
     // One-shot missing scheduled_at_ms.
     let mut bad = one_shot_req(env_id, Uuid::new_v4(), 0);
     bad.scheduled_at_ms = 0;
-    let err = svc.create_scheduled_change(Request::new(bad)).await.unwrap_err();
+    let err = svc
+        .create_scheduled_change(Request::new(bad))
+        .await
+        .unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
 
     // Recurring missing rrule.
@@ -263,12 +297,17 @@ async fn invalid_arguments_are_rejected(pool: PgPool) {
         rrule: String::new(),
         tz: String::new(),
     };
-    let err = svc.create_scheduled_change(Request::new(bad)).await.unwrap_err();
+    let err = svc
+        .create_scheduled_change(Request::new(bad))
+        .await
+        .unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
 
     // Bad UUID on get.
     let err = svc
-        .get_scheduled_change(Request::new(GetScheduledChangeRequest { id: "nope".to_string() }))
+        .get_scheduled_change(Request::new(GetScheduledChangeRequest {
+            id: "nope".to_string(),
+        }))
         .await
         .unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
