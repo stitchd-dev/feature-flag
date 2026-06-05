@@ -391,6 +391,15 @@ impl FlagServiceImpl {
         )> = Vec::with_capacity(closure.len());
         let mut all_segment_ids: std::collections::HashSet<stitchd_core::id::SegmentId> =
             std::collections::HashSet::new();
+        // Retain each closure flag's full gate so the rules-only resolved map can
+        // be FOLDED with each flag's prerequisite fallback (see step below) — the
+        // orchestrator resolves variants from rules ONLY and does not itself apply
+        // the gate, so a transitively-unmet intermediate flag would otherwise show
+        // its rule variant and wrongly satisfy its dependent.
+        let mut closure_gates: std::collections::HashMap<
+            FlagId,
+            stitchd_core::prerequisite::PrerequisiteGate,
+        > = std::collections::HashMap::new();
         for fid in &closure {
             let fr = self
                 .flag_repo
@@ -404,7 +413,8 @@ impl FlagServiceImpl {
                 r.rule.condition.collect_segment_ids(&mut all_segment_ids);
             }
             let gate = self.load_prerequisite_gate(*fid).await?;
-            flag_entries.push((*fid, engine_rules, gate.prerequisites));
+            flag_entries.push((*fid, engine_rules, gate.prerequisites.clone()));
+            closure_gates.insert(*fid, gate);
         }
 
         // Resolve segment membership for the closure's referenced segments.
@@ -424,11 +434,20 @@ impl FlagServiceImpl {
             evaluated_flags: std::collections::HashMap::new(),
         };
 
-        stitchd_core::rule_engine::orchestrator::evaluate_flags_with_prerequisites(
+        let mut map = stitchd_core::rule_engine::orchestrator::evaluate_flags_with_prerequisites(
             &flag_entries,
             &base_input,
         )
-        .map_err(|e| Status::invalid_argument(format!("prerequisite resolution failed: {e}")))
+        .map_err(|e| Status::invalid_argument(format!("prerequisite resolution failed: {e}")))?;
+        // Fold each closure flag's prerequisite fallback into the rules-only map
+        // so a transitively-unmet prerequisite (A→B→C, C unmet) records B's
+        // fallback variant — making the dependent flag's gate correctly fail.
+        stitchd_core::rule_engine::orchestrator::fold_prerequisite_fallbacks(
+            &mut map,
+            &flag_entries,
+            &closure_gates,
+        );
+        Ok(map)
     }
 
     /// Resolve the set of segments a single context bundle belongs to, merging

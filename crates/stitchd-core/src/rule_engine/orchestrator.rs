@@ -1,5 +1,5 @@
 use crate::id::{FlagId, VariantId};
-use crate::prerequisite::FlagPrerequisite;
+use crate::prerequisite::{FlagPrerequisite, PrerequisiteGate};
 use crate::rule_engine::dependency::{extract_flag_deps, topological_sort};
 use crate::rule_engine::error::RuleEngineError;
 use crate::rule_engine::eval_rules::evaluate_rules;
@@ -127,6 +127,65 @@ pub fn evaluate_flags_with_prerequisites(
     }
 
     Ok(results)
+}
+
+/// Fold each flag's prerequisite-gate fallback into the rules-only resolved
+/// variant map produced by [`evaluate_flags_with_prerequisites`].
+///
+/// The orchestrator resolves each flag's variant from its **rules only** — it
+/// deliberately does NOT apply the prerequisite fallback gate (see its
+/// rustdoc). So an intermediate flag `B` whose own prerequisite `C` is unmet
+/// still appears in the map as its *rule* output, which would let `B`'s
+/// dependent `A` incorrectly proceed (`A` would see `B` satisfying its
+/// requirement). This is wrong for transitive chains.
+///
+/// This pass walks the closure in **topological order** (prerequisites before
+/// dependents) and, for any flag whose gate is unmet given the already-folded
+/// map, overrides its entry with the gate's `fallback_variant_id` (`None` ⇒ no
+/// resolved variant, i.e. the off/disabled default). Because the walk is
+/// dependency-ordered, a folded fallback is visible when a later dependent's
+/// gate is checked — so fallback propagates transitively.
+///
+/// This is the single source of truth shared by the flag-service preview path
+/// and the Rust SDK, so the *intermediate* cross-flag map is gated identically
+/// before the final per-target gate
+/// ([`crate::evaluation::engine::evaluate_flag_with_prerequisites`]) runs.
+///
+/// `flag_entries` is the same `(flag_id, rules, prerequisites)` slice passed to
+/// the orchestrator (used to rebuild the dependency graph for ordering).
+/// `gates` carries each flag's full [`PrerequisiteGate`] (prerequisites +
+/// fallback). Flags absent from `gates`, or with an empty gate, are left
+/// untouched — so a closure with no prerequisites is a no-op (identical to the
+/// pre-fold map).
+pub fn fold_prerequisite_fallbacks(
+    map: &mut HashMap<FlagId, Option<VariantId>>,
+    flag_entries: &[(FlagId, Vec<Rule>, Vec<FlagPrerequisite>)],
+    gates: &HashMap<FlagId, PrerequisiteGate>,
+) {
+    let graph = build_dependency_graph(flag_entries);
+    let order = match topological_sort(&graph) {
+        Ok(o) => o,
+        // A cycle here was already rejected by the orchestrator; defensively
+        // skip folding (leave the rules-only map) rather than panicking.
+        Err(_) => return,
+    };
+
+    for flag_id in order {
+        let Some(gate) = gates.get(&flag_id) else {
+            continue;
+        };
+        if gate.prerequisites.is_empty() {
+            continue;
+        }
+        // Unmet = any prerequisite whose resolved variant (after prior folds)
+        // is absent / None / != required.
+        let unmet = gate.prerequisites.iter().any(|p| {
+            map.get(&p.prerequisite_flag_id).copied().flatten() != Some(p.required_variant_id)
+        });
+        if unmet {
+            map.insert(flag_id, gate.fallback_variant_id);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -483,6 +542,108 @@ mod tests {
         assert_eq!(results[&a], Some(v_a));
         assert_eq!(results[&b], Some(v_b));
         assert_eq!(results[&c], Some(v_c));
+    }
+
+    // ── fold_prerequisite_fallbacks: transitive gate folding ─────────────────
+
+    #[test]
+    fn fold_records_fallback_for_transitive_unmet_chain() {
+        // A requires B serve X; B requires C serve Y; C is UNMET (resolves to
+        // a non-required variant). After the orchestrator (rules-only) B would
+        // appear as its rule variant X, wrongly satisfying A. The fold must:
+        //   - mark B unmet (C != Y) ⇒ record B's fallback (None here),
+        //   - then mark A unmet (B != X, since B was folded to None) ⇒ record
+        //     A's fallback.
+        let a = FlagId::new();
+        let b = FlagId::new();
+        let c = FlagId::new();
+        let x = VariantId::new(); // B's required/rule variant
+        let y = VariantId::new(); // C's required variant
+        let c_actual = VariantId::new(); // C actually resolves here (unmet)
+        let a_fallback = VariantId::new();
+        let b_fallback = VariantId::new();
+
+        // Rules: A always serves X-as-rule (irrelevant value), B always serves X,
+        // C always serves c_actual. These mimic "rule matched" for every flag.
+        let rules_a = vec![always_variant(VariantId::new())];
+        let rules_b = vec![always_variant(x)];
+        let rules_c = vec![always_variant(c_actual)];
+
+        let flag_entries = vec![
+            (
+                a,
+                rules_a,
+                vec![FlagPrerequisite {
+                    prerequisite_flag_id: b,
+                    required_variant_id: x,
+                }],
+            ),
+            (
+                b,
+                rules_b,
+                vec![FlagPrerequisite {
+                    prerequisite_flag_id: c,
+                    required_variant_id: y,
+                }],
+            ),
+            (c, rules_c, vec![]),
+        ];
+
+        let ctx: [Context; 0] = [];
+        let mut map =
+            evaluate_flags_with_prerequisites(&flag_entries, &EvaluationInput::new(&ctx)).unwrap();
+
+        // Sanity: rules-only map has B serving X (the bug) before folding.
+        assert_eq!(
+            map[&b],
+            Some(x),
+            "rules-only map should record B's rule variant"
+        );
+
+        let mut gates: HashMap<FlagId, PrerequisiteGate> = HashMap::new();
+        gates.insert(
+            a,
+            PrerequisiteGate {
+                prerequisites: vec![FlagPrerequisite {
+                    prerequisite_flag_id: b,
+                    required_variant_id: x,
+                }],
+                fallback_variant_id: Some(a_fallback),
+            },
+        );
+        gates.insert(
+            b,
+            PrerequisiteGate {
+                prerequisites: vec![FlagPrerequisite {
+                    prerequisite_flag_id: c,
+                    required_variant_id: y,
+                }],
+                fallback_variant_id: Some(b_fallback),
+            },
+        );
+
+        fold_prerequisite_fallbacks(&mut map, &flag_entries, &gates);
+
+        // C resolved to c_actual (unmet vs y) ⇒ B folds to its fallback ⇒ A's
+        // gate now fails (B != X) ⇒ A folds to its fallback.
+        assert_eq!(map[&c], Some(c_actual));
+        assert_eq!(map[&b], Some(b_fallback), "B must record its fallback");
+        assert_eq!(map[&a], Some(a_fallback), "A must fall back transitively");
+    }
+
+    #[test]
+    fn fold_is_noop_without_prerequisites() {
+        // No gates ⇒ fold leaves the rules-only map untouched.
+        let f = FlagId::new();
+        let v = VariantId::new();
+        let flag_entries = vec![(f, vec![always_variant(v)], vec![])];
+        let ctx: [Context; 0] = [];
+        let mut map =
+            evaluate_flags_with_prerequisites(&flag_entries, &EvaluationInput::new(&ctx)).unwrap();
+        let before = map.clone();
+        let gates: HashMap<FlagId, PrerequisiteGate> = HashMap::new();
+        fold_prerequisite_fallbacks(&mut map, &flag_entries, &gates);
+        assert_eq!(map, before);
     }
 
     // Local helper mirroring dependency::flag_eq_rule for the merge test.

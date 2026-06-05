@@ -41,7 +41,9 @@ use stitchd_core::flag::{Flag, FlagRecord, FlagRule as CoreFlagRule, Variant as 
 use stitchd_core::id::{EnvironmentId, FlagId, FlagKey, ProjectId, RuleId, SegmentId, VariantId};
 use stitchd_core::prerequisite::{FlagPrerequisite as CorePrerequisite, PrerequisiteGate};
 use stitchd_core::rule_engine::condition::Condition;
-use stitchd_core::rule_engine::orchestrator::evaluate_flags_with_prerequisites;
+use stitchd_core::rule_engine::orchestrator::{
+    evaluate_flags_with_prerequisites, fold_prerequisite_fallbacks,
+};
 use stitchd_core::rule_engine::types::{
     ConditionExpr, EvaluationInput, ExclusionGate, PercentageTarget, Rule, RuleOutput, TargetField,
 };
@@ -1271,56 +1273,6 @@ impl SdkClient {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-/// Fold each closure flag's prerequisite-gate fallback into the resolved
-/// variant map, in dependency order.
-///
-/// [`evaluate_flags_with_prerequisites`] resolves each flag's variant from its
-/// **rules only** — it deliberately does NOT apply the prerequisite fallback
-/// gate (see its rustdoc). So an intermediate flag B whose own prerequisite C
-/// is unmet still appears in the map as its *rule* output, which would let B's
-/// dependent A incorrectly proceed.
-///
-/// This pass walks the closure in topological order (prerequisites before
-/// dependents) and, for any flag whose gate is unmet given the
-/// already-folded map, overrides its entry with the gate's fallback variant
-/// (`None` ⇒ no resolved variant, i.e. the off/disabled default). Because the
-/// walk is dependency-ordered, a folded fallback is visible when a later
-/// dependent's gate is checked — so fallback propagates transitively.
-///
-/// This mirrors the semantics the core engine's gate expects of its caller
-/// (`prereq_transitive_chain_falls_back_when_root_off`): the map fed to a
-/// dependent must already carry each prerequisite's gate-applied variant.
-fn fold_prerequisite_fallbacks(
-    map: &mut HashMap<FlagId, Option<VariantId>>,
-    flag_entries: &[(FlagId, Vec<Rule>, Vec<CorePrerequisite>)],
-    closure_gates: &HashMap<FlagId, PrerequisiteGate>,
-) {
-    let graph = stitchd_core::rule_engine::orchestrator::build_dependency_graph(flag_entries);
-    let order = match stitchd_core::rule_engine::dependency::topological_sort(&graph) {
-        Ok(o) => o,
-        // A cycle here was already rejected by the orchestrator; defensively
-        // skip folding (leave the rules-only map) rather than panicking.
-        Err(_) => return,
-    };
-
-    for flag_id in order {
-        let Some(gate) = closure_gates.get(&flag_id) else {
-            continue;
-        };
-        if gate.prerequisites.is_empty() {
-            continue;
-        }
-        // Unmet = any prerequisite whose resolved variant (after prior folds)
-        // is absent / None / != required.
-        let unmet = gate.prerequisites.iter().any(|p| {
-            map.get(&p.prerequisite_flag_id).copied().flatten() != Some(p.required_variant_id)
-        });
-        if unmet {
-            map.insert(flag_id, gate.fallback_variant_id);
-        }
-    }
-}
 
 /// Resolve the set of segments a single context bundle belongs to, merging
 /// rule-based segment membership (evaluated via the core segment evaluator)

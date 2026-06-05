@@ -62,6 +62,26 @@ async fn seed_variant(pool: &PgPool, flag_id: Uuid, key: &str) -> Uuid {
     .unwrap()
 }
 
+/// Seed an always-matching rule (`condition: And([])`) on `flag_id` that serves
+/// `variant_id`, so the flag resolves to that variant in the orchestrator's
+/// rules-only pass.
+async fn seed_always_variant_rule(pool: &PgPool, flag_id: Uuid, variant_id: Uuid) {
+    let rule_def = serde_json::json!({
+        "id": Uuid::new_v4(),
+        "condition": { "And": [] },
+        "output": { "Variant": variant_id },
+    });
+    sqlx::query(
+        r"INSERT INTO feature_flag_rules (flag_id, rule_index, rule_def)
+          VALUES ($1, 0, $2)",
+    )
+    .bind(flag_id)
+    .bind(rule_def)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 fn build_service(pool: PgPool) -> FlagServiceImpl {
     let audit = Arc::new(stitchd_db::repository::pg::PgAuditLogger::new(pool.clone()));
     let flag_repo: Arc<dyn stitchd_db::FlagRepository> = Arc::new(
@@ -405,4 +425,111 @@ async fn preview_returns_fallback_when_prerequisite_unmet(pool: PgPool) {
         "preview must surface the prerequisite_failure trace"
     );
     assert_eq!(pf["prerequisite_flag_id"], prereq.to_string());
+}
+
+/// Regression for the transitive cross-flag fold bug
+/// (`discovered-from:feature-flag-hp5.7.2`): in a chain A→B→C where C is
+/// *enabled* but resolves to a non-required variant, B's own prerequisite on C
+/// is unmet. The orchestrator's rules-only pass records B as its **rule**
+/// variant (the one A requires), so without folding B's fallback into the
+/// intermediate map, A would wrongly proceed. With the core fold wired into the
+/// preview path, B is recorded as its fallback, so A's gate correctly fails and
+/// A returns ITS fallback — and the trace names B as the failing prerequisite.
+#[sqlx::test(migrations = "../stitchd-db/migrations")]
+async fn preview_transitive_unmet_chain_falls_back(pool: PgPool) {
+    use stitchd_proto::flags::v1::EvaluatePreviewRequest;
+
+    let project_id = seed_org_project(&pool).await;
+
+    // ── Flag A (the dependent under preview): requires B serve "b_req". ──
+    let a = seed_flag(&pool, project_id, "a").await;
+    let a_main = seed_variant(&pool, a, "a_main").await;
+    let _a_fb = seed_variant(&pool, a, "a_fb").await;
+    sqlx::query("UPDATE feature_flags SET default_variant_id = $2 WHERE id = $1")
+        .bind(a)
+        .bind(a_main)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // ── Flag B: enabled, rule serves "b_req"; requires C serve "c_req". ──
+    let b = seed_flag(&pool, project_id, "b").await;
+    let b_req = seed_variant(&pool, b, "b_req").await;
+    let _b_fb = seed_variant(&pool, b, "b_fb").await;
+    seed_always_variant_rule(&pool, b, b_req).await;
+
+    // ── Flag C: enabled, rule serves "c_other" (NOT the required "c_req"). ──
+    let c = seed_flag(&pool, project_id, "c").await;
+    let c_req = seed_variant(&pool, c, "c_req").await;
+    let c_other = seed_variant(&pool, c, "c_other").await;
+    seed_always_variant_rule(&pool, c, c_other).await;
+
+    let svc = build_service(pool);
+
+    // B requires C=c_req (unmet, since C serves c_other) → B falls back to b_fb.
+    svc.set_prerequisites(Request::new(SetPrerequisitesRequest {
+        project_id: project_id.to_string(),
+        flag_key: "b".to_string(),
+        prerequisites: vec![FlagPrerequisite {
+            prerequisite_flag_id: c.to_string(),
+            prerequisite_flag_key: String::new(),
+            required_variant_id: c_req.to_string(),
+            required_variant_key: String::new(),
+        }],
+        fallback_variant_key: "b_fb".to_string(),
+        version: 0,
+    }))
+    .await
+    .expect("set B prereq");
+
+    // A requires B=b_req. With the fix B resolves to b_fb (its fallback), so
+    // A's gate fails → A falls back to a_fb.
+    svc.set_prerequisites(Request::new(SetPrerequisitesRequest {
+        project_id: project_id.to_string(),
+        flag_key: "a".to_string(),
+        prerequisites: vec![FlagPrerequisite {
+            prerequisite_flag_id: b.to_string(),
+            prerequisite_flag_key: String::new(),
+            required_variant_id: b_req.to_string(),
+            required_variant_key: String::new(),
+        }],
+        fallback_variant_key: "a_fb".to_string(),
+        version: 0,
+    }))
+    .await
+    .expect("set A prereq");
+
+    let contexts_json = serde_json::to_string(&serde_json::json!([
+        { "contexts": [ {
+            "context_type": "user", "key": "u1",
+            "parameters": {}, "private_parameters": []
+        } ] }
+    ]))
+    .unwrap();
+
+    let resp = svc
+        .evaluate_preview(Request::new(EvaluatePreviewRequest {
+            project_id: project_id.to_string(),
+            flag_key: "a".to_string(),
+            contexts_json,
+            environment_id: String::new(),
+        }))
+        .await
+        .expect("evaluate_preview")
+        .into_inner();
+
+    let results: Vec<serde_json::Value> = serde_json::from_str(&resp.results_json).unwrap();
+    assert_eq!(results.len(), 1);
+    // The transitive gate fired → A's fallback "a_fb", NOT "a_main".
+    assert_eq!(
+        results[0]["variant_key"], "a_fb",
+        "A must fall back because B (its prerequisite) is transitively unmet"
+    );
+    // The trace names B as the failing prerequisite of A.
+    let pf = &results[0]["prerequisite_failure"];
+    assert!(
+        !pf.is_null(),
+        "preview must surface the prerequisite_failure trace"
+    );
+    assert_eq!(pf["prerequisite_flag_id"], b.to_string());
 }

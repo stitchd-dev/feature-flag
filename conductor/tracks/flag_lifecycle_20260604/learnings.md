@@ -492,3 +492,32 @@ Patterns, gotchas, and context discovered during implementation.
   key↔wire-id branches, fold dependency-order propagation, resolve_segments_for_bundle). New paths
   >90%; remaining gaps are defensive branches (conversion-fail continue, orchestrator-cycle warn —
   hard to reach since closures exclude the target).
+
+## Bugfix: transitive prerequisite fold unified in core (bead feature-flag-df7)
+
+- **Bug**: `rule_engine::orchestrator::evaluate_flags_with_prerequisites` builds the cross-flag
+  resolved map from RULES ONLY — it never applies each flag's own prerequisite gate. In a transitive
+  chain A→B→C with C unmet, B was recorded as its *rule* variant, so A's gate saw B as satisfying its
+  requirement and wrongly proceeded. The Phase 7 SDK worked around this locally; the flag-service
+  PREVIEW path had the identical, unfixed bug.
+- **Fix (DRY — option b, core helper)**: promoted the SDK's private `fold_prerequisite_fallbacks`
+  into `stitchd-core` as `pub fn rule_engine::orchestrator::fold_prerequisite_fallbacks(map,
+  flag_entries, gates)` (re-exported from `rule_engine::mod`). It rebuilds the dep graph, walks the
+  closure in topological order, and overrides any flag whose gate is unmet (given the already-folded
+  map) with `gate.fallback_variant_id` — so fallback propagates transitively. Chose the helper over
+  changing the orchestrator's input tuple to keep `evaluate_flags`'s empty-prereq delegation byte-for-
+  byte unchanged (no gates ⇒ no override ⇒ identical map).
+- **Wiring**: flag-service `resolve_prerequisite_variant_map` now retains each closure flag's full
+  `PrerequisiteGate` (it already loads them via `load_prerequisite_gate`) and folds the rules-only map
+  before returning it to `evaluate_preview_with_prerequisites`. The Rust SDK now imports and calls the
+  core helper; its private duplicate was removed (the SDK lib test + 9 integration prereq cases still
+  pass, behaviour identical since the logic was lifted verbatim).
+- **Regression tests**: (1) core unit `fold_records_fallback_for_transitive_unmet_chain` — A→B→C, C
+  serves a non-required variant ⇒ B folds to its fallback ⇒ A folds to its fallback. (2) flag-service
+  integration `preview_transitive_unmet_chain_falls_back` — seeds rules directly into
+  `feature_flag_rules` (always-match `And([])` → `Variant`), verified RED without the fold (A returned
+  `a_main`) then GREEN with it (`a_fb`, trace names B as the failing prerequisite).
+- **Gotcha**: the existing `preview_returns_fallback_when_prerequisite_unmet` test used a *disabled*
+  prereq, which is absent from the closure map regardless — it never exercised the transitive-fold
+  bug. The new test keeps every flag *enabled* and uses a rule that resolves the intermediate to a
+  non-required variant, which is the only shape that reproduces it.
