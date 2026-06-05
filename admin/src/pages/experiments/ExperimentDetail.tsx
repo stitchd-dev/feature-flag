@@ -9,6 +9,8 @@ import {
   useActiveContextType,
 } from '../../context/ContextTypeContext'
 import { ContextTypeTabs } from '../../components/ContextTypeTabs'
+import { ScheduleBuilder } from '../../components/schedule/ScheduleBuilder'
+import type { MutationPreset } from '../../components/schedule/ScheduleBuilder'
 import {
   getExperiment,
   getExperimentResults,
@@ -44,6 +46,20 @@ import { listExperimentInteractions } from '../../lib/api/exclusionGroups'
 import type { ExperimentInteraction } from '../../lib/api/exclusionGroups'
 
 /**
+ * Experiment lifecycle-transition presets for the schedule builder
+ * (flag_lifecycle_20260604 A3: start, pause, resume, stop, archive). The
+ * schedule-service dispatches each `transition` to the experimentation-service's
+ * TransitionExperiment RPC at fire time.
+ */
+const EXPERIMENT_TRANSITION_PRESETS: MutationPreset[] = [
+  { id: 'start', label: 'Start experiment', payload: { transition: 'start' } },
+  { id: 'pause', label: 'Pause experiment', payload: { transition: 'pause' } },
+  { id: 'resume', label: 'Resume experiment', payload: { transition: 'resume' } },
+  { id: 'stop', label: 'Stop experiment', payload: { transition: 'stop' } },
+  { id: 'archive', label: 'Archive experiment', payload: { transition: 'archive' } },
+]
+
+/**
  * Minimal projection of a `metric_definitions` row used by ExperimentDetail
  * to resolve display names + goal direction from the IDs referenced by an
  * experiment.
@@ -64,6 +80,7 @@ type Tab =
   | 'config'
   | 'metrics'
   | 'events'
+  | 'schedule'
 
 // ─── Config tab ──────────────────────────────────────────────────────────────
 
@@ -567,6 +584,7 @@ function ExperimentDetailBody({
           <button className={`tab ${tab === 'config' ? 'active' : ''}`} onClick={() => setTab('config')}>Configuration</button>
           <button className={`tab ${tab === 'metrics' ? 'active' : ''}`} onClick={() => setTab('metrics')}>Metrics <span className="count">{metricNames.length || apiExp.metric_ids.length || 0}</span></button>
           <button className={`tab ${tab === 'events' ? 'active' : ''}`} onClick={() => setTab('events')}>Events</button>
+          <button className={`tab ${tab === 'schedule' ? 'active' : ''}`} onClick={() => setTab('schedule')}>Schedule</button>
         </div>
 
         {tab === 'results' && (
@@ -707,6 +725,14 @@ function ExperimentDetailBody({
               <div className="empty-desc">Live tail of qualifying events from ClickHouse — useful for debugging metric definitions.</div>
             </div>
           </div>
+        )}
+        {tab === 'schedule' && envId && (
+          <ScheduleBuilder
+            envId={envId}
+            entityKind="experiments"
+            entityId={apiExp.id}
+            presets={EXPERIMENT_TRANSITION_PRESETS}
+          />
         )}
       </div>
     </>

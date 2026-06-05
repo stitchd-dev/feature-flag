@@ -8,6 +8,7 @@ import { api } from '../../lib/api'
 import { extractErrorMessage } from '../../lib/errors'
 import type { Segment } from './types'
 import { EditSegmentModal } from './EditSegmentModal'
+import { ScheduleBuilder } from '../../components/schedule/ScheduleBuilder'
 import { ConditionExprEditor } from '../../components/rules/RuleCard'
 import type { ConditionExpr } from '../../lib/ruleTypes'
 
@@ -652,6 +653,17 @@ export function SegmentDetail() {
             )}
           </div>
         </div>
+
+        {/* ── Scheduled changes (flag_lifecycle_20260604, Phase 8.2) ── */}
+        {envId && (
+          <div style={{ marginTop: 20 }}>
+            <ScheduleBuilder
+              envId={envId}
+              entityKind="segments"
+              entityId={segment.id}
+            />
+          </div>
+        )}
       </div>
 
       {showCsv && (
