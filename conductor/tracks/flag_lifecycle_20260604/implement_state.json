@@ -1,12 +1,14 @@
 {
-  "current_phase": "Wave C: Phase 4 (prereq backend) || Phase 5 (scheduler extend)",
-  "current_phase_index": 3,
+  "current_phase": "Wave D: Phase 6 (dependency graph + referential integrity) || Phase 7 (SDK)",
+  "current_phase_index": 5,
   "current_task_index": 0,
   "completed_phases": [
     "Phase 1: Foundation — Deps, Schema, Proto, Core Types",
     "Phase 2: Flag Prerequisites — Eval-Time Gate (stitchd-core)",
-    "Phase 3: Scheduler Core + Flag Scheduling (stitchd-schedule-service)"
+    "Phase 3: Scheduler Core + Flag Scheduling (stitchd-schedule-service)",
+    "Phase 4: Prerequisites — Persistence, Service, Gateway, Snapshot, Flag Delete-Block",
+    "Phase 5: Scheduler — Experiments + Segments + Routes + Experiment Start-Prereqs"
   ],
-  "last_updated": "2026-06-04T15:30:00Z",
+  "last_updated": "2026-06-04T17:30:00Z",
   "status": "in_progress"
 }
