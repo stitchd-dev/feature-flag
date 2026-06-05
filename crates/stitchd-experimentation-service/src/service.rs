@@ -32,7 +32,8 @@ use crate::analytics_client::AnalyticsResultsPort;
 use crate::dict_refresh::{DictionaryRefresher, spawn_refresh};
 use crate::flag_client::FlagClient;
 use crate::start_prerequisites::{
-    StartPrerequisiteRepository, StartPrerequisiteResolver, evaluate_start_prerequisites,
+    StartPrerequisiteRepository, StartPrerequisiteResolver, dependency_exists_message,
+    evaluate_start_prerequisites,
 };
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1031,27 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .find_by_id(exp_id)
             .await
             .map_err(Status::from)?;
+
+        // ── Referential-integrity guard (spec C3, Phase 6) ────────────────────
+        // Block the delete while another experiment still declares this one as an
+        // `experiment_done` start-time prerequisite. The reference must be
+        // removed first. Returns the `dependency_exists:<ids>` sentinel a gateway
+        // decodes into HTTP 409 DEPENDENCY_EXISTS (mirror of the
+        // `flag_locked_by_experiment:<uuid>` convention). No-op when the
+        // start-prerequisite repo is not configured.
+        if let Some((prereq_repo, _resolver)) = self.start_prereq.as_ref() {
+            let dependents = prereq_repo
+                .dependents_experiment_done(exp_uuid)
+                .await
+                .map_err(Status::from)?;
+            if !dependents.is_empty() {
+                metrics::counter!("experimentation_service.delete_experiment.dependency_exists")
+                    .increment(1);
+                return Err(Status::failed_precondition(dependency_exists_message(
+                    &dependents,
+                )));
+            }
+        }
 
         self.experiment_repo
             .soft_delete(exp_id)
@@ -3817,14 +3839,39 @@ mod tests {
         PrereqCheck, StartPrerequisite, StartPrerequisiteRepository, StartPrerequisiteResolver,
     };
 
-    struct StubPrereqRepo(Vec<StartPrerequisite>);
+    struct StubPrereqRepo {
+        prereqs: Vec<StartPrerequisite>,
+        /// Experiments that declare the queried experiment as an
+        /// `experiment_done` prerequisite (drives the delete-block guard).
+        dependents: Vec<uuid::Uuid>,
+    }
+    impl StubPrereqRepo {
+        fn new(prereqs: Vec<StartPrerequisite>) -> Self {
+            Self {
+                prereqs,
+                dependents: vec![],
+            }
+        }
+        fn with_dependents(dependents: Vec<uuid::Uuid>) -> Self {
+            Self {
+                prereqs: vec![],
+                dependents,
+            }
+        }
+    }
     #[async_trait]
     impl StartPrerequisiteRepository for StubPrereqRepo {
         async fn list_for_experiment(
             &self,
             _experiment_id: uuid::Uuid,
         ) -> Result<Vec<StartPrerequisite>, RepositoryError> {
-            Ok(self.0.clone())
+            Ok(self.prereqs.clone())
+        }
+        async fn dependents_experiment_done(
+            &self,
+            _experiment_id: uuid::Uuid,
+        ) -> Result<Vec<uuid::Uuid>, RepositoryError> {
+            Ok(self.dependents.clone())
         }
     }
 
@@ -3855,7 +3902,7 @@ mod tests {
     #[tokio::test]
     async fn transition_into_running_refused_when_start_prereq_unmet() {
         let (env_id, env_str) = env_uuid();
-        let repo = Arc::new(StubPrereqRepo(vec![StartPrerequisite::FlagVariant {
+        let repo = Arc::new(StubPrereqRepo::new(vec![StartPrerequisite::FlagVariant {
             flag_id: uuid::Uuid::new_v4(),
             required_variant_id: uuid::Uuid::new_v4(),
         }]));
@@ -3895,9 +3942,11 @@ mod tests {
     #[tokio::test]
     async fn transition_into_running_allowed_when_prereqs_met() {
         let (env_id, env_str) = env_uuid();
-        let repo = Arc::new(StubPrereqRepo(vec![StartPrerequisite::ExperimentDone {
-            experiment_id: uuid::Uuid::new_v4(),
-        }]));
+        let repo = Arc::new(StubPrereqRepo::new(vec![
+            StartPrerequisite::ExperimentDone {
+                experiment_id: uuid::Uuid::new_v4(),
+            },
+        ]));
         let resolver = Arc::new(StubPrereqResolver {
             flag: PrereqCheck::Met,
             experiment: PrereqCheck::Met,
@@ -3919,12 +3968,79 @@ mod tests {
         svc.transition_experiment(req).await.expect("start allowed");
     }
 
+    /// Spec C3 (Phase 6): deleting an experiment that another experiment declares
+    /// as an `experiment_done` start-time prerequisite is blocked with the
+    /// `dependency_exists:<ids>` sentinel listing the blocking experiment id.
+    #[tokio::test]
+    async fn delete_experiment_blocked_while_referenced_as_prerequisite() {
+        use crate::start_prerequisites::DEPENDENCY_EXISTS_STATUS_PREFIX;
+        let (env_id, _env_str) = env_uuid();
+        let blocking_exp = uuid::Uuid::new_v4();
+        let repo = Arc::new(StubPrereqRepo::with_dependents(vec![blocking_exp]));
+        let resolver = Arc::new(StubPrereqResolver {
+            flag: PrereqCheck::Met,
+            experiment: PrereqCheck::Met,
+        });
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_start_prerequisites(repo, resolver);
+
+        let req = tonic::Request::new(DeleteExperimentRequest {
+            experiment_id: ExperimentId::new().to_string(),
+            environment_id: String::new(),
+        });
+        let err = svc
+            .delete_experiment(req)
+            .await
+            .expect_err("delete blocked");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            err.message().starts_with(DEPENDENCY_EXISTS_STATUS_PREFIX),
+            "msg: {}",
+            err.message()
+        );
+        assert!(
+            err.message().contains(&blocking_exp.to_string()),
+            "msg: {}",
+            err.message()
+        );
+    }
+
+    /// Spec C3 (Phase 6): once no experiment references it, the delete succeeds.
+    #[tokio::test]
+    async fn delete_experiment_succeeds_when_not_referenced() {
+        let (env_id, _env_str) = env_uuid();
+        // No dependents → delete proceeds.
+        let repo = Arc::new(StubPrereqRepo::with_dependents(vec![]));
+        let resolver = Arc::new(StubPrereqResolver {
+            flag: PrereqCheck::Met,
+            experiment: PrereqCheck::Met,
+        });
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_start_prerequisites(repo, resolver);
+
+        let req = tonic::Request::new(DeleteExperimentRequest {
+            experiment_id: ExperimentId::new().to_string(),
+            environment_id: String::new(),
+        });
+        svc.delete_experiment(req).await.expect("delete allowed");
+    }
+
     /// A NON-start transition (e.g. running→paused) does NOT evaluate start-time
     /// prerequisites, even when unmet.
     #[tokio::test]
     async fn non_start_transition_skips_prereq_gate() {
         let (env_id, env_str) = env_uuid();
-        let repo = Arc::new(StubPrereqRepo(vec![StartPrerequisite::FlagVariant {
+        let repo = Arc::new(StubPrereqRepo::new(vec![StartPrerequisite::FlagVariant {
             flag_id: uuid::Uuid::new_v4(),
             required_variant_id: uuid::Uuid::new_v4(),
         }]));

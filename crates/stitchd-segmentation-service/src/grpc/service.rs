@@ -27,6 +27,29 @@ use crate::{
 pub struct AppState {
     /// Segment repository backed by PostgreSQL.
     pub segment_repo: Arc<dyn SegmentRepository>,
+    /// Optional Postgres pool used by the referential-integrity scan that
+    /// blocks deleting a segment still referenced by a flag rule or another
+    /// segment (`flag_lifecycle_20260604`, Phase 6). `None` disables the guard
+    /// (delete proceeds unconditionally — used by the mock-based unit tests).
+    pub dependency_pool: Option<sqlx::PgPool>,
+}
+
+impl AppState {
+    /// Construct state with no dependency-scan pool (delete-block disabled).
+    #[must_use]
+    pub const fn new(segment_repo: Arc<dyn SegmentRepository>) -> Self {
+        Self {
+            segment_repo,
+            dependency_pool: None,
+        }
+    }
+
+    /// Attach the Postgres pool that powers the segment delete-block guard.
+    #[must_use]
+    pub fn with_dependency_pool(mut self, pool: sqlx::PgPool) -> Self {
+        self.dependency_pool = Some(pool);
+        self
+    }
 }
 
 /// gRPC implementation of `SegmentationService`.
@@ -39,6 +62,33 @@ impl SegmentationServiceImpl {
     #[must_use]
     pub const fn new(state: AppState) -> Self {
         Self { state }
+    }
+
+    /// Referential-integrity guard for segment delete: reject when a flag rule
+    /// or another segment still references `segment_id`.
+    ///
+    /// On a non-empty dependent set this returns a
+    /// `tonic::Status::failed_precondition` carrying the
+    /// `dependency_exists:<comma-separated dependent ids>` sentinel — the
+    /// gateway decodes it into a structured `409 DEPENDENCY_EXISTS` body (mirror
+    /// of the `flag_locked_by_experiment:<uuid>` convention). No-op when the
+    /// dependency-scan pool is not configured.
+    async fn ensure_no_segment_dependents(
+        &self,
+        segment_id: stitchd_core::id::SegmentId,
+    ) -> Result<(), Status> {
+        let Some(pool) = self.state.dependency_pool.as_ref() else {
+            return Ok(());
+        };
+        let dependents = crate::dependency_scan::dependents_of_segment(pool, segment_id)
+            .await
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
+        if dependents.is_empty() {
+            return Ok(());
+        }
+        Err(Status::failed_precondition(
+            crate::dependency_scan::dependency_exists_message(&dependents.all_ids()),
+        ))
     }
 }
 
@@ -176,6 +226,31 @@ impl SegmentationService for SegmentationServiceImpl {
                 mutate_update(&*self.state.segment_repo, req, env_id).await
             }
             SegmentMutationKind::Delete => {
+                // Referential-integrity guard (Phase 6): resolve the segment and
+                // block the delete if a flag rule or another segment still
+                // references it (409 dependency_exists via the gateway).
+                let seg_key = match &req.segment {
+                    Some(
+                        stitchd_proto::segments::v1::mutate_segment_request::Segment::RuleSegment(
+                            r,
+                        ),
+                    ) => Some(r.key.clone()),
+                    Some(
+                        stitchd_proto::segments::v1::mutate_segment_request::Segment::ListSegment(
+                            l,
+                        ),
+                    ) => Some(l.key.clone()),
+                    None => None,
+                };
+                if let Some(key) = seg_key {
+                    let seg = self
+                        .state
+                        .segment_repo
+                        .find_by_key(&key, env_id)
+                        .await
+                        .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
+                    self.ensure_no_segment_dependents(seg.id).await?;
+                }
                 mutate_delete(&*self.state.segment_repo, req, env_id).await
             }
             SegmentMutationKind::Unspecified => Err(Status::invalid_argument(
@@ -467,6 +542,10 @@ impl SegmentationService for SegmentationServiceImpl {
             .map_err(|_| {
                 Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
             })?;
+
+        // Referential-integrity guard (Phase 6): block the delete if a flag rule
+        // or another segment still references this segment.
+        self.ensure_no_segment_dependents(segment_id).await?;
 
         self.state
             .segment_repo
