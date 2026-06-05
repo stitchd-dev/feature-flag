@@ -13,6 +13,7 @@ import { extractErrorMessage } from '../../lib/errors'
 import type { AdminFlagResponse, VariantJson } from '../../lib/types'
 import { PreviewTab } from './PreviewTab'
 import { AnalyticsTab } from './AnalyticsTab'
+import { FlagScheduleTab } from './FlagScheduleTab'
 import { EditFlagDefaultRule } from './EditFlagDefaultRule'
 import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
 import { localId, allocationSum, isCatchAll, defaultCatchAll, normalizeOutput } from '../../lib/ruleTypes'
@@ -637,7 +638,15 @@ function MetadataEditor({
 
 // ─── FlagDetail ───────────────────────────────────────────────────────────────
 
-type Tab = 'targeting' | 'variants' | 'default_rule' | 'evals' | 'preview' | 'code' | 'history'
+type Tab =
+  | 'targeting'
+  | 'variants'
+  | 'default_rule'
+  | 'schedule'
+  | 'evals'
+  | 'preview'
+  | 'code'
+  | 'history'
 
 export function FlagDetail() {
   const { key } = useParams<{ key: string }>()
@@ -790,6 +799,9 @@ export function FlagDetail() {
           <button className={`tab ${tab === 'default_rule' ? 'active' : ''}`} onClick={() => setTab('default_rule')}>
             <I.toggle size={13} /> Default rule
           </button>
+          <button className={`tab ${tab === 'schedule' ? 'active' : ''}`} onClick={() => setTab('schedule')}>
+            <I.history size={13} /> Schedule
+          </button>
           <button className={`tab ${tab === 'evals' ? 'active' : ''}`} onClick={() => setTab('evals')}>
             <I.zap size={13} /> Evaluations
           </button>
@@ -829,6 +841,7 @@ export function FlagDetail() {
             onConflict={handleConflict}
           />
         )}
+        {tab === 'schedule' && <FlagScheduleTab flag={flag} />}
         {tab === 'evals' && projectId && <AnalyticsTab projectId={projectId} flagId={flag.flag_id} />}
         {tab === 'preview' && <PreviewTab flagId={flag.key} />}
         {tab === 'code' && <SdkSnippet flag={flag} />}
