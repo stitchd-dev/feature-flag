@@ -150,11 +150,7 @@ export function PrerequisitesEditor({ flag, canWrite, onSaved }: Props) {
             .filter((f) => f.key !== flag.key)
             .map((f) => ({
               key: f.key,
-              // `prerequisites` may be absent on the list DTO; default to [].
-              deps:
-                (f as unknown as { prerequisites?: { prerequisite_flag_key: string }[] }).prerequisites?.map(
-                  (p) => p.prerequisite_flag_key,
-                ) ?? [],
+              deps: f.prerequisites?.map((p) => p.prerequisite_flag_key) ?? [],
             })),
         )
         // Pre-load variants for already-configured prerequisites.

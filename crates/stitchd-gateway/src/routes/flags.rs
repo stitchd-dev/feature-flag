@@ -244,6 +244,16 @@ pub struct AdminFlagJson {
     /// lock badge before the user attempts a save and gets a 409.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locked_by_experiment_id: Option<String>,
+    /// The flag's prerequisite gate (deps). Empty when the flag is ungated.
+    /// Surfaced on the list/get DTO so the admin UI can render "has
+    /// prerequisites" / "is a prerequisite" badges and resolve reverse-dep
+    /// cycles client-side (flag_lifecycle_20260604, Phase 8.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prerequisites: Vec<PrerequisiteJson>,
+    /// Key of the configured fallback variant; empty/omitted = the off/disabled
+    /// variant.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fallback_variant_key: String,
 }
 
 fn proto_variant_value_to_json(
@@ -451,6 +461,8 @@ fn flag_to_admin_json(f: &FeatureFlag) -> AdminFlagJson {
         } else {
             Some(f.locked_by_experiment_id.clone())
         },
+        prerequisites: f.prerequisites.iter().map(proto_prereq_to_json).collect(),
+        fallback_variant_key: f.fallback_variant_key.clone(),
     }
 }
 

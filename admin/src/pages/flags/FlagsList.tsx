@@ -15,6 +15,7 @@ import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
 import type { AdminFlagResponse, PaginatedResponse } from '../../lib/types'
 import { CreateFlagModal } from './CreateFlagModal'
+import { FlagBadges, buildPrerequisiteOfSet } from './flagBadges'
 
 const PER_PAGE = 50
 
@@ -24,14 +25,17 @@ function Toggle({ on, onClick }: { on: boolean; onClick: (e: React.MouseEvent) =
   return <span className={`toggle ${on ? 'on' : ''}`} onClick={onClick} />
 }
 
-function FlagTableRow({ flag, orgId, onToggle }: { flag: AdminFlagResponse; orgId: string; onToggle: (key: string) => void }) {
+function FlagTableRow({ flag, orgId, onToggle, isPrerequisiteOf }: { flag: AdminFlagResponse; orgId: string; onToggle: (key: string) => void; isPrerequisiteOf: boolean }) {
   const navigate = useNavigate()
   return (
     <tr className="row-clickable" onClick={() => navigate(`/org/${orgId}/flags/${flag.key}`)}>
       <td><Toggle on={flag.enabled} onClick={(e) => { e.stopPropagation(); onToggle(flag.key) }} /></td>
       <td>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span className="mono-key">{flag.key}</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span className="mono-key">{flag.key}</span>
+            <FlagBadges flag={flag} isPrerequisiteOf={isPrerequisiteOf} />
+          </span>
           <span style={{ fontSize: 11, color: 'var(--fg-muted)' }}>{flag.name}</span>
         </div>
       </td>
@@ -53,7 +57,7 @@ function FlagTableRow({ flag, orgId, onToggle }: { flag: AdminFlagResponse; orgI
   )
 }
 
-function FlagCard({ flag, orgId, onToggle }: { flag: AdminFlagResponse; orgId: string; onToggle: (key: string) => void }) {
+function FlagCard({ flag, orgId, onToggle, isPrerequisiteOf }: { flag: AdminFlagResponse; orgId: string; onToggle: (key: string) => void; isPrerequisiteOf: boolean }) {
   const navigate = useNavigate()
   return (
     <div className="card" style={{ cursor: 'pointer' }} onClick={() => navigate(`/org/${orgId}/flags/${flag.key}`)}>
@@ -64,6 +68,9 @@ function FlagCard({ flag, orgId, onToggle }: { flag: AdminFlagResponse; orgId: s
         </div>
         <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{flag.key}</div>
         <div style={{ fontSize: 12, color: 'var(--fg-muted)' }}>{flag.name}</div>
+        <div style={{ marginTop: 6 }}>
+          <FlagBadges flag={flag} isPrerequisiteOf={isPrerequisiteOf} />
+        </div>
       </div>
       <div style={{ padding: 14 }}>
         <VariantBar variants={[{ name: flag.enabled ? 'on' : 'off', alloc: 100 }]} />
@@ -123,6 +130,8 @@ export function FlagsList() {
   }
 
   const displayFlags = flags.map((f) => ({ ...f, enabled: optimisticEnabled.get(f.key) ?? f.enabled }))
+  // Keys referenced as a prerequisite by some flag in the page → "is a prerequisite" badge.
+  const prerequisiteOf = buildPrerequisiteOfSet(flags)
 
   const filtered = displayFlags.filter((f) => {
     if (search && !f.key.includes(search) && !f.name.toLowerCase().includes(search.toLowerCase())) return false
@@ -298,7 +307,7 @@ export function FlagsList() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.map((f) => <FlagTableRow key={f.key} flag={f} orgId={orgId} onToggle={toggleFlag} />)}
+                      {filtered.map((f) => <FlagTableRow key={f.key} flag={f} orgId={orgId} onToggle={toggleFlag} isPrerequisiteOf={prerequisiteOf.has(f.key)} />)}
                     </tbody>
                   </table>
                 </div>
@@ -308,7 +317,7 @@ export function FlagsList() {
 
             {layout === 'cards' && flags.length > 0 && (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
-                {filtered.map((f) => <FlagCard key={f.key} flag={f} orgId={orgId} onToggle={toggleFlag} />)}
+                {filtered.map((f) => <FlagCard key={f.key} flag={f} orgId={orgId} onToggle={toggleFlag} isPrerequisiteOf={prerequisiteOf.has(f.key)} />)}
               </div>
             )}
 
@@ -327,7 +336,12 @@ export function FlagsList() {
                           <td style={{ width: 40 }}>
                             <Toggle on={f.enabled} onClick={(e) => { e.stopPropagation(); toggleFlag(f.key) }} />
                           </td>
-                          <td><span className="mono-key">{f.key}</span></td>
+                          <td>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              <span className="mono-key">{f.key}</span>
+                              <FlagBadges flag={f} isPrerequisiteOf={prerequisiteOf.has(f.key)} />
+                            </span>
+                          </td>
                           <td><span className={`type-pill ${f.flag_type}`}>{f.flag_type}</span></td>
                           <td style={{ color: 'var(--fg-muted)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
                             {f.updated_at ? new Date(f.updated_at).toLocaleDateString() : '—'}

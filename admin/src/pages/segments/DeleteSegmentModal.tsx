@@ -3,6 +3,8 @@ import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
 import { api } from '../../lib/api'
 import { extractErrorMessage } from '../../lib/errors'
+import { parseDependencyExists } from '../../components/dependency/dependencyHelpers'
+import type { DependencyExistsError } from '../../lib/types'
 import type { Segment } from './types'
 
 interface SegmentDetail extends Segment {
@@ -19,6 +21,7 @@ export function DeleteSegmentModal({ segment, onClose, onDeleted }: Props) {
   const [detail, setDetail] = useState<SegmentDetail | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [blocked, setBlocked] = useState<DependencyExistsError | null>(null)
 
   useEffect(() => {
     api.get<SegmentDetail>(`/v1/segments/${segment.id}`)
@@ -29,11 +32,16 @@ export function DeleteSegmentModal({ segment, onClose, onDeleted }: Props) {
   async function handleDelete() {
     setDeleting(true)
     setError(null)
+    setBlocked(null)
     try {
       await api.delete(`/v1/segments/${segment.id}`)
       onDeleted()
     } catch (err: unknown) {
-      setError(extractErrorMessage(err))
+      // A 409 dependency_exists means flags still reference this segment —
+      // surface the blocking dependents + remove-first guidance.
+      const dep = parseDependencyExists(err)
+      if (dep) setBlocked(dep)
+      else setError(extractErrorMessage(err))
       setDeleting(false)
     }
   }
@@ -70,6 +78,21 @@ export function DeleteSegmentModal({ segment, onClose, onDeleted }: Props) {
         {error && (
           <div style={{ padding: '10px 14px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 13 }}>
             <I.alert size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />{error}
+          </div>
+        )}
+
+        {blocked && (
+          <div style={{ padding: '10px 14px', background: 'var(--danger-bg)', border: '1px solid rgba(196,43,28,0.3)', borderRadius: 6, color: 'var(--danger)', fontSize: 13 }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              <I.alert size={13} style={{ verticalAlign: 'middle', marginRight: 6 }} />
+              Can’t delete — still referenced
+            </div>
+            <div style={{ marginBottom: 6 }}>{blocked.message} Remove the references below first.</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {blocked.dependents.map((d) => (
+                <code key={d} style={{ fontSize: 12, wordBreak: 'break-all' }}>{d}</code>
+              ))}
+            </div>
           </div>
         )}
 

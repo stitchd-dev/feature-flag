@@ -41,6 +41,17 @@ interface RolloutDebug {
   variant_ranges: VariantRange[]
 }
 
+/**
+ * A failed prerequisite gate for one context (flag_lifecycle_20260604, Phase 8.4).
+ * Mirrors the gateway `PreviewResultJson.prerequisite_failure` — IDs are UUIDs.
+ */
+interface PrerequisiteFailure {
+  prerequisite_flag_id: string
+  required_variant_id: string
+  resolved_variant_id?: string
+  fallback_variant_key: string
+}
+
 interface ContextResult {
   context_index: number
   context_key: string
@@ -51,6 +62,7 @@ interface ContextResult {
   fired_rule_name: string | null
   rule_traces: RuleTrace[]
   rollout_debug: RolloutDebug | null
+  prerequisite_failure?: PrerequisiteFailure | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -312,6 +324,42 @@ function RolloutDebugPanel({ debug }: { debug: RolloutDebug }) {
   )
 }
 
+/**
+ * Banner explaining that a prerequisite gate failed and the flag returned its
+ * fallback variant, skipping its rules (flag_lifecycle_20260604, Phase 8.4).
+ */
+function PrerequisiteFailureBanner({ failure }: { failure: PrerequisiteFailure }) {
+  return (
+    <div
+      role="status"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '8px 12px',
+        borderRadius: 6,
+        background: 'var(--warning-bg, rgba(217,119,6,0.1))',
+        border: '1px solid rgba(217,119,6,0.3)',
+        color: 'var(--warning, #b45309)',
+        fontSize: 12,
+      }}
+    >
+      <div style={{ fontWeight: 600 }}>
+        Prerequisite gate failed — fallback variant returned
+      </div>
+      <div>
+        Prerequisite flag <code>{failure.prerequisite_flag_id}</code> did not resolve to its
+        required variant <code>{failure.required_variant_id}</code>
+        {failure.resolved_variant_id
+          ? <> (resolved to <code>{failure.resolved_variant_id}</code>)</>
+          : ' (disabled or unresolved)'}
+        . This flag returned its fallback variant{' '}
+        <code>{failure.fallback_variant_key || '(off/disabled)'}</code> and skipped its rules.
+      </div>
+    </div>
+  )
+}
+
 /** Unified result panel — one card regardless of how many contexts were evaluated. */
 function EvaluationResults({ results }: { results: ContextResult[] }) {
   const single = results.length === 1
@@ -346,6 +394,13 @@ function EvaluationResults({ results }: { results: ContextResult[] }) {
               </span>
             )}
           </div>
+
+          {/* ── Prerequisite gate (fallback taken) ── */}
+          {result.prerequisite_failure && (
+            <div style={{ padding: '0 16px 6px' }}>
+              <PrerequisiteFailureBanner failure={result.prerequisite_failure} />
+            </div>
+          )}
 
           {/* ── Rule tree ── */}
           <div style={{ padding: '0 16px 14px' }}>

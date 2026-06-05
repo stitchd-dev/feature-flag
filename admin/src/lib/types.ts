@@ -140,6 +140,15 @@ export interface AdminFlagResponse {
    * render the lock badge proactively instead of after a failing save round-trip.
    */
   locked_by_experiment_id?: string
+  /**
+   * The flag's prerequisite gate (deps). Omitted/empty when ungated. Surfaced
+   * on list + get so the UI can render "has prerequisites" / "is a prerequisite"
+   * badges and resolve reverse-dep cycles client-side
+   * (flag_lifecycle_20260604, Phase 8.4).
+   */
+  prerequisites?: Prerequisite[]
+  /** Key of the configured fallback variant; omitted/empty = off/disabled. */
+  fallback_variant_key?: string
 }
 
 // ── Experiment results / exposures / timeseries types (Phase 7) ──────────────
