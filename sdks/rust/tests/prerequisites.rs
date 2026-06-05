@@ -119,10 +119,7 @@ async fn unmet_prerequisite_returns_fallback_variant() {
 
     let client = testing::sdk_client_simple(snapshot(vec![prereq, dependent]));
     let results = client
-        .evaluate(
-            &[EvalRequest::single("dependent", ctx())],
-            TraceLevel::Full,
-        )
+        .evaluate(&[EvalRequest::single("dependent", ctx())], TraceLevel::Full)
         .await;
 
     assert_eq!(results.len(), 1);
@@ -147,10 +144,7 @@ async fn met_prerequisite_allows_normal_evaluation() {
 
     let client = testing::sdk_client_simple(snapshot(vec![prereq, dependent]));
     let results = client
-        .evaluate(
-            &[EvalRequest::single("dependent", ctx())],
-            TraceLevel::Full,
-        )
+        .evaluate(&[EvalRequest::single("dependent", ctx())], TraceLevel::Full)
         .await;
 
     assert_eq!(results.len(), 1);
@@ -249,10 +243,7 @@ async fn disabled_prerequisite_flag_falls_back() {
 
     let client = testing::sdk_client_simple(snapshot(vec![prereq, dependent]));
     let results = client
-        .evaluate(
-            &[EvalRequest::single("dependent", ctx())],
-            TraceLevel::Full,
-        )
+        .evaluate(&[EvalRequest::single("dependent", ctx())], TraceLevel::Full)
         .await;
 
     assert_eq!(results.len(), 1);
@@ -276,10 +267,7 @@ async fn missing_prerequisite_flag_falls_back() {
 
     let client = testing::sdk_client_simple(snapshot(vec![dependent]));
     let results = client
-        .evaluate(
-            &[EvalRequest::single("dependent", ctx())],
-            TraceLevel::Full,
-        )
+        .evaluate(&[EvalRequest::single("dependent", ctx())], TraceLevel::Full)
         .await;
 
     assert_eq!(results.len(), 1);
@@ -304,14 +292,72 @@ async fn empty_fallback_uses_off_default_variant() {
 
     let client = testing::sdk_client_simple(snapshot(vec![prereq, dependent]));
     let results = client
-        .evaluate(
-            &[EvalRequest::single("dependent", ctx())],
-            TraceLevel::Full,
-        )
+        .evaluate(&[EvalRequest::single("dependent", ctx())], TraceLevel::Full)
         .await;
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].outcome, EvalOutcome::PrerequisiteFailed);
     // Falls back to the flag's default variant (`off`).
     assert_eq!(results[0].variant_key, "off");
+}
+
+// ── (g) Prerequisite cycle ⇒ fail-closed ⇒ fallback ──────────────────────────
+
+#[tokio::test]
+async fn prerequisite_cycle_fails_closed_to_fallback() {
+    // a requires b=on; b requires a=on. The orchestrator's topo-sort rejects
+    // the cycle; the SDK treats that conservatively as "all prerequisites
+    // unmet" → the evaluated flag returns its fallback variant.
+    let mut a = flag("a", "00000000-0000-0000-0000-0000000000e1");
+    a.prerequisites = vec![FlagPrerequisite {
+        prerequisite_flag_id: String::new(),
+        prerequisite_flag_key: "b".to_string(),
+        required_variant_id: String::new(),
+        required_variant_key: "on".to_string(),
+    }];
+    a.fallback_variant_key = "fallback".to_string();
+
+    let mut b = flag("b", "00000000-0000-0000-0000-0000000000e2");
+    b.prerequisites = vec![FlagPrerequisite {
+        prerequisite_flag_id: String::new(),
+        prerequisite_flag_key: "a".to_string(),
+        required_variant_id: String::new(),
+        required_variant_key: "on".to_string(),
+    }];
+    b.fallback_variant_key = "fallback".to_string();
+
+    let client = testing::sdk_client_simple(snapshot(vec![a, b]));
+    let results = client
+        .evaluate(&[EvalRequest::single("a", ctx())], TraceLevel::Full)
+        .await;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, EvalOutcome::PrerequisiteFailed);
+    assert_eq!(results[0].variant_key, "fallback");
+}
+
+// ── (h) Self-prerequisite ⇒ closure empties ⇒ unmet ⇒ fallback ───────────────
+
+#[tokio::test]
+async fn self_prerequisite_falls_back() {
+    // A flag listing ITSELF as a prerequisite: the closure BFS excludes the
+    // flag itself, so the closure is empty → the gate is unmet (no resolved
+    // variant for the self-reference) → fallback.
+    let mut a = flag("a", "00000000-0000-0000-0000-0000000000f1");
+    a.prerequisites = vec![FlagPrerequisite {
+        prerequisite_flag_id: String::new(),
+        prerequisite_flag_key: "a".to_string(),
+        required_variant_id: String::new(),
+        required_variant_key: "on".to_string(),
+    }];
+    a.fallback_variant_key = "fallback".to_string();
+
+    let client = testing::sdk_client_simple(snapshot(vec![a]));
+    let results = client
+        .evaluate(&[EvalRequest::single("a", ctx())], TraceLevel::Full)
+        .await;
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].outcome, EvalOutcome::PrerequisiteFailed);
+    assert_eq!(results[0].variant_key, "fallback");
 }
