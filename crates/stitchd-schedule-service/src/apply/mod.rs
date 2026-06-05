@@ -76,3 +76,80 @@ impl<F: Applier, E: Applier, S: Applier> Applier for Dispatcher<F, E, S> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use stitchd_db::ScheduleStatus;
+    use uuid::Uuid;
+
+    /// An applier that records the entity-type it was routed and returns a tag.
+    struct TaggedApplier(&'static str);
+    #[async_trait]
+    impl Applier for TaggedApplier {
+        async fn apply(&self, _change: &ScheduledChangeRow) -> anyhow::Result<ApplyOutcome> {
+            Ok(ApplyOutcome::Skipped(self.0.to_string()))
+        }
+    }
+
+    fn row(entity_type: &str) -> ScheduledChangeRow {
+        let now = Utc::now();
+        ScheduledChangeRow {
+            id: Uuid::new_v4(),
+            entity_type: entity_type.to_string(),
+            entity_id: Uuid::new_v4(),
+            env_id: Uuid::new_v4(),
+            mutation_payload: serde_json::json!({}),
+            schedule_kind: "one_shot".to_string(),
+            scheduled_at: Some(now),
+            rrule: None,
+            tz: None,
+            next_run_at: Some(now),
+            last_run_at: None,
+            status: ScheduleStatus::Pending,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+            created_by: None,
+        }
+    }
+
+    fn dispatcher() -> Dispatcher<TaggedApplier, TaggedApplier, TaggedApplier> {
+        Dispatcher::new(
+            TaggedApplier("flag"),
+            TaggedApplier("experiment"),
+            TaggedApplier("segment"),
+        )
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_to_each_entity_applier() {
+        let d = dispatcher();
+        assert_eq!(
+            d.apply(&row("flag")).await.unwrap(),
+            ApplyOutcome::Skipped("flag".to_string())
+        );
+        assert_eq!(
+            d.apply(&row("experiment")).await.unwrap(),
+            ApplyOutcome::Skipped("experiment".to_string())
+        );
+        assert_eq!(
+            d.apply(&row("segment")).await.unwrap(),
+            ApplyOutcome::Skipped("segment".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_entity_type_is_failed_not_dropped() {
+        let d = dispatcher();
+        let outcome = d.apply(&row("widget")).await.unwrap();
+        match outcome {
+            ApplyOutcome::Failed(detail) => {
+                assert!(detail.contains("unsupported entity type"));
+                assert!(detail.contains("widget"));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+}

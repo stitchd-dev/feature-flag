@@ -175,4 +175,81 @@ mod tests {
         }
         assert_eq!(status_from_proto(0), None);
     }
+
+    #[test]
+    fn kind_to_proto_maps_all_variants() {
+        assert_eq!(kind_to_proto("one_shot"), pb::ScheduleKind::OneShot as i32);
+        assert_eq!(
+            kind_to_proto("recurring"),
+            pb::ScheduleKind::Recurring as i32
+        );
+        assert_eq!(
+            kind_to_proto("bogus"),
+            pb::ScheduleKind::Unspecified as i32
+        );
+    }
+
+    #[test]
+    fn run_outcome_to_proto_maps_all_variants() {
+        assert_eq!(
+            run_outcome_to_proto(RunOutcome::Applied),
+            pb::ScheduleRunOutcome::Applied as i32
+        );
+        assert_eq!(
+            run_outcome_to_proto(RunOutcome::Skipped),
+            pb::ScheduleRunOutcome::Skipped as i32
+        );
+        assert_eq!(
+            run_outcome_to_proto(RunOutcome::Failed),
+            pb::ScheduleRunOutcome::Failed as i32
+        );
+    }
+
+    #[test]
+    fn change_and_run_to_proto_map_rows() {
+        use chrono::Utc;
+        use stitchd_db::{ScheduleStatus, ScheduledChangeRow, ScheduledChangeRunRow};
+        use uuid::Uuid;
+
+        let now = Utc::now();
+        let row = ScheduledChangeRow {
+            id: Uuid::new_v4(),
+            entity_type: "flag".to_string(),
+            entity_id: Uuid::new_v4(),
+            env_id: Uuid::new_v4(),
+            mutation_payload: serde_json::json!({"k": "v"}),
+            schedule_kind: "recurring".to_string(),
+            scheduled_at: None,
+            rrule: Some("DTSTART:20260101T000000Z\nRRULE:FREQ=DAILY".to_string()),
+            tz: Some("UTC".to_string()),
+            next_run_at: Some(now),
+            last_run_at: Some(now),
+            status: ScheduleStatus::Active,
+            version: 3,
+            created_at: now,
+            updated_at: now,
+            created_by: None,
+        };
+        let run = ScheduledChangeRunRow {
+            id: Uuid::new_v4(),
+            scheduled_change_id: row.id,
+            fired_at: now,
+            outcome: RunOutcome::Skipped,
+            detail: Some("flag_locked_by_experiment:abc".to_string()),
+        };
+        let run_pb = run_to_proto(&run);
+        assert_eq!(run_pb.outcome, pb::ScheduleRunOutcome::Skipped as i32);
+        assert_eq!(run_pb.detail, "flag_locked_by_experiment:abc");
+
+        let pb = change_to_proto(&row, vec![run_pb]);
+        assert_eq!(pb.id, row.id.to_string());
+        assert_eq!(pb.entity_type, pb::ScheduleEntityType::Flag as i32);
+        assert_eq!(pb.schedule_kind, pb::ScheduleKind::Recurring as i32);
+        assert_eq!(pb.status, pb::ScheduleStatus::Active as i32);
+        assert_eq!(pb.tz, "UTC");
+        assert_eq!(pb.version, 3);
+        assert_eq!(pb.runs.len(), 1);
+        assert_eq!(pb.scheduled_at_ms, 0);
+        assert_eq!(pb.next_run_at_ms, now.timestamp_millis());
+    }
 }
