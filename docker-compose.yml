@@ -209,6 +209,39 @@ services:
       retries: 5
       start_period: 10s
 
+  schedule-service:
+    build:
+      context: .
+      dockerfile: docker/schedule-service/Dockerfile
+    container_name: stitchd-schedule-service
+    restart: unless-stopped
+    environment:
+      STITCHD_DATABASE_URL: postgres://${POSTGRES_USER:-stitchd}:${POSTGRES_PASSWORD:-stitchd}@postgres:5432/${POSTGRES_DB:-stitchd}
+      STITCHD_FLAG_SERVICE_GRPC_URL: http://flag-service:50052
+      STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL: http://experimentation-service:50055
+      STITCHD_SEGMENTATION_SERVICE_GRPC_URL: http://segmentation-service:50053
+      STITCHD_SCHEDULE_SERVICE_GRPC_PORT: "50057"
+      STITCHD_SCHEDULE_SERVICE_HTTP_PORT: "9201"
+      STITCHD_SCHEDULE_SCHEDULER_INTERVAL_SECS: "60"
+      STITCHD_SCHEDULE_CLAIM_BATCH: "100"
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "${STITCHD_SCHEDULE_SERVICE_GRPC_PORT:-50057}:50057"
+      - "${STITCHD_SCHEDULE_SERVICE_HTTP_PORT:-9201}:9201"
+    networks:
+      - stitchd
+    depends_on:
+      postgres:
+        condition: service_healthy
+      flag-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "grpc_health_probe -addr=:50057 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   analytics-service:
     build:
       context: .
