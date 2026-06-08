@@ -486,3 +486,55 @@ From `conductor/patterns.md` (read before starting):
   commit-idempotent, rollout-commit-then-stop, rollout-stop-only-idempotent,
   no-convergence-no-action, non-bandit-no-action). stats-service lib: 374 pass.
 - **No `.sqlx` delta** (record_convergence + recorder use runtime `sqlx::query`).
+
+## Phase 8 — Optimization Campaigns (2026-06-08)
+
+### Task 8.1 — campaigns (commit aebebdc)
+- **Campaign MODEL (documented):** a campaign ATTACHES to a bandit experiment on a
+  flag (the experiment is the campaign's vehicle), NOT a separate iteration engine.
+  Spawning the "next iteration" = restarting the experiment (stopped→running via
+  TransitionExperiment, which the repo already turns into a fresh
+  experiment_iterations row + re-acquired lock) after rewriting the bound rule so
+  the winner is the new control (control-dominant 90/10 allocation via the
+  privileged ApplyBanditAllocation).
+- **Linkage surfacing without a domain ripple:** the Experiment domain type does
+  NOT carry bandit_campaign_id (adding it ripples to ~12 SELECT/INSERT/mapper
+  sites). Instead: proto `RunningExperiment.bandit_campaign_id = 17`, populated in
+  the `list_running_experiments` server loop via a NEW
+  `ExperimentRepository::find_bandit_campaign_id` — added as a **default method
+  returning Ok(None)** on the trait so the ~12 stub/test impls don't need
+  updating; only the PG impl overrides it (one scalar read). stats-service
+  `RunningExperiment` gains the decoded `Option<Uuid>` field.
+- **Idempotency + cap = ONE atomic SQL statement.** `try_claim_spawn(id,
+  expected_version)` is `UPDATE ... SET iterations_spawned+1, version+1 WHERE id=$1
+  AND version=$2 AND status='active' AND iterations_spawned <
+  (config->>'max_iterations')::int RETURNING ...`. `Some` = slot claimed (spawn
+  exactly one), `None` = refused (stale version → same convergence can't
+  double-spawn; OR cap reached → finalize). No read-modify-write race. The cap is
+  read inline from the JSONB config so it's a single conditional update.
+- **Drift only after a Commit (not a Rollout).** `compute_drift` runs only when the
+  lifecycle outcome is `Committed`; it builds the same objective arms and calls the
+  pure `detect_drift` (core, reuses probability_best). Committed-winner is a
+  goal-directed-argmax proxy (the persisted commit target isn't threaded into this
+  pass). `decide_campaign_action(lifecycle, drift, can_spawn)` is pure: RolledOut →
+  Spawn (or Finalize if !can_spawn); drifted+can_spawn → Spawn (challenger as new
+  control); else NoAction. A capped campaign does NOT reopen on drift.
+- **Pure decision + CampaignSpawner trait seam** (load / try_claim_spawn /
+  open_next_iteration / finalize) → exhaustive fakes tests without a live
+  exp-service/PG. The spawn pass runs in main.rs AFTER the lifecycle pass, fed the
+  captured LifecycleOutcome.
+- **`#[sqlx::test]` with FKs:** `bandit_campaigns` FKs environments+feature_flags,
+  so the repo tests seed org→project→env→flag (mirrors the live-CH test chain).
+  `migrations = "./migrations"` (relative to the db crate root, like
+  scheduled_changes). 4 repo tests run in NORMAL `cargo test` (PG-only, not live-CH)
+  → NO CI `--test` list change needed (no new live-CH tests/*.rs added this phase).
+- **RepositoryError::Unexpected wraps anyhow::Error, NOT String** (use
+  `anyhow::anyhow!`, not `format!`).
+- **Proto additive:** new BanditCampaign message + Create/Get/List/Stop RPCs +
+  RunningExperiment field 17. Regenerates on plain `cargo build`. The 3 gateway
+  test-mock ExperimentationService impls + the stats-service scheduler test mock
+  needed the 4 new RPC stubs added (E0046) — same gotcha as Phase-3/4.
+- Gates: core 904 / db 182 / exp-service 133 lib+integration / flag-service 117 /
+  stats-service 384 lib + integration all green; clippy -Dwarnings clean across all
+  5 crates; purity green; full `cargo build --workspace --all-targets` clean. No
+  `.sqlx` delta (runtime sqlx::query throughout, no macros).
