@@ -295,3 +295,74 @@ From `conductor/patterns.md` (read before starting):
   mocks, so `cargo build --workspace --all-targets` was already broken (E0046) at the
   Phase-4 start commit. Added unimplemented stubs across 6 gateway test files. (Fix gaps
   as discovered — did not baseline around it.)
+
+## Phase 5 — Real-Time Eval Path (snapshot-resident, bandit-aware) (2026-06-08)
+
+### Task 5.1 — RealtimeBanditModel rides the snapshot (commit c932949)
+- **Mirrors ExclusionGate 1:1.** New `optional RealtimeBanditModel realtime_bandit = 5`
+  on proto `PercentageAllocation` (+ `RealtimeBanditModel`/`VariantPosterior` messages +
+  `RewardFamily`/`BanditGoalDirection` enums in `flag_sync.proto`); parallel domain types
+  in `rule_engine/types.rs` (`RealtimeBanditModel`, `VariantPosterior`, `RewardFamily`,
+  `BanditGoal`) + `realtime_bandit: Option<RealtimeBanditModel>` on `RuleOutput::Percentage`
+  with `#[serde(default, skip_serializing_if=...)]` so legacy rules decode + omit it.
+- **`VariantPosterior` carries BOTH families' params** (`alpha`/`beta` for Beta,
+  `mu`/`sigma2` for Normal) in one shape — general enough for Phase 6 contextual to extend
+  without a wire change.
+- **A new `RuleOutput::Percentage` field ripples to ~18 struct-literal + pattern sites**
+  across core/proto/flag-service/gateway/db-tests/SDK. Fastest path: `perl -0pi` to insert
+  `realtime_bandit: None,` after every `exclusion_gate: None,` line, then hand-fix the
+  ~3 `exclusion_gate: Some(...)` constructors + the legacy `FlagEvaluator::evaluate`
+  destructure (`realtime_bandit: _`). Mapping wired in `mapping.rs`
+  (`proto_realtime_bandit_to_domain`/`domain_realtime_bandit_to_proto`) — unspecified
+  family→Beta, unspecified goal→Increase.
+
+### Task 5.2 — pure in-memory bandit sampling in evaluate_flag (commit 35ce501)
+- **Purity kept by delegating ALL sampling to the bandit module.** Added
+  `experimentation/bandit/realtime.rs` (`context_seed` = murmur3_x64_128 of `salt+unit_key`
+  folded u128→u64 by XOR of halves; `sample_realtime_variant` = one seeded Beta/Normal draw
+  per arm via the shared `Lcg`, goal-directed argmax). engine.rs only calls these pure fns +
+  resolves the chosen variant — NO sqlx/tokio/reqwest/warn/error tokens, so the two
+  `purity.rs` greps stay green (verified after the change).
+- **Branch is gated + insertion-only.** The realtime branch sits at the TOP of the
+  `RuleOutput::Percentage` arm in the unified `evaluate_flag`: `if let Some(model) = realtime_bandit
+  && let Some(assignment) = sample_realtime_bandit(...) { ...; continue; }`. A rule with
+  `realtime_bandit: None` never enters it → static bucket→% path is byte-identical (proven by
+  `rule_without_realtime_bandit_uses_static_path_unchanged`, which recomputes the murmur bucket
+  independently and asserts equality over 500 contexts). A missing diversion unit returns
+  `None` → graceful static fallback.
+- **Preview==SDK parity is automatic** because BOTH go through `evaluate_flag`; tested by
+  evaluating the same context at `TraceLevel::Full` (preview) vs `TraceLevel::Off` (SDK) →
+  same variant over 300 contexts. The SDK's own proto→domain mapper (`sdks/rust/src/client.rs`)
+  also wires `realtime_bandit` so the model flows through the snapshot the SDK already fetches.
+- **Trace privacy:** the bandit `RolloutDebug.hash_input` names only "real-time bandit
+  sampling: <variant>" + surfaces sampled draws as variant_ranges — NEVER posterior params or
+  context values (asserted: no `900`/`alice` in the note).
+
+### Task 5.3 — stats-tick refreshes the snapshot model (commit 8c5782c)
+- **Chose to EXTEND the existing RPCs (smaller change) over a new sibling RPC.** Added
+  `optional RealtimeBanditModel realtime_model` to `ApplyBanditAllocationRequest` (field 4,
+  exp-service) + `BanditUpdateAllocationRequest` (field 9, flag-service). exp-service imports
+  `flags/v1/flag_sync.proto` for the cross-package type. When present, flag-service's
+  `bandit_update_allocation` writes it onto the bound custom rule's `realtime_bandit` field
+  (default-rule target + a model → InvalidArgument, since a distribution has no rule output).
+  The static `allocations` still ride along as the fallback split.
+- **Realtime path is a separate, mutually-exclusive branch in `run_bandit_reallocation`:**
+  `is_eligible_realtime` (mode=Bandit + propagation=Realtime) → `run_realtime_refresh`, which
+  builds the proto model via the pure `decide_realtime_model` (single scalar objective only for
+  now; Beta from count/funnel mean+n, Normal from numeric/ratio mean), dispatches via the new
+  `AllocationApplier::apply_realtime`, and records one `reallocate` row. Static path (Phase 4)
+  is untouched — regression test asserts a static bandit calls `apply` not `apply_realtime`.
+- **`AllocationApplier` trait grew `apply_realtime`;** `GrpcAllocationApplier` shares an inner
+  `dispatch(.., model: Option<..>)` for both paths. Two test fakes (lib `FakeApplier`, live-CH
+  `CapturingApplier`) updated to count realtime calls + capture the model.
+- **Salt = experiment_id, unit_context_type = first configured unit** for the snapshot model;
+  even-split fallback distribution (largest-remainder, sum=10000) rides along.
+- **No `.sqlx` delta** (PgRunRecorder uses runtime `sqlx::query`, no macros). Satisfied the
+  "extend live-CH test OR unit-test the dispatch" with thorough unit tests for
+  `decide_realtime_model` + the realtime/static dispatch branches.
+
+### Gates
+- purity tests green after every engine change; clippy `-D warnings` clean on all 4 crates;
+  core 860 / flag-service 116+ / stats-service 356 / exp-service 130 lib tests pass; full
+  `cargo build --workspace --all-targets` clean; `cargo build -p stitchd-sdk-rust` confirms the
+  snapshot field flows to the SDK.
