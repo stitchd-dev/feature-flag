@@ -184,6 +184,10 @@ async fn main() -> anyhow::Result<()> {
                 let analytics = scheduler_analytics_client.clone();
                 let ch = scheduler_ch.clone();
                 let metric_repo = scheduler_compute_metric_repo.clone();
+                // Bandit reallocation deps: the shared experimentation-service
+                // client (for the privileged ApplyBanditAllocation write) and the
+                // PG pool (for the bandit_allocation_runs history insert).
+                let bandit_exp_client = scheduler_exp_client.clone();
                 tokio::spawn(async move {
                     let computed_at = chrono::Utc::now();
 
@@ -251,6 +255,48 @@ async fn main() -> anyhow::Result<()> {
                             return;
                         }
                     }
+                    // ── Bandit static-reallocation pass ─────────────────────
+                    // For a RUNNING static-propagation bandit, compute fresh
+                    // per-variant weights from observed reward and write them to
+                    // the bound flag rule via the privileged ApplyBanditAllocation
+                    // RPC; the eval path is untouched (SDKs converge on the next
+                    // poll). A no-op for every non-bandit experiment. A read/insert
+                    // error is logged but must not abort the schedule update.
+                    {
+                        let applier = stitchd_stats_service::bandit::GrpcAllocationApplier::new(
+                            bandit_exp_client.clone(),
+                        );
+                        let recorder =
+                            stitchd_stats_service::bandit::PgRunRecorder::new(pool.clone());
+                        match stitchd_stats_service::bandit::run_bandit_reallocation(
+                            &reader,
+                            &applier,
+                            &recorder,
+                            &exp,
+                            &metrics,
+                            computed_at,
+                            computed_at,
+                        )
+                        .await
+                        {
+                            Ok(outcome) => {
+                                if !matches!(
+                                    outcome,
+                                    stitchd_stats_service::bandit::BanditRunOutcome::NotApplicable
+                                ) {
+                                    info!(
+                                        experiment_id = %exp.experiment_id,
+                                        ?outcome,
+                                        "bandit reallocation complete"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(experiment_id = %exp.experiment_id, "bandit reallocation failed: {e}");
+                            }
+                        }
+                    }
+
                     if let Err(e) = update_schedule_after_run(
                         &pool,
                         exp.experiment_id,
@@ -299,14 +345,27 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Timeseries reader (Phase 7 Task 3) ────────────────────────────────────
     use stitchd_stats_service::timeseries_reader::ClickHouseTimeseriesReader;
+    let recomputer_metric_repo = metric_repo.clone();
     let timeseries_reader = Arc::new(ClickHouseTimeseriesReader::new(
         Arc::new(ch_client.clone()),
         metric_repo,
         experiment_repo,
     ));
 
-    let stats_svc =
-        StatsServiceImpl::new(pg_pool.clone()).with_timeseries_reader(timeseries_reader);
+    // On-demand bandit reallocation hook for the `TriggerRecompute` RPC: a
+    // trigger on a running static-bandit experiment recomputes + applies fresh
+    // weights immediately rather than waiting for the next scheduler tick.
+    let recomputer: Arc<dyn stitchd_stats_service::grpc::service::ExperimentRecomputer> =
+        Arc::new(stitchd_stats_service::bandit::PerExperimentRecomputer::new(
+            exp_client.clone(),
+            Arc::new(ch_client.clone()),
+            recomputer_metric_repo,
+            pg_pool.clone(),
+        ));
+
+    let stats_svc = StatsServiceImpl::new(pg_pool.clone())
+        .with_timeseries_reader(timeseries_reader)
+        .with_recomputer(recomputer);
 
     tokio::spawn(
         Server::builder()
