@@ -170,3 +170,27 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
   workspace tests (2625 pass; only env-only `eval_preview_clickhouse` needs a live
   daemon), contract, admin tsc/lint/vitest 924/build. (docs e855658, tests d0ae7dc, fmt 1bf240c)
 - [ ] Task: Conductor - User Manual Verification 'Phase 9: Docs & CI' (Protocol in workflow.md)
+
+## Phase 10: Follow-Up Completions (Revision #1)
+<!-- depends: phase9 -->
+<!-- Added by revision #1 (2026-06-05): completes three items the initial implementation
+     deferred as fail-closed / definition-only. Sequential — tasks 1 & 2 both touch
+     stitchd-experimentation-service. -->
+
+- [ ] Task 1: Flag-service variant-UUID exposure (closes `feature-flag-bun`). Add variant UUIDs
+  to flag-service `GetFlag`/`FeatureFlag` (backward-compatible proto + populate), then make the
+  experimentation-service `flag_variant` start-prerequisite compare the actual served variant UUID
+  exactly — replacing today's fail-closed behaviour. TDD: a MET `flag_variant` prereq now allows
+  start; unmet still refuses (manual + scheduled).
+  <!-- files: proto/flags/v1/flag_service.proto, crates/stitchd-flag-service/src/service.rs, crates/stitchd-experimentation-service/src/start_prerequisites.rs -->
+- [ ] Task 2: Experiment start-prerequisite read RPC (closes `feature-flag-coe`). Add a
+  read RPC (e.g. `GetExperimentStartPrerequisites`, or fold into `GetExperiment`) + gateway wiring
+  so the dependency-graph API's experiment branch is populated (currently a `note`), and surface
+  configured start-prereqs in the Admin UI experiment page. TDD.
+  <!-- files: proto/experiments/v1/experiment_service.proto, crates/stitchd-experimentation-service/src/service.rs, crates/stitchd-gateway/src/routes/dependencies.rs, admin/src/pages/experiments -->
+- [ ] Task 3: Segment list-generation activation RPC. Add a segmentation-service RPC to activate a
+  prepared list-segment generation, and wire schedule-service `apply/segment.rs` to use it for
+  `list_generation` payloads — replacing today's reject-with-reason so scheduled list-segment
+  generation swaps actually fire. TDD.
+  <!-- files: proto/segments/v1/segment_service.proto, crates/stitchd-segmentation-service/src/service.rs, crates/stitchd-schedule-service/src/apply/segment.rs -->
+- [ ] Task: Conductor - User Manual Verification 'Phase 10: Follow-Up Completions' (Protocol in workflow.md)

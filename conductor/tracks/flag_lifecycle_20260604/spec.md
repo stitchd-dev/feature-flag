@@ -1,5 +1,7 @@
 # Spec: Flag Lifecycle Automation — Scheduled Changes, Prerequisites & Dependency Integrity
 
+<!-- Last Revised: 2026-06-05 (Revision #1 — see Revision History at end + Phase 10 in plan.md) -->
+
 ## Overview
 
 Lifecycle-automation capabilities spanning the platform's mutable entities
@@ -145,3 +147,18 @@ All surface with full Admin UI parity.
 - ClickHouse changes (schedules + dependencies are PostgreSQL-only).
 - Auto-cascade *deletion* of dependents — explicitly replaced by the
   block-until-references-removed guard (C3).
+
+## Revision History
+
+### Revision #1 (2026-06-05) — Follow-Up Completions (now Phase 10)
+The initial implementation (Phases 1–9) shipped three behaviours in a deferred/partial form;
+this revision pulls them into scope for completion (no change to existing behaviour, additive):
+- **A4 / C4 — `flag_variant` experiment start-prerequisites now verify exactly.** Implementation
+  fell back to fail-closed because flag-service's proto exposed variant *keys* but not UUIDs.
+  Phase 10.1 exposes variant UUIDs and compares the served variant exactly. (was `feature-flag-bun`)
+- **C4 — experiment start-prerequisites become readable.** They were write-and-enforce only; the
+  dependency-graph API's experiment branch returned a `note`. Phase 10.2 adds a read RPC + gateway
+  wiring + Admin UI surfacing. (was `feature-flag-coe`)
+- **A4 — segment list-generation activation.** Scheduled segment changes covered definition updates
+  only (no activation RPC existed; `list_generation` payloads were rejected). Phase 10.3 adds a
+  segmentation-service activation RPC and wires the scheduler to it.

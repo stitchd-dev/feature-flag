@@ -598,3 +598,17 @@ Patterns, gotchas, and context discovered during implementation.
   UNSET, but `.env.local` sets it → it attempts a connect and fails `ConnectionRefused` with no
   daemon running. Not in CI's auto path (CI starts only postgres+clickhouse; this is an E2E
   concern). Unrelated to this track. With the var unset the entire workspace suite is green.
+
+## 2026-06-05 — REVISION #1
+- **Type:** Both (plan-heavy: new Phase 10; light spec)
+- **Trigger:** Three deferred/partial behaviours from Phases 1–9 (filed as follow-up beads) were
+  folded into the plan for completion.
+- **Learning:**
+  - Gotcha: a feature can pass its phase gate while a sub-behaviour is silently **fail-closed** —
+    `flag_variant` experiment start-prereqs "worked" (refused start) only because the verifying
+    data (variant UUID) wasn't on the proto, so they could never be satisfied. A green test suite
+    didn't catch it because no test asserted the *positive* (prereq-met ⇒ start allowed) path.
+  - Pattern: when a worker reports "X fails closed because Y isn't available," treat it as an
+    in-scope gap to schedule, not just a note — and ensure both the negative AND positive paths of
+    a gate are tested. Cross-service data needs (e.g. an ID the consumer must compare) belong on the
+    producer's proto from the start.
