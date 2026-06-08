@@ -183,6 +183,53 @@ message GetPrerequisitesResponse {
   string fallback_variant_key = 2;
 }
 
+// ─── Privileged bandit allocation-update (bandit_20260608 Phase 3) ─────────────
+//
+// A bandit experiment must rewrite its bound flag-rule's percentage allocation
+// on every stats tick. The whole-flag experiment lock makes ALL human
+// flag/rule mutations return FAILED_PRECONDITION (`flag_locked_by_experiment`)
+// while an experiment is running/paused. This RPC is the ONE sanctioned,
+// system-actor writer that BYPASSES that lock — but ONLY for the experiment
+// that currently owns the lock. A caller whose `experiment_id` does not match
+// the flag's current lock owner is rejected (FAILED_PRECONDITION) so an
+// arbitrary caller cannot use this path to dodge the human lock.
+//
+// The write is version-bumped (optimistic concurrency) and audit-logged
+// attributed to the bandit/system actor (mirrors how the scheduler attributes
+// system mutations: actor_id = None).
+
+message BanditUpdateAllocationRequest {
+  // Project-scoped operation — required.
+  string project_id     = 1;
+  // Flag identifier — the flag key within the project.
+  string flag_key       = 2;
+  // Environment the experiment runs in (audit/scoping metadata).
+  string environment_id = 3;
+  // The bandit experiment requesting the reallocation. MUST match the flag's
+  // current lock owner, else the request is rejected.
+  string experiment_id  = 4;
+  // Optimistic-locking version (matches FeatureFlag.version). Server rejects
+  // with ABORTED when the stored version differs.
+  uint64 version        = 5;
+  // The new allocation in basis points (sum 10000). Reuses AllocationBucket
+  // (variant_key + weight_bp) from flag_sync.proto.
+  repeated AllocationBucket allocations = 6;
+  // Target selector — exactly one of the following identifies the bound rule
+  // whose allocation is rewritten:
+  oneof target {
+    // Rewrite the percentage weights of this custom rule (its RuleId UUID).
+    string flag_rule_id = 7;
+    // Rewrite the flag's default-rule distribution.
+    bool   default_rule = 8;
+  }
+}
+
+message BanditUpdateAllocationResponse {
+  FeatureFlag flag    = 1;
+  // The post-write optimistic-concurrency version.
+  uint64      version = 2;
+}
+
 // ─── Flag management service ──────────────────────────────────────────────────
 
 service FlagService {
@@ -216,4 +263,13 @@ service FlagService {
 
   // [ADDITIVE — flag_lifecycle_20260604] Read a flag's prerequisite gate.
   rpc GetPrerequisites(GetPrerequisitesRequest) returns (GetPrerequisitesResponse);
+
+  // [ADDITIVE — bandit_20260608] Privileged, system-actor allocation update for
+  // a running bandit experiment. Rewrites the bound rule's percentage weights
+  // (or the default-rule distribution), BYPASSING the whole-flag human lock —
+  // but only for the experiment that currently owns the lock. Rejects with
+  // FAILED_PRECONDITION when the supplied experiment_id is not the lock owner,
+  // and with ABORTED on a version mismatch.
+  rpc BanditUpdateAllocation(BanditUpdateAllocationRequest)
+      returns (BanditUpdateAllocationResponse);
 }

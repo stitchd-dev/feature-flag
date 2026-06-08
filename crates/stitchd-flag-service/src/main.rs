@@ -131,7 +131,8 @@ async fn main() -> anyhow::Result<()> {
     )
     .with_clickhouse(Arc::clone(&ch_client))
     .with_experiment_repo(Arc::clone(&experiment_repo))
-    .with_prerequisite_repo(prerequisite_repo);
+    .with_prerequisite_repo(prerequisite_repo)
+    .with_audit_logger(audit_raw.clone());
 
     let sdk_backend_svc = FlagSdkBackendServiceImpl::new(
         Arc::clone(&flag_repo),
