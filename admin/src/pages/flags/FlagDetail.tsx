@@ -10,9 +10,14 @@ import { useOrgContext } from '../../context/OrgContext'
 import { api } from '../../lib/api'
 import { PERMISSIONS } from '../../lib/permissions'
 import { extractErrorMessage } from '../../lib/errors'
-import type { AdminFlagResponse, VariantJson } from '../../lib/types'
+import type { AdminFlagResponse, VariantJson, DependencyExistsError } from '../../lib/types'
 import { PreviewTab } from './PreviewTab'
 import { AnalyticsTab } from './AnalyticsTab'
+import { FlagScheduleTab } from './FlagScheduleTab'
+import { PrerequisitesEditor } from './PrerequisitesEditor'
+import { DependencyGraph } from '../../components/dependency/DependencyGraph'
+import { DeleteBlockedDialog } from '../../components/dependency/DeleteBlockedDialog'
+import { parseDependencyExists } from '../../components/dependency/dependencyHelpers'
 import { EditFlagDefaultRule } from './EditFlagDefaultRule'
 import type { RuleState, ConditionExpr, RuleOutputJson, AllocationBucket } from '../../lib/ruleTypes'
 import { localId, allocationSum, isCatchAll, defaultCatchAll, normalizeOutput } from '../../lib/ruleTypes'
@@ -637,7 +642,17 @@ function MetadataEditor({
 
 // ─── FlagDetail ───────────────────────────────────────────────────────────────
 
-type Tab = 'targeting' | 'variants' | 'default_rule' | 'evals' | 'preview' | 'code' | 'history'
+type Tab =
+  | 'targeting'
+  | 'variants'
+  | 'default_rule'
+  | 'prerequisites'
+  | 'dependencies'
+  | 'schedule'
+  | 'evals'
+  | 'preview'
+  | 'code'
+  | 'history'
 
 export function FlagDetail() {
   const { key } = useParams<{ key: string }>()
@@ -653,6 +668,7 @@ export function FlagDetail() {
   const [enabled, setEnabled] = useState(false)
   const [togglingEnabled, setTogglingEnabled] = useState(false)
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false)
+  const [deleteBlocked, setDeleteBlocked] = useState<DependencyExistsError | null>(null)
   const [rulesDirty, setRulesDirty] = useState(false)
 
   const canRead = can(PERMISSIONS.FLAG_READ)
@@ -718,6 +734,13 @@ export function FlagDetail() {
       toast('Flag archived', 'success')
       setTimeout(() => navigate(`/org/${orgId}/flags`), 1200)
     } catch (err: unknown) {
+      // A 409 dependency_exists means the flag is still referenced as a
+      // prerequisite — surface the blocking dependents + remove-first guidance.
+      const blocked = parseDependencyExists(err)
+      if (blocked) {
+        setDeleteBlocked(blocked)
+        return
+      }
       toast(extractErrorMessage(err), 'error')
     }
   }
@@ -790,6 +813,15 @@ export function FlagDetail() {
           <button className={`tab ${tab === 'default_rule' ? 'active' : ''}`} onClick={() => setTab('default_rule')}>
             <I.toggle size={13} /> Default rule
           </button>
+          <button className={`tab ${tab === 'prerequisites' ? 'active' : ''}`} onClick={() => setTab('prerequisites')}>
+            <I.layers size={13} /> Prerequisites
+          </button>
+          <button className={`tab ${tab === 'dependencies' ? 'active' : ''}`} onClick={() => setTab('dependencies')}>
+            <I.command size={13} /> Dependencies
+          </button>
+          <button className={`tab ${tab === 'schedule' ? 'active' : ''}`} onClick={() => setTab('schedule')}>
+            <I.history size={13} /> Schedule
+          </button>
           <button className={`tab ${tab === 'evals' ? 'active' : ''}`} onClick={() => setTab('evals')}>
             <I.zap size={13} /> Evaluations
           </button>
@@ -829,6 +861,24 @@ export function FlagDetail() {
             onConflict={handleConflict}
           />
         )}
+        {tab === 'prerequisites' && (
+          <PrerequisitesEditor
+            flag={flag}
+            canWrite={canWrite}
+            onSaved={() => toast('Prerequisites saved', 'success')}
+          />
+        )}
+        {tab === 'dependencies' && projectId && (
+          <div className="card">
+            <div className="card-header">
+              <div className="card-title">Dependency graph</div>
+            </div>
+            <div style={{ padding: '12px 16px' }}>
+              <DependencyGraph projectId={projectId} entityKind="flags" entityId={flag.key} />
+            </div>
+          </div>
+        )}
+        {tab === 'schedule' && <FlagScheduleTab flag={flag} />}
         {tab === 'evals' && projectId && <AnalyticsTab projectId={projectId} flagId={flag.flag_id} />}
         {tab === 'preview' && <PreviewTab flagId={flag.key} />}
         {tab === 'code' && <SdkSnippet flag={flag} />}
@@ -845,6 +895,15 @@ export function FlagDetail() {
           confirmDanger
           onConfirm={archiveFlag}
           onCancel={() => setShowArchiveConfirm(false)}
+        />
+      )}
+
+      {deleteBlocked && (
+        <DeleteBlockedDialog
+          action="archive"
+          entityLabel="flag"
+          error={deleteBlocked}
+          onClose={() => setDeleteBlocked(null)}
         />
       )}
 

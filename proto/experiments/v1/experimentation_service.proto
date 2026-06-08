@@ -450,6 +450,33 @@ message GetExperimentInteractionsResponse {
   repeated ExperimentInteraction interactions = 1;
 }
 
+// ─── Start-time prerequisites read (flag_lifecycle_20260604, Phase 10) ────────
+//
+// Read an experiment's configured start-time prerequisites — the conditions that
+// must hold for a manual or scheduled start to be allowed (enforced in
+// `TransitionExperiment` when transitioning into `running`). Two kinds:
+//   * flag_variant     — a named flag must currently serve a required variant.
+//   * experiment_done  — a referenced experiment must be stopped/concluded.
+
+message StartPrerequisite {
+  // "flag_variant" or "experiment_done".
+  string kind = 1;
+  // flag_variant: the prerequisite flag + required variant (UUIDs).
+  string flag_id             = 2;
+  string required_variant_id = 3;
+  // experiment_done: the prerequisite experiment (UUID).
+  string prerequisite_experiment_id = 4;
+}
+
+message GetExperimentStartPrerequisitesRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+message GetExperimentStartPrerequisitesResponse {
+  repeated StartPrerequisite prerequisites = 1;
+}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
@@ -491,4 +518,10 @@ service ExperimentationService {
   // ── Experiment interactions ────────────────────────────────────────────────
   rpc GetExperimentInteractions(GetExperimentInteractionsRequest)
       returns (GetExperimentInteractionsResponse);
+
+  // [ADDITIVE — flag_lifecycle_20260604] Read an experiment's configured
+  // start-time prerequisites (flag_variant / experiment_done). Powers the
+  // dependency-graph experiment branch + the Admin UI experiment page.
+  rpc GetExperimentStartPrerequisites(GetExperimentStartPrerequisitesRequest)
+      returns (GetExperimentStartPrerequisitesResponse);
 }

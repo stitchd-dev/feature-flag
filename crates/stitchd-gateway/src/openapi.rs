@@ -46,6 +46,9 @@ use utoipa::{
         crate::routes::flags::update_rules,
         crate::routes::flags::update_flag_hashing,
         crate::routes::flags::set_default_rule_distribution,
+        // Prerequisites (flag_lifecycle)
+        crate::routes::flags::get_prerequisites,
+        crate::routes::flags::set_prerequisites,
         // Segments (JWT)
         crate::routes::segments::list_segments,
         crate::routes::segments::create_segment,
@@ -100,6 +103,15 @@ use utoipa::{
         crate::routes::stats::get_timeseries,
         crate::routes::stats::trigger_recompute_env_scoped,
         crate::routes::stats::get_recompute_job_status,
+        // Schedules (flag_lifecycle, JWT)
+        crate::routes::schedules::create_schedule,
+        crate::routes::schedules::list_schedules,
+        crate::routes::schedules::get_schedule,
+        crate::routes::schedules::cancel_schedule,
+        crate::routes::schedules::pause_schedule,
+        crate::routes::schedules::resume_schedule,
+        // Dependency graph (flag_lifecycle Phase 6)
+        crate::routes::dependencies::get_dependencies,
     ),
     components(
         schemas(
@@ -129,6 +141,10 @@ use utoipa::{
             crate::routes::flags::DefaultRuleDistributionBody,
             crate::routes::flags::SetDefaultRuleDistributionBody,
             crate::routes::flags::SetDefaultRuleDistributionResponseJson,
+            // Prerequisites (flag_lifecycle_20260604).
+            crate::routes::flags::PrerequisiteJson,
+            crate::routes::flags::SetPrerequisitesBody,
+            crate::routes::flags::PrerequisitesResponseJson,
             // Phase 4 (flag_eval_unify_20260522) — rule CRUD DTOs.
             crate::routes::flags::HashSelectorJson,
             crate::routes::flags::RuleBody,
@@ -210,6 +226,14 @@ use utoipa::{
             crate::routes::stats::GetTimeseriesQuery,
             crate::routes::stats::TimeseriesBucketJson,
             crate::routes::stats::GetTimeseriesResponseJson,
+            // Schedules (flag_lifecycle)
+            crate::routes::schedules::CreateScheduleBody,
+            crate::routes::schedules::ScheduleVersionBody,
+            crate::routes::schedules::ScheduleJson,
+            crate::routes::schedules::ScheduleRunJson,
+            // Dependency graph (flag_lifecycle Phase 6)
+            crate::routes::dependencies::DependencyGraphJson,
+            crate::routes::dependencies::DependencyEdge,
         )
     ),
     modifiers(&SecurityAddon)

@@ -9,6 +9,9 @@ import {
   useActiveContextType,
 } from '../../context/ContextTypeContext'
 import { ContextTypeTabs } from '../../components/ContextTypeTabs'
+import { ScheduleBuilder } from '../../components/schedule/ScheduleBuilder'
+import { DependencyGraph } from '../../components/dependency/DependencyGraph'
+import type { MutationPreset } from '../../components/schedule/ScheduleBuilder'
 import {
   getExperiment,
   getExperimentResults,
@@ -44,6 +47,20 @@ import { listExperimentInteractions } from '../../lib/api/exclusionGroups'
 import type { ExperimentInteraction } from '../../lib/api/exclusionGroups'
 
 /**
+ * Experiment lifecycle-transition presets for the schedule builder
+ * (flag_lifecycle_20260604 A3: start, pause, resume, stop, archive). The
+ * schedule-service dispatches each `transition` to the experimentation-service's
+ * TransitionExperiment RPC at fire time.
+ */
+const EXPERIMENT_TRANSITION_PRESETS: MutationPreset[] = [
+  { id: 'start', label: 'Start experiment', payload: { transition: 'start' } },
+  { id: 'pause', label: 'Pause experiment', payload: { transition: 'pause' } },
+  { id: 'resume', label: 'Resume experiment', payload: { transition: 'resume' } },
+  { id: 'stop', label: 'Stop experiment', payload: { transition: 'stop' } },
+  { id: 'archive', label: 'Archive experiment', payload: { transition: 'archive' } },
+]
+
+/**
  * Minimal projection of a `metric_definitions` row used by ExperimentDetail
  * to resolve display names + goal direction from the IDs referenced by an
  * experiment.
@@ -64,6 +81,7 @@ type Tab =
   | 'config'
   | 'metrics'
   | 'events'
+  | 'schedule'
 
 // ─── Config tab ──────────────────────────────────────────────────────────────
 
@@ -255,7 +273,7 @@ function ExperimentDetailBody({
 }: BodyProps) {
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
-  const { orgId, envId } = useOrgContext()
+  const { orgId, envId, projectId } = useOrgContext()
   const { contextTypes, activeContextType, setActiveContextType } =
     useActiveContextType()
 
@@ -567,6 +585,7 @@ function ExperimentDetailBody({
           <button className={`tab ${tab === 'config' ? 'active' : ''}`} onClick={() => setTab('config')}>Configuration</button>
           <button className={`tab ${tab === 'metrics' ? 'active' : ''}`} onClick={() => setTab('metrics')}>Metrics <span className="count">{metricNames.length || apiExp.metric_ids.length || 0}</span></button>
           <button className={`tab ${tab === 'events' ? 'active' : ''}`} onClick={() => setTab('events')}>Events</button>
+          <button className={`tab ${tab === 'schedule' ? 'active' : ''}`} onClick={() => setTab('schedule')}>Schedule</button>
         </div>
 
         {tab === 'results' && (
@@ -675,7 +694,29 @@ function ExperimentDetailBody({
           />
         )}
 
-        {tab === 'config' && <ExpConfig display={display} metricNames={metricNames} />}
+        {tab === 'config' && (
+          <>
+            <ExpConfig display={display} metricNames={metricNames} />
+            {projectId && (
+              <div className="card" style={{ marginTop: 16 }}>
+                <div className="card-header">
+                  <div className="card-title">Start prerequisites &amp; dependencies</div>
+                </div>
+                <div className="card-body">
+                  <p style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 0 }}>
+                    Conditions that must hold for this experiment to start (manual or
+                    scheduled). A start is refused while any prerequisite is unmet.
+                  </p>
+                  <DependencyGraph
+                    projectId={projectId}
+                    entityKind="experiments"
+                    entityId={apiExp.id}
+                  />
+                </div>
+              </div>
+            )}
+          </>
+        )}
 
         {tab === 'metrics' && (
           <div className="card">
@@ -707,6 +748,14 @@ function ExperimentDetailBody({
               <div className="empty-desc">Live tail of qualifying events from ClickHouse — useful for debugging metric definitions.</div>
             </div>
           </div>
+        )}
+        {tab === 'schedule' && envId && (
+          <ScheduleBuilder
+            envId={envId}
+            entityKind="experiments"
+            entityId={apiExp.id}
+            presets={EXPERIMENT_TRANSITION_PRESETS}
+          />
         )}
       </div>
     </>

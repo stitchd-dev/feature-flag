@@ -1,5 +1,5 @@
 # Tech Stack
-<!-- Last refreshed: 2026-06-04 (post seqtest_20260603 — sequential testing stats core + live per-metric compute pass; nway interaction stats; cross-experiment exclusion groups. Stats/table additions synced during the tracks; verified current.) -->
+<!-- Last refreshed: 2026-06-05 (post flag_lifecycle_20260604 — new stitchd-schedule-service (8th gRPC service), flag prerequisites eval-gate, cross-entity dependency integrity. Crate/env-var/PG-table/proto additions synced during Phase 9.) -->
 
 <!--
 domain_boundaries_20260530 conventions (see conductor/patterns.md for the full set):
@@ -78,10 +78,33 @@ post-compute-pass follow-ups resolved on track/seqtest_20260603 (NOT yet merged 
   erf/norm_cdf/Z95/ratio-delta-var/bayes-normal-contrast were de-duplicated in stitchd-core.
 -->
 
+<!--
+flag_lifecycle_20260604 additions (deps + architecture decision; finalized Phase 9 —
+the crate, env vars, PG tables, and proto additions are now in the tables/sections below):
+- Two new workspace deps (declared in [workspace.dependencies]; wired into stitchd-core
+  in Phase 1, scheduler service in Phase 3):
+  * `chrono-tz` 0.10 — IANA timezone database for `chrono`. Scheduled changes store the
+    author-chosen IANA zone (e.g. `America/New_York`) and the canonical UTC instant;
+    recurring-window next-occurrence math resolves wall-clock times in the stored zone so
+    DST transitions (spring-forward / fall-back) shift the UTC offset correctly.
+  * `rrule` 0.14 — pure-Rust RFC-5545 recurrence rules. Recurring scheduled changes carry
+    an RRULE string + IANA tz; `stitchd_core::schedule::RecurrenceSpec::next_occurrence`
+    computes the next firing instant DST-aware. One-shot changes do not use `rrule`.
+- Architecture decision: a NEW `stitchd-schedule-service` binary crate (built in Phase 3)
+  is a gRPC-only scheduled consumer that mirrors `stitchd-stats-service`'s tokio-interval
+  loop (see "Scheduler Pattern" below). On each tick it queries PostgreSQL for due changes
+  (`next_run_at <= now()`, status pending/active), then dispatches each to the OWNING
+  service's existing mutation/lifecycle RPC (flag → `FlagService.MutateFlag`; experiment →
+  `ExperimentationService.TransitionExperiment`; segment → `SegmentationService` admin
+  update). It is entity-agnostic and holds no domain logic of its own — application flows
+  through each entity's canonical path so version bumps + audit entries happen exactly as
+  for human mutations. All scheduler state lives in PostgreSQL (`scheduled_changes` +
+  `scheduled_change_runs`) so it is restart-safe and idempotent (a missed tick catches up).
+-->
 
 ## Architecture
 
-The system is decomposed into seven Cargo workspace crates, each a standalone gRPC microservice, fronted by a REST gateway. Two library crates (`stitchd-event-writer`, `stitchd-sdk-rust`) support services and SDK consumers respectively:
+The system is decomposed into eight Cargo workspace crates, each a standalone gRPC microservice, fronted by a REST gateway. Two library crates (`stitchd-event-writer`, `stitchd-sdk-rust`) support services and SDK consumers respectively:
 
 | Crate | Role | Type |
 |---|---|---|
@@ -92,6 +115,7 @@ The system is decomposed into seven Cargo workspace crates, each a standalone gR
 | `stitchd-analytics-service` | Event-definition CRUD + ingestion gRPC (multi-context `Array(Tuple(String, String))` rows in ClickHouse `events_v2`); metric-definition CRUD + ClickHouse-backed preview (`POST /v1/metrics/{id}/preview` via `dispatch_preview_query`); owns `experiment_results` in ClickHouse | Binary |
 | `stitchd-experimentation-service` | Experiment lifecycle; reads pre-computed results from ClickHouse `experiment_results` table; experiments now reference `metric_ids` (cutover migration `20260520000002`) | Binary |
 | `stitchd-stats-service` | Scheduled stats computation (60-min interval); gRPC-only consumer; writes pre-aggregated results to ClickHouse `experiment_results`. Exposes pure query builders under `queries::{aggregation, ratio, funnel, preview}` (experiment-scoped vs day-bucketed preview); shared `jsonlogic_to_sql` translator for metric `where_clause` filters | Binary |
+| `stitchd-schedule-service` | Scheduled-change lifecycle (`flag_lifecycle_20260604`); gRPC-only consumer (mirrors stats-service's tokio-interval loop, default 60 s). Claims due rows from PG `scheduled_changes` (`FOR UPDATE SKIP LOCKED`, restart-safe + idempotent, missed-tick catch-up) and dispatches each to the owning service's canonical mutation RPC: flag → flag-service `MutateFlag`, experiment → experimentation-service `TransitionExperiment`, segment → segmentation-service `UpdateAdminSegment`. One-shot + recurring (RRULE + IANA-tz, DST-aware); honors the experiment lock + transition validity at fire time; holds no domain logic of its own. Also serves the gRPC `ScheduleService` (create/list/get/cancel/pause/resume) + health/metrics HTTP. | Binary |
 | `stitchd-event-writer` | ClickHouse event ingestion and migration helpers (library; replaces retired `stitchd-events` crate name) | Library |
 | `stitchd-sdk-rust` | Server-side Rust SDK — in-process flag evaluation via `SdkClient::evaluate(&[EvalRequest], TraceLevel)`, which delegates to `stitchd-core::evaluation::evaluate_flag` (library; naming convention: `stitchd-sdk-{lang}`) | Library |
 | `stitchd-core` | Domain model, rule engine, segmentation logic, hashing, ID types. Hosts the SOLE flag-evaluation orchestrator `evaluation::evaluate_flag(...)` (post-`flag_eval_unify_20260522`) — preview path + SDK path both delegate here. Owns the canonical `HashSelector` / `HashInputSpec` / `TraceLevel` / `ListMembershipIndex` / `EvalOutcome` / `EvaluationTrace` / `FlagEvaluationResult` types | Library |
@@ -130,6 +154,18 @@ All Stitchd-owned environment variables carry the `STITCHD_` prefix (the sole ex
 | `STITCHD_{SERVICE}_METRICS_PORT` | `STITCHD_AUTH_SERVICE_METRICS_PORT=9091` |
 | `STITCHD_GATEWAY_HTTP_PORT` | `STITCHD_GATEWAY_HTTP_PORT=8080` (gateway REST) |
 | `STITCHD_GATEWAY_METRICS_PORT` | `STITCHD_GATEWAY_METRICS_PORT=9080` (gateway Prometheus) |
+
+`stitchd-schedule-service` (`flag_lifecycle_20260604`) adds:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `STITCHD_SCHEDULE_SERVICE_GRPC_PORT` | `50057` | `ScheduleService` gRPC port |
+| `STITCHD_SCHEDULE_SERVICE_HTTP_PORT` | `9201` | health + Prometheus metrics HTTP port |
+| `STITCHD_SCHEDULE_SCHEDULER_INTERVAL_SECS` | `60` | tokio interval tick cadence |
+| `STITCHD_SCHEDULE_CLAIM_BATCH` | `100` | max due rows claimed per tick |
+| `STITCHD_FLAG_SERVICE_GRPC_URL` | `http://localhost:50051` | flag-service dispatch endpoint (compose: `http://flag-service:50052`) |
+| `STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL` | `http://localhost:50055` | experimentation-service dispatch endpoint |
+| `STITCHD_SEGMENTATION_SERVICE_GRPC_URL` | `http://localhost:50053` | segmentation-service dispatch endpoint |
 
 ## Admin UI (Frontend)
 
@@ -202,6 +238,8 @@ Routes in `stitchd-gateway/src/routes/context_intel.rs`:
 | `governor` + `tower_governor` | 0.10 / 0.8 | Auth endpoint rate limiting |
 | `secrecy` | 0.10 | Zero-on-drop secret wrapping |
 | `siphasher` + `murmur3` + `sha2` | 1.0 / 0.5 / 0.11 | Consistent hashing (flag evaluation) |
+| `chrono-tz` | 0.10 | IANA timezone DB for `chrono` — DST-aware scheduled-change windows (`flag_lifecycle_20260604`) |
+| `rrule` | 0.14 | RFC-5545 recurrence rules — recurring scheduled changes (`flag_lifecycle_20260604`) |
 | `scylla` | 1.6 | ScyllaDB async CQL driver (`metrics` feature enabled) |
 | `utoipa` + `utoipa-axum` | 5.5 / 0.2 | OpenAPI 3.1 spec generation |
 | `rand` / `reqwest` | 0.10 / 0.13 | RNG (`rand::rng()` + `RngExt::random_range`) / HTTP client (`rustls` + `form` + `http2` features; `default-features = false`) |
@@ -237,6 +275,8 @@ Key invariants:
 - `chrono::Duration` is NOT `std::time::Duration`; convert via `.to_std().unwrap()`
 - On-demand recompute is handled by the gRPC `TriggerRecompute` RPC (spawns a task, returns job_id)
 - `stats_schedule.last_computed_at` is the authoritative staleness signal; results are stale when it is >60 min old or absent
+
+`stitchd-schedule-service` (`flag_lifecycle_20260604`) reuses this same pattern (default 60 s tick). Its loop claims due `scheduled_changes` rows inside a transaction with `FOR UPDATE SKIP LOCKED` and does apply + run-history append + advance/finalize all inside that claim tx — so a crash mid-apply rolls back and is re-claimed next tick (missed-tick catch-up), and a concurrent replica skips locked rows. Recurring next-run uses `stitchd-core::schedule::RecurrenceSpec::next_occurrence` (RRULE + IANA tz, DST-aware).
 
 ## Caching
 - **SDK Key Cache** (`stitchd-auth-service`): `moka 0.12` async `Cache<String, SdkKey>` keyed on `key_hash`, TTL = 60 s.
@@ -300,11 +340,23 @@ Post-baseline incremental migrations:
 - `crates/stitchd-db/migrations/20260602000001_exclusion_groups.sql` (`xexp_interaction_20260602`): adds the `exclusion_groups` table (per-env, immutable `salt`, version/audit/soft-delete; partial unique index on `(env_id, name) WHERE deleted_at IS NULL`) and the nullable `exclusion_group_id` + `group_bucket_lo/hi` columns on `experiments` (CHECK `0 <= lo < hi <= 10000` or both NULL) and snapshot columns on `experiment_iterations`.
 - `crates/stitchd-event-writer/migrations/20260602000002_experiment_interactions.sql` (`xexp_interaction_20260602`): the ClickHouse `experiment_interactions` table (registered in the `event_writer::migrations` MIGRATIONS array so it auto-applies on analytics-service boot).
 - `crates/stitchd-event-writer/migrations/20260602000002_experiment_interactions.sql` was **rewritten in place** in `nway_interaction_20260603` (clean cutover — system not live) to the unified N-way schema (`experiment_ids Array(UUID)` + `interaction_order` + `term` + N-D `cell_stats` + `df` + Bayesian columns), now `ReplacingMergeTree(computed_at)` + 30-day TTL (readers use `FINAL`). The separate `20260602000005_interaction_insufficient_data.sql` ALTER was removed (folded into the table). Assumes a fresh ClickHouse DB; no backfill.
+- `crates/stitchd-db/migrations/20260604000001_lifecycle_automation.sql` (`flag_lifecycle_20260604`):
+  - `scheduled_changes` — `(entity_type, entity_id, env_id, mutation_payload JSONB, schedule_kind, scheduled_at, rrule, tz, next_run_at, last_run_at, status, created_by)` with a partial index on `next_run_at WHERE status='active'` (the scheduler's due-query). One-shot rows carry `scheduled_at`; recurring rows carry `rrule` + IANA `tz` and recompute `next_run_at`. Soft-delete + `version` + named CHECK constraints per baseline convention.
+  - `scheduled_change_runs` — per-fire history (outcome + detail, e.g. the `dependency_exists:`/skip reason).
+  - `flag_prerequisites` — `(flag_id, prerequisite_flag_id, required_variant_id)` edge rows; plus `feature_flags.fallback_variant_id UUID REFERENCES variants(id)` (the gate's fallback).
+  - `entity_dependencies` — generic dependency edge table (flag→flag prerequisite edges populated here; flag→segment / segment→segment are scanned authoritatively at delete time).
+- `crates/stitchd-db/migrations/20260604000002_experiment_start_prerequisites.sql` (`flag_lifecycle_20260604`): `experiment_start_prerequisites` — `kind` CHECK (`flag_variant` sets flag_id+variant_id, `experiment_done` sets prerequisite_experiment_id; `chk_experiment_start_prereq_shape` keeps each kind's columns mutually exclusive). Enforced on manual AND scheduled experiment start; also drives experiment→experiment delete-blocking.
 
 The experimentation-service proto gained additive RPCs (`CreateExclusionGroup`/`ListExclusionGroups`/`UpdateExclusionGroup`/`DeleteExclusionGroup`/`AssignExperimentToGroup`/`UnassignExperiment`/`GetExperimentInteractions`); `flags.v1.PercentageAllocation` gained an additive `exclusion_gate` (group_salt + context_type + bucket_lo/hi) carried on the existing definition-sync path.
+
+**`flag_lifecycle_20260604` proto additions (all backward-compatible — new messages / fields / RPCs, never renumbered):**
+- **New `proto/schedule/v1/schedule_service.proto`** — `ScheduleService` (Create / List / Get / Cancel / Pause / Resume `ScheduledChange` + internal `ListDueChanges`), the `ScheduledChange` + `ScheduledChangeRun` messages, and 4 enums (`ScheduleEntityType` / `ScheduleKind` / `ScheduleStatus` / `ScheduleRunOutcome`). Registered in `stitchd-proto` build.rs + `pub mod schedule::v1`.
+- **`flags.v1` (`flag_sync.proto`):** new `FlagPrerequisite` message (carries BOTH `*_id` UUIDs and `*_key` strings so it rides admin/preview AND SDK definition-sync snapshots), `FeatureFlag.prerequisites` (tag 15, repeated) + `FeatureFlag.fallback_variant_key` (tag 16).
+- **`flags.v1` (`flag_service.proto`):** `SetPrerequisites` / `GetPrerequisites` RPCs + request/response messages.
+- **No new proto error enum.** Referential-integrity 409s use the `dependency_exists:<ids>` status-message sentinel (mirroring `flag_locked_by_experiment:`) decoded source-agnostically in the gateway — same convention as the existing flag-lock sentinel; no proto change. Experiment/segment scheduling reuse existing `TransitionExperiment` / `UpdateAdminSegment` RPCs.
 
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
 - ClickHouse 24+ for events, experiment data, metric aggregations
 - ScyllaDB 6+ for list-segment entry storage (wide rows, million-scale per segment)
-- Docker Compose orchestrates all service containers with health-checked dependencies (scylladb service added in `segment_scylla_20260516`)
+- Docker Compose orchestrates all service containers with health-checked dependencies (scylladb service added in `segment_scylla_20260516`; `schedule-service` added in `flag_lifecycle_20260604` — eighth gRPC service, gRPC :50057 / HTTP :9201, depends on postgres + flag-service)

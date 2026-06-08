@@ -44,3 +44,7 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 stitchd-proto = { path = "../stitchd-proto" }
 tonic = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }

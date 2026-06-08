@@ -154,6 +154,10 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         segment_repo: Arc::clone(&segment_repo),
+        // Referential-integrity scan (Phase 6 — flag_lifecycle): block deleting a
+        // segment still referenced by a flag rule or another segment. Reuses the
+        // shared Postgres pool (flag rules + segments live in the same DB).
+        dependency_pool: Some(pool.clone()),
     };
     let service = SegmentationServiceImpl::new(state);
     let svc = SegmentationServiceServer::new(service);

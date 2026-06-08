@@ -72,6 +72,9 @@ async fn main() -> anyhow::Result<()> {
     // Experiment repo backs the whole-flag lock helper (`is_flag_locked`).
     let experiment_repo: Arc<dyn stitchd_db::ExperimentRepository> =
         Arc::new(PgExperimentRepository::new(pool.clone(), audit_raw.clone()));
+    // Prerequisite repo backs Set/GetPrerequisites + snapshot/preview gate
+    // population + the flag delete-block guard (flag_lifecycle_20260604).
+    let prerequisite_repo = stitchd_db::PrerequisiteRepository::new(pool.clone());
     // ── ScyllaDB (list-segment membership reads) ──────────────────────────────
     let scylla_config = ScyllaConfig::from_env();
     tracing::info!(
@@ -127,7 +130,8 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&segment_repo),
     )
     .with_clickhouse(Arc::clone(&ch_client))
-    .with_experiment_repo(Arc::clone(&experiment_repo));
+    .with_experiment_repo(Arc::clone(&experiment_repo))
+    .with_prerequisite_repo(prerequisite_repo);
 
     let sdk_backend_svc = FlagSdkBackendServiceImpl::new(
         Arc::clone(&flag_repo),

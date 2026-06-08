@@ -28,9 +28,7 @@ mod tests {
     }
 
     fn make_service(repo: MockSegmentRepoForTest) -> SegmentationServiceImpl {
-        SegmentationServiceImpl::new(AppState {
-            segment_repo: Arc::new(repo),
-        })
+        SegmentationServiceImpl::new(AppState::new(Arc::new(repo)))
     }
 
     fn empty_rule_payload() -> Vec<u8> {

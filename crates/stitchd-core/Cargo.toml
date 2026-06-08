@@ -15,6 +15,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
+rrule = { workspace = true }
 semver = { workspace = true }
 smallvec = { workspace = true }
 async-trait = { workspace = true }

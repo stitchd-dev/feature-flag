@@ -200,6 +200,18 @@ impl ExperimentationService for MockExpService {
     {
         Err(Status::unimplemented("not used"))
     }
+
+    async fn get_experiment_start_prerequisites(
+        &self,
+        _req: tonic::Request<
+            stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest,
+        >,
+    ) -> Result<
+        Response<stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesResponse>,
+        Status,
+    > {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock_exp_service(svc: MockExpService) -> ExperimentationServiceClient<Channel> {

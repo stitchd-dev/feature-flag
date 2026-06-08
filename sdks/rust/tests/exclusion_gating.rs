@@ -136,12 +136,14 @@ fn build_proto_flag(gate: &ExclusionGate) -> FeatureFlag {
                 value: Some(ProtoVariantValue {
                     value: Some(ProtoVValue::BoolValue(true)),
                 }),
+                id: String::new(),
             },
             ProtoVariant {
                 key: "off".to_string(),
                 value: Some(ProtoVariantValue {
                     value: Some(ProtoVValue::BoolValue(false)),
                 }),
+                id: String::new(),
             },
         ],
         default_variant_key: "off".to_string(),
@@ -209,6 +211,7 @@ fn build_core_flag(gate: &ExclusionGate) -> Flag {
             rule,
         }],
         variants,
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     }
 }
 

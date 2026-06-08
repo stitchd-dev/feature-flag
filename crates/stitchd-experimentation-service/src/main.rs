@@ -62,19 +62,7 @@ async fn main() -> anyhow::Result<()> {
     let exclusion_group_repo =
         Arc::new(PgExclusionGroupRepository::new(pool.clone(), audit.clone()));
     let flag_repo = Arc::new(PgFlagRepository::new(pool.clone(), audit));
-    let schedule_repo = Arc::new(PgStatsScheduleRepository::new(pool));
-
-    // ── Analytics Service gRPC client ─────────────────────────────────────────
-    let analytics_addr = std::env::var("STITCHD_ANALYTICS_SERVICE_GRPC_URL")
-        .unwrap_or_else(|_| "http://localhost:50054".to_string());
-
-    let analytics_client = connect_with_retry_default("Analytics Service", &analytics_addr, || {
-        let addr = analytics_addr.clone();
-        async move { AnalyticsClient::connect(addr).await }
-    })
-    .await
-    .context("connect to Analytics Service")?;
-    tracing::info!(addr = %analytics_addr, "Connected to Analytics Service");
+    let schedule_repo = Arc::new(PgStatsScheduleRepository::new(pool.clone()));
 
     // ── Flag Service client ───────────────────────────────────────────────────
     let flag_service_addr = std::env::var("STITCHD_FLAG_SERVICE_ADDR")
@@ -94,6 +82,48 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
+
+    // Start-time prerequisite gate (Phase 5 + Phase 10): repo over
+    // `experiment_start_prerequisites` + a resolver. `experiment_done` is backed
+    // by the experiment repo; `flag_variant` resolves the live served variant via
+    // the Flag Service (exact UUID comparison) when a Flag Service connection is
+    // available — falling back to fail-closed only when it is not.
+    let start_prereq_repo = Arc::new(
+        stitchd_experimentation_service::start_prerequisites::PgStartPrerequisiteRepository::new(
+            pool.clone(),
+        ),
+    );
+    let served_variant_lookup: Arc<
+        dyn stitchd_experimentation_service::start_prerequisites::ServedVariantLookup,
+    > = match flag_client.clone() {
+        Some(fc) => Arc::new(
+            stitchd_experimentation_service::start_prerequisites::FlagServiceServedVariantLookup::new(
+                flag_repo.clone(),
+                fc,
+            ),
+        ),
+        None => Arc::new(
+            stitchd_experimentation_service::start_prerequisites::UnavailableServedVariantLookup,
+        ),
+    };
+    let start_prereq_resolver = Arc::new(
+        stitchd_experimentation_service::start_prerequisites::ServiceStartPrerequisiteResolver::new(
+            experiment_repo.clone(),
+            served_variant_lookup,
+        ),
+    );
+
+    // ── Analytics Service gRPC client ─────────────────────────────────────────
+    let analytics_addr = std::env::var("STITCHD_ANALYTICS_SERVICE_GRPC_URL")
+        .unwrap_or_else(|_| "http://localhost:50054".to_string());
+
+    let analytics_client = connect_with_retry_default("Analytics Service", &analytics_addr, || {
+        let addr = analytics_addr.clone();
+        async move { AnalyticsClient::connect(addr).await }
+    })
+    .await
+    .context("connect to Analytics Service")?;
+    tracing::info!(addr = %analytics_addr, "Connected to Analytics Service");
 
     // ── gRPC server ───────────────────────────────────────────────────────────
     let port: u16 = std::env::var("STITCHD_EXPERIMENTATION_SERVICE_GRPC_PORT")
@@ -134,7 +164,8 @@ async fn main() -> anyhow::Result<()> {
     )
     .with_exposure_reader(exposure_reader)
     .with_interactions_reader(interactions_reader)
-    .with_exclusion_groups(exclusion_group_repo, flag_repo);
+    .with_exclusion_groups(exclusion_group_repo, flag_repo)
+    .with_start_prerequisites(start_prereq_repo, start_prereq_resolver);
 
     let (health_reporter, health_service) = health_reporter();
     health_reporter

@@ -1,0 +1,167 @@
+syntax = "proto3";
+
+package stitchd.schedule.v1;
+
+// Scheduled-change lifecycle service (flag_lifecycle_20260604).
+//
+// A scheduled change applies a mutation to a flag, segment, or experiment at a
+// future time — one-shot (a single instant) or recurring (an RFC-5545 RRULE in
+// an IANA timezone, evaluated DST-aware). The scheduler is entity-agnostic;
+// `mutation_payload_json` is the JSON-encoded request the owning service's
+// existing mutation/lifecycle RPC consumes at fire time (flag → MutateFlag;
+// experiment → TransitionExperiment; segment → admin update). All instants are
+// canonical UTC; `tz` records the IANA zone the author authored in.
+//
+// Naming/representation conventions mirror the rest of the workspace protos:
+// the mutation payload travels as a JSON string (cf. EvaluatePreviewRequest's
+// `contexts_json`) and timestamps as epoch-millisecond int64s, avoiding a
+// dependency on google.protobuf well-known types.
+
+// Which kind of entity a scheduled change targets.
+enum ScheduleEntityType {
+  SCHEDULE_ENTITY_TYPE_UNSPECIFIED = 0;
+  SCHEDULE_ENTITY_TYPE_FLAG        = 1;
+  SCHEDULE_ENTITY_TYPE_SEGMENT     = 2;
+  SCHEDULE_ENTITY_TYPE_EXPERIMENT  = 3;
+}
+
+// One-shot vs recurring schedule.
+enum ScheduleKind {
+  SCHEDULE_KIND_UNSPECIFIED = 0;
+  SCHEDULE_KIND_ONE_SHOT    = 1;
+  SCHEDULE_KIND_RECURRING   = 2;
+}
+
+// Lifecycle status. One-shot: pending → applied | failed | cancelled.
+// Recurring: active ⇄ paused (per-fire history in ScheduledChangeRun rows).
+enum ScheduleStatus {
+  SCHEDULE_STATUS_UNSPECIFIED = 0;
+  SCHEDULE_STATUS_PENDING     = 1;
+  SCHEDULE_STATUS_ACTIVE      = 2;
+  SCHEDULE_STATUS_PAUSED      = 3;
+  SCHEDULE_STATUS_APPLIED     = 4;
+  SCHEDULE_STATUS_FAILED      = 5;
+  SCHEDULE_STATUS_CANCELLED   = 6;
+}
+
+// Outcome of a single firing.
+enum ScheduleRunOutcome {
+  SCHEDULE_RUN_OUTCOME_UNSPECIFIED = 0;
+  SCHEDULE_RUN_OUTCOME_APPLIED     = 1;
+  SCHEDULE_RUN_OUTCOME_SKIPPED     = 2;
+  SCHEDULE_RUN_OUTCOME_FAILED      = 3;
+}
+
+// A single firing of a scheduled change.
+message ScheduledChangeRun {
+  string             id        = 1;
+  int64              fired_at_ms = 2;
+  ScheduleRunOutcome outcome   = 3;
+  // Free-text reason / error detail (e.g. flag-locked skip reason). When a run
+  // was skipped because the target flag is locked by an experiment, this
+  // carries the `flag_locked_by_experiment:<uuid>` sentinel; when skipped for a
+  // referential-integrity conflict, the `dependency_exists:<detail>` sentinel.
+  string             detail    = 4;
+}
+
+// A scheduled change record.
+message ScheduledChange {
+  string             id               = 1;
+  ScheduleEntityType entity_type      = 2;
+  string             entity_id        = 3;
+  string             env_id           = 4;
+  // JSON-encoded mutation request the owning service's RPC consumes at fire time.
+  string             mutation_payload_json = 5;
+  ScheduleKind       schedule_kind    = 6;
+  // One-shot: epoch-ms instant to fire (UTC). 0 for recurring.
+  int64              scheduled_at_ms  = 7;
+  // Recurring: RFC-5545 RRULE string. Empty for one-shot.
+  string             rrule            = 8;
+  // IANA timezone the recurring rule is evaluated in (e.g. "America/New_York").
+  string             tz               = 9;
+  ScheduleStatus     status           = 10;
+  // Next computed firing instant (epoch-ms, UTC). 0 when none scheduled.
+  int64              next_run_at_ms   = 11;
+  // Last actual firing instant (epoch-ms, UTC). 0 when never fired.
+  int64              last_run_at_ms   = 12;
+  int64              created_at_ms    = 13;
+  int64              updated_at_ms    = 14;
+  uint64             version          = 15;
+  // Run history (most-recent-first), populated on Get; empty on List.
+  repeated ScheduledChangeRun runs    = 16;
+}
+
+// ─── Requests / responses ─────────────────────────────────────────────────────
+
+message CreateScheduledChangeRequest {
+  ScheduleEntityType entity_type      = 1;
+  string             entity_id        = 2;
+  string             env_id           = 3;
+  string             mutation_payload_json = 4;
+  ScheduleKind       schedule_kind    = 5;
+  // One-shot: epoch-ms instant to fire (UTC).
+  int64              scheduled_at_ms  = 6;
+  // Recurring: RRULE + IANA tz.
+  string             rrule            = 7;
+  string             tz               = 8;
+}
+
+message ListScheduledChangesRequest {
+  // Filter by environment (required).
+  string             env_id      = 1;
+  // Optional entity filter — when set, only schedules for this entity.
+  ScheduleEntityType entity_type = 2;
+  string             entity_id   = 3;
+  // Optional status filter; UNSPECIFIED returns all non-deleted.
+  ScheduleStatus     status      = 4;
+}
+
+message ListScheduledChangesResponse {
+  repeated ScheduledChange changes = 1;
+}
+
+message GetScheduledChangeRequest {
+  string id = 1;
+}
+
+message CancelScheduledChangeRequest {
+  string id      = 1;
+  uint64 version = 2;
+}
+
+message PauseScheduledChangeRequest {
+  string id      = 1;
+  uint64 version = 2;
+}
+
+message ResumeScheduledChangeRequest {
+  string id      = 1;
+  uint64 version = 2;
+}
+
+// Internal: the scheduler interval loop calls this to fetch every change whose
+// next_run_at has come due (status pending/active, next_run_at <= as_of).
+message ListDueChangesRequest {
+  // Evaluate due-ness as of this instant (epoch-ms, UTC). 0 means "now".
+  int64  as_of_ms = 1;
+  // Max rows to return (0 = service default).
+  uint32 limit    = 2;
+}
+
+message ListDueChangesResponse {
+  repeated ScheduledChange changes = 1;
+}
+
+// ─── Service ──────────────────────────────────────────────────────────────────
+
+service ScheduleService {
+  rpc CreateScheduledChange(CreateScheduledChangeRequest) returns (ScheduledChange);
+  rpc ListScheduledChanges(ListScheduledChangesRequest)   returns (ListScheduledChangesResponse);
+  rpc GetScheduledChange(GetScheduledChangeRequest)       returns (ScheduledChange);
+  rpc CancelScheduledChange(CancelScheduledChangeRequest) returns (ScheduledChange);
+  rpc PauseScheduledChange(PauseScheduledChangeRequest)   returns (ScheduledChange);
+  rpc ResumeScheduledChange(ResumeScheduledChangeRequest) returns (ScheduledChange);
+
+  // Internal — consumed by the scheduler interval loop to apply due changes.
+  rpc ListDueChanges(ListDueChangesRequest) returns (ListDueChangesResponse);
+}

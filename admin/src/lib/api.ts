@@ -10,6 +10,12 @@ import type {
   PaginatedExposures,
   Timeseries,
   RolloutDistribution,
+  LifecycleEntityKind,
+  ScheduledChange,
+  CreateScheduleBody,
+  PrerequisiteGate,
+  SetPrerequisitesBody,
+  DependencyGraph,
 } from './types'
 
 export const api = axios.create({
@@ -870,6 +876,144 @@ export async function listContextParams(
 ): Promise<ContextParamSuggestion[]> {
   const { data } = await api.get<ContextParamSuggestion[]>(
     `/v1/environments/${environmentId}/context-types/${contextType}/params`,
+    { signal },
+  )
+  return data
+}
+
+// ─── Scheduled changes (flag_lifecycle_20260604, Phase 8) ─────────────────────
+//
+// Environment-scoped CRUD over scheduled changes for flags/segments/experiments.
+// A change targets `(entity_type, entity_id, env_id)` + a mutation payload + a
+// schedule spec. See `crates/stitchd-gateway/src/routes/schedules.rs`.
+
+/** List scheduled changes for one entity in an environment. */
+export async function listSchedules(
+  environmentId: string,
+  entityKind: LifecycleEntityKind,
+  entityId: string,
+  signal?: AbortSignal,
+): Promise<ScheduledChange[]> {
+  const { data } = await api.get<ScheduledChange[]>(
+    `/v1/environments/${environmentId}/${entityKind}/${entityId}/schedules`,
+    { signal },
+  )
+  return data
+}
+
+/** Get a single scheduled change (with run history). */
+export async function getSchedule(
+  environmentId: string,
+  scheduleId: string,
+  signal?: AbortSignal,
+): Promise<ScheduledChange> {
+  const { data } = await api.get<ScheduledChange>(
+    `/v1/environments/${environmentId}/schedules/${scheduleId}`,
+    { signal },
+  )
+  return data
+}
+
+/** Create a scheduled change for one entity. Returns the created change (201). */
+export async function createSchedule(
+  environmentId: string,
+  entityKind: LifecycleEntityKind,
+  entityId: string,
+  body: CreateScheduleBody,
+): Promise<ScheduledChange> {
+  const { data } = await api.post<ScheduledChange>(
+    `/v1/environments/${environmentId}/${entityKind}/${entityId}/schedules`,
+    body,
+  )
+  return data
+}
+
+/** Cancel a pending one-shot schedule (optimistic `version`). */
+export async function cancelSchedule(
+  environmentId: string,
+  scheduleId: string,
+  version: number,
+): Promise<ScheduledChange> {
+  const { data } = await api.post<ScheduledChange>(
+    `/v1/environments/${environmentId}/schedules/${scheduleId}/cancel`,
+    { version },
+  )
+  return data
+}
+
+/** Pause a recurring schedule (optimistic `version`). */
+export async function pauseSchedule(
+  environmentId: string,
+  scheduleId: string,
+  version: number,
+): Promise<ScheduledChange> {
+  const { data } = await api.post<ScheduledChange>(
+    `/v1/environments/${environmentId}/schedules/${scheduleId}/pause`,
+    { version },
+  )
+  return data
+}
+
+/** Resume a paused recurring schedule (optimistic `version`). */
+export async function resumeSchedule(
+  environmentId: string,
+  scheduleId: string,
+  version: number,
+): Promise<ScheduledChange> {
+  const { data } = await api.post<ScheduledChange>(
+    `/v1/environments/${environmentId}/schedules/${scheduleId}/resume`,
+    { version },
+  )
+  return data
+}
+
+// ─── Flag prerequisites (flag_lifecycle_20260604, Phase 8) ────────────────────
+//
+// Project-scoped. PUT replaces the full prerequisite set + fallback variant.
+// A cycle ⇒ HTTP 400 (message names the cycle path);
+// flag locked by an experiment ⇒ HTTP 409.
+// See `crates/stitchd-gateway/src/routes/flags.rs`.
+
+/** Read a flag's prerequisite gate (deps + fallback variant). */
+export async function getPrerequisites(
+  projectId: string,
+  flagKey: string,
+  signal?: AbortSignal,
+): Promise<PrerequisiteGate> {
+  const { data } = await api.get<PrerequisiteGate>(
+    `/v1/projects/${projectId}/flags/${flagKey}/prerequisites`,
+    { signal },
+  )
+  return data
+}
+
+/** Replace a flag's prerequisite gate. Throws on 400 (cycle) / 409 (locked). */
+export async function setPrerequisites(
+  projectId: string,
+  flagKey: string,
+  body: SetPrerequisitesBody,
+): Promise<PrerequisiteGate> {
+  const { data } = await api.put<PrerequisiteGate>(
+    `/v1/projects/${projectId}/flags/${flagKey}/prerequisites`,
+    body,
+  )
+  return data
+}
+
+// ─── Dependency graph (flag_lifecycle_20260604, Phase 8) ──────────────────────
+//
+// Project-scoped read of upstream prerequisites + downstream dependents for a
+// flag / segment / experiment. See `crates/stitchd-gateway/src/routes/dependencies.rs`.
+
+/** Get the upstream + downstream dependency graph for one entity. */
+export async function getDependencies(
+  projectId: string,
+  entityKind: LifecycleEntityKind,
+  entityId: string,
+  signal?: AbortSignal,
+): Promise<DependencyGraph> {
+  const { data } = await api.get<DependencyGraph>(
+    `/v1/projects/${projectId}/${entityKind}/${entityId}/dependencies`,
     { signal },
   )
   return data

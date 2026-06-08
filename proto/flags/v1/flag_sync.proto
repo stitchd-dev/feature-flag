@@ -20,6 +20,12 @@ message VariantValue {
 message Variant {
   string       key   = 1;
   VariantValue value = 2;
+  // [ADDITIVE — flag_lifecycle_20260604] UUID of the variant. Admin metadata,
+  // surfaced on the GetFlag/ListFlags read path so cross-service consumers (e.g.
+  // the experimentation-service `flag_variant` start-prerequisite) can compare
+  // the served variant by its stable UUID rather than by key. Empty on the SDK
+  // definition-sync path, which is key-only.
+  string       id    = 3;
 }
 
 // --- Percentage allocation ---
@@ -123,6 +129,28 @@ message FlagRule {
   string rule_id = 5;
 }
 
+// --- Prerequisites ---
+
+// [ADDITIVE — flag_lifecycle_20260604] A single flag→flag prerequisite gate.
+// The dependent flag only proceeds to its own rules when the prerequisite flag
+// resolves to the required variant; otherwise the dependent flag returns its
+// configured fallback variant (see FeatureFlag.fallback_variant_key).
+//
+// Both the UUID and the key are carried so this message rides BOTH the SDK
+// definition-sync snapshot (keys, for local resolution) and the admin/preview
+// snapshot (UUIDs, admin metadata). SDK-sync responses leave the *_id fields
+// empty; admin RPC responses populate both.
+message FlagPrerequisite {
+  // UUID of the prerequisite flag. Admin metadata — empty in SDK sync.
+  string prerequisite_flag_id  = 1;
+  // Key of the prerequisite flag — used by the SDK for local resolution.
+  string prerequisite_flag_key = 2;
+  // UUID of the required variant. Admin metadata — empty in SDK sync.
+  string required_variant_id   = 3;
+  // Key of the variant the prerequisite flag must resolve to for the gate to pass.
+  string required_variant_key  = 4;
+}
+
 // --- Feature flag ---
 
 enum FlagValueType {
@@ -155,6 +183,15 @@ message FeatureFlag {
   // SDK sync responses. Lets the admin UI surface the lock badge before the
   // user attempts a save and gets a 409.
   string         locked_by_experiment_id = 14;
+  // [ADDITIVE — flag_lifecycle_20260604] Prerequisite gate. Evaluated before
+  // this flag's own rules: if any prerequisite flag does not resolve to its
+  // required variant, this flag returns `fallback_variant_key` and skips its
+  // rules. Populated in BOTH the SDK definition-sync snapshot and the
+  // evaluate-preview snapshot so SDK + preview gate identically.
+  repeated FlagPrerequisite prerequisites = 15;
+  // Key of the variant returned when a prerequisite gate fails. Empty string
+  // means "fall back to the flag's off/disabled variant".
+  string         fallback_variant_key = 16;
 }
 
 // --- SDK sync service ---

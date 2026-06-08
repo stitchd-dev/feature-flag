@@ -25,7 +25,8 @@ pub mod tests {
     };
     use stitchd_db::{RepositoryError, SegmentRepository};
     use stitchd_proto::segments::v1::{
-        EvaluateMembershipRequest, segmentation_service_server::SegmentationService,
+        ActivateListGenerationRequest, EvaluateMembershipRequest,
+        segmentation_service_server::SegmentationService,
     };
 
     use crate::grpc::service::{AppState, SegmentationServiceImpl};
@@ -448,9 +449,7 @@ pub mod tests {
     }
 
     fn make_service(repo: MockSegmentRepoForTest) -> SegmentationServiceImpl {
-        SegmentationServiceImpl::new(AppState {
-            segment_repo: Arc::new(repo),
-        })
+        SegmentationServiceImpl::new(AppState::new(Arc::new(repo)))
     }
 
     fn env_id() -> (EnvironmentId, String) {
@@ -593,5 +592,49 @@ pub mod tests {
         assert!(result.is_err());
         let status = result.unwrap_err();
         assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+    }
+
+    // -------------------------------------------------------------------------
+    // ActivateListGeneration (flag_lifecycle_20260604, Phase 10.3)
+    // -------------------------------------------------------------------------
+
+    /// Activating a prepared list generation full-replaces the member set via the
+    /// generation-swap (`set_list_entries`), returning the activated counts.
+    #[tokio::test]
+    async fn activate_list_generation_swaps_in_prepared_member_set() {
+        let repo = MockSegmentRepoForTest::new();
+        let (env_id, _env_str) = env_id();
+        let seg = repo.insert_list_segment(env_id, "vip", HashMap::new());
+        let svc = make_service(repo);
+
+        let resp = svc
+            .activate_list_generation(Request::new(ActivateListGenerationRequest {
+                segment_id: seg.id.as_uuid().to_string(),
+                context_type: "user".to_string(),
+                include: vec!["alice".to_string(), "bob".to_string()],
+                exclude: vec!["mallory".to_string()],
+            }))
+            .await
+            .expect("activation succeeds")
+            .into_inner();
+
+        assert_eq!(resp.include_count, 2);
+        assert_eq!(resp.exclude_count, 1);
+    }
+
+    /// An invalid `segment_id` is rejected with `INVALID_ARGUMENT`.
+    #[tokio::test]
+    async fn activate_list_generation_rejects_bad_segment_id() {
+        let svc = make_service(MockSegmentRepoForTest::new());
+        let err = svc
+            .activate_list_generation(Request::new(ActivateListGenerationRequest {
+                segment_id: "not-a-uuid".to_string(),
+                context_type: "user".to_string(),
+                include: vec![],
+                exclude: vec![],
+            }))
+            .await
+            .expect_err("bad id rejected");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 }

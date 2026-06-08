@@ -11,9 +11,11 @@ use stitchd_db::{
 };
 use stitchd_proto::flags::v1::{
     EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
-    GetFlagRequest, ListFlagsRequest, ListFlagsResponse, MutateFlagRequest, MutateFlagResponse,
-    MutationKind, SetDefaultRuleDistributionRequest, SetDefaultRuleDistributionResponse,
-    UpdateFlagHashingRequest, UpdateFlagHashingResponse, flag_service_server::FlagService,
+    GetFlagRequest, GetPrerequisitesRequest, GetPrerequisitesResponse, ListFlagsRequest,
+    ListFlagsResponse, MutateFlagRequest, MutateFlagResponse, MutationKind,
+    SetDefaultRuleDistributionRequest, SetDefaultRuleDistributionResponse, SetPrerequisitesRequest,
+    SetPrerequisitesResponse, UpdateFlagHashingRequest, UpdateFlagHashingResponse,
+    flag_service_server::FlagService,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -42,6 +44,12 @@ pub struct FlagServiceImpl {
     /// In-process cache for `is_flag_locked` results. Populated only when
     /// `experiment_repo` is set.
     flag_lock_cache: FlagLockCache,
+    /// Optional prerequisite repository (`flag_lifecycle_20260604` Phase 4).
+    /// Wired in production via [`FlagServiceImpl::with_prerequisite_repo`]; when
+    /// `None`, `Set/GetPrerequisites` return `UNIMPLEMENTED`, snapshot/preview
+    /// population is skipped, and the delete-block guard is a no-op (admissible
+    /// only in targeted unit tests that don't exercise prerequisites).
+    prerequisite_repo: Option<stitchd_db::PrerequisiteRepository>,
 }
 
 impl FlagServiceImpl {
@@ -61,7 +69,19 @@ impl FlagServiceImpl {
             ch_client: None,
             experiment_repo: None,
             flag_lock_cache: FlagLockCache::new(),
+            prerequisite_repo: None,
         }
+    }
+
+    /// Wire in the prerequisite repository so `Set/GetPrerequisites`, snapshot +
+    /// preview prerequisite population, and the flag delete-block guard are
+    /// active. Without this the prerequisite RPCs return `UNIMPLEMENTED` and the
+    /// delete-block guard is a no-op (`flag_lifecycle_20260604` Phase 4). The
+    /// production `main.rs` always sets it.
+    #[must_use]
+    pub fn with_prerequisite_repo(mut self, repo: stitchd_db::PrerequisiteRepository) -> Self {
+        self.prerequisite_repo = Some(repo);
+        self
     }
 
     /// Attach a ClickHouse client for fire-and-forget evaluation telemetry.
@@ -135,6 +155,329 @@ impl FlagServiceImpl {
                 );
             }
         }
+    }
+
+    // ── Prerequisites (flag_lifecycle_20260604 Phase 4) ───────────────────────
+
+    /// Resolve a prerequisite flag's [`FlagId`] from a request entry, preferring
+    /// the explicit UUID and falling back to the project-scoped key lookup. The
+    /// admin path supplies UUIDs; the key path keeps the RPC usable from
+    /// key-only callers.
+    fn resolve_flag_id(
+        &self,
+        id_str: &str,
+        key_str: &str,
+        flag_id_by_key: &std::collections::HashMap<&str, stitchd_core::id::FlagId>,
+    ) -> Option<stitchd_core::id::FlagId> {
+        if !id_str.is_empty()
+            && let Ok(uuid) = uuid::Uuid::parse_str(id_str)
+        {
+            return Some(stitchd_core::id::FlagId::from_uuid(uuid));
+        }
+        if !key_str.is_empty() {
+            return flag_id_by_key.get(key_str).copied();
+        }
+        None
+    }
+
+    /// Resolve a required/fallback variant's [`VariantId`] for `flag_id`,
+    /// preferring the explicit UUID and validating it belongs to the flag;
+    /// otherwise resolving by key. Returns `INVALID_ARGUMENT` when the variant
+    /// does not exist on the flag.
+    async fn resolve_variant_id(
+        &self,
+        flag_id: stitchd_core::id::FlagId,
+        id_str: &str,
+        key_str: &str,
+    ) -> Result<stitchd_core::id::VariantId, Status> {
+        let variants = self
+            .variant_repo
+            .find_by_flag(flag_id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        if !id_str.is_empty()
+            && let Ok(uuid) = uuid::Uuid::parse_str(id_str)
+        {
+            let vid = stitchd_core::id::VariantId::from_uuid(uuid);
+            if variants.iter().any(|v| v.id == vid) {
+                return Ok(vid);
+            }
+            return Err(Status::invalid_argument(format!(
+                "variant '{id_str}' does not belong to flag {flag_id}"
+            )));
+        }
+        if !key_str.is_empty() {
+            return variants
+                .iter()
+                .find(|v| v.key == key_str)
+                .map(|v| v.id)
+                .ok_or_else(|| {
+                    Status::invalid_argument(format!(
+                        "variant key '{key_str}' not found on flag {flag_id}"
+                    ))
+                });
+        }
+        Err(Status::invalid_argument(
+            "a prerequisite variant id or key is required",
+        ))
+    }
+
+    /// Build the proto `FlagPrerequisite` list + fallback variant key for a flag
+    /// from the persisted gate. Resolves prerequisite-flag keys and variant keys
+    /// so the response carries BOTH UUIDs (admin metadata) and keys (SDK/local
+    /// resolution).
+    async fn build_prerequisite_protos(
+        &self,
+        flag_id: stitchd_core::id::FlagId,
+        prereq_repo: &stitchd_db::PrerequisiteRepository,
+    ) -> Result<(Vec<stitchd_proto::flags::v1::FlagPrerequisite>, String), Status> {
+        build_prerequisite_protos_with(
+            flag_id,
+            prereq_repo,
+            self.flag_repo.as_ref(),
+            self.variant_repo.as_ref(),
+        )
+        .await
+    }
+
+    /// Populate a `FeatureFlag` proto's `prerequisites` + `fallback_variant_key`
+    /// from the persisted gate (admin/preview snapshot population). No-op when
+    /// the prerequisite repository is not configured.
+    async fn populate_prerequisites_proto(
+        &self,
+        flag_id: stitchd_core::id::FlagId,
+        proto: &mut FeatureFlag,
+    ) -> Result<(), Status> {
+        let Some(repo) = self.prerequisite_repo.as_ref() else {
+            return Ok(());
+        };
+        let (prerequisites, fallback_variant_key) =
+            self.build_prerequisite_protos(flag_id, repo).await?;
+        proto.prerequisites = prerequisites;
+        proto.fallback_variant_key = fallback_variant_key;
+        Ok(())
+    }
+
+    /// Load the persisted prerequisite gate for `flag_id` as a core
+    /// [`PrerequisiteGate`]. Returns the default (empty) gate when the
+    /// prerequisite repository is not configured.
+    async fn load_prerequisite_gate(
+        &self,
+        flag_id: stitchd_core::id::FlagId,
+    ) -> Result<stitchd_core::prerequisite::PrerequisiteGate, Status> {
+        let Some(repo) = self.prerequisite_repo.as_ref() else {
+            return Ok(stitchd_core::prerequisite::PrerequisiteGate::default());
+        };
+        let rows = repo
+            .get(flag_id.as_uuid())
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        let prerequisites = rows
+            .iter()
+            .map(|r| stitchd_core::prerequisite::FlagPrerequisite {
+                prerequisite_flag_id: stitchd_core::id::FlagId::from_uuid(r.prerequisite_flag_id),
+                required_variant_id: stitchd_core::id::VariantId::from_uuid(r.required_variant_id),
+            })
+            .collect();
+        let fallback_variant_id = repo
+            .get_fallback_variant(flag_id.as_uuid())
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?
+            .map(stitchd_core::id::VariantId::from_uuid);
+        Ok(stitchd_core::prerequisite::PrerequisiteGate {
+            prerequisites,
+            fallback_variant_id,
+        })
+    }
+
+    /// Referential-integrity guard for flag delete/archive: reject when another
+    /// flag still references `flag_id` as a prerequisite.
+    ///
+    /// On a non-empty dependent set this returns a
+    /// `tonic::Status::failed_precondition` carrying the
+    /// `dependency_exists:<comma-separated dependent flag ids>` sentinel — the
+    /// gateway decodes it into a structured `409 DEPENDENCY_EXISTS` body (mirror
+    /// of the `flag_locked_by_experiment:<uuid>` convention). No-op when the
+    /// prerequisite repository is not configured.
+    async fn ensure_no_dependents(&self, flag_id: stitchd_core::id::FlagId) -> Result<(), Status> {
+        let Some(repo) = self.prerequisite_repo.as_ref() else {
+            return Ok(());
+        };
+        let dependents = repo
+            .dependents_of(stitchd_db::ENTITY_TYPE_FLAG, flag_id.as_uuid())
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        if dependents.is_empty() {
+            return Ok(());
+        }
+        let dependent_ids: Vec<stitchd_core::id::FlagId> = dependents
+            .iter()
+            .map(|d| stitchd_core::id::FlagId::from_uuid(d.from_id))
+            .collect();
+        Err(Status::failed_precondition(
+            crate::prerequisites::dependency_exists_message(&dependent_ids),
+        ))
+    }
+
+    /// Resolve the variant each of `flag`'s (transitive) prerequisite flags
+    /// resolves to for the given `contexts` bundle, returning the
+    /// `evaluated_flags` map the prerequisite gate consumes.
+    ///
+    /// Loads the transitive prerequisite-flag closure (following each
+    /// prerequisite flag's own prerequisites), pulls their rules + referenced
+    /// segments, then runs
+    /// [`stitchd_core::rule_engine::orchestrator::evaluate_flags_with_prerequisites`]
+    /// which topo-sorts the closure (rejecting cycles) and resolves each flag's
+    /// variant in dependency order. The dependent `flag` itself is excluded —
+    /// the gate is applied to it by `evaluate_preview_with_prerequisites`.
+    async fn resolve_prerequisite_variant_map(
+        &self,
+        flag: &stitchd_core::flag::Flag,
+        contexts: &[stitchd_core::context::Context],
+        env_id: stitchd_core::id::EnvironmentId,
+    ) -> Result<
+        std::collections::HashMap<stitchd_core::id::FlagId, Option<stitchd_core::id::VariantId>>,
+        Status,
+    > {
+        use stitchd_core::id::FlagId;
+
+        // No gate → nothing to resolve.
+        if flag.prerequisites.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let Some(prereq_repo) = self.prerequisite_repo.as_ref() else {
+            return Ok(std::collections::HashMap::new());
+        };
+
+        // BFS the transitive prerequisite-flag closure (excluding the dependent
+        // flag itself).
+        let mut closure: std::collections::HashSet<FlagId> = std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<FlagId> = flag
+            .prerequisites
+            .prerequisites
+            .iter()
+            .map(|p| p.prerequisite_flag_id)
+            .collect();
+        while let Some(fid) = queue.pop_front() {
+            if fid == flag.record.id || !closure.insert(fid) {
+                continue;
+            }
+            let rows = prereq_repo
+                .get(fid.as_uuid())
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?;
+            for r in rows {
+                let next = FlagId::from_uuid(r.prerequisite_flag_id);
+                if !closure.contains(&next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        if closure.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        // Load each closure flag's rules + prerequisite edges, and gather the
+        // union of segments referenced across all of them.
+        let mut flag_entries: Vec<(
+            FlagId,
+            Vec<stitchd_core::rule_engine::types::Rule>,
+            Vec<stitchd_core::prerequisite::FlagPrerequisite>,
+        )> = Vec::with_capacity(closure.len());
+        let mut all_segment_ids: std::collections::HashSet<stitchd_core::id::SegmentId> =
+            std::collections::HashSet::new();
+        // Retain each closure flag's full gate so the rules-only resolved map can
+        // be FOLDED with each flag's prerequisite fallback (see step below) — the
+        // orchestrator resolves variants from rules ONLY and does not itself apply
+        // the gate, so a transitively-unmet intermediate flag would otherwise show
+        // its rule variant and wrongly satisfy its dependent.
+        let mut closure_gates: std::collections::HashMap<
+            FlagId,
+            stitchd_core::prerequisite::PrerequisiteGate,
+        > = std::collections::HashMap::new();
+        for fid in &closure {
+            let fr = self
+                .flag_repo
+                .find_rules(*fid)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?;
+            let engine_rules: Vec<stitchd_core::rule_engine::types::Rule> =
+                fr.iter().map(|r| r.rule.clone()).collect();
+            for r in &fr {
+                r.rule.condition.collect_segment_ids(&mut all_segment_ids);
+            }
+            let gate = self.load_prerequisite_gate(*fid).await?;
+            flag_entries.push((*fid, engine_rules, gate.prerequisites.clone()));
+            closure_gates.insert(*fid, gate);
+        }
+
+        // Resolve segment membership for the closure's referenced segments.
+        let segment_definitions = self.fetch_segment_definitions(&all_segment_ids).await?;
+        let single_ec = vec![stitchd_core::context::EvaluationContext {
+            contexts: contexts.to_vec(),
+        }];
+        let list_memberships = self
+            .resolve_list_memberships(&all_segment_ids, &single_ec, env_id)
+            .await?;
+        let resolved_segments =
+            self.resolve_segments_for_bundle(contexts, &segment_definitions, &list_memberships);
+
+        let base_input = stitchd_core::rule_engine::types::EvaluationInput {
+            contexts,
+            resolved_segments,
+            evaluated_flags: std::collections::HashMap::new(),
+        };
+
+        let mut map = stitchd_core::rule_engine::orchestrator::evaluate_flags_with_prerequisites(
+            &flag_entries,
+            &base_input,
+        )
+        .map_err(|e| Status::invalid_argument(format!("prerequisite resolution failed: {e}")))?;
+        // Fold each closure flag's prerequisite fallback into the rules-only map
+        // so a transitively-unmet prerequisite (A→B→C, C unmet) records B's
+        // fallback variant — making the dependent flag's gate correctly fail.
+        stitchd_core::rule_engine::orchestrator::fold_prerequisite_fallbacks(
+            &mut map,
+            &flag_entries,
+            &closure_gates,
+        );
+        Ok(map)
+    }
+
+    /// Resolve the set of segments a single context bundle belongs to, merging
+    /// rule-based segment membership (evaluated via the core segment evaluator)
+    /// with the pre-resolved list-segment memberships.
+    fn resolve_segments_for_bundle(
+        &self,
+        contexts: &[stitchd_core::context::Context],
+        segment_definitions: &[stitchd_core::segment::SegmentDefinition],
+        list_memberships: &[std::collections::HashSet<stitchd_core::id::SegmentId>],
+    ) -> std::collections::HashSet<stitchd_core::id::SegmentId> {
+        let mut resolved: std::collections::HashSet<stitchd_core::id::SegmentId> =
+            if segment_definitions.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                match stitchd_core::segment::SegmentEvaluator::evaluate_all(
+                    contexts,
+                    segment_definitions,
+                ) {
+                    Ok(results) => results
+                        .into_iter()
+                        .filter_map(|(id, r)| if r.matched { Some(id) } else { None })
+                        .collect(),
+                    Err(_) => std::collections::HashSet::new(),
+                }
+            };
+        if let Some(list) = list_memberships.first() {
+            resolved.extend(list.iter().copied());
+        }
+        resolved
     }
 
     /// Fetch `SegmentDefinition`s for a set of IDs in three bulk DB queries.
@@ -333,6 +676,67 @@ fn parse_project_id(s: &str) -> Result<Option<stitchd_core::id::ProjectId>, Stat
         .map_err(|_| Status::invalid_argument("invalid project_id"))
 }
 
+/// Build the proto `FlagPrerequisite` list + fallback variant key for a flag
+/// from the persisted gate, resolving prerequisite-flag keys and variant keys so
+/// the response carries BOTH UUIDs (admin metadata) and keys (SDK/local
+/// resolution). Free function so both the `&self` admin handlers and the
+/// `get_flag_definitions` spawned streaming task (which moves cloned repos) can
+/// reuse it.
+async fn build_prerequisite_protos_with(
+    flag_id: stitchd_core::id::FlagId,
+    prereq_repo: &stitchd_db::PrerequisiteRepository,
+    flag_repo: &dyn stitchd_db::FlagRepository,
+    variant_repo: &dyn stitchd_db::VariantRepository,
+) -> Result<(Vec<stitchd_proto::flags::v1::FlagPrerequisite>, String), Status> {
+    let rows = prereq_repo
+        .get(flag_id.as_uuid())
+        .await
+        .map_err(FlagServiceError::from)
+        .map_err(Status::from)?;
+
+    let mut protos = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let prereq_flag_id = stitchd_core::id::FlagId::from_uuid(row.prerequisite_flag_id);
+        let prereq_flag_key = flag_repo
+            .find_by_id(prereq_flag_id)
+            .await
+            .map(|f| f.key.to_string())
+            .unwrap_or_default();
+        let req_variant_key = variant_repo
+            .find_by_flag(prereq_flag_id)
+            .await
+            .ok()
+            .and_then(|vs| {
+                vs.into_iter()
+                    .find(|v| v.id.as_uuid() == row.required_variant_id)
+                    .map(|v| v.key)
+            })
+            .unwrap_or_default();
+        protos.push(stitchd_proto::flags::v1::FlagPrerequisite {
+            prerequisite_flag_id: row.prerequisite_flag_id.to_string(),
+            prerequisite_flag_key: prereq_flag_key,
+            required_variant_id: row.required_variant_id.to_string(),
+            required_variant_key: req_variant_key,
+        });
+    }
+
+    let fallback_key = match prereq_repo.get_fallback_variant(flag_id.as_uuid()).await {
+        Ok(Some(variant_id)) => variant_repo
+            .find_by_flag(flag_id)
+            .await
+            .ok()
+            .and_then(|vs| {
+                vs.into_iter()
+                    .find(|v| v.id.as_uuid() == variant_id)
+                    .map(|v| v.key)
+            })
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+
+    Ok((protos, fallback_key))
+}
+
 #[allow(clippy::too_many_lines)]
 #[tonic::async_trait]
 impl FlagService for FlagServiceImpl {
@@ -391,6 +795,9 @@ impl FlagService for FlagServiceImpl {
         if project_id.is_some() {
             self.populate_lock_state(record.id, &mut proto_flag).await;
         }
+        // Populate the prerequisite gate (admin + SDK both gate identically).
+        self.populate_prerequisites_proto(record.id, &mut proto_flag)
+            .await?;
         Ok(Response::new(proto_flag))
     }
 
@@ -476,6 +883,8 @@ impl FlagService for FlagServiceImpl {
             if project_id.is_some() {
                 self.populate_lock_state(record.id, &mut proto).await;
             }
+            self.populate_prerequisites_proto(record.id, &mut proto)
+                .await?;
             proto_flags.push(proto);
         }
 
@@ -934,6 +1343,12 @@ impl FlagService for FlagServiceImpl {
                     .await
                     .map_err(Status::from)?;
 
+                // Referential integrity (flag_lifecycle_20260604 Phase 4.3):
+                // refuse delete/archive while another flag still references this
+                // one as a prerequisite. Returns a `dependency_exists:<ids>`
+                // sentinel the gateway rewrites into HTTP 409 DEPENDENCY_EXISTS.
+                self.ensure_no_dependents(record.id).await?;
+
                 // Optimistic locking check
                 #[allow(clippy::cast_sign_loss)]
                 let stored_version = record.version as u64;
@@ -1203,6 +1618,7 @@ impl FlagService for FlagServiceImpl {
 
         let flag_repo = Arc::clone(&self.flag_repo);
         let variant_repo = Arc::clone(&self.variant_repo);
+        let prereq_repo = self.prerequisite_repo.clone();
 
         tokio::spawn(async move {
             for record in flag_records {
@@ -1222,7 +1638,28 @@ impl FlagService for FlagServiceImpl {
                     }
                 };
 
-                let proto_flag = mapping::build_feature_flag_proto(&record, variants, &rules);
+                let mut proto_flag = mapping::build_feature_flag_proto(&record, variants, &rules);
+                // SDK definition-sync carries the prerequisite gate (keys, for
+                // local resolution) so the SDK gates identically to preview.
+                if let Some(repo) = prereq_repo.as_ref() {
+                    match build_prerequisite_protos_with(
+                        record.id,
+                        repo,
+                        flag_repo.as_ref(),
+                        variant_repo.as_ref(),
+                    )
+                    .await
+                    {
+                        Ok((prerequisites, fallback_variant_key)) => {
+                            proto_flag.prerequisites = prerequisites;
+                            proto_flag.fallback_variant_key = fallback_variant_key;
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e)).await;
+                            return;
+                        }
+                    }
+                }
                 if tx.send(Ok(proto_flag)).await.is_err() {
                     // Client disconnected
                     break;
@@ -1336,11 +1773,18 @@ impl FlagService for FlagServiceImpl {
             .map_err(FlagServiceError::from)
             .map_err(Status::from)?;
 
+        // flag_lifecycle_20260604 Phase 4: load the persisted prerequisite gate
+        // so preview gates identically to the SDK (returns the fallback variant
+        // when a prerequisite is unmet, with the failing prerequisite named in
+        // the trace).
+        let gate = self.load_prerequisite_gate(record.id).await?;
+
         let flag = stitchd_core::flag::Flag {
             record,
             hashing_config: vec![],
             rules,
             variants,
+            prerequisites: gate,
         };
 
         let segment_ids = flag.referenced_segment_ids();
@@ -1370,13 +1814,38 @@ impl FlagService for FlagServiceImpl {
             .resolve_list_memberships(&segment_ids, &evaluation_contexts, env_id)
             .await?;
 
-        let results = stitchd_core::evaluation::preview::evaluate_preview(
-            &flag,
-            &evaluation_contexts,
-            &segment_definitions,
-            env_id,
-            &pre_resolved_list_memberships,
-        );
+        // Resolve the (transitive) prerequisite flags' variants per evaluation
+        // context, then run the prerequisite-aware preview so the gate reads the
+        // resolved map. We evaluate one EC at a time because each EC is an
+        // independent bundle whose prerequisite resolution may differ.
+        let mut results: Vec<stitchd_core::evaluation::preview::ContextPreviewResult> = Vec::new();
+        for (ec_idx, ec) in evaluation_contexts.iter().enumerate() {
+            let evaluated_flags = self
+                .resolve_prerequisite_variant_map(&flag, &ec.contexts, env_id)
+                .await?;
+            let one_ec = std::slice::from_ref(ec);
+            let one_membership: Vec<std::collections::HashSet<stitchd_core::id::SegmentId>> = vec![
+                pre_resolved_list_memberships
+                    .get(ec_idx)
+                    .cloned()
+                    .unwrap_or_default(),
+            ];
+            let mut ec_results =
+                stitchd_core::evaluation::preview::evaluate_preview_with_prerequisites(
+                    &flag,
+                    one_ec,
+                    &segment_definitions,
+                    env_id,
+                    &one_membership,
+                    &evaluated_flags,
+                );
+            // Re-base the per-EC context_index onto the global flat index.
+            let base = results.len();
+            for r in &mut ec_results {
+                r.context_index += base;
+            }
+            results.extend(ec_results);
+        }
 
         // NOTE: evaluate_preview intentionally does NOT write to flag_evaluation_log.
         // Per spec (context_intel track): only real SDK evaluations via IngestSdkEvalLog
@@ -1507,6 +1976,213 @@ impl FlagService for FlagServiceImpl {
         Ok(Response::new(SetDefaultRuleDistributionResponse {
             flag: Some(proto_flag),
             version: new_version,
+        }))
+    }
+
+    // Prerequisites (flag_lifecycle_20260604 Phase 4). Replace the dependent
+    // flag's prerequisite gate: validate the prerequisite flags + required
+    // variants exist, reject any edge set that would form a cycle in the
+    // prerequisite DAG (write-time cycle detection via the core topo-sort), then
+    // persist (rows + entity_dependencies mirror edges) in one transaction.
+    async fn set_prerequisites(
+        &self,
+        request: Request<SetPrerequisitesRequest>,
+    ) -> Result<Response<SetPrerequisitesResponse>, Status> {
+        let req = request.into_inner();
+        let Some(prereq_repo) = self.prerequisite_repo.as_ref() else {
+            return Err(Status::unimplemented(
+                "prerequisites are not configured on this flag-service instance",
+            ));
+        };
+
+        let project_id = parse_project_id(&req.project_id)?
+            .ok_or_else(|| Status::invalid_argument("project_id is required"))?;
+        let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let record = self
+            .flag_repo
+            .find_by_key(&flag_key, project_id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        // Optimistic-lock check (mirrors set_default_rule_distribution).
+        #[allow(clippy::cast_sign_loss)]
+        let stored_version = record.version as u64;
+        if req.version != 0 && stored_version != req.version {
+            return Err(Status::aborted(format!(
+                "version conflict: expected {}, actual {stored_version}",
+                req.version
+            )));
+        }
+
+        // Whole-flag lock: refuse prerequisite mutation while an experiment in
+        // running/paused state is bound to this flag.
+        self.ensure_flag_unlocked(record.id)
+            .await
+            .map_err(Status::from)?;
+
+        // Resolve the full set of flags in the project so we can (a) resolve
+        // prerequisite flags/variants by key and (b) assemble the existing
+        // prerequisite graph for cycle detection.
+        let project_flags = self
+            .flag_repo
+            .list_by_project(project_id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        let flag_id_by_key: std::collections::HashMap<&str, stitchd_core::id::FlagId> =
+            project_flags
+                .iter()
+                .map(|f| (f.key.as_str(), f.id))
+                .collect();
+
+        // Resolve + validate each proposed prerequisite edge.
+        let mut new_edges: Vec<stitchd_db::NewFlagPrerequisite> =
+            Vec::with_capacity(req.prerequisites.len());
+        let mut proposed_dep_ids: Vec<stitchd_core::id::FlagId> =
+            Vec::with_capacity(req.prerequisites.len());
+        for p in &req.prerequisites {
+            let prereq_flag_id = self
+                .resolve_flag_id(
+                    &p.prerequisite_flag_id,
+                    &p.prerequisite_flag_key,
+                    &flag_id_by_key,
+                )
+                .ok_or_else(|| {
+                    Status::invalid_argument(format!(
+                        "prerequisite flag not found: id='{}' key='{}'",
+                        p.prerequisite_flag_id, p.prerequisite_flag_key
+                    ))
+                })?;
+            if prereq_flag_id == record.id {
+                return Err(Status::invalid_argument(
+                    "a flag cannot be its own prerequisite",
+                ));
+            }
+            let required_variant_id = self
+                .resolve_variant_id(
+                    prereq_flag_id,
+                    &p.required_variant_id,
+                    &p.required_variant_key,
+                )
+                .await?;
+            new_edges.push(stitchd_db::NewFlagPrerequisite {
+                prerequisite_flag_id: prereq_flag_id.as_uuid(),
+                required_variant_id: required_variant_id.as_uuid(),
+            });
+            proposed_dep_ids.push(prereq_flag_id);
+        }
+
+        // Write-time cycle detection: existing edges (minus this flag's, which
+        // is being fully replaced) + the proposed edges for this flag.
+        let project_flag_uuids: Vec<uuid::Uuid> =
+            project_flags.iter().map(|f| f.id.as_uuid()).collect();
+        let existing = prereq_repo
+            .edges_for_flags(&project_flag_uuids)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        let mut graph: std::collections::HashMap<
+            stitchd_core::id::FlagId,
+            Vec<stitchd_core::id::FlagId>,
+        > = std::collections::HashMap::new();
+        for (from, to) in existing {
+            let from_id = stitchd_core::id::FlagId::from_uuid(from);
+            if from_id == record.id {
+                continue; // replaced below by the proposed set
+            }
+            graph
+                .entry(from_id)
+                .or_default()
+                .push(stitchd_core::id::FlagId::from_uuid(to));
+        }
+        graph.insert(record.id, proposed_dep_ids.clone());
+        let edges: Vec<(stitchd_core::id::FlagId, Vec<stitchd_core::id::FlagId>)> =
+            graph.into_iter().collect();
+        if let Err(cycle) = crate::prerequisites::detect_prerequisite_cycle(&edges) {
+            let path = cycle
+                .involved
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            return Err(Status::invalid_argument(format!(
+                "prerequisite cycle detected: {path}"
+            )));
+        }
+
+        // Resolve the fallback variant key (empty → None = off/disabled).
+        let fallback_variant_id = if req.fallback_variant_key.is_empty() {
+            None
+        } else {
+            Some(
+                self.resolve_variant_id(record.id, "", &req.fallback_variant_key)
+                    .await?
+                    .as_uuid(),
+            )
+        };
+
+        prereq_repo
+            .replace(record.id.as_uuid(), &new_edges, fallback_variant_id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        // Build the response proto with the freshly-persisted gate populated.
+        let variants = self
+            .variant_repo
+            .find_by_flag(record.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        let rules = self
+            .flag_repo
+            .find_rules(record.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        let mut proto = mapping::build_feature_flag_proto(&record, variants, &rules);
+        self.populate_prerequisites_proto(record.id, &mut proto)
+            .await?;
+
+        metrics::counter!("flag_service.set_prerequisites.ok").increment(1);
+        Ok(Response::new(SetPrerequisitesResponse {
+            flag: Some(proto),
+            version: stored_version,
+        }))
+    }
+
+    async fn get_prerequisites(
+        &self,
+        request: Request<GetPrerequisitesRequest>,
+    ) -> Result<Response<GetPrerequisitesResponse>, Status> {
+        let req = request.into_inner();
+        let Some(prereq_repo) = self.prerequisite_repo.as_ref() else {
+            return Err(Status::unimplemented(
+                "prerequisites are not configured on this flag-service instance",
+            ));
+        };
+
+        let project_id = parse_project_id(&req.project_id)?
+            .ok_or_else(|| Status::invalid_argument("project_id is required"))?;
+        let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let record = self
+            .flag_repo
+            .find_by_key(&flag_key, project_id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let (prerequisites, fallback_variant_key) = self
+            .build_prerequisite_protos(record.id, prereq_repo)
+            .await?;
+
+        Ok(Response::new(GetPrerequisitesResponse {
+            prerequisites,
+            fallback_variant_key,
         }))
     }
 }

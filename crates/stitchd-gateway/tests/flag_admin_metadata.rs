@@ -107,6 +107,18 @@ impl FlagService for MetadataFlagService {
     {
         Err(Status::unimplemented("not used"))
     }
+    async fn set_prerequisites(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::SetPrerequisitesRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::SetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_prerequisites(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::GetPrerequisitesRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::GetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock(svc: MetadataFlagService) -> FlagServiceClient<Channel> {

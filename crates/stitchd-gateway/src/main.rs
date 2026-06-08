@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         "http://localhost:50055",
     );
     let stats_addr = env_or("STITCHD_STATS_SERVICE_ADDR", "http://localhost:50056");
+    let schedule_addr = env_or("STITCHD_SCHEDULE_SERVICE_ADDR", "http://localhost:50057");
 
     // `GatewayState::connect` dials all six downstream services in sequence
     // and fails fast on the first transport error. During a parallel cold
@@ -82,7 +83,7 @@ async fn main() -> anyhow::Result<()> {
     // dependency is slow to bind, the helper retries the full sequence
     // until every peer is reachable (or the ~60s budget is exhausted).
     let downstream_summary = format!(
-        "auth={auth_addr} flag={flag_addr} seg={segmentation_addr} analytics={analytics_addr} experimentation={experimentation_addr} stats={stats_addr}"
+        "auth={auth_addr} flag={flag_addr} seg={segmentation_addr} analytics={analytics_addr} experimentation={experimentation_addr} stats={stats_addr} schedule={schedule_addr}"
     );
     let state =
         connect_with_retry_default("gateway downstream services", &downstream_summary, || {
@@ -92,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
             let analytics_addr = analytics_addr.clone();
             let experimentation_addr = experimentation_addr.clone();
             let stats_addr = stats_addr.clone();
+            let schedule_addr = schedule_addr.clone();
             async move {
                 GatewayState::connect(
                     auth_addr,
@@ -100,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
                     analytics_addr,
                     experimentation_addr,
                     stats_addr,
+                    schedule_addr,
                 )
                 .await
             }

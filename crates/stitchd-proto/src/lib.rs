@@ -72,4 +72,11 @@ pub mod analytics {
     }
 }
 
+/// Scheduled-change lifecycle service (one-shot + recurring DST-aware schedules).
+pub mod schedule {
+    pub mod v1 {
+        tonic::include_proto!("stitchd.schedule.v1");
+    }
+}
+
 mod tests;

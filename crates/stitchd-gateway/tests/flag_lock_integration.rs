@@ -155,6 +155,18 @@ impl FlagService for LockedFlagService {
             self.locked_experiment_id
         )))
     }
+    async fn set_prerequisites(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::SetPrerequisitesRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::SetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_prerequisites(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::GetPrerequisitesRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::GetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock_flag_service(svc: LockedFlagService) -> FlagServiceClient<Channel> {
@@ -386,6 +398,18 @@ impl FlagService for UnlockedFlagService {
             },
         ))
     }
+    async fn set_prerequisites(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::SetPrerequisitesRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::SetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_prerequisites(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::GetPrerequisitesRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::GetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 #[tokio::test]
@@ -557,6 +581,18 @@ impl FlagService for InvalidDistFlagService {
         Err(Status::invalid_argument(
             "invalid_distribution: allocations must sum to 100",
         ))
+    }
+    async fn set_prerequisites(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::SetPrerequisitesRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::SetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_prerequisites(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::GetPrerequisitesRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::GetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
     }
 }
 

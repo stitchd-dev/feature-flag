@@ -132,12 +132,14 @@ fn cross_context_corpus() -> (FeatureFlag, Flag) {
                 value: Some(ProtoVariantValue {
                     value: Some(VVal::StringValue("off".into())),
                 }),
+                id: String::new(),
             },
             ProtoVariant {
                 key: "treatment".into(),
                 value: Some(ProtoVariantValue {
                     value: Some(VVal::StringValue("on".into())),
                 }),
+                id: String::new(),
             },
         ],
         default_variant_key: "control".into(),
@@ -206,6 +208,7 @@ fn cross_context_corpus() -> (FeatureFlag, Flag) {
                 value: VariantValue::StrValue("on".into()),
             },
         ],
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     };
 
     (proto, core)
@@ -227,12 +230,14 @@ fn default_rule_distribution_corpus() -> (FeatureFlag, Flag) {
                 value: Some(ProtoVariantValue {
                     value: Some(VVal::BoolValue(false)),
                 }),
+                id: String::new(),
             },
             ProtoVariant {
                 key: "treatment".into(),
                 value: Some(ProtoVariantValue {
                     value: Some(VVal::BoolValue(true)),
                 }),
+                id: String::new(),
             },
         ],
         default_variant_key: "control".into(),
@@ -285,6 +290,7 @@ fn default_rule_distribution_corpus() -> (FeatureFlag, Flag) {
                 value: VariantValue::BoolValue(true),
             },
         ],
+        prerequisites: stitchd_core::prerequisite::PrerequisiteGate::default(),
     };
     (proto, core)
 }

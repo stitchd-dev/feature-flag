@@ -5,8 +5,8 @@ pub mod preview;
 mod purity;
 pub mod types;
 
-pub use engine::{FlagEvaluator, evaluate_flag};
+pub use engine::{FlagEvaluator, evaluate_flag, evaluate_flag_with_prerequisites};
 pub use types::{
     EvalOutcome, EvaluationTrace, FlagEvaluationResult, HashInputSpec, HashSelector,
-    ListMembershipIndex, TraceLevel,
+    ListMembershipIndex, PrerequisiteFailureTrace, TraceLevel,
 };

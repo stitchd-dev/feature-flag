@@ -6,7 +6,7 @@ All configuration is passed via environment variables. There are no config files
 
 > **Naming convention:** Stitchd-owned variables carry the `STITCHD_` prefix. The sole exception is `RUST_LOG`, which follows the Rust ecosystem standard. Service port variables follow `STITCHD_<SERVICE>_GRPC_PORT` / `STITCHD_<SERVICE>_METRICS_PORT`; the gateway adds `STITCHD_GATEWAY_HTTP_PORT` and `STITCHD_GATEWAY_GRPC_PORT`.
 
-_35 variables discovered across the workspace._
+_42 variables discovered across the workspace._
 
 ## Variables by Crate
 
@@ -70,7 +70,20 @@ _35 variables discovered across the workspace._
 | `STITCHD_AUTH_SERVICE_ADDR` | `http://localhost:50051` | no (has default) |
 | `STITCHD_GATEWAY_GRPC_PORT` | `50050` | no (has default) |
 | `STITCHD_GATEWAY_HTTP_PORT` | `8080` | no (has default) |
+| `STITCHD_SCHEDULE_SERVICE_ADDR` | `http://localhost:50057` | no (has default) |
 | `STITCHD_STATS_SERVICE_ADDR` | `http://localhost:50056` | no (has default) |
+
+### `stitchd-schedule-service`
+
+| Variable | Default | Required |
+|----------|---------|----------|
+| `STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL` | `http://localhost:50055` | no (has default) |
+| `STITCHD_FLAG_SERVICE_GRPC_URL` | `http://localhost:50051` | no (has default) |
+| `STITCHD_SCHEDULE_CLAIM_BATCH` | `100` | no (has default) |
+| `STITCHD_SCHEDULE_SCHEDULER_INTERVAL_SECS` | `60` | no (has default) |
+| `STITCHD_SCHEDULE_SERVICE_GRPC_PORT` | `50057` | no (has default) |
+| `STITCHD_SCHEDULE_SERVICE_HTTP_PORT` | `9201` | no (has default) |
+| `STITCHD_SEGMENTATION_SERVICE_GRPC_URL` | `http://localhost:50053` | no (has default) |
 
 ### `stitchd-segmentation-service`
 
@@ -85,7 +98,6 @@ _35 variables discovered across the workspace._
 
 | Variable | Default | Required |
 |----------|---------|----------|
-| `STITCHD_EXPERIMENTATION_SERVICE_GRPC_URL` | `http://localhost:50055` | no (has default) |
 | `STITCHD_STATS_SCHEDULER_INTERVAL_SECS` | `3600` | no (has default) |
 | `STITCHD_STATS_SERVICE_GRPC_PORT` | `50056` | no (has default) |
 | `STITCHD_STATS_SERVICE_HTTP_PORT` | `9200` | no (has default) |

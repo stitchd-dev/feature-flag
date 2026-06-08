@@ -144,6 +144,45 @@ message SetDefaultRuleDistributionResponse {
   uint64      version = 2;
 }
 
+// ─── Prerequisites (flag_lifecycle_20260604) ──────────────────────────────────
+//
+// Manage a flag's prerequisite gate: the set of (prerequisite_flag,
+// required_variant) deps plus the per-flag fallback variant returned when the
+// gate fails. Write-time cycle detection rejects edges that would form a cycle
+// in the prerequisite DAG (added in Phase 4).
+
+message SetPrerequisitesRequest {
+  // Project-scoped admin operation — required.
+  string project_id = 1;
+  // Flag whose prerequisites are being set (key within the project).
+  string flag_key    = 2;
+  // The full replacement set of prerequisites. Empty clears all prerequisites.
+  repeated FlagPrerequisite prerequisites = 3;
+  // Key of the fallback variant returned when the gate fails. Empty string
+  // means "fall back to the flag's off/disabled variant".
+  string fallback_variant_key = 4;
+  // Optimistic-locking version (matches FeatureFlag.version).
+  uint64 version     = 5;
+}
+
+message SetPrerequisitesResponse {
+  FeatureFlag flag    = 1;
+  uint64      version = 2;
+}
+
+message GetPrerequisitesRequest {
+  // Project-scoped admin read — required.
+  string project_id = 1;
+  // Flag whose prerequisites are being fetched (key within the project).
+  string flag_key   = 2;
+}
+
+message GetPrerequisitesResponse {
+  repeated FlagPrerequisite prerequisites = 1;
+  // Key of the configured fallback variant, or empty for the off/disabled variant.
+  string fallback_variant_key = 2;
+}
+
 // ─── Flag management service ──────────────────────────────────────────────────
 
 service FlagService {
@@ -169,4 +208,12 @@ service FlagService {
   // Rejects with FAILED_PRECONDITION when the flag is locked.
   rpc SetDefaultRuleDistribution(SetDefaultRuleDistributionRequest)
       returns (SetDefaultRuleDistributionResponse);
+
+  // [ADDITIVE — flag_lifecycle_20260604] Replace a flag's prerequisite gate
+  // (deps + fallback variant). Rejects with INVALID_ARGUMENT when the edge set
+  // would form a cycle in the prerequisite DAG.
+  rpc SetPrerequisites(SetPrerequisitesRequest) returns (SetPrerequisitesResponse);
+
+  // [ADDITIVE — flag_lifecycle_20260604] Read a flag's prerequisite gate.
+  rpc GetPrerequisites(GetPrerequisitesRequest) returns (GetPrerequisitesResponse);
 }

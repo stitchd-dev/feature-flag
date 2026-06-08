@@ -70,6 +70,10 @@ required-features = ["test-util"]
 name = "exclusion_gating"
 required-features = ["test-util"]
 
+[[test]]
+name = "prerequisites"
+required-features = ["test-util"]
+
 [dev-dependencies]
 # Integration tests stub out the gateway with wiremock + tonic mock services.
 wiremock = { workspace = true }

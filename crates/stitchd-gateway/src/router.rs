@@ -26,8 +26,9 @@ use crate::middleware::auth::{
 use crate::middleware::event_quota::{build_limiter_from_env, event_quota_middleware};
 use crate::middleware::sdk_auth::sdk_auth_middleware;
 use crate::routes::{
-    admin, auth, auth_providers, context_intel, eval_stats, event_admin, events, exclusion_groups,
-    experiments, flags, management, metrics, oidc, saml, sdk_backend, segments, stats,
+    admin, auth, auth_providers, context_intel, dependencies, eval_stats, event_admin, events,
+    exclusion_groups, experiments, flags, management, metrics, oidc, saml, schedules, sdk_backend,
+    segments, stats,
 };
 use crate::state::GatewayState;
 
@@ -313,6 +314,22 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             get(context_intel::list_context_params),
         )
         .route("/v1/jobs/{job_id}", get(stats::get_job_status))
+        // --- schedules (flag_lifecycle) ---
+        .route(
+            "/v1/environments/{environment_id}/{entity_kind}/{entity_id}/schedules",
+            get(schedules::list_schedules),
+        )
+        .route(
+            "/v1/environments/{environment_id}/schedules/{schedule_id}",
+            get(schedules::get_schedule),
+        )
+        // --- end schedules ---
+        // --- dependency graph (flag_lifecycle Phase 6) ---
+        .route(
+            "/v1/projects/{project_id}/{entity_kind}/{entity_id}/dependencies",
+            get(dependencies::get_dependencies),
+        )
+        // --- end dependency graph ---
         .with_state(Arc::clone(&state));
 
     let resource_write = Router::new()
@@ -349,6 +366,12 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/projects/{project_id}/flags/{flag_id}/hashing",
             put(flags::update_flag_hashing),
         )
+        // --- prerequisites (flag_lifecycle) ---
+        .route(
+            "/v1/projects/{project_id}/flags/{flag_id}/prerequisites",
+            get(flags::get_prerequisites).put(flags::set_prerequisites),
+        )
+        // --- end prerequisites (flag_lifecycle) ---
         // Segments — write
         .route(
             "/v1/segments",
@@ -433,6 +456,24 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/experiments/{experiment_id}/recompute",
             post(stats::trigger_recompute),
         )
+        // --- schedules (flag_lifecycle) ---
+        .route(
+            "/v1/environments/{environment_id}/{entity_kind}/{entity_id}/schedules",
+            post(schedules::create_schedule),
+        )
+        .route(
+            "/v1/environments/{environment_id}/schedules/{schedule_id}/cancel",
+            post(schedules::cancel_schedule),
+        )
+        .route(
+            "/v1/environments/{environment_id}/schedules/{schedule_id}/pause",
+            post(schedules::pause_schedule),
+        )
+        .route(
+            "/v1/environments/{environment_id}/schedules/{schedule_id}/resume",
+            post(schedules::resume_schedule),
+        )
+        // --- end schedules ---
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn(require_write_permission));
 

@@ -10,8 +10,10 @@ pub mod experiment;
 pub mod flag;
 pub mod metric;
 pub mod organisation;
+pub mod prerequisites;
 pub mod project;
 pub mod role;
+pub mod scheduled_changes;
 pub mod sdk_key;
 pub mod segment;
 pub mod user;
@@ -25,8 +27,16 @@ pub use experiment::PgExperimentRepository;
 pub use flag::{PgFlagRepository, PgVariantRepository};
 pub use metric::PgMetricRepository;
 pub use organisation::PgOrganisationRepository;
+pub use prerequisites::{
+    DEPENDENCY_KIND_PREREQUISITE, DependentRow, ENTITY_TYPE_FLAG, FlagPrerequisiteRow,
+    NewFlagPrerequisite, PrerequisiteRepository,
+};
 pub use project::PgProjectRepository;
 pub use role::PgRoleRepository;
+pub use scheduled_changes::{
+    NewScheduledChange, RunOutcome, ScheduleKind, ScheduleStatus, ScheduledChangeRepository,
+    ScheduledChangeRow, ScheduledChangeRunRow,
+};
 pub use sdk_key::PgSdkKeyRepository;
 pub use segment::PgSegmentRepository;
 pub use user::PgUserRepository;

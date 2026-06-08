@@ -10,5 +10,6 @@
 pub mod error;
 pub mod flag_lock;
 pub mod mapping;
+pub mod prerequisites;
 pub mod sdk_backend;
 pub mod service;
