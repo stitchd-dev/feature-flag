@@ -46,3 +46,19 @@ From `conductor/patterns.md` — directly relevant to this track:
 ---
 
 <!-- Learnings from implementation will be appended below -->
+
+## [2026-06-08] Phase 5: Fresh-DB Reset Tooling [e604ccb, 84bb55b]
+- **Implemented:** scripts/reset_dev_db.sh (PG drop/create/migrate; --all adds CH+Scylla) + `cargo xtask ch-migrate`.
+- **Learnings:**
+  - Dev PG drift = "different checksum" on V1 baseline (edited after apply) → `sqlx migrate run` halts, later migrations pending. Only fix is full DROP+recreate (no in-place re-checksum). `sqlx database drop -y` is non-interactive.
+  - ClickHouse Replicated*MergeTree leaves replica registrations in Keeper after a plain DROP DATABASE → recreate fails REPLICA_ALREADY_EXISTS (Code 253). Use `DROP DATABASE … SYNC` AND sweep orphans: enumerate `system.zookeeper WHERE path='/clickhouse/tables/<db>'` and `SYSTEM DROP REPLICA '<replica>' FROM ZKPATH …`. Replica name = `getMacro('replica')` (here "localhost").
+  - CH HTTP rejects anonymous DDL (403); dev creds are stitchd:stitchd (curl --user).
+  - Canonical CH migrator is `stitchd_event_writer::migrations::run` (2 embedded migrations); the clickhouse-migrations/ dirs are legacy.
+
+## [2026-06-08] Phase 3: On-Demand Interaction Recompute [f29420d]
+- **Implemented:** PerExperimentRecomputer.recompute → refresh_interactions → pub(crate) sweep_for_experiment_env → run_interaction_sweep, scoped to the target experiment's env.
+- **Learnings:**
+  - On-demand recompute (`grpc/service.rs` run_recompute → ExperimentRecomputer trait) drove only per-exp bandit reallocation; interactions only refreshed on the 60-min tick. `run_bandit_reallocation` returns Ok(NotApplicable) for non-bandit exps (no error) so appending the sweep is safe for all experiments.
+  - `run_interaction_sweep` groups by environment internally, so passing the env-subset is equivalent to a global sweep but cheaper.
+  - GOTCHA: a true live-CH e2e through recompute() is infeasible as a self-seeding #[ignore] test because it calls fetch_running_experiments over the experimentation-service gRPC (not available in self-seeding tests). Tested the env-scoping seam at unit level with fake reader/writer/repos instead → no ci.yml `--test` list change needed.
+  - `stitchd_db::RepositoryError` is the re-export (NOT `stitchd_db::repository::RepositoryError`, which is private).

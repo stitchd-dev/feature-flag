@@ -38,12 +38,12 @@ idempotency store.
 ## Phase 3: On-Demand Interaction Recompute (feature-flag-uga)
 <!-- depends: -->
 
-- [ ] Task 1: Wire CH reader/writer + interaction repo into the on-demand `ExperimentRecomputer` / `StatsServiceImpl`
+- [x] Task 1: Wire CH reader/writer + interaction repo into the on-demand `ExperimentRecomputer` / `StatsServiceImpl` [f29420d]
   <!-- files: crates/stitchd-stats-service/src/grpc/service.rs, crates/stitchd-stats-service/src/recompute_trigger.rs, crates/stitchd-stats-service/src/main.rs -->
-- [ ] Task 2: Call `run_interaction_sweep` in the `run_recompute` path (order-capped via `STITCHD_STATS_MAX_INTERACTION_ORDER`); sweep failure marks job failed — TDD
+- [x] Task 2: Call `run_interaction_sweep` in the on-demand recompute path (order-capped via `STITCHD_STATS_MAX_INTERACTION_ORDER`); sweep failure marks job failed — TDD [f29420d]
   <!-- files: crates/stitchd-stats-service/src/grpc/service.rs, crates/stitchd-stats-service/src/interaction_compute.rs -->
   <!-- depends: task1 -->
-- [ ] Task 3: Self-seeding live-CH integration test (AC-5) + update CI `--test` list in ci.yml + close feature-flag-uga
+- [x] Task 3: Unit tests for the on-demand sweep seam (no-op vs proceed); live e2e infeasible (needs experimentation-service gRPC) so no ci.yml --test change; close feature-flag-uga [f29420d]
   <!-- files: crates/stitchd-stats-service/tests, .github/workflows/ci.yml -->
   <!-- depends: task2 -->
 - [ ] Task: Conductor - User Manual Verification 'On-Demand Interaction Recompute' (Protocol in workflow.md)
