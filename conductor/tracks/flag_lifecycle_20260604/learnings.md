@@ -612,3 +612,51 @@ Patterns, gotchas, and context discovered during implementation.
     in-scope gap to schedule, not just a note — and ensure both the negative AND positive paths of
     a gate are tested. Cross-service data needs (e.g. an ID the consumer must compare) belong on the
     producer's proto from the start.
+
+## 2026-06-08 — Phase 10 (Follow-Up Completions, Revision #1)
+- SHAs: 10.1 `a75f790`, 10.2 `555be87`, 10.3 `003d206`, fmt `1ef99ae`. Beads hp5.10.1–10.3 closed;
+  milestone feature-flag-hp5.10 left OPEN for the orchestrator.
+- **10.1 — variant UUID + exact flag_variant verify.** Added `flags.v1 Variant.id` (tag 3,
+  backward-compatible; empty on SDK sync). The exact `flag_variant` resolution is two-hop: the
+  prereq stores a flag *id* but flag-service `GetFlag` keys on flag *key*, so a `ServedVariantLookup`
+  trait resolves flag_id→key via `FlagRepository::find_by_id`, then calls `GetFlag(env,key)` and
+  reads the **served (default) variant** UUID = the variant whose `key == default_variant_key`
+  (None when the flag is disabled / has no default). `compare_served_variant` (pure helper) compares
+  it to `required_variant_id`. Wired via `FlagServiceServedVariantLookup`; an `UnavailableServedVariantLookup`
+  keeps the old fail-closed behaviour when no Flag Service connection is available at boot. The
+  experimentation-service `main.rs` ALREADY created a `flag_client` (Option) — reused it; moved the
+  flag-client block above the resolver and removed the now-duplicate block.
+  - **Field-add blast radius:** adding `Variant.id` broke every exhaustive `ProtoVariant {…}` literal
+    (no `..Default::default()`). Sites fixed: gateway `variant_body_to_proto` + 1 test literal;
+    schedule-service `apply/flag.rs`; SDK `client.rs` test helpers + 4 SDK test files + `conformance.rs`.
+    `cargo test --workspace --all-targets --features stitchd-sdk-rust/test-util --no-run` is the only
+    way to surface the feature-gated SDK test targets.
+- **10.2 — start-prereq read RPC + dep-graph + UI.** Added `experiments.v1 GetExperimentStartPrerequisites`
+  RPC + `StartPrerequisite` msg (dedicated RPC, mirrors `GetExperimentInteractions`; chose this over
+  folding into `GetExperiment` so the read is independent of the heavy Experiment message). Impl reads
+  the existing `start_prereq` collaborator (empty when absent — no error). **Mock blast radius:** adding
+  the RPC broke 3 `impl ExperimentationService` mocks (stats-service scheduler, 2 gateway test files) —
+  added `Unimplemented` stubs. Gateway `dependencies.rs` experiment branch is now ASYNC + calls the RPC:
+  flag_variant→flag edge (`prerequisite_flag_variant`), experiment_done→experiment edge
+  (`prerequisite_experiment_done`); the old synchronous unit test was removed (now an integration test
+  in `dependencies_routes.rs` with a full mock ExperimentationService — ~22-method trait, but the only
+  RPC that returns data is the new one). Admin UI: the generic `DependencyGraph` component is reusable
+  as-is — just mounted it on the experiment Configuration tab (`entityKind="experiments"`,
+  `entityId={apiExp.id}` — the dep route is project-scoped + uses the experiment UUID, and `projectId`
+  comes from `useOrgContext()`). Only added two `edgeKindLabel` cases + a vitest.
+- **10.3 — segment list-generation activation.** Added `segments.v1 ActivateListGeneration` RPC.
+  **No new ScyllaDB mechanism needed** — the existing `SegmentRepository::set_list_entries` IS the
+  generation-swap (writes a fresh random-id generation, then LWT CAS-flips the active-generation
+  pointer). "Activate a prepared generation" = full-replace the include/exclude member set via that
+  swap, so the RPC just carries the prepared `include`/`exclude` and calls `set_list_entries`
+  (context_type defaults to "user"). schedule-service `apply/segment.rs`: `SegmentUpdater` trait
+  gained `activate_list_generation`; the `list_generation` payload kind (now carrying `include`/`exclude`)
+  dispatches it instead of the prior reject-with-reason. No `main.rs` change — same `GrpcSegmentUpdater`.
+  The segmentation-service test mock (`MockSegmentRepoForTest`) already implemented `set_list_entries`,
+  so the service-level activation test was a small add.
+- **Gates:** `SQLX_OFFLINE=true cargo build --workspace` ✓; clippy `--workspace --all-targets --features
+  stitchd-sdk-rust/test-util -D warnings` ✓; `cargo fmt --all --check` ✓; tests for the 5 crates
+  660 passed / 0 failed; admin tsc ✓, lint 0 errors (70 pre-existing warnings), vitest 925/925, build ✓;
+  `cargo xtask docs` + `git diff --exit-code` ✓ (zero tracked drift). All proto additions verified in the
+  gitignored generated gRPC pages (Variant.id, GetExperimentStartPrerequisites, ActivateListGeneration).
+  Zero `.sqlx/` change (all runtime `sqlx::query`/`query_as`, no compile-time macros).
