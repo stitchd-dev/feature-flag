@@ -13,6 +13,7 @@
 
 pub mod allocation;
 pub mod contextual;
+pub mod convergence;
 pub mod epsilon;
 pub mod realtime;
 pub mod reward;
@@ -24,6 +25,9 @@ pub use allocation::{NormalizeError, normalize_to_distribution};
 pub use contextual::{
     ContextualModel, FeatureEncoding, FeatureResolver, FeatureSpec, VariantCoefficients,
     encode_features, fit_design_inverse, fit_ridge, predict, sample_contextual_variant,
+};
+pub use convergence::{
+    ConvergedWinner, DEFAULT_CONVERGENCE_SAMPLES, detect_convergence, probability_best,
 };
 pub use epsilon::epsilon_greedy_weights;
 pub use realtime::{SampledDraw, sample_realtime_variant};

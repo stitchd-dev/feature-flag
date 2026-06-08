@@ -117,9 +117,9 @@ Phase-level wave summary:
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
-- [ ] Task 1: Convergence detector (posterior prob-best threshold) in stitchd-core; tests.
+- [~] Task 1: Convergence detector (posterior prob-best threshold) in stitchd-core; tests.
       <!-- files: crates/stitchd-core/src/experimentation/bandit/convergence.rs -->
-- [ ] Task 2: Lifecycle executor in experimentation/stats-service — `advisory` badge,
+- [~] Task 2: Lifecycle executor in experimentation/stats-service — `advisory` badge,
       `auto_commit` (lock to winner), `auto_rollout` (commit + auto-stop + promote winner to
       standing rule/default + release lock); idempotent; audited in `bandit_allocation_runs`.
       <!-- files: crates/stitchd-stats-service/src/bandit.rs, crates/stitchd-experimentation-service/src/* -->
@@ -130,7 +130,7 @@ Phase-level wave summary:
 <!-- execution: sequential -->
 <!-- depends: phase7 -->
 
-- [ ] Task 1: Campaign entity + RPCs; on-convergence spawn next iteration (winner=new
+- [~] Task 1: Campaign entity + RPCs; on-convergence spawn next iteration (winner=new
       control + new variants); on-reward-drift reopen exploration; `max_iterations`/budget caps;
       `action=spawn_iteration` audit. Tests incl. cap enforcement + idempotent spawn.
       <!-- files: crates/stitchd-experimentation-service/src/*, crates/stitchd-stats-service/src/bandit.rs -->
