@@ -332,13 +332,13 @@ mod tests {
                 .unwrap_or_default())
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
             _include_archived: bool,
-        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+        ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError> {
             unimplemented!("not used in these tests")
         }
 
@@ -659,13 +659,13 @@ mod tests {
             )))
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
             _include_archived: bool,
-        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+        ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError> {
             Err(RepositoryError::Unexpected(anyhow::anyhow!(
                 "db unavailable"
             )))

@@ -528,14 +528,14 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
             _include_archived: bool,
-        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
-            Ok((vec![], 0))
+        ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
         }
 
         async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {
@@ -1225,13 +1225,13 @@ mod tests {
             Err(RepositoryError::Unexpected(anyhow::anyhow!("db down")))
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
             _include_archived: bool,
-        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+        ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError> {
             Err(RepositoryError::Unexpected(anyhow::anyhow!("db down")))
         }
 

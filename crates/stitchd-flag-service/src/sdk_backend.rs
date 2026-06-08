@@ -788,13 +788,13 @@ mod tests {
                 .filter(|d| d.deleted_at.is_none())
                 .collect())
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _environment_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
             _include_archived: bool,
-        ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+        ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError> {
             unimplemented!()
         }
         async fn create(&self, _def: &EventDefinition) -> Result<(), RepositoryError> {

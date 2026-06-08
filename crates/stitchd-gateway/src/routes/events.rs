@@ -221,14 +221,10 @@ pub async fn list_event_definitions(
     Path(environment_id): Path<String>,
     Query(cursor): Query<CursorParams>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let offset = cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = cursor.effective_limit();
     let req = TonicRequest::new(ListEventDefinitionsRequest {
         environment_id,
-        offset: Some(offset),
-        limit: Some(u64::from(limit)),
+        cursor: cursor.cursor.clone().unwrap_or_default(),
+        limit: cursor.effective_limit(),
         include_archived: Some(false),
     });
     let mut client = state.analytics_client.lock().await;
@@ -242,7 +238,7 @@ pub async fn list_event_definitions(
         .into_iter()
         .map(proto_to_event_def_json)
         .collect();
-    Ok(Json(CursorPage::from_offset(items, resp.total, offset)))
+    Ok(Json(CursorPage::from_token(items, resp.next_cursor)))
 }
 
 /// `POST /v1/environments/{environment_id}/event-definitions`

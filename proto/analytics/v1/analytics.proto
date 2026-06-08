@@ -334,16 +334,17 @@ message GetEventDefinitionRequest {
 
 message ListEventDefinitionsRequest {
   string          environment_id    = 1;
-  optional uint64 offset            = 2;
-  optional uint64 limit             = 3;
+  // Cursor (keyset) pagination. An empty cursor is the first page; `limit`
+  // defaults to 50, capped at 200.
+  string          cursor            = 2;
+  uint32          limit             = 3;
   optional bool   include_archived  = 4;
 }
 
 message ListEventDefinitionsResponse {
   repeated EventDefinitionMsg items  = 1;
-  uint64                      total  = 2;
-  uint64                      offset = 3;
-  uint64                      limit  = 4;
+  // Opaque cursor for the next page; empty when there are no more rows.
+  string                      next_cursor = 2;
 }
 
 message UpdateEventDefinitionRequest {

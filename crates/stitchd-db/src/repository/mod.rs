@@ -758,16 +758,20 @@ pub trait EventDefinitionRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<EventDefinition>, RepositoryError>;
 
-    /// List definitions for an environment with offset pagination.
-    /// Returns `(page_items, total_count)`. `include_archived = true`
-    /// includes soft-deleted rows in both the page and the total.
-    async fn list_by_environment_paginated(
+    /// List definitions for an environment with **keyset** (cursor) pagination,
+    /// ordered by `(created_at, id)`. `include_archived = true` includes
+    /// soft-deleted rows.
+    ///
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
         include_archived: bool,
-    ) -> Result<(Vec<EventDefinition>, u64), RepositoryError>;
+    ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError>;
 
     /// Persist a new definition.
     async fn create(&self, def: &EventDefinition) -> Result<(), RepositoryError>;

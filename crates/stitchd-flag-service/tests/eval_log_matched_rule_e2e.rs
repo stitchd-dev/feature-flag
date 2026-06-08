@@ -322,13 +322,13 @@ impl EventDefinitionRepository for StubEventDefRepo {
     ) -> Result<Vec<EventDefinition>, RepositoryError> {
         Ok(vec![])
     }
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         _env_id: EnvironmentId,
-        _offset: u64,
+        _after: Option<stitchd_db::KeysetCursor>,
         _limit: u64,
         _include_archived: bool,
-    ) -> Result<(Vec<EventDefinition>, u64), RepositoryError> {
+    ) -> Result<(Vec<EventDefinition>, Option<String>), RepositoryError> {
         unimplemented!()
     }
     async fn create(&self, _d: &EventDefinition) -> Result<(), RepositoryError> {
