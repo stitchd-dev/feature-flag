@@ -66,3 +66,72 @@ From `conductor/patterns.md` (read before starting):
   guardrail constraints). Full Pareto-front exploration is explicitly out of scope.
 
 <!-- Learnings from implementation will be appended below -->
+
+## Phase 1 — Schema, Domain & Proto Foundation (2026-06-08)
+
+### Task 1.1 — PG migration (commit eb79e87)
+- New migration `20260608000001_bandit_foundation.sql`: `experiment_mode TEXT DEFAULT
+  'fixed'` (CHECK fixed|bandit) + `bandit_config JSONB` + `bandit_campaign_id UUID FK`
+  on `experiments`; `bandit_config JSONB` snapshot on `experiment_iterations`;
+  `bandit_campaigns` + `bandit_allocation_runs` tables (the latter mirrors
+  `scheduled_change_runs`). All idempotent (IF NOT EXISTS / ADD COLUMN IF NOT EXISTS).
+- **Shared dev DB drift gotcha:** the running `stitchd` Postgres DB has a *pre-existing*
+  baseline checksum mismatch on `20260525000001_v1_baseline` AND several un-applied
+  pending migrations (exclusion_group_unit_context_type, lifecycle_automation, …) — i.e.
+  it was NOT migrated to the current branch state. `cargo sqlx migrate run` against it
+  aborts on the checksum. Workaround used: create a fresh throwaway DB
+  (`bandit_verify_20260608`) and migrate from scratch — the whole chain incl. this
+  migration applies green. Use that fresh DB as `DATABASE_URL` for `#[sqlx::test]` and
+  `cargo sqlx prepare`. (DATABASE_URL is unset in the env; dev URL is
+  `postgres://stitchd:stitchd@localhost:5432/<db>` from docker-compose defaults.)
+- Baseline tables use `env_id` (not `environment_id`) on `experiments`/`iterations`, but
+  `bandit_campaigns` follows the spec's `environment_id` naming (both conventions exist
+  in v1_baseline).
+
+### Task 1.2 — core domain types (commit d9378cf)
+- Bandit submodule under `crates/stitchd-core/src/experimentation/bandit/`. Tagged enums
+  use `#[serde(tag = "type", rename_all = "snake_case")]` (matches `MetricKind`/segment
+  conventions); `ExperimentMode` is `rename_all = "lowercase"`. `Uuid` fields carry
+  `#[cfg_attr(feature="openapi", schema(value_type = String, format = Uuid))]`.
+- New `Experiment`/`ExperimentIteration` fields use `#[serde(default)]` so legacy JSON/rows
+  decode (added a back-compat deserialization test).
+- **DB repo is hand-rolled `sqlx::query` + `row.get(...)` mapping (NOT `query!` macros NOR
+  FromRow).** Adding a domain field therefore requires touching EVERY SELECT/INSERT/UPDATE
+  + the `row_to_experiment`/`row_to_iteration` mappers in
+  `repository/pg/experiment.rs`. The status-transition UPDATE…RETURNING and the
+  iteration-INSERT both feed the row mappers, so their column lists/binds must include the
+  new columns too. Did this in Task 1.2's commit (it's the schema↔domain seam the migration
+  + types jointly require).
+
+### Task 1.3 — proto (commit 92f5421)
+- Additive only: Experiment fields 25/26, Iteration 17, analytics
+  WriteExperimentResultsRequest 14 + ExperimentResult row 15. `bandit_config` rides as a
+  JSON *string* (mirrors how no JSON-typed proto exists here; verified sequential_result
+  carries the same way). Proto regenerates via a plain `cargo build` (protoc-bin-vendored).
+- **A new domain field ripples to ~12 struct-literal sites across the workspace** (services
+  + every test fixture/builder that spells out `Experiment {…}`/`ExperimentIteration {…}`).
+  Fastest path: `cargo build --workspace --all-targets`, fix the reported `missing field`
+  sites one wave at a time. Watch trailing closers: `};` vs `}` vs `}])` need separate
+  edits / replace_all groupings.
+- **bandit_allocation is accepted at the analytics write boundary but defaulted to None at
+  the CH conversion** — the ClickHouse `experiment_results` row has no column yet (single
+  baseline CH migration; no incremental ALTER mechanism wired). Full CH persistence is FR7
+  surfacing (Phase 11), deliberately deferred.
+
+### Task 1.4 — gateway REST (commit b692fc5)
+- Gateway is a pure proto-translation layer; binding validation lives in the service. Added
+  `resolve_bandit_fields()` helper for the bandit input rules (mode ∈ {fixed,bandit};
+  config only with mode=bandit; config must `validate()`), returning 422 via
+  `GatewayError::InvalidBody` (there is NO `Validation` variant — `InvalidBody`→422,
+  `BadRequest`→400).
+- **Don't insert a fn between a `#[utoipa::path(...)]` attribute and its handler** — the
+  macro generates `__path_<fn>` and breaks if the attribute no longer sits directly on the
+  handler. Put helpers above the doc-comment/attribute block.
+- running/paused immutability for mode/config is enforced by the existing service-side
+  update guard (rejects updates while running|paused), not re-implemented at the gateway.
+
+### Gates
+- `.sqlx` cache delta = ZERO: the experiment repo uses runtime `sqlx::query`, not `query!`,
+  so `cargo sqlx prepare` produced no new entries. Nothing to commit there.
+- fmt/clippy `-D warnings`/core+db+gateway tests all green (with DATABASE_URL pointed at the
+  fresh verify DB for the `#[sqlx::test]` suites).
