@@ -57,3 +57,21 @@ that the cursor `{items, next_cursor}` envelope omits.
   internals `[-] DEFERRED → feature-flag-cj5]` (contract-preserving; tracked
   separately so this track stays closed). **No new active task** added to this
   (completed) track.
+
+---
+
+## Revision #2 — 2026-06-09 — Type: Spec + Plan (FR-4.3 true keyset implemented)
+
+**Phase/task when raised:** post-completion follow-up — the user directed implementing the deferred true-keyset internals (`feature-flag-cj5`) autonomously.
+
+**Trigger:** Revision #1 delivered the cursor contract via an interim encoded-offset shim and deferred true keyset. The user asked to complete it now, with a **clean cutover** (not additive migration).
+
+**Changes made (code, across 10 commits 56aa12d…28dc14e):**
+- Shared `stitchd_db::KeysetCursor` (base64url(JSON({created_at, id}))) + `effective_limit`.
+- 8 top-level list entities cut over OFFSET → keyset: proto (page/per_page/total → cursor/limit/next_cursor), repo `list_*_paginated` → `list_*_keyset`, service handlers, gateway routes (`CursorPage::from_token`), all repo mock impls, and tests (each with a multi-page exactly-once correctness test).
+- Removed the interim encoded-offset shim (`OffsetCursor`, `CursorParams::offset()`, `CursorPage::from_offset()`).
+- Internal unbounded "list-all" consumers (gateway dependency-graph) now page through the cursor.
+
+**Changes made (spec/plan):** FR-4.3 marked Done (keyset); "Last Revised" → Revision #2; plan's deferred follow-up item → `[x]` with per-entity SHAs.
+
+**Rationale & impact:** O(1) per-page scans + concurrent-insert stability. **REST contract unchanged** (opaque token) ⇒ Admin UI untouched. **Behavior note:** `org-users` list order changed from `email` to `(created_at, id)` (the only user-visible ordering change; all other entities already ordered by `created_at`). Verified CI-green: workspace clippy -D warnings, sqlx-check, fmt, docs idempotent, OpenAPI contract 23/120, stitchd-db + 6 services + analytics (156) all pass. `feature-flag-cj5` closed.

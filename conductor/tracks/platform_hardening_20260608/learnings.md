@@ -109,3 +109,13 @@ From `conductor/patterns.md` — directly relevant to this track:
 - **Learning:**
   - Gotcha: a "migrate to keyset" requirement conflates the user-facing CONTRACT (opaque cursor → {items,next_cursor}) with an internal OPTIMIZATION (drop OFFSET). Separating them lets you ship the mandated contract immediately (encoded-offset cursor) and defer the perf win (true keyset) as a contract-preserving follow-up.
   - Pattern: when a spec mandates a paradigm change, deliver the CONTRACT first over existing internals; treat the internal rewrite as a separate, scoped, deferrable optimization. And scope "all list endpoints" to top-level resource collections — detail sub-lists with count/total dependencies are legitimately excluded.
+
+## [2026-06-09] REVISION #2 — true keyset implemented (feature-flag-cj5)
+- **Type:** Spec + Plan + code (10 commits)
+- **Learning:**
+  - Gotcha: a keyset cutover SILENTLY removes any "page:0 = give me everything" mode. Grep EVERY caller of the changed list RPC — internal consumers (e.g. dependency-graph) that relied on the unbounded list must be converted to page through the cursor, or they truncate at the default limit.
+  - Gotcha: keyset needs a UNIQUE total order — `ORDER BY created_at` alone is ambiguous; add `, id`. Entities already ordered by created_at keep their order; one (org-users) was email-ordered and its sort changed to (created_at, id).
+  - Gotcha: `limit as usize` trips clippy::cast_possible_truncation under -D warnings — use `usize::try_from(limit).unwrap_or(usize::MAX)`.
+  - Gotcha (env): a CH `DROP DATABASE` (reset_dev_db.sh --all) can leave Keeper replica state inconsistent → later self-seeding analytics tests fail KEEPER_EXCEPTION on Replicated*MergeTree MVs. Re-running the reset (SYNC drop + orphan sweep) clears it; CI (fresh CH) is unaffected.
+  - Pattern: opaque cursor tokens make the keyset cutover REST-contract-preserving — the UI/clients never change when offset→keyset internals swap. Own the token format in the repo (next to the SQL), forward it untouched through proto + gateway.
+  - Pattern: verify keyset correctness with a multi-page test that pages through N>2 pages and asserts every row visited exactly once (no gaps/dupes) — catches off-by-one boundary + tiebreaker bugs that single-page tests miss.

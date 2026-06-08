@@ -79,8 +79,8 @@ idempotency store.
   <!-- depends: task4 -->
 - [x] Task: Conductor - User Manual Verification 'Cursor-Based Pagination Migration' — verified CI-green (gateway 288 + admin vitest 994, OpenAPI contract 23/120, docs idempotent)
 
-### Phase 4 — Deferred follow-up (out of this track → `feature-flag-cj5`)
-- [-] True keyset internals [DEFERRED → feature-flag-cj5]: convert the 6 list repos from `OFFSET` + `COUNT(*) OVER()` to keyset (`WHERE (sort_key,id) > cursor … LIMIT n+1`) and swap the gateway cursor token payload `{offset}` → `{sort_key,id}` (the `CursorPage::from_overfetch` primitive is already in place). Contract-preserving — the REST `?cursor=&limit=` → `{items,next_cursor}` surface does NOT change. Buys O(1) deep-page scans + concurrent-insert stability. Tracked separately so this track stays closed.
+### Phase 4 — True keyset internals (`feature-flag-cj5`) — DONE (Revision #2)
+- [x] True keyset migration [feature-flag-cj5]: converted the 8 top-level list repos from `OFFSET` + `COUNT(*) OVER()` to keyset (`WHERE (created_at,id) > cursor … ORDER BY created_at, id LIMIT n+1`) via clean proto cutover (page/per_page/total → cursor/limit/next_cursor); opaque token owned by `stitchd_db::KeysetCursor`, forwarded by the gateway (`CursorPage::from_token`); interim encoded-offset shim removed. REST contract unchanged (opaque token) ⇒ Admin UI untouched. Each entity verified by a multi-page exactly-once/no-gaps test. Entities: flags [5827206], experiments [7e761c4], exclusion-groups [169342b], segments [4b4d454], events [1917f84], metrics [995469b], sdk-keys [418d251], org-users [599e36b] (+ keyset helper foundation [56aa12d], shim removal [28dc14e]).
 
 ## Phase 5: Fresh-DB Reset Tooling (feature-flag-7rp)
 <!-- execution: parallel -->

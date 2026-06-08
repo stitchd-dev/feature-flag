@@ -1,11 +1,11 @@
 # Spec: Platform Hardening — Idempotency Keys, On-Demand Interaction Recompute, Cursor Pagination, Fresh-DB Tooling
 
-> **Last Revised: 2026-06-08 (Revision #1)** — FR-4 (cursor pagination) amended to
-> the as-built approach: the cursor **contract** is delivered via an opaque
-> encoded-offset at the gateway over the existing offset-based service RPCs (true
-> keyset internals deferred as follow-up `feature-flag-cj5`); cursor scope is the
-> top-level resource collections only — experiment-detail sub-lists
-> (iterations, exposures) stay page-based. See `revisions.md`.
+> **Last Revised: 2026-06-09 (Revision #2)** — FR-4.3 true keyset now **implemented**
+> (`feature-flag-cj5`): the 8 top-level list repos converted `OFFSET` → keyset
+> `(created_at, id)`, clean proto cutover (cursor/limit + next_cursor), interim
+> encoded-offset shim removed. REST contract unchanged (opaque token) ⇒ Admin UI
+> untouched. (Revision #1 delivered the cursor contract via encoded-offset; scope
+> remains top-level collections — detail sub-lists stay page-based.) See `revisions.md`.
 
 ## Overview
 
@@ -95,16 +95,16 @@ dev ergonomics.
 - FR-4.2 Shared cursor primitives in the gateway (`CursorParams` + `CursorPage<T>`
   + `encode_cursor`/`decode_cursor`); opaque token = base64url(JSON(position)),
   treated as opaque by clients. ✅
-- FR-4.3 **(Revised)** Deliver the cursor contract as an **opaque encoded-offset**
-  at the gateway over each service's existing `(offset, limit) → (items, total)`
-  RPC — `CursorParams::offset()` decodes the token to a start offset,
-  `CursorPage::from_offset(items, total, start)` emits `next_cursor` iff more rows
-  remain. **No proto or repo change.** *Originally specified as a per-repo keyset
-  rewrite (`WHERE (sort_key, id) > cursor … LIMIT n+1`, dropping `OFFSET` +
-  `COUNT(*) OVER()`); that true-keyset internal — which buys O(1) deep-page scans
-  + concurrent-insert stability and swaps only the token payload, not the
-  contract — is deferred to follow-up `feature-flag-cj5`. The
-  `CursorPage::from_overfetch` primitive is in place for it.*
+- FR-4.3 **(Done — Revision #2, `feature-flag-cj5`)** Repos migrated from `OFFSET`
+  + `COUNT(*) OVER()` to **true keyset**: `WHERE (created_at, id) > cursor … ORDER
+  BY created_at, id LIMIT n+1`, dropping the total. The opaque token
+  (`stitchd_db::KeysetCursor` = base64url(JSON({created_at, id}))) is owned by the
+  repo and forwarded untouched by the gateway (`CursorPage::from_token`); the proto
+  list RPCs carry `cursor`/`limit` + `next_cursor` (clean cutover, page/per_page +
+  total removed). O(1) per page, concurrent-insert-stable. Verified per entity by a
+  multi-page exactly-once/no-gaps correctness test. *(The interim encoded-offset
+  shim — `CursorParams::offset()` / `CursorPage::from_offset()` — was removed once
+  every route used keyset.)*
 - FR-4.4 Migrate gateway list routes + the OpenAPI contract surface. ✅ (8 top-level
   list routes; the OpenAPI contract-check verifies `(method, path)` pairs, which
   are unchanged.)
