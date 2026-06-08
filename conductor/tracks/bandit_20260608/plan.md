@@ -82,7 +82,7 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 4' [autonomous] (Protocol in workflow.md)
 
-## Phase 5: Real-Time Eval Path (snapshot-resident, bandit-aware) [checkpoint: pending]
+## Phase 5: Real-Time Eval Path (snapshot-resident, bandit-aware) [checkpoint: 33fac68]
 <!-- execution: sequential -->
 <!-- depends: phase2, phase3 -->
 
