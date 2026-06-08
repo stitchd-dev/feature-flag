@@ -146,7 +146,7 @@ Phase-level wave summary:
       <!-- files: crates/stitchd-stats-service/src/bandit.rs, crates/stitchd-stats-service/src/compute.rs -->
 - [x] Task: Conductor - User Manual Verification 'Phase 9' [autonomous] (Protocol in workflow.md)
 
-## Phase 10: Bandit-Aware Interaction Analysis + Order 4+ [checkpoint: pending]
+## Phase 10: Bandit-Aware Interaction Analysis + Order 4+ [checkpoint: f34ded1]
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
