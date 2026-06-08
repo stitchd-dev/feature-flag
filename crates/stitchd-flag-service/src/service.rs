@@ -2225,8 +2225,7 @@ impl FlagService for FlagServiceImpl {
 
         let req = request.into_inner();
 
-        let project_id = parse_project_id(&req.project_id)?
-            .ok_or_else(|| Status::invalid_argument("project_id is required"))?;
+        let project_id = parse_project_id(&req.project_id)?;
         let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
@@ -2240,12 +2239,28 @@ impl FlagService for FlagServiceImpl {
             Status::invalid_argument("target (flag_rule_id|default_rule) is required")
         })?;
 
-        let mut record = self
-            .flag_repo
-            .find_by_key(&flag_key, project_id)
-            .await
-            .map_err(FlagServiceError::from)
-            .map_err(Status::from)?;
+        // Resolve the flag by project (preferred) or environment. The dispatch
+        // wrapper in experimentation-service has environment_id + flag_key but
+        // not the project_id, so fall back to env-scoped lookup (mirrors get_flag).
+        let mut record = if let Some(pid) = project_id {
+            self.flag_repo
+                .find_by_key(&flag_key, pid)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?
+        } else {
+            let env_id = parse_env_id(&req.environment_id)?;
+            let flags = self
+                .flag_repo
+                .list_by_environment(env_id)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?;
+            flags
+                .into_iter()
+                .find(|f| f.key.as_str() == flag_key.as_str())
+                .ok_or_else(|| Status::not_found(format!("flag '{}' not found", req.flag_key)))?
+        };
 
         // Optimistic-lock check (mirrors set_default_rule_distribution).
         if record.version != i64::try_from(req.version).unwrap_or(record.version) {

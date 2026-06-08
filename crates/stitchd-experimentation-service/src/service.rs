@@ -19,6 +19,7 @@ use stitchd_db::{
     repository::pg::ExclusionGroupRepository,
 };
 use stitchd_proto::experiments::v1::{
+    ApplyBanditAllocationRequest, ApplyBanditAllocationResponse, BanditAllocationOutcome,
     BoundTarget, ContextTypeResults, CreateExperimentRequest, DeleteExperimentRequest,
     ExperimentIteration as ProtoIteration, ExperimentResults, GetExperimentIterationRequest,
     GetExperimentRequest, GetResultsRequest, ListExperimentsRequest, ListExperimentsResponse,
@@ -476,6 +477,90 @@ impl RuleGateWriter for stitchd_db::repository::pg::PgFlagRepository {
     ) -> Result<(), RepositoryError> {
         // Delegates to the inherent method added on the PG flag repo (P3.T1).
         Self::set_rule_exclusion_gate(self, flag_rule_id, gate).await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bandit allocation dispatch (bandit_20260608 Phase 3 Task 2)
+// ---------------------------------------------------------------------------
+
+/// The bound target a bandit allocation should be written to, once the
+/// experiment is confirmed eligible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BanditDispatchTarget {
+    /// Rewrite the flag's default-rule distribution.
+    DefaultRule,
+    /// Rewrite the named custom rule's percentage weights.
+    CustomRule(RuleId),
+}
+
+/// Outcome of resolving whether (and how) a bandit allocation can be dispatched
+/// for an experiment, BEFORE any flag-service call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BanditDispatchPlan {
+    /// Eligible: write to this target. `flag_key` resolved from the experiment.
+    Apply {
+        flag_key: String,
+        environment_id: String,
+        target: BanditDispatchTarget,
+    },
+    /// Ineligible — a recoverable no-op (NOT an error). The string is the
+    /// human-readable skip reason recorded in `bandit_allocation_runs.detail`.
+    Skip(String),
+}
+
+/// Pure eligibility + bound-target resolution for a bandit allocation dispatch.
+///
+/// Eligibility rules (FR4 / FR5):
+/// - the experiment must be in `bandit` mode,
+/// - it must be `running` or `paused` (the only states that hold the flag lock),
+/// - it must have a resolvable bound target (`flag_rule_id` XOR
+///   `targets_default_rule`) and a known `flag_key`,
+/// - the caller must supply at least one allocation.
+///
+/// Anything else returns [`BanditDispatchPlan::Skip`] with a reason — the stats
+/// tick keeps advancing rather than erroring.
+pub(crate) fn resolve_bandit_dispatch(
+    exp: &Experiment,
+    allocation_count: usize,
+) -> BanditDispatchPlan {
+    use stitchd_core::experimentation::bandit::ExperimentMode;
+
+    if exp.experiment_mode != ExperimentMode::Bandit {
+        return BanditDispatchPlan::Skip("experiment is not in bandit mode".to_string());
+    }
+    if !matches!(
+        exp.status,
+        ExperimentStatus::Running | ExperimentStatus::Paused
+    ) {
+        return BanditDispatchPlan::Skip(format!(
+            "experiment is {:?}; only running/paused bandit experiments are eligible",
+            exp.status
+        ));
+    }
+    if allocation_count == 0 {
+        return BanditDispatchPlan::Skip("no allocations supplied".to_string());
+    }
+    let Some(flag_key) = exp.flag_key.clone() else {
+        return BanditDispatchPlan::Skip("experiment has no resolved flag_key".to_string());
+    };
+
+    // Bound target: XOR of flag_rule_id / targets_default_rule.
+    let target = match (exp.flag_rule_id, exp.targets_default_rule) {
+        (Some(rule_id), false) => BanditDispatchTarget::CustomRule(rule_id),
+        (None, true) => BanditDispatchTarget::DefaultRule,
+        (Some(_), true) | (None, false) => {
+            return BanditDispatchPlan::Skip(
+                "experiment binding is ambiguous (neither/both of flag_rule_id, default_rule)"
+                    .to_string(),
+            );
+        }
+    };
+
+    BanditDispatchPlan::Apply {
+        flag_key,
+        environment_id: exp.environment_id.to_string(),
+        target,
     }
 }
 
@@ -1697,6 +1782,119 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
         metrics::counter!("experimentation_service.update_iteration_last_computed.ok").increment(1);
         Ok(Response::new(UpdateIterationLastComputedResponse {}))
+    }
+
+    /// Push newly-computed bandit weights for a running bandit experiment
+    /// (`bandit_20260608` Phase 3 Task 2, FR4).
+    ///
+    /// Resolves the experiment's bound target (custom rule vs default-rule),
+    /// then calls flag-service's privileged `BanditUpdateAllocation` (which
+    /// bypasses the whole-flag human lock for the owning experiment). Ineligible
+    /// experiments (not bandit, not running/paused, no bound target) are reported
+    /// `skipped` — a recoverable no-op, NOT an error, so the stats tick keeps
+    /// advancing. A version conflict surfaces as `failed` with
+    /// `version_conflict = true` so the caller re-fetches the version and retries
+    /// on the next tick. The structured outcome is recorded by the caller in
+    /// `bandit_allocation_runs`. Weight computation is NOT here (Phase 4).
+    #[instrument(skip(self, request))]
+    async fn apply_bandit_allocation(
+        &self,
+        request: Request<ApplyBanditAllocationRequest>,
+    ) -> Result<Response<ApplyBanditAllocationResponse>, Status> {
+        let req = request.into_inner();
+        let exp_uuid = uuid::Uuid::parse_str(req.experiment_id.trim())
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+        let experiment_id = ExperimentId::from_uuid(exp_uuid);
+
+        let exp = self
+            .experiment_repo
+            .find_by_id(experiment_id)
+            .await
+            .map_err(Status::from)?;
+
+        // Pure eligibility + bound-target resolution.
+        let plan = resolve_bandit_dispatch(&exp, req.allocations.len());
+        let (flag_key, environment_id, target) = match plan {
+            BanditDispatchPlan::Skip(reason) => {
+                metrics::counter!("experimentation_service.apply_bandit_allocation.skipped")
+                    .increment(1);
+                return Ok(Response::new(ApplyBanditAllocationResponse {
+                    outcome: BanditAllocationOutcome::Skipped as i32,
+                    resolved_target: String::new(),
+                    new_version: 0,
+                    version_conflict: false,
+                    detail: reason,
+                }));
+            }
+            BanditDispatchPlan::Apply {
+                flag_key,
+                environment_id,
+                target,
+            } => (flag_key, environment_id, target),
+        };
+
+        let (flag_rule_id, resolved_target) = match &target {
+            BanditDispatchTarget::DefaultRule => (None, "default_rule".to_string()),
+            BanditDispatchTarget::CustomRule(rule_id) => {
+                (Some(rule_id.to_string()), rule_id.to_string())
+            }
+        };
+
+        // Without a flag client we cannot dispatch — report skipped (no-op).
+        let Some(flag_client) = self.flag_client.as_ref() else {
+            return Ok(Response::new(ApplyBanditAllocationResponse {
+                outcome: BanditAllocationOutcome::Skipped as i32,
+                resolved_target,
+                new_version: 0,
+                version_conflict: false,
+                detail: "flag-service client not configured".to_string(),
+            }));
+        };
+
+        let allocations: Vec<stitchd_proto::flags::v1::AllocationBucket> = req
+            .allocations
+            .iter()
+            .map(|a| stitchd_proto::flags::v1::AllocationBucket {
+                variant_key: a.variant_key.clone(),
+                weight_bp: a.weight_bp,
+            })
+            .collect();
+
+        match flag_client
+            .bandit_update_allocation(
+                &environment_id,
+                &flag_key,
+                &experiment_id.to_string(),
+                flag_rule_id.as_deref(),
+                allocations,
+                req.expected_version,
+            )
+            .await
+        {
+            Ok(new_version) => {
+                metrics::counter!("experimentation_service.apply_bandit_allocation.applied")
+                    .increment(1);
+                Ok(Response::new(ApplyBanditAllocationResponse {
+                    outcome: BanditAllocationOutcome::Applied as i32,
+                    resolved_target,
+                    new_version,
+                    version_conflict: false,
+                    detail: String::new(),
+                }))
+            }
+            Err(status) => {
+                let version_conflict = status.code() == tonic::Code::Aborted;
+                metrics::counter!("experimentation_service.apply_bandit_allocation.failed")
+                    .increment(1);
+                Ok(Response::new(ApplyBanditAllocationResponse {
+                    outcome: BanditAllocationOutcome::Failed as i32,
+                    resolved_target,
+                    new_version: 0,
+                    version_conflict,
+                    detail: format!("{}: {}", status.code(), status.message()),
+                }))
+            }
+        }
     }
 
     // ── Phase 7 — admin reads ────────────────────────────────────────────────
@@ -5892,5 +6090,321 @@ mod tests {
 
         // (b) no rule with the requested id at all.
         assert!(rule_allocation_expected_bp(&flag, &Uuid::new_v4().to_string()).is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // bandit_20260608 Phase 3 Task 2 — allocation dispatch wrapper
+    // -----------------------------------------------------------------------
+
+    use stitchd_core::experimentation::bandit::ExperimentMode;
+
+    /// Build a bandit-mode experiment with the given status + binding.
+    fn make_bandit_experiment(
+        env_id: EnvironmentId,
+        status: ExperimentStatus,
+        flag_rule_id: Option<RuleId>,
+        targets_default_rule: bool,
+        flag_key: Option<&str>,
+    ) -> Experiment {
+        let mut exp = make_experiment(env_id);
+        exp.experiment_mode = ExperimentMode::Bandit;
+        exp.status = status;
+        exp.flag_rule_id = flag_rule_id;
+        exp.targets_default_rule = targets_default_rule;
+        exp.flag_key = flag_key.map(std::string::ToString::to_string);
+        exp
+    }
+
+    // ── Pure helper: bound-target resolution + skip cases ──────────────────
+
+    #[test]
+    fn resolve_dispatch_custom_rule_running_is_apply() {
+        let rule_id = RuleId::new();
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            Some(rule_id),
+            false,
+            Some("flag-a"),
+        );
+        match resolve_bandit_dispatch(&exp, 2) {
+            BanditDispatchPlan::Apply {
+                flag_key, target, ..
+            } => {
+                assert_eq!(flag_key, "flag-a");
+                assert_eq!(target, BanditDispatchTarget::CustomRule(rule_id));
+            }
+            other => panic!("expected Apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_dispatch_default_rule_paused_is_apply() {
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Paused,
+            None,
+            true,
+            Some("flag-b"),
+        );
+        match resolve_bandit_dispatch(&exp, 3) {
+            BanditDispatchPlan::Apply { target, .. } => {
+                assert_eq!(target, BanditDispatchTarget::DefaultRule);
+            }
+            other => panic!("expected Apply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_dispatch_skips_non_bandit() {
+        let mut exp = make_experiment(EnvironmentId::new()); // Fixed mode
+        exp.status = ExperimentStatus::Running;
+        exp.flag_key = Some("flag-c".to_string());
+        assert!(matches!(
+            resolve_bandit_dispatch(&exp, 2),
+            BanditDispatchPlan::Skip(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_dispatch_skips_draft_and_stopped() {
+        for status in [ExperimentStatus::Draft, ExperimentStatus::Stopped] {
+            let exp =
+                make_bandit_experiment(EnvironmentId::new(), status, None, true, Some("flag-d"));
+            assert!(
+                matches!(
+                    resolve_bandit_dispatch(&exp, 2),
+                    BanditDispatchPlan::Skip(_)
+                ),
+                "status {status:?} must skip"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_dispatch_skips_empty_allocations() {
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            None,
+            true,
+            Some("flag-e"),
+        );
+        assert!(matches!(
+            resolve_bandit_dispatch(&exp, 0),
+            BanditDispatchPlan::Skip(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_dispatch_skips_missing_flag_key() {
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            None,
+            true,
+            None,
+        );
+        assert!(matches!(
+            resolve_bandit_dispatch(&exp, 2),
+            BanditDispatchPlan::Skip(_)
+        ));
+    }
+
+    #[test]
+    fn resolve_dispatch_skips_ambiguous_binding() {
+        // both flag_rule_id AND targets_default_rule set → ambiguous.
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            Some(RuleId::new()),
+            true,
+            Some("flag-f"),
+        );
+        assert!(matches!(
+            resolve_bandit_dispatch(&exp, 2),
+            BanditDispatchPlan::Skip(_)
+        ));
+        // neither set → ambiguous.
+        let exp2 = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            None,
+            false,
+            Some("flag-g"),
+        );
+        assert!(matches!(
+            resolve_bandit_dispatch(&exp2, 2),
+            BanditDispatchPlan::Skip(_)
+        ));
+    }
+
+    // ── RPC: skipped outcomes (reachable without a flag client) ────────────
+
+    /// Repo returning a single configurable experiment for find_by_id.
+    struct OneExpRepo {
+        exp: Experiment,
+    }
+
+    #[async_trait]
+    impl ExperimentRepository for OneExpRepo {
+        async fn find_by_id(&self, id: ExperimentId) -> Result<Experiment, RepositoryError> {
+            let mut exp = self.exp.clone();
+            exp.id = id;
+            Ok(exp)
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+            _status_filter: Option<ExperimentStatus>,
+        ) -> Result<Vec<Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+            Ok((vec![], 0))
+        }
+        async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(&self, experiment: &Experiment) -> Result<Experiment, RepositoryError> {
+            Ok(experiment.clone())
+        }
+        async fn soft_delete(&self, _id: ExperimentId) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn list_iterations(
+            &self,
+            _experiment_id: ExperimentId,
+        ) -> Result<Vec<ExperimentIteration>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn apply_transition(
+            &self,
+            _id: ExperimentId,
+            _to: ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<ExperimentId>, RepositoryError> {
+            Ok(None)
+        }
+        async fn find_iteration_by_id(
+            &self,
+            _iteration_id: stitchd_core::id::ExperimentIterationId,
+        ) -> Result<ExperimentIteration, RepositoryError> {
+            unimplemented!()
+        }
+    }
+
+    fn service_with_exp(exp: Experiment) -> ExperimentationServiceImpl {
+        ExperimentationServiceImpl::new(
+            Arc::new(OneExpRepo { exp }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None, // no flag client
+        )
+    }
+
+    fn alloc_req(
+        exp_id: ExperimentId,
+        buckets: Vec<(&str, u32)>,
+    ) -> Request<ApplyBanditAllocationRequest> {
+        Request::new(ApplyBanditAllocationRequest {
+            experiment_id: exp_id.to_string(),
+            allocations: buckets
+                .into_iter()
+                .map(
+                    |(k, bp)| stitchd_proto::experiments::v1::BanditAllocationBucket {
+                        variant_key: k.to_string(),
+                        weight_bp: bp,
+                    },
+                )
+                .collect(),
+            expected_version: 1,
+        })
+    }
+
+    #[tokio::test]
+    async fn apply_bandit_allocation_skips_fixed_experiment() {
+        let mut exp = make_experiment(EnvironmentId::new()); // Fixed mode
+        exp.status = ExperimentStatus::Running;
+        exp.flag_key = Some("flag-x".to_string());
+        let exp_id = exp.id;
+        let svc = service_with_exp(exp);
+
+        let resp = svc
+            .apply_bandit_allocation(alloc_req(exp_id, vec![("on", 10000)]))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp.outcome, BanditAllocationOutcome::Skipped as i32);
+        assert!(!resp.detail.is_empty());
+    }
+
+    #[tokio::test]
+    async fn apply_bandit_allocation_skips_draft_experiment() {
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Draft,
+            None,
+            true,
+            Some("flag-x"),
+        );
+        let exp_id = exp.id;
+        let svc = service_with_exp(exp);
+        let resp = svc
+            .apply_bandit_allocation(alloc_req(exp_id, vec![("on", 10000)]))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp.outcome, BanditAllocationOutcome::Skipped as i32);
+    }
+
+    #[tokio::test]
+    async fn apply_bandit_allocation_eligible_but_no_client_skips_with_resolved_target() {
+        // Eligible bandit experiment, but the service has no flag client wired:
+        // reported as skipped with the resolved target so the caller still
+        // records the run.
+        let rule_id = RuleId::new();
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            Some(rule_id),
+            false,
+            Some("flag-x"),
+        );
+        let exp_id = exp.id;
+        let svc = service_with_exp(exp);
+        let resp = svc
+            .apply_bandit_allocation(alloc_req(exp_id, vec![("on", 6000), ("off", 4000)]))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(resp.outcome, BanditAllocationOutcome::Skipped as i32);
+        assert_eq!(resp.resolved_target, rule_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn apply_bandit_allocation_invalid_experiment_id_is_invalid_argument() {
+        let svc = service_with_exp(make_experiment(EnvironmentId::new()));
+        let req = Request::new(ApplyBanditAllocationRequest {
+            experiment_id: "not-a-uuid".to_string(),
+            allocations: vec![],
+            expected_version: 0,
+        });
+        let err = svc.apply_bandit_allocation(req).await.unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 }

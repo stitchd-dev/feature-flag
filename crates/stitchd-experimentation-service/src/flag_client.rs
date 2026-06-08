@@ -3,7 +3,9 @@
 use std::sync::Arc;
 use tonic::transport::Channel;
 
-use stitchd_proto::flags::v1::{GetFlagRequest, flag_service_client::FlagServiceClient};
+use stitchd_proto::flags::v1::{
+    BanditUpdateAllocationRequest, GetFlagRequest, flag_service_client::FlagServiceClient,
+};
 
 /// A thin wrapper around the Flag Service gRPC client.
 #[derive(Clone)]
@@ -66,6 +68,45 @@ impl FlagClient {
         });
         let mut client = self.inner.lock().await;
         client.get_flag(request).await.map(|r| r.into_inner())
+    }
+
+    /// Push a newly-computed bandit allocation to the flag-service's privileged
+    /// `BanditUpdateAllocation` RPC (`bandit_20260608` Phase 3). The flag-service
+    /// verifies `experiment_id` against the flag's current lock owner and bypasses
+    /// the whole-flag human lock only for that owning experiment.
+    ///
+    /// `flag_rule_id` selects a custom rule; `None` targets the default rule.
+    /// Returns the post-write flag version on success, or the gRPC `Status`
+    /// (e.g. `ABORTED` on version conflict, `FAILED_PRECONDITION` when the
+    /// experiment is not the lock owner).
+    pub async fn bandit_update_allocation(
+        &self,
+        environment_id: &str,
+        flag_key: &str,
+        experiment_id: &str,
+        flag_rule_id: Option<&str>,
+        allocations: Vec<stitchd_proto::flags::v1::AllocationBucket>,
+        expected_version: u64,
+    ) -> Result<u64, tonic::Status> {
+        use stitchd_proto::flags::v1::bandit_update_allocation_request::Target;
+        let target = match flag_rule_id {
+            Some(rule_id) => Target::FlagRuleId(rule_id.to_string()),
+            None => Target::DefaultRule(true),
+        };
+        let request = tonic::Request::new(BanditUpdateAllocationRequest {
+            project_id: String::new(),
+            flag_key: flag_key.to_string(),
+            environment_id: environment_id.to_string(),
+            experiment_id: experiment_id.to_string(),
+            version: expected_version,
+            allocations,
+            target: Some(target),
+        });
+        let mut client = self.inner.lock().await;
+        client
+            .bandit_update_allocation(request)
+            .await
+            .map(|r| r.into_inner().version)
     }
 }
 
