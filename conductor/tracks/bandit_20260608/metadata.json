@@ -1,0 +1,14 @@
+{
+  "track_id": "bandit_20260608",
+  "type": "feature",
+  "status": "new",
+  "priority": "medium",
+  "depends_on": [],
+  "estimated_hours": null,
+  "created_at": "2026-06-08T00:00:00Z",
+  "updated_at": "2026-06-08T00:00:00Z",
+  "description": "Multi-armed bandit (adaptive & autonomous experiment allocation): bandit mode on the experiment entity with Thompson/epsilon-greedy/UCB/contextual algorithms over all four reward metric families, scalar + multi-objective reward, static-rewrite + real-time snapshot-resident eval paths, autonomous lifecycle (advisory/auto_commit/auto_rollout) + optimization campaigns, and bandit-aware interaction analysis incl. order 4+.",
+  "git_branch": "track/bandit_20260608",
+  "worktree_path": ".worktrees/bandit_20260608",
+  "parallel_execution": true
+}
