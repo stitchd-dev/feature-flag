@@ -31,10 +31,12 @@ pub use repository::{
     UserRepository, VariantRepository,
     composite::CompositeSegmentRepository,
     pg::{
-        PgAuditLogger, PgContextRegistryRepository, PgEnvironmentRepository,
-        PgEventDefinitionRepository, PgExperimentRepository, PgFlagRepository, PgMetricRepository,
-        PgOrganisationRepository, PgProjectRepository, PgRoleRepository, PgSdkKeyRepository,
-        PgSegmentRepository, PgUserRepository, PgVariantRepository,
+        BanditAllocationRepository, BanditAllocationRunRow, BanditCampaignRepository,
+        BanditConvergence, PgAuditLogger, PgBanditAllocationRepository, PgBanditCampaignRepository,
+        PgContextRegistryRepository, PgEnvironmentRepository, PgEventDefinitionRepository,
+        PgExperimentRepository, PgFlagRepository, PgMetricRepository, PgOrganisationRepository,
+        PgProjectRepository, PgRoleRepository, PgSdkKeyRepository, PgSegmentRepository,
+        PgUserRepository, PgVariantRepository,
         prerequisites::{
             DEPENDENCY_KIND_PREREQUISITE, DependentRow, ENTITY_TYPE_FLAG, FlagPrerequisiteRow,
             NewFlagPrerequisite, PrerequisiteRepository,

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package stitchd.experiments.v1;
 
+import "flags/v1/flag_sync.proto";
+
 // ─── Experiment status ────────────────────────────────────────────────────────
 
 enum ExperimentStatus {
@@ -48,6 +50,12 @@ message Experiment {
   double           sequential_alpha           = 22;
   optional double  sequential_tau_squared     = 23;
   int64            sequential_min_sample_size = 24;
+  // [ADDITIVE] Bandit (adaptive allocation) mode. `experiment_mode` is
+  // "fixed" (default) or "bandit"; `bandit_config` carries the bandit
+  // configuration as a JSON string (mirrors how other JSON blobs ride proto
+  // here), absent for fixed experiments.
+  string           experiment_mode            = 25;
+  optional string  bandit_config              = 26;
 }
 
 // ─── Iteration (a single run of an experiment) ────────────────────────────────
@@ -84,6 +92,10 @@ message ExperimentIteration {
   // stats-service compute pass reads this to drive numeric-metric variance
   // reduction; absent on rows written before this field existed (decodes to 0).
   uint32          pre_period_days            = 16;
+  // [ADDITIVE] Snapshot of the bandit configuration at iteration start, carried
+  // as a JSON string (mirrors the parent Experiment field). Absent for fixed
+  // experiments / rows written before this field existed.
+  optional string bandit_config              = 17;
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────
@@ -272,6 +284,21 @@ message RunningExperiment {
   // not source it (no rule/default-rule weights), in which case the SRM check
   // falls back to the uniform split.
   map<string, uint32> variant_expected_bp        = 14;
+  // [ADDITIVE] Bandit (adaptive allocation) mode. `experiment_mode` is "fixed"
+  // (default) or "bandit"; `bandit_config` carries the iteration-snapshotted
+  // bandit configuration as a JSON string (algorithm, propagation_mode,
+  // min_exploration_bp, objective, lifecycle_policy, convergence threshold).
+  // The stats-service bandit reallocation pass reads these to decide whether an
+  // experiment is an eligible static-propagation bandit and how to compute its
+  // weights. Empty `experiment_mode` decodes to "fixed" for back-compat with
+  // older servers; absent `bandit_config` means no bandit configuration.
+  string          experiment_mode            = 15;
+  optional string bandit_config              = 16;
+  // [ADDITIVE — bandit_20260608] The owning optimization campaign id (UUID), if
+  // this experiment is run under a campaign. The stats-service lifecycle pass
+  // uses it to spawn the next campaign iteration on convergence/drift (bounded +
+  // idempotent). Absent for non-campaign experiments.
+  optional string bandit_campaign_id         = 17;
 }
 
 message ListRunningExperimentsRequest {
@@ -288,6 +315,68 @@ message UpdateIterationLastComputedRequest {
 }
 
 message UpdateIterationLastComputedResponse {}
+
+// ─── Bandit allocation dispatch (bandit_20260608 Phase 3) ─────────────────────
+//
+// The stats-service bandit module computes new per-variant weights each tick
+// and pushes them via this RPC. experimentation-service resolves the
+// experiment's bound target (custom rule vs default-rule), then calls
+// flag-service's privileged `BanditUpdateAllocation` (which bypasses the
+// whole-flag human lock for the owning experiment). Only running/paused bandit
+// experiments are eligible — everything else is reported as `skipped` (not an
+// error) so the stats tick keeps advancing. The structured outcome is recorded
+// by the caller in `bandit_allocation_runs`. The actual weight computation is
+// NOT here (that is Phase 4).
+
+// One arm's target weight in basis points (sum across arms = 10000).
+message BanditAllocationBucket {
+  string variant_key = 1;
+  // 1 = 0.01%, 10000 = 100%.
+  uint32 weight_bp   = 2;
+}
+
+message ApplyBanditAllocationRequest {
+  // The bandit experiment whose bound rule allocation is being rewritten.
+  string experiment_id = 1;
+  // The newly-computed per-variant allocation (basis points, sum 10000).
+  repeated BanditAllocationBucket allocations = 2;
+  // The flag version the caller observed (optimistic concurrency). `0` means
+  // "look it up server-side" (the caller did not pre-fetch the flag).
+  uint64 expected_version = 3;
+  // [ADDITIVE — bandit_20260608] Optional snapshot-resident real-time bandit
+  // model. When present, the dispatch refreshes the bound rule's
+  // `realtime_bandit` model (the real-time propagation path) instead of
+  // rewriting the static weights. Forwarded verbatim to flag-service's
+  // BanditUpdateAllocation. Requires a bound custom rule (not the default rule).
+  optional stitchd.flags.v1.RealtimeBanditModel realtime_model = 4;
+}
+
+// Outcome of an allocation dispatch.
+enum BanditAllocationOutcome {
+  BANDIT_ALLOCATION_OUTCOME_UNSPECIFIED = 0;
+  // The allocation was written to the bound rule.
+  BANDIT_ALLOCATION_OUTCOME_APPLIED     = 1;
+  // The experiment is ineligible (not running/paused, not a bandit, no bound
+  // target) — a recoverable no-op, NOT a failure.
+  BANDIT_ALLOCATION_OUTCOME_SKIPPED     = 2;
+  // The write failed (incl. version conflict — caller should re-fetch + retry).
+  BANDIT_ALLOCATION_OUTCOME_FAILED      = 3;
+}
+
+message ApplyBanditAllocationResponse {
+  BanditAllocationOutcome outcome = 1;
+  // The bound target that was (or would have been) rewritten:
+  // `flag_rule_id` UUID, or "default_rule", or empty when skipped pre-resolution.
+  string                  resolved_target = 2;
+  // The post-write flag version on APPLIED; 0 otherwise.
+  uint64                  new_version     = 3;
+  // True when the failure was an optimistic-concurrency conflict — the caller
+  // should re-fetch the version and retry on the next tick.
+  bool                    version_conflict = 4;
+  // Human-readable detail (skip reason / failure message). Recorded in
+  // `bandit_allocation_runs.detail`.
+  string                  detail          = 5;
+}
 
 // ─── Exposures (Phase 7) ──────────────────────────────────────────────────────
 //
@@ -477,6 +566,126 @@ message GetExperimentStartPrerequisitesResponse {
   repeated StartPrerequisite prerequisites = 1;
 }
 
+// ─── Bandit optimization campaigns (FR8, bandit_20260608) ─────────────────────
+// An operator-configured-once construct that auto-spawns successive bandit
+// experiment iterations on one flag (on convergence / drift), bounded by
+// max_iterations / budget. `config` rides as a JSON string (mirrors how
+// bandit_config is carried elsewhere in this proto).
+
+message BanditCampaign {
+  string id                 = 1;
+  string environment_id     = 2;
+  string flag_id            = 3;
+  string name               = 4;
+  // BanditCampaignConfig as a JSON string.
+  string config             = 5;
+  // "active" | "paused" | "completed" | "cancelled".
+  string status             = 6;
+  // Number of iterations auto-spawned so far (bounded by config.max_iterations).
+  int32  iterations_spawned = 7;
+  // Optimistic-concurrency version.
+  int64  version            = 8;
+}
+
+message CreateBanditCampaignRequest {
+  string environment_id = 1;
+  string flag_id        = 2;
+  string name           = 3;
+  // BanditCampaignConfig as a JSON string.
+  string config         = 4;
+}
+
+message GetBanditCampaignRequest {
+  string environment_id = 1;
+  string campaign_id    = 2;
+}
+
+message ListBanditCampaignsRequest {
+  string environment_id = 1;
+}
+
+message ListBanditCampaignsResponse {
+  repeated BanditCampaign campaigns = 1;
+}
+
+message StopBanditCampaignRequest {
+  string environment_id = 1;
+  string campaign_id    = 2;
+}
+
+// ─── Bandit state + allocation history surfacing (FR7, bandit_20260608) ────────
+// Read-only surfacing of a bandit experiment's current state and its allocation
+// timeline, for the Admin UI Bandit Results view. All JSON-shaped payloads ride
+// as JSON strings (mirrors how bandit_config / sequential_result are carried in
+// this proto): the gateway re-parses them into typed REST DTOs.
+
+message GetBanditStateRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+// The current state of a bandit experiment.
+message GetBanditStateResponse {
+  string experiment_id = 1;
+  // "fixed" | "bandit". A non-bandit experiment returns is_bandit=false and the
+  // remaining fields empty/zero.
+  bool   is_bandit     = 2;
+  // The current per-arm allocation (latest `reallocate` row's per-arm bp). Empty
+  // until the first reallocation tick has fired.
+  repeated BanditAllocationBucket current_allocation = 3;
+  // Per-objective posteriors as a JSON string (the `bandit_objectives` value
+  // from the latest reallocate row's `new_allocation`). Shape:
+  // `{"objectives":[{"metric_id","role","weight"?,"goal","variants":[{...}]}]}`.
+  // Empty string when no posteriors have been recorded yet.
+  string objectives_json = 4;
+  // The bandit config summary as a JSON string (the full BanditConfig).
+  // Empty string when the experiment is not a bandit.
+  string bandit_config_json = 5;
+  // Convergence state (from experiments.bandit_converged_variant / _prob).
+  // `converged_variant` empty + `has_converged`=false until the experiment first
+  // converges.
+  string converged_variant = 6;
+  double converged_prob    = 7;
+  bool   has_converged     = 8;
+  // True when the current allocation is a single-arm 100% commit to the
+  // converged winner (auto_commit / auto_rollout having fired).
+  bool   committed         = 9;
+  // Campaign linkage: the owning campaign's id + status, empty when the
+  // experiment is not part of a campaign.
+  string campaign_id     = 10;
+  string campaign_status = 11;
+}
+
+message GetBanditAllocationHistoryRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+  // Max rows to return (newest first). 0 → server default (50), capped at 500.
+  uint32 limit          = 3;
+}
+
+// One `bandit_allocation_runs` row.
+message BanditAllocationRun {
+  // RFC-3339-able millis-since-epoch of when the action fired.
+  int64  fired_at_ms     = 1;
+  // "reallocate" | "commit" | "rollout" | "spawn_iteration" | "skip".
+  string action          = 2;
+  // "applied" | "skipped" | "failed".
+  string outcome         = 3;
+  // The prior allocation as a JSON string (may be empty / "null").
+  string old_allocation_json = 4;
+  // The new allocation (incl. `bandit_objectives`) as a JSON string (may be
+  // empty / "null").
+  string new_allocation_json = 5;
+  // Free-text reason / error detail (e.g. flag-locked skip reason). Empty when
+  // none.
+  string detail          = 6;
+}
+
+message GetBanditAllocationHistoryResponse {
+  // Rows ordered by fired_at DESC (newest first).
+  repeated BanditAllocationRun runs = 1;
+}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
@@ -501,6 +710,14 @@ service ExperimentationService {
   rpc UpdateIterationLastComputed(UpdateIterationLastComputedRequest)
       returns (UpdateIterationLastComputedResponse);
 
+  // [ADDITIVE — bandit_20260608] Push newly-computed bandit weights for a
+  // running bandit experiment. Resolves the bound target and calls
+  // flag-service's privileged BanditUpdateAllocation. Ineligible experiments
+  // are reported `skipped` (not an error); version conflicts are surfaced for
+  // caller retry.
+  rpc ApplyBanditAllocation(ApplyBanditAllocationRequest)
+      returns (ApplyBanditAllocationResponse);
+
   // ── Phase 7 admin reads ────────────────────────────────────────────────────
   // Paginated read against ClickHouse `experiment_assignments` for one
   // experiment + context_type. Powers the admin UI's "Exposures" panel.
@@ -524,4 +741,19 @@ service ExperimentationService {
   // dependency-graph experiment branch + the Admin UI experiment page.
   rpc GetExperimentStartPrerequisites(GetExperimentStartPrerequisitesRequest)
       returns (GetExperimentStartPrerequisitesResponse);
+
+  // ── Bandit optimization campaigns (FR8, bandit_20260608) ───────────────────
+  rpc CreateBanditCampaign(CreateBanditCampaignRequest) returns (BanditCampaign);
+  rpc GetBanditCampaign(GetBanditCampaignRequest)       returns (BanditCampaign);
+  rpc ListBanditCampaigns(ListBanditCampaignsRequest)   returns (ListBanditCampaignsResponse);
+  rpc StopBanditCampaign(StopBanditCampaignRequest)     returns (BanditCampaign);
+
+  // ── Bandit state + allocation history surfacing (FR7, bandit_20260608) ──────
+  // Read a bandit experiment's current state (allocation, posteriors,
+  // convergence, config, campaign linkage) for the Admin UI Bandit Results view.
+  rpc GetBanditState(GetBanditStateRequest) returns (GetBanditStateResponse);
+  // Read the `bandit_allocation_runs` timeline (newest first) — the data behind
+  // the allocation-over-time chart + lifecycle-action timeline.
+  rpc GetBanditAllocationHistory(GetBanditAllocationHistoryRequest)
+      returns (GetBanditAllocationHistoryResponse);
 }

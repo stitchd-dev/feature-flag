@@ -63,3 +63,4 @@
   - [Attribution Model](./experimentation/attribution.md)
   - [Default-Rule Experiments](./experimentation/default-rule-experiments.md)
   - [Sequential Testing](./experimentation/sequential-testing.md)
+  - [Multi-Armed Bandit](./experimentation/multi-armed-bandit.md)

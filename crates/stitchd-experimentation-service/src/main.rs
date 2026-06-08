@@ -21,7 +21,10 @@ use tracing_subscriber::{EnvFilter, fmt};
 use stitchd_core::util::grpc_connect::connect_with_retry_default;
 use stitchd_db::{
     PgAuditLogger, PgExperimentRepository, PgStatsScheduleRepository,
-    repository::pg::{PgExclusionGroupRepository, PgFlagRepository},
+    repository::pg::{
+        PgBanditAllocationRepository, PgBanditCampaignRepository, PgExclusionGroupRepository,
+        PgFlagRepository,
+    },
 };
 use stitchd_experimentation_service::{
     analytics_client::AnalyticsClient, exposure_reader::ClickHouseExposureReader,
@@ -61,6 +64,8 @@ async fn main() -> anyhow::Result<()> {
     let experiment_repo = Arc::new(PgExperimentRepository::new(pool.clone(), audit.clone()));
     let exclusion_group_repo =
         Arc::new(PgExclusionGroupRepository::new(pool.clone(), audit.clone()));
+    let campaign_repo = Arc::new(PgBanditCampaignRepository::new(pool.clone()));
+    let bandit_allocation_repo = Arc::new(PgBanditAllocationRepository::new(pool.clone()));
     let flag_repo = Arc::new(PgFlagRepository::new(pool.clone(), audit));
     let schedule_repo = Arc::new(PgStatsScheduleRepository::new(pool.clone()));
 
@@ -165,6 +170,8 @@ async fn main() -> anyhow::Result<()> {
     .with_exposure_reader(exposure_reader)
     .with_interactions_reader(interactions_reader)
     .with_exclusion_groups(exclusion_group_repo, flag_repo)
+    .with_campaigns(campaign_repo)
+    .with_bandit_allocation(bandit_allocation_repo)
     .with_start_prerequisites(start_prereq_repo, start_prereq_resolver);
 
     let (health_reporter, health_service) = health_reporter();

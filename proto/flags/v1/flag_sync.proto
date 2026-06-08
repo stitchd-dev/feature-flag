@@ -65,6 +65,127 @@ message PercentageAllocation {
   // [bucket_lo, bucket_hi). Used by mutually-exclusive experiment groups so
   // that overlapping experiments carve out disjoint slices of traffic.
   optional ExclusionGate exclusion_gate = 4;
+  // [ADDITIVE — bandit_20260608] Optional real-time bandit model. When present,
+  // the rule's variant is drawn per-context from the snapshot-resident reward
+  // posteriors (a Thompson draw seeded by the unit context's key) INSTEAD of the
+  // static bucket→weight allocation. Mirrors `exclusion_gate`: pure rule data
+  // that rides the snapshot, sampled with zero DB lookup at eval time. Absent on
+  // every non-realtime-bandit rule, which keeps the static eval path unchanged.
+  optional RealtimeBanditModel realtime_bandit = 5;
+}
+
+// [ADDITIVE — bandit_20260608] Snapshot-resident reward model for a real-time
+// (snapshot-resident) bandit rule. Rides on the flag definition snapshot exactly
+// like ExclusionGate; the evaluator draws one Thompson sample per variant from
+// these posteriors (context-seeded RNG) and assigns the argmax variant. Pure +
+// zero-DB + deterministic. The stats tick refreshes these params each tick.
+message RealtimeBanditModel {
+  // Salt mixed into the per-context sampling seed so the same unit produces a
+  // stable draw for this experiment and a different one for another.
+  string salt = 1;
+  // The context type whose `key` seeds the per-context draw (the experiment's
+  // randomization / diversion unit, e.g. "user"). If no context of this type is
+  // present in the evaluated bundle, the rule falls back to the static
+  // allocation gracefully (a missing unit cannot be sampled).
+  string unit_context_type = 2;
+  // Reward-metric family driving the posteriors — selects Beta (conversion /
+  // funnel) vs Normal (numeric / ratio) sampling.
+  RewardFamily family = 3;
+  // Goal direction: whether a higher (INCREASE) or lower (DECREASE) reward is
+  // better. The evaluator picks the goal-directed argmax of the sampled draws.
+  BanditGoalDirection goal = 4;
+  // Per-variant posterior parameters. One entry per variant the rule can
+  // assign. Used by the NON-contextual realtime path; ignored when `contextual`
+  // is set.
+  repeated VariantPosterior variants = 5;
+  // [ADDITIVE — bandit_20260608 Phase 6] Optional contextual reward model. When
+  // set, the variant is drawn per-context from the linear model (a
+  // feature-conditioned Thompson draw) instead of the non-contextual `variants`
+  // posteriors. A model is EITHER non-contextual (`variants`) OR contextual
+  // (`contextual`). Absent on every non-contextual realtime rule.
+  optional ContextualModel contextual = 6;
+}
+
+// [ADDITIVE — bandit_20260608 Phase 6] A snapshot-resident contextual reward
+// model: a shared feature set plus one linear coefficient vector per variant.
+message ContextualModel {
+  // The features every variant's coefficients are defined over, in order. The
+  // design vector is [1.0 (intercept), <feat0 slots>, <feat1 slots>, ...].
+  repeated FeatureSpec features = 1;
+  // Per-variant coefficient vectors.
+  repeated VariantCoefficients variants = 2;
+}
+
+// One context feature the reward model conditions on.
+message FeatureSpec {
+  // The context type whose parameter is read (e.g. "user").
+  string context_type = 1;
+  // The parameter name within that context (e.g. "plan").
+  string parameter = 2;
+  // How the parameter value is encoded into the design vector.
+  FeatureEncoding encoding = 3;
+}
+
+// How a single context feature is turned into design-vector slot(s).
+message FeatureEncoding {
+  oneof kind {
+    // Numeric passthrough — one slot (missing / unparsable → 0.0).
+    NumericEncoding numeric = 1;
+    // One-hot — one slot per category (unknown / missing → all 0.0 baseline).
+    OneHotEncoding one_hot = 2;
+  }
+}
+
+// Numeric passthrough encoding (no parameters).
+message NumericEncoding {}
+
+// One-hot categorical encoding.
+message OneHotEncoding {
+  // Categories to encode, in declaration order — one slot each.
+  repeated string categories = 1;
+}
+
+// The fitted linear reward coefficients for one variant.
+message VariantCoefficients {
+  // The variant key these coefficients predict reward for.
+  string variant_key = 1;
+  // Intercept-first coefficient vector (len == 1 + sum of feature widths).
+  repeated double coeffs = 2;
+  // Optional flattened d*d row-major (X^T X + lambda I)^-1 for the LinUCB
+  // exploration term (d == coeffs length). Empty → fixed exploration variance.
+  repeated double a_inv = 3;
+}
+
+// Reward-metric family for a real-time bandit posterior.
+enum RewardFamily {
+  REWARD_FAMILY_UNSPECIFIED = 0;
+  // Conversion / funnel rate — Beta(alpha, beta) posterior.
+  REWARD_FAMILY_BETA   = 1;
+  // Continuous numeric / ratio mean — Normal(mu, sigma2) posterior.
+  REWARD_FAMILY_NORMAL = 2;
+}
+
+// Goal direction for a real-time bandit reward.
+enum BanditGoalDirection {
+  BANDIT_GOAL_DIRECTION_UNSPECIFIED = 0;
+  // Higher reward is better (argmax of draws).
+  BANDIT_GOAL_DIRECTION_INCREASE = 1;
+  // Lower reward is better (argmin of draws).
+  BANDIT_GOAL_DIRECTION_DECREASE = 2;
+}
+
+// Posterior parameters for one variant of a real-time bandit.
+//
+// For a Beta family `alpha`/`beta` carry the posterior; `mu`/`sigma2` are
+// ignored. For a Normal family `mu` (posterior mean) and `sigma2` (posterior
+// variance) carry the posterior; `alpha`/`beta` are ignored. General enough that
+// Phase 6 (contextual) can extend with per-feature coefficients.
+message VariantPosterior {
+  string variant_key = 1;
+  double alpha  = 2;
+  double beta   = 3;
+  double mu     = 4;
+  double sigma2 = 5;
 }
 
 // [ADDITIVE] Bucket-range gate over a per-group salt hash. Buckets are in the

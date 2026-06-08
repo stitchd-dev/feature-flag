@@ -142,6 +142,8 @@ fn make_experiment(env_id: EnvironmentId, flag_id: FlagId, flag_rule_id: RuleId)
         sequential_alpha: 0.05,
         sequential_tau_squared: None,
         sequential_min_sample_size: 100,
+        experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
+        bandit_config: None,
     }
 }
 

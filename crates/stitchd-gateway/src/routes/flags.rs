@@ -971,6 +971,7 @@ fn rule_body_to_proto(
             buckets,
             hash_inputs: proto_hash_inputs,
             exclusion_gate: None,
+            realtime_bandit: None,
         }))
     } else {
         None

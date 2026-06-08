@@ -192,6 +192,9 @@ fn running_experiment(s: &Seeded, sequential_enabled: bool) -> RunningExperiment
         // Default: no designed split → uniform SRM fallback. The weighted-SRM
         // integration test below overrides this on the returned struct.
         variant_expected_bp: HashMap::new(),
+        experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
+        bandit_config: None,
+        bandit_campaign_id: None,
     }
 }
 

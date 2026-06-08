@@ -51,6 +51,12 @@ use super::{NdContinuousCell, TermKind, TermResult};
 /// *same* `MS_error`, so the partition is internally consistent (no term uses a
 /// different residual estimate than another).
 pub fn continuous_terms(cells: &[NdContinuousCell], order: usize) -> Vec<TermResult> {
+    // Order ≥ 4 uses the general inclusion-exclusion partition (every subset of
+    // factors); orders ≤ 3 keep the original direct arithmetic so the golden /
+    // regression snapshots stay byte-identical.
+    if order >= 4 {
+        return continuous_terms_general(cells, order);
+    }
     let mut out = Vec::with_capacity(if order == 3 { 7 } else { 3 });
 
     // The common error term shared by *every* F-test below.
@@ -101,6 +107,119 @@ pub fn continuous_terms(cells: &[NdContinuousCell], order: usize) -> Vec<TermRes
     }
 
     out
+}
+
+// ── General N-way ANOVA partition (order ≥ 4) ─────────────────────────────────
+
+/// General balanced-factorial ANOVA decomposition for arbitrary `order` (≥ 4).
+///
+/// Every term (every non-empty subset `S` of the `order` factors) is F-tested
+/// against the SAME pooled within-cell error term ([`ErrorTerm`]). The term's
+/// numerator SS is the **inclusion-exclusion interaction SS**:
+///
+///   `SS_inter(S) = Σ_{T ⊆ S} (−1)^(|S|−|T|) · SS_cells(T)`,
+///
+/// where `SS_cells(T) = Σ over the T-collapsed grid of n·(cell_mean − grand_mean)²`
+/// is the between-cell SS of the table collapsed onto factor subset `T`
+/// (`SS_cells(∅) = 0`). For `|S| = 1` this reduces to the one-way main-effect SS;
+/// for `|S| = 2` to the additive-model interaction SS — i.e. it agrees with the
+/// direct order-≤3 formulas (up to floating-point reassociation, which is why
+/// orders ≤ 3 keep their original path for the byte-identical gates). The
+/// interaction df is `Π_{f∈S}(L_f − 1)`.
+fn continuous_terms_general(cells: &[NdContinuousCell], order: usize) -> Vec<TermResult> {
+    let err = ErrorTerm::from_cells(cells, order);
+    let grand_mean = grand_mean(cells, order);
+
+    // Per-factor level counts (max index + 1) over exactly `order` factors.
+    let mut dims = vec![0usize; order];
+    for c in cells {
+        if c.levels.len() != order || c.n == 0 {
+            continue;
+        }
+        for (d, count) in dims.iter_mut().enumerate() {
+            *count = (*count).max(c.levels[d] + 1);
+        }
+    }
+
+    // Cache SS_cells(T) for every subset T that appears in some inclusion-
+    // exclusion sum (keyed by the subset bitmask). Computed lazily.
+    let mut ss_cache: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
+
+    let mut out = Vec::new();
+    for mask in 1u32..(1u32 << order) {
+        let subset: Vec<usize> = (0..order).filter(|&f| mask & (1 << f) != 0).collect();
+        let kind = TermKind::of(&subset);
+
+        // df = Π (L_f − 1); a <2-level factor makes the term untestable.
+        let df: u32 = subset
+            .iter()
+            .map(|&f| (dims[f].saturating_sub(1)) as u32)
+            .product();
+        if subset.iter().any(|&f| dims[f] < 2) || df == 0 {
+            out.push(term(kind, super::InteractionResult::insufficient(df)));
+            continue;
+        }
+
+        // Inclusion-exclusion over every sub-subset T ⊆ S.
+        let mut ss = 0.0f64;
+        let s_len = subset.len();
+        let mut sub = mask;
+        loop {
+            // Iterate every submask of `mask` (including 0 and mask itself).
+            let t_len = sub.count_ones() as usize;
+            let sign = if (s_len - t_len).is_multiple_of(2) {
+                1.0
+            } else {
+                -1.0
+            };
+            let ss_t = *ss_cache
+                .entry(sub)
+                .or_insert_with(|| ss_cells_for_mask(cells, order, sub, grand_mean));
+            ss += sign * ss_t;
+            if sub == 0 {
+                break;
+            }
+            sub = (sub - 1) & mask;
+        }
+        if ss < 0.0 {
+            ss = 0.0; // floating-point cancellation guard
+        }
+        out.push(f_test(kind, ss, df, &err));
+    }
+    out
+}
+
+/// Between-cell SS of the full table collapsed onto the factor subset encoded by
+/// `mask` (bit `f` set ⇒ factor `f` retained): `Σ n·(cell_mean − grand_mean)²`
+/// over the collapsed grid. `mask == 0` (the empty subset) is `0.0`. An empty
+/// collapsed cell cannot occur here because the collapse sums over the full
+/// populated table; a wrong-arity / zero-n source cell is skipped.
+fn ss_cells_for_mask(cells: &[NdContinuousCell], order: usize, mask: u32, grand_mean: f64) -> f64 {
+    if mask == 0 {
+        return 0.0;
+    }
+    let factors: Vec<usize> = (0..order).filter(|&f| mask & (1 << f) != 0).collect();
+    // Collapse: (n, sum) keyed by the retained-factor level tuple.
+    let mut grid: std::collections::HashMap<Vec<usize>, (f64, f64)> =
+        std::collections::HashMap::new();
+    for c in cells {
+        if c.levels.len() != order || c.n == 0 {
+            continue;
+        }
+        let key: Vec<usize> = factors.iter().map(|&f| c.levels[f]).collect();
+        let e = grid.entry(key).or_insert((0.0, 0.0));
+        e.0 += c.n as f64;
+        e.1 += c.sum;
+    }
+    let mut ss = 0.0f64;
+    for (n, sum) in grid.values() {
+        if *n <= 0.0 {
+            continue;
+        }
+        let dev = sum / n - grand_mean;
+        ss += n * dev * dev;
+    }
+    if ss < 0.0 { 0.0 } else { ss }
 }
 
 /// Trial-weighted grand mean over every populated `order`-arity cell, or `0.0`
@@ -578,7 +697,7 @@ mod tests {
             cell_mean(&[1, 1], 16.0, 50),
         ];
         let terms = continuous_terms(&nd, 2);
-        let kinds: Vec<TermKind> = terms.iter().map(|t| t.kind).collect();
+        let kinds: Vec<TermKind> = terms.iter().map(|t| t.kind.clone()).collect();
         assert_eq!(kinds.len(), 3);
         assert!(kinds.contains(&TermKind::Main { factor: 0 }));
         assert!(kinds.contains(&TermKind::Main { factor: 1 }));
@@ -903,5 +1022,80 @@ mod tests {
         let a = continuous_terms(&nd, 3);
         let b = continuous_terms(&nd, 3);
         assert_eq!(a, b);
+    }
+
+    // ── order-4 (general inclusion-exclusion partition) ───────────────────────
+
+    fn full_2x2x2x2(
+        mean: impl Fn(usize, usize, usize, usize) -> f64,
+        n: u64,
+    ) -> Vec<NdContinuousCell> {
+        let mut v = Vec::with_capacity(16);
+        for i in 0..2 {
+            for j in 0..2 {
+                for k in 0..2 {
+                    for l in 0..2 {
+                        v.push(cell_mean(&[i, j, k, l], mean(i, j, k, l), n));
+                    }
+                }
+            }
+        }
+        v
+    }
+
+    /// order-4 emits the full hierarchical set: 4 + 6 + 4 + 1 = 15 terms.
+    #[test]
+    fn order4_emits_fifteen_terms() {
+        let nd = full_2x2x2x2(|_, _, _, _| 10.0, 50);
+        let terms = continuous_terms(&nd, 4);
+        assert_eq!(terms.len(), 15);
+        assert!(terms.iter().any(|t| t.kind == TermKind::of(&[0, 1, 2, 3])));
+        for trip in [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]] {
+            assert!(terms.iter().any(|t| t.kind == TermKind::of(&trip)));
+        }
+        assert!(terms.iter().all(|t| t.bayes.is_none()));
+    }
+
+    /// Planted four-way (mean = base + α·i·j·k·l): only the top term carries the
+    /// signal → significant.
+    #[test]
+    fn order4_planted_fourway_is_significant() {
+        let nd = full_2x2x2x2(|i, j, k, l| 10.0 + 12.0 * (i * j * k * l) as f64, 60);
+        let terms = continuous_terms(&nd, 4);
+        let four = find(&terms, TermKind::of(&[0, 1, 2, 3]));
+        assert!(!four.freq.insufficient_data);
+        assert_eq!(four.freq.df, 1); // (2-1)^4
+        assert!(
+            four.freq.significant,
+            "planted 4-way should be significant: p={} F={}",
+            four.freq.p_value, four.freq.statistic
+        );
+    }
+
+    /// Fully additive + lower-order (no four-way) mean model → top term NOT
+    /// significant.
+    #[test]
+    fn order4_no_fourway_is_not_significant() {
+        // mean depends only on sums of ≤3 factors (mains + a couple pairwise),
+        // never the 4-product → no genuine four-way residual.
+        let model = |i: usize, j: usize, k: usize, l: usize| {
+            let (i, j, k, l) = (i as f64, j as f64, k as f64, l as f64);
+            10.0 + 2.0 * i + 3.0 * j + 4.0 * k + 5.0 * l + 6.0 * i * j + 7.0 * k * l
+        };
+        let nd = full_2x2x2x2(model, 80);
+        let terms = continuous_terms(&nd, 4);
+        let four = find(&terms, TermKind::of(&[0, 1, 2, 3]));
+        assert!(!four.freq.insufficient_data);
+        assert!(
+            !four.freq.significant,
+            "no four-way present: p={} F={}",
+            four.freq.p_value, four.freq.statistic
+        );
+    }
+
+    #[test]
+    fn order4_is_deterministic() {
+        let nd = full_2x2x2x2(|i, j, k, l| 10.0 + 8.0 * (i * j * k * l) as f64, 60);
+        assert_eq!(continuous_terms(&nd, 4), continuous_terms(&nd, 4));
     }
 }

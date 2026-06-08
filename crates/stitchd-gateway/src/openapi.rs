@@ -89,6 +89,10 @@ use utoipa::{
         crate::routes::experiments::get_results,
         crate::routes::experiments::list_exposures,
         crate::routes::experiments::get_interactions,
+        crate::routes::experiments::get_bandit_state,
+        crate::routes::experiments::get_bandit_history,
+        crate::routes::experiments::list_bandit_campaigns,
+        crate::routes::experiments::get_bandit_campaign,
         // Exclusion groups (JWT)
         crate::routes::exclusion_groups::list_exclusion_groups,
         crate::routes::exclusion_groups::create_exclusion_group,
@@ -213,6 +217,14 @@ use utoipa::{
             crate::routes::experiments::ListIterationsQuery,
             crate::routes::experiments::ExperimentInteractionJson,
             crate::routes::experiments::ExperimentInteractionsJson,
+            // Bandit surfacing (FR7)
+            crate::routes::experiments::BanditAllocationBucketJson,
+            crate::routes::experiments::BanditStateJson,
+            crate::routes::experiments::BanditAllocationRunJson,
+            crate::routes::experiments::BanditAllocationHistoryJson,
+            crate::routes::experiments::BanditHistoryQuery,
+            crate::routes::experiments::BanditCampaignJson,
+            crate::routes::experiments::BanditCampaignsJson,
             // Exclusion groups
             crate::routes::exclusion_groups::ExclusionGroupJson,
             crate::routes::exclusion_groups::CreateExclusionGroupBody,
@@ -315,6 +327,40 @@ mod tests {
             assert!(
                 props.get(field).is_some(),
                 "VariantResultJson schema must document {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn bandit_surfacing_paths_and_schemas_are_registered() {
+        // Phase 12 consumes these via the OpenAPI doc; the routes + DTOs must
+        // land in the generated spec.
+        let doc = ApiDoc::openapi();
+        let json = doc.to_json().expect("must serialise");
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        let paths = &parsed["paths"];
+        for path in [
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit",
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit/history",
+            "/v1/environments/{environment_id}/bandit-campaigns",
+            "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}",
+        ] {
+            assert!(paths.get(path).is_some(), "missing OpenAPI path {path}");
+        }
+
+        let schemas = &parsed["components"]["schemas"];
+        for schema in [
+            "BanditStateJson",
+            "BanditAllocationBucketJson",
+            "BanditAllocationRunJson",
+            "BanditAllocationHistoryJson",
+            "BanditCampaignJson",
+            "BanditCampaignsJson",
+        ] {
+            assert!(
+                schemas.get(schema).is_some(),
+                "missing OpenAPI schema {schema}"
             );
         }
     }

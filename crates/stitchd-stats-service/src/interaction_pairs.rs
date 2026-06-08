@@ -73,20 +73,11 @@ pub struct ExperimentMeta {
 /// `(min, max)` ordering regardless of input order.
 #[must_use]
 pub fn candidate_pairs(experiments: &[ExperimentMeta]) -> Vec<(ExpId, ExpId)> {
-    let mut pairs = Vec::new();
-    for (i, a) in experiments.iter().enumerate() {
-        for b in &experiments[i + 1..] {
-            if can_interact(a, b) {
-                let (lo, hi) = if a.id <= b.id {
-                    (a.id, b.id)
-                } else {
-                    (b.id, a.id)
-                };
-                pairs.push((lo, hi));
-            }
-        }
-    }
-    pairs
+    // Thin wrapper over the arity-general [`candidate_tuples`] at order 2.
+    candidate_tuples(experiments, 2)
+        .into_iter()
+        .map(|t| (t[0], t[1]))
+        .collect()
 }
 
 /// Enumerate the unordered experiment **triples** worth testing for a three-way
@@ -108,25 +99,80 @@ pub fn candidate_pairs(experiments: &[ExperimentMeta]) -> Vec<(ExpId, ExpId)> {
 /// for a stable, dedupe-friendly ordering regardless of input order.
 #[must_use]
 pub fn candidate_triples(experiments: &[ExperimentMeta]) -> Vec<(ExpId, ExpId, ExpId)> {
-    let mut triples = Vec::new();
+    // Thin wrapper over the arity-general [`candidate_tuples`] at order 3.
+    candidate_tuples(experiments, 3)
+        .into_iter()
+        .map(|t| (t[0], t[1], t[2]))
+        .collect()
+}
+
+/// Enumerate the unordered experiment **tuples** of a given `order` worth
+/// testing for an `order`-way interaction — the arity-generalised
+/// [`candidate_pairs`] (order 2) / [`candidate_triples`] (order 3).
+///
+/// A tuple survives iff **every** constituent pair satisfies [`can_interact`]
+/// (distinct flags, overlapping windows, not same exclusion group) AND all
+/// `order` experiments share at least one **common** metric (the interaction
+/// term is computed over a metric every participant carries).
+///
+/// Two notes carry over from [`candidate_triples`] to arbitrary order:
+/// - active windows are 1-D intervals, so by **Helly's theorem** pairwise
+///   overlap implies a non-empty *common* live window — no separate tuple-window
+///   check is needed at any order.
+/// - the common-metric requirement is the `order`-way metric intersection, which
+///   is stricter than pairwise `shares_metric`.
+///
+/// `order < 2` yields no tuples. Each surviving tuple is returned once, with its
+/// ids sorted ascending, in a stable lexicographic order over the sorted ids.
+#[must_use]
+pub fn candidate_tuples(experiments: &[ExperimentMeta], order: usize) -> Vec<Vec<ExpId>> {
+    if order < 2 || experiments.len() < order {
+        return Vec::new();
+    }
     let n = experiments.len();
-    for i in 0..n {
-        for j in (i + 1)..n {
-            for k in (j + 1)..n {
-                let (a, b, c) = (&experiments[i], &experiments[j], &experiments[k]);
-                if can_interact(a, b)
-                    && can_interact(a, c)
-                    && can_interact(b, c)
-                    && shares_metric_all3(a, b, c)
-                {
-                    let mut ids = [a.id, b.id, c.id];
-                    ids.sort();
-                    triples.push((ids[0], ids[1], ids[2]));
+    let mut out = Vec::new();
+    // Iterate k-combinations of indices via an index stack (ascending), so the
+    // emitted tuples are already in lexicographic index order.
+    let mut combo: Vec<usize> = (0..order).collect();
+    loop {
+        let members: Vec<&ExperimentMeta> = combo.iter().map(|&i| &experiments[i]).collect();
+        // Every constituent pair must be able to interact …
+        let all_pairs_ok =
+            (0..order).all(|i| ((i + 1)..order).all(|j| can_interact(members[i], members[j])));
+        if all_pairs_ok && shares_metric_all(&members) {
+            let mut ids: Vec<ExpId> = members.iter().map(|m| m.id).collect();
+            ids.sort();
+            out.push(ids);
+        }
+
+        // Advance to the next ascending index combination (k-combination of n).
+        let mut i = order;
+        loop {
+            if i == 0 {
+                return out;
+            }
+            i -= 1;
+            if combo[i] != i + n - order {
+                combo[i] += 1;
+                for j in (i + 1)..order {
+                    combo[j] = combo[j - 1] + 1;
                 }
+                break;
             }
         }
     }
-    triples
+}
+
+/// Whether every experiment in `members` shares at least one common metric
+/// (`⋂ metric_ids ≠ ∅`) — required for an `order`-way interaction term.
+fn shares_metric_all(members: &[&ExperimentMeta]) -> bool {
+    let Some((first, rest)) = members.split_first() else {
+        return false;
+    };
+    first
+        .metric_ids
+        .iter()
+        .any(|m| rest.iter().all(|meta| meta.metric_ids.contains(m)))
 }
 
 /// Whether two experiments satisfy every interaction-candidacy rule.
@@ -152,14 +198,6 @@ fn windows_overlap(a: &ExperimentMeta, b: &ExperimentMeta) -> bool {
 /// Whether the two experiments' metric-id sets intersect.
 fn shares_metric(a: &ExperimentMeta, b: &ExperimentMeta) -> bool {
     a.metric_ids.iter().any(|m| b.metric_ids.contains(m))
-}
-
-/// Whether all three experiments share at least one common metric
-/// (`a ∩ b ∩ c != ∅`) — required for a three-way interaction term.
-fn shares_metric_all3(a: &ExperimentMeta, b: &ExperimentMeta, c: &ExperimentMeta) -> bool {
-    a.metric_ids
-        .iter()
-        .any(|m| b.metric_ids.contains(m) && c.metric_ids.contains(m))
 }
 
 /// Whether both experiments belong to the *same* exclusion group.
@@ -420,5 +458,90 @@ mod tests {
             .collect();
         // C(4,3) = 4 triples.
         assert_eq!(candidate_triples(&xs).len(), 4);
+    }
+
+    // ── candidate_tuples (Phase 10: order 4+) ─────────────────────────────────
+
+    #[test]
+    fn candidate_tuples_order2_matches_candidate_pairs() {
+        let m = Uuid::new_v4();
+        let xs: Vec<ExperimentMeta> = (1..=4)
+            .map(|i| meta(Uuid::from_u128(i), Uuid::new_v4(), vec![m]))
+            .collect();
+        let pairs = candidate_pairs(&xs);
+        let tuples = candidate_tuples(&xs, 2);
+        let as_pairs: Vec<(ExpId, ExpId)> = tuples.iter().map(|t| (t[0], t[1])).collect();
+        assert_eq!(pairs, as_pairs, "order-2 tuples must equal candidate_pairs");
+    }
+
+    #[test]
+    fn candidate_tuples_order3_matches_candidate_triples() {
+        let m = Uuid::new_v4();
+        let xs: Vec<ExperimentMeta> = (1..=5)
+            .map(|i| meta(Uuid::from_u128(i), Uuid::new_v4(), vec![m]))
+            .collect();
+        let triples = candidate_triples(&xs);
+        let tuples = candidate_tuples(&xs, 3);
+        let as_triples: Vec<(ExpId, ExpId, ExpId)> =
+            tuples.iter().map(|t| (t[0], t[1], t[2])).collect();
+        assert_eq!(triples, as_triples);
+    }
+
+    #[test]
+    fn candidate_tuples_order4_enumerates_all_quadruples() {
+        let m = Uuid::new_v4();
+        // 5 distinct-flag experiments all sharing one metric, overlapping → C(5,4)=5.
+        let xs: Vec<ExperimentMeta> = (1..=5)
+            .map(|i| meta(Uuid::from_u128(i), Uuid::new_v4(), vec![m]))
+            .collect();
+        let quads = candidate_tuples(&xs, 4);
+        assert_eq!(quads.len(), 5, "C(5,4) = 5 quadruples");
+        // Every tuple has 4 sorted-ascending ids.
+        for q in &quads {
+            assert_eq!(q.len(), 4);
+            let mut sorted = q.clone();
+            sorted.sort();
+            assert_eq!(*q, sorted, "ids must be sorted ascending");
+        }
+        // The single C(4,4) over the first four.
+        assert_eq!(candidate_tuples(&xs[..4], 4).len(), 1);
+    }
+
+    #[test]
+    fn candidate_tuples_order4_requires_common_metric_across_all_four() {
+        // Each pair shares SOME metric but the 4-way intersection is empty.
+        let m1 = Uuid::new_v4();
+        let m2 = Uuid::new_v4();
+        let a = meta(Uuid::from_u128(1), Uuid::new_v4(), vec![m1]);
+        let b = meta(Uuid::from_u128(2), Uuid::new_v4(), vec![m1, m2]);
+        let c = meta(Uuid::from_u128(3), Uuid::new_v4(), vec![m2]);
+        let d = meta(Uuid::from_u128(4), Uuid::new_v4(), vec![m1, m2]);
+        // {a,c} share no metric → not even all pairs interact, and no common metric.
+        assert!(candidate_tuples(&[a, b, c, d], 4).is_empty());
+    }
+
+    #[test]
+    fn candidate_tuples_order4_excluded_when_one_pair_shares_a_flag() {
+        let m = Uuid::new_v4();
+        let flag = Uuid::new_v4();
+        let a = meta(Uuid::from_u128(1), flag, vec![m]);
+        let b = meta(Uuid::from_u128(2), flag, vec![m]); // shares flag with a
+        let c = meta(Uuid::from_u128(3), Uuid::new_v4(), vec![m]);
+        let d = meta(Uuid::from_u128(4), Uuid::new_v4(), vec![m]);
+        assert!(candidate_tuples(&[a, b, c, d], 4).is_empty());
+    }
+
+    #[test]
+    fn candidate_tuples_below_order_or_too_few_inputs_empty() {
+        let m = Uuid::new_v4();
+        let xs: Vec<ExperimentMeta> = (1..=3)
+            .map(|i| meta(Uuid::from_u128(i), Uuid::new_v4(), vec![m]))
+            .collect();
+        assert!(candidate_tuples(&xs, 1).is_empty(), "order < 2 → none");
+        assert!(
+            candidate_tuples(&xs, 4).is_empty(),
+            "fewer inputs than order"
+        );
+        assert!(candidate_tuples(&[], 2).is_empty());
     }
 }

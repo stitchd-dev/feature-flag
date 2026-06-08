@@ -18,6 +18,9 @@ events `contexts` column) are retired — the stats pipeline no longer reads tho
   lock interaction with the default-rule distribution.
 - [Sequential Testing](./sequential-testing.md) — always-valid inference (mSPRT always-valid
   p-values + confidence sequences) so experiments can be peeked safely; opt-in per experiment.
+- [Multi-Armed Bandit](./multi-armed-bandit.md) — adaptive traffic allocation (Thompson / ε-greedy
+  / UCB / contextual), static vs realtime propagation, autonomous lifecycle, campaigns,
+  multi-objective rewards.
 
 ## Quick Start
 
@@ -48,6 +51,7 @@ events `contexts` column) are retired — the stats pipeline no longer reads tho
 | Stats query cutover (JOIN on `experiment_assignments`)        | ✅ Complete |
 | Per-context-type Frequentist / Bayesian / CUPED / SRM         | ✅ Complete |
 | Sequential testing (mSPRT always-valid p + confidence sequences, opt-in) | ✅ Complete |
+| Multi-armed bandit (Thompson / ε-greedy / UCB / contextual, static + realtime, autonomous lifecycle, campaigns, multi-objective) | ✅ Complete |
 | Guardrail direction-violation detection                       | ✅ Complete |
 | Gateway: `/results`, `/exposures`, `/timeseries`, `/recompute`| ✅ Complete |
 | Admin UI: Results / Exposures / Time-series / Iterations tabs | ✅ Complete |
@@ -75,7 +79,6 @@ The work landed across 11 phases tracked in `conductor/tracks/experimentation_fu
 
 The following remain explicitly out of scope (separate future tracks):
 
-- Multi-armed bandit / Thompson sampling auto-allocation
 - Group-sequential / alpha-spending boundaries (O'Brien–Fleming / Pocock) — note: fully-sequential
   always-valid inference (mSPRT + confidence sequences) is now implemented, see
   [Sequential Testing](./sequential-testing.md)

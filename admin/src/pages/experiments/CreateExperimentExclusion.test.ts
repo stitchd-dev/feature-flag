@@ -14,6 +14,7 @@ import { describe, it, expect } from 'vitest'
 import SOURCE from './CreateExperimentModal.tsx?raw'
 import {
   experimentSchema,
+  DEFAULT_BANDIT_CONFIG,
   type ExperimentFormValues,
 } from '../../lib/validation/experiment'
 import { exclusionGroupFitsCapacity } from './exclusionGroups/capacity'
@@ -35,6 +36,8 @@ const validBase: ExperimentFormValues = {
   sequential_min_sample_size: 100,
   traffic_allocation: 100,
   model: 'bayesian',
+  experiment_mode: 'fixed',
+  bandit_config: DEFAULT_BANDIT_CONFIG,
 }
 
 // ─── Schema: optional exclusion_group_id ─────────────────────────────────────

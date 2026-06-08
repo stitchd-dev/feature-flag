@@ -38,6 +38,89 @@ export const MAX_METRIC_IDS = 5
 /** Maximum number of guardrail metrics permitted per experiment. */
 export const MAX_GUARDRAIL_METRIC_IDS = 5
 
+// ── Bandit (FR7) ────────────────────────────────────────────────────────────
+
+/** Experiment mode: a classic fixed-allocation A/B test, or an adaptive bandit. */
+export const EXPERIMENT_MODES = ['fixed', 'bandit'] as const
+export type ExperimentMode = (typeof EXPERIMENT_MODES)[number]
+
+/** Bandit allocation algorithms (mirrors core `BanditAlgorithm`). */
+export const BANDIT_ALGORITHMS = [
+  'thompson',
+  'epsilon_greedy',
+  'ucb',
+  'contextual',
+] as const
+export type BanditAlgorithm = (typeof BANDIT_ALGORITHMS)[number]
+
+/** Propagation mode: static (per-tick rewrite) vs realtime (snapshot-resident). */
+export const BANDIT_PROPAGATION_MODES = ['static', 'realtime'] as const
+export type BanditPropagationMode = (typeof BANDIT_PROPAGATION_MODES)[number]
+
+/** Lifecycle automation policy (mirrors core `LifecyclePolicy`). */
+export const BANDIT_LIFECYCLE_POLICIES = [
+  'advisory',
+  'auto_commit',
+  'auto_rollout',
+] as const
+export type BanditLifecyclePolicy = (typeof BANDIT_LIFECYCLE_POLICIES)[number]
+
+/** Objective kind for the multi-objective builder. */
+export const BANDIT_OBJECTIVE_KINDS = [
+  'scalar',
+  'scalarized',
+  'constrained',
+] as const
+export type BanditObjectiveKind = (typeof BANDIT_OBJECTIVE_KINDS)[number]
+
+/** Constraint direction for constrained objectives. */
+export const BANDIT_CONSTRAINT_DIRECTIONS = ['gte', 'lte'] as const
+export type BanditConstraintDirection =
+  (typeof BANDIT_CONSTRAINT_DIRECTIONS)[number]
+
+/** One metric+weight row for a scalarized objective. */
+export interface BanditScalarizedWeight {
+  metric_id: string
+  weight: number
+}
+
+/** One guardrail constraint row for a constrained objective. */
+export interface BanditConstraint {
+  metric_id: string
+  bound: number
+  direction: BanditConstraintDirection
+}
+
+/**
+ * Bandit configuration captured by the form. All fields are flat (Formik
+ * doesn't love deeply-nested arrays of objects, but it copes with the shallow
+ * rows here). The submit helper assembles these into the gateway's nested
+ * `bandit_config` shape.
+ */
+export interface BanditConfigFormValues {
+  algorithm: BanditAlgorithm
+  propagation_mode: BanditPropagationMode
+  /** Minimum exploration floor as a PERCENT (0–100); converted to bp on submit. */
+  min_exploration_pct: number
+  lifecycle_policy: BanditLifecyclePolicy
+  /** Convergence probability threshold (0–1). */
+  convergence_prob_threshold: number
+  /** Contextual feature names (only meaningful when algorithm = contextual). */
+  contextual_features: string[]
+  // ── Objective builder ──
+  objective_kind: BanditObjectiveKind
+  /** Single metric for scalar; primary metric for constrained. */
+  objective_metric_id: string
+  /** Metric+weight rows for scalarized. */
+  scalarized_weights: BanditScalarizedWeight[]
+  /** Guardrail-constraint rows for constrained. */
+  constraints: BanditConstraint[]
+  // ── Optional autonomous campaign ──
+  campaign_enabled: boolean
+  campaign_max_iterations: number
+  campaign_drift_threshold: number
+}
+
 /**
  * UUID-ish regex (any version). The gateway revalidates against the live
  * `metric_definitions` / `feature_flags` / `flag_rules` tables; the UI just
@@ -90,7 +173,152 @@ export interface ExperimentFormValues {
    * `requested_bp` derived from `traffic_allocation`.
    */
   exclusion_group_id?: string
+  /**
+   * Experiment mode. `fixed` (default) = classic A/B; `bandit` = adaptive
+   * allocation. When `bandit`, `bandit_config` is required + validated.
+   */
+  experiment_mode: ExperimentMode
+  /** Bandit configuration; only meaningful + validated when mode = bandit. */
+  bandit_config: BanditConfigFormValues
 }
+
+/** Sensible defaults for a fresh bandit config (mode flipped to bandit). */
+export const DEFAULT_BANDIT_CONFIG: BanditConfigFormValues = {
+  algorithm: 'thompson',
+  propagation_mode: 'static',
+  min_exploration_pct: 5,
+  lifecycle_policy: 'advisory',
+  convergence_prob_threshold: 0.95,
+  contextual_features: [],
+  objective_kind: 'scalar',
+  objective_metric_id: '',
+  scalarized_weights: [],
+  constraints: [],
+  campaign_enabled: false,
+  campaign_max_iterations: 5,
+  campaign_drift_threshold: 0.1,
+}
+
+/**
+ * Bandit-config sub-schema, applied only when `experiment_mode === 'bandit'`.
+ * Cross-field requireds reference sibling fields inside this object so they
+ * resolve without external Yup context.
+ */
+export const banditConfigSchema = Yup.object({
+  algorithm: Yup.string()
+    .oneOf(BANDIT_ALGORITHMS as unknown as string[], 'Invalid algorithm')
+    .required(),
+  propagation_mode: Yup.string()
+    .oneOf(
+      BANDIT_PROPAGATION_MODES as unknown as string[],
+      'Invalid propagation mode',
+    )
+    .required(),
+  min_exploration_pct: Yup.number()
+    .typeError('Exploration floor must be a number')
+    .min(0, 'Exploration floor cannot be negative')
+    // Floor is per-arm; cap at 50% so floor·n stays sane for small arm counts.
+    .max(50, 'Exploration floor must be 50% or less')
+    .required(),
+  lifecycle_policy: Yup.string()
+    .oneOf(
+      BANDIT_LIFECYCLE_POLICIES as unknown as string[],
+      'Invalid lifecycle policy',
+    )
+    .required(),
+  convergence_prob_threshold: Yup.number()
+    .typeError('Convergence threshold must be a number')
+    .moreThan(0, 'Convergence threshold must be between 0 and 1')
+    .lessThan(1, 'Convergence threshold must be between 0 and 1')
+    .required(),
+  contextual_features: Yup.array()
+    .of(Yup.string().trim().min(1).required())
+    // Contextual algorithm requires ≥1 feature; other algorithms ignore this.
+    .when('algorithm', {
+      is: 'contextual',
+      then: (s) =>
+        s.min(1, 'Contextual bandits need at least one feature').required(),
+      otherwise: (s) => s.notRequired(),
+    })
+    .default([]),
+  objective_kind: Yup.string()
+    .oneOf(
+      BANDIT_OBJECTIVE_KINDS as unknown as string[],
+      'Invalid objective kind',
+    )
+    .required(),
+  objective_metric_id: Yup.string()
+    .when('objective_kind', {
+      is: (kind: string) => kind === 'scalar' || kind === 'constrained',
+      then: (s) =>
+        s
+          .matches(UUID_RE, 'Pick a metric for the objective')
+          .required('Pick a metric for the objective'),
+      otherwise: (s) => s.notRequired(),
+    })
+    .default(''),
+  scalarized_weights: Yup.array()
+    .of(
+      Yup.object({
+        metric_id: Yup.string()
+          .matches(UUID_RE, 'Metric ID must be a UUID')
+          .required(),
+        weight: Yup.number()
+          .typeError('Weight must be a number')
+          .moreThan(0, 'Weight must be greater than 0')
+          .required(),
+      }),
+    )
+    .when('objective_kind', {
+      is: 'scalarized',
+      then: (s) => s.min(1, 'Add at least one weighted metric').required(),
+      otherwise: (s) => s.notRequired(),
+    })
+    .default([]),
+  constraints: Yup.array()
+    .of(
+      Yup.object({
+        metric_id: Yup.string()
+          .matches(UUID_RE, 'Metric ID must be a UUID')
+          .required(),
+        bound: Yup.number().typeError('Bound must be a number').required(),
+        direction: Yup.string()
+          .oneOf(BANDIT_CONSTRAINT_DIRECTIONS as unknown as string[])
+          .required(),
+      }),
+    )
+    .when('objective_kind', {
+      is: 'constrained',
+      then: (s) => s.min(1, 'Add at least one guardrail constraint').required(),
+      otherwise: (s) => s.notRequired(),
+    })
+    .default([]),
+  campaign_enabled: Yup.boolean().required().default(false),
+  campaign_max_iterations: Yup.number()
+    .typeError('Max iterations must be a number')
+    .when('campaign_enabled', {
+      is: true,
+      then: (s) =>
+        s
+          .integer('Max iterations must be a whole number')
+          .min(1, 'Max iterations must be at least 1')
+          .required('Max iterations is required for a campaign'),
+      otherwise: (s) => s.notRequired(),
+    })
+    .default(5),
+  campaign_drift_threshold: Yup.number()
+    .typeError('Drift threshold must be a number')
+    .when('campaign_enabled', {
+      is: true,
+      then: (s) =>
+        s
+          .moreThan(0, 'Drift threshold must be between 0 and 1')
+          .lessThan(1, 'Drift threshold must be between 0 and 1')
+          .required('Drift threshold is required for a campaign'),
+      otherwise: (s) => s.notRequired(),
+    })
+    .default(0.1),
+})
 
 /**
  * The Phase 10 schema.
@@ -276,4 +504,24 @@ export const experimentSchema: Yup.ObjectSchema<ExperimentFormValues> = Yup.obje
       'Exclusion group must be a valid UUID',
       (value) => !value || UUID_RE.test(value),
     ),
+
+  // ── Bandit mode + config ────────────────────────────────────────────────
+  experiment_mode: Yup.string()
+    .oneOf(EXPERIMENT_MODES as unknown as string[], 'Invalid experiment mode')
+    .required()
+    .default('fixed'),
+
+  // The nested bandit config is validated only when mode = bandit; for a
+  // `fixed` experiment the whole object is stripped (so an empty/partial config
+  // never blocks submit). Intra-config conditionals (`algorithm`,
+  // `objective_kind`, `campaign_enabled`) reference SIBLINGS within the object,
+  // which Yup resolves natively without any external context.
+  bandit_config: Yup.object()
+    .when('experiment_mode', {
+      is: 'bandit',
+      then: () => banditConfigSchema,
+      // Fixed mode: accept anything (the config is ignored on submit).
+      otherwise: (s) => s.optional().nullable().strip(),
+    })
+    .default(DEFAULT_BANDIT_CONFIG),
 }) as unknown as Yup.ObjectSchema<ExperimentFormValues>

@@ -190,14 +190,28 @@ jobs:
             --cobertura \
             --output-path coverage/cobertura.xml
 
+      - name: Install sqlx-cli
+        # The bandit_reallocation live test seeds the PG FK chain + records a
+        # bandit_allocation_runs row against the base DATABASE_URL DB, so that DB
+        # must carry the full schema (the CH-only tests below do not need it, but
+        # bandit_reallocation does).
+        uses: taiki-e/install-action@v2
+        with:
+          tool: sqlx-cli
+
+      - name: Run migrations (for the bandit live test's PG seeding)
+        run: sqlx migrate run --source crates/stitchd-db/migrations
+
       - name: Live-ClickHouse integration tests (stats-service)
-        # The query builders, per-metric compute pass, CUPED, percentile and
-        # interaction SQL are only exercised by `#[ignore]`d live-ClickHouse tests,
-        # which `cargo llvm-cov` above does not run (no `-- --ignored`). ClickHouse
-        # is already up from "Start infrastructure services" and these tests are
-        # self-contained (they call `event_writer::migrations::run` to create
-        # their tables and default `STITCHD_CLICKHOUSE_URL` to localhost), so run
-        # them explicitly here to guard the join semantics + ITT bounding.
+        # The query builders, per-metric compute pass, CUPED, percentile,
+        # interaction SQL and bandit static reallocation are only exercised by
+        # `#[ignore]`d live tests, which `cargo llvm-cov` above does not run (no
+        # `-- --ignored`). ClickHouse + Postgres are already up from "Start
+        # infrastructure services" and these tests are self-seeding (they call
+        # `event_writer::migrations::run` to create their CH tables and default
+        # `STITCHD_CLICKHOUSE_URL` to localhost; bandit_reallocation additionally
+        # seeds its PG FK chain against DATABASE_URL), so run them explicitly here
+        # to guard the join semantics + ITT bounding + reallocation math.
         # NOTE: list each `--test` target explicitly (a plain `-- --ignored` would
         # also run non-self-seeding ignored tests); keep this in sync with the
         # self-seeding files under crates/stitchd-stats-service/tests/.
@@ -205,7 +219,10 @@ jobs:
           cargo test -p stitchd-stats-service \
             --test aggregation_query --test ratio_query --test funnel_query \
             --test preview_query --test interaction_compute --test compute_pass \
-            --test cuped_compute --test percentile_significance -- --ignored
+            --test cuped_compute --test percentile_significance \
+            --test bandit_reallocation --test bandit_contextual \
+            --test bandit_multiobjective --test bandit_interaction_order4 \
+            --test bandit_e2e_lifecycle -- --ignored
 
       - name: Upload coverage to Codecov
         # Use the official `codecov/codecov-action` instead of the

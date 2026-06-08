@@ -221,6 +221,12 @@ message ExperimentResult {
   // p_crossed, ci_lower, ci_upper, insufficient_data, method}. Absent / empty
   // when sequential testing was not run for the row.
   optional string sequential_result = 14;
+  // [ADDITIVE] Bandit allocation snapshot for this (experiment, iteration,
+  // metric_key, context_type) row, serialised as a JSON object keyed by
+  // variant_key — each entry carries the current allocation weight in basis
+  // points plus the per-objective reward posteriors. Absent / empty for
+  // non-bandit experiments.
+  optional string bandit_allocation = 15;
 }
 
 // Write (upsert) one experiment result.
@@ -248,6 +254,11 @@ message WriteExperimentResultsRequest {
   // entry: {always_valid_p, p_crossed, ci_lower, ci_upper, insufficient_data,
   // method}. Absent / empty when sequential testing was not run for the row.
   optional string sequential_result = 13;
+  // [ADDITIVE] Bandit allocation snapshot for this row, serialised as a JSON
+  // object keyed by variant_key — each entry: {weight_bp, posteriors:{...}}
+  // (current allocation in basis points + per-objective reward posteriors).
+  // Absent / empty for non-bandit experiments.
+  optional string bandit_allocation = 14;
 }
 
 // Empty response — Worker 3's write returns () so no result is echoed back.

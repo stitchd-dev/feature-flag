@@ -45,6 +45,12 @@ import type { IterationSummary } from './tabs/Iterations'
 import { InteractionsTab, hasSignificantInteraction } from './tabs/Interactions'
 import { listExperimentInteractions } from '../../lib/api/exclusionGroups'
 import type { ExperimentInteraction } from '../../lib/api/exclusionGroups'
+import { BanditTab } from './tabs/Bandit'
+import {
+  getBanditState,
+  getBanditAllocationHistory,
+} from '../../lib/api/bandit'
+import type { BanditState, BanditAllocationHistory } from '../../lib/api/bandit'
 
 /**
  * Experiment lifecycle-transition presets for the schedule builder
@@ -74,6 +80,7 @@ interface MetricNameRow {
 
 type Tab =
   | 'results'
+  | 'bandit'
   | 'exposures'
   | 'timeseries'
   | 'iterations'
@@ -392,6 +399,51 @@ function ExperimentDetailBody({
 
   const showInteractionWarning = hasSignificantInteraction(interactions)
 
+  // ── Bandit state + history fetch ──────────────────────────────────────────
+  // Fetched on mount so the "Bandit" tab can be shown/hidden based on
+  // `is_bandit`. Allocation history rides along (it backs the chart + timeline).
+  const [banditState, setBanditState] = useState<BanditState | null>(null)
+  const [banditHistory, setBanditHistory] =
+    useState<BanditAllocationHistory | null>(null)
+  const [banditLoading, setBanditLoading] = useState(false)
+  const [banditError, setBanditError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!envId || !apiExp.key) return
+    const ctrl = new AbortController()
+    setBanditLoading(true)
+    setBanditError(null)
+    getBanditState(envId, apiExp.key, ctrl.signal)
+      .then((state) => {
+        if (ctrl.signal.aborted) return
+        setBanditState(state)
+        // Only chase the history when the experiment is actually a bandit.
+        if (!state.is_bandit) return
+        return getBanditAllocationHistory(
+          envId,
+          apiExp.key,
+          { limit: 200 },
+          ctrl.signal,
+        ).then((history) => {
+          if (ctrl.signal.aborted) return
+          setBanditHistory(history)
+        })
+      })
+      .catch((err) => {
+        if (ctrl.signal.aborted) return
+        // A non-bandit experiment may 404/422 here — treat as "not a bandit"
+        // rather than a hard error so the rest of the page renders.
+        setBanditState(null)
+        setBanditError(extractErrorMessage(err))
+      })
+      .finally(() => {
+        if (!ctrl.signal.aborted) setBanditLoading(false)
+      })
+    return () => ctrl.abort()
+  }, [envId, apiExp.key])
+
+  const isBandit = banditState?.is_bandit === true
+
   // ── Timeseries fetch ──────────────────────────────────────────────────────
   const [tsDays, setTsDays] = useState(7)
   const [tsSeries, setTsSeries] = useState<Record<string, TimeseriesData>>({})
@@ -578,6 +630,9 @@ function ExperimentDetailBody({
 
         <div className="tabs">
           <button className={`tab ${tab === 'results' ? 'active' : ''}`} onClick={() => setTab('results')}>Results</button>
+          {isBandit && (
+            <button className={`tab ${tab === 'bandit' ? 'active' : ''}`} onClick={() => setTab('bandit')}>Bandit</button>
+          )}
           <button className={`tab ${tab === 'exposures' ? 'active' : ''}`} onClick={() => setTab('exposures')}>Exposures · SRM</button>
           <button className={`tab ${tab === 'timeseries' ? 'active' : ''}`} onClick={() => setTab('timeseries')}>Time-series</button>
           <button className={`tab ${tab === 'iterations' ? 'active' : ''}`} onClick={() => setTab('iterations')}>Iterations</button>
@@ -632,6 +687,15 @@ function ExperimentDetailBody({
               metricNames={metricNames.length > 0 ? metricNames : apiExp.metric_ids}
             />
           </>
+        )}
+
+        {tab === 'bandit' && (
+          <BanditTab
+            state={banditState}
+            history={banditHistory}
+            loading={banditLoading}
+            error={banditError}
+          />
         )}
 
         {tab === 'exposures' && (
@@ -691,6 +755,7 @@ function ExperimentDetailBody({
             interactions={interactions}
             loading={interactionsLoading}
             error={interactionsError}
+            isBandit={isBandit}
           />
         )}
 

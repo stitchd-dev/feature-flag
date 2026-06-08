@@ -18,6 +18,7 @@ import { ValidationError } from 'yup'
 import SOURCE from './CreateExperimentModal.tsx?raw'
 import {
   experimentSchema,
+  DEFAULT_BANDIT_CONFIG,
   type ExperimentFormValues,
   MAX_METRIC_IDS,
   MAX_GUARDRAIL_METRIC_IDS,
@@ -52,6 +53,8 @@ const validBase: ExperimentFormValues = {
   sequential_min_sample_size: 100,
   traffic_allocation: 100,
   model: 'bayesian',
+  experiment_mode: 'fixed',
+  bandit_config: DEFAULT_BANDIT_CONFIG,
 }
 
 async function validate(

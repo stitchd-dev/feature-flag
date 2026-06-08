@@ -6,7 +6,11 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 
 use stitchd_core::{
-    experimentation::{Experiment, ExperimentIteration, ExperimentStatus, validate_transition},
+    experimentation::{
+        Experiment, ExperimentIteration, ExperimentStatus,
+        bandit::{BanditConfig, ExperimentMode},
+        validate_transition,
+    },
     id::{
         EnvironmentId, ExclusionGroupId, ExperimentId, ExperimentIterationId, FlagId, MetricId,
         RuleId, UserId,
@@ -55,6 +59,44 @@ const fn pre_period_to_i32(v: u32) -> i32 {
     }
 }
 
+fn parse_experiment_mode(s: &str) -> ExperimentMode {
+    match s {
+        "bandit" => ExperimentMode::Bandit,
+        _ => ExperimentMode::Fixed,
+    }
+}
+
+const fn experiment_mode_str(mode: ExperimentMode) -> &'static str {
+    match mode {
+        ExperimentMode::Fixed => "fixed",
+        ExperimentMode::Bandit => "bandit",
+    }
+}
+
+/// Decode a nullable `bandit_config` JSONB column into the domain type.
+fn decode_bandit_config(
+    json: Option<serde_json::Value>,
+) -> Result<Option<BanditConfig>, RepositoryError> {
+    match json {
+        None => Ok(None),
+        Some(v) => Ok(Some(serde_json::from_value(v).map_err(|e| {
+            RepositoryError::Unexpected(anyhow::anyhow!("bandit_config JSONB malformed: {e}"))
+        })?)),
+    }
+}
+
+/// Encode an optional [`BanditConfig`] to a JSONB value for binding.
+fn encode_bandit_config(
+    config: Option<&BanditConfig>,
+) -> Result<Option<serde_json::Value>, RepositoryError> {
+    match config {
+        None => Ok(None),
+        Some(c) => Ok(Some(serde_json::to_value(c).map_err(|e| {
+            RepositoryError::Unexpected(anyhow::anyhow!("bandit_config serialize failed: {e}"))
+        })?)),
+    }
+}
+
 fn parse_status(s: &str) -> ExperimentStatus {
     match s {
         "running" => ExperimentStatus::Running,
@@ -80,6 +122,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
                 e.sequential_testing_enabled, e.sequential_alpha,
                 e.sequential_tau_squared, e.sequential_min_sample_size,
+                e.experiment_mode, e.bandit_config,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -118,6 +161,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
                 e.sequential_testing_enabled, e.sequential_alpha,
                 e.sequential_tau_squared, e.sequential_min_sample_size,
+                e.experiment_mode, e.bandit_config,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -168,6 +212,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
                 e.sequential_testing_enabled, e.sequential_alpha,
                 e.sequential_tau_squared, e.sequential_min_sample_size,
+                e.experiment_mode, e.bandit_config,
                 f.key AS flag_key,
                 COALESCE((
                     SELECT ARRAY_AGG(v.key ORDER BY v.id)
@@ -230,10 +275,11 @@ impl ExperimentRepository for PgExperimentRepository {
                  scheduled_start_at, scheduled_end_at,
                  sequential_testing_enabled, sequential_alpha,
                  sequential_tau_squared, sequential_min_sample_size,
+                 experiment_mode, bandit_config,
                  version, created_at, updated_at, deleted_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::text, $10, $11,
                     $12::float8::numeric, $13, $14, $15, $16, $17,
-                    $18, $19, $20, $21, $22, $23, $24, $25)
+                    $18, $19, $20, $21, $22::text, $23, $24, $25, $26, $27)
             ",
         )
         .bind(experiment.id.as_uuid())
@@ -257,6 +303,8 @@ impl ExperimentRepository for PgExperimentRepository {
         .bind(experiment.sequential_alpha)
         .bind(experiment.sequential_tau_squared)
         .bind(experiment.sequential_min_sample_size)
+        .bind(experiment_mode_str(experiment.experiment_mode))
+        .bind(encode_bandit_config(experiment.bandit_config.as_ref())?)
         .bind(experiment.version)
         .bind(experiment.created_at)
         .bind(experiment.updated_at)
@@ -342,9 +390,11 @@ impl ExperimentRepository for PgExperimentRepository {
                 sequential_alpha = $14,
                 sequential_tau_squared = $15,
                 sequential_min_sample_size = $16,
+                experiment_mode = $17::text,
+                bandit_config = $18,
                 updated_at = NOW(),
-                version = $17
-            WHERE id = $18 AND version = $19 AND deleted_at IS NULL
+                version = $19
+            WHERE id = $20 AND version = $21 AND deleted_at IS NULL
             RETURNING
                 id, env_id, flag_id, flag_rule_id, targets_default_rule, name, description,
                 hypothesis, status, metric_ids, guardrail_metric_ids,
@@ -354,7 +404,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 version, created_at, updated_at, deleted_at,
                 exclusion_group_id, group_bucket_lo, group_bucket_hi,
                 sequential_testing_enabled, sequential_alpha,
-                sequential_tau_squared, sequential_min_sample_size
+                sequential_tau_squared, sequential_min_sample_size,
+                experiment_mode, bandit_config
             ",
         )
         .bind(&experiment.name)
@@ -373,6 +424,8 @@ impl ExperimentRepository for PgExperimentRepository {
         .bind(experiment.sequential_alpha)
         .bind(experiment.sequential_tau_squared)
         .bind(experiment.sequential_min_sample_size)
+        .bind(experiment_mode_str(experiment.experiment_mode))
+        .bind(encode_bandit_config(experiment.bandit_config.as_ref())?)
         .bind(new_version)
         .bind(experiment.id.as_uuid())
         .bind(experiment.version)
@@ -481,7 +534,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 unit_context_types, default_rule_distribution,
                 exclusion_group_id, group_bucket_lo, group_bucket_hi,
                 sequential_testing_enabled, sequential_alpha,
-                sequential_tau_squared, sequential_min_sample_size
+                sequential_tau_squared, sequential_min_sample_size,
+                bandit_config
             FROM experiment_iterations
             WHERE experiment_id = $1
             ORDER BY iteration_number
@@ -559,7 +613,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 version, created_at, updated_at, deleted_at,
                 exclusion_group_id, group_bucket_lo, group_bucket_hi,
                 sequential_testing_enabled, sequential_alpha,
-                sequential_tau_squared, sequential_min_sample_size
+                sequential_tau_squared, sequential_min_sample_size,
+                experiment_mode, bandit_config
             ",
         )
         .bind(experiment_status_str(to))
@@ -638,9 +693,10 @@ impl ExperimentRepository for PgExperimentRepository {
                      default_rule_distribution,
                      exclusion_group_id, group_bucket_lo, group_bucket_hi,
                      sequential_testing_enabled, sequential_alpha,
-                     sequential_tau_squared, sequential_min_sample_size)
+                     sequential_tau_squared, sequential_min_sample_size,
+                     bandit_config)
                 VALUES ($1, $2, $3, $4, NOW(), $5, $6, $7::float8::numeric, $8, $9, $10, $11, $12,
-                        $13, $14, $15, $16, $17, $18, $19)
+                        $13, $14, $15, $16, $17, $18, $19, $20)
                 ",
             )
             .bind(iteration_id.as_uuid())
@@ -668,6 +724,9 @@ impl ExperimentRepository for PgExperimentRepository {
             .bind(current.sequential_alpha)
             .bind(current.sequential_tau_squared)
             .bind(current.sequential_min_sample_size)
+            // Snapshot the bandit config at iteration start (mirrors the
+            // sequential-testing snapshot above).
+            .bind(encode_bandit_config(current.bandit_config.as_ref())?)
             .execute(&mut *tx)
             .await
             .map_err(RepositoryError::Database)?;
@@ -733,6 +792,7 @@ impl ExperimentRepository for PgExperimentRepository {
                 e.exclusion_group_id, e.group_bucket_lo, e.group_bucket_hi,
                 e.sequential_testing_enabled, e.sequential_alpha,
                 e.sequential_tau_squared, e.sequential_min_sample_size,
+                e.experiment_mode, e.bandit_config,
                 e.version, e.created_at, e.updated_at, e.deleted_at,
                 f.key AS flag_key,
                 COALESCE((
@@ -792,7 +852,8 @@ impl ExperimentRepository for PgExperimentRepository {
                 unit_context_types, default_rule_distribution,
                 exclusion_group_id, group_bucket_lo, group_bucket_hi,
                 sequential_testing_enabled, sequential_alpha,
-                sequential_tau_squared, sequential_min_sample_size
+                sequential_tau_squared, sequential_min_sample_size,
+                bandit_config
             FROM experiment_iterations
             WHERE id = $1
             ",
@@ -807,6 +868,21 @@ impl ExperimentRepository for PgExperimentRepository {
         })?;
 
         row_to_iteration(&row)
+    }
+
+    async fn find_bandit_campaign_id(
+        &self,
+        experiment_id: ExperimentId,
+    ) -> Result<Option<uuid::Uuid>, RepositoryError> {
+        let id: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT bandit_campaign_id FROM experiments WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(experiment_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?
+        .flatten();
+        Ok(id)
     }
 }
 
@@ -873,6 +949,8 @@ fn row_to_experiment(row: &sqlx::postgres::PgRow) -> Experiment {
         sequential_alpha: row.get("sequential_alpha"),
         sequential_tau_squared: row.get("sequential_tau_squared"),
         sequential_min_sample_size: row.get("sequential_min_sample_size"),
+        experiment_mode: parse_experiment_mode(row.get::<&str, _>("experiment_mode")),
+        bandit_config: decode_bandit_config(row.get("bandit_config")).unwrap_or(None),
     }
 }
 
@@ -930,6 +1008,7 @@ fn row_to_iteration(row: &sqlx::postgres::PgRow) -> Result<ExperimentIteration, 
         sequential_alpha: row.get("sequential_alpha"),
         sequential_tau_squared: row.get("sequential_tau_squared"),
         sequential_min_sample_size: row.get("sequential_min_sample_size"),
+        bandit_config: decode_bandit_config(row.get("bandit_config"))?,
     })
 }
 

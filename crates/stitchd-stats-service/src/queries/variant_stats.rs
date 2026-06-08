@@ -172,6 +172,96 @@ pub fn build_aggregation_cells_query(
     Ok(BuiltQuery { sql, binds })
 }
 
+/// Build the **per-assigned-unit contextual reward** query for one experiment +
+/// iteration restricted to a single `context_type`, a single `Aggregation`
+/// reward metric, and a single context FEATURE read from event properties.
+///
+/// For each assigned unit (deduped `FINAL` first-exposure assignments) this
+/// returns:
+/// * `variant_key` — the unit's assigned arm,
+/// * `feature_value` — the value of `events.properties[feature_param]` taken from
+///   any of the unit's post-exposure metric events (`''` when the unit fired no
+///   event or the property is absent — the contextual encoder maps `''` to the
+///   numeric `0.0` / the one-hot baseline), and
+/// * `reward` — the post-exposure metric value sum over `[assigned_at,
+///   iteration_end)` (`0` for a non-firing unit, ITT).
+///
+/// One row per assigned unit (NOT pre-aggregated per variant) so the
+/// stats-service can fit a per-variant ridge regression over `(feature, reward)`
+/// design rows. Mirrors [`build_aggregation_cells_query`]'s ITT discipline.
+///
+/// # Errors
+/// Returns [`QueryBuildError`] when the metric `where_clause` JsonLogic cannot
+/// be translated.
+pub fn build_contextual_reward_rows_query(
+    cfg: &AggregationConfig,
+    feature_param: &str,
+    experiment_id: &str,
+    iteration_id: &str,
+    env_id: &str,
+    context_type: &str,
+    iteration_end: DateTime<Utc>,
+) -> Result<BuiltQuery, QueryBuildError> {
+    let end_ms = iteration_end.timestamp_millis();
+    let mut binds = Vec::new();
+
+    let assignments_cte = emit_assignments_cte(
+        &mut binds,
+        experiment_id,
+        iteration_id,
+        env_id,
+        context_type,
+        iteration_end,
+    );
+
+    let ev_env_ph = push_bind(&mut binds, QueryBind::Str(env_id.to_owned()));
+    let event_ph = push_bind(&mut binds, QueryBind::Str(cfg.event_key.clone()));
+    let ev_ctx_ph = push_bind(&mut binds, QueryBind::Str(context_type.to_owned()));
+    let ev_end_ph = push_bind(&mut binds, QueryBind::I64(end_ms));
+    let value_expr = super::numeric_value_expr(cfg);
+    // The feature property key is admin-controlled free-form; escape it into the
+    // `properties['…']` map-key literal exactly like `on_field`.
+    let feature_key = super::clickhouse_escape(feature_param);
+
+    let extra_where = match cfg.where_clause.as_ref() {
+        Some(expr) => {
+            let frag = jsonlogic_to_sql(expr, &mut binds)?;
+            format!("\n      AND ({frag})")
+        }
+        None => String::new(),
+    };
+
+    let sql = format!(
+        "WITH\n\
+        assignments AS (\n\
+        {assignments_cte}\
+        ),\n\
+        matched_events AS (\n    \
+            SELECT\n        \
+                ctx_pair.2 AS context_key,\n        \
+                {value_expr} AS value,\n        \
+                e.properties['{feature_key}'] AS feature_value,\n        \
+                e.occurred_at AS occurred_at\n    \
+            FROM events AS e\n    \
+            ARRAY JOIN e.contexts AS ctx_pair\n    \
+            WHERE e.env_id = toUUID({ev_env_ph})\n      \
+              AND e.metric_key = {event_ph}\n      \
+              AND ctx_pair.1 = {ev_ctx_ph}\n      \
+              AND e.occurred_at < fromUnixTimestamp64Milli({ev_end_ph}){extra_where}\n\
+        )\n\
+        SELECT\n    \
+            asg.variant_key AS variant_key,\n    \
+            anyIf(me.feature_value, me.occurred_at >= asg.assigned_at) AS feature_value,\n    \
+            sumIf(me.value, me.occurred_at >= asg.assigned_at) AS reward\n\
+        FROM assignments AS asg\n\
+        LEFT JOIN matched_events AS me\n    \
+            ON me.context_key = asg.context_key\n\
+        GROUP BY asg.context_type, asg.context_key, asg.variant_key"
+    );
+
+    Ok(BuiltQuery { sql, binds })
+}
+
 /// Build the per-`(context_type, variant_key)` **ratio** sufficient-stats query
 /// for one experiment + iteration restricted to a single `context_type`.
 ///
@@ -844,6 +934,66 @@ mod tests {
             "{}",
             q.sql
         );
+    }
+
+    // ── Contextual reward rows ───────────────────────────────────────────────
+
+    #[test]
+    fn contextual_reward_rows_projects_feature_value_and_reward_per_unit() {
+        let q = build_contextual_reward_rows_query(
+            &count_cfg(),
+            "plan",
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            "user",
+            end(),
+        )
+        .unwrap();
+        // Feature value pulled from the event properties map.
+        assert!(
+            q.sql.contains("e.properties['plan'] AS feature_value"),
+            "{}",
+            q.sql
+        );
+        // One row per assigned unit (grouped by context_key), not per variant.
+        assert!(
+            q.sql
+                .contains("GROUP BY asg.context_type, asg.context_key, asg.variant_key"),
+            "{}",
+            q.sql
+        );
+        // ITT post-exposure reward sum.
+        assert!(
+            q.sql
+                .contains("sumIf(me.value, me.occurred_at >= asg.assigned_at) AS reward"),
+            "{}",
+            q.sql
+        );
+        // The feature value is taken from a post-exposure event.
+        assert!(
+            q.sql.contains(
+                "anyIf(me.feature_value, me.occurred_at >= asg.assigned_at) AS feature_value"
+            ),
+            "{}",
+            q.sql
+        );
+    }
+
+    #[test]
+    fn contextual_reward_rows_escapes_feature_property_key() {
+        // A feature name with a quote must be escaped into the map-key literal.
+        let q = build_contextual_reward_rows_query(
+            &count_cfg(),
+            "pl'an",
+            EXP_ID,
+            ITER_ID,
+            ENV_ID,
+            "user",
+            end(),
+        )
+        .unwrap();
+        assert!(q.sql.contains("e.properties['pl\\'an']"), "{}", q.sql);
     }
 
     #[test]

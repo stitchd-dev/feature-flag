@@ -6,7 +6,8 @@ use crate::rule_engine::error::RuleEngineError;
 use crate::rule_engine::eval_expr::evaluate_expr;
 use crate::rule_engine::eval_rules::evaluate_rules;
 use crate::rule_engine::types::{
-    EvaluationInput, ExclusionGate, PercentageTarget, Rule, RuleOutput, TargetField,
+    EvaluationInput, ExclusionGate, PercentageTarget, RealtimeBanditModel, Rule, RuleOutput,
+    TargetField,
 };
 use crate::segment::{SegmentDefinition, SegmentEvaluator};
 use crate::variants::VariantValue;
@@ -353,8 +354,47 @@ fn evaluate_one(
                     }
                 }
                 RuleOutput::Percentage {
-                    targets, weights, ..
+                    targets,
+                    weights,
+                    realtime_bandit,
+                    ..
                 } => {
+                    // ── Real-time bandit branch (snapshot-resident, PURE) ──
+                    // A rule carrying a real-time bandit model draws its variant
+                    // per-context from the snapshot posteriors via a Thompson
+                    // sample seeded deterministically by the unit context's key.
+                    // Gated to realtime-bandit rules ONLY: a rule WITHOUT
+                    // `realtime_bandit` skips this entirely and takes the exact
+                    // static path below, byte-identical. A missing unit context
+                    // falls back to the static path gracefully (cannot seed a
+                    // draw without the diversion unit). Pure math: no I/O, no
+                    // clock — `sample_realtime_variant` reuses the same seeded
+                    // LCG the stats core uses.
+                    if let Some(model) = realtime_bandit
+                        && let Some(assignment) =
+                            sample_realtime_bandit(model.as_ref(), bundle, flag, want_trace)
+                    {
+                        result_variant_key = assignment.variant_key;
+                        result_variant_value = assignment.variant_value;
+                        if want_trace {
+                            rollout_debug = Some(assignment.rollout_debug);
+                        }
+                        fired_rule_index = Some(i);
+                        fired_rule_name = rule.name.clone();
+                        fired_rule_id = Some(rule.id);
+                        if want_trace {
+                            let condition_tree =
+                                Some(build_condition_tree(&rule.condition, &input));
+                            rule_traces.push(RuleTrace {
+                                rule_index: i,
+                                rule_name: rule.name.clone(),
+                                outcome: RuleOutcome::Match,
+                                condition_tree,
+                            });
+                        }
+                        continue;
+                    }
+
                     // Bridge old PercentageTarget shape → HashInputSpec on
                     // the fly. Phase 5/6 cuts over the storage; this
                     // internal conversion preserves byte-identity in the
@@ -577,6 +617,181 @@ fn exclusion_gate_admits(gate: &ExclusionGate, bundle: &[Context]) -> bool {
     }
 }
 
+/// The result of a successful real-time bandit assignment.
+struct BanditAssignment {
+    /// The variant key the context was assigned to.
+    variant_key: String,
+    /// The assigned variant's value.
+    variant_value: VariantValue,
+    /// The trace debug for the assignment (only built when tracing).
+    rollout_debug: RolloutDebug,
+}
+
+/// Note recorded in [`RolloutDebug::hash_input`] for a real-time bandit
+/// assignment. Names only that the variant was bandit-sampled — never any
+/// context or posterior-parameter values (privacy: no `privateParameters`
+/// leakage).
+pub(crate) const REALTIME_BANDIT_NOTE: &str = "assigned by real-time bandit sampling";
+
+/// Note recorded in [`RolloutDebug::hash_input`] for a CONTEXTUAL real-time
+/// bandit assignment. Names the chosen variant + the feature NAMES the model
+/// conditions on — NEVER any feature value (privacy: no `privateParameters`
+/// leakage).
+pub(crate) const CONTEXTUAL_BANDIT_NOTE: &str = "assigned by contextual bandit sampling";
+
+/// A [`FeatureResolver`](crate::experimentation::bandit::contextual::FeatureResolver)
+/// over a pre-resolved, owned `(context_type, parameter) → value` map.
+///
+/// The map is built ONCE from the in-memory context bundle (stringifying each
+/// looked-up parameter) before encoding, so `resolve` can hand back a borrow
+/// into owned storage with no `unsafe`. Pure, no I/O. Feature values stay inside
+/// this resolver and the encoded numeric vector; they never reach a trace.
+struct BundleFeatureResolver {
+    values: HashMap<(String, String), String>,
+}
+
+impl BundleFeatureResolver {
+    /// Pre-resolve every `(context_type, parameter)` the model's features name
+    /// from `bundle` into owned strings.
+    fn new(
+        bundle: &[Context],
+        features: &[crate::experimentation::bandit::contextual::FeatureSpec],
+    ) -> Self {
+        let mut values = HashMap::with_capacity(features.len());
+        for f in features {
+            if let Some(v) = bundle
+                .iter()
+                .find(|c| c.context_type == f.context_type)
+                .and_then(|c| c.parameters.get(&f.parameter).map(|v| v.to_string()))
+            {
+                values.insert((f.context_type.clone(), f.parameter.clone()), v);
+            }
+        }
+        Self { values }
+    }
+}
+
+impl crate::experimentation::bandit::contextual::FeatureResolver for BundleFeatureResolver {
+    fn resolve(&self, context_type: &str, parameter: &str) -> Option<&str> {
+        self.values
+            .get(&(context_type.to_string(), parameter.to_string()))
+            .map(String::as_str)
+    }
+}
+
+/// Draw a variant for a real-time-bandit percentage rule from its
+/// snapshot-resident model, seeded by the diversion unit's context key.
+///
+/// Returns `Some(BanditAssignment)` when the model's `unit_context_type` is
+/// present in `bundle` AND the sampled variant key resolves to a real variant on
+/// the flag. Returns `None` when the diversion unit is absent (a missing unit
+/// cannot seed a draw) or the sampled variant is unknown — the caller then falls
+/// back to the static allocation path gracefully.
+///
+/// Pure: the only work is a Murmur3 seed fold + a Thompson draw over the
+/// in-memory posteriors (the shared seeded LCG). No I/O, no async, no clock.
+///
+/// When `want_trace`, the returned [`RolloutDebug`] names the chosen variant and
+/// the sampled per-variant weights (the draw values) but NEVER the posterior
+/// parameters or any context value — privacy is preserved.
+fn sample_realtime_bandit(
+    model: &RealtimeBanditModel,
+    bundle: &[Context],
+    flag: &Flag,
+    want_trace: bool,
+) -> Option<BanditAssignment> {
+    // Locate the diversion unit; absent → cannot seed → static fallback.
+    let unit = bundle
+        .iter()
+        .find(|c| c.context_type == model.unit_context_type)?;
+    let seed = crate::experimentation::bandit::realtime::context_seed(&model.salt, &unit.key);
+
+    // ── Contextual branch: feature-conditioned per-context linear draw ──────
+    // When the model carries a contextual representation, encode the bundle's
+    // feature values (pure) and Thompson-draw the goal-directed argmax from the
+    // per-variant coefficients. A model with NO contextual representation falls
+    // through to the non-contextual posterior path below, byte-identical.
+    if let Some(cmodel) = model.contextual.as_ref() {
+        let resolver = BundleFeatureResolver::new(bundle, &cmodel.features);
+        let feature_vector = crate::experimentation::bandit::contextual::encode_features(
+            &cmodel.features,
+            &resolver,
+        );
+        let chosen_key = crate::experimentation::bandit::sample_contextual_variant(
+            cmodel,
+            &feature_vector,
+            model.goal,
+            seed,
+        )?;
+        let variant = flag.get_variant_by_key(&chosen_key)?;
+        let rollout_debug = if want_trace {
+            // Surface the chosen variant + the feature NAMES only — never any
+            // feature value or coefficient (privacy preserved).
+            let feature_names: Vec<String> = cmodel
+                .features
+                .iter()
+                .map(|f| format!("{}.{}", f.context_type, f.parameter))
+                .collect();
+            RolloutDebug {
+                hash_input: format!(
+                    "{CONTEXTUAL_BANDIT_NOTE}: {} [features: {}]",
+                    chosen_key,
+                    feature_names.join(",")
+                ),
+                bucket: 0,
+                variant_ranges: Vec::new(),
+            }
+        } else {
+            RolloutDebug {
+                hash_input: String::new(),
+                bucket: 0,
+                variant_ranges: Vec::new(),
+            }
+        };
+        return Some(BanditAssignment {
+            variant_key: variant.key.clone(),
+            variant_value: variant.value.clone(),
+            rollout_debug,
+        });
+    }
+
+    let (chosen_key, draws) = crate::experimentation::bandit::sample_realtime_variant(model, seed)?;
+    // Resolve the sampled variant key to a real variant; unknown → fallback.
+    let variant = flag.get_variant_by_key(&chosen_key)?;
+
+    let rollout_debug = if want_trace {
+        // Surface the chosen variant + sampled weights (draw values) as the
+        // variant ranges. NEVER include posterior params or context values.
+        let variant_ranges = draws
+            .iter()
+            .map(|d| VariantRange {
+                variant_key: d.variant_key.clone(),
+                // Reuse the range fields to carry the sampled weight, scaled to
+                // basis points so the existing trace shape holds an integer.
+                from: 0,
+                to: (d.draw.clamp(0.0, 1.0) * 10_000.0) as u32,
+            })
+            .collect();
+        RolloutDebug {
+            hash_input: format!("{REALTIME_BANDIT_NOTE}: {chosen_key}"),
+            bucket: 0,
+            variant_ranges,
+        }
+    } else {
+        RolloutDebug {
+            hash_input: String::new(),
+            bucket: 0,
+            variant_ranges: Vec::new(),
+        }
+    };
+
+    Some(BanditAssignment {
+        variant_key: variant.key.clone(),
+        variant_value: variant.value.clone(),
+        rollout_debug,
+    })
+}
+
 /// Outcome of a failed prerequisite-gate check.
 ///
 /// Carries only flag/variant identifiers — no context or parameter values —
@@ -685,6 +900,11 @@ impl FlagEvaluator {
                     targets,
                     weights,
                     exclusion_gate,
+                    // The legacy single-output evaluator predates the real-time
+                    // bandit path (added in the unified `evaluate_flag` only).
+                    // It ignores the model and uses the static allocation, which
+                    // is the safe fallback for any caller still on this path.
+                    realtime_bandit: _,
                 } => {
                     // Exclusion-group gate: if present and it does not admit
                     // this context, the rule does not enroll the context.
@@ -951,6 +1171,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let segments = HashSet::new();
@@ -1052,6 +1273,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         // Provide user context but NOT org context
@@ -1088,6 +1310,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1124,6 +1347,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 1)], // only covers bucket 0
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         // Iterate users until we find one that doesn't land in bucket 0
@@ -1168,6 +1392,7 @@ mod tests {
             }],
             weights: vec![(nonexistent, 10000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1337,6 +1562,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1711,6 +1937,7 @@ mod tests {
             }],
             weights: vec![(on_id, 5000), (off_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let ctx = Context::new("user", "u1");
@@ -2020,6 +2247,7 @@ mod tests {
             ],
             weights: vec![(on_id, 5000), (off_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let memberships = ListMembershipIndex::new();
@@ -2113,6 +2341,7 @@ mod tests {
                     }],
                     weights: vec![(on_id, 5000), (off_id, 5000)],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             },
         });
@@ -2218,6 +2447,7 @@ mod tests {
             ],
             weights: vec![(on_id, 5000), (off_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let memberships = ListMembershipIndex::new();
@@ -2286,6 +2516,7 @@ mod tests {
             // a held-out context falls through to the default variant "off".
             weights: vec![(on_id, 10000), (off_id, 0)],
             exclusion_gate: gate,
+            realtime_bandit: None,
         };
         flag
     }
@@ -2819,5 +3050,373 @@ mod tests {
             res.outcome,
             EvalOutcome::PrerequisiteFailed { prerequisite_flag_id } if prerequisite_flag_id == p1
         ));
+    }
+
+    // ── bandit_20260608 Phase 5: real-time bandit sampling in evaluate_flag ──
+
+    use crate::rule_engine::types::{
+        BanditGoal, RealtimeBanditModel, RewardFamily, VariantPosterior,
+    };
+
+    /// Build a single always-match Percentage rule flag. When `model` is `Some`,
+    /// the rule carries a real-time bandit model; when `None` it is a plain
+    /// static percentage rule. Variants are "on" (50%) / "off" (50%) by default.
+    fn realtime_bandit_flag(model: Option<RealtimeBanditModel>) -> Flag {
+        let mut flag = setup_flag();
+        let on_id = flag.variants[0].id;
+        let off_id = flag.variants[1].id;
+        flag.rules[0].rule.condition = ConditionExpr::And(vec![]); // always match
+        flag.rules[0].rule.name = Some("bandit".to_string());
+        flag.rules[0].rule.output = RuleOutput::Percentage {
+            targets: vec![PercentageTarget {
+                context_type: "user".to_string(),
+                field: TargetField::Key,
+            }],
+            weights: vec![(on_id, 5000), (off_id, 5000)],
+            exclusion_gate: None,
+            realtime_bandit: model.map(Box::new),
+        };
+        flag
+    }
+
+    fn bandit_model(goal: BanditGoal, arms: &[(&str, f64, f64)]) -> RealtimeBanditModel {
+        RealtimeBanditModel {
+            salt: "phase5-bandit".to_string(),
+            unit_context_type: "user".to_string(),
+            family: RewardFamily::Beta,
+            goal,
+            variants: arms
+                .iter()
+                .map(|(k, a, b)| VariantPosterior {
+                    variant_key: (*k).to_string(),
+                    alpha: *a,
+                    beta: *b,
+                    mu: 0.0,
+                    sigma2: 0.0,
+                })
+                .collect(),
+            contextual: None,
+        }
+    }
+
+    /// (a) A real-time bandit rule assigns deterministically per context, and a
+    /// clearly-better posterior wins the large majority of contexts.
+    #[test]
+    fn realtime_bandit_assigns_deterministically_and_better_wins() {
+        let model = bandit_model(
+            BanditGoal::Increase,
+            &[("on", 900.0, 100.0), ("off", 100.0, 900.0)],
+        );
+        let flag = realtime_bandit_flag(Some(model));
+
+        // Determinism: the same context resolves identically every call.
+        let r1 = eval_one(&flag, Context::new("user", "alice"), TraceLevel::Off);
+        let r2 = eval_one(&flag, Context::new("user", "alice"), TraceLevel::Off);
+        assert_eq!(r1.variant_key, r2.variant_key);
+        assert!(matches!(
+            r1.outcome,
+            EvalOutcome::RuleMatch { rule_index: 0 }
+        ));
+
+        // "on" (much higher Beta mean) should win most contexts.
+        let mut on = 0;
+        let n = 1000;
+        for i in 0..n {
+            let res = eval_one(
+                &flag,
+                Context::new("user", format!("u{i}")),
+                TraceLevel::Off,
+            );
+            assert!(res.variant_key == "on" || res.variant_key == "off");
+            if res.variant_key == "on" {
+                on += 1;
+            }
+        }
+        assert!(
+            on as f64 / n as f64 > 0.85,
+            "better arm should dominate, got {on}/{n}"
+        );
+    }
+
+    /// (b) REGRESSION: a rule WITHOUT a realtime_bandit model takes the exact
+    /// static bucket→percentage path, byte-identical to the static allocation.
+    #[test]
+    fn rule_without_realtime_bandit_uses_static_path_unchanged() {
+        let flag = realtime_bandit_flag(None);
+        let on_id = flag.variants[0].id;
+        let off_id = flag.variants[1].id;
+        let env = EnvironmentId::from_uuid(Uuid::nil());
+
+        for i in 0..500u32 {
+            let key = format!("user-{i}");
+            // Independently compute the static assignment exactly as the engine
+            // does: murmur bucket over [flag_key, env, user.key], then walk the
+            // cumulative weights.
+            let bucket =
+                calculate_allocation("test-flag", &env.to_string(), std::slice::from_ref(&key));
+            let mut cumulative = 0u32;
+            let mut expected = "off";
+            for (vid, w) in [(on_id, 5000u32), (off_id, 5000u32)] {
+                cumulative += w;
+                if bucket < cumulative {
+                    expected = if vid == on_id { "on" } else { "off" };
+                    break;
+                }
+            }
+            let res = eval_one(&flag, Context::new("user", &key), TraceLevel::Off);
+            assert_eq!(
+                res.variant_key, expected,
+                "static path diverged for {key}: bucket={bucket}"
+            );
+            assert!(matches!(
+                res.outcome,
+                EvalOutcome::RuleMatch { rule_index: 0 }
+            ));
+        }
+    }
+
+    /// (b') A realtime model attached to the rule must NOT change a context whose
+    /// diversion unit is absent — it falls back to the static path, identical to
+    /// the no-model flag.
+    #[test]
+    fn realtime_bandit_missing_unit_matches_static_assignment() {
+        let model = bandit_model(
+            BanditGoal::Increase,
+            &[("on", 900.0, 100.0), ("off", 100.0, 900.0)],
+        );
+        let with_model = realtime_bandit_flag(Some(model));
+        let without_model = realtime_bandit_flag(None);
+
+        // Bundle has NO "user" context (the model's unit_context_type) → the
+        // bandit branch returns None and the static path runs. Use a "device"
+        // context so the bundle is non-empty but the unit is absent.
+        for i in 0..200u32 {
+            let ctx = Context::new("device", format!("d{i}"));
+            let a = eval_one(&with_model, ctx.clone(), TraceLevel::Off);
+            let b = eval_one(&without_model, ctx, TraceLevel::Off);
+            assert_eq!(
+                a.variant_key, b.variant_key,
+                "missing-unit bandit must fall back to the static assignment"
+            );
+        }
+    }
+
+    /// (c) Preview (TraceLevel::Full) and the SDK (TraceLevel::Off) resolve the
+    /// SAME variant for the same context under the same snapshot — both go
+    /// through `evaluate_flag`, so the bandit draw is identical.
+    #[test]
+    fn realtime_bandit_preview_and_sdk_parity() {
+        let model = bandit_model(
+            BanditGoal::Increase,
+            &[("on", 400.0, 600.0), ("off", 600.0, 400.0)],
+        );
+        let flag = realtime_bandit_flag(Some(model));
+        for i in 0..300u32 {
+            let key = format!("user-{i}");
+            let preview = eval_one(&flag, Context::new("user", &key), TraceLevel::Full);
+            let sdk = eval_one(&flag, Context::new("user", &key), TraceLevel::Off);
+            assert_eq!(
+                preview.variant_key, sdk.variant_key,
+                "preview/SDK parity broke for {key}"
+            );
+        }
+    }
+
+    /// (c') The Full trace names the bandit assignment + sampled weights but
+    /// never leaks posterior params or context values.
+    #[test]
+    fn realtime_bandit_trace_names_assignment_without_leaking_params() {
+        let model = bandit_model(
+            BanditGoal::Increase,
+            &[("on", 900.0, 100.0), ("off", 100.0, 900.0)],
+        );
+        let flag = realtime_bandit_flag(Some(model));
+        let res = eval_one(&flag, Context::new("user", "alice"), TraceLevel::Full);
+        let dbg = res
+            .trace
+            .as_ref()
+            .unwrap()
+            .rollout_debug
+            .as_ref()
+            .expect("bandit assignment must produce a rollout debug");
+        assert!(
+            dbg.hash_input.contains("real-time bandit"),
+            "trace should name the bandit assignment, got {:?}",
+            dbg.hash_input
+        );
+        // Privacy: no posterior parameter values (alpha/beta) appear in the note.
+        assert!(!dbg.hash_input.contains("900"));
+        assert!(!dbg.hash_input.contains("alice"));
+        // Sampled weights are surfaced as variant ranges (one per arm).
+        assert_eq!(dbg.variant_ranges.len(), 2);
+    }
+
+    /// (d) An empty-variants model also falls back gracefully (no panic).
+    #[test]
+    fn realtime_bandit_empty_model_falls_back() {
+        let model = bandit_model(BanditGoal::Increase, &[]);
+        let flag = realtime_bandit_flag(Some(model));
+        let res = eval_one(&flag, Context::new("user", "alice"), TraceLevel::Off);
+        // No variants → fallback to static path → resolves a real variant.
+        assert!(res.variant_key == "on" || res.variant_key == "off");
+    }
+
+    // ── Phase 6: contextual bandit engine wiring ─────────────────────────────
+
+    use crate::experimentation::bandit::contextual::{
+        ContextualModel, FeatureEncoding, FeatureSpec, VariantCoefficients,
+    };
+
+    /// A contextual model over a single numeric `user.score` feature: variant
+    /// "on" predicts reward = +score, "off" predicts reward = -score (intercept
+    /// 0). For score>0, "on" should dominate; for score<0, "off" dominates.
+    fn contextual_model() -> RealtimeBanditModel {
+        RealtimeBanditModel {
+            salt: "phase6-ctx".to_string(),
+            unit_context_type: "user".to_string(),
+            family: RewardFamily::Normal,
+            goal: BanditGoal::Increase,
+            variants: vec![],
+            contextual: Some(ContextualModel {
+                features: vec![FeatureSpec {
+                    context_type: "user".to_string(),
+                    parameter: "score".to_string(),
+                    encoding: FeatureEncoding::Numeric,
+                }],
+                variants: vec![
+                    VariantCoefficients {
+                        variant_key: "on".to_string(),
+                        coeffs: vec![0.0, 1.0],
+                        a_inv: None,
+                    },
+                    VariantCoefficients {
+                        variant_key: "off".to_string(),
+                        coeffs: vec![0.0, -1.0],
+                        a_inv: None,
+                    },
+                ],
+            }),
+        }
+    }
+
+    /// Contextual assignment is deterministic and the better-context-feature
+    /// variant wins the large majority of contexts.
+    #[test]
+    fn contextual_bandit_assigns_deterministically_and_better_feature_wins() {
+        let flag = realtime_bandit_flag(Some(contextual_model()));
+
+        // Determinism for a fixed context.
+        let c = Context::new("user", "alice").with_parameter("score", ParameterValue::Double(10.0));
+        let r1 = eval_one(&flag, c.clone(), TraceLevel::Off);
+        let r2 = eval_one(&flag, c, TraceLevel::Off);
+        assert_eq!(r1.variant_key, r2.variant_key);
+        assert!(matches!(
+            r1.outcome,
+            EvalOutcome::RuleMatch { rule_index: 0 }
+        ));
+
+        // For a strong positive score, "on" (reward = +score) should win most.
+        let mut on = 0;
+        let n = 500u32;
+        for i in 0..n {
+            let ctx = Context::new("user", format!("user-{i}"))
+                .with_parameter("score", ParameterValue::Double(10.0));
+            if eval_one(&flag, ctx, TraceLevel::Off).variant_key == "on" {
+                on += 1;
+            }
+        }
+        assert!(
+            on as f64 / n as f64 > 0.9,
+            "on should win positive-score: {on}/{n}"
+        );
+
+        // For a strong negative score, "off" (reward = -score) should win most.
+        let mut off = 0;
+        for i in 0..n {
+            let ctx = Context::new("user", format!("user-{i}"))
+                .with_parameter("score", ParameterValue::Double(-10.0));
+            if eval_one(&flag, ctx, TraceLevel::Off).variant_key == "off" {
+                off += 1;
+            }
+        }
+        assert!(
+            off as f64 / n as f64 > 0.9,
+            "off should win negative-score: {off}/{n}"
+        );
+    }
+
+    /// A missing diversion unit → contextual branch cannot seed → static
+    /// fallback, identical to a no-model flag.
+    #[test]
+    fn contextual_bandit_missing_unit_falls_back_to_static() {
+        let with_model = realtime_bandit_flag(Some(contextual_model()));
+        let without_model = realtime_bandit_flag(None);
+        for i in 0..200u32 {
+            // No "user" context (the unit) — use "device".
+            let ctx = Context::new("device", format!("d{i}"));
+            let a = eval_one(&with_model, ctx.clone(), TraceLevel::Off);
+            let b = eval_one(&without_model, ctx, TraceLevel::Off);
+            assert_eq!(a.variant_key, b.variant_key);
+        }
+    }
+
+    /// A missing FEATURE parameter (unit present, but no `score`) still assigns:
+    /// the feature encodes to 0.0 so both variants predict 0 — a graceful,
+    /// deterministic draw (no panic, real variant resolved).
+    #[test]
+    fn contextual_bandit_missing_feature_assigns_gracefully() {
+        let flag = realtime_bandit_flag(Some(contextual_model()));
+        // user present, but no "score" parameter.
+        let res = eval_one(&flag, Context::new("user", "alice"), TraceLevel::Off);
+        assert!(res.variant_key == "on" || res.variant_key == "off");
+        assert!(matches!(
+            res.outcome,
+            EvalOutcome::RuleMatch { rule_index: 0 }
+        ));
+    }
+
+    /// Preview (Full) and SDK (Off) resolve the SAME variant for the same
+    /// context under a contextual model.
+    #[test]
+    fn contextual_bandit_preview_and_sdk_parity() {
+        let flag = realtime_bandit_flag(Some(contextual_model()));
+        for i in 0..200u32 {
+            let ctx = Context::new("user", format!("user-{i}"))
+                .with_parameter("score", ParameterValue::Double(3.0));
+            let preview = eval_one(&flag, ctx.clone(), TraceLevel::Full);
+            let sdk = eval_one(&flag, ctx, TraceLevel::Off);
+            assert_eq!(preview.variant_key, sdk.variant_key);
+        }
+    }
+
+    /// The Full trace names the contextual assignment + feature NAMES only —
+    /// never a feature value or coefficient.
+    #[test]
+    fn contextual_bandit_trace_names_features_without_leaking_values() {
+        let flag = realtime_bandit_flag(Some(contextual_model()));
+        let ctx =
+            Context::new("user", "alice").with_parameter("score", ParameterValue::Double(42.0));
+        let res = eval_one(&flag, ctx, TraceLevel::Full);
+        let dbg = res
+            .trace
+            .as_ref()
+            .unwrap()
+            .rollout_debug
+            .as_ref()
+            .expect("contextual assignment must produce a rollout debug");
+        assert!(
+            dbg.hash_input.contains("contextual bandit"),
+            "trace should name the contextual assignment, got {:?}",
+            dbg.hash_input
+        );
+        // Feature NAME present...
+        assert!(
+            dbg.hash_input.contains("user.score"),
+            "{:?}",
+            dbg.hash_input
+        );
+        // ...but neither the feature VALUE nor the unit key leaks.
+        assert!(!dbg.hash_input.contains("42"));
+        assert!(!dbg.hash_input.contains("alice"));
     }
 }

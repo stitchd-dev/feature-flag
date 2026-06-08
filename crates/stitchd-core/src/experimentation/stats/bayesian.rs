@@ -45,12 +45,17 @@ pub struct BayesianVariantResult {
 /// A minimal Linear Congruential Generator for Monte Carlo sampling.
 ///
 /// Parameters from Numerical Recipes (Knuth).
-struct Lcg {
+///
+/// `pub(crate)` so the [`crate::experimentation::bandit`] allocators can sample
+/// from the SAME seeded RNG + Beta/Gamma machinery the Bayesian engine uses (a
+/// single source of truth for posterior sampling; no second RNG dependency).
+pub(crate) struct Lcg {
     state: u64,
 }
 
 impl Lcg {
-    fn new(seed: u64) -> Self {
+    /// Construct an LCG seeded with `seed`.
+    pub(crate) fn new(seed: u64) -> Self {
         Self { state: seed }
     }
 
@@ -70,7 +75,11 @@ impl Lcg {
 }
 
 /// Trait used as the `Rng` bound in sampling helpers so tests can substitute a seeded RNG.
-trait Rng {
+///
+/// `pub(crate)` so the bandit allocators can call [`sample_beta`] / [`sample_gamma`]
+/// against the shared [`Lcg`].
+pub(crate) trait Rng {
+    /// Returns a pseudo-random f64 in `[0, 1)`.
     fn next_f64(&mut self) -> f64;
 }
 
@@ -85,7 +94,7 @@ impl Rng for Lcg {
 /// Sample from Gamma(shape, rate=1) using the Marsaglia-Tsang method.
 ///
 /// Handles shape < 1 via the Ahrens–Dieter boost: Gamma(a) = Gamma(a+1) * U^(1/a).
-fn sample_gamma(shape: f64, rng: &mut impl Rng) -> f64 {
+pub(crate) fn sample_gamma(shape: f64, rng: &mut impl Rng) -> f64 {
     if shape < 1.0 {
         // Boost: sample Gamma(shape+1) then scale
         let u = rng.next_f64();
@@ -120,11 +129,22 @@ fn sample_gamma(shape: f64, rng: &mut impl Rng) -> f64 {
 }
 
 /// Sample from Beta(alpha, beta) using the ratio-of-Gammas method.
-fn sample_beta(alpha: f64, beta: f64, rng: &mut impl Rng) -> f64 {
+pub(crate) fn sample_beta(alpha: f64, beta: f64, rng: &mut impl Rng) -> f64 {
     let x = sample_gamma(alpha, rng);
     let y = sample_gamma(beta, rng);
     let sum = x + y;
     if sum == 0.0 { 0.5 } else { x / sum }
+}
+
+/// Draw a single standard-normal `N(0, 1)` deviate via the Box-Muller transform.
+///
+/// `pub(crate)` so the bandit allocators can sample Normal-Normal / delta-method
+/// reward posteriors from the SAME [`Lcg`] used everywhere else in the stats
+/// core. Uses the same cosine branch already used inside [`sample_gamma`].
+pub(crate) fn sample_standard_normal(rng: &mut impl Rng) -> f64 {
+    let u1 = rng.next_f64().max(1e-300); // avoid log(0)
+    let u2 = rng.next_f64();
+    (2.0 * std::f64::consts::PI * u2).cos() * (-2.0 * u1.ln()).sqrt()
 }
 
 // ── Percentile helper ────────────────────────────────────────────────────────

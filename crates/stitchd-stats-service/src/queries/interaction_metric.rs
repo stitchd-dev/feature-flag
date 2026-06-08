@@ -79,12 +79,15 @@ impl MetricCellKind {
     }
 }
 
-/// Validate the k-way experiment list: at least 2, at most 3 (the supported
-/// interaction orders), and all distinct.
+/// Validate the k-way experiment list: at least 2 (a 1-way "tuple" is a single
+/// experiment, no interaction) and all distinct. The upper bound is the
+/// operator-configured `STITCHD_STATS_MAX_INTERACTION_ORDER` cap enforced by the
+/// caller (`compute_and_persist_interactions`) — the SQL CTE itself is arity-
+/// general (it loops `0..k`), so no fixed upper bound is imposed here.
 fn validate_exp_ids(exp_ids: &[&str]) -> Result<(), QueryBuildError> {
-    if !(2..=3).contains(&exp_ids.len()) {
+    if exp_ids.len() < 2 {
         return Err(QueryBuildError::InvalidConfig(format!(
-            "interaction order must be 2 or 3 (got {} experiments)",
+            "interaction order must be at least 2 (got {} experiments)",
             exp_ids.len()
         )));
     }
@@ -187,7 +190,7 @@ fn emit_shared_cte(
 /// order as `exp_ids`.
 ///
 /// # Errors
-/// Returns [`QueryBuildError::InvalidConfig`] when `exp_ids` is not 2 or 3
+/// Returns [`QueryBuildError::InvalidConfig`] when `exp_ids` has fewer than 2
 /// distinct experiments.
 pub fn build_interaction_metric_cells_query(
     cfg: &AggregationConfig,
@@ -299,7 +302,7 @@ pub fn build_interaction_metric_cells_query(
 /// index. Each grid branch emits the *identical* cells the per-tuple query emits
 /// for that tuple (proven by the live-CH equivalence test).
 ///
-/// `tuples` must be non-empty; each tuple must be 2 or 3 distinct experiments
+/// `tuples` must be non-empty; each tuple must be ≥ 2 distinct experiments
 /// (same contract as the per-tuple builder). The experiment ids are the sorted
 /// `Vec<&str>` the sweep already carries (tuple order is preserved in
 /// `variant_keys`).
@@ -310,7 +313,7 @@ pub fn build_interaction_metric_cells_query(
 ///
 /// # Errors
 /// Returns [`QueryBuildError::InvalidConfig`] when `tuples` is empty or any tuple
-/// is not 2 or 3 distinct experiments, or [`QueryBuildError::UnsupportedJsonLogic`]
+/// has fewer than 2 distinct experiments, or [`QueryBuildError::UnsupportedJsonLogic`]
 /// / [`QueryBuildError::InvalidJsonLogic`] when the metric `where_clause` cannot
 /// be translated.
 pub fn build_consolidated_aggregation_cells_query(
@@ -511,7 +514,7 @@ pub fn build_consolidated_aggregation_cells_query(
 /// the ITT discipline of the aggregation path.
 ///
 /// # Errors
-/// Returns [`QueryBuildError::InvalidConfig`] when `exp_ids` is not 2 or 3
+/// Returns [`QueryBuildError::InvalidConfig`] when `exp_ids` has fewer than 2
 /// distinct experiments, `steps.len() < 2`, or `window_seconds <= 0`.
 pub fn build_interaction_funnel_cells_query(
     cfg: &FunnelConfig,
@@ -640,7 +643,7 @@ pub fn build_interaction_funnel_cells_query(
 /// below by the per-context joint exposure (ITT) and above by `interaction_end`.
 ///
 /// # Errors
-/// Returns [`QueryBuildError::InvalidConfig`] when `exp_ids` is not 2 or 3
+/// Returns [`QueryBuildError::InvalidConfig`] when `exp_ids` has fewer than 2
 /// distinct experiments.
 pub fn build_interaction_ratio_cells_query(
     num_cfg: &AggregationConfig,
@@ -1902,17 +1905,29 @@ mod tests {
         assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
     }
 
+    /// Phase 10: order ≥ 4 is now ACCEPTED (the CTE is arity-general); the
+    /// operator-bounded cap is enforced by the caller, not this builder. A 4-way
+    /// build succeeds and emits four aliased assignment joins (a0..a3) with the
+    /// four-element variant_keys array.
     #[test]
-    fn rejects_order_above_three() {
-        let err = build_interaction_metric_cells_query(
+    fn accepts_order_four() {
+        let built = build_interaction_metric_cells_query(
             &count_cfg(),
             ENV_ID,
             &[EXP_A, EXP_B, EXP_C, "00000000-0000-0000-0000-0000000000dd"],
             "user",
             end(),
         )
-        .unwrap_err();
-        assert!(matches!(err, QueryBuildError::InvalidConfig(_)));
+        .expect("order-4 must build");
+        // Four aliased assignment sources participate in the shared join.
+        for alias in ["a0", "a1", "a2", "a3"] {
+            assert!(
+                built.sql.contains(&format!("AS {alias} FINAL")),
+                "missing assignment alias {alias} in order-4 CTE"
+            );
+        }
+        // The variant tuple array spans all four aliases.
+        assert!(built.sql.contains("a3.variant_key"));
     }
 
     #[test]

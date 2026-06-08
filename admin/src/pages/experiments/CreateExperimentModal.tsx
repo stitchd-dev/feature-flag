@@ -18,7 +18,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Formik, Form, useFormikContext, useField } from 'formik'
+import { Formik, Form, FieldArray, useFormikContext, useField } from 'formik'
 import { I } from '../../components/icons'
 import { Modal } from '../../components/Modal'
 import { FormField } from '../../components/form/FormField'
@@ -45,6 +45,7 @@ import {
   experimentSchema,
   MAX_METRIC_IDS,
   MAX_GUARDRAIL_METRIC_IDS,
+  DEFAULT_BANDIT_CONFIG,
   type ExperimentFormValues,
 } from '../../lib/validation/experiment'
 import type {
@@ -58,6 +59,7 @@ import {
   filterMetricOptions,
   hasDefaultRuleDistribution,
   metricKindChipStyle,
+  parseBanditConfig,
   type MetricPickerOption,
   type RulePickerOption,
 } from './CreateExperimentModal.helpers'
@@ -65,6 +67,40 @@ import {
 const MODEL_OPTIONS = [
   { value: 'bayesian', label: 'Bayesian' },
   { value: 'frequentist', label: 'Frequentist' },
+]
+
+const EXPERIMENT_MODE_OPTIONS = [
+  { value: 'fixed', label: 'Fixed (classic A/B)' },
+  { value: 'bandit', label: 'Bandit (adaptive)' },
+]
+
+const BANDIT_ALGORITHM_OPTIONS = [
+  { value: 'thompson', label: 'Thompson sampling' },
+  { value: 'epsilon_greedy', label: 'Epsilon-greedy (ε)' },
+  { value: 'ucb', label: 'UCB (c)' },
+  { value: 'contextual', label: 'Contextual (feature list)' },
+]
+
+const BANDIT_PROPAGATION_OPTIONS = [
+  { value: 'static', label: 'Static (per-tick rewrite)' },
+  { value: 'realtime', label: 'Realtime (per-request)' },
+]
+
+const BANDIT_LIFECYCLE_OPTIONS = [
+  { value: 'advisory', label: 'Advisory (recommend only)' },
+  { value: 'auto_commit', label: 'Auto-commit winner' },
+  { value: 'auto_rollout', label: 'Auto-rollout (commit + stop)' },
+]
+
+const BANDIT_OBJECTIVE_OPTIONS = [
+  { value: 'scalar', label: 'Scalar (single metric)' },
+  { value: 'scalarized', label: 'Scalarized (weighted sum)' },
+  { value: 'constrained', label: 'Constrained (primary + guardrails)' },
+]
+
+const BANDIT_CONSTRAINT_DIRECTION_OPTIONS = [
+  { value: 'gte', label: '≥ (at least)' },
+  { value: 'lte', label: '≤ (at most)' },
 ]
 
 /**
@@ -688,6 +724,285 @@ function UnitContextTypesPicker({ envId }: { envId: string }) {
   )
 }
 
+// ── Bandit configuration section ──────────────────────────────────────────────
+
+/**
+ * Bandit-mode configuration. Rendered only when `experiment_mode === 'bandit'`.
+ * Surfaces the Phase 1 `bandit_config` knobs: algorithm, propagation mode,
+ * min-exploration floor (%), lifecycle policy, convergence threshold, a
+ * multi-objective builder (scalar / scalarized / constrained), an optional
+ * contextual feature list, and an optional autonomous campaign.
+ *
+ * Objective metrics are entered as metric-definition UUIDs (validated by the
+ * schema's UUID matcher) — the picker-backed metric selection is reserved for
+ * the primary/guardrail multi-selects above.
+ */
+function BanditConfigSection() {
+  const { values } = useFormikContext<ExperimentFormValues>()
+  const cfg = values.bandit_config
+
+  return (
+    <div
+      data-testid="bandit-config-section"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        padding: 12,
+        border: '1px solid var(--accent)',
+        borderRadius: 8,
+        background: 'var(--accent-softer, var(--bg-sunken))',
+      }}
+    >
+      <div style={{ fontWeight: 600, fontSize: 13 }}>
+        <I.beaker size={13} /> Bandit configuration
+      </div>
+
+      <FormSelect
+        name="bandit_config.algorithm"
+        label="Algorithm"
+        options={BANDIT_ALGORITHM_OPTIONS}
+      />
+
+      {cfg.algorithm === 'contextual' && (
+        <FieldArray name="bandit_config.contextual_features">
+          {(arr) => (
+            <div data-testid="contextual-features">
+              <label className="label" style={{ display: 'block', marginBottom: 4 }}>
+                Contextual features
+              </label>
+              {cfg.contextual_features.map((_, i) => (
+                <div
+                  key={i}
+                  style={{ display: 'flex', gap: 6, marginBottom: 6 }}
+                >
+                  <FormField
+                    name={`bandit_config.contextual_features.${i}`}
+                    label=""
+                    placeholder="e.g. user.country"
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn sm"
+                    aria-label={`Remove feature ${i + 1}`}
+                    onClick={() => arr.remove(i)}
+                  >
+                    <I.x size={12} />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => arr.push('')}
+              >
+                + Add feature
+              </button>
+              <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginTop: 4 }}>
+                Contextual bandits need at least one feature (context
+                parameter) to condition allocation on.
+              </div>
+            </div>
+          )}
+        </FieldArray>
+      )}
+
+      <FormSelect
+        name="bandit_config.propagation_mode"
+        label="Propagation mode"
+        options={BANDIT_PROPAGATION_OPTIONS}
+      />
+
+      <FormField
+        name="bandit_config.min_exploration_pct"
+        label="Minimum exploration floor (%)"
+        type="number"
+        placeholder="5"
+        step="0.1"
+        hint="Per-arm exploration floor, as a percent. Converted to basis points on submit."
+      />
+
+      <FormSelect
+        name="bandit_config.lifecycle_policy"
+        label="Lifecycle policy"
+        options={BANDIT_LIFECYCLE_OPTIONS}
+      />
+
+      <FormField
+        name="bandit_config.convergence_prob_threshold"
+        label="Convergence probability threshold"
+        type="number"
+        placeholder="0.95"
+        step="0.01"
+        hint="Probability-best required to declare a converged winner (0–1)."
+      />
+
+      {/* ── Objective builder ── */}
+      <FormSelect
+        name="bandit_config.objective_kind"
+        label="Objective"
+        options={BANDIT_OBJECTIVE_OPTIONS}
+      />
+
+      {cfg.objective_kind === 'scalar' && (
+        <FormField
+          name="bandit_config.objective_metric_id"
+          label="Objective metric ID"
+          placeholder="metric-definition UUID"
+          hint="The single metric the bandit optimises."
+          style={{ fontFamily: 'var(--font-mono)' }}
+        />
+      )}
+
+      {cfg.objective_kind === 'scalarized' && (
+        <FieldArray name="bandit_config.scalarized_weights">
+          {(arr) => (
+            <div data-testid="scalarized-weights">
+              <label className="label" style={{ display: 'block', marginBottom: 4 }}>
+                Weighted metrics
+              </label>
+              {cfg.scalarized_weights.map((_, i) => (
+                <div
+                  key={i}
+                  style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'flex-start' }}
+                >
+                  <FormField
+                    name={`bandit_config.scalarized_weights.${i}.metric_id`}
+                    label=""
+                    placeholder="metric UUID"
+                    style={{ flex: 2, fontFamily: 'var(--font-mono)' }}
+                  />
+                  <FormField
+                    name={`bandit_config.scalarized_weights.${i}.weight`}
+                    label=""
+                    type="number"
+                    step="any"
+                    placeholder="weight"
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn sm"
+                    aria-label={`Remove weighted metric ${i + 1}`}
+                    onClick={() => arr.remove(i)}
+                  >
+                    <I.x size={12} />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className="btn sm"
+                onClick={() => arr.push({ metric_id: '', weight: 1 })}
+              >
+                + Add weighted metric
+              </button>
+            </div>
+          )}
+        </FieldArray>
+      )}
+
+      {cfg.objective_kind === 'constrained' && (
+        <>
+          <FormField
+            name="bandit_config.objective_metric_id"
+            label="Primary metric ID"
+            placeholder="metric-definition UUID"
+            hint="The metric the bandit optimises subject to the constraints below."
+            style={{ fontFamily: 'var(--font-mono)' }}
+          />
+          <FieldArray name="bandit_config.constraints">
+            {(arr) => (
+              <div data-testid="constraints">
+                <label className="label" style={{ display: 'block', marginBottom: 4 }}>
+                  Guardrail constraints
+                </label>
+                {cfg.constraints.map((_, i) => (
+                  <div
+                    key={i}
+                    style={{ display: 'flex', gap: 6, marginBottom: 6, alignItems: 'flex-start' }}
+                  >
+                    <FormField
+                      name={`bandit_config.constraints.${i}.metric_id`}
+                      label=""
+                      placeholder="metric UUID"
+                      style={{ flex: 2, fontFamily: 'var(--font-mono)' }}
+                    />
+                    <FormSelect
+                      name={`bandit_config.constraints.${i}.direction`}
+                      label=""
+                      options={BANDIT_CONSTRAINT_DIRECTION_OPTIONS}
+                    />
+                    <FormField
+                      name={`bandit_config.constraints.${i}.bound`}
+                      label=""
+                      type="number"
+                      step="any"
+                      placeholder="bound"
+                      style={{ flex: 1 }}
+                    />
+                    <button
+                      type="button"
+                      className="btn sm"
+                      aria-label={`Remove constraint ${i + 1}`}
+                      onClick={() => arr.remove(i)}
+                    >
+                      <I.x size={12} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn sm"
+                  onClick={() =>
+                    arr.push({ metric_id: '', bound: 0, direction: 'gte' })
+                  }
+                >
+                  + Add constraint
+                </button>
+              </div>
+            )}
+          </FieldArray>
+        </>
+      )}
+
+      {/* ── Optional autonomous campaign ── */}
+      <FormCheckbox
+        name="bandit_config.campaign_enabled"
+        label="Enable autonomous optimization campaign"
+        hint="Auto-spawn successive iterations on convergence/drift, bounded by max iterations."
+      />
+      {cfg.campaign_enabled && (
+        <>
+          <FormField
+            name="bandit_config.campaign_max_iterations"
+            label="Max iterations"
+            type="number"
+            placeholder="5"
+            hint="Cap on the number of successive iterations the campaign may spawn."
+          />
+          <FormField
+            name="bandit_config.campaign_drift_threshold"
+            label="Drift threshold"
+            type="number"
+            step="0.01"
+            placeholder="0.1"
+            hint="Re-open the campaign when a challenger's probability-best drifts past this (0–1)."
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Renders the bandit config section only when the mode is set to bandit. */
+function BanditModeGate() {
+  const { values } = useFormikContext<ExperimentFormValues>()
+  if (values.experiment_mode !== 'bandit') return null
+  return <BanditConfigSection />
+}
+
 // ── Sequential testing (always-valid) section ─────────────────────────────────
 
 /**
@@ -890,6 +1205,8 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
     traffic_allocation: number
     model: 'bayesian' | 'frequentist'
     exclusion_group_id: string
+    experiment_mode: ExperimentFormValues['experiment_mode']
+    bandit_config: ExperimentFormValues['bandit_config']
   } | null>(null)
 
   // Flag list (env-scoped) — backs the FlagPicker.
@@ -932,6 +1249,8 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
       traffic_allocation?: number
       model: 'bayesian' | 'frequentist'
       exclusion_group_id?: string | null
+      experiment_mode?: string
+      bandit_config?: unknown
     }
     api
       .get<FullExperimentJson>(
@@ -968,6 +1287,11 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
             data.traffic_allocation != null ? data.traffic_allocation * 100 : 100,
           model: data.model,
           exclusion_group_id: data.exclusion_group_id ?? '',
+          experiment_mode: data.experiment_mode === 'bandit' ? 'bandit' : 'fixed',
+          bandit_config:
+            data.experiment_mode === 'bandit'
+              ? parseBanditConfig(data.bandit_config, DEFAULT_BANDIT_CONFIG)
+              : DEFAULT_BANDIT_CONFIG,
         })
       })
       .catch(() => undefined)
@@ -1001,6 +1325,8 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
     traffic_allocation: 100,
     model: 'bayesian',
     exclusion_group_id: '',
+    experiment_mode: 'fixed',
+    bandit_config: DEFAULT_BANDIT_CONFIG,
   }
 
   // ── Submit handler ────────────────────────────────────────────────────────
@@ -1160,6 +1486,16 @@ export function CreateExperimentModal({ onClose, editExperimentKey }: Props) {
           <RulePicker options={rulePickerOptions} cta={cta} />
 
           <FormSelect name="model" label="Statistical model" options={MODEL_OPTIONS} />
+
+          <FormSelect
+            name="experiment_mode"
+            label="Experiment mode"
+            options={EXPERIMENT_MODE_OPTIONS}
+            hint="Fixed = classic A/B test with static allocation. Bandit = adaptive allocation that shifts traffic toward the winning arm."
+          />
+
+          <BanditModeGate />
+
 
           {envId && (
             <>

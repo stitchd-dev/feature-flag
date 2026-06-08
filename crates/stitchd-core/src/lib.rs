@@ -2,7 +2,8 @@
 //! platform.
 //!
 //! No I/O, no database, no network. All other workspace crates depend on this. Holds the
-//! canonical types for feature flags, segments, contexts, evaluation, events, experiments,
+//! canonical types for feature flags, segments, contexts, evaluation, events, experiments
+//! (including multi-armed bandit algorithms, posteriors, and convergence detection),
 //! and the rule engine that combines them.
 //!
 //! See the [Architecture] chapter of the mdBook for how this crate sits relative to the

@@ -1,13 +1,15 @@
 /**
- * Interactions tab — N-way cross-experiment interactions (P5).
+ * Interactions tab — N-way cross-experiment interactions (P5, P10/P12).
  *
- * Renders both pairwise (order 2) and three-way (order 3) interaction
- * estimates between this experiment and other concurrently-running experiments,
- * scoped by context type + metric. Each row shows participating experiments,
- * an order badge, the interaction term, context type, metric, shared exposure
- * count, the frequentist estimate/p-value, and Bayesian columns.
+ * Renders interaction estimates of ANY order (pairwise, three-way, and
+ * operator-bounded four-way and higher) between this experiment and other
+ * concurrently-running experiments, scoped by context type + metric. Each row
+ * shows participating experiments, an order badge, the interaction term,
+ * context type, metric, shared exposure count, the frequentist estimate/p-value,
+ * and Bayesian columns.
  *
- * Rows are sorted by interaction_order then metric_key for readability.
+ * Rows are grouped by interaction order (ascending) then sorted by metric_key
+ * for readability; nothing in this component assumes a maximum order of 3.
  *
  * Pure-render — the parent (`ExperimentDetail`) fetches the data and passes it
  * in, mirroring the Exposures / Iterations tab convention. Exercised via
@@ -23,6 +25,13 @@ interface Props {
   interactions: ExperimentInteraction[]
   loading: boolean
   error: string | null
+  /**
+   * True when THIS experiment is running in bandit mode. Surfaces a note that
+   * SRM is bandit-skipped and interactions are estimated under a shifting
+   * allocation (the n-weighted estimators handle unequal cells — see
+   * Phase 10 learnings).
+   */
+  isBandit?: boolean
 }
 
 /** Format a p-value to 4 decimals, or "—" when null/NaN. */
@@ -55,22 +64,47 @@ export function formatBayesCI(
 }
 
 /**
- * Humanize the interaction term for display.
- * main:<uuid> → "Main effect"
- * 2way:…     → "A×B"
- * 3way:…     → "A×B×C"
- * Fallback:   raw term string
+ * The first 26 factor labels (A..Z); falls back to "F{n}" beyond Z so a
+ * (hypothetical) >26-way term never collides. Used to render an A×B×C×… label.
+ */
+function factorLabels(n: number): string {
+  const letters: string[] = []
+  for (let i = 0; i < n; i++) {
+    letters.push(i < 26 ? String.fromCharCode(65 + i) : `F${i + 1}`)
+  }
+  return letters.join('×')
+}
+
+/**
+ * Humanize the interaction term for display. Generic over interaction order —
+ * does NOT cap at three-way.
+ *
+ *   main:<uuid>          → "Main effect"
+ *   2way:…               → "A×B"
+ *   3way:…               → "A×B×C"
+ *   {N}way:… (N ≥ 4)     → "A×B×C×D…" (N factors)
+ *   Fallback (order ≥ 1) → A×B×… derived from `order`
+ *   Fallback (unknown)   → raw term string
  */
 export function formatTerm(term: string, order: number): string {
   // The term prefix is authoritative (it names the actual effect); `order` is
   // only a fallback for an unprefixed term.
   if (term.startsWith('main:')) return 'Main effect'
-  if (term.startsWith('2way:')) return 'A×B'
-  if (term.startsWith('3way:')) return 'A×B×C'
+  // Match any `{N}way:` prefix (handles 2way/3way and operator-bounded 4+).
+  const m = /^(\d+)way:/.exec(term)
+  if (m) {
+    const n = Number(m[1])
+    return n <= 1 ? 'Main effect' : factorLabels(n)
+  }
   if (order === 1) return 'Main effect'
-  if (order === 2) return 'A×B'
-  if (order === 3) return 'A×B×C'
+  if (order >= 2) return factorLabels(order)
   return term
+}
+
+/** Human label for an interaction order, generic over any N (no 3-way cap). */
+export function orderLabel(order: number): string {
+  if (order === 1) return 'Main'
+  return `${order}-way`
 }
 
 /**
@@ -96,16 +130,36 @@ export function hasSignificantInteraction(
   )
 }
 
-/** Sort interactions by interaction_order ascending, then metric_key alphabetically. */
-function sortInteractions(rows: ExperimentInteraction[]): ExperimentInteraction[] {
+/**
+ * Sort interactions by interaction_order ascending (so rows group by order:
+ * main → pairwise → three-way → four-way → …), then metric_key alphabetically,
+ * then by term for stable ordering. Generic over any order — never caps at 3.
+ */
+export function sortInteractions(
+  rows: ExperimentInteraction[],
+): ExperimentInteraction[] {
   return [...rows].sort((a, b) => {
     if (a.interaction_order !== b.interaction_order)
       return a.interaction_order - b.interaction_order
-    return a.metric_key.localeCompare(b.metric_key)
+    const byMetric = a.metric_key.localeCompare(b.metric_key)
+    if (byMetric !== 0) return byMetric
+    return a.term.localeCompare(b.term)
   })
 }
 
-export function InteractionsTab({ interactions, loading, error }: Props) {
+/** The distinct interaction orders present, ascending. */
+export function distinctOrders(rows: ExperimentInteraction[]): number[] {
+  return Array.from(new Set(rows.map((r) => r.interaction_order))).sort(
+    (a, b) => a - b,
+  )
+}
+
+export function InteractionsTab({
+  interactions,
+  loading,
+  error,
+  isBandit = false,
+}: Props) {
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
@@ -131,13 +185,63 @@ export function InteractionsTab({ interactions, loading, error }: Props) {
   }
 
   const sorted = sortInteractions(interactions)
+  const orders = distinctOrders(sorted)
+  const maxOrder = orders.length > 0 ? orders[orders.length - 1] : 0
 
   return (
-    <div className="card" style={{ overflowX: 'auto' }}>
-      <table className="table" style={{ marginBottom: 0 }}>
+    <div>
+      {isBandit && (
+        <div
+          role="note"
+          data-testid="bandit-interaction-note"
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+            padding: '10px 14px',
+            marginBottom: 14,
+            borderRadius: 8,
+            background: 'var(--bg-sunken)',
+            border: '1px solid var(--border)',
+            color: 'var(--fg-muted)',
+            fontSize: 12,
+          }}
+        >
+          <I.beaker size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            This experiment is a bandit. SRM is bandit-skipped (the realized
+            allocation shifts by design), and interaction estimates are computed
+            on n-weighted cells, so unequal arm sizes under adaptive allocation
+            are handled.
+          </span>
+        </div>
+      )}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 10,
+          fontSize: 12,
+          color: 'var(--fg-muted)',
+        }}
+      >
+        <span>
+          {sorted.length} term{sorted.length === 1 ? '' : 's'} ·{' '}
+          {orders.map((o) => orderLabel(o)).join(', ')}
+        </span>
+        {maxOrder >= 4 && (
+          <span className="badge" data-testid="high-order-present">
+            Includes {maxOrder}-way
+          </span>
+        )}
+      </div>
+      <div className="card" style={{ overflowX: 'auto' }}>
+        <table className="table" style={{ marginBottom: 0 }}>
         <thead>
           <tr>
             <th>Interaction</th>
+            <th>Order</th>
             <th>Term</th>
             <th>Context type</th>
             <th>Metric</th>
@@ -152,7 +256,6 @@ export function InteractionsTab({ interactions, loading, error }: Props) {
         </thead>
         <tbody>
           {sorted.map((row, i) => {
-            const orderLabel = row.interaction_order === 2 ? '2-way' : row.interaction_order === 3 ? '3-way' : `${row.interaction_order}-way`
             const experimentLabel = row.experiment_names.join(' · ')
 
             return (
@@ -162,14 +265,16 @@ export function InteractionsTab({ interactions, loading, error }: Props) {
                     <span style={{ fontWeight: 600, fontSize: 13 }}>
                       {experimentLabel}
                     </span>
-                    <span
-                      className="badge"
-                      data-order={row.interaction_order}
-                      style={{ alignSelf: 'flex-start', fontSize: 10 }}
-                    >
-                      {orderLabel}
-                    </span>
                   </div>
+                </td>
+                <td>
+                  <span
+                    className="badge"
+                    data-order={row.interaction_order}
+                    style={{ fontSize: 10 }}
+                  >
+                    {orderLabel(row.interaction_order)}
+                  </span>
                 </td>
                 <td style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                   {formatTerm(row.term, row.interaction_order)}
@@ -254,7 +359,8 @@ export function InteractionsTab({ interactions, loading, error }: Props) {
             )
           })}
         </tbody>
-      </table>
+        </table>
+      </div>
     </div>
   )
 }

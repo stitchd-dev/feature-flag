@@ -97,8 +97,9 @@ use stitchd_core::metric::{
 use crate::dispatch::rewrite_placeholders_to_clickhouse;
 use crate::queries::QueryBind;
 use crate::queries::variant_stats::{
-    build_aggregation_cells_query, build_assignment_counts_query, build_funnel_cells_query,
-    build_percentile_samples_query, build_ratio_cells_query, build_unit_values_with_pre_query,
+    build_aggregation_cells_query, build_assignment_counts_query,
+    build_contextual_reward_rows_query, build_funnel_cells_query, build_percentile_samples_query,
+    build_ratio_cells_query, build_unit_values_with_pre_query,
 };
 use crate::results_writer::{MetricSummary, VariantPoint};
 use crate::scheduler::RunningExperiment;
@@ -160,6 +161,15 @@ const PERCENTILE_SAMPLE_CAP: u64 = 100_000;
 struct ChAssignmentCountRow {
     variant_key: String,
     n: u64,
+}
+
+/// Per-assigned-unit contextual reward row: the unit's arm, its feature value
+/// (from event properties; `""` when absent) and its post-exposure reward sum.
+#[derive(Debug, Clone, serde::Deserialize, clickhouse::Row)]
+struct ChContextualRewardRow {
+    variant_key: String,
+    feature_value: String,
+    reward: f64,
 }
 
 /// Per-**unit** CUPED row (single merged query — FIX B5): one assigned unit's
@@ -272,6 +282,24 @@ pub trait CellReader: Send + Sync {
         pre_start: DateTime<Utc>,
         pre_end: DateTime<Utc>,
     ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error>;
+
+    /// Per-assigned-unit contextual reward rows for the contextual-bandit fit.
+    /// Returns one `(variant_key, feature_value, reward)` per assigned unit in
+    /// `context_type`, where `feature_value` is `events.properties[feature_param]`
+    /// from the unit's post-exposure metric events (`""` when absent) and
+    /// `reward` is the post-exposure metric value sum (`0` for a non-firing unit,
+    /// ITT). See [`crate::queries::variant_stats::build_contextual_reward_rows_query`].
+    #[allow(clippy::too_many_arguments)]
+    async fn contextual_reward_rows(
+        &self,
+        cfg: &AggregationConfig,
+        feature_param: &str,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+    ) -> Result<Vec<(String, String, f64)>, anyhow::Error>;
 }
 
 /// Aggregation cell: the event-side sufficient statistics for one variant
@@ -498,6 +526,35 @@ impl CellReader for ClickHouseCellReader {
         Ok(rows
             .into_iter()
             .map(|r| (r.context_key, r.variant_key, r.y, r.x_pre))
+            .collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn contextual_reward_rows(
+        &self,
+        cfg: &AggregationConfig,
+        feature_param: &str,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        env_id: Uuid,
+        context_type: &str,
+        iteration_end: DateTime<Utc>,
+    ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
+        let built = build_contextual_reward_rows_query(
+            cfg,
+            feature_param,
+            &experiment_id.to_string(),
+            &iteration_id.to_string(),
+            &env_id.to_string(),
+            context_type,
+            iteration_end,
+        )?;
+        let rows = bind_query(&self.client, built.sql, built.binds)
+            .fetch_all::<ChContextualRewardRow>()
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.variant_key, r.feature_value, r.reward))
             .collect())
     }
 }
@@ -1507,7 +1564,19 @@ pub async fn run_stats_compute(
         // tested against its real proportions; empty → uniform `total/K`
         // fallback. Stored to attach under `variant_stats["srm"]` after the
         // summaries are built — NOT folded into the recommendation string.
-        if let Some(srm_json) = srm_json_for(&counts, &exp.variant_keys, &exp.variant_expected_bp) {
+        // Bandit-aware: a time-varying allocation has no fixed design split, so
+        // SRM is skipped (Green, flagged) for bandit experiments rather than
+        // tested against the static rule snapshot (which would spuriously alarm).
+        let is_bandit = matches!(
+            exp.experiment_mode,
+            stitchd_core::experimentation::bandit::ExperimentMode::Bandit
+        );
+        if let Some(srm_json) = srm_json_for(
+            &counts,
+            &exp.variant_keys,
+            &exp.variant_expected_bp,
+            is_bandit,
+        ) {
             srm_per_ctx.insert(context_type.clone(), srm_json);
         }
 
@@ -1773,10 +1842,25 @@ fn metric_type_str(mt: MetricType) -> &'static str {
 ///
 /// Returns `None` when SRM is undefined for the context (< 2 variants in the
 /// effective set or zero total assignments) so no `"srm"` key is emitted.
+///
+/// `is_bandit` makes the check **bandit-aware** (Phase 10, FR6). A bandit
+/// experiment continuously shifts traffic toward better-performing arms, so its
+/// realized per-variant exposure is NOT a fixed design split — the static
+/// `expected_bp` (the bound rule / default-rule distribution snapshot) is the
+/// WRONG null hypothesis. Testing observed assignments against it would flag a
+/// *healthy* bandit Red the moment it started exploiting (a spurious alarm). The
+/// principled bandit "expected" split is the actual time-weighted exposure,
+/// against which the realized counts trivially match (χ² ≈ 0) — i.e. there is no
+/// design to mismatch. We therefore SKIP the chi-square for bandits and emit a
+/// benign Green result annotated `"bandit_skipped": true`; the bandit's
+/// min-exploration floor (not SRM) is what guarantees no arm is starved. The
+/// per-variant observed counts are still surfaced so operators see the live
+/// realized split.
 fn srm_json_for(
     counts: &[(String, u64)],
     configured_variants: &[String],
     expected_bp: &HashMap<String, u32>,
+    is_bandit: bool,
 ) -> Option<Value> {
     // Effective variant set = configured variants ∪ any variant that actually
     // produced a count (defensive: a count for an unexpected key still shows).
@@ -1800,6 +1884,34 @@ fn srm_json_for(
     let total: u64 = counts.iter().map(|(_, n)| n).sum();
     if total == 0 {
         return None;
+    }
+
+    // Bandit-aware short-circuit: a time-varying allocation has no fixed design
+    // split to test against. Surface the realized per-variant counts (expected =
+    // observed, contribution 0) as a Green result flagged `bandit_skipped`,
+    // never running the chi-square that would spuriously fire on a healthy
+    // exploiting bandit.
+    if is_bandit {
+        let per_variant: Vec<Value> = keys
+            .iter()
+            .map(|vk| {
+                let observed = observed_by_key.get(vk.as_str()).copied().unwrap_or(0);
+                serde_json::json!({
+                    "variant_key": vk,
+                    "observed": observed,
+                    // For a bandit the realized exposure IS the expectation.
+                    "expected": observed as f64,
+                    "chi_sq_contribution": 0.0,
+                })
+            })
+            .collect();
+        return Some(serde_json::json!({
+            "per_variant": per_variant,
+            "overall_chi_sq": 0.0,
+            "overall_chi_sq_p": 1.0,
+            "health": "green",
+            "bandit_skipped": true,
+        }));
     }
     // Designed split: sum the basis-point weights restricted to the effective
     // variant set (only the relative split among THESE arms matters — the rule
@@ -2385,6 +2497,9 @@ mod tests {
                 min_sample_size: 0,
             },
             variant_expected_bp: HashMap::new(),
+            experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
+            bandit_config: None,
+            bandit_campaign_id: None,
         }
     }
 
@@ -2519,8 +2634,8 @@ mod tests {
             ("treatment".to_string(), 1000),
         ];
         let configured = vec!["control".to_string(), "treatment".to_string()];
-        let srm =
-            srm_json_for(&counts, &configured, &HashMap::new()).expect("srm json for 2 variants");
+        let srm = srm_json_for(&counts, &configured, &HashMap::new(), false)
+            .expect("srm json for 2 variants");
         assert_eq!(srm["health"], "green");
         assert!(srm["overall_chi_sq"].as_f64().unwrap() < 1e-9);
         assert!(srm["overall_chi_sq_p"].as_f64().unwrap() > 0.99);
@@ -2542,7 +2657,7 @@ mod tests {
     fn srm_json_for_mismatch_is_red_with_contributions() {
         let counts = vec![("a".to_string(), 800), ("b".to_string(), 1200)];
         let configured = vec!["a".to_string(), "b".to_string()];
-        let srm = srm_json_for(&counts, &configured, &HashMap::new()).expect("srm json");
+        let srm = srm_json_for(&counts, &configured, &HashMap::new(), false).expect("srm json");
         assert_eq!(srm["health"], "red");
         assert!((srm["overall_chi_sq"].as_f64().unwrap() - 80.0).abs() < 1e-6);
         let pv = srm["per_variant"].as_array().unwrap();
@@ -2562,7 +2677,8 @@ mod tests {
             srm_json_for(
                 &[("only".to_string(), 100)],
                 &["only".to_string()],
-                &HashMap::new()
+                &HashMap::new(),
+                false
             )
             .is_none()
         );
@@ -2570,7 +2686,8 @@ mod tests {
             srm_json_for(
                 &[("a".to_string(), 0), ("b".to_string(), 0)],
                 &["a".to_string(), "b".to_string()],
-                &HashMap::new()
+                &HashMap::new(),
+                false
             )
             .is_none(),
             "zero total → no SRM"
@@ -2596,7 +2713,7 @@ mod tests {
             "treatment".to_string(),
             "starved".to_string(),
         ];
-        let srm = srm_json_for(&counts, &configured, &HashMap::new())
+        let srm = srm_json_for(&counts, &configured, &HashMap::new(), false)
             .expect("srm json for 3 configured variants");
 
         // The zero arm is present in the observations (K = 3, not 2).
@@ -2636,7 +2753,8 @@ mod tests {
             ("control".to_string(), 1000),
             ("treatment".to_string(), 1000),
         ];
-        let srm = srm_json_for(&counts, &[], &HashMap::new()).expect("falls back to counts keys");
+        let srm =
+            srm_json_for(&counts, &[], &HashMap::new(), false).expect("falls back to counts keys");
         assert_eq!(srm["per_variant"].as_array().unwrap().len(), 2);
         assert_eq!(srm["health"], "green");
     }
@@ -2658,7 +2776,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let srm = srm_json_for(&counts, &configured, &weights).expect("weighted srm json");
+        let srm = srm_json_for(&counts, &configured, &weights, false).expect("weighted srm json");
         assert_eq!(
             srm["health"], "green",
             "a 90/10 split that matches the 90/10 design is healthy"
@@ -2688,7 +2806,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let srm = srm_json_for(&counts, &configured, &weights).expect("weighted srm json");
+        let srm = srm_json_for(&counts, &configured, &weights, false).expect("weighted srm json");
         assert_eq!(
             srm["health"], "red",
             "a 50/50 observed split under a 90/10 design is a real SRM mismatch"
@@ -2718,7 +2836,7 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        let srm = srm_json_for(&counts, &configured, &weights).expect("weighted srm json");
+        let srm = srm_json_for(&counts, &configured, &weights, false).expect("weighted srm json");
 
         let pv = srm["per_variant"].as_array().expect("per_variant array");
         assert_eq!(pv.len(), 3, "all 3 configured arms surfaced, incl. starved");
@@ -2754,8 +2872,8 @@ mod tests {
             ("treatment".to_string(), 1000),
         ];
         let configured = vec!["control".to_string(), "treatment".to_string()];
-        let srm =
-            srm_json_for(&counts, &configured, &HashMap::new()).expect("uniform-fallback srm json");
+        let srm = srm_json_for(&counts, &configured, &HashMap::new(), false)
+            .expect("uniform-fallback srm json");
         assert_eq!(srm["health"], "green");
         // Uniform expected = total/K = 1000 each.
         let pv = srm["per_variant"].as_array().unwrap();
@@ -2777,13 +2895,90 @@ mod tests {
             [("control".to_string(), 0), ("treatment".to_string(), 0)]
                 .into_iter()
                 .collect();
-        let srm =
-            srm_json_for(&counts, &configured, &weights).expect("zero-sum falls back to uniform");
+        let srm = srm_json_for(&counts, &configured, &weights, false)
+            .expect("zero-sum falls back to uniform");
         assert_eq!(srm["health"], "green");
         let pv = srm["per_variant"].as_array().unwrap();
         for row in pv {
             assert!((row["expected"].as_f64().unwrap() - 1000.0).abs() < 1e-9);
         }
+    }
+
+    // ── Phase 10: bandit-aware SRM (FR6) ──────────────────────────────────────
+
+    /// A bandit experiment whose realized allocation has shifted hard toward the
+    /// winning arm (a healthy exploiting bandit) MUST NOT trip a spurious SRM
+    /// alarm against its static design split. With `is_bandit = true` the same
+    /// 800/200 observed split that the static 50/50 design would flag RED instead
+    /// reads GREEN and carries `bandit_skipped: true`; the per-arm realized counts
+    /// are still surfaced (expected == observed, contribution 0).
+    #[test]
+    fn srm_json_for_bandit_shifted_allocation_is_green_not_spurious_red() {
+        // Observed split is 800/200 — under a static 50/50 design this is a
+        // massive χ² = (300²+300²)/500 = 360 → RED in the fixed path.
+        let counts = vec![("control".to_string(), 800), ("treatment".to_string(), 200)];
+        let configured = vec!["control".to_string(), "treatment".to_string()];
+        let design_5050: HashMap<String, u32> = [
+            ("control".to_string(), 5000),
+            ("treatment".to_string(), 5000),
+        ]
+        .into_iter()
+        .collect();
+
+        // Fixed mode: the shifted split is a real (spurious-for-a-bandit) RED.
+        let fixed =
+            srm_json_for(&counts, &configured, &design_5050, false).expect("fixed-mode srm json");
+        assert_eq!(
+            fixed["health"], "red",
+            "the static path still flags an 800/200 split under a 50/50 design"
+        );
+
+        // Bandit mode: same data, same design → GREEN + bandit_skipped, NO χ².
+        let bandit =
+            srm_json_for(&counts, &configured, &design_5050, true).expect("bandit-mode srm json");
+        assert_eq!(
+            bandit["health"], "green",
+            "a healthy exploiting bandit must NOT trip SRM; got {}",
+            bandit["health"]
+        );
+        assert_eq!(
+            bandit["bandit_skipped"], true,
+            "bandit SRM must be flagged as skipped"
+        );
+        assert!(bandit["overall_chi_sq"].as_f64().unwrap() < 1e-12);
+        assert_eq!(bandit["overall_chi_sq_p"].as_f64().unwrap(), 1.0);
+        // Realized per-arm counts are still surfaced (expected == observed).
+        let pv = bandit["per_variant"].as_array().expect("per_variant");
+        let ctrl = pv.iter().find(|r| r["variant_key"] == "control").unwrap();
+        assert_eq!(ctrl["observed"].as_u64().unwrap(), 800);
+        assert!((ctrl["expected"].as_f64().unwrap() - 800.0).abs() < 1e-9);
+        assert!((ctrl["chi_sq_contribution"].as_f64().unwrap()).abs() < 1e-12);
+    }
+
+    /// Bandit SRM is still undefined (None) for < 2 variants / zero total — the
+    /// short-circuit runs AFTER those guards.
+    #[test]
+    fn srm_json_for_bandit_respects_undefined_guards() {
+        assert!(
+            srm_json_for(
+                &[("only".to_string(), 100)],
+                &["only".to_string()],
+                &HashMap::new(),
+                true
+            )
+            .is_none(),
+            "single variant → None even in bandit mode"
+        );
+        assert!(
+            srm_json_for(
+                &[("a".to_string(), 0), ("b".to_string(), 0)],
+                &["a".to_string(), "b".to_string()],
+                &HashMap::new(),
+                true
+            )
+            .is_none(),
+            "zero total → None even in bandit mode"
+        );
     }
 
     // ── run_stats_compute SRM attachment + round-trip (891) ───────────────────
@@ -2881,6 +3076,19 @@ mod tests {
         ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error> {
             Ok(Vec::new())
         }
+        #[allow(clippy::too_many_arguments)]
+        async fn contextual_reward_rows(
+            &self,
+            _cfg: &AggregationConfig,
+            _feature_param: &str,
+            _e: Uuid,
+            _i: Uuid,
+            _v: Uuid,
+            _ct: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<(String, String, f64)>, anyhow::Error> {
+            Ok(Vec::new())
+        }
     }
 
     /// End-to-end (no CH): the compute pass attaches the SRM JSON under
@@ -2914,6 +3122,9 @@ mod tests {
                 min_sample_size: 0,
             },
             variant_expected_bp: HashMap::new(),
+            experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
+            bandit_config: None,
+            bandit_campaign_id: None,
         };
 
         // Heavy 800/1200 mismatch → SRM should be RED.

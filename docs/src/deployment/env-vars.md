@@ -6,7 +6,7 @@ All configuration is passed via environment variables. There are no config files
 
 > **Naming convention:** Stitchd-owned variables carry the `STITCHD_` prefix. The sole exception is `RUST_LOG`, which follows the Rust ecosystem standard. Service port variables follow `STITCHD_<SERVICE>_GRPC_PORT` / `STITCHD_<SERVICE>_METRICS_PORT`; the gateway adds `STITCHD_GATEWAY_HTTP_PORT` and `STITCHD_GATEWAY_GRPC_PORT`.
 
-_42 variables discovered across the workspace._
+_43 variables discovered across the workspace._
 
 ## Variables by Crate
 
@@ -98,6 +98,7 @@ _42 variables discovered across the workspace._
 
 | Variable | Default | Required |
 |----------|---------|----------|
+| `STITCHD_STATS_MAX_INTERACTION_ORDER` | `3` | no (has default) |
 | `STITCHD_STATS_SCHEDULER_INTERVAL_SECS` | `3600` | no (has default) |
 | `STITCHD_STATS_SERVICE_GRPC_PORT` | `50056` | no (has default) |
 | `STITCHD_STATS_SERVICE_HTTP_PORT` | `9200` | no (has default) |

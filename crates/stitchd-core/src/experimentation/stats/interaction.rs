@@ -139,7 +139,14 @@ impl InteractionResult {
 
 /// Which decomposition term a [`TermResult`] represents. Factor indices are
 /// 0-based positions in the participating-experiment tuple (tuple order).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Orders 1–3 keep their dedicated variants ([`TermKind::Main`],
+/// [`TermKind::TwoWay`], [`TermKind::ThreeWay`]) so existing golden/regression
+/// snapshots stay byte-identical; orders ≥ 4 use the general
+/// [`TermKind::NWay`] variant, whose `factors` are always sorted ascending.
+/// Construct a term from an arbitrary factor list with [`TermKind::of`], which
+/// canonicalises to the right variant by arity.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TermKind {
     /// Single-experiment main effect.
     Main { factor: usize },
@@ -147,16 +154,58 @@ pub enum TermKind {
     TwoWay { a: usize, b: usize },
     /// Three-way interaction among three experiments.
     ThreeWay { a: usize, b: usize, c: usize },
+    /// General interaction among four or more experiments. `factors` is sorted
+    /// ascending and has length ≥ 4. (Lower arities canonicalise to the
+    /// dedicated variants above via [`TermKind::of`].)
+    NWay { factors: Vec<usize> },
 }
 
 impl TermKind {
-    /// Interaction order of this term (1 = main, 2 = pairwise, 3 = three-way).
+    /// Canonical term for an arbitrary set of participating factor indices.
+    /// The slice is sorted ascending and mapped to the dedicated variant for
+    /// arity 1/2/3, or [`TermKind::NWay`] for arity ≥ 4. An empty slice is a
+    /// programming error and panics in debug; in release it falls back to a
+    /// `Main { factor: 0 }` so the pipeline never produces an invalid term.
+    #[must_use]
+    pub fn of(factors: &[usize]) -> Self {
+        let mut f = factors.to_vec();
+        f.sort_unstable();
+        match f.as_slice() {
+            [a] => TermKind::Main { factor: *a },
+            [a, b] => TermKind::TwoWay { a: *a, b: *b },
+            [a, b, c] => TermKind::ThreeWay {
+                a: *a,
+                b: *b,
+                c: *c,
+            },
+            [] => {
+                debug_assert!(false, "TermKind::of called with no factors");
+                TermKind::Main { factor: 0 }
+            }
+            _ => TermKind::NWay { factors: f },
+        }
+    }
+
+    /// The participating factor indices, in ascending order.
+    #[must_use]
+    pub fn factors(&self) -> Vec<usize> {
+        match self {
+            TermKind::Main { factor } => vec![*factor],
+            TermKind::TwoWay { a, b } => vec![*a, *b],
+            TermKind::ThreeWay { a, b, c } => vec![*a, *b, *c],
+            TermKind::NWay { factors } => factors.clone(),
+        }
+    }
+
+    /// Interaction order of this term (1 = main, 2 = pairwise, 3 = three-way,
+    /// k = k-way).
     #[must_use]
     pub fn order(&self) -> u8 {
         match self {
             TermKind::Main { .. } => 1,
             TermKind::TwoWay { .. } => 2,
             TermKind::ThreeWay { .. } => 3,
+            TermKind::NWay { factors } => factors.len() as u8,
         }
     }
 }
@@ -180,7 +229,10 @@ pub struct BayesianInteraction {
 /// One decomposed interaction term: its identity, the Frequentist result, and
 /// an optional Bayesian posterior (attached during routing once both inference
 /// workers have run).
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// No longer `Copy` (the `kind` carries a `Vec` for order ≥ 4); clone where a
+/// copy is needed.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TermResult {
     /// Which effect/interaction this row represents.
     pub kind: TermKind,
@@ -1048,7 +1100,7 @@ mod nway_integration_tests {
         let terms = binary_terms(&cells, 3);
         // 3 main + 3 two-way + 1 three-way.
         assert_eq!(terms.len(), 7);
-        let kinds: Vec<TermKind> = terms.iter().map(|t| t.kind).collect();
+        let kinds: Vec<TermKind> = terms.iter().map(|t| t.kind.clone()).collect();
         for f in 0..3 {
             assert!(kinds.contains(&TermKind::Main { factor: f }));
         }

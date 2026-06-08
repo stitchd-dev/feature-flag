@@ -184,6 +184,10 @@ async fn main() -> anyhow::Result<()> {
                 let analytics = scheduler_analytics_client.clone();
                 let ch = scheduler_ch.clone();
                 let metric_repo = scheduler_compute_metric_repo.clone();
+                // Bandit reallocation deps: the shared experimentation-service
+                // client (for the privileged ApplyBanditAllocation write) and the
+                // PG pool (for the bandit_allocation_runs history insert).
+                let bandit_exp_client = scheduler_exp_client.clone();
                 tokio::spawn(async move {
                     let computed_at = chrono::Utc::now();
 
@@ -251,6 +255,151 @@ async fn main() -> anyhow::Result<()> {
                             return;
                         }
                     }
+                    // ── Bandit static-reallocation pass ─────────────────────
+                    // For a RUNNING static-propagation bandit, compute fresh
+                    // per-variant weights from observed reward and write them to
+                    // the bound flag rule via the privileged ApplyBanditAllocation
+                    // RPC; the eval path is untouched (SDKs converge on the next
+                    // poll). A no-op for every non-bandit experiment. A read/insert
+                    // error is logged but must not abort the schedule update.
+                    {
+                        let applier = stitchd_stats_service::bandit::GrpcAllocationApplier::new(
+                            bandit_exp_client.clone(),
+                        );
+                        let recorder =
+                            stitchd_stats_service::bandit::PgRunRecorder::new(pool.clone());
+                        // The allocation last written this tick (used as the
+                        // lifecycle idempotency check: "already committed to a
+                        // single-bucket winner?").
+                        let mut current_allocation: Option<
+                            stitchd_core::rollout::RolloutDistribution,
+                        > = None;
+                        match stitchd_stats_service::bandit::run_bandit_reallocation(
+                            &reader,
+                            &applier,
+                            &recorder,
+                            &exp,
+                            &metrics,
+                            computed_at,
+                            computed_at,
+                        )
+                        .await
+                        {
+                            Ok(outcome) => {
+                                if let stitchd_stats_service::bandit::BanditRunOutcome::Applied {
+                                    allocation,
+                                    ..
+                                } = &outcome
+                                {
+                                    current_allocation = Some(allocation.clone());
+                                }
+                                if !matches!(
+                                    outcome,
+                                    stitchd_stats_service::bandit::BanditRunOutcome::NotApplicable
+                                ) {
+                                    info!(
+                                        experiment_id = %exp.experiment_id,
+                                        ?outcome,
+                                        "bandit reallocation complete"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(experiment_id = %exp.experiment_id, "bandit reallocation failed: {e}");
+                            }
+                        }
+
+                        // ── Autonomous lifecycle pass (FR5) ─────────────────
+                        // After reallocation, detect convergence and apply the
+                        // operator-selected lifecycle policy (advisory /
+                        // auto_commit / auto_rollout). Advisory only records a
+                        // badge; auto_commit/auto_rollout require the opt-in and
+                        // are idempotent across ticks. A no-op for non-bandit /
+                        // unconverged experiments. Errors are logged, never abort
+                        // the schedule update.
+                        {
+                            let transitioner =
+                                stitchd_stats_service::lifecycle::GrpcLifecycleTransitioner::new(
+                                    bandit_exp_client.clone(),
+                                    pool.clone(),
+                                );
+                            let lifecycle_outcome =
+                                match stitchd_stats_service::lifecycle::run_bandit_lifecycle(
+                                    &reader,
+                                    &applier,
+                                    &transitioner,
+                                    &recorder,
+                                    &exp,
+                                    &metrics,
+                                    current_allocation.as_ref(),
+                                    computed_at,
+                                    computed_at,
+                                )
+                                .await
+                                {
+                                    Ok(outcome) => {
+                                        if !matches!(
+                                        outcome,
+                                        stitchd_stats_service::lifecycle::LifecycleOutcome::NoAction
+                                    ) {
+                                            info!(
+                                                experiment_id = %exp.experiment_id,
+                                                ?outcome,
+                                                "bandit lifecycle pass complete"
+                                            );
+                                        }
+                                        Some(outcome)
+                                    }
+                                    Err(e) => {
+                                        warn!(experiment_id = %exp.experiment_id, "bandit lifecycle pass failed: {e}");
+                                        None
+                                    }
+                                };
+
+                            // ── Campaign spawn pass (FR8) ───────────────────
+                            // When a campaign-owned iteration rolls out (or its
+                            // committed winner drifts), spawn the next iteration
+                            // — bounded by max_iterations, idempotent via the
+                            // campaign version/counter. No-op for non-campaign
+                            // experiments.
+                            if let Some(lifecycle_outcome) = lifecycle_outcome {
+                                let spawner =
+                                    stitchd_stats_service::campaign::GrpcCampaignSpawner::new(
+                                        bandit_exp_client.clone(),
+                                        pool.clone(),
+                                    );
+                                match stitchd_stats_service::campaign::run_campaign_spawn(
+                                    &reader,
+                                    &spawner,
+                                    &recorder,
+                                    &exp,
+                                    &metrics,
+                                    &lifecycle_outcome,
+                                    computed_at,
+                                    computed_at,
+                                )
+                                .await
+                                {
+                                    Ok(outcome) => {
+                                        if !matches!(
+                                            outcome,
+                                            stitchd_stats_service::campaign::SpawnOutcome::NoAction
+                                        ) {
+                                            info!(
+                                                experiment_id = %exp.experiment_id,
+                                                ?outcome,
+                                                "bandit campaign spawn pass complete"
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(experiment_id = %exp.experiment_id, "bandit campaign spawn pass failed: {e}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if let Err(e) = update_schedule_after_run(
                         &pool,
                         exp.experiment_id,
@@ -276,6 +425,8 @@ async fn main() -> anyhow::Result<()> {
                         sweep_metric_repo.as_ref(),
                         &running,
                         chrono::Utc::now(),
+                        stitchd_stats_service::interaction_compute::max_interaction_order_from_env(
+                        ),
                     )
                     .await
                     {
@@ -299,14 +450,27 @@ async fn main() -> anyhow::Result<()> {
 
     // ── Timeseries reader (Phase 7 Task 3) ────────────────────────────────────
     use stitchd_stats_service::timeseries_reader::ClickHouseTimeseriesReader;
+    let recomputer_metric_repo = metric_repo.clone();
     let timeseries_reader = Arc::new(ClickHouseTimeseriesReader::new(
         Arc::new(ch_client.clone()),
         metric_repo,
         experiment_repo,
     ));
 
-    let stats_svc =
-        StatsServiceImpl::new(pg_pool.clone()).with_timeseries_reader(timeseries_reader);
+    // On-demand bandit reallocation hook for the `TriggerRecompute` RPC: a
+    // trigger on a running static-bandit experiment recomputes + applies fresh
+    // weights immediately rather than waiting for the next scheduler tick.
+    let recomputer: Arc<dyn stitchd_stats_service::grpc::service::ExperimentRecomputer> =
+        Arc::new(stitchd_stats_service::bandit::PerExperimentRecomputer::new(
+            exp_client.clone(),
+            Arc::new(ch_client.clone()),
+            recomputer_metric_repo,
+            pg_pool.clone(),
+        ));
+
+    let stats_svc = StatsServiceImpl::new(pg_pool.clone())
+        .with_timeseries_reader(timeseries_reader)
+        .with_recomputer(recomputer);
 
     tokio::spawn(
         Server::builder()

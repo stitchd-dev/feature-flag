@@ -18,7 +18,10 @@
  */
 
 import type { RuleJson, RolloutDistribution } from '../../lib/types'
-import type { ExperimentFormValues } from '../../lib/validation/experiment'
+import type {
+  ExperimentFormValues,
+  BanditConfigFormValues,
+} from '../../lib/validation/experiment'
 
 export type MetricKind = 'aggregation' | 'ratio' | 'funnel'
 
@@ -225,6 +228,172 @@ function sequentialTestingFields(
   return out
 }
 
+// ─── Bandit config payload ──────────────────────────────────────────────────
+
+/**
+ * Build the gateway's `objective` payload from the form's flat objective fields.
+ *
+ * Mirrors the Phase 1 gateway shape (tagged by `type`):
+ *   • Scalar      → `{ type: 'scalar', metric_id }`
+ *   • Scalarized  → `{ type: 'scalarized', weights: [{ metric_id, weight }] }`
+ *   • Constrained → `{ type: 'constrained', primary_metric_id,
+ *                       constraints: [{ metric_id, bound, direction }] }`
+ */
+export function buildBanditObjective(
+  cfg: BanditConfigFormValues,
+): Record<string, unknown> {
+  switch (cfg.objective_kind) {
+    case 'scalarized':
+      return {
+        type: 'scalarized',
+        weights: cfg.scalarized_weights.map((w) => ({
+          metric_id: w.metric_id,
+          weight: Number(w.weight),
+        })),
+      }
+    case 'constrained':
+      return {
+        type: 'constrained',
+        primary_metric_id: cfg.objective_metric_id,
+        constraints: cfg.constraints.map((c) => ({
+          metric_id: c.metric_id,
+          bound: Number(c.bound),
+          direction: c.direction,
+        })),
+      }
+    case 'scalar':
+    default:
+      return { type: 'scalar', metric_id: cfg.objective_metric_id }
+  }
+}
+
+/**
+ * Build the `bandit_config` object posted alongside an experiment when
+ * `experiment_mode === 'bandit'`.
+ *
+ * The min-exploration floor is captured as a PERCENT in the form and converted
+ * to basis points here (5% → 500bp). The optional autonomous-campaign block is
+ * only included when the operator opts in (`campaign_enabled`).
+ */
+export function buildBanditConfigPayload(
+  cfg: BanditConfigFormValues,
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    algorithm: cfg.algorithm,
+    propagation_mode: cfg.propagation_mode,
+    min_exploration_bp: Math.round(Number(cfg.min_exploration_pct) * 100),
+    lifecycle_policy: cfg.lifecycle_policy,
+    convergence_prob_threshold: Number(cfg.convergence_prob_threshold),
+    objective: buildBanditObjective(cfg),
+  }
+  if (cfg.algorithm === 'contextual') {
+    payload.contextual_features = cfg.contextual_features
+      .map((f) => f.trim())
+      .filter(Boolean)
+  }
+  if (cfg.campaign_enabled) {
+    payload.campaign = {
+      max_iterations: Math.max(
+        1,
+        Math.floor(Number(cfg.campaign_max_iterations)),
+      ),
+      drift_threshold: Number(cfg.campaign_drift_threshold),
+    }
+  }
+  return payload
+}
+
+/**
+ * Returns the `experiment_mode` + (when bandit) `bandit_config` keys for the
+ * create/patch body. A `fixed` experiment OMITS `bandit_config` entirely so the
+ * gateway leaves it null.
+ */
+function banditFields(values: ExperimentFormValues): Record<string, unknown> {
+  if (values.experiment_mode !== 'bandit') {
+    return { experiment_mode: 'fixed' }
+  }
+  return {
+    experiment_mode: 'bandit',
+    bandit_config: buildBanditConfigPayload(values.bandit_config),
+  }
+}
+
+/**
+ * Parse the gateway's nested `bandit_config` JSON back into the flat form
+ * shape for edit mode. Tolerant of missing/partial fields — falls back to the
+ * supplied defaults. The `min_exploration_bp` is converted back to a percent.
+ */
+export function parseBanditConfig(
+  raw: unknown,
+  defaults: BanditConfigFormValues,
+): BanditConfigFormValues {
+  if (!raw || typeof raw !== 'object') return defaults
+  const r = raw as Record<string, unknown>
+  const obj = (r.objective ?? {}) as Record<string, unknown>
+  const kind =
+    obj.type === 'scalarized'
+      ? 'scalarized'
+      : obj.type === 'constrained'
+        ? 'constrained'
+        : 'scalar'
+  const campaign = (r.campaign ?? null) as Record<string, unknown> | null
+  return {
+    algorithm:
+      (r.algorithm as BanditConfigFormValues['algorithm']) ??
+      defaults.algorithm,
+    propagation_mode:
+      (r.propagation_mode as BanditConfigFormValues['propagation_mode']) ??
+      defaults.propagation_mode,
+    min_exploration_pct:
+      typeof r.min_exploration_bp === 'number'
+        ? r.min_exploration_bp / 100
+        : defaults.min_exploration_pct,
+    lifecycle_policy:
+      (r.lifecycle_policy as BanditConfigFormValues['lifecycle_policy']) ??
+      defaults.lifecycle_policy,
+    convergence_prob_threshold:
+      typeof r.convergence_prob_threshold === 'number'
+        ? r.convergence_prob_threshold
+        : defaults.convergence_prob_threshold,
+    contextual_features: Array.isArray(r.contextual_features)
+      ? (r.contextual_features as string[])
+      : defaults.contextual_features,
+    objective_kind: kind,
+    objective_metric_id:
+      kind === 'constrained'
+        ? ((obj.primary_metric_id as string) ?? '')
+        : ((obj.metric_id as string) ?? ''),
+    scalarized_weights: Array.isArray(obj.weights)
+      ? (obj.weights as { metric_id: string; weight: number }[]).map((w) => ({
+          metric_id: w.metric_id,
+          weight: w.weight,
+        }))
+      : [],
+    constraints: Array.isArray(obj.constraints)
+      ? (
+          obj.constraints as {
+            metric_id: string
+            bound: number
+            direction: BanditConfigFormValues['constraints'][number]['direction']
+          }[]
+        ).map((c) => ({
+          metric_id: c.metric_id,
+          bound: c.bound,
+          direction: c.direction,
+        }))
+      : [],
+    campaign_enabled: campaign != null,
+    campaign_max_iterations:
+      campaign && typeof campaign.max_iterations === 'number'
+        ? campaign.max_iterations
+        : defaults.campaign_max_iterations,
+    campaign_drift_threshold:
+      campaign && typeof campaign.drift_threshold === 'number'
+        ? campaign.drift_threshold
+        : defaults.campaign_drift_threshold,
+  }
+}
+
 // ─── Submit body ────────────────────────────────────────────────────────────
 
 /**
@@ -266,6 +435,7 @@ export function buildExperimentCreateBody(
       .filter(Boolean),
     pre_period_days: Math.max(0, Math.floor(values.pre_period_days)),
     ...sequentialTestingFields(values),
+    ...banditFields(values),
     traffic_allocation: values.traffic_allocation / 100,
     model: values.model,
   }
@@ -300,6 +470,7 @@ export function buildExperimentPatchBody(
       .filter(Boolean),
     pre_period_days: Math.max(0, Math.floor(values.pre_period_days)),
     ...sequentialTestingFields(values),
+    ...banditFields(values),
     traffic_allocation: values.traffic_allocation / 100,
     model: values.model,
   }

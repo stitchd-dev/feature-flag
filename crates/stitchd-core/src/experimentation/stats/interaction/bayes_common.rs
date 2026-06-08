@@ -44,39 +44,37 @@ pub(super) struct CellPost {
     pub var: f64,
 }
 
-/// Enumerate exactly the terms for the requested `order`, independent of the
-/// data's factor count: `Main{0..order}`, every `TwoWay{a<b}` in `0..order`, and
-/// — when `order >= 3` — the `ThreeWay{0,1,2}`. This matches the Frequentist
-/// workers ([`super::anova::continuous_terms`] / [`super::ratio::ratio_terms`] /
-/// [`super::loglinear::binary_terms`]) so the routing layer joins a consistent
-/// term set across inference models.
+/// Enumerate the full hierarchical term set for the requested `order`,
+/// independent of the data's factor count: every non-empty subset of the
+/// `order` factors of size `1..=order` — i.e. all `Main`, all `TwoWay`, all
+/// `ThreeWay`, … up to the single top `order`-way term over `0..order`. For
+/// `order <= 3` this is exactly `Main{0..order}` + every `TwoWay{a<b}` +
+/// (order 3) the `ThreeWay{0,1,2}`, preserving the legacy enumeration; for
+/// `order >= 4` it additionally includes all intermediate-order subsets and the
+/// top [`TermKind::NWay`]. This matches the Frequentist workers so the routing
+/// layer joins a consistent term set across inference models.
+///
+/// Terms are emitted in ascending `(order, factors)` order so the routing layer
+/// and golden snapshots see a stable sequence.
 ///
 /// (Terms whose factor index exceeds what the data carries are still dropped
 /// downstream: [`contrast_coeffs`] returns `None` for an absent factor, so they
 /// never reach the cell collapse.)
 pub(super) fn enumerate_terms(order: usize) -> Vec<TermKind> {
-    let mut terms = Vec::new();
-    for f in 0..order {
-        terms.push(TermKind::Main { factor: f });
+    let mut by_size: Vec<Vec<TermKind>> = vec![Vec::new(); order + 1];
+    // Every non-empty subset of 0..order, bucketed by size.
+    for mask in 1u32..(1u32 << order) {
+        let subset: Vec<usize> = (0..order).filter(|&f| mask & (1 << f) != 0).collect();
+        by_size[subset.len()].push(TermKind::of(&subset));
     }
-    for a in 0..order {
-        for b in (a + 1)..order {
-            terms.push(TermKind::TwoWay { a, b });
-        }
-    }
-    if order >= 3 {
-        terms.push(TermKind::ThreeWay { a: 0, b: 1, c: 2 });
-    }
-    terms
+    // Flatten size 1, 2, …, order; within a size the subsets are already in
+    // ascending factor order because `mask` iterates ascending.
+    by_size.into_iter().skip(1).flatten().collect()
 }
 
 /// The factor indices a term participates in (in tuple order).
 pub(super) fn term_factors(kind: &TermKind) -> Vec<usize> {
-    match *kind {
-        TermKind::Main { factor } => vec![factor],
-        TermKind::TwoWay { a, b } => vec![a, b],
-        TermKind::ThreeWay { a, b, c } => vec![a, b, c],
-    }
+    kind.factors()
 }
 
 /// Number of factors (interaction order of the *data*) from the cell level
@@ -185,6 +183,38 @@ pub(super) fn contrast_coeffs(
                 }
             }
         }
+        TermKind::NWay { ref factors } => {
+            // General k-way difference-of-differences over the 2^k hypercube
+            // corners: each participating factor at level 0 or its top level.
+            // A corner's sign is (−1)^(#coords at level 0), so the all-top
+            // corner is +1 — the exact generalisation of the 2×2 and 2×2×2
+            // anchored contrasts above. Factors with >2 levels are anchored at
+            // level 0 (a representative top-vs-base k-way contrast).
+            let k = factors.len();
+            let mut tops = Vec::with_capacity(k);
+            for &f in factors {
+                let n = *dims.get(f)?;
+                if n < 2 {
+                    return None;
+                }
+                tops.push(n - 1);
+            }
+            // Enumerate every corner via a k-bit mask: bit set ⇒ factor at top.
+            for corner in 0u32..(1u32 << k) {
+                let mut key = Vec::with_capacity(k);
+                let mut zeros = 0u32;
+                for (slot, &top) in tops.iter().enumerate() {
+                    if corner & (1 << slot) != 0 {
+                        key.push(top);
+                    } else {
+                        key.push(0);
+                        zeros += 1;
+                    }
+                }
+                let sign = if zeros.is_multiple_of(2) { 1.0 } else { -1.0 };
+                add(key, sign);
+            }
+        }
     }
 
     Some(coeffs)
@@ -263,7 +293,7 @@ where
             continue; // degenerate / missing collapsed cell ⇒ omit the term.
         }
         if let Some(bi) = summarise(mean, var) {
-            out.push((*kind, bi));
+            out.push((kind.clone(), bi));
         }
     }
     out

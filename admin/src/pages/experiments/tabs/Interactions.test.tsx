@@ -20,6 +20,9 @@ import {
   formatBayesProb,
   formatBayesCI,
   formatTerm,
+  orderLabel,
+  sortInteractions,
+  distinctOrders,
 } from './Interactions'
 import type { ExperimentInteraction } from '../../../lib/api/exclusionGroups'
 
@@ -186,6 +189,46 @@ describe('formatTerm', () => {
   it('returns "A×B×C" for order 3 or 3way: prefix', () => {
     expect(formatTerm('3way:axbxc', 3)).toBe('A×B×C')
   })
+
+  it('returns "A×B×C×D" for a four-way term (no order-3 cap)', () => {
+    expect(formatTerm('4way:axbxcxd', 4)).toBe('A×B×C×D')
+  })
+
+  it('returns five factors for a five-way term', () => {
+    expect(formatTerm('5way:axbxcxdxe', 5)).toBe('A×B×C×D×E')
+  })
+
+  it('falls back to order-derived factors for an unprefixed high-order term', () => {
+    expect(formatTerm('weird-term', 4)).toBe('A×B×C×D')
+  })
+})
+
+describe('orderLabel', () => {
+  it('labels low orders', () => {
+    expect(orderLabel(1)).toBe('Main')
+    expect(orderLabel(2)).toBe('2-way')
+    expect(orderLabel(3)).toBe('3-way')
+  })
+
+  it('labels four-way and beyond generically', () => {
+    expect(orderLabel(4)).toBe('4-way')
+    expect(orderLabel(6)).toBe('6-way')
+  })
+})
+
+describe('sortInteractions / distinctOrders', () => {
+  const o2: ExperimentInteraction = { ...NOT_SIGNIFICANT, interaction_order: 2, metric_key: 'b' }
+  const o3: ExperimentInteraction = { ...NOT_SIGNIFICANT, interaction_order: 3, metric_key: 'a' }
+  const o4: ExperimentInteraction = { ...NOT_SIGNIFICANT, interaction_order: 4, metric_key: 'a', term: '4way:wxyz' }
+
+  it('groups by order ascending', () => {
+    const sorted = sortInteractions([o4, o2, o3])
+    expect(sorted.map((r) => r.interaction_order)).toEqual([2, 3, 4])
+  })
+
+  it('lists distinct orders ascending', () => {
+    expect(distinctOrders([o4, o2, o3, o2])).toEqual([2, 3, 4])
+  })
 })
 
 // ─── Render ──────────────────────────────────────────────────────────────────
@@ -305,5 +348,87 @@ describe('InteractionsTab render', () => {
       <InteractionsTab interactions={[]} loading={false} error="boom" />,
     )
     expect(html).toMatch(/boom/)
+  })
+
+  it('renders an order-4 term row (no 3-way cap)', () => {
+    const row4way: ExperimentInteraction = {
+      experiment_ids: ['a', 'b', 'c', 'd'],
+      experiment_names: ['Exp A', 'Exp B', 'Exp C', 'Exp D'],
+      interaction_order: 4,
+      term: '4way:axbxcxd',
+      context_type: 'user',
+      metric_key: 'revenue',
+      shared_count: 4200,
+      interaction_estimate: 0.005,
+      p_value: 0.3,
+      df: 1,
+      significant: false,
+      insufficient_data: false,
+      bayes_prob: 0.6,
+      bayes_expected: 0.004,
+      bayes_ci_low: -0.001,
+      bayes_ci_high: 0.01,
+    }
+    const html = renderToString(
+      <InteractionsTab interactions={[row4way]} loading={false} error={null} />,
+    )
+    expect(html).toMatch(/data-order="4"/)
+    expect(html).toMatch(/4-way/)
+    // The humanized term shows four factors.
+    expect(html).toMatch(/A×B×C×D/)
+    // The "includes N-way" hint surfaces for order ≥ 4.
+    expect(html).toMatch(/data-testid="high-order-present"/)
+  })
+
+  it('groups higher-order terms after lower-order terms', () => {
+    const row2: ExperimentInteraction = { ...NOT_SIGNIFICANT, interaction_order: 2, term: '2way:axb' }
+    const row4: ExperimentInteraction = {
+      ...NOT_SIGNIFICANT,
+      interaction_order: 4,
+      term: '4way:axbxcxd',
+      experiment_names: ['W', 'X', 'Y', 'Z'],
+    }
+    const html = renderToString(
+      <InteractionsTab interactions={[row4, row2]} loading={false} error={null} />,
+    )
+    // The 2-way order badge appears before the 4-way badge in document order.
+    expect(html.indexOf('data-order="2"')).toBeLessThan(html.indexOf('data-order="4"'))
+  })
+
+  it('does not show the high-order hint when max order is 3', () => {
+    const row3: ExperimentInteraction = {
+      ...NOT_SIGNIFICANT,
+      interaction_order: 3,
+      term: '3way:axbxc',
+      experiment_names: ['A', 'B', 'C'],
+    }
+    const html = renderToString(
+      <InteractionsTab interactions={[row3]} loading={false} error={null} />,
+    )
+    expect(html).not.toMatch(/data-testid="high-order-present"/)
+  })
+
+  it('surfaces a bandit note when the experiment is a bandit', () => {
+    const html = renderToString(
+      <InteractionsTab
+        interactions={[NOT_SIGNIFICANT]}
+        loading={false}
+        error={null}
+        isBandit
+      />,
+    )
+    expect(html).toMatch(/data-testid="bandit-interaction-note"/)
+    expect(html).toMatch(/bandit-skipped/)
+  })
+
+  it('omits the bandit note for a fixed experiment', () => {
+    const html = renderToString(
+      <InteractionsTab
+        interactions={[NOT_SIGNIFICANT]}
+        loading={false}
+        error={null}
+      />,
+    )
+    expect(html).not.toMatch(/data-testid="bandit-interaction-note"/)
   })
 })

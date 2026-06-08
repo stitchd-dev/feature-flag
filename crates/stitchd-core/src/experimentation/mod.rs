@@ -5,11 +5,14 @@
 //! [`ExperimentStatus::Running`] creates a new [`ExperimentIteration`] that
 //! captures a snapshot of the experiment configuration at that moment.
 
+pub mod bandit;
 pub mod stats;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use bandit::{BanditConfig, ExperimentMode};
 
 use crate::id::{
     EnvironmentId, ExclusionGroupId, ExperimentId, ExperimentIterationId, FlagId, MetricId, RuleId,
@@ -228,6 +231,15 @@ pub struct Experiment {
     /// to declare significance. `>= 0`.
     #[serde(default = "default_sequential_min_sample_size")]
     pub sequential_min_sample_size: i64,
+    /// Whether this experiment uses a fixed split or adaptive (bandit)
+    /// allocation. Defaults to [`ExperimentMode::Fixed`].
+    #[serde(default)]
+    pub experiment_mode: ExperimentMode,
+    /// Bandit (adaptive allocation) configuration. `Some` only when
+    /// `experiment_mode == Bandit`. Snapshotted onto the iteration at start
+    /// (mirrors the sequential-testing settings).
+    #[serde(default)]
+    pub bandit_config: Option<BanditConfig>,
 }
 
 /// Default α for sequential testing when not explicitly configured.
@@ -308,11 +320,51 @@ pub struct ExperimentIteration {
     /// Snapshot of `sequential_min_sample_size` at iteration start.
     #[serde(default = "default_sequential_min_sample_size")]
     pub sequential_min_sample_size: i64,
+    /// Snapshot of the bandit configuration at iteration start. `Some` only for
+    /// bandit-mode experiments.
+    #[serde(default)]
+    pub bandit_config: Option<BanditConfig>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── bandit-mode fields default for backward compatibility ────────────────
+
+    #[test]
+    fn experiment_without_bandit_fields_deserializes_as_fixed() {
+        // A pre-bandit experiment JSON (no experiment_mode / bandit_config) must
+        // still deserialize, defaulting to a fixed experiment.
+        let json = r#"{
+            "id": "00000000-0000-0000-0000-000000000001",
+            "environment_id": "00000000-0000-0000-0000-000000000002",
+            "flag_id": "00000000-0000-0000-0000-000000000003",
+            "flag_key": null,
+            "variant_keys": [],
+            "flag_rule_id": null,
+            "targets_default_rule": true,
+            "name": "legacy",
+            "description": null,
+            "hypothesis": null,
+            "metric_ids": [],
+            "guardrail_metric_ids": [],
+            "traffic_allocation": 100.0,
+            "min_sample_size": null,
+            "pre_period_days": 0,
+            "unit_context_types": ["user"],
+            "scheduled_start_at": null,
+            "scheduled_end_at": null,
+            "status": "draft",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "deleted_at": null,
+            "version": 1
+        }"#;
+        let exp: Experiment = serde_json::from_str(json).unwrap();
+        assert_eq!(exp.experiment_mode, ExperimentMode::Fixed);
+        assert_eq!(exp.bandit_config, None);
+    }
 
     // ── ExperimentStatus::allowed_transitions ────────────────────────────────
 
@@ -546,6 +598,8 @@ mod tests {
             sequential_alpha: 0.05,
             sequential_tau_squared: None,
             sequential_min_sample_size: 100,
+            experiment_mode: ExperimentMode::Fixed,
+            bandit_config: None,
         };
         assert_eq!(exp.status, ExperimentStatus::Draft);
         assert_eq!(exp.metric_ids.len(), 1);
@@ -577,6 +631,7 @@ mod tests {
             sequential_alpha: 0.05,
             sequential_tau_squared: None,
             sequential_min_sample_size: 100,
+            bandit_config: None,
         };
         assert_eq!(iter.iteration_number, 1);
         assert!(iter.ended_at.is_none());
@@ -618,6 +673,8 @@ mod tests {
             sequential_alpha: 0.05,
             sequential_tau_squared: None,
             sequential_min_sample_size: 100,
+            experiment_mode: ExperimentMode::Fixed,
+            bandit_config: None,
         })
         .unwrap();
         // Strip the new fields to simulate a legacy payload.
@@ -656,6 +713,7 @@ mod tests {
             sequential_alpha: 0.05,
             sequential_tau_squared: None,
             sequential_min_sample_size: 100,
+            bandit_config: None,
         })
         .unwrap();
         let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();

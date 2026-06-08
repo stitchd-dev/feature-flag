@@ -232,6 +232,53 @@ impl ExperimentationService for MockExpService {
     > {
         Err(Status::unimplemented("not used"))
     }
+    async fn apply_bandit_allocation(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ApplyBanditAllocationRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ApplyBanditAllocationResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn create_bandit_campaign(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::CreateBanditCampaignRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_bandit_campaign(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetBanditCampaignRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn list_bandit_campaigns(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListBanditCampaignsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListBanditCampaignsResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn stop_bandit_campaign(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::StopBanditCampaignRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn get_bandit_state(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetBanditStateRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditStateResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn get_bandit_allocation_history(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetBanditAllocationHistoryRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditAllocationHistoryResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock_exp_service(svc: MockExpService) -> ExperimentationServiceClient<Channel> {

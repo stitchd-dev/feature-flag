@@ -132,6 +132,7 @@ mod compilation_tests {
             }],
             hash_inputs: new_inputs,
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let mut buf = Vec::new();
@@ -186,6 +187,7 @@ mod compilation_tests {
             }],
             hash_inputs: vec![],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
         let mut buf = Vec::new();
         sender.encode(&mut buf).expect("encode");
