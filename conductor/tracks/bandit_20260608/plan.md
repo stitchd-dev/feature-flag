@@ -159,7 +159,7 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 10' [autonomous] (Protocol in workflow.md)
 
-## Phase 11: REST/Proto Output Surfacing [checkpoint: pending]
+## Phase 11: REST/Proto Output Surfacing [checkpoint: 10c54f5]
 <!-- execution: sequential -->
 <!-- depends: phase4, phase7, phase8, phase9 -->
 
