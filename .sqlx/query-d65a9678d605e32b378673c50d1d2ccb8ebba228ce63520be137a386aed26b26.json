@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE idempotency_keys SET created_at = now() - interval '48 hours'\n             WHERE scope = 's' AND idempotency_key = 'k'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "d65a9678d605e32b378673c50d1d2ccb8ebba228ce63520be137a386aed26b26"
+}

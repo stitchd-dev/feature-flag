@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO idempotency_keys (scope, idempotency_key, request_hash)\n             VALUES ($1, $2, $3)\n             ON CONFLICT (scope, idempotency_key) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4a0ee42f4fc83831d09b63bac24bfc0411974425e7c9f009a26ba6c5e2ca8ebd"
+}

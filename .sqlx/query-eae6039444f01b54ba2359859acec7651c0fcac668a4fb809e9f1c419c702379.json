@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO idempotency_keys\n                 (scope, idempotency_key, request_hash, response_status,\n                  response_body, response_content_type)\n             VALUES ($1, $2, '', $3, $4, $5)\n             ON CONFLICT (scope, idempotency_key) DO UPDATE\n                 SET response_status = EXCLUDED.response_status,\n                     response_body = EXCLUDED.response_body,\n                     response_content_type = EXCLUDED.response_content_type",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eae6039444f01b54ba2359859acec7651c0fcac668a4fb809e9f1c419c702379"
+}

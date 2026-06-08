@@ -32,6 +32,11 @@ tokio-stream = "0.1"
 async-trait = { workspace = true }
 chrono = { workspace = true }
 governor = { workspace = true }
+# Idempotency-Key middleware (platform_hardening_20260608): a narrowly-scoped
+# PgPool backs the `idempotency_keys` ledger; sha2/hex fingerprint requests.
+sqlx = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

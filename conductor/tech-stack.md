@@ -355,6 +355,12 @@ The experimentation-service proto gained additive RPCs (`CreateExclusionGroup`/`
 - **`flags.v1` (`flag_service.proto`):** `SetPrerequisites` / `GetPrerequisites` RPCs + request/response messages.
 - **No new proto error enum.** Referential-integrity 409s use the `dependency_exists:<ids>` status-message sentinel (mirroring `flag_locked_by_experiment:`) decoded source-agnostically in the gateway — same convention as the existing flag-lock sentinel; no proto change. Experiment/segment scheduling reuse existing `TransitionExperiment` / `UpdateAdminSegment` RPCs.
 
+**`platform_hardening_20260608` change — gateway gains a narrowly-scoped `PgPool` for Idempotency-Key middleware:**
+- Historically the gateway held **zero** database access — a pure REST↔gRPC translator (`domain_boundaries_20260530`). This track adds a single, narrowly-scoped `PgPool` to the gateway **solely** for HTTP-edge cross-cutting state: the `idempotency_keys` table (migration `20260608000003_idempotency_keys.sql`). This is **not** a domain-logic regression — idempotency is request dedup at the edge (the same class of cross-cutting concern as the existing in-memory rate-limit/quota and tracing), it just needs durable, cross-replica state. The gateway issues NO domain queries; the only table it touches is `idempotency_keys`.
+- The pool connects to `STITCHD_DATABASE_URL`. If that env var is **unset**, idempotency middleware is **disabled** (the gateway logs a warning and runs without it) — keeping the gateway runnable in deployments that don't provision it a DB, and preserving backward compatibility.
+- TTL is configured by `STITCHD_GATEWAY_IDEMPOTENCY_TTL_SECS` (default 86400 = 24h); a gateway tokio interval task sweeps expired rows. Applies to all mutating methods (POST/PUT/PATCH/DELETE) when an `Idempotency-Key` header is present; a replay returns the stored 2xx with an `Idempotent-Replayed: true` header, key-reuse with a different request fingerprint returns `422 idempotency_key_reuse`, and a store error fails **open** (request proceeds unprotected rather than 500ing).
+- Deviation from the spec's `response_body jsonb`: stored as **BYTEA + content-type** so any 2xx payload replays byte-for-byte regardless of content type (more robust than JSONB, which would reject non-JSON bodies).
+
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
 - ClickHouse 24+ for events, experiment data, metric aggregations

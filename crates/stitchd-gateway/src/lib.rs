@@ -15,6 +15,7 @@
 
 pub mod error;
 pub mod grpc_server;
+pub mod idempotency;
 pub mod middleware;
 pub mod openapi;
 pub mod pagination;
