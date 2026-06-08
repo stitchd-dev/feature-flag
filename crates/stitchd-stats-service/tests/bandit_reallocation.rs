@@ -87,10 +87,12 @@ async fn insert_events(ch: &Client, rows: &[EventRow]) {
 }
 
 /// A fake applier that always returns APPLIED, capturing the distribution it was
-/// handed (so the test can assert the EXACT weights the pass computed).
+/// handed (so the test can assert the EXACT weights the pass computed) and the
+/// realtime model when the realtime path is exercised.
 #[derive(Default)]
 struct CapturingApplier {
     last: Mutex<Option<RolloutDistribution>>,
+    last_model: Mutex<Option<stitchd_proto::flags::v1::RealtimeBanditModel>>,
 }
 
 #[async_trait::async_trait]
@@ -103,6 +105,20 @@ impl AllocationApplier for CapturingApplier {
         *self.last.lock().unwrap() = Some(allocation.clone());
         Ok(ApplyResult::Applied {
             resolved_target: "default_rule".to_string(),
+            new_version: 2,
+        })
+    }
+
+    async fn apply_realtime(
+        &self,
+        _experiment_id: Uuid,
+        allocation: &RolloutDistribution,
+        model: stitchd_proto::flags::v1::RealtimeBanditModel,
+    ) -> Result<ApplyResult, anyhow::Error> {
+        *self.last.lock().unwrap() = Some(allocation.clone());
+        *self.last_model.lock().unwrap() = Some(model);
+        Ok(ApplyResult::Applied {
+            resolved_target: "rule".to_string(),
             new_version: 2,
         })
     }

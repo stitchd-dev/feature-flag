@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package stitchd.experiments.v1;
 
+import "flags/v1/flag_sync.proto";
+
 // ─── Experiment status ────────────────────────────────────────────────────────
 
 enum ExperimentStatus {
@@ -336,6 +338,12 @@ message ApplyBanditAllocationRequest {
   // The flag version the caller observed (optimistic concurrency). `0` means
   // "look it up server-side" (the caller did not pre-fetch the flag).
   uint64 expected_version = 3;
+  // [ADDITIVE — bandit_20260608] Optional snapshot-resident real-time bandit
+  // model. When present, the dispatch refreshes the bound rule's
+  // `realtime_bandit` model (the real-time propagation path) instead of
+  // rewriting the static weights. Forwarded verbatim to flag-service's
+  // BanditUpdateAllocation. Requires a bound custom rule (not the default rule).
+  optional stitchd.flags.v1.RealtimeBanditModel realtime_model = 4;
 }
 
 // Outcome of an allocation dispatch.

@@ -343,7 +343,7 @@ fn domain_exclusion_gate_to_proto(
 /// `family` defaults to Beta, an unspecified `goal` defaults to Increase — both
 /// are the conservative non-contextual defaults.
 #[must_use]
-fn proto_realtime_bandit_to_domain(
+pub(crate) fn proto_realtime_bandit_to_domain(
     model: &ProtoRealtimeBanditModel,
 ) -> stitchd_core::rule_engine::types::RealtimeBanditModel {
     use stitchd_core::rule_engine::types::{

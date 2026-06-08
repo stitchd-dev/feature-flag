@@ -58,7 +58,7 @@ use stitchd_core::experimentation::bandit::{
 use stitchd_core::experimentation::stats::MetricType;
 use stitchd_core::experimentation::stats::sequential::RatioGroupStats;
 use stitchd_core::metric::{GoalDirection as MetricGoal, MetricDefinition, MetricKind};
-use stitchd_core::rollout::RolloutDistribution;
+use stitchd_core::rollout::{RolloutAllocation, RolloutDistribution};
 
 use crate::compute::{
     AggCell, CellReader, count_variant_stats, funnel_variant_stats, metric_type_for,
@@ -135,6 +135,22 @@ pub fn is_eligible(exp: &RunningExperiment) -> bool {
     }
     match &exp.bandit_config {
         Some(cfg) => cfg.propagation_mode == PropagationMode::Static,
+        None => false,
+    }
+}
+
+/// Is this experiment eligible for the **real-time** snapshot-resident pass?
+///
+/// Requires bandit mode + a bandit config whose `propagation_mode` is
+/// [`PropagationMode::Realtime`]. The realtime path refreshes the bound rule's
+/// snapshot-resident model parameters instead of rewriting a static %.
+#[must_use]
+pub fn is_eligible_realtime(exp: &RunningExperiment) -> bool {
+    if exp.experiment_mode != ExperimentMode::Bandit {
+        return false;
+    }
+    match &exp.bandit_config {
+        Some(cfg) => cfg.propagation_mode == PropagationMode::Realtime,
         None => false,
     }
 }
@@ -358,6 +374,135 @@ pub fn decide_allocation(
     }
 }
 
+// ── Real-time model decision (pure) ──────────────────────────────────────────
+
+/// The pure decision for the real-time propagation path: build the
+/// snapshot-resident [`RealtimeBanditModel`](stitchd_proto::flags::v1::RealtimeBanditModel)
+/// parameters or decide to skip.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RealtimeModelDecision {
+    /// Refresh the bound rule's snapshot-resident model to these params.
+    Refresh(stitchd_proto::flags::v1::RealtimeBanditModel),
+    /// Skip with this reason.
+    Skip(String),
+}
+
+/// The minimum per-arm sample size below which the realtime model is not
+/// refreshed (insufficient evidence — same floor as the static path).
+fn realtime_min_arm_n(rewards: &MetricRewards) -> u64 {
+    rewards
+        .arms
+        .iter()
+        .map(|(_, p)| p.arm_n())
+        .min()
+        .unwrap_or(0)
+}
+
+/// Convert one [`RewardPosterior`] into proto [`VariantPosterior`] params for a
+/// given family. Beta family carries `(alpha, beta)`; Normal family carries
+/// `(mu, sigma2)`. Pure.
+fn variant_posterior_proto(
+    variant_key: &str,
+    family: stitchd_proto::flags::v1::RewardFamily,
+    post: &RewardPosterior,
+) -> stitchd_proto::flags::v1::VariantPosterior {
+    use stitchd_proto::flags::v1::{RewardFamily as PF, VariantPosterior as PV};
+    match family {
+        PF::Beta => {
+            // Beta(alpha, beta) from the count/funnel posterior mean + n.
+            let n = post.arm_n() as f64;
+            let mean = post.mean().clamp(0.0, 1.0);
+            let successes = (mean * n).round();
+            PV {
+                variant_key: variant_key.to_string(),
+                alpha: 1.0 + successes,
+                beta: 1.0 + (n - successes).max(0.0),
+                mu: 0.0,
+                sigma2: 0.0,
+            }
+        }
+        // Normal(mu, sigma2): mean + a variance proxy. We approximate the
+        // posterior variance as (point variance / n) using the mean only when no
+        // richer stat is exposed; the engine collapses sigma2<=0 to a point draw.
+        PF::Normal | PF::Unspecified => {
+            let mean = post.mean();
+            // A small positive variance keeps Thompson exploration alive; scaled
+            // down by n so a well-sampled arm sharpens.
+            let n = (post.arm_n() as f64).max(1.0);
+            PV {
+                variant_key: variant_key.to_string(),
+                alpha: 0.0,
+                beta: 0.0,
+                mu: mean,
+                sigma2: (mean.abs().max(1.0)) / n,
+            }
+        }
+    }
+}
+
+/// The pure real-time model decision: from the experiment's [`BanditConfig`] and
+/// a single objective metric's reward posteriors, build the snapshot-resident
+/// model params or decide to skip.
+///
+/// Skips when there is no reward data, any arm has insufficient evidence, the
+/// objective is multi-objective (deferred to a later phase for the realtime
+/// path), or the metric family has no posterior-sampling form.
+#[must_use]
+pub fn decide_realtime_model(
+    config: &BanditConfig,
+    metrics: &[MetricRewards],
+    salt: &str,
+    unit_context_type: &str,
+) -> RealtimeModelDecision {
+    use stitchd_proto::flags::v1::{
+        BanditGoalDirection as PG, RealtimeBanditModel as PModel, RewardFamily as PF,
+    };
+
+    // Single-objective scalar only for the non-contextual realtime model; multi
+    // objective is folded in once the contextual phase lands.
+    if !matches!(config.objective, RewardObjective::Scalar { .. }) {
+        return RealtimeModelDecision::Skip(
+            "realtime model currently supports a single scalar objective".to_string(),
+        );
+    }
+    let Some(rewards) = metrics.first() else {
+        return RealtimeModelDecision::Skip("no objective metric reward data".to_string());
+    };
+    if rewards.arms.is_empty() {
+        return RealtimeModelDecision::Skip("no arms in reward posteriors".to_string());
+    }
+    let min_n = realtime_min_arm_n(rewards);
+    if min_n < MIN_ARM_SAMPLE {
+        return RealtimeModelDecision::Skip(format!(
+            "insufficient data: smallest arm n={min_n} < {MIN_ARM_SAMPLE}"
+        ));
+    }
+
+    // Map the posterior family to the wire family.
+    let family = match &rewards.arms[0].1 {
+        RewardPosterior::Conversion(_) | RewardPosterior::Funnel(_) => PF::Beta,
+        RewardPosterior::Numeric(_) | RewardPosterior::Ratio(_) => PF::Normal,
+    };
+    let goal = match rewards.goal {
+        BanditGoal::Increase => PG::Increase,
+        BanditGoal::Decrease => PG::Decrease,
+    };
+
+    let variants = rewards
+        .arms
+        .iter()
+        .map(|(vk, post)| variant_posterior_proto(vk, family, post))
+        .collect();
+
+    RealtimeModelDecision::Refresh(PModel {
+        salt: salt.to_string(),
+        unit_context_type: unit_context_type.to_string(),
+        family: family as i32,
+        goal: goal as i32,
+        variants,
+    })
+}
+
 // ── I/O seams (thin traits) ──────────────────────────────────────────────────
 
 /// Result of applying an allocation via the privileged RPC.
@@ -393,6 +538,16 @@ pub trait AllocationApplier: Send + Sync {
         &self,
         experiment_id: Uuid,
         allocation: &RolloutDistribution,
+    ) -> Result<ApplyResult, anyhow::Error>;
+
+    /// Refresh the bound rule's snapshot-resident real-time bandit `model`
+    /// (realtime propagation path). `allocation` still rides along as the static
+    /// fallback for contexts that lack the diversion unit.
+    async fn apply_realtime(
+        &self,
+        experiment_id: Uuid,
+        allocation: &RolloutDistribution,
+        model: stitchd_proto::flags::v1::RealtimeBanditModel,
     ) -> Result<ApplyResult, anyhow::Error>;
 }
 
@@ -446,12 +601,15 @@ impl GrpcAllocationApplier {
     }
 }
 
-#[async_trait::async_trait]
-impl AllocationApplier for GrpcAllocationApplier {
-    async fn apply(
+impl GrpcAllocationApplier {
+    /// Shared dispatch for both the static and realtime paths. `model = None` is
+    /// the static-rewrite path; `Some(model)` refreshes the snapshot-resident
+    /// model on the bound rule.
+    async fn dispatch(
         &self,
         experiment_id: Uuid,
         allocation: &RolloutDistribution,
+        model: Option<stitchd_proto::flags::v1::RealtimeBanditModel>,
     ) -> Result<ApplyResult, anyhow::Error> {
         use stitchd_proto::experiments::v1::{
             ApplyBanditAllocationRequest, BanditAllocationBucket, BanditAllocationOutcome,
@@ -470,6 +628,7 @@ impl AllocationApplier for GrpcAllocationApplier {
             experiment_id: experiment_id.to_string(),
             allocations,
             expected_version: 0,
+            realtime_model: model,
         };
 
         let resp = {
@@ -510,6 +669,26 @@ impl AllocationApplier for GrpcAllocationApplier {
                 version_conflict: status.code() == tonic::Code::Aborted,
             }),
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl AllocationApplier for GrpcAllocationApplier {
+    async fn apply(
+        &self,
+        experiment_id: Uuid,
+        allocation: &RolloutDistribution,
+    ) -> Result<ApplyResult, anyhow::Error> {
+        self.dispatch(experiment_id, allocation, None).await
+    }
+
+    async fn apply_realtime(
+        &self,
+        experiment_id: Uuid,
+        allocation: &RolloutDistribution,
+        model: stitchd_proto::flags::v1::RealtimeBanditModel,
+    ) -> Result<ApplyResult, anyhow::Error> {
+        self.dispatch(experiment_id, allocation, Some(model)).await
     }
 }
 
@@ -822,13 +1001,193 @@ async fn build_metric_rewards(
     }))
 }
 
+/// An even basis-point split across `variant_keys`, used as the static fallback
+/// distribution that rides alongside a refreshed realtime model (for contexts
+/// without the diversion unit). Largest-remainder so the sum is exactly 10000.
+#[must_use]
+fn even_split(variant_keys: &[String]) -> RolloutDistribution {
+    let n = variant_keys.len().max(1) as u32;
+    let base = 10_000 / n;
+    let mut rem = 10_000 - base * n;
+    let allocations = variant_keys
+        .iter()
+        .map(|vk| {
+            let extra = if rem > 0 {
+                rem -= 1;
+                1
+            } else {
+                0
+            };
+            RolloutAllocation {
+                variant_key: vk.clone(),
+                percentage_bp: base + extra,
+            }
+        })
+        .collect();
+    RolloutDistribution { allocations }
+}
+
+/// Run the **realtime** snapshot-resident refresh for one bandit experiment.
+///
+/// Reads the objective metric posteriors, builds the [`RealtimeBanditModel`] wire
+/// params, and dispatches them to the bound rule via `apply_realtime` so the next
+/// snapshot build + SDK poll delivers the new posteriors. Records exactly one
+/// `bandit_allocation_runs` row (action `reallocate`, or `skip` on a recoverable
+/// condition). Only a real ClickHouse / PG error propagates.
+async fn run_realtime_refresh(
+    reader: &dyn CellReader,
+    applier: &dyn AllocationApplier,
+    recorder: &dyn RunRecorder,
+    exp: &RunningExperiment,
+    metrics: &HashMap<Uuid, MetricDefinition>,
+    iteration_end: DateTime<Utc>,
+) -> Result<BanditRunOutcome, anyhow::Error> {
+    let config = exp
+        .bandit_config
+        .as_ref()
+        .expect("eligible realtime bandit has config");
+
+    // Resolve + read the objective metric posteriors (single scalar objective).
+    let mut metric_rewards: Vec<MetricRewards> = Vec::new();
+    for mid in objective_metric_ids(&config.objective) {
+        let Some(def) = metrics.get(&mid) else {
+            continue;
+        };
+        if let Some(mr) = build_metric_rewards(reader, exp, def, metrics, iteration_end).await? {
+            metric_rewards.push(mr);
+        }
+    }
+
+    // The diversion unit + salt: the first configured unit context type, and the
+    // experiment id as a stable per-experiment salt.
+    let unit_context_type = exp
+        .unit_context_types
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "user".to_string());
+    let salt = exp.experiment_id.to_string();
+
+    match decide_realtime_model(config, &metric_rewards, &salt, &unit_context_type) {
+        RealtimeModelDecision::Skip(reason) => {
+            recorder
+                .record(
+                    exp.experiment_id,
+                    exp.iteration_id,
+                    "skip",
+                    None,
+                    None,
+                    "skipped",
+                    Some(reason.clone()),
+                )
+                .await?;
+            Ok(BanditRunOutcome::Skipped { reason })
+        }
+        RealtimeModelDecision::Refresh(model) => {
+            // Static fallback distribution rides along for contexts missing the
+            // diversion unit (an even split keeps every arm represented).
+            let dist = even_split(&exp.variant_keys);
+            let detail_json = serde_json::json!({
+                "realtime_model": {
+                    "family": model.family,
+                    "goal": model.goal,
+                    "unit_context_type": model.unit_context_type,
+                    "variants": model.variants.iter().map(|v| v.variant_key.clone()).collect::<Vec<_>>(),
+                },
+            });
+            match applier
+                .apply_realtime(exp.experiment_id, &dist, model)
+                .await
+            {
+                Ok(ApplyResult::Applied {
+                    resolved_target,
+                    new_version,
+                }) => {
+                    recorder
+                        .record(
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            "reallocate",
+                            None,
+                            Some(detail_json),
+                            "applied",
+                            Some(format!(
+                                "realtime model refreshed on {resolved_target} (version {new_version})"
+                            )),
+                        )
+                        .await?;
+                    Ok(BanditRunOutcome::Applied {
+                        allocation: dist,
+                        resolved_target,
+                        new_version,
+                    })
+                }
+                Ok(ApplyResult::Skipped { detail }) => {
+                    recorder
+                        .record(
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            "skip",
+                            None,
+                            Some(detail_json),
+                            "skipped",
+                            Some(detail.clone()),
+                        )
+                        .await?;
+                    Ok(BanditRunOutcome::Skipped { reason: detail })
+                }
+                Ok(ApplyResult::Failed {
+                    detail,
+                    version_conflict,
+                }) => {
+                    recorder
+                        .record(
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            "reallocate",
+                            None,
+                            Some(detail_json),
+                            "failed",
+                            Some(detail.clone()),
+                        )
+                        .await?;
+                    Ok(BanditRunOutcome::Failed {
+                        allocation: dist,
+                        detail,
+                        version_conflict,
+                    })
+                }
+                Err(e) => {
+                    let detail = format!("apply_realtime RPC error: {e}");
+                    recorder
+                        .record(
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            "reallocate",
+                            None,
+                            Some(detail_json),
+                            "failed",
+                            Some(detail.clone()),
+                        )
+                        .await?;
+                    Ok(BanditRunOutcome::Failed {
+                        allocation: dist,
+                        detail,
+                        version_conflict: false,
+                    })
+                }
+            }
+        }
+    }
+}
+
 /// Run the bandit static-reallocation pass for one experiment.
 ///
 /// No-ops (returns [`BanditRunOutcome::NotApplicable`], no row written) for any
-/// experiment that is not an eligible static-propagation bandit. Otherwise reads
-/// sufficient stats, computes + writes weights, and records exactly one history
-/// row. Skips (records a `skip` row) on any recoverable condition; only a real
-/// ClickHouse read error or PG insert error propagates as `Err`.
+/// experiment that is not an eligible bandit. A static-propagation bandit reads
+/// sufficient stats, computes + writes weights; a realtime-propagation bandit
+/// refreshes the snapshot-resident model params instead. Records exactly one
+/// history row. Skips (records a `skip` row) on any recoverable condition; only
+/// a real ClickHouse read error or PG insert error propagates as `Err`.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_bandit_reallocation(
     reader: &dyn CellReader,
@@ -839,6 +1198,12 @@ pub async fn run_bandit_reallocation(
     iteration_end: DateTime<Utc>,
     tick: DateTime<Utc>,
 ) -> Result<BanditRunOutcome, anyhow::Error> {
+    // Realtime propagation path: refresh the snapshot-resident model params
+    // rather than rewriting a static %. Mutually exclusive with the static path.
+    if is_eligible_realtime(exp) {
+        return run_realtime_refresh(reader, applier, recorder, exp, metrics, iteration_end).await;
+    }
+
     if !is_eligible(exp) {
         return Ok(BanditRunOutcome::NotApplicable);
     }
@@ -1359,6 +1724,19 @@ mod tests {
     struct FakeApplier {
         result: ApplyResult,
         calls: Mutex<u32>,
+        realtime_calls: Mutex<u32>,
+        last_model: Mutex<Option<stitchd_proto::flags::v1::RealtimeBanditModel>>,
+    }
+
+    impl FakeApplier {
+        fn new(result: ApplyResult) -> Self {
+            Self {
+                result,
+                calls: Mutex::new(0),
+                realtime_calls: Mutex::new(0),
+                last_model: Mutex::new(None),
+            }
+        }
     }
 
     #[async_trait::async_trait]
@@ -1369,6 +1747,17 @@ mod tests {
             _allocation: &RolloutDistribution,
         ) -> Result<ApplyResult, anyhow::Error> {
             *self.calls.lock().unwrap() += 1;
+            Ok(self.result.clone())
+        }
+
+        async fn apply_realtime(
+            &self,
+            _experiment_id: Uuid,
+            _allocation: &RolloutDistribution,
+            model: stitchd_proto::flags::v1::RealtimeBanditModel,
+        ) -> Result<ApplyResult, anyhow::Error> {
+            *self.realtime_calls.lock().unwrap() += 1;
+            *self.last_model.lock().unwrap() = Some(model);
             Ok(self.result.clone())
         }
     }
@@ -1494,13 +1883,10 @@ mod tests {
             counts: vec![],
             successes: HashMap::new(),
         };
-        let applier = FakeApplier {
-            result: ApplyResult::Applied {
-                resolved_target: "x".into(),
-                new_version: 1,
-            },
-            calls: Mutex::new(0),
-        };
+        let applier = FakeApplier::new(ApplyResult::Applied {
+            resolved_target: "x".into(),
+            new_version: 1,
+        });
         let recorder = FakeRecorder::default();
         let exp = running_bandit(None, ExperimentMode::Fixed);
         let out = run_bandit_reallocation(
@@ -1538,13 +1924,10 @@ mod tests {
             counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
             successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
         };
-        let applier = FakeApplier {
-            result: ApplyResult::Applied {
-                resolved_target: "default_rule".into(),
-                new_version: 9,
-            },
-            calls: Mutex::new(0),
-        };
+        let applier = FakeApplier::new(ApplyResult::Applied {
+            resolved_target: "default_rule".into(),
+            new_version: 9,
+        });
         let recorder = FakeRecorder::default();
         let metrics = HashMap::from([(metric_id, count_metric(metric_id, env))]);
 
@@ -1595,13 +1978,10 @@ mod tests {
             counts: vec![("control".into(), 1000), ("treatment".into(), 5)],
             successes: HashMap::from([("control".into(), 100), ("treatment".into(), 1)]),
         };
-        let applier = FakeApplier {
-            result: ApplyResult::Applied {
-                resolved_target: "x".into(),
-                new_version: 1,
-            },
-            calls: Mutex::new(0),
-        };
+        let applier = FakeApplier::new(ApplyResult::Applied {
+            resolved_target: "x".into(),
+            new_version: 1,
+        });
         let recorder = FakeRecorder::default();
         let metrics = HashMap::from([(metric_id, count_metric(metric_id, env))]);
 
@@ -1638,13 +2018,10 @@ mod tests {
             counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
             successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
         };
-        let applier = FakeApplier {
-            result: ApplyResult::Failed {
-                detail: "version conflict".into(),
-                version_conflict: true,
-            },
-            calls: Mutex::new(0),
-        };
+        let applier = FakeApplier::new(ApplyResult::Failed {
+            detail: "version conflict".into(),
+            version_conflict: true,
+        });
         let recorder = FakeRecorder::default();
         let metrics = HashMap::from([(metric_id, count_metric(metric_id, env))]);
 
@@ -1670,5 +2047,214 @@ mod tests {
         assert_eq!(rows[0].action, "reallocate");
         assert_eq!(rows[0].outcome, "failed");
         assert_eq!(rows[0].detail.as_deref(), Some("version conflict"));
+    }
+
+    // ── bandit_20260608 Phase 5: realtime propagation path ──────────────────
+
+    fn realtime_config(metric_id: Uuid) -> BanditConfig {
+        let mut cfg = thompson_config(500);
+        cfg.propagation_mode = PropagationMode::Realtime;
+        cfg.objective = RewardObjective::Scalar { metric_id };
+        cfg
+    }
+
+    #[test]
+    fn eligible_realtime_only_for_realtime_bandit() {
+        let rt = realtime_config(Uuid::new_v4());
+        assert!(is_eligible_realtime(&running_bandit(
+            Some(rt.clone()),
+            ExperimentMode::Bandit
+        )));
+        // Static propagation → not the realtime path.
+        let mut static_cfg = rt.clone();
+        static_cfg.propagation_mode = PropagationMode::Static;
+        assert!(!is_eligible_realtime(&running_bandit(
+            Some(static_cfg),
+            ExperimentMode::Bandit
+        )));
+        // Fixed mode → ineligible.
+        assert!(!is_eligible_realtime(&running_bandit(
+            Some(rt),
+            ExperimentMode::Fixed
+        )));
+        // No config → ineligible.
+        assert!(!is_eligible_realtime(&running_bandit(
+            None,
+            ExperimentMode::Bandit
+        )));
+    }
+
+    #[test]
+    fn decide_realtime_model_builds_beta_posteriors() {
+        let cfg = realtime_config(Uuid::new_v4());
+        let mr = metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 1000, 300)],
+        );
+        match decide_realtime_model(&cfg, &[mr], "salt", "user") {
+            RealtimeModelDecision::Refresh(model) => {
+                assert_eq!(model.salt, "salt");
+                assert_eq!(model.unit_context_type, "user");
+                assert_eq!(
+                    model.family,
+                    stitchd_proto::flags::v1::RewardFamily::Beta as i32
+                );
+                assert_eq!(model.variants.len(), 2);
+                // treatment has the higher Beta mean → larger alpha/(alpha+beta).
+                let by = |k: &str| {
+                    model
+                        .variants
+                        .iter()
+                        .find(|v| v.variant_key == k)
+                        .unwrap()
+                        .clone()
+                };
+                let c = by("control");
+                let t = by("treatment");
+                assert!(
+                    t.alpha / (t.alpha + t.beta) > c.alpha / (c.alpha + c.beta),
+                    "treatment posterior mean should exceed control"
+                );
+            }
+            other => panic!("expected Refresh, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decide_realtime_model_skips_on_insufficient_data() {
+        let cfg = realtime_config(Uuid::new_v4());
+        let mr = metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 5, 1)],
+        );
+        assert!(matches!(
+            decide_realtime_model(&cfg, &[mr], "s", "user"),
+            RealtimeModelDecision::Skip(_)
+        ));
+    }
+
+    #[test]
+    fn decide_realtime_model_skips_multi_objective() {
+        let mut cfg = realtime_config(Uuid::new_v4());
+        cfg.objective = RewardObjective::Scalarized { weights: vec![] };
+        let mr = metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 1000, 300)],
+        );
+        assert!(matches!(
+            decide_realtime_model(&cfg, &[mr], "s", "user"),
+            RealtimeModelDecision::Skip(_)
+        ));
+    }
+
+    /// The realtime path dispatches a MODEL (not a static %), and records a
+    /// `reallocate` row.
+    #[tokio::test]
+    async fn realtime_mode_refreshes_model_not_static_dist() {
+        let metric_id = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let cfg = realtime_config(metric_id);
+        let mut exp = running_bandit(Some(cfg), ExperimentMode::Bandit);
+        exp.env_id = env;
+        exp.metric_ids = vec![metric_id];
+
+        let reader = FakeReader {
+            counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
+            successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
+        };
+        let applier = FakeApplier::new(ApplyResult::Applied {
+            resolved_target: "rule-1".into(),
+            new_version: 4,
+        });
+        let recorder = FakeRecorder::default();
+        let metrics = HashMap::from([(metric_id, count_metric(metric_id, env))]);
+
+        let out = run_bandit_reallocation(
+            &reader,
+            &applier,
+            &recorder,
+            &exp,
+            &metrics,
+            Utc::now(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(out, BanditRunOutcome::Applied { .. }));
+        // The realtime path was used, NOT the static apply.
+        assert_eq!(*applier.realtime_calls.lock().unwrap(), 1);
+        assert_eq!(
+            *applier.calls.lock().unwrap(),
+            0,
+            "static apply must not run"
+        );
+        let model = applier
+            .last_model
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("model dispatched");
+        assert_eq!(model.variants.len(), 2);
+        assert_eq!(model.unit_context_type, "user");
+        let rows = recorder.rows.lock().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].action, "reallocate");
+        assert_eq!(rows[0].outcome, "applied");
+    }
+
+    /// REGRESSION: a static-mode bandit still uses the static apply path (NOT
+    /// the realtime model dispatch), unchanged from Phase 4.
+    #[tokio::test]
+    async fn static_mode_still_uses_static_apply() {
+        let metric_id = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let mut cfg = thompson_config(500); // Static propagation
+        cfg.objective = RewardObjective::Scalar { metric_id };
+        let mut exp = running_bandit(Some(cfg), ExperimentMode::Bandit);
+        exp.env_id = env;
+        exp.metric_ids = vec![metric_id];
+
+        let reader = FakeReader {
+            counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
+            successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
+        };
+        let applier = FakeApplier::new(ApplyResult::Applied {
+            resolved_target: "default_rule".into(),
+            new_version: 7,
+        });
+        let recorder = FakeRecorder::default();
+        let metrics = HashMap::from([(metric_id, count_metric(metric_id, env))]);
+
+        let out = run_bandit_reallocation(
+            &reader,
+            &applier,
+            &recorder,
+            &exp,
+            &metrics,
+            Utc::now(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(out, BanditRunOutcome::Applied { .. }));
+        assert_eq!(*applier.calls.lock().unwrap(), 1, "static apply path used");
+        assert_eq!(
+            *applier.realtime_calls.lock().unwrap(),
+            0,
+            "realtime path must not run for a static bandit"
+        );
+    }
+
+    #[test]
+    fn even_split_sums_to_10000() {
+        for n in 1..=7usize {
+            let keys: Vec<String> = (0..n).map(|i| format!("v{i}")).collect();
+            let dist = even_split(&keys);
+            let sum: u32 = dist.allocations.iter().map(|a| a.percentage_bp).sum();
+            assert_eq!(sum, 10_000, "n={n}");
+            assert_eq!(dist.allocations.len(), n);
+        }
     }
 }

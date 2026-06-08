@@ -2339,6 +2339,11 @@ impl FlagService for FlagServiceImpl {
         let audit_detail;
         let updated = match target {
             Target::DefaultRule(true) => {
+                if req.realtime_model.is_some() {
+                    return Err(Status::invalid_argument(
+                        "realtime_model requires a flag_rule_id target; the default-rule distribution has no rule output to carry a model",
+                    ));
+                }
                 record.default_rule_distribution = Some(dist);
                 audit_detail = serde_json::json!({ "target": "default_rule" });
                 self.flag_repo
@@ -2377,10 +2382,16 @@ impl FlagService for FlagServiceImpl {
 
                 // Rewrite the matched rule's percentage weights, preserving its
                 // hash targets + exclusion gate. The bound rule MUST already be a
-                // percentage rule for a bandit to reallocate it.
+                // percentage rule for a bandit to reallocate it. When a real-time
+                // model is supplied (realtime propagation path), ALSO refresh the
+                // rule's `realtime_bandit` model so the next snapshot build + SDK
+                // poll delivers the new posteriors; the static weights stay as the
+                // fallback for contexts missing the diversion unit.
                 match &mut target_rule.rule.output {
                     stitchd_core::rule_engine::types::RuleOutput::Percentage {
-                        weights, ..
+                        weights,
+                        realtime_bandit,
+                        ..
                     } => {
                         *weights = dist
                             .allocations
@@ -2394,6 +2405,10 @@ impl FlagService for FlagServiceImpl {
                                 (vid, a.percentage_bp)
                             })
                             .collect();
+                        if let Some(model) = req.realtime_model.as_ref() {
+                            *realtime_bandit =
+                                Some(mapping::proto_realtime_bandit_to_domain(model));
+                        }
                     }
                     stitchd_core::rule_engine::types::RuleOutput::Variant(_) => {
                         return Err(Status::failed_precondition(format!(
@@ -4968,6 +4983,7 @@ mod tests {
                 bandit_alloc_bucket("off", 3000),
             ],
             target: Some(Target::DefaultRule(true)),
+            realtime_model: None,
         });
 
         svc.bandit_update_allocation(req)
@@ -5049,6 +5065,7 @@ mod tests {
                 bandit_alloc_bucket("off", 2000),
             ],
             target: Some(Target::FlagRuleId(rule_id.to_string())),
+            realtime_model: None,
         });
 
         svc.bandit_update_allocation(req)
@@ -5066,6 +5083,173 @@ mod tests {
             }
             other => panic!("expected Percentage output, got {other:?}"),
         }
+    }
+
+    /// bandit_20260608: a `BanditUpdateAllocation` carrying a `realtime_model`
+    /// refreshes the custom rule's snapshot-resident `realtime_bandit` model (so
+    /// the next snapshot delivers it), alongside the static fallback weights.
+    #[tokio::test]
+    async fn bandit_update_allocation_writes_realtime_model() {
+        use stitchd_proto::flags::v1::{
+            BanditGoalDirection, BanditUpdateAllocationRequest, RealtimeBanditModel,
+            RewardFamily as ProtoRewardFamily, VariantPosterior as ProtoVariantPosterior,
+            bandit_update_allocation_request::Target,
+        };
+
+        let (variants, on_id, off_id) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        let project_id = flag.project_id;
+        let flag_id = flag.id;
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+        let rule_id = RuleId::new();
+
+        let pct_rule = stitchd_core::flag::FlagRule {
+            flag_id,
+            rule_index: 0,
+            rule: Rule {
+                id: rule_id,
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![],
+                    weights: vec![(on_id, 5000), (off_id, 5000)],
+                    exclusion_gate: None,
+                    realtime_bandit: None,
+                },
+            },
+        };
+        let flag_repo = Arc::new(StubFlagRepo {
+            flags: Mutex::new(vec![flag]),
+            rules: Mutex::new(std::collections::HashMap::from([(flag_id, vec![pct_rule])])),
+        });
+        let svc = FlagServiceImpl::new(
+            flag_repo.clone(),
+            StubVariantRepoWithData::with_variants(variants),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(OwnedLockExperimentRepo {
+            owner: Some(exp_id),
+        }));
+
+        let model = RealtimeBanditModel {
+            salt: exp_id.to_string(),
+            unit_context_type: "user".to_string(),
+            family: ProtoRewardFamily::Beta as i32,
+            goal: BanditGoalDirection::Increase as i32,
+            variants: vec![
+                ProtoVariantPosterior {
+                    variant_key: "on".to_string(),
+                    alpha: 31.0,
+                    beta: 71.0,
+                    mu: 0.0,
+                    sigma2: 0.0,
+                },
+                ProtoVariantPosterior {
+                    variant_key: "off".to_string(),
+                    alpha: 11.0,
+                    beta: 91.0,
+                    mu: 0.0,
+                    sigma2: 0.0,
+                },
+            ],
+        };
+
+        let req = Request::new(BanditUpdateAllocationRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            environment_id: EnvironmentId::new().to_string(),
+            experiment_id: exp_id.to_string(),
+            version: 1,
+            allocations: vec![
+                bandit_alloc_bucket("on", 5000),
+                bandit_alloc_bucket("off", 5000),
+            ],
+            target: Some(Target::FlagRuleId(rule_id.to_string())),
+            realtime_model: Some(model),
+        });
+
+        svc.bandit_update_allocation(req)
+            .await
+            .expect("realtime model refresh must succeed");
+
+        let stored = flag_repo.find_rules(flag_id).await.unwrap();
+        match &stored[0].rule.output {
+            RuleOutput::Percentage {
+                realtime_bandit, ..
+            } => {
+                let m = realtime_bandit
+                    .as_ref()
+                    .expect("realtime_bandit model must be written onto the rule");
+                assert_eq!(m.unit_context_type, "user");
+                assert_eq!(m.variants.len(), 2);
+                assert_eq!(
+                    m.family,
+                    stitchd_core::rule_engine::types::RewardFamily::Beta
+                );
+            }
+            other => panic!("expected Percentage output, got {other:?}"),
+        }
+    }
+
+    /// bandit_20260608: a `realtime_model` with a default-rule target is
+    /// rejected (the default-rule distribution has no rule output to carry one).
+    #[tokio::test]
+    async fn bandit_update_allocation_rejects_realtime_model_on_default_rule() {
+        use stitchd_proto::flags::v1::{
+            BanditGoalDirection, BanditUpdateAllocationRequest, RealtimeBanditModel,
+            RewardFamily as ProtoRewardFamily, bandit_update_allocation_request::Target,
+        };
+
+        let (variants, _on_id, _off_id) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        let project_id = flag.project_id;
+        let flag_id = flag.id;
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+
+        let flag_repo = Arc::new(StubFlagRepo {
+            flags: Mutex::new(vec![flag]),
+            rules: Mutex::new(std::collections::HashMap::from([(flag_id, vec![])])),
+        });
+        let svc = FlagServiceImpl::new(
+            flag_repo.clone(),
+            StubVariantRepoWithData::with_variants(variants),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(OwnedLockExperimentRepo {
+            owner: Some(exp_id),
+        }));
+
+        let req = Request::new(BanditUpdateAllocationRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            environment_id: EnvironmentId::new().to_string(),
+            experiment_id: exp_id.to_string(),
+            version: 1,
+            allocations: vec![
+                bandit_alloc_bucket("on", 5000),
+                bandit_alloc_bucket("off", 5000),
+            ],
+            target: Some(Target::DefaultRule(true)),
+            realtime_model: Some(RealtimeBanditModel {
+                salt: exp_id.to_string(),
+                unit_context_type: "user".to_string(),
+                family: ProtoRewardFamily::Beta as i32,
+                goal: BanditGoalDirection::Increase as i32,
+                variants: vec![],
+            }),
+        });
+
+        let err = svc
+            .bandit_update_allocation(req)
+            .await
+            .expect_err("realtime model on default rule must be rejected");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
     /// (c) A `BanditUpdateAllocation` whose experiment_id is NOT the lock owner
@@ -5102,6 +5286,7 @@ mod tests {
             version: 1,
             allocations: vec![bandit_alloc_bucket("on", 10000)],
             target: Some(Target::DefaultRule(true)),
+            realtime_model: None,
         });
 
         let err = svc
@@ -5141,6 +5326,7 @@ mod tests {
             version: 1,
             allocations: vec![bandit_alloc_bucket("on", 10000)],
             target: Some(Target::DefaultRule(true)),
+            realtime_model: None,
         });
 
         let err = svc
@@ -5183,6 +5369,7 @@ mod tests {
             version: 1, // stored is 5
             allocations: vec![bandit_alloc_bucket("on", 10000)],
             target: Some(Target::DefaultRule(true)),
+            realtime_model: None,
         });
 
         let err = svc

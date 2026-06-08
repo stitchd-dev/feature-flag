@@ -79,6 +79,7 @@ impl FlagClient {
     /// Returns the post-write flag version on success, or the gRPC `Status`
     /// (e.g. `ABORTED` on version conflict, `FAILED_PRECONDITION` when the
     /// experiment is not the lock owner).
+    #[allow(clippy::too_many_arguments)]
     pub async fn bandit_update_allocation(
         &self,
         environment_id: &str,
@@ -87,6 +88,7 @@ impl FlagClient {
         flag_rule_id: Option<&str>,
         allocations: Vec<stitchd_proto::flags::v1::AllocationBucket>,
         expected_version: u64,
+        realtime_model: Option<stitchd_proto::flags::v1::RealtimeBanditModel>,
     ) -> Result<u64, tonic::Status> {
         use stitchd_proto::flags::v1::bandit_update_allocation_request::Target;
         let target = match flag_rule_id {
@@ -101,6 +103,7 @@ impl FlagClient {
             version: expected_version,
             allocations,
             target: Some(target),
+            realtime_model,
         });
         let mut client = self.inner.lock().await;
         client

@@ -222,6 +222,14 @@ message BanditUpdateAllocationRequest {
     // Rewrite the flag's default-rule distribution.
     bool   default_rule = 8;
   }
+  // [ADDITIVE — bandit_20260608] Optional snapshot-resident real-time bandit
+  // model. When present, the targeted custom rule's `realtime_bandit` model is
+  // refreshed (so the next snapshot build + SDK poll delivers the new posteriors
+  // and eval samples per-context) instead of rewriting the static weights. Only
+  // valid with `flag_rule_id` (a default-rule distribution has no rule output to
+  // carry a model). The `allocations` still ride along as the fallback static
+  // split for contexts without the diversion unit.
+  optional RealtimeBanditModel realtime_model = 9;
 }
 
 message BanditUpdateAllocationResponse {

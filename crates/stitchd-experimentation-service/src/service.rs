@@ -1886,6 +1886,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
                 flag_rule_id.as_deref(),
                 allocations,
                 req.expected_version,
+                req.realtime_model.clone(),
             )
             .await
         {
@@ -6352,6 +6353,7 @@ mod tests {
                 )
                 .collect(),
             expected_version: 1,
+            realtime_model: None,
         })
     }
 
@@ -6422,6 +6424,7 @@ mod tests {
             experiment_id: "not-a-uuid".to_string(),
             allocations: vec![],
             expected_version: 0,
+            realtime_model: None,
         });
         let err = svc.apply_bandit_allocation(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
