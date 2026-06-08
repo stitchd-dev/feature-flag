@@ -1702,6 +1702,10 @@ fn proto_allocation_to_core(
     // SDK already fetches, so it flows to the shared core evaluator with no
     // extra fetch — preview and SDK resolve identically.
     let realtime_bandit = alloc.realtime_bandit.as_ref().map(|m| {
+        use stitchd_core::experimentation::bandit::contextual::{
+            ContextualModel, FeatureEncoding, FeatureSpec, VariantCoefficients,
+        };
+        use stitchd_proto::flags::v1::feature_encoding::Kind as ProtoEncodingKind;
         use stitchd_proto::flags::v1::{
             BanditGoalDirection as ProtoGoal, RewardFamily as ProtoFamily,
         };
@@ -1713,6 +1717,37 @@ fn proto_allocation_to_core(
             Ok(ProtoGoal::Decrease) => BanditGoal::Decrease,
             _ => BanditGoal::Increase,
         };
+        // Phase 6: a contextual model rides the same snapshot. When present the
+        // shared core evaluator draws per-context from the linear coefficients.
+        let contextual = m.contextual.as_ref().map(|c| ContextualModel {
+            features: c
+                .features
+                .iter()
+                .map(|f| FeatureSpec {
+                    context_type: f.context_type.clone(),
+                    parameter: f.parameter.clone(),
+                    encoding: match f.encoding.as_ref().and_then(|e| e.kind.as_ref()) {
+                        Some(ProtoEncodingKind::OneHot(oh)) => FeatureEncoding::OneHot {
+                            categories: oh.categories.clone(),
+                        },
+                        _ => FeatureEncoding::Numeric,
+                    },
+                })
+                .collect(),
+            variants: c
+                .variants
+                .iter()
+                .map(|v| VariantCoefficients {
+                    variant_key: v.variant_key.clone(),
+                    coeffs: v.coeffs.clone(),
+                    a_inv: if v.a_inv.is_empty() {
+                        None
+                    } else {
+                        Some(v.a_inv.clone())
+                    },
+                })
+                .collect(),
+        });
         RealtimeBanditModel {
             salt: m.salt.clone(),
             unit_context_type: m.unit_context_type.clone(),
@@ -1729,6 +1764,7 @@ fn proto_allocation_to_core(
                     sigma2: v.sigma2,
                 })
                 .collect(),
+            contextual,
         }
     });
 
@@ -1736,7 +1772,7 @@ fn proto_allocation_to_core(
         targets,
         weights,
         exclusion_gate,
-        realtime_bandit,
+        realtime_bandit: realtime_bandit.map(Box::new),
     })
 }
 

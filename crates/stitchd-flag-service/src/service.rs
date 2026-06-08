@@ -2407,7 +2407,7 @@ impl FlagService for FlagServiceImpl {
                             .collect();
                         if let Some(model) = req.realtime_model.as_ref() {
                             *realtime_bandit =
-                                Some(mapping::proto_realtime_bandit_to_domain(model));
+                                Some(Box::new(mapping::proto_realtime_bandit_to_domain(model)));
                         }
                     }
                     stitchd_core::rule_engine::types::RuleOutput::Variant(_) => {
@@ -5155,6 +5155,7 @@ mod tests {
                     sigma2: 0.0,
                 },
             ],
+            contextual: None,
         };
 
         let req = Request::new(BanditUpdateAllocationRequest {
@@ -5242,6 +5243,7 @@ mod tests {
                 family: ProtoRewardFamily::Beta as i32,
                 goal: BanditGoalDirection::Increase as i32,
                 variants: vec![],
+                contextual: None,
             }),
         });
 

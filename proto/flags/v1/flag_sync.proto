@@ -94,8 +94,66 @@ message RealtimeBanditModel {
   // Goal direction: whether a higher (INCREASE) or lower (DECREASE) reward is
   // better. The evaluator picks the goal-directed argmax of the sampled draws.
   BanditGoalDirection goal = 4;
-  // Per-variant posterior parameters. One entry per variant the rule can assign.
+  // Per-variant posterior parameters. One entry per variant the rule can
+  // assign. Used by the NON-contextual realtime path; ignored when `contextual`
+  // is set.
   repeated VariantPosterior variants = 5;
+  // [ADDITIVE — bandit_20260608 Phase 6] Optional contextual reward model. When
+  // set, the variant is drawn per-context from the linear model (a
+  // feature-conditioned Thompson draw) instead of the non-contextual `variants`
+  // posteriors. A model is EITHER non-contextual (`variants`) OR contextual
+  // (`contextual`). Absent on every non-contextual realtime rule.
+  optional ContextualModel contextual = 6;
+}
+
+// [ADDITIVE — bandit_20260608 Phase 6] A snapshot-resident contextual reward
+// model: a shared feature set plus one linear coefficient vector per variant.
+message ContextualModel {
+  // The features every variant's coefficients are defined over, in order. The
+  // design vector is [1.0 (intercept), <feat0 slots>, <feat1 slots>, ...].
+  repeated FeatureSpec features = 1;
+  // Per-variant coefficient vectors.
+  repeated VariantCoefficients variants = 2;
+}
+
+// One context feature the reward model conditions on.
+message FeatureSpec {
+  // The context type whose parameter is read (e.g. "user").
+  string context_type = 1;
+  // The parameter name within that context (e.g. "plan").
+  string parameter = 2;
+  // How the parameter value is encoded into the design vector.
+  FeatureEncoding encoding = 3;
+}
+
+// How a single context feature is turned into design-vector slot(s).
+message FeatureEncoding {
+  oneof kind {
+    // Numeric passthrough — one slot (missing / unparsable → 0.0).
+    NumericEncoding numeric = 1;
+    // One-hot — one slot per category (unknown / missing → all 0.0 baseline).
+    OneHotEncoding one_hot = 2;
+  }
+}
+
+// Numeric passthrough encoding (no parameters).
+message NumericEncoding {}
+
+// One-hot categorical encoding.
+message OneHotEncoding {
+  // Categories to encode, in declaration order — one slot each.
+  repeated string categories = 1;
+}
+
+// The fitted linear reward coefficients for one variant.
+message VariantCoefficients {
+  // The variant key these coefficients predict reward for.
+  string variant_key = 1;
+  // Intercept-first coefficient vector (len == 1 + sum of feature widths).
+  repeated double coeffs = 2;
+  // Optional flattened d*d row-major (X^T X + lambda I)^-1 for the LinUCB
+  // exploration term (d == coeffs length). Empty → fixed exploration variance.
+  repeated double a_inv = 3;
 }
 
 // Reward-metric family for a real-time bandit posterior.

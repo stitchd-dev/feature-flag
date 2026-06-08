@@ -500,6 +500,7 @@ pub fn decide_realtime_model(
         family: family as i32,
         goal: goal as i32,
         variants,
+        contextual: None,
     })
 }
 

@@ -12,6 +12,7 @@
 //! floor, and the multi-objective [`reward`] combiner.
 
 pub mod allocation;
+pub mod contextual;
 pub mod epsilon;
 pub mod realtime;
 pub mod reward;
@@ -20,6 +21,10 @@ pub mod types;
 pub mod ucb;
 
 pub use allocation::{NormalizeError, normalize_to_distribution};
+pub use contextual::{
+    ContextualModel, FeatureEncoding, FeatureResolver, FeatureSpec, VariantCoefficients,
+    encode_features, fit_design_inverse, fit_ridge, predict, sample_contextual_variant,
+};
 pub use epsilon::epsilon_greedy_weights;
 pub use realtime::{SampledDraw, sample_realtime_variant};
 pub use reward::{

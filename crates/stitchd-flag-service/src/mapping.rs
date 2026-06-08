@@ -10,13 +10,15 @@ use stitchd_core::{
 };
 use stitchd_proto::flags::v1::{
     AllocationBucket, BanditGoalDirection as ProtoBanditGoalDirection, ContextKeySelector,
-    ContextParameterSelector, ExclusionGate as ProtoExclusionGate, FeatureFlag,
-    FlagRule as ProtoFlagRule, FlagValueType as ProtoFlagValueType,
-    HashSelector as ProtoHashSelector, PercentageAllocation,
-    RealtimeBanditModel as ProtoRealtimeBanditModel, RewardFamily as ProtoRewardFamily,
-    Variant as ProtoVariant, VariantPosterior as ProtoVariantPosterior,
-    VariantValue as ProtoVariantValue, hash_selector::Selector as ProtoSelectorInner,
-    variant_value::Value as ProtoVariantValueInner,
+    ContextParameterSelector, ContextualModel as ProtoContextualModel,
+    ExclusionGate as ProtoExclusionGate, FeatureEncoding as ProtoFeatureEncoding, FeatureFlag,
+    FeatureSpec as ProtoFeatureSpec, FlagRule as ProtoFlagRule,
+    FlagValueType as ProtoFlagValueType, HashSelector as ProtoHashSelector, NumericEncoding,
+    OneHotEncoding, PercentageAllocation, RealtimeBanditModel as ProtoRealtimeBanditModel,
+    RewardFamily as ProtoRewardFamily, Variant as ProtoVariant,
+    VariantCoefficients as ProtoVariantCoefficients, VariantPosterior as ProtoVariantPosterior,
+    VariantValue as ProtoVariantValue, feature_encoding::Kind as ProtoEncodingKind,
+    hash_selector::Selector as ProtoSelectorInner, variant_value::Value as ProtoVariantValueInner,
 };
 
 /// Convert a proto [`ProtoVariant`] to a domain [`stitchd_core::flag::Variant`].
@@ -119,7 +121,8 @@ pub fn proto_flag_rule_to_domain(
             let realtime_bandit = alloc
                 .realtime_bandit
                 .as_ref()
-                .map(proto_realtime_bandit_to_domain);
+                .map(proto_realtime_bandit_to_domain)
+                .map(Box::new);
             RuleOutput::Percentage {
                 targets,
                 weights,
@@ -375,6 +378,86 @@ pub(crate) fn proto_realtime_bandit_to_domain(
                 sigma2: v.sigma2,
             })
             .collect(),
+        contextual: model.contextual.as_ref().map(proto_contextual_to_domain),
+    }
+}
+
+/// Convert a proto [`ProtoContextualModel`] to the domain
+/// [`stitchd_core::experimentation::bandit::contextual::ContextualModel`].
+#[must_use]
+fn proto_contextual_to_domain(
+    model: &ProtoContextualModel,
+) -> stitchd_core::experimentation::bandit::contextual::ContextualModel {
+    use stitchd_core::experimentation::bandit::contextual::{
+        ContextualModel, FeatureEncoding, FeatureSpec, VariantCoefficients,
+    };
+    ContextualModel {
+        features: model
+            .features
+            .iter()
+            .map(|f| FeatureSpec {
+                context_type: f.context_type.clone(),
+                parameter: f.parameter.clone(),
+                encoding: match f.encoding.as_ref().and_then(|e| e.kind.as_ref()) {
+                    Some(ProtoEncodingKind::OneHot(oh)) => FeatureEncoding::OneHot {
+                        categories: oh.categories.clone(),
+                    },
+                    // Numeric / unspecified / unknown → numeric passthrough.
+                    _ => FeatureEncoding::Numeric,
+                },
+            })
+            .collect(),
+        variants: model
+            .variants
+            .iter()
+            .map(|v| VariantCoefficients {
+                variant_key: v.variant_key.clone(),
+                coeffs: v.coeffs.clone(),
+                // An empty a_inv on the wire → None (fixed exploration).
+                a_inv: if v.a_inv.is_empty() {
+                    None
+                } else {
+                    Some(v.a_inv.clone())
+                },
+            })
+            .collect(),
+    }
+}
+
+/// Convert a domain contextual model to the proto [`ProtoContextualModel`].
+#[must_use]
+fn domain_contextual_to_proto(
+    model: &stitchd_core::experimentation::bandit::contextual::ContextualModel,
+) -> ProtoContextualModel {
+    use stitchd_core::experimentation::bandit::contextual::FeatureEncoding;
+    ProtoContextualModel {
+        features: model
+            .features
+            .iter()
+            .map(|f| ProtoFeatureSpec {
+                context_type: f.context_type.clone(),
+                parameter: f.parameter.clone(),
+                encoding: Some(ProtoFeatureEncoding {
+                    kind: Some(match &f.encoding {
+                        FeatureEncoding::Numeric => ProtoEncodingKind::Numeric(NumericEncoding {}),
+                        FeatureEncoding::OneHot { categories } => {
+                            ProtoEncodingKind::OneHot(OneHotEncoding {
+                                categories: categories.clone(),
+                            })
+                        }
+                    }),
+                }),
+            })
+            .collect(),
+        variants: model
+            .variants
+            .iter()
+            .map(|v| ProtoVariantCoefficients {
+                variant_key: v.variant_key.clone(),
+                coeffs: v.coeffs.clone(),
+                a_inv: v.a_inv.clone().unwrap_or_default(),
+            })
+            .collect(),
     }
 }
 
@@ -410,6 +493,7 @@ fn domain_realtime_bandit_to_proto(
                 sigma2: v.sigma2,
             })
             .collect(),
+        contextual: model.contextual.as_ref().map(domain_contextual_to_proto),
     }
 }
 
@@ -469,7 +553,7 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
                 // bandit_20260608: the real-time bandit model rides the snapshot.
                 realtime_bandit: realtime_bandit
                     .as_ref()
-                    .map(domain_realtime_bandit_to_proto),
+                    .map(|m| domain_realtime_bandit_to_proto(m)),
             }))
         }
     };
@@ -1274,6 +1358,7 @@ mod tests {
                     sigma2: 0.1,
                 },
             ],
+            contextual: None,
         };
 
         let flag_rule = stitchd_core::flag::FlagRule {
@@ -1290,7 +1375,7 @@ mod tests {
                     }],
                     weights: vec![(vid, 5000), (vid2, 5000)],
                     exclusion_gate: None,
-                    realtime_bandit: Some(model.clone()),
+                    realtime_bandit: Some(Box::new(model.clone())),
                 },
             },
         };
@@ -1326,7 +1411,98 @@ mod tests {
         else {
             panic!("expected Percentage output");
         };
-        assert_eq!(realtime_bandit, Some(model));
+        assert_eq!(realtime_bandit, Some(Box::new(model)));
+    }
+
+    #[test]
+    fn percentage_contextual_bandit_round_trips_core_proto_core() {
+        use stitchd_core::experimentation::bandit::contextual::{
+            ContextualModel, FeatureEncoding, FeatureSpec, VariantCoefficients,
+        };
+        use stitchd_core::rule_engine::types::{BanditGoal, RealtimeBanditModel, RewardFamily};
+
+        let vid = make_variant_id();
+        let vid2 = make_variant_id();
+        let mut key_map = HashMap::new();
+        key_map.insert(vid, "control".to_string());
+        key_map.insert(vid2, "treatment".to_string());
+        let variant_map: HashMap<String, VariantId> = [
+            ("control".to_string(), vid),
+            ("treatment".to_string(), vid2),
+        ]
+        .into_iter()
+        .collect();
+
+        let model = RealtimeBanditModel {
+            salt: "exp-ctx".to_string(),
+            unit_context_type: "user".to_string(),
+            family: RewardFamily::Normal,
+            goal: BanditGoal::Increase,
+            variants: vec![],
+            contextual: Some(ContextualModel {
+                features: vec![
+                    FeatureSpec {
+                        context_type: "user".to_string(),
+                        parameter: "age".to_string(),
+                        encoding: FeatureEncoding::Numeric,
+                    },
+                    FeatureSpec {
+                        context_type: "user".to_string(),
+                        parameter: "plan".to_string(),
+                        encoding: FeatureEncoding::OneHot {
+                            categories: vec!["free".to_string(), "pro".to_string()],
+                        },
+                    },
+                ],
+                variants: vec![
+                    VariantCoefficients {
+                        variant_key: "control".to_string(),
+                        coeffs: vec![0.1, 0.2, 0.3, 0.4],
+                        a_inv: Some(vec![
+                            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0,
+                            0.0, 1.0,
+                        ]),
+                    },
+                    VariantCoefficients {
+                        variant_key: "treatment".to_string(),
+                        coeffs: vec![0.5, 0.6, 0.7, 0.8],
+                        a_inv: None,
+                    },
+                ],
+            }),
+        };
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: FlagId::new(),
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![PercentageTarget {
+                        context_type: "user".to_string(),
+                        field: TargetField::Key,
+                    }],
+                    weights: vec![(vid, 5000), (vid2, 5000)],
+                    exclusion_gate: None,
+                    realtime_bandit: Some(Box::new(model.clone())),
+                },
+            },
+        };
+
+        // core → proto → core: the contextual model survives the round-trip
+        // identically (features, encodings, coeffs, a_inv None/Some).
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        let domain =
+            proto_flag_rule_to_domain(FlagId::new(), 0, &proto, &variant_map).expect("conversion");
+        let RuleOutput::Percentage {
+            realtime_bandit, ..
+        } = domain.rule.output
+        else {
+            panic!("expected Percentage output");
+        };
+        assert_eq!(realtime_bandit, Some(Box::new(model)));
     }
 
     #[test]

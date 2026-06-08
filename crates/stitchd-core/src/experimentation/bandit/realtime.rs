@@ -141,6 +141,7 @@ mod tests {
                     sigma2: 0.0,
                 })
                 .collect(),
+            contextual: None,
         }
     }
 
@@ -160,6 +161,7 @@ mod tests {
                     sigma2: *s2,
                 })
                 .collect(),
+            contextual: None,
         }
     }
 

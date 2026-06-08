@@ -151,8 +151,16 @@ pub struct RealtimeBanditModel {
     pub family: RewardFamily,
     /// The goal direction used to pick the winning sampled variant.
     pub goal: BanditGoal,
-    /// Per-variant posterior parameters; one entry per assignable variant.
+    /// Per-variant posterior parameters; one entry per assignable variant. Used
+    /// by the NON-contextual realtime path. Ignored when `contextual` is `Some`.
     pub variants: Vec<VariantPosterior>,
+    /// Optional contextual reward model. When `Some`, the variant is drawn from
+    /// the per-context linear model (a feature-conditioned Thompson draw) instead
+    /// of the non-contextual `variants` posteriors. A model is EITHER
+    /// non-contextual (`variants`) OR contextual (`contextual`). Absent in legacy
+    /// serialized models and on every non-contextual realtime rule → `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contextual: Option<crate::experimentation::bandit::contextual::ContextualModel>,
 }
 
 // ── RuleOutput ────────────────────────────────────────────────────────────────
@@ -179,8 +187,11 @@ pub enum RuleOutput {
         /// Thompson draw) instead of the static `weights` bucketing. Absent in
         /// legacy serialized rules and on every non-realtime-bandit rule →
         /// `None`, which preserves the static eval path exactly.
+        ///
+        /// Boxed so the (now contextual-capable, large) model does not bloat the
+        /// common non-bandit `Percentage` variant on the hot eval path.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        realtime_bandit: Option<RealtimeBanditModel>,
+        realtime_bandit: Option<Box<RealtimeBanditModel>>,
     },
 }
 
@@ -371,7 +382,7 @@ mod tests {
             targets: vec![],
             weights: vec![(VariantId::new(), 10000)],
             exclusion_gate: None,
-            realtime_bandit: Some(RealtimeBanditModel {
+            realtime_bandit: Some(Box::new(RealtimeBanditModel {
                 salt: "exp-salt".to_string(),
                 unit_context_type: "user".to_string(),
                 family: RewardFamily::Beta,
@@ -392,7 +403,44 @@ mod tests {
                         sigma2: 0.0,
                     },
                 ],
-            }),
+                contextual: None,
+            })),
+        };
+        let json = serde_json::to_string(&output).unwrap();
+        let back: RuleOutput = serde_json::from_str(&json).unwrap();
+        assert_eq!(output, back);
+    }
+
+    #[test]
+    fn realtime_bandit_round_trips_with_contextual_model() {
+        use crate::experimentation::bandit::contextual::{
+            ContextualModel, FeatureEncoding, FeatureSpec, VariantCoefficients,
+        };
+        let output = RuleOutput::Percentage {
+            targets: vec![],
+            weights: vec![(VariantId::new(), 10000)],
+            exclusion_gate: None,
+            realtime_bandit: Some(Box::new(RealtimeBanditModel {
+                salt: "exp-salt".to_string(),
+                unit_context_type: "user".to_string(),
+                family: RewardFamily::Normal,
+                goal: BanditGoal::Increase,
+                variants: vec![],
+                contextual: Some(ContextualModel {
+                    features: vec![FeatureSpec {
+                        context_type: "user".to_string(),
+                        parameter: "plan".to_string(),
+                        encoding: FeatureEncoding::OneHot {
+                            categories: vec!["free".to_string(), "pro".to_string()],
+                        },
+                    }],
+                    variants: vec![VariantCoefficients {
+                        variant_key: "control".to_string(),
+                        coeffs: vec![0.1, 0.2, 0.3],
+                        a_inv: None,
+                    }],
+                }),
+            })),
         };
         let json = serde_json::to_string(&output).unwrap();
         let back: RuleOutput = serde_json::from_str(&json).unwrap();
