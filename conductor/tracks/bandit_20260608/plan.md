@@ -136,15 +136,15 @@ Phase-level wave summary:
       <!-- files: crates/stitchd-experimentation-service/src/*, crates/stitchd-stats-service/src/bandit.rs -->
 - [x] Task: Conductor - User Manual Verification 'Phase 8' [autonomous] (Protocol in workflow.md)
 
-## Phase 9: Multi-Objective Wiring & Constrained Guardrails
+## Phase 9: Multi-Objective Wiring & Constrained Guardrails [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
-- [ ] Task 1: End-to-end scalarization config (objective weights) + constrained guardrail
+- [x] Task 1: End-to-end scalarization config [bbae68b] (objective weights) + constrained guardrail
       down-weighting in the stats-compute reward path (uses Phase 2 combiner); per-objective
       posteriors persisted for surfacing; live-CH integration test.
       <!-- files: crates/stitchd-stats-service/src/bandit.rs, crates/stitchd-stats-service/src/compute.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 9' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 9' [autonomous] (Protocol in workflow.md)
 
 ## Phase 10: Bandit-Aware Interaction Analysis + Order 4+
 <!-- execution: sequential -->
