@@ -135,3 +135,49 @@ From `conductor/patterns.md` (read before starting):
   so `cargo sqlx prepare` produced no new entries. Nothing to commit there.
 - fmt/clippy `-D warnings`/core+db+gateway tests all green (with DATABASE_URL pointed at the
   fresh verify DB for the `#[sqlx::test]` suites).
+
+## Phase 2 — Bandit Core Algorithms (w2_core, stitchd-core, pure math)
+
+- **RNG reuse, no new dep:** the bandit allocators sample posteriors via the
+  *existing* `bayesian.rs` machinery. Promoted `Lcg`, the `Rng` trait,
+  `sample_beta`, `sample_gamma` from private → `pub(crate)`, and added one new
+  `pub(crate) fn sample_standard_normal` (Box-Muller, same cosine branch already
+  inside `sample_gamma`) so Numeric/Ratio posteriors sample from the same seeded
+  stream. `RatioGroupStats::ratio_var()` is already `pub(crate)`; bandit is in the
+  same crate so it consumes it directly. No `rand`/extra dependency added.
+- **`VariantStats` shape:** the real struct is `{ sample_size, conversions, mean,
+  variance, conversion_rate, percentiles }` (NOT the `n/successes/value_sum`
+  shape in the task brief). `RewardPosterior` wraps `VariantStats` for
+  count/funnel/numeric and `RatioGroupStats` (from `stats::sequential`) for ratio.
+- **`GoalDirection { Increase, Decrease }`** lives in `thompson.rs` (first
+  allocator) and is re-exported + reused by epsilon/ucb/reward — single
+  interpretation of goal direction everywhere. Decrease = argmin (Thompson) /
+  negated mean (epsilon/ucb index).
+- **Separation of concerns:** allocators return *raw* `Vec<(String, f64)>`
+  weights; `allocation::normalize_to_distribution` is the ONLY place that turns
+  raw weights → basis points. Largest-remainder (Hamilton) apportionment:
+  reserve `floor·n`, distribute `10000−floor·n` proportionally, hand out leftover
+  bp by largest fractional remainder (ties → input order) → sum is EXACTLY 10000,
+  every arm ≥ floor. Rejects `floor·n > 10000`. A zeroed-weight arm still gets the
+  floor; with floor=0 an arm can legitimately get 0 bp (so the normaliser does NOT
+  call `RolloutDistribution::validate`, which forbids 0 — that's only valid when
+  floor>0).
+- **UCB rule = winner-take-all** (documented): raw weight 1.0 to the max-index
+  arm, 0.0 to the rest; `n==0 → +inf` index (forced exploration). The exploration
+  floor downstream means winner-take-all never starves the other arms.
+- **Constrained multi-objective gotcha:** post-hoc `apply_exploitable_mask`
+  (zeroing non-exploitable arms' weights) STARVES winner-take-all allocators if
+  the sole winner is the excluded arm (all weights become 0 → normaliser splits
+  evenly). Added `allocate_exploitable(arms, mask, allocator_closure)` which runs
+  the allocator over ONLY eligible arms then merges excluded arms back at 0.0 —
+  the robust path for every allocator. Kept `apply_exploitable_mask` for the
+  proportional (Thompson) case.
+- **Scalarized reward has no joint posterior:** `reward_arms` turns the
+  goal-normalised z-score weighted-sum into a point `Numeric` posterior
+  (variance 0), so Thompson degenerates to deterministic argmax — intended for a
+  scalarized point reward. Scalar/Constrained preserve the real posterior so
+  Thompson keeps full uncertainty sampling.
+- Phase 2 SHAs: Thompson 4c19ecc, epsilon+UCB be6b2ac, normalization 40292d9,
+  reward combiner 40f1733. 61 new unit tests; full stitchd-core lib suite 843
+  passed, clippy `-D warnings` clean, fmt clean. No async/I/O/sqlx in the bandit
+  module (mirrors the `evaluation` purity contract).
