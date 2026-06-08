@@ -35,37 +35,37 @@ Phase-level wave summary:
       <!-- depends: task3 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 1' [autonomous] (Protocol in workflow.md)
 
-## Phase 2: Bandit Core Algorithms (stitchd-core, pure)
+## Phase 2: Bandit Core Algorithms (stitchd-core, pure) [checkpoint: pending]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Thompson Sampling — Monte-Carlo probability-best over existing
+- [x] Task 1: Thompson Sampling [4c19ecc] — Monte-Carlo probability-best over existing
       `bayesian::analyze_*` posteriors → weight vector; golden-vector + Monte-Carlo tests.
       <!-- files: crates/stitchd-core/src/experimentation/bandit/thompson.rs -->
-- [ ] Task 2: Epsilon-greedy + UCB allocators from sufficient stats; golden-vector tests.
+- [x] Task 2: Epsilon-greedy + UCB [be6b2ac] allocators from sufficient stats; golden-vector tests.
       <!-- files: crates/stitchd-core/src/experimentation/bandit/epsilon.rs, crates/stitchd-core/src/experimentation/bandit/ucb.rs -->
-- [ ] Task 3: Weight normalization + `min_exploration_bp` floor enforcement (sum=10000,
+- [x] Task 3: Weight normalization [40292d9] + `min_exploration_bp` floor enforcement (sum=10000,
       every arm ≥ floor); property tests (floor preserved, sums exact).
       <!-- files: crates/stitchd-core/src/experimentation/bandit/allocation.rs -->
-- [ ] Task 4: Reward combiner — scalarization (goal-normalized weighted sum) + constrained
+- [x] Task 4: Reward combiner [40f1733] — scalarization (goal-normalized weighted sum) + constrained
       (primary + guardrail-constraint down-weighting); per-objective passthrough; tests.
       <!-- files: crates/stitchd-core/src/experimentation/bandit/reward.rs -->
       <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 2' [autonomous] (Protocol in workflow.md)
 
-## Phase 3: Privileged Allocation-Write Path
+## Phase 3: Privileged Allocation-Write Path [checkpoint: pending]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
-- [ ] Task 1: System-actor allocation-update RPC on flag-service — writes bound rule
+- [x] Task 1: System-actor allocation-update RPC [e7f8e96] on flag-service — writes bound rule
       allocation / `default_rule_distribution`, version-bumped, audit as bandit/system actor,
       BYPASSES the whole-flag human lock; tests incl. concurrent human-mutation-still-409.
       <!-- files: crates/stitchd-flag-service/src/*, proto/flags/v1/flag_service.proto -->
-- [ ] Task 2: experimentation-service hook exposing the bound-rule target + lock-aware
+- [x] Task 2: experimentation-service hook [364e445] exposing the bound-rule target + lock-aware
       dispatch wrapper for the bandit writer; tests.
       <!-- files: crates/stitchd-experimentation-service/src/* -->
       <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 3' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3' [autonomous] (Protocol in workflow.md)
 
 ## Phase 4: Stats-Service Static Reallocation Pass
 <!-- execution: sequential -->

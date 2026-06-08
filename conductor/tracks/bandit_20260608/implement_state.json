@@ -1,12 +1,15 @@
 {
-  "current_phase": "Wave B: Phase 2 (core algorithms) || Phase 3 (write path)",
-  "current_phase_index": 1,
+  "current_phase": "Wave C: Phase 4 (static reallocation) -> then Phase 5/9/10",
+  "current_phase_index": 3,
   "current_task_index": 0,
-  "completed_phases": ["Phase 1: Schema, Domain & Proto Foundation"],
-  "last_updated": "2026-06-08T07:20:00Z",
+  "completed_phases": ["Phase 1: Schema, Domain & Proto Foundation","Phase 2: Bandit Core Algorithms","Phase 3: Privileged Allocation-Write Path"],
+  "last_updated": "2026-06-08T07:55:00Z",
   "status": "in_progress",
   "mode": "autonomous",
-  "binding_constraint": "Flag evaluation MUST be DB-free and fully in-memory (enforced by evaluation/purity.rs CI test forbidding sqlx/tokio/reqwest); bandit state at eval time rides the polling snapshot.",
-  "phase1_commits": ["eb79e87","d9378cf","92f5421","b692fc5"],
-  "notes": "DB drift bug filed in beads. experiment repo uses runtime sqlx::query (no macro), so sqlx offline cache unaffected by experiment columns."
+  "binding_constraint": "Flag evaluation MUST be DB-free/in-memory (evaluation/purity.rs CI test forbids sqlx/tokio/reqwest); bandit state at eval time rides the polling snapshot.",
+  "key_signatures": {
+    "phase2": "stitchd_core::experimentation::bandit:: thompson_weights(arms,goal,n_samples,seed); epsilon_greedy_weights(arms,goal,epsilon); ucb_weights(arms,goal,c); normalize_to_distribution(raw,min_exploration_bp)->RolloutDistribution; combined_rewards/reward_arms(objective,metrics); BanditArm{variant_key,posterior:RewardPosterior}; MetricRewards{metric_id,goal,arms}",
+    "phase3": "flag-service RPC BanditUpdateAllocation(project_id,flag_key,environment_id,experiment_id,version,allocations[AllocationBucket],oneof target{flag_rule_id|default_rule}); experimentation-service RPC ApplyBanditAllocation(experiment_id,allocations[BanditAllocationBucket],expected_version)->outcome(APPLIED|SKIPPED|FAILED)+resolved_target+new_version+version_conflict"
+  },
+  "verify_db": "postgres://stitchd:stitchd@localhost:5432/bandit_verify_20260608"
 }
