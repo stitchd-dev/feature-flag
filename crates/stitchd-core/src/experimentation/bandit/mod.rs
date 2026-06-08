@@ -9,11 +9,13 @@
 //! ([`BanditConfig`], [`BanditCampaignConfig`] and friends). Allocation /
 //! sampling logic lands in later phases.
 
+pub mod allocation;
 pub mod epsilon;
 pub mod thompson;
 pub mod types;
 pub mod ucb;
 
+pub use allocation::{NormalizeError, normalize_to_distribution};
 pub use epsilon::epsilon_greedy_weights;
 pub use thompson::{BanditArm, GoalDirection, RewardPosterior, thompson_weights};
 pub use types::{
