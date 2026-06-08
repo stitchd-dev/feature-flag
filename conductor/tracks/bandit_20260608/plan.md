@@ -113,7 +113,7 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 6' [autonomous] (Protocol in workflow.md)
 
-## Phase 7: Autonomous Lifecycle (convergence / commit / rollout) [checkpoint: pending]
+## Phase 7: Autonomous Lifecycle (convergence / commit / rollout) [checkpoint: b8667fd]
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
@@ -126,7 +126,7 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 7' [autonomous] (Protocol in workflow.md)
 
-## Phase 8: Autonomous Optimization Campaigns [checkpoint: pending]
+## Phase 8: Autonomous Optimization Campaigns [checkpoint: b8667fd]
 <!-- execution: sequential -->
 <!-- depends: phase7 -->
 
