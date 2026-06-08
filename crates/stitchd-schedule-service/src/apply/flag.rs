@@ -302,6 +302,9 @@ impl FlagMutationPayload {
                 .map(|v| Variant {
                     key: v.key,
                     value: Some(v.value.to_proto()),
+                    // Scheduled mutation payloads carry variants by key/value;
+                    // the variant UUID is assigned server-side.
+                    id: String::new(),
                 })
                 .collect(),
             default_variant_key: b.default_variant_key,

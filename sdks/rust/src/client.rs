@@ -1918,6 +1918,7 @@ mod tests {
             value: Some(VariantValue {
                 value: Some(VVal::BoolValue(value)),
             }),
+            id: String::new(),
         }
     }
 
@@ -1927,6 +1928,7 @@ mod tests {
             value: Some(VariantValue {
                 value: Some(VVal::StringValue(value.to_string())),
             }),
+            id: String::new(),
         }
     }
 

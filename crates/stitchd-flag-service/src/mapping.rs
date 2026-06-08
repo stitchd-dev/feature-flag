@@ -30,8 +30,15 @@ pub fn proto_variant_to_domain(v: ProtoVariant) -> Option<stitchd_core::flag::Va
             VariantValue::JsonValue(serde_json::from_str(&s).ok()?)
         }
     };
+    // Prefer the variant UUID carried on the proto (admin read path); fall back
+    // to a freshly minted id when absent (SDK sync / create paths leave it empty).
+    let id = v
+        .id
+        .parse::<uuid::Uuid>()
+        .map(stitchd_core::id::VariantId::from_uuid)
+        .unwrap_or_else(|_| stitchd_core::id::VariantId::new());
     Some(stitchd_core::flag::Variant {
-        id: stitchd_core::id::VariantId::new(),
+        id,
         key: v.key,
         value,
     })
@@ -57,7 +64,11 @@ pub fn domain_variant_to_proto(v: stitchd_core::flag::Variant) -> ProtoVariant {
             value: Some(ProtoVariantValueInner::JsonValue(j.to_string())),
         },
     });
-    ProtoVariant { key: v.key, value }
+    ProtoVariant {
+        key: v.key,
+        value,
+        id: v.id.as_uuid().to_string(),
+    }
 }
 
 /// Convert a proto [`ProtoFlagRule`] back to a domain [`stitchd_core::flag::FlagRule`].
@@ -519,6 +530,23 @@ mod tests {
             proto.value.unwrap().value,
             Some(ProtoVariantValueInner::BoolValue(true))
         ));
+    }
+
+    /// Phase 10.1: the variant UUID round-trips through proto ↔ domain so that
+    /// cross-service consumers (experiment start-prerequisites) can compare the
+    /// served variant by its stable UUID.
+    #[test]
+    fn variant_id_round_trips_through_proto() {
+        let id = make_variant_id();
+        let domain = stitchd_core::flag::Variant {
+            id,
+            key: "on".to_string(),
+            value: VariantValue::BoolValue(true),
+        };
+        let proto = domain_variant_to_proto(domain);
+        assert_eq!(proto.id, id.as_uuid().to_string());
+        let back = proto_variant_to_domain(proto).expect("round-trip");
+        assert_eq!(back.id, id);
     }
 
     #[test]

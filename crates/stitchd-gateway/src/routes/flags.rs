@@ -398,6 +398,9 @@ fn variant_body_to_proto(v: VariantBody) -> stitchd_proto::flags::v1::Variant {
     stitchd_proto::flags::v1::Variant {
         key: v.key,
         value: Some(VariantValue { value }),
+        // Write path: the variant UUID is assigned server-side; admin bodies
+        // never carry one.
+        id: String::new(),
     }
 }
 
@@ -2094,6 +2097,7 @@ mod tests {
                 value: Some(VariantValue {
                     value: Some(Value::BoolValue(true)),
                 }),
+                id: String::new(),
             }],
             rules: vec![],
             locked_by_experiment_id: String::new(),

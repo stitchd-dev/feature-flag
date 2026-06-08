@@ -132,12 +132,14 @@ fn cross_context_corpus() -> (FeatureFlag, Flag) {
                 value: Some(ProtoVariantValue {
                     value: Some(VVal::StringValue("off".into())),
                 }),
+                id: String::new(),
             },
             ProtoVariant {
                 key: "treatment".into(),
                 value: Some(ProtoVariantValue {
                     value: Some(VVal::StringValue("on".into())),
                 }),
+                id: String::new(),
             },
         ],
         default_variant_key: "control".into(),
@@ -228,12 +230,14 @@ fn default_rule_distribution_corpus() -> (FeatureFlag, Flag) {
                 value: Some(ProtoVariantValue {
                     value: Some(VVal::BoolValue(false)),
                 }),
+                id: String::new(),
             },
             ProtoVariant {
                 key: "treatment".into(),
                 value: Some(ProtoVariantValue {
                     value: Some(VVal::BoolValue(true)),
                 }),
+                id: String::new(),
             },
         ],
         default_variant_key: "control".into(),

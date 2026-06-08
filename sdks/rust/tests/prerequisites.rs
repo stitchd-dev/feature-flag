@@ -46,6 +46,7 @@ fn string_variant(key: &str, value: &str) -> ProtoVariant {
         value: Some(ProtoVariantValue {
             value: Some(VVal::StringValue(value.to_string())),
         }),
+        id: String::new(),
     }
 }
 

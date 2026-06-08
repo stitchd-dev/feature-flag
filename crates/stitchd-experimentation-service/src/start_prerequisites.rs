@@ -276,27 +276,76 @@ pub async fn evaluate_start_prerequisites(
     Ok(None)
 }
 
+/// Resolves the variant a flag currently **serves** in an environment, by UUID.
+///
+/// Abstracted as a trait so [`ServiceStartPrerequisiteResolver`]'s `flag_variant`
+/// gate is unit-testable without a live Flag Service. The production
+/// implementation ([`FlagServiceServedVariantLookup`]) resolves `flag_id` →
+/// `flag_key` via the flag repository, then reads the live `FeatureFlag` from the
+/// Flag Service to determine the served variant's UUID — exact comparison
+/// (replacing the former fail-closed behaviour, now that the Flag Service exposes
+/// variant UUIDs on its read surface).
+#[async_trait]
+pub trait ServedVariantLookup: Send + Sync {
+    /// Return the UUID of the variant `flag_id` currently serves in
+    /// `environment_id`, or `Ok(None)` when the flag serves no determinate
+    /// variant (disabled, or no default variant configured). `Err` only on an
+    /// unexpected transport/internal failure.
+    async fn served_variant(
+        &self,
+        environment_id: &str,
+        flag_id: Uuid,
+    ) -> Result<Option<Uuid>, tonic::Status>;
+}
+
 /// Production [`StartPrerequisiteResolver`].
 ///
 /// * **experiment_done** — resolved against the experiment repository: the
 ///   prerequisite experiment must be `Stopped`/concluded.
-/// * **flag_variant** — resolved against the Flag Service. The Flag Service's
-///   `GetFlag`/`FeatureFlag` proto currently exposes variants by **key** only (no
-///   variant UUIDs), while a start-prerequisite stores `required_variant_id`
-///   (UUID). Until the Flag Service exposes variant IDs (tracked as a follow-up),
-///   this resolver **cannot positively verify** a flag-variant prerequisite by
-///   UUID and so **fails closed** — an unverifiable flag-variant prerequisite is
-///   reported `Unmet`, refusing the start rather than starting on an unchecked
-///   assumption. `experiment_done` is fully functional.
+/// * **flag_variant** — resolved exactly via a [`ServedVariantLookup`]: the live
+///   variant the flag currently serves is compared by UUID against the stored
+///   `required_variant_id`. A match meets the prerequisite (allowing the start);
+///   any mismatch (incl. a disabled flag serving no variant) reports `Unmet`.
 pub struct ServiceStartPrerequisiteResolver {
     experiment_repo: std::sync::Arc<dyn stitchd_db::ExperimentRepository>,
+    served_variant_lookup: std::sync::Arc<dyn ServedVariantLookup>,
 }
 
 impl ServiceStartPrerequisiteResolver {
-    /// Construct over the experiment repository.
+    /// Construct over the experiment repository + a served-variant lookup.
     #[must_use]
-    pub fn new(experiment_repo: std::sync::Arc<dyn stitchd_db::ExperimentRepository>) -> Self {
-        Self { experiment_repo }
+    pub fn new(
+        experiment_repo: std::sync::Arc<dyn stitchd_db::ExperimentRepository>,
+        served_variant_lookup: std::sync::Arc<dyn ServedVariantLookup>,
+    ) -> Self {
+        Self {
+            experiment_repo,
+            served_variant_lookup,
+        }
+    }
+}
+
+/// Compare the variant a flag currently serves against the required variant.
+///
+/// `Met` exactly when the flag serves `required_variant_id`; otherwise `Unmet`
+/// with a reason that names the mismatch (or the absence of a served variant —
+/// e.g. a disabled flag or one with no default variant).
+#[must_use]
+pub fn compare_served_variant(
+    flag_id: Uuid,
+    served: Option<Uuid>,
+    required_variant_id: Uuid,
+) -> PrereqCheck {
+    match served {
+        Some(served) if served == required_variant_id => PrereqCheck::Met,
+        Some(served) => PrereqCheck::Unmet(format!(
+            "flag-variant prerequisite unmet: flag {flag_id} serves variant \
+             {served}, requires {required_variant_id}"
+        )),
+        None => PrereqCheck::Unmet(format!(
+            "flag-variant prerequisite unmet: flag {flag_id} serves no variant \
+             (disabled or no default), requires {required_variant_id}"
+        )),
     }
 }
 
@@ -304,18 +353,17 @@ impl ServiceStartPrerequisiteResolver {
 impl StartPrerequisiteResolver for ServiceStartPrerequisiteResolver {
     async fn flag_serves_variant(
         &self,
-        _environment_id: &str,
+        environment_id: &str,
         flag_id: Uuid,
         required_variant_id: Uuid,
     ) -> Result<PrereqCheck, tonic::Status> {
-        // Fail closed: the Flag Service does not yet expose variant UUIDs on the
-        // FeatureFlag proto, so a `required_variant_id` cannot be matched against
-        // the live flag. Refuse the start rather than assume the gate passes.
-        Ok(PrereqCheck::Unmet(format!(
-            "flag-variant prerequisite (flag {flag_id} must serve variant \
-             {required_variant_id}) cannot be verified: the Flag Service does not \
-             expose variant IDs"
-        )))
+        // Exact verification: resolve the variant the flag currently serves and
+        // compare it to the required variant by UUID.
+        let served = self
+            .served_variant_lookup
+            .served_variant(environment_id, flag_id)
+            .await?;
+        Ok(compare_served_variant(flag_id, served, required_variant_id))
     }
 
     async fn experiment_is_done(&self, experiment_id: Uuid) -> Result<PrereqCheck, tonic::Status> {
@@ -333,6 +381,87 @@ impl StartPrerequisiteResolver for ServiceStartPrerequisiteResolver {
                 exp.status
             )))
         }
+    }
+}
+
+/// Production [`ServedVariantLookup`] backed by the flag repository (for
+/// `flag_id → flag_key` resolution) and the Flag Service (for the live served
+/// variant + its UUID).
+///
+/// The flag a start-prerequisite references is arbitrary (not necessarily the
+/// experiment's bound flag), so its key is resolved via [`stitchd_db::FlagRepository::find_by_id`].
+/// The Flag Service's `GetFlag` then returns the live `FeatureFlag` whose
+/// `default_variant_key` names the served variant and whose `variants[].id`
+/// carries the variant UUID (exposed on the read surface in
+/// `flag_lifecycle_20260604`). The served variant is `None` when the flag is
+/// disabled or has no default variant configured.
+pub struct FlagServiceServedVariantLookup {
+    flag_repo: std::sync::Arc<dyn stitchd_db::FlagRepository>,
+    flag_client: crate::flag_client::FlagClient,
+}
+
+impl FlagServiceServedVariantLookup {
+    /// Construct over the flag repository + a Flag Service client.
+    #[must_use]
+    pub fn new(
+        flag_repo: std::sync::Arc<dyn stitchd_db::FlagRepository>,
+        flag_client: crate::flag_client::FlagClient,
+    ) -> Self {
+        Self {
+            flag_repo,
+            flag_client,
+        }
+    }
+}
+
+/// Fail-closed [`ServedVariantLookup`] used when no Flag Service connection is
+/// available at startup. It reports the flag as serving no variant, so any
+/// `flag_variant` start-prerequisite is treated as unmet (refusing the start)
+/// rather than allowed on an unverifiable assumption.
+pub struct UnavailableServedVariantLookup;
+
+#[async_trait]
+impl ServedVariantLookup for UnavailableServedVariantLookup {
+    async fn served_variant(
+        &self,
+        _environment_id: &str,
+        _flag_id: Uuid,
+    ) -> Result<Option<Uuid>, tonic::Status> {
+        Ok(None)
+    }
+}
+
+#[async_trait]
+impl ServedVariantLookup for FlagServiceServedVariantLookup {
+    async fn served_variant(
+        &self,
+        environment_id: &str,
+        flag_id: Uuid,
+    ) -> Result<Option<Uuid>, tonic::Status> {
+        let flag_record = self
+            .flag_repo
+            .find_by_id(stitchd_core::id::FlagId::from_uuid(flag_id))
+            .await
+            .map_err(tonic::Status::from)?;
+
+        let flag = self
+            .flag_client
+            .get_flag(environment_id, flag_record.key.as_str())
+            .await?;
+
+        // A disabled flag, or one without a default variant, serves no
+        // determinate variant for the gate.
+        if !flag.enabled || flag.default_variant_key.is_empty() {
+            return Ok(None);
+        }
+
+        // Find the served (default) variant and return its UUID.
+        let served = flag
+            .variants
+            .iter()
+            .find(|v| v.key == flag.default_variant_key)
+            .and_then(|v| v.id.parse::<Uuid>().ok());
+        Ok(served)
     }
 }
 
@@ -633,6 +762,29 @@ mod tests {
             res.is_err(),
             "shape constraint must reject mismatched columns"
         );
+    }
+
+    // ── compare_served_variant — exact flag-variant verification ──────────────
+
+    #[test]
+    fn compare_served_variant_met_when_served_equals_required() {
+        let required = Uuid::new_v4();
+        assert_eq!(
+            compare_served_variant(Uuid::new_v4(), Some(required), required),
+            PrereqCheck::Met
+        );
+    }
+
+    #[test]
+    fn compare_served_variant_unmet_when_served_differs() {
+        let r = compare_served_variant(Uuid::new_v4(), Some(Uuid::new_v4()), Uuid::new_v4());
+        assert!(matches!(r, PrereqCheck::Unmet(reason) if reason.contains("serves variant")));
+    }
+
+    #[test]
+    fn compare_served_variant_unmet_when_flag_serves_no_variant() {
+        let r = compare_served_variant(Uuid::new_v4(), None, Uuid::new_v4());
+        assert!(matches!(r, PrereqCheck::Unmet(reason) if reason.contains("no variant")));
     }
 
     #[tokio::test]

@@ -3968,6 +3968,41 @@ mod tests {
         svc.transition_experiment(req).await.expect("start allowed");
     }
 
+    /// Phase 10.1 positive path: a MET `flag_variant` start-prerequisite now
+    /// ALLOWS the start (previously fail-closed → always refused). Covers manual
+    /// AND scheduled start (both flow through `transition_experiment`).
+    #[tokio::test]
+    async fn transition_into_running_allowed_when_flag_variant_prereq_met() {
+        let (env_id, env_str) = env_uuid();
+        let repo = Arc::new(StubPrereqRepo::new(vec![StartPrerequisite::FlagVariant {
+            flag_id: uuid::Uuid::new_v4(),
+            required_variant_id: uuid::Uuid::new_v4(),
+        }]));
+        // The resolver reports the flag-variant prerequisite as met (the served
+        // variant matches the required one).
+        let resolver = Arc::new(StubPrereqResolver {
+            flag: PrereqCheck::Met,
+            experiment: PrereqCheck::Met,
+        });
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_start_prerequisites(repo, resolver);
+
+        let req = tonic::Request::new(TransitionExperimentRequest {
+            experiment_id: ExperimentId::new().to_string(),
+            new_status: stitchd_proto::experiments::v1::ExperimentStatus::Active as i32,
+            environment_id: env_str,
+            reason: String::new(),
+        });
+        svc.transition_experiment(req)
+            .await
+            .expect("start allowed when flag_variant prereq met");
+    }
+
     /// Spec C3 (Phase 6): deleting an experiment that another experiment declares
     /// as an `experiment_done` start-time prerequisite is blocked with the
     /// `dependency_exists:<ids>` sentinel listing the blocking experiment id.

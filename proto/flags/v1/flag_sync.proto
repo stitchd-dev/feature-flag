@@ -20,6 +20,12 @@ message VariantValue {
 message Variant {
   string       key   = 1;
   VariantValue value = 2;
+  // [ADDITIVE — flag_lifecycle_20260604] UUID of the variant. Admin metadata,
+  // surfaced on the GetFlag/ListFlags read path so cross-service consumers (e.g.
+  // the experimentation-service `flag_variant` start-prerequisite) can compare
+  // the served variant by its stable UUID rather than by key. Empty on the SDK
+  // definition-sync path, which is key-only.
+  string       id    = 3;
 }
 
 // --- Percentage allocation ---

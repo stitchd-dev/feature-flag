@@ -394,6 +394,7 @@ fn convert_flag(f: &FixtureFlag) -> (FeatureFlag, Option<usize>) {
         .map(|v| Variant {
             key: v.key.clone(),
             value: json_to_vval(&v.value).map(|inner| VariantValue { value: Some(inner) }),
+            id: String::new(),
         })
         .collect();
 
