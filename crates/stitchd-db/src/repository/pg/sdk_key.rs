@@ -81,46 +81,54 @@ impl SdkKeyRepository for PgSdkKeyRepository {
         Ok(rows.iter().map(row_to_sdk_key).collect())
     }
 
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<SdkKey>, u64), RepositoryError> {
+    ) -> Result<(Vec<SdkKey>, Option<String>), RepositoryError> {
+        // Keyset pagination ordered by (created_at, id): fetch limit+1 rows; the
+        // surplus row signals a next page. The row-value comparison
+        // `(created_at, id) > ($cursor_created_at, $cursor_id)` resumes strictly
+        // after the prior page's last row. A NULL cursor (first page) admits all.
+        // sdk_keys has no soft-delete column — revoked keys stay listed.
+        #[allow(clippy::cast_possible_wrap)]
         let rows = sqlx::query(
             r"
-            SELECT id, environment_id, key_hash, name, is_active, created_at, revoked_at,
-                   COUNT(*) OVER() AS total_count
+            SELECT id, environment_id, key_hash, name, is_active, created_at, revoked_at
             FROM sdk_keys
             WHERE environment_id = $1
-            ORDER BY created_at
-            LIMIT $2 OFFSET $3
+              AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3))
+            ORDER BY created_at, id
+            LIMIT $4
             ",
         )
         .bind(environment_id.as_uuid())
-        .bind({
-            #[allow(clippy::cast_possible_wrap)]
-            let v = limit as i64;
-            v
-        })
-        .bind({
-            #[allow(clippy::cast_possible_wrap)]
-            let v = offset as i64;
-            v
-        })
+        .bind(after.map(|c| c.created_at))
+        .bind(after.map(|c| c.id))
+        .bind((limit + 1) as i64)
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let total = rows.first().map_or(0, |r| {
-            let n: i64 = r.get("total_count");
-            #[allow(clippy::cast_sign_loss)]
-            let result = n.max(0) as u64;
-            result
-        });
+        let mut keys: Vec<SdkKey> = rows.iter().map(row_to_sdk_key).collect();
 
-        let keys: Vec<SdkKey> = rows.iter().map(row_to_sdk_key).collect();
-        Ok((keys, total))
+        // limit+1 rows ⇒ more pages: drop the surplus and encode the new last
+        // row's keyset as the next cursor.
+        let next_cursor = if keys.len() as u64 > limit {
+            keys.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            keys.last().map(|k| {
+                crate::KeysetCursor {
+                    created_at: k.created_at,
+                    id: k.id.as_uuid(),
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
+
+        Ok((keys, next_cursor))
     }
 
     async fn create(&self, key: &SdkKey) -> Result<(), RepositoryError> {

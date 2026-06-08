@@ -408,15 +408,10 @@ pub async fn list_sdk_keys(
     Path(environment_id): Path<String>,
     Query(query): Query<ListSdkKeysQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let offset = query
-        .cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = query.cursor.effective_limit();
     let req = tonic::Request::new(ListSdkKeysRequest {
         environment_id,
-        page: (offset / u64::from(limit)) as u32 + 1,
-        per_page: limit,
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.management_client.lock().await;
     let resp = client
@@ -439,7 +434,7 @@ pub async fn list_sdk_keys(
             },
         })
         .collect();
-    Ok(Json(CursorPage::from_offset(sdk_keys, inner.total, offset)))
+    Ok(Json(CursorPage::from_token(sdk_keys, inner.next_cursor)))
 }
 
 /// Query parameters for listing org users.
