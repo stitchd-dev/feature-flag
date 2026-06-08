@@ -72,7 +72,8 @@ pub fn binary_terms(cells: &[NdBinaryCell], order: usize) -> Vec<TermResult> {
         }
     }
 
-    // Three-way interaction (only defined at order 3).
+    // Three-way interaction at EXACTLY order 3: the canonical {0,1,2} term via
+    // the dedicated `three_way` IPF (preserves the order-3 byte-identical path).
     if order == 3 {
         out.push(TermResult {
             kind: TermKind::ThreeWay { a: 0, b: 1, c: 2 },
@@ -81,6 +82,200 @@ pub fn binary_terms(cells: &[NdBinaryCell], order: usize) -> Vec<TermResult> {
         });
     }
 
+    // Higher-order interactions (order ≥ 4): every interaction subset of size
+    // ≥ 3 over factors `0..order` (including each three-way subset — at order ≥ 4
+    // the order==3 branch above does not fire). `k_way` fits the no-S-way
+    // hierarchical log-linear model by IPF over the outcome-bearing
+    // `(|S|−1)`-margins — the exact arity generalisation of `three_way`'s
+    // `[OAB][OAC][OBC]` fit.
+    if order >= 4 {
+        for mask in 1u32..(1u32 << order) {
+            let subset: Vec<usize> = (0..order).filter(|&f| mask & (1 << f) != 0).collect();
+            if subset.len() < 3 {
+                continue; // sizes 1/2 already emitted above.
+            }
+            out.push(TermResult {
+                kind: TermKind::of(&subset),
+                freq: k_way(cells, &subset),
+                bayes: None,
+            });
+        }
+    }
+
+    out
+}
+
+// ── General k-way interaction (order ≥ 4) ─────────────────────────────────────
+
+/// The general `O × S` `(|S|+1)`-way interaction for a factor subset `S` of size
+/// `k ≥ 2`: does the `(k−1)`-way interaction structure's effect on the outcome
+/// itself vary across the last factor?
+///
+/// Fits the no-top-way hierarchical log-linear model — every outcome-bearing
+/// `(k−1)`-margin `O × (S∖{f})` for each `f ∈ S` — to the success/failure counts
+/// by iterative proportional fitting over a flat `O × ΠL_f` table, then a Pearson
+/// χ² of observed vs fitted on `Π_{f∈S}(L_f − 1)` df. This is the exact arity
+/// generalisation of [`three_way`] (`k = 3`, margins `[OAB][OAC][OBC]`). Abstains
+/// on any structural degeneracy (a <2-level factor, too few units, an empty
+/// margin, or IPF failing to converge / producing a non-finite fit).
+fn k_way(cells: &[NdBinaryCell], subset: &[usize]) -> InteractionResultLocal {
+    let k = subset.len();
+    // Per-retained-factor dense level counts.
+    let dims: Vec<usize> = subset.iter().map(|&f| levels_on(cells, f)).collect();
+    let df: u32 = dims.iter().map(|&d| d.saturating_sub(1) as u32).product();
+    if dims.iter().any(|&d| d < 2) {
+        return insufficient(df);
+    }
+
+    // Flat O × (Π dims) layout, addressed via a mixed-radix index over
+    // [outcome, retained-factor levels...].
+    let cells_per_outcome: usize = dims.iter().product();
+    let radices: Vec<usize> = {
+        let mut r = Vec::with_capacity(k + 1);
+        r.push(2usize); // outcome
+        r.extend_from_slice(&dims);
+        r
+    };
+    let flat = |coords: &[usize]| -> usize {
+        let mut idx = 0usize;
+        for (slot, &c) in coords.iter().enumerate() {
+            idx = idx * radices[slot] + c;
+        }
+        idx
+    };
+
+    // Observed success/failure counts over the collapsed sub-grid.
+    let mut obs = vec![0.0f64; 2 * cells_per_outcome];
+    let mut total_n = 0u64;
+    let mut total_s = 0u64;
+    for cell in cells {
+        // A cell missing any retained factor is skipped (cannot place it).
+        if subset.iter().any(|&f| cell.levels.get(f).is_none()) {
+            continue;
+        }
+        let lv: Vec<usize> = subset.iter().map(|&f| cell.levels[f]).collect();
+        let successes = cell.successes.min(cell.n);
+        let fail = cell.n - successes;
+        let mut succ_coords = Vec::with_capacity(k + 1);
+        succ_coords.push(1usize);
+        succ_coords.extend_from_slice(&lv);
+        let mut fail_coords = Vec::with_capacity(k + 1);
+        fail_coords.push(0usize);
+        fail_coords.extend_from_slice(&lv);
+        obs[flat(&succ_coords)] += successes as f64;
+        obs[flat(&fail_coords)] += fail as f64;
+        total_n = total_n.saturating_add(cell.n);
+        total_s = total_s.saturating_add(successes);
+    }
+    if total_n < MIN_TOTAL_N {
+        return insufficient(df);
+    }
+    if total_s == 0 || total_s == total_n {
+        return insufficient(df);
+    }
+
+    // Enumerate the full set of flat coords once (for margin building + IPF).
+    let all_coords: Vec<Vec<usize>> = enumerate_coords(&radices);
+
+    // The (k−1)-margins to fit: for each retained factor `f`, the margin over
+    // {outcome} ∪ (retained factors except `f`) — i.e. sum out the slot of `f`.
+    // Each margin is represented as the set of slot indices (into `radices`) it
+    // KEEPS (slot 0 = outcome is always kept).
+    let mut margins: Vec<Vec<usize>> = Vec::with_capacity(k);
+    for drop_slot in 1..=k {
+        let kept: Vec<usize> = (0..=k).filter(|&s| s != drop_slot).collect();
+        margins.push(kept);
+    }
+
+    // Observed margin tables, plus a zero-margin abstain guard.
+    let mut obs_margins: Vec<std::collections::HashMap<Vec<usize>, f64>> = Vec::new();
+    for kept in &margins {
+        let mut m: std::collections::HashMap<Vec<usize>, f64> = std::collections::HashMap::new();
+        for coords in &all_coords {
+            let key: Vec<usize> = kept.iter().map(|&s| coords[s]).collect();
+            *m.entry(key).or_insert(0.0) += obs[flat(coords)];
+        }
+        if m.values().any(|&v| v <= 0.0) {
+            return insufficient(df);
+        }
+        obs_margins.push(m);
+    }
+
+    // IPF from a uniform table, rescaling to each margin in turn.
+    let mut fit = vec![1.0f64; 2 * cells_per_outcome];
+    let mut converged = false;
+    for _ in 0..IPF_MAX_ITER {
+        let mut max_change = 0.0f64;
+        for (mi, kept) in margins.iter().enumerate() {
+            // Current fitted margin sums.
+            let mut cur: std::collections::HashMap<Vec<usize>, f64> =
+                std::collections::HashMap::new();
+            for coords in &all_coords {
+                let key: Vec<usize> = kept.iter().map(|&s| coords[s]).collect();
+                *cur.entry(key).or_insert(0.0) += fit[flat(coords)];
+            }
+            for coords in &all_coords {
+                let key: Vec<usize> = kept.iter().map(|&s| coords[s]).collect();
+                let cur_v = cur[&key];
+                if cur_v <= 0.0 {
+                    return insufficient(df);
+                }
+                let scale = obs_margins[mi][&key] / cur_v;
+                let cell = &mut fit[flat(coords)];
+                let after = *cell * scale;
+                max_change = max_change.max((after - *cell).abs());
+                *cell = after;
+            }
+        }
+        if max_change < IPF_TOL {
+            converged = true;
+            break;
+        }
+    }
+    if !converged {
+        return insufficient(df);
+    }
+
+    // Pearson χ² of observed vs fitted.
+    let mut chi_sq = 0.0f64;
+    for (i, &e) in fit.iter().enumerate() {
+        if !e.is_finite() {
+            return insufficient(df);
+        }
+        if e > 0.0 {
+            let d = obs[i] - e;
+            chi_sq += d * d / e;
+        }
+    }
+    if !chi_sq.is_finite() {
+        return insufficient(df);
+    }
+    let p_value = super::chi_square_sf(chi_sq, df as f64);
+    InteractionResultLocal {
+        estimate: chi_sq,
+        statistic: chi_sq,
+        p_value,
+        df,
+        significant: p_value < super::ALPHA,
+        insufficient_data: false,
+    }
+}
+
+/// Enumerate every coordinate tuple of a mixed-radix space `radices`
+/// (row-major / lexicographic over the radices), e.g. `[2,2,2] →
+/// [0,0,0],[0,0,1],…,[1,1,1]`.
+fn enumerate_coords(radices: &[usize]) -> Vec<Vec<usize>> {
+    let total: usize = radices.iter().product();
+    let mut out = Vec::with_capacity(total);
+    for flat in 0..total {
+        let mut rem = flat;
+        let mut coords = vec![0usize; radices.len()];
+        for slot in (0..radices.len()).rev() {
+            coords[slot] = rem % radices[slot];
+            rem /= radices[slot];
+        }
+        out.push(coords);
+    }
     out
 }
 
@@ -430,7 +625,7 @@ mod tests {
     fn pick(terms: &[TermResult], kind: TermKind) -> TermResult {
         let found: Vec<_> = terms.iter().filter(|t| t.kind == kind).collect();
         assert_eq!(found.len(), 1, "expected exactly one {kind:?} term");
-        *found[0]
+        found[0].clone()
     }
 
     // ── shape of the decomposition ──────────────────────────────────────────
@@ -803,5 +998,104 @@ mod tests {
         let a = binary_terms(&nd, 3);
         let b = binary_terms(&nd, 3);
         assert_eq!(a, b);
+    }
+
+    // ── order-4 (generalized k-way) ───────────────────────────────────────────
+
+    /// Build a full 2×2×2×2 binary grid from a per-corner success-rate closure.
+    fn full_2x2x2x2(rate: impl Fn(usize, usize, usize, usize) -> f64, n: u64) -> Vec<NdBinaryCell> {
+        let mut v = Vec::with_capacity(16);
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    for d in 0..2 {
+                        let s = (rate(a, b, c, d) * n as f64).round() as u64;
+                        v.push(cell(&[a, b, c, d], n, s));
+                    }
+                }
+            }
+        }
+        v
+    }
+
+    /// order-4 emits the FULL hierarchical set: 4 main + 6 two-way + 4 three-way
+    /// + 1 four-way = 15 terms, each with `bayes: None`.
+    #[test]
+    fn order4_emits_full_hierarchical_term_set() {
+        let nd = full_2x2x2x2(|_, _, _, _| 0.10, 800);
+        let terms = binary_terms(&nd, 4);
+        assert_eq!(terms.len(), 15, "C(4,1..4) = 4+6+4+1");
+        assert!(terms.iter().all(|t| t.bayes.is_none()));
+        // The top four-way term is an NWay over all four factors.
+        assert!(terms.iter().any(|t| t.kind == TermKind::of(&[0, 1, 2, 3])));
+        // All four three-way subsets present.
+        for trip in [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]] {
+            assert!(
+                terms.iter().any(|t| t.kind == TermKind::of(&trip)),
+                "missing three-way {trip:?}"
+            );
+        }
+    }
+
+    /// A planted four-way: the (a,b,c) three-way structure FLIPS sign between the
+    /// two d levels, so only the top four-way term carries the signal → it is
+    /// significant.
+    #[test]
+    fn order4_planted_fourway_is_significant() {
+        let n = 4000;
+        // d=0 slice: a 3-way bump only in the (1,1,1) corner. d=1 slice: the
+        // bump moves to (1,1,0) instead — the 3-way pattern differs across d.
+        let rate = |a: usize, b: usize, c: usize, d: usize| {
+            let lifted = if d == 0 {
+                (a, b, c) == (1, 1, 1)
+            } else {
+                (a, b, c) == (1, 1, 0)
+            };
+            if lifted { 0.40 } else { 0.10 }
+        };
+        let nd = full_2x2x2x2(rate, n);
+        let terms = binary_terms(&nd, 4);
+        let four = terms
+            .iter()
+            .find(|t| t.kind == TermKind::of(&[0, 1, 2, 3]))
+            .expect("four-way term present");
+        assert!(!four.freq.insufficient_data, "should be testable");
+        assert_eq!(four.freq.df, 1); // (2-1)^4
+        assert!(
+            four.freq.significant,
+            "planted four-way must be significant: p={} chi2={}",
+            four.freq.p_value, four.freq.statistic
+        );
+    }
+
+    /// A purely additive-rate four-way model (rate depends only on a+b+c+d) has
+    /// NO genuine four-way term → the top term is NOT significant.
+    #[test]
+    fn order4_additive_fourway_is_not_significant() {
+        let n = 4000;
+        let rate = |a: usize, b: usize, c: usize, d: usize| {
+            0.10 + 0.03 * a as f64 + 0.04 * b as f64 + 0.05 * c as f64 + 0.06 * d as f64
+        };
+        let nd = full_2x2x2x2(rate, n);
+        let terms = binary_terms(&nd, 4);
+        let four = terms
+            .iter()
+            .find(|t| t.kind == TermKind::of(&[0, 1, 2, 3]))
+            .expect("four-way term present");
+        assert!(!four.freq.insufficient_data);
+        assert!(
+            !four.freq.significant,
+            "additive model has no four-way: p={} chi2={}",
+            four.freq.p_value, four.freq.statistic
+        );
+    }
+
+    /// Determinism on the order-4 generalized IPF path.
+    #[test]
+    fn order4_decomposition_is_deterministic() {
+        let nd = full_2x2x2x2(|a, b, c, d| 0.10 + 0.05 * (a * b * c * d) as f64, 1000);
+        let x = binary_terms(&nd, 4);
+        let y = binary_terms(&nd, 4);
+        assert_eq!(x, y);
     }
 }

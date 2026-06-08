@@ -401,10 +401,11 @@ mod tests {
         assert!(find(&out, TermKind::TwoWay { a: 1, b: 2 }).is_none());
         assert!(find(&out, TermKind::ThreeWay { a: 0, b: 1, c: 2 }).is_none());
         // No emitted term references a factor index >= order.
-        assert!(out.iter().all(|(k, _)| match *k {
-            TermKind::Main { factor } => factor < 2,
-            TermKind::TwoWay { a, b } => a < 2 && b < 2,
+        assert!(out.iter().all(|(k, _)| match k {
+            TermKind::Main { factor } => *factor < 2,
+            TermKind::TwoWay { a, b } => *a < 2 && *b < 2,
             TermKind::ThreeWay { .. } => false,
+            TermKind::NWay { .. } => false,
         }));
     }
 

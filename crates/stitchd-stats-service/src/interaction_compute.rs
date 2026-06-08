@@ -53,7 +53,7 @@ use stitchd_core::metric::{AggregationConfig, MetricDefinition, MetricKind, Rati
 use stitchd_db::repository::MetricRepository;
 
 use crate::dispatch::rewrite_placeholders_to_clickhouse;
-use crate::interaction_pairs::{ExperimentMeta, candidate_pairs, candidate_triples};
+use crate::interaction_pairs::{ExperimentMeta, candidate_tuples};
 use crate::queries::QueryBind;
 use crate::queries::interaction_metric::{
     MetricCellKind, build_consolidated_aggregation_cells_query,
@@ -334,6 +334,7 @@ pub trait InteractionWriter: Send + Sync {
 /// Propagates the first reader / writer error encountered. A per-cell read that
 /// returns an empty grid is skipped (no shared population on that context_type —
 /// nothing to persist).
+#[allow(clippy::too_many_arguments)]
 pub async fn compute_and_persist_interactions(
     reader: &dyn InteractionCellReader,
     writer: &dyn InteractionWriter,
@@ -342,18 +343,38 @@ pub async fn compute_and_persist_interactions(
     metrics: &HashMap<Uuid, MetricDefinition>,
     context_types: &[String],
     computed_at: DateTime<Utc>,
+    max_order: usize,
 ) -> Result<usize, anyhow::Error> {
     let by_id: HashMap<Uuid, &ExperimentMeta> = experiments.iter().map(|e| (e.id, e)).collect();
     let env_str = env_id.to_string();
 
-    // Enumerate every candidate tuple (pairs + triples) as a uniform list of
+    // The operator-bounded interaction order. Clamped to ≥ 2 (a 1-way "tuple"
+    // is just a single experiment, no interaction). Tuples of order ≤ this cap
+    // are enumerated; higher orders are intentionally NOT computed and the cap
+    // is logged below when it actually truncates a possible higher-order tuple
+    // (no silent truncation, per FR6).
+    let cap = max_order.max(2);
+
+    // Enumerate every candidate tuple of order 2..=cap as a uniform list of
     // experiment-id vectors so the rest of the pipeline is order-agnostic.
     let mut tuples: Vec<Vec<Uuid>> = Vec::new();
-    for (a, b) in candidate_pairs(experiments) {
-        tuples.push(vec![a, b]);
+    for order in 2..=cap {
+        for tuple in candidate_tuples(experiments, order) {
+            tuples.push(tuple);
+        }
     }
-    for (a, b, c) in candidate_triples(experiments) {
-        tuples.push(vec![a, b, c]);
+
+    // Cap-truncation visibility: if there exist enough mutually-overlapping,
+    // common-metric experiments to FORM an (cap+1)-way candidate but the cap
+    // forbids it, log so the truncation is never silent.
+    if experiments.len() > cap && !candidate_tuples(experiments, cap + 1).is_empty() {
+        tracing::info!(
+            env_id = %env_id,
+            max_interaction_order = cap,
+            candidates_above_cap = candidate_tuples(experiments, cap + 1).len(),
+            "interaction sweep: higher-order interaction candidates exist but are \
+             truncated by the configured max interaction order cap"
+        );
     }
 
     // Per-tuple context resolved once: metas, the tuple's overlap-window upper
@@ -425,7 +446,7 @@ pub async fn compute_and_persist_interactions(
         let cell_stats = cells_to_json(cells);
         let order = exp_ids.len() as u8;
         for t in terms {
-            let term = term_string(t.kind, exp_ids);
+            let term = term_string(&t.kind, exp_ids);
             let bayes = t.bayes.unwrap_or(BayesianInteraction {
                 prob: 0.0,
                 expected: 0.0,
@@ -795,13 +816,22 @@ fn merge_bayes(terms: &mut [TermResult], bayes: Vec<(TermKind, BayesianInteracti
 /// Render the `term` column string for a decomposition term, substituting the
 /// ACTUAL experiment UUIDs at the term's factor positions (`exp_ids[factor]`,
 /// tuple order):
-/// - `"main:<exp>"`, `"2way:<a>x<b>"`, `"3way:<a>x<b>x<c>"`.
-fn term_string(kind: TermKind, exp_ids: &[Uuid]) -> String {
+/// - `"main:<exp>"`, `"2way:<a>x<b>"`, `"3way:<a>x<b>x<c>"`, and for order ≥ 4
+///   `"<k>way:<exp>x…"` (k factors joined by `x`).
+fn term_string(kind: &TermKind, exp_ids: &[Uuid]) -> String {
     match kind {
-        TermKind::Main { factor } => format!("main:{}", exp_ids[factor]),
-        TermKind::TwoWay { a, b } => format!("2way:{}x{}", exp_ids[a], exp_ids[b]),
+        TermKind::Main { factor } => format!("main:{}", exp_ids[*factor]),
+        TermKind::TwoWay { a, b } => format!("2way:{}x{}", exp_ids[*a], exp_ids[*b]),
         TermKind::ThreeWay { a, b, c } => {
-            format!("3way:{}x{}x{}", exp_ids[a], exp_ids[b], exp_ids[c])
+            format!("3way:{}x{}x{}", exp_ids[*a], exp_ids[*b], exp_ids[*c])
+        }
+        TermKind::NWay { factors } => {
+            let joined = factors
+                .iter()
+                .map(|&f| exp_ids[f].to_string())
+                .collect::<Vec<_>>()
+                .join("x");
+            format!("{}way:{}", factors.len(), joined)
         }
     }
 }
@@ -853,6 +883,34 @@ pub fn benjamini_hochberg(pvalues: &[f64], fdr: f64) -> Vec<bool> {
     reject
 }
 
+/// Environment-variable name for the operator-bounded maximum cross-experiment
+/// interaction order. Default [`DEFAULT_MAX_INTERACTION_ORDER`] (3) preserves
+/// the historical 2-/3-way behaviour; set to 4+ to enable higher-order
+/// interaction detection (combinatorially more candidate tuples + decomposition
+/// terms, so raise deliberately). Values below 2 are clamped to 2 downstream.
+pub const MAX_INTERACTION_ORDER_ENV: &str = "STITCHD_STATS_MAX_INTERACTION_ORDER";
+
+/// Default operator-bounded maximum interaction order (preserves pre-Phase-10
+/// order-3 behaviour).
+pub const DEFAULT_MAX_INTERACTION_ORDER: usize = 3;
+
+/// Read the operator-bounded max interaction order from
+/// `STITCHD_STATS_MAX_INTERACTION_ORDER`, falling back to
+/// [`DEFAULT_MAX_INTERACTION_ORDER`] when unset / unparseable. Clamped to ≥ 2.
+///
+/// The env-var name is written as a string literal here (not via
+/// [`MAX_INTERACTION_ORDER_ENV`]) so the `cargo xtask docs` env-var scraper —
+/// which matches `env::var("STITCHD_…")` literals and resolves the
+/// `.unwrap_or(CONST)` default against the in-file `const` — picks it up.
+#[must_use]
+pub fn max_interaction_order_from_env() -> usize {
+    std::env::var("STITCHD_STATS_MAX_INTERACTION_ORDER")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_INTERACTION_ORDER)
+        .max(2)
+}
+
 /// Top-level sweep: compute and persist interactions for every environment
 /// represented in `running` (the currently-running experiments).
 ///
@@ -879,6 +937,7 @@ pub async fn run_interaction_sweep(
     metric_repo: &dyn MetricRepository,
     running: &[Experiment],
     computed_at: DateTime<Utc>,
+    max_order: usize,
 ) -> Result<usize, anyhow::Error> {
     // Group running experiments by environment.
     let mut by_env: HashMap<Uuid, Vec<&Experiment>> = HashMap::new();
@@ -938,6 +997,7 @@ pub async fn run_interaction_sweep(
             &metrics,
             &context_types,
             computed_at,
+            max_order,
         )
         .await?;
     }
@@ -1543,15 +1603,15 @@ mod tests {
             Uuid::from_u128(30),
         ];
         assert_eq!(
-            term_string(TermKind::Main { factor: 1 }, &ids),
+            term_string(&TermKind::Main { factor: 1 }, &ids),
             format!("main:{}", ids[1])
         );
         assert_eq!(
-            term_string(TermKind::TwoWay { a: 0, b: 2 }, &ids),
+            term_string(&TermKind::TwoWay { a: 0, b: 2 }, &ids),
             format!("2way:{}x{}", ids[0], ids[2])
         );
         assert_eq!(
-            term_string(TermKind::ThreeWay { a: 0, b: 1, c: 2 }, &ids),
+            term_string(&TermKind::ThreeWay { a: 0, b: 1, c: 2 }, &ids),
             format!("3way:{}x{}x{}", ids[0], ids[1], ids[2])
         );
     }
@@ -1580,6 +1640,7 @@ mod tests {
             &metrics,
             &["user".to_string()],
             ts(15),
+            3,
         )
         .await
         .unwrap();
@@ -1671,6 +1732,7 @@ mod tests {
             &metrics,
             &["user".to_string()],
             ts(15),
+            3,
         )
         .await
         .unwrap();
@@ -1757,6 +1819,7 @@ mod tests {
             &metrics,
             &["user".to_string()],
             ts(15),
+            3,
         )
         .await
         .unwrap();
@@ -1809,6 +1872,7 @@ mod tests {
             &metrics,
             &["user".to_string()],
             ts(15),
+            3,
         )
         .await
         .unwrap();
@@ -1860,6 +1924,7 @@ mod tests {
             &metrics,
             &["user".to_string()],
             ts(15),
+            3,
         )
         .await
         .unwrap();
@@ -1954,6 +2019,7 @@ mod tests {
             &metrics,
             &["user".to_string()],
             ts(15),
+            3,
         )
         .await
         .unwrap();
@@ -2089,7 +2155,7 @@ mod tests {
         let reader = FakeReader::with_agg(strong_2x2());
         let writer = FakeWriter::default();
 
-        let n = run_interaction_sweep(&reader, &writer, &repo, &[a, b], Utc::now())
+        let n = run_interaction_sweep(&reader, &writer, &repo, &[a, b], Utc::now(), 3)
             .await
             .unwrap();
         assert_eq!(n, 3, "one pair × one metric × one context → 3 term rows");
@@ -2123,7 +2189,7 @@ mod tests {
         let reader = FakeReader::with_agg(strong_2x2());
         let writer = FakeWriter::default();
 
-        let n = run_interaction_sweep(&reader, &writer, &repo, &[a, b], Utc::now())
+        let n = run_interaction_sweep(&reader, &writer, &repo, &[a, b], Utc::now(), 3)
             .await
             .unwrap();
         assert_eq!(n, 0, "experiments in different envs never pair");
@@ -2153,12 +2219,181 @@ mod tests {
             &metrics,
             &["user".to_string()],
             ts(15),
+            3,
         )
         .await
         .unwrap();
 
         assert_eq!(n, 0, "no shared population → no row");
         assert!(writer.rows.lock().unwrap().is_empty());
+    }
+
+    // ── Phase 10: operator-bounded order 4+ ───────────────────────────────────
+
+    /// A reader that returns an `order`-dimensional fully-populated conversion
+    /// grid sized to the requested tuple arity (variant_keys length == arity), so
+    /// the sweep can drive any order with a self-consistent grid. The (all-top)
+    /// corner carries a strong lift so the top-order interaction is detectable.
+    #[derive(Default)]
+    struct ArityReader;
+
+    fn arity_grid(order: usize) -> Vec<NdCellAggregate> {
+        // Full 2^order grid over {control, treatment}; plant a big lift only in
+        // the all-"treatment" corner so the top-order interaction is non-trivial.
+        let mut cells = Vec::with_capacity(1 << order);
+        for corner in 0u32..(1u32 << order) {
+            let variants: Vec<&str> = (0..order)
+                .map(|s| {
+                    if corner & (1 << s) != 0 {
+                        "treatment"
+                    } else {
+                        "control"
+                    }
+                })
+                .collect();
+            let all_top = corner == (1u32 << order) - 1;
+            let succ = if all_top { 600 } else { 100 };
+            cells.push(nd_binary(&variants, 1000, succ));
+        }
+        cells
+    }
+
+    #[async_trait]
+    impl InteractionCellReader for ArityReader {
+        async fn fetch_aggregation_cells(
+            &self,
+            _cfg: &AggregationConfig,
+            _env_id: &str,
+            exp_ids: &[&str],
+            _context_type: &str,
+            _interaction_end: DateTime<Utc>,
+        ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+            Ok(arity_grid(exp_ids.len()))
+        }
+        async fn fetch_funnel_cells(
+            &self,
+            _cfg: &stitchd_core::metric::FunnelConfig,
+            _env_id: &str,
+            exp_ids: &[&str],
+            _context_type: &str,
+            _interaction_end: DateTime<Utc>,
+        ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+            Ok(arity_grid(exp_ids.len()))
+        }
+        async fn fetch_ratio_cells(
+            &self,
+            _num_cfg: &AggregationConfig,
+            _den_cfg: &AggregationConfig,
+            _env_id: &str,
+            _exp_ids: &[&str],
+            _context_type: &str,
+            _interaction_end: DateTime<Utc>,
+        ) -> Result<Vec<NdCellAggregate>, anyhow::Error> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// With four overlapping experiments sharing one metric and `max_order = 4`,
+    /// the sweep emits every tuple of order 2..=4 with its full hierarchical
+    /// decomposition, INCLUDING the single order-4 tuple's 15 terms with the top
+    /// `4way:` term present. A `main:` term distinguishes per-tuple rows.
+    #[tokio::test]
+    async fn order4_sweep_emits_fourway_terms() {
+        let metric = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let exps: Vec<ExperimentMeta> = (1..=4)
+            .map(|i| meta(Uuid::from_u128(i), Uuid::new_v4(), metric))
+            .collect();
+        let mut metrics = HashMap::new();
+        metrics.insert(
+            metric,
+            agg_metric(metric, "checkout", AggregationOperator::Count),
+        );
+
+        let reader = ArityReader;
+        let writer = FakeWriter::default();
+        let n = compute_and_persist_interactions(
+            &reader,
+            &writer,
+            env,
+            &exps,
+            &metrics,
+            &["user".to_string()],
+            ts(15),
+            4,
+        )
+        .await
+        .unwrap();
+
+        // Tuple counts: C(4,2)=6 pairs ×3, C(4,3)=4 triples ×7, C(4,4)=1 quad ×15.
+        let expected = 6 * 3 + 4 * 7 + 15;
+        assert_eq!(
+            n, expected,
+            "pairs + triples + the order-4 quad decomposition"
+        );
+
+        let rows = writer.rows.lock().unwrap();
+        // Exactly one order-4 tuple, with 15 terms, the top one a `4way:`.
+        let order4: Vec<_> = rows.iter().filter(|r| r.interaction_order == 4).collect();
+        assert_eq!(order4.len(), 15, "the single quad's full hierarchical set");
+        let fourway = order4
+            .iter()
+            .filter(|r| r.term.starts_with("4way:"))
+            .count();
+        assert_eq!(fourway, 1, "exactly one top four-way term");
+        let threeway_subsets = order4
+            .iter()
+            .filter(|r| r.term.starts_with("3way:"))
+            .count();
+        assert_eq!(
+            threeway_subsets, 4,
+            "all four three-way subsets within the quad"
+        );
+        // The persisted experiment_ids on a 4-way row name all four (sorted).
+        let four_row = order4.iter().find(|r| r.term.starts_with("4way:")).unwrap();
+        assert_eq!(four_row.experiment_ids.len(), 4);
+        let mut sorted = four_row.experiment_ids.clone();
+        sorted.sort();
+        assert_eq!(four_row.experiment_ids, sorted, "ids sorted ascending");
+    }
+
+    /// The default cap (`max_order = 3`) over the SAME four experiments emits
+    /// NO order-4 rows — the cap is enforced (pairs + triples only).
+    #[tokio::test]
+    async fn default_cap_excludes_order4() {
+        let metric = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let exps: Vec<ExperimentMeta> = (1..=4)
+            .map(|i| meta(Uuid::from_u128(i), Uuid::new_v4(), metric))
+            .collect();
+        let mut metrics = HashMap::new();
+        metrics.insert(
+            metric,
+            agg_metric(metric, "checkout", AggregationOperator::Count),
+        );
+
+        let reader = ArityReader;
+        let writer = FakeWriter::default();
+        let n = compute_and_persist_interactions(
+            &reader,
+            &writer,
+            env,
+            &exps,
+            &metrics,
+            &["user".to_string()],
+            ts(15),
+            3, // default cap
+        )
+        .await
+        .unwrap();
+
+        // C(4,2)=6 pairs ×3 + C(4,3)=4 triples ×7 = 18 + 28 = 46; no order-4.
+        assert_eq!(n, 6 * 3 + 4 * 7);
+        let rows = writer.rows.lock().unwrap();
+        assert!(
+            rows.iter().all(|r| r.interaction_order <= 3),
+            "the order-3 cap must exclude any order-4 row"
+        );
     }
 }
 

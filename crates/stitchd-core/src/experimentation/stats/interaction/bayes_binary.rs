@@ -514,6 +514,40 @@ mod tests {
         assert!(find(&terms, TermKind::TwoWay { a: 0, b: 1 }).is_none());
     }
 
+    // ── order-4 (general NWay contrast) ───────────────────────────────────────
+
+    /// order==4 yields the full hierarchical set incl. the top four-way NWay term
+    /// and all four three-way subsets; a planted four-way drives high `prob`.
+    #[test]
+    fn order_four_returns_fourway_and_subsets() {
+        // Full 2×2×2×2; plant a four-way: the (1,1,1,*) three-way bump exists
+        // only at d=1, absent at d=0 → the four-way contrast is large.
+        let mut cells = Vec::new();
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    for d in 0..2 {
+                        let lifted = d == 1 && (a, b, c) == (1, 1, 1);
+                        let s = if lifted { 400 } else { 80 };
+                        cells.push(cell(&[a, b, c, d], 800, s));
+                    }
+                }
+            }
+        }
+        let terms = binary_bayes(&cells, 4);
+        // The top four-way NWay term is present and detected.
+        let four = find(&terms, TermKind::of(&[0, 1, 2, 3])).expect("four-way present");
+        assert!(four.prob.is_finite() && four.expected.is_finite());
+        assert!(four.prob > 0.9, "planted four-way prob={}", four.prob);
+        // All four three-way subsets surface too.
+        for trip in [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]] {
+            assert!(
+                find(&terms, TermKind::of(&trip)).is_some(),
+                "missing three-way {trip:?}"
+            );
+        }
+    }
+
     /// CI is symmetric about `expected` at ±Z95·sd, and width is positive.
     #[test]
     fn credible_interval_is_symmetric() {

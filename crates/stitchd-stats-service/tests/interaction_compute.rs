@@ -292,6 +292,7 @@ async fn significant_interaction_is_written() {
         &metrics,
         &["user".to_string()],
         Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap(),
+        3,
     )
     .await
     .expect("compute_and_persist should succeed");
@@ -374,6 +375,7 @@ async fn independent_effects_are_not_significant() {
         &metrics,
         &["user".to_string()],
         Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap(),
+        3,
     )
     .await
     .expect("compute_and_persist should succeed");
@@ -436,6 +438,7 @@ async fn same_group_pair_writes_nothing() {
         &metrics,
         &["user".to_string()],
         Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap(),
+        3,
     )
     .await
     .expect("compute_and_persist should succeed");
@@ -491,6 +494,7 @@ async fn insufficient_data_is_persisted() {
         &metrics,
         &["user".to_string()],
         Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap(),
+        3,
     )
     .await
     .expect("compute_and_persist should succeed");
@@ -594,6 +598,7 @@ async fn pre_exposure_events_are_excluded_itt() {
         &metrics,
         &["user".to_string()],
         end,
+        3,
     )
     .await
     .expect("compute_and_persist should succeed");
@@ -712,6 +717,7 @@ async fn three_way_sweep_keeps_distinct_main_effect_rows() {
         &metrics,
         &["user".to_string()],
         Utc.with_ymd_and_hms(2026, 5, 31, 0, 0, 0).unwrap(),
+        3,
     )
     .await
     .expect("compute_and_persist should succeed");
@@ -997,6 +1003,7 @@ async fn consolidated_aggregation_matches_per_tuple_three_way() {
         &metrics,
         &["user".to_string()],
         computed_at,
+        3,
     )
     .await
     .expect("old-path sweep");
@@ -1012,6 +1019,7 @@ async fn consolidated_aggregation_matches_per_tuple_three_way() {
         &metrics,
         &["user".to_string()],
         computed_at,
+        3,
     )
     .await
     .expect("new-path sweep");
@@ -1091,6 +1099,7 @@ async fn consolidated_aggregation_matches_per_tuple_pairwise() {
         &metrics,
         &["user".to_string()],
         computed_at,
+        3,
     )
     .await
     .expect("old-path sweep");
@@ -1105,6 +1114,7 @@ async fn consolidated_aggregation_matches_per_tuple_pairwise() {
         &metrics,
         &["user".to_string()],
         computed_at,
+        3,
     )
     .await
     .expect("new-path sweep");
@@ -1159,6 +1169,7 @@ async fn consolidated_aggregation_fetch_count_three_experiments() {
         &metrics,
         &["user".to_string()],
         computed_at,
+        3,
     )
     .await
     .expect("old-path sweep");
@@ -1173,6 +1184,7 @@ async fn consolidated_aggregation_fetch_count_three_experiments() {
         &metrics,
         &["user".to_string()],
         computed_at,
+        3,
     )
     .await
     .expect("new-path sweep");

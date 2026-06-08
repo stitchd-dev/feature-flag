@@ -135,13 +135,34 @@ pub fn ratio_terms(cells: &[NdRatioCell], order: usize) -> Vec<TermResult> {
         }
     }
 
-    // Three-way interaction (only when three experiments participate).
-    if order >= 3 {
+    // Three-way interaction at EXACTLY order 3 (the canonical {0,1,2} term).
+    // At order ≥ 4 every three-way subset is emitted by the higher-order block
+    // below via `k_way`, so guarding to `== 3` avoids double-counting {0,1,2}.
+    if order == 3 {
         terms.push(TermResult {
             kind: TermKind::ThreeWay { a: 0, b: 1, c: 2 },
             freq: three_way(cells, 0, 1, 2),
             bayes: None,
         });
+    }
+
+    // Higher-order interactions (order ≥ 4): every interaction subset of size
+    // ≥ 3 over factors `0..order` (the order==3 branch above fires only at
+    // exactly order 3, so at order ≥ 4 every three-way subset is emitted here).
+    // `k_way` handles any arity via the same `collapse` + `residual_q`/`did`
+    // machinery `two_way`/`three_way` use, so the math path is uniform.
+    if order >= 4 {
+        for mask in 1u32..(1u32 << order) {
+            let subset: Vec<usize> = (0..order).filter(|&f| mask & (1 << f) != 0).collect();
+            if subset.len() < 3 {
+                continue; // sizes 1 & 2 already emitted above.
+            }
+            terms.push(TermResult {
+                kind: TermKind::of(&subset),
+                freq: k_way(cells, &subset),
+                bayes: None,
+            });
+        }
     }
 
     terms
@@ -331,6 +352,68 @@ fn did_2x2x2(grid: &[RatioAgg], dims: &[usize], df: u32) -> InteractionResult {
     let low = (r[0][1][1] - r[0][1][0]) - (r[0][0][1] - r[0][0][0]);
     let delta = high - low;
 
+    let se = var_sum.sqrt();
+    if !positive(se) || !se.is_finite() {
+        return InteractionResult::insufficient(df);
+    }
+    let z = delta / se;
+    let p_value = super::z_to_p(z);
+    InteractionResult {
+        estimate: delta,
+        statistic: z,
+        p_value,
+        df,
+        significant: p_value < super::ALPHA && p_value.is_finite(),
+        insufficient_data: false,
+    }
+}
+
+// ── General k-way interaction (order ≥ 4) ─────────────────────────────────────
+
+/// General `k`-way interaction on the chosen `factors` (arity ≥ 2). Collapses
+/// onto the sub-grid and, when every retained factor is exactly 2-level, uses
+/// the exact difference-of-differences `z`-contrast over the `2^k` corners
+/// (`df = 1`); otherwise the residual quadratic form of the all-effects-below-`k`
+/// inverse-variance WLS fit ([`residual_q`]). This is the exact arity-generalised
+/// form of [`two_way`] / [`three_way`].
+fn k_way(cells: &[NdRatioCell], factors: &[usize]) -> InteractionResult {
+    let Some((dims, grid)) = collapse(cells, factors) else {
+        return InteractionResult::insufficient(1);
+    };
+    let df: u32 = dims.iter().map(|&d| (d - 1) as u32).product();
+    if dims.iter().all(|&d| d == 2) {
+        did_hypercube(&grid, &dims, df)
+    } else {
+        residual_q(&grid, &dims, df)
+    }
+}
+
+/// Exact `k`-way difference-of-differences `z`-contrast over the `2^k` corners
+/// of an all-2-level grid: the corner sign is `(−1)^(#coords at level 0)`, so
+/// the all-top corner is `+1` (the generalisation of [`did_2x2`] / [`did_2x2x2`]).
+/// Pooled delta-method SE; two-sided normal-tail p-value.
+fn did_hypercube(grid: &[RatioAgg], dims: &[usize], df: u32) -> InteractionResult {
+    let k = dims.len();
+    let mut delta = 0.0f64;
+    let mut var_sum = 0.0f64;
+    for corner in 0u32..(1u32 << k) {
+        let mut coords = Vec::with_capacity(k);
+        let mut zeros = 0u32;
+        for slot in 0..k {
+            if corner & (1 << slot) != 0 {
+                coords.push(1usize); // top level (== 1 for a 2-level factor)
+            } else {
+                coords.push(0);
+                zeros += 1;
+            }
+        }
+        let Some((r, v)) = grid[flat_index(&coords, dims)].ratio_var() else {
+            return InteractionResult::insufficient(df);
+        };
+        let sign = if zeros.is_multiple_of(2) { 1.0 } else { -1.0 };
+        delta += sign * r;
+        var_sum += v; // each corner appears once with coefficient ±1.
+    }
     let se = var_sum.sqrt();
     if !positive(se) || !se.is_finite() {
         return InteractionResult::insufficient(df);
@@ -981,6 +1064,74 @@ mod tests {
         let a = ratio_terms(&cells, 2);
         let b = ratio_terms(&cells, 2);
         assert_eq!(a, b);
+    }
+
+    // ── order-4 (generalized k-way) ───────────────────────────────────────────
+
+    fn full_2x2x2x2_ratio(
+        r: impl Fn(usize, usize, usize, usize) -> f64,
+        n: usize,
+    ) -> Vec<NdRatioCell> {
+        let mut v = Vec::with_capacity(16);
+        for a in 0..2 {
+            for b in 0..2 {
+                for c in 0..2 {
+                    for d in 0..2 {
+                        v.push(cell_with_ratio(&[a, b, c, d], r(a, b, c, d), 50.0, n));
+                    }
+                }
+            }
+        }
+        v
+    }
+
+    /// order-4 emits the full hierarchical set: 4 + 6 + 4 + 1 = 15 terms.
+    #[test]
+    fn order4_emits_fifteen_terms() {
+        let cells = full_2x2x2x2_ratio(|_, _, _, _| 0.20, 200);
+        let terms = ratio_terms(&cells, 4);
+        assert_eq!(terms.len(), 15);
+        assert!(terms.iter().any(|t| t.kind == TermKind::of(&[0, 1, 2, 3])));
+        assert!(terms.iter().all(|t| t.bayes.is_none()));
+    }
+
+    /// Planted four-way: the three-way (a,b,c) bump moves between d levels → only
+    /// the top four-way term is significant; df = 1 (2×2×2×2 z-contrast path).
+    #[test]
+    fn order4_planted_fourway_is_significant() {
+        let r = |a: usize, b: usize, c: usize, d: usize| {
+            let lifted = if d == 0 {
+                (a, b, c) == (1, 1, 1)
+            } else {
+                (a, b, c) == (1, 1, 0)
+            };
+            if lifted { 0.45 } else { 0.20 }
+        };
+        let cells = full_2x2x2x2_ratio(r, 400);
+        let terms = ratio_terms(&cells, 4);
+        let four = term(&terms, TermKind::of(&[0, 1, 2, 3]));
+        assert!(!four.freq.insufficient_data);
+        assert_eq!(four.freq.df, 1);
+        assert!(four.freq.significant, "p={}", four.freq.p_value);
+    }
+
+    /// Additive-on-the-ratio-scale model → no four-way → not significant.
+    #[test]
+    fn order4_additive_is_not_significant() {
+        let r = |a: usize, b: usize, c: usize, d: usize| {
+            0.10 + 0.03 * a as f64 + 0.03 * b as f64 + 0.03 * c as f64 + 0.03 * d as f64
+        };
+        let cells = full_2x2x2x2_ratio(r, 500);
+        let terms = ratio_terms(&cells, 4);
+        let four = term(&terms, TermKind::of(&[0, 1, 2, 3]));
+        assert!(!four.freq.insufficient_data);
+        assert!(!four.freq.significant, "p={}", four.freq.p_value);
+    }
+
+    #[test]
+    fn order4_is_deterministic() {
+        let cells = full_2x2x2x2_ratio(|_, _, _, _| 0.20, 200);
+        assert_eq!(ratio_terms(&cells, 4), ratio_terms(&cells, 4));
     }
 
     /// The 2×2 z-path and a manual delta-method computation agree on δ and z.

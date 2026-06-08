@@ -425,6 +425,8 @@ async fn main() -> anyhow::Result<()> {
                         sweep_metric_repo.as_ref(),
                         &running,
                         chrono::Utc::now(),
+                        stitchd_stats_service::interaction_compute::max_interaction_order_from_env(
+                        ),
                     )
                     .await
                     {
