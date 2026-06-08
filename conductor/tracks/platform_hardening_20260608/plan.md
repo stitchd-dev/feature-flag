@@ -25,12 +25,12 @@ idempotency store.
 ## Phase 2: SDK gRPC / Event-Ingest Idempotency
 <!-- depends: phase1 -->
 
-- [ ] Task 1: Per-batch idempotency key on event-ingest (`/v1/sdk/events:batch` REST + gRPC ingest) — server-side dedup (ledger or ReplacingMergeTree dedup-key) — TDD
+- [x] Task 1: Per-batch idempotency key on event-ingest (`/v1/sdk/events:batch` REST + gRPC ingest) — server-side dedup (ledger or ReplacingMergeTree dedup-key) — TDD [f8d6d91]
   <!-- files: crates/stitchd-gateway/src/routes/sdk_backend.rs, crates/stitchd-event-writer/src, proto -->
-- [ ] Task 2: Rust SDK stamps each flush batch with a stable idempotency key — at-least-once flush becomes exactly-once at the server
+- [x] Task 2: Rust SDK stamps each flush batch with a stable idempotency key — at-least-once flush becomes exactly-once at the server [f8d6d91]
   <!-- files: sdks/rust/src/events.rs, sdks/rust/src/event_buffer.rs, sdks/rust/src/client.rs -->
   <!-- depends: task1 -->
-- [ ] Task 3: Live-CH integration test — duplicate batch replay does not double-count (AC-6)
+- [x] Task 3: Live-CH integration test — duplicate batch replay does not double-count (AC-6) [f8d6d91]
   <!-- files: crates/stitchd-gateway/src/tests, sdks/rust/tests -->
   <!-- depends: task1 -->
 - [ ] Task: Conductor - User Manual Verification 'SDK gRPC / Event-Ingest Idempotency' (Protocol in workflow.md)

@@ -73,3 +73,13 @@ From `conductor/patterns.md` — directly relevant to this track:
   - GOTCHA (docs scraper): `cargo xtask docs` env-var scraper only matches LITERAL `env::var("STITCHD_…")` / `env_or(...)`, NOT `env::var(CONST)`. Inline the literal (kept const + debug_assert_eq) so the var lands in env-vars.md. (Existing const-declared STITCHD_EVENT_QUOTA_PER_SEC is undocumented for this reason.)
   - GOTCHA (#![deny(warnings, clippy::all)] in gateway): clippy::type_complexity errors on a Mutex<HashMap<(String,String),(String,Option<_>)>> — factor into `type` aliases.
   - Deviation: response_body stored as BYTEA + content_type (not jsonb) for content-agnostic byte-exact replay.
+
+## [2026-06-08] Phase 2: SDK/Event-Ingest Idempotency [f8d6d91]
+- **Implemented:** SDK stamps Idempotency-Key header on both event POST paths; server-side dedup IS the Phase 1 gateway middleware (no proto change, no new store).
+- **Learnings:**
+  - Two SDK event paths: EventBuffer (metric events → POST /v1/events/track, inline retry loop replays identical body → fresh v4 UUID per batch reused across retries = fully exactly-once) and HttpEventSink (flag-eval → POST /v1/sdk/events:batch, re-enqueue model → content-derived uuid v5 key dedups exact re-sends only).
+  - Reusing Phase 1's middleware avoided proto/schema changes entirely — the SDK just adds a header. SDK uses x-sdk-key (no Authorization) → shares the middleware "anon" scope; safe because keys are globally unique UUIDs.
+  - GOTCHA: uuid::Uuid::new_v5 needs the `v5` feature (workspace uuid only had v4/serde); add `features=["v5"]` on the crate's dep line.
+  - GOTCHA (clippy): MutexGuard held across .await — clone-and-drop the guard in a block before awaiting.
+  - GOTCHA (shell): backticks inside a double-quoted `git commit -m "..."` are command-substituted by zsh — corrupted "`v5`"→"". Use single quotes or avoid backticks in -m.
+  - Eval log is plain MergeTree (no evaluation_id — retired in schema cutover), so per-event CH dedup would need a schema change; batch-level header dedup chosen instead.
