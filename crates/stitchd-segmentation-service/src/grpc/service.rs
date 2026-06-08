@@ -7,7 +7,8 @@ use tonic::{Request, Response, Status};
 use stitchd_core::segment::{Segment, SegmentType};
 use stitchd_db::SegmentRepository;
 use stitchd_proto::segments::v1::{
-    AddEntriesRequest, AddEntriesResponse, AdminSegment, CreateAdminSegmentRequest,
+    ActivateListGenerationRequest, ActivateListGenerationResponse, AddEntriesRequest,
+    AddEntriesResponse, AdminSegment, CreateAdminSegmentRequest,
     DeleteAdminSegmentRequest, DeleteAdminSegmentResponse, EvaluateMembershipRequest,
     EvaluateMembershipResponse, GetAdminSegmentRequest, GetSegmentRequest,
     ListAdminSegmentsRequest, ListAdminSegmentsResponse, ListSegmentsRequest, ListSegmentsResponse,
@@ -735,6 +736,42 @@ impl SegmentationService for SegmentationServiceImpl {
             .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
 
         Ok(Response::new(RemoveEntriesResponse { removed_count }))
+    }
+
+    async fn activate_list_generation(
+        &self,
+        req: Request<ActivateListGenerationRequest>,
+    ) -> Result<Response<ActivateListGenerationResponse>, Status> {
+        let r = req.into_inner();
+        let segment_id = r
+            .segment_id
+            .parse::<uuid::Uuid>()
+            .map(stitchd_core::id::SegmentId::from_uuid)
+            .map_err(|_| {
+                Status::invalid_argument(format!("invalid segment_id: {}", r.segment_id))
+            })?;
+
+        let context_type = if r.context_type.is_empty() {
+            "user"
+        } else {
+            r.context_type.as_str()
+        };
+
+        let include_count = i64::try_from(r.include.len()).unwrap_or(i64::MAX);
+        let exclude_count = i64::try_from(r.exclude.len()).unwrap_or(i64::MAX);
+
+        // Atomic full-replace via the generation-swap: writes a fresh generation
+        // for the prepared member set then CAS-flips the active pointer.
+        self.state
+            .segment_repo
+            .set_list_entries(segment_id, context_type, &r.include, &r.exclude)
+            .await
+            .map_err(|e| Status::from(SegmentationServiceError::from(e)))?;
+
+        Ok(Response::new(ActivateListGenerationResponse {
+            include_count,
+            exclude_count,
+        }))
     }
 }
 

@@ -13,16 +13,13 @@
 //! `ConditionExpr` (bytes on the wire), carried in the stored payload as a JSON
 //! string the scheduler passes through verbatim.
 //!
-//! ## Limitation: list-generation activation
-//! The spec (A4) also mentions, for **list-based** segments, "activate a prepared
-//! generation". The current segmentation-service proto exposes only entry-level
-//! mutation RPCs (`AddEntries`/`RemoveEntries`/`PatchSegmentEntries`) — there is
-//! **no** "activate a prepared generation" RPC to dispatch to. So a list-generation
-//! swap is *not* supported by the scheduler here; this apply path is scoped to the
-//! rule/definition update. When such an RPC is introduced, a `list_generation`
-//! payload kind is a clean extension on the mirror below. A payload that asks for
-//! list-generation activation is recorded as a `Failed` run with that reason rather
-//! than silently dropped.
+//! ## List-generation activation (spec A4)
+//! For **list-based** segments, a scheduled change may instead "activate a prepared
+//! generation": the payload's `kind` is `list_generation` and it carries the full
+//! prepared `include`/`exclude` member set. The scheduler dispatches it to the
+//! segmentation-service `ActivateListGeneration` RPC, which atomically full-replaces
+//! the member set via the ScyllaDB generation-swap (fresh generation + CAS pointer
+//! flip) — so the scheduled swap actually fires (flag_lifecycle_20260604 Phase 10).
 //!
 //! ## Outcome classification
 //! Mirrors the flag/experiment apply paths: a stale-version conflict
@@ -36,17 +33,24 @@ use serde::Deserialize;
 use tonic::Status;
 
 use stitchd_db::ScheduledChangeRow;
-use stitchd_proto::segments::v1::UpdateAdminSegmentRequest;
+use stitchd_proto::segments::v1::{ActivateListGenerationRequest, UpdateAdminSegmentRequest};
 
 use crate::apply::{Applier, ApplyOutcome};
 
-/// Abstraction over the segmentation-service `UpdateAdminSegment` RPC so the apply
-/// path is unit-testable with a stub (no live segmentation-service).
+/// Abstraction over the segmentation-service RPCs used by the apply path so it is
+/// unit-testable with a stub (no live segmentation-service).
 #[async_trait]
 pub trait SegmentUpdater: Send + Sync {
-    /// Invoke `UpdateAdminSegment`. Returns the gRPC status on failure (the apply
-    /// path inspects its code to classify the outcome).
+    /// Invoke `UpdateAdminSegment` (definition update). Returns the gRPC status on
+    /// failure (the apply path inspects its code to classify the outcome).
     async fn update_segment(&self, req: UpdateAdminSegmentRequest) -> Result<(), Status>;
+
+    /// Invoke `ActivateListGeneration` (list-segment generation swap). Returns the
+    /// gRPC status on failure.
+    async fn activate_list_generation(
+        &self,
+        req: ActivateListGenerationRequest,
+    ) -> Result<(), Status>;
 }
 
 /// Production [`SegmentUpdater`] backed by a tonic segmentation-service client.
@@ -85,6 +89,17 @@ impl SegmentUpdater for GrpcSegmentUpdater {
             .await?;
         Ok(())
     }
+
+    async fn activate_list_generation(
+        &self,
+        req: ActivateListGenerationRequest,
+    ) -> Result<(), Status> {
+        let mut client = self.client.lock().await;
+        client
+            .activate_list_generation(tonic::Request::new(req))
+            .await?;
+        Ok(())
+    }
 }
 
 /// Applies due segment changes via a [`SegmentUpdater`].
@@ -112,19 +127,27 @@ impl<U: SegmentUpdater> Applier for SegmentApplier<U> {
                 }
             };
 
-        let req = match payload.into_request(change) {
-            Ok(r) => r,
-            Err(e) => return Ok(ApplyOutcome::Failed(e)),
+        let result = match payload.kind {
+            SegmentMutationKind::DefinitionUpdate => {
+                self.updater
+                    .update_segment(payload.into_update_request(change))
+                    .await
+            }
+            SegmentMutationKind::ListGeneration => {
+                self.updater
+                    .activate_list_generation(payload.into_activation_request(change))
+                    .await
+            }
         };
 
-        match self.updater.update_segment(req).await {
+        match result {
             Ok(()) => Ok(ApplyOutcome::Applied),
             Err(status) => Ok(classify_status(&status)),
         }
     }
 }
 
-/// Map an `UpdateAdminSegment` error status to an [`ApplyOutcome`]. A stale-version
+/// Map an RPC error status to an [`ApplyOutcome`]. A stale-version
 /// conflict is recoverable (`Skipped` — a recurring schedule advances); everything
 /// else is `Failed`.
 fn classify_status(status: &Status) -> ApplyOutcome {
@@ -139,9 +162,9 @@ fn classify_status(status: &Status) -> ApplyOutcome {
 /// JSON shape stored in `scheduled_changes.mutation_payload` for a segment change.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SegmentMutationPayload {
-    /// Mutation kind. Only `definition_update` is dispatchable today;
-    /// `list_generation` is reserved for a future "activate prepared generation"
-    /// RPC and is rejected with a clear reason until that RPC exists.
+    /// Mutation kind. `definition_update` dispatches `UpdateAdminSegment`;
+    /// `list_generation` dispatches `ActivateListGeneration` (the prepared
+    /// member-set swap).
     #[serde(default = "default_segment_kind")]
     pub kind: SegmentMutationKind,
     /// Optimistic-concurrency version expected by segmentation-service.
@@ -163,9 +186,15 @@ pub struct SegmentMutationPayload {
     /// Context kind this list targets; defaults to "user" server-side when empty.
     #[serde(default)]
     pub context_type: String,
-    /// Keys to explicitly exclude (list-based only).
+    /// Keys to explicitly exclude (list-based definition update only).
     #[serde(default)]
     pub excluded_keys: Vec<String>,
+    /// `list_generation` only: the full prepared include-list to activate.
+    #[serde(default)]
+    pub include: Vec<String>,
+    /// `list_generation` only: the full prepared exclude-list to activate.
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 const fn default_segment_kind() -> SegmentMutationKind {
@@ -178,36 +207,33 @@ const fn default_segment_kind() -> SegmentMutationKind {
 pub enum SegmentMutationKind {
     /// Swap in a new rule-expression / definition via `UpdateAdminSegment`.
     DefinitionUpdate,
-    /// Activate a prepared list generation — NOT yet dispatchable (no RPC).
+    /// Activate a prepared list generation via `ActivateListGeneration`.
     ListGeneration,
 }
 
 impl SegmentMutationPayload {
-    /// Build the `UpdateAdminSegmentRequest` for `change`. Rejects the
-    /// not-yet-supported `list_generation` kind with a clear reason.
-    fn into_request(
-        self,
-        change: &ScheduledChangeRow,
-    ) -> Result<UpdateAdminSegmentRequest, String> {
-        match self.kind {
-            SegmentMutationKind::ListGeneration => Err(
-                "list-generation activation is not supported by the scheduler: \
-                 segmentation-service exposes no 'activate prepared generation' RPC \
-                 (only entry-level AddEntries/RemoveEntries/PatchSegmentEntries). \
-                 Scoped to definition updates."
-                    .to_string(),
-            ),
-            SegmentMutationKind::DefinitionUpdate => Ok(UpdateAdminSegmentRequest {
-                segment_id: change.entity_id.to_string(),
-                name: self.name,
-                description: self.description,
-                tags: self.tags,
-                condition_expr: self.condition_expr.into_bytes(),
-                user_list: Vec::new(),
-                version: self.version,
-                context_type: self.context_type,
-                excluded_keys: self.excluded_keys,
-            }),
+    /// Build the `UpdateAdminSegmentRequest` for a `definition_update` change.
+    fn into_update_request(self, change: &ScheduledChangeRow) -> UpdateAdminSegmentRequest {
+        UpdateAdminSegmentRequest {
+            segment_id: change.entity_id.to_string(),
+            name: self.name,
+            description: self.description,
+            tags: self.tags,
+            condition_expr: self.condition_expr.into_bytes(),
+            user_list: Vec::new(),
+            version: self.version,
+            context_type: self.context_type,
+            excluded_keys: self.excluded_keys,
+        }
+    }
+
+    /// Build the `ActivateListGenerationRequest` for a `list_generation` change.
+    fn into_activation_request(self, change: &ScheduledChangeRow) -> ActivateListGenerationRequest {
+        ActivateListGenerationRequest {
+            segment_id: change.entity_id.to_string(),
+            context_type: self.context_type,
+            include: self.include,
+            exclude: self.exclude,
         }
     }
 }
@@ -242,18 +268,21 @@ mod tests {
     struct StubUpdater {
         result: Mutex<Option<Status>>,
         seen: Mutex<Option<UpdateAdminSegmentRequest>>,
+        seen_activation: Mutex<Option<ActivateListGenerationRequest>>,
     }
     impl StubUpdater {
         fn ok() -> Self {
             Self {
                 result: Mutex::new(None),
                 seen: Mutex::new(None),
+                seen_activation: Mutex::new(None),
             }
         }
         fn err(status: Status) -> Self {
             Self {
                 result: Mutex::new(Some(status)),
                 seen: Mutex::new(None),
+                seen_activation: Mutex::new(None),
             }
         }
     }
@@ -261,6 +290,16 @@ mod tests {
     impl SegmentUpdater for StubUpdater {
         async fn update_segment(&self, req: UpdateAdminSegmentRequest) -> Result<(), Status> {
             *self.seen.lock().unwrap() = Some(req);
+            match self.result.lock().unwrap().clone() {
+                Some(s) => Err(s),
+                None => Ok(()),
+            }
+        }
+        async fn activate_list_generation(
+            &self,
+            req: ActivateListGenerationRequest,
+        ) -> Result<(), Status> {
+            *self.seen_activation.lock().unwrap() = Some(req);
             match self.result.lock().unwrap().clone() {
                 Some(s) => Err(s),
                 None => Ok(()),
@@ -301,16 +340,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_generation_kind_is_failed_with_limitation_reason() {
-        let payload = serde_json::json!({ "kind": "list_generation", "version": 1 });
+    async fn list_generation_kind_activates_prepared_generation() {
+        // Phase 10.3: a list_generation payload now fires ActivateListGeneration
+        // with the prepared include/exclude member set (was rejected before).
+        let payload = serde_json::json!({
+            "kind": "list_generation",
+            "context_type": "user",
+            "include": ["alice", "bob"],
+            "exclude": ["mallory"],
+        });
         let change = segment_change(payload);
         let applier = SegmentApplier::new(StubUpdater::ok());
-        match applier.apply(&change).await.unwrap() {
-            ApplyOutcome::Failed(reason) => {
-                assert!(reason.contains("list-generation"), "reason: {reason}");
-            }
-            other => panic!("expected Failed, got {other:?}"),
-        }
+        assert_eq!(applier.apply(&change).await.unwrap(), ApplyOutcome::Applied);
+
+        let seen = applier
+            .updater
+            .seen_activation
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("activation dispatched");
+        assert_eq!(seen.segment_id, change.entity_id.to_string());
+        assert_eq!(seen.context_type, "user");
+        assert_eq!(seen.include, vec!["alice", "bob"]);
+        assert_eq!(seen.exclude, vec!["mallory"]);
+        // No definition-update RPC was sent.
+        assert!(applier.updater.seen.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn list_generation_activation_failure_is_classified() {
+        // A NOT_FOUND from the activation RPC is non-recoverable (Failed).
+        let payload = serde_json::json!({
+            "kind": "list_generation",
+            "include": ["x"],
+        });
+        let change = segment_change(payload);
+        let applier = SegmentApplier::new(StubUpdater::err(Status::not_found("segment gone")));
+        assert!(matches!(
+            applier.apply(&change).await.unwrap(),
+            ApplyOutcome::Failed(_)
+        ));
     }
 
     #[tokio::test]
