@@ -67,7 +67,7 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 3' [autonomous] (Protocol in workflow.md)
 
-## Phase 4: Stats-Service Static Reallocation Pass [checkpoint: pending]
+## Phase 4: Stats-Service Static Reallocation Pass [checkpoint: 17f077c]
 <!-- execution: sequential -->
 <!-- depends: phase2, phase3 -->
 
