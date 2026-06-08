@@ -62,3 +62,14 @@ From `conductor/patterns.md` — directly relevant to this track:
   - `run_interaction_sweep` groups by environment internally, so passing the env-subset is equivalent to a global sweep but cheaper.
   - GOTCHA: a true live-CH e2e through recompute() is infeasible as a self-seeding #[ignore] test because it calls fetch_running_experiments over the experimentation-service gRPC (not available in self-seeding tests). Tested the env-scoping seam at unit level with fake reader/writer/repos instead → no ci.yml `--test` list change needed.
   - `stitchd_db::RepositoryError` is the re-export (NOT `stitchd_db::repository::RepositoryError`, which is private).
+
+## [2026-06-08] Phase 1: Idempotency-Key Middleware [a00c79a]
+- **Implemented:** gateway/idempotency.rs (IdempotencyStore trait + PgIdempotencyStore + axum middleware + sweeper), migration 20260608000003, main.rs wiring.
+- **Learnings:**
+  - The gateway had ZERO DB access (pure REST↔gRPC). Idempotency needs durable state → gateway gains a narrowly-scoped PgPool (documented tech-stack deviation). Layered in main.rs (NOT build_router) so it applies globally without touching build_router's many test callers; disabled when STITCHD_DATABASE_URL unset (fail-safe + backward compat).
+  - Scope from SHA-256(Authorization header) avoids any middleware-ordering dependency (works regardless of whether auth ran first).
+  - axum body buffering: `req.into_parts()` → `axum::body::to_bytes(body, LIMIT)` → fingerprint → `Request::from_parts(parts, Body::from(bytes))`; same for the response to capture+replay.
+  - Concurrency via `INSERT … ON CONFLICT (scope,key) DO NOTHING` (rows_affected==1 ⇒ we own it); in-flight (NULL status) → 409; completed → replay; different request_hash → 422.
+  - GOTCHA (docs scraper): `cargo xtask docs` env-var scraper only matches LITERAL `env::var("STITCHD_…")` / `env_or(...)`, NOT `env::var(CONST)`. Inline the literal (kept const + debug_assert_eq) so the var lands in env-vars.md. (Existing const-declared STITCHD_EVENT_QUOTA_PER_SEC is undocumented for this reason.)
+  - GOTCHA (#![deny(warnings, clippy::all)] in gateway): clippy::type_complexity errors on a Mutex<HashMap<(String,String),(String,Option<_>)>> — factor into `type` aliases.
+  - Deviation: response_body stored as BYTEA + content_type (not jsonb) for content-agnostic byte-exact replay.

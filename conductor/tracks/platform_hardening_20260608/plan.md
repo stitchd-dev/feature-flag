@@ -9,15 +9,15 @@ idempotency store.
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task 1: Migration — `idempotency_keys` PG table (`key`, `scope`, `request_hash`, `response_status`, `response_body jsonb`, `created_at`; unique `(scope, key)`) + regenerate sqlx offline cache
+- [x] Task 1: Migration — `idempotency_keys` PG table (`key`, `scope`, `request_hash`, `response_status`, `response_body jsonb`, `created_at`; unique `(scope, key)`) + regenerate sqlx offline cache [a00c79a]
   <!-- files: crates/stitchd-db/migrations, .sqlx -->
-- [ ] Task 2: Idempotency middleware — fingerprint (method+path+canonical body), replay stored 2xx, 422 on key-reuse-with-different-fingerprint, fail-open on store error — TDD
+- [x] Task 2: Idempotency middleware — fingerprint (method+path+canonical body), replay stored 2xx, 422 on key-reuse-with-different-fingerprint, fail-open on store error — TDD [a00c79a]
   <!-- files: crates/stitchd-gateway/src/middleware/idempotency.rs, crates/stitchd-gateway/src/middleware/mod.rs -->
   <!-- depends: task1 -->
-- [ ] Task 3: TTL sweeper tokio task + `STITCHD_GATEWAY_IDEMPOTENCY_TTL_SECS` env var (default 86400) + env-vars doc
+- [x] Task 3: TTL sweeper tokio task + `STITCHD_GATEWAY_IDEMPOTENCY_TTL_SECS` env var (default 86400) + env-vars doc [a00c79a]
   <!-- files: crates/stitchd-gateway/src/main.rs, crates/stitchd-gateway/src/state.rs -->
   <!-- depends: task1 -->
-- [ ] Task 4: Wire layer onto all mutating `/v1/*` routes + integration tests (AC-1..4)
+- [x] Task 4: Wire layer onto all mutating `/v1/*` routes + integration tests (AC-1..4) [a00c79a]
   <!-- files: crates/stitchd-gateway/src/router.rs, crates/stitchd-gateway/src/tests -->
   <!-- depends: task2 -->
 - [ ] Task: Conductor - User Manual Verification 'Idempotency Store + REST Mutation Middleware' (Protocol in workflow.md)
