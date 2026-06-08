@@ -51,18 +51,18 @@ idempotency store.
 ## Phase 4: Cursor-Based Pagination Migration
 <!-- depends: -->
 
-- [ ] Task 1: Document the cursor contract in `tech-stack.md` (reverses domain_boundaries page-based canonical) — opaque keyset cursor, `?cursor=&limit=`, `{items, next_cursor}`
+- [x] Task 1: Document the cursor contract in `tech-stack.md` (reverses domain_boundaries page-based canonical) — opaque keyset cursor, `?cursor=&limit=`, `{items, next_cursor}` [67c76f8]
   <!-- files: conductor/tech-stack.md -->
-- [ ] Task 2: Shared cursor primitives — `CursorParams` + `CursorPage<T>` + opaque-token encode/decode (base64 keyset) + proto messages — TDD
+- [x] Task 2: Shared gateway cursor primitives — `CursorParams` + `CursorPage<T>` + opaque base64url token encode/decode — TDD [67c76f8] (proto messages deferred to the route sweep)
   <!-- files: crates/stitchd-gateway/src/pagination.rs, proto -->
   <!-- depends: task1 -->
-- [ ] Task 3: Migrate repo queries to keyset pagination (replace OFFSET + COUNT(*) OVER()) — TDD per repo
+- [ ] Task 3: Migrate repo queries to keyset pagination — TDD per repo  [REMAINING: 78 _paginated methods across 30 files]
   <!-- files: crates/stitchd-db/src/repository -->
   <!-- depends: task2 -->
 - [ ] Task 4: Migrate gateway list routes + OpenAPI contract surface
   <!-- files: crates/stitchd-gateway/src/routes, crates/stitchd-gateway/src/openapi.rs -->
   <!-- depends: task3 -->
-- [ ] Task 5: Migrate Admin UI list views to cursor (next/prev tokens, drop page numbers) + vitest
+- [ ] Task 5: Migrate Admin UI list views to cursor (next/prev tokens, drop page numbers) + vitest  [REMAINING: 24 UI files + Pagination.tsx/usePaginatedList.ts]
   <!-- files: admin/src -->
   <!-- depends: task4 -->
 - [ ] Task: Conductor - User Manual Verification 'Cursor-Based Pagination Migration' (Protocol in workflow.md)

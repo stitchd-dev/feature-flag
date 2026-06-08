@@ -83,3 +83,13 @@ From `conductor/patterns.md` — directly relevant to this track:
   - GOTCHA (clippy): MutexGuard held across .await — clone-and-drop the guard in a block before awaiting.
   - GOTCHA (shell): backticks inside a double-quoted `git commit -m "..."` are command-substituted by zsh — corrupted "`v5`"→"". Use single quotes or avoid backticks in -m.
   - Eval log is plain MergeTree (no evaluation_id — retired in schema cutover), so per-event CH dedup would need a schema change; batch-level header dedup chosen instead.
+
+## [2026-06-08] Phase 4: Cursor Pagination — FOUNDATION ONLY [67c76f8]
+- **Implemented:** Task 1 (tech-stack cursor contract) + Task 2 (gateway::pagination cursor primitives: CursorParams/CursorPage/encode_cursor/decode_cursor + 6 tests). Additive — page-based types untouched.
+- **Tasks 3-5 NOT done (scoped, deferred):** the breaking full-stack sweep.
+- **Learnings / why deferred:**
+  - Surface measured: 78 `_paginated` repo methods across 30 files, 5 proto files, 8 gateway route files, 24 Admin UI files + shared Pagination.tsx/usePaginatedList.ts.
+  - Because the gateway is a pure proxy, cursor pagination is NOT gateway-local: keyset logic lives in each service's repo, passed via proto, so the sweep needs proto cursor fields + every service repo's keyset query + every route + all UI — it's a coordinated breaking change.
+  - It REVERSES domain_boundaries_20260530's deliberate page-based canonical and removes Admin UI page-number navigation (keyset can't random-access an arbitrary page) — a UX regression the team had deliberately chosen against. This warrants explicit review, not an autonomous rush.
+  - Decision: deliver the correct, tested, additive foundation (breaks nothing, CI-green) and recommend the breaking sweep as a dedicated reviewed effort. Rushing 78 repo methods + 5 protos + 24 UI files half-broken would violate the keep-CI-green / don't-ship-broken principle.
+  - Opaque token = base64url(JSON(keyset)); `from_overfetch` (fetch limit+1, surplus row ⇒ next_cursor) is the repo idiom for the sweep.
