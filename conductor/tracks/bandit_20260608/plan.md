@@ -146,18 +146,18 @@ Phase-level wave summary:
       <!-- files: crates/stitchd-stats-service/src/bandit.rs, crates/stitchd-stats-service/src/compute.rs -->
 - [x] Task: Conductor - User Manual Verification 'Phase 9' [autonomous] (Protocol in workflow.md)
 
-## Phase 10: Bandit-Aware Interaction Analysis + Order 4+
+## Phase 10: Bandit-Aware Interaction Analysis + Order 4+ [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
 - [ ] Task 1: Time-varying-allocation correctness in interaction sweep + SRM (no spurious
       flags when a participant is a bandit); tests over shifting-allocation fixtures.
       <!-- files: crates/stitchd-stats-service/src/interaction_pairs.rs, crates/stitchd-stats-service/src/compute.rs -->
-- [ ] Task 2: Generalize interaction order cap 3 → operator-bounded 4+; extend hierarchical
+- [x] Task 2: Generalize interaction order cap [a4b32cf] 3 → operator-bounded 4+; extend hierarchical
       decomposition + BH-FDR; live-CH integration test; **update CI `--test` list**.
       <!-- files: crates/stitchd-stats-service/src/*, .github/workflows/ci.yml -->
       <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 10' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 10' [autonomous] (Protocol in workflow.md)
 
 ## Phase 11: REST/Proto Output Surfacing
 <!-- execution: sequential -->

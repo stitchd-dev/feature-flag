@@ -590,3 +590,76 @@ From `conductor/patterns.md` (read before starting):
   `bandit_reallocation` `--ignored` green against live CH+PG; full
   `cargo build --workspace --all-targets` clean. No `.sqlx` delta (runtime
   `sqlx::query`/`query_scalar`, no macros).
+
+## Phase 10 — Bandit-Aware Interaction Analysis + Order 4+ (2026-06-08)
+
+### Task 10.1 — bandit-aware SRM + interaction correctness (commit c7385ed)
+- **SRM was the only real bug.** The Phase-4 weighted SRM tests observed
+  assignments against `variant_expected_bp` (bound rule / default-rule snapshot).
+  For a bandit that static split is the WRONG null — once the bandit exploits, the
+  realized split diverges and the chi-square fires RED on a *healthy* experiment.
+  Fix: `srm_json_for` gained `is_bandit`; for a bandit it short-circuits AFTER the
+  undefined-context guards (<2 variants / 0 total → None) and emits Green +
+  `"bandit_skipped": true`, surfacing realized per-arm counts (expected==observed,
+  contribution 0). The principled "expected" for a bandit is the time-weighted
+  exposure, which the realized counts trivially match (χ²≈0) — i.e. no design to
+  mismatch. The min-exploration floor (not SRM) guarantees no starved arm.
+- **Interaction math needed NO change (verified, documented).** The ITT
+  first-exposure self-join keys on assignment time so cell membership is correct
+  under a shifting split, and every per-cell estimator (log-linear χ², ANOVA F,
+  ratio delta, Beta/Normal Bayesian) compares n-WEIGHTED per-cell rates — unequal
+  cell sizes are already handled, no equal-allocation assumption. So a shifting
+  bandit produces no spurious interaction significance; only SRM had a stale null.
+- `is_bandit` sourced from `RunningExperiment.experiment_mode` (already decoded by
+  the Phase-1 scheduler), so no new plumbing.
+
+### Task 10.2 — generalize order 3 → operator-bounded 4+ (commit a4b32cf)
+- **Keep the dedicated TermKind variants for orders 1-3; add NWay{factors} for
+  ≥4.** Replacing the enum wholesale would have churned the deep IPF/ANOVA math
+  AND broken the byte-for-byte golden snapshots (`binary_bayes_golden_bits_order3`,
+  the anova/loglinear order-≤3 regression gates). Instead: `TermKind::of(&factors)`
+  canonicalises by arity (Main/TwoWay/ThreeWay for 1/2/3, NWay for ≥4), and a
+  `factors()` accessor abstracts matching. Orders ≤3 take the UNCHANGED code path
+  → snapshots stay identical; orders ≥4 take a new general path. This was the key
+  decision that made the change tractable + low-risk.
+- **`bayes_common` and ratio `residual_q`/`design_columns` were ALREADY
+  arity-general** (subset enumeration + WLS over all effects below k). Only
+  `enumerate_terms` (capped at one ThreeWay) and the ThreeWay corner contrast were
+  order-bound. Generalizing `enumerate_terms` to the full subset lattice + adding a
+  general 2^k-corner DiD contrast (`contrast_coeffs` NWay arm) generalized ALL
+  THREE Bayesian families at once (binary/continuous/ratio route through it).
+- **loglinear is the genuinely hard part.** The order-3 three-way is no-four-way
+  IPF over `[OAB][OAC][OBC]`. Generalized to `k_way`: fit the no-top-way model by
+  IPF over every outcome-bearing (|S|-1)-margin of the subset, flat mixed-radix
+  table, Pearson χ² on Π(L_f-1) df. anova order≥4 uses the inclusion-exclusion SS
+  partition `SS(S)=Σ_{T⊆S}(-1)^(|S|-|T|)SS_cells(T)` (submask iteration
+  `sub=(sub-1)&mask`); ratio order≥4 uses `did_hypercube` (2^k z-contrast) +
+  existing `residual_q`.
+- **GOTCHA: the `order==3` dedicated-branch double-count.** Both loglinear and
+  ratio emit the canonical {0,1,2} ThreeWay in an `if order==3` (loglinear) /
+  `if order>=3` (ratio) branch. At order 4 the higher-order loop emits ALL
+  three-way subsets incl. {0,1,2}, so the dedicated branch must be `== 3` (ratio
+  had `>= 3` → double-counted {0,1,2} → 16 terms instead of 15). The order-≥4 loop
+  emits every subset size ≥3 with NO {0,1,2} skip (the dedicated branch is inactive
+  at order 4).
+- **The SQL CTE builder (`emit_shared_cte`) was already arity-general** (loops
+  `0..k`); only `validate_exp_ids` capped at 3. Generalized to ≥2; the operator cap
+  is enforced upstream in `compute_and_persist_interactions`. Forgetting this
+  surfaced as a live-test "interaction order must be 2 or 3" InvalidConfig.
+- **Env var for docs scraper:** `cargo xtask docs` matches the LITERAL string
+  `env::var("STITCHD_…")` and resolves `.unwrap_or(CONST)` against an in-file
+  `const`. So `max_interaction_order_from_env()` must use the string literal
+  (not a const identifier) for the var name; the default `3` resolves via
+  `const DEFAULT_MAX_INTERACTION_ORDER: usize = 3`. env-vars.md regenerated (42→43).
+- **TermKind/TermResult lost Copy** (Vec field) — a handful of `*kind`/`*found[0]`
+  / `t.kind` test moves needed `.clone()`, and one non-exhaustive match needed an
+  NWay arm. `term_string` now takes `&TermKind`.
+- **Cap truncation is logged, not silent** (FR6): the sweep `tracing::info!`s when
+  enough mutually-overlapping common-metric experiments exist to form an
+  (cap+1)-way candidate but the cap forbids it.
+- **Gates:** core 923 lib + 125 interaction (incl. golden-bits) / stats-service 397
+  lib + 44 query-builder, all green; clippy -Dwarnings clean (core+stats-service
+  all-targets); fmt clean; `bandit_interaction_order4` (2) + `interaction_compute`
+  (9) live --ignored green against live CH; full workspace --all-targets build
+  clean. No `.sqlx` delta (runtime queries). Only docs delta = the auto-scraped
+  env var row.
