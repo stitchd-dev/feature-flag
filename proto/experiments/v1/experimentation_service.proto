@@ -202,13 +202,16 @@ message GetExperimentRequest {
 
 message ListExperimentsRequest {
   string environment_id = 1;
-  uint32 page            = 3;
-  uint32 per_page        = 4;
+  // Cursor (keyset) pagination. An empty cursor is the first page; `limit`
+  // defaults to 50, capped at 200.
+  string cursor          = 2;
+  uint32 limit           = 3;
 }
 
 message ListExperimentsResponse {
   repeated Experiment experiments = 1;
-  uint64              total       = 2;
+  // Opaque cursor for the next page; empty when there are no more rows.
+  string next_cursor = 2;
 }
 
 message GetResultsRequest {

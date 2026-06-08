@@ -4202,14 +4202,14 @@ mod tests {
         ) -> Result<Vec<stitchd_core::experimentation::Experiment>, RepositoryError> {
             Ok(vec![])
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: stitchd_core::id::EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<stitchd_core::experimentation::Experiment>, u64), RepositoryError>
+        ) -> Result<(Vec<stitchd_core::experimentation::Experiment>, Option<String>), RepositoryError>
         {
-            Ok((vec![], 0))
+            Ok((vec![], None))
         }
         async fn create(
             &self,
@@ -4851,14 +4851,14 @@ mod tests {
         ) -> Result<Vec<stitchd_core::experimentation::Experiment>, RepositoryError> {
             Ok(vec![])
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: stitchd_core::id::EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<stitchd_core::experimentation::Experiment>, u64), RepositoryError>
+        ) -> Result<(Vec<stitchd_core::experimentation::Experiment>, Option<String>), RepositoryError>
         {
-            Ok((vec![], 0))
+            Ok((vec![], None))
         }
         async fn create(
             &self,

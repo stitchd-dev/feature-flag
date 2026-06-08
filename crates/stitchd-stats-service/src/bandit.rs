@@ -3378,12 +3378,12 @@ mod ondemand_interaction_tests {
         ) -> Result<Vec<Experiment>, RepositoryError> {
             unimplemented!()
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+        ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError> {
             unimplemented!()
         }
         async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {

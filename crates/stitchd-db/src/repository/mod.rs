@@ -588,16 +588,18 @@ pub trait ExperimentRepository: Send + Sync {
         status_filter: Option<ExperimentStatus>,
     ) -> Result<Vec<Experiment>, RepositoryError>;
 
-    /// List non-deleted experiments in an environment with offset pagination.
+    /// List non-deleted experiments in an environment with **keyset** (cursor)
+    /// pagination, ordered by `(created_at, id)`.
     ///
-    /// Returns `(page_items, total_count)` where `total_count` is the count of
-    /// all non-deleted experiments for the environment (regardless of offset/limit).
-    async fn list_by_environment_paginated(
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
         &self,
         env_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<Experiment>, u64), RepositoryError>;
+    ) -> Result<(Vec<Experiment>, Option<String>), RepositoryError>;
 
     /// Persist a new experiment.
     async fn create(&self, experiment: &Experiment) -> Result<(), RepositoryError>;

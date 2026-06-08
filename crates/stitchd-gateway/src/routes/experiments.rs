@@ -436,15 +436,10 @@ pub async fn list_experiments(
     Path(environment_id): Path<String>,
     Query(query): Query<ListExperimentsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let offset = query
-        .cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = query.cursor.effective_limit();
     let req = tonic::Request::new(ListExperimentsRequest {
         environment_id,
-        page: (offset / u64::from(limit)) as u32 + 1,
-        per_page: limit,
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.experimentation_client.lock().await;
     let resp = client
@@ -454,11 +449,7 @@ pub async fn list_experiments(
     let inner = resp.into_inner();
     let experiments: Vec<ExperimentJson> =
         inner.experiments.iter().map(experiment_to_json).collect();
-    Ok(Json(CursorPage::from_offset(
-        experiments,
-        inner.total,
-        offset,
-    )))
+    Ok(Json(CursorPage::from_token(experiments, inner.next_cursor)))
 }
 
 /// Validate + translate the REST bandit fields into the proto carriers.

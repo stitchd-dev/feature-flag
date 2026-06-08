@@ -1652,12 +1652,12 @@ mod handler_tests {
                 .cloned()
                 .collect())
         }
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             _env_id: EnvironmentId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<Experiment>, u64), stitchd_db::RepositoryError> {
+        ) -> Result<(Vec<Experiment>, Option<String>), stitchd_db::RepositoryError> {
             unimplemented!()
         }
         async fn create(
