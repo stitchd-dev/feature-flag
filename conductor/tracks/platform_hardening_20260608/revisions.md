@@ -4,7 +4,7 @@ Record of spec/plan revisions made during implementation.
 
 ---
 
-## Revision #1 — 2026-06-08 — Type: Spec (FR-4 Cursor Pagination)
+## Revision #1 — 2026-06-08 — Type: Spec + Plan (FR-4 Cursor Pagination)
 
 **Phase/task when raised:** Phase 4 (Cursor-Based Pagination Migration), during the
 route + repo + UI sweep.
@@ -45,5 +45,15 @@ that the cursor `{items, next_cursor}` envelope omits.
   change when it lands.
 - Keeping detail sub-lists page-based preserves the exposure-count UI feature.
 - Already reflected in `tech-stack.md` and `product.md` during implementation.
-- **No plan tasks added/removed** — Tasks 3/4/5 completed under the revised FR-4
-  (Task 3 reframed from "keyset" to "cursor transport over offset RPCs").
+
+**Changes made (plan):**
+- Added a "Last Revised" marker + a Phase 4 `SCOPE` note (top-level collections;
+  sub-lists page-based; encoded-offset approach).
+- **Task 3 reframed** from "migrate repo queries to keyset" → "cursor transport via
+  opaque encoded-offset at the gateway over existing offset RPCs (no proto/repo
+  change)". Tasks 1/2/4/5 descriptions tightened to the as-built; the manual
+  verification meta-task marked complete (verified CI-green).
+- Added a **`### Phase 4 — Deferred follow-up`** entry marking the true-keyset
+  internals `[-] DEFERRED → feature-flag-cj5]` (contract-preserving; tracked
+  separately so this track stays closed). **No new active task** added to this
+  (completed) track.

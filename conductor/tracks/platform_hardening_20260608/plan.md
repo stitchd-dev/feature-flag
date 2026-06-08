@@ -1,5 +1,10 @@
 # Plan: Platform Hardening
 
+> **Last Revised: 2026-06-08 (Revision #1)** — Phase 4 reframed to the as-built
+> cursor approach (opaque encoded-offset at the gateway; true keyset deferred to
+> `feature-flag-cj5`) and scoped to top-level resource collections (detail
+> sub-lists stay page-based). See `revisions.md` / `spec.md` FR-4.
+
 Implementation plan for `platform_hardening_20260608`. TDD per `conductor/workflow.md`
 (Red → Green → Refactor → ≥90% coverage). Phases 1, 3, 4, 5 are independent
 (`depends: -`) and can run as parallel worker-waves; Phase 2 depends on Phase 1's
@@ -50,22 +55,32 @@ idempotency store.
 
 ## Phase 4: Cursor-Based Pagination Migration
 <!-- depends: -->
+<!-- SCOPE (Revision #1): cursor = the 8 top-level resource collections (flags,
+     experiments, segments, events, metrics, sdk-keys, org-users mgmt+admin,
+     exclusion-groups). Experiment-detail sub-lists (iterations, exposures) stay
+     page-based — they back numbered detail views and the exposure-count stat
+     needs the `total` the cursor envelope omits. Approach: opaque encoded-offset
+     at the gateway over existing offset-based service RPCs (zero proto/repo
+     churn); true keyset internals deferred to feature-flag-cj5. -->
 
-- [x] Task 1: Document the cursor contract in `tech-stack.md` (reverses domain_boundaries page-based canonical) — opaque keyset cursor, `?cursor=&limit=`, `{items, next_cursor}` [67c76f8]
+- [x] Task 1: Document the cursor contract in `tech-stack.md` (supersedes domain_boundaries page-based canonical) — opaque cursor, `?cursor=&limit=`, `{items, next_cursor}` [67c76f8, 734ff03]
   <!-- files: conductor/tech-stack.md -->
-- [x] Task 2: Shared gateway cursor primitives — `CursorParams` + `CursorPage<T>` + opaque base64url token encode/decode — TDD [67c76f8] (proto messages deferred to the route sweep)
-  <!-- files: crates/stitchd-gateway/src/pagination.rs, proto -->
+- [x] Task 2: Shared gateway cursor primitives — `CursorParams` + `CursorPage<T>` + `encode_cursor`/`decode_cursor` (opaque base64url token) — TDD [67c76f8]
+  <!-- files: crates/stitchd-gateway/src/pagination.rs -->
   <!-- depends: task1 -->
-- [x] Task 3: Cursor transport over existing offset RPCs (opaque encoded-offset at gateway); true keyset internals deferred as tracked optimization [734ff03]
-  <!-- files: crates/stitchd-db/src/repository -->
+- [x] Task 3: (Revised) Cursor transport via opaque encoded-offset at the gateway over each service's existing `(offset,limit)→(items,total)` RPC (`CursorParams::offset()` + `CursorPage::from_offset`) — TDD; NO proto/repo change [734ff03]
+  <!-- files: crates/stitchd-gateway/src/pagination.rs -->
   <!-- depends: task2 -->
-- [x] Task 4: Migrate gateway list routes + OpenAPI contract (8 top-level list endpoints → cursor; detail sub-lists iterations/exposures stay page-based) [229c0ab,66b9568] surface
+- [x] Task 4: Migrate the 8 top-level gateway list routes to cursor; OpenAPI contract surface (contract-check verifies method+path, unchanged) [229c0ab, 66b9568]
   <!-- files: crates/stitchd-gateway/src/routes, crates/stitchd-gateway/src/openapi.rs -->
   <!-- depends: task3 -->
-- [x] Task 5: Migrate Admin UI list views to cursor (next/prev, no page numbers) + vitest [66b9568]
+- [x] Task 5: Migrate Admin UI list views to cursor (shared `usePaginatedList` + `Pagination`, next/prev, no page numbers) + vitest [66b9568]
   <!-- files: admin/src -->
   <!-- depends: task4 -->
-- [ ] Task: Conductor - User Manual Verification 'Cursor-Based Pagination Migration' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Cursor-Based Pagination Migration' — verified CI-green (gateway 288 + admin vitest 994, OpenAPI contract 23/120, docs idempotent)
+
+### Phase 4 — Deferred follow-up (out of this track → `feature-flag-cj5`)
+- [-] True keyset internals [DEFERRED → feature-flag-cj5]: convert the 6 list repos from `OFFSET` + `COUNT(*) OVER()` to keyset (`WHERE (sort_key,id) > cursor … LIMIT n+1`) and swap the gateway cursor token payload `{offset}` → `{sort_key,id}` (the `CursorPage::from_overfetch` primitive is already in place). Contract-preserving — the REST `?cursor=&limit=` → `{items,next_cursor}` surface does NOT change. Buys O(1) deep-page scans + concurrent-insert stability. Tracked separately so this track stays closed.
 
 ## Phase 5: Fresh-DB Reset Tooling (feature-flag-7rp)
 <!-- execution: parallel -->
