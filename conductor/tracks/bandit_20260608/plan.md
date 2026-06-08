@@ -82,7 +82,7 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 4' [autonomous] (Protocol in workflow.md)
 
-## Phase 5: Real-Time Eval Path (snapshot-resident, bandit-aware)
+## Phase 5: Real-Time Eval Path (snapshot-resident, bandit-aware) [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase2, phase3 -->
 
@@ -98,7 +98,7 @@ Phase-level wave summary:
 - [ ] Task 3: Stats-tick refreshes real-time model params in snapshot (instead of static %).
       <!-- files: crates/stitchd-stats-service/src/bandit.rs -->
       <!-- depends: task2 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 5' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5' [autonomous] (Protocol in workflow.md)
 
 ## Phase 6: Contextual Bandit
 <!-- execution: sequential -->
