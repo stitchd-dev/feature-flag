@@ -69,6 +69,10 @@ fn row_to_proto(row: ExperimentResultRow) -> ExperimentResult {
         computed_at: ms_to_rfc3339(row.computed_at),
         created_at: ms_to_rfc3339(row.created_at),
         context_type: row.context_type,
+        // Bandit allocation is not yet persisted in the ClickHouse result row
+        // (FR7 surfacing lands in a later phase); the proto field exists so the
+        // write path is forward-compatible.
+        bandit_allocation: None,
     }
 }
 
@@ -448,6 +452,7 @@ mod tests {
             recommendation: "ship_treatment".to_string(),
             computed_at: "2026-05-01T00:00:00Z".to_string(),
             context_type: "user".to_string(),
+            bandit_allocation: None,
         })
     }
 

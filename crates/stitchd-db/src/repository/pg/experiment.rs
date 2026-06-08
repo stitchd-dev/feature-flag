@@ -66,7 +66,7 @@ fn parse_experiment_mode(s: &str) -> ExperimentMode {
     }
 }
 
-fn experiment_mode_str(mode: ExperimentMode) -> &'static str {
+const fn experiment_mode_str(mode: ExperimentMode) -> &'static str {
     match mode {
         ExperimentMode::Fixed => "fixed",
         ExperimentMode::Bandit => "bandit",

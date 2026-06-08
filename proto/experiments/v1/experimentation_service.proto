@@ -48,6 +48,12 @@ message Experiment {
   double           sequential_alpha           = 22;
   optional double  sequential_tau_squared     = 23;
   int64            sequential_min_sample_size = 24;
+  // [ADDITIVE] Bandit (adaptive allocation) mode. `experiment_mode` is
+  // "fixed" (default) or "bandit"; `bandit_config` carries the bandit
+  // configuration as a JSON string (mirrors how other JSON blobs ride proto
+  // here), absent for fixed experiments.
+  string           experiment_mode            = 25;
+  optional string  bandit_config              = 26;
 }
 
 // ─── Iteration (a single run of an experiment) ────────────────────────────────
@@ -84,6 +90,10 @@ message ExperimentIteration {
   // stats-service compute pass reads this to drive numeric-metric variance
   // reduction; absent on rows written before this field existed (decodes to 0).
   uint32          pre_period_days            = 16;
+  // [ADDITIVE] Snapshot of the bandit configuration at iteration start, carried
+  // as a JSON string (mirrors the parent Experiment field). Absent for fixed
+  // experiments / rows written before this field existed.
+  optional string bandit_config              = 17;
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────

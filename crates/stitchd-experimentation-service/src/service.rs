@@ -178,6 +178,50 @@ fn iteration_to_proto(i: &stitchd_core::experimentation::ExperimentIteration) ->
         // CUPED pre-period window (days), snapshotted on the iteration. The
         // stats-service reads this to drive numeric-metric variance reduction.
         pre_period_days: i.pre_period_days,
+        bandit_config: bandit_config_to_json(i.bandit_config.as_ref()),
+    }
+}
+
+/// Serialize an optional [`BanditConfig`] to the JSON-string proto carrier.
+/// `None` (and any serialization failure, which cannot happen for a valid
+/// config) maps to `None`.
+fn bandit_config_to_json(
+    config: Option<&stitchd_core::experimentation::bandit::BanditConfig>,
+) -> Option<String> {
+    config.and_then(|c| serde_json::to_string(c).ok())
+}
+
+/// Parse the JSON-string proto carrier back into an optional [`BanditConfig`].
+/// An empty / absent string maps to `None`; a malformed payload is a client
+/// error.
+fn bandit_config_from_json(
+    json: Option<&str>,
+) -> Result<Option<stitchd_core::experimentation::bandit::BanditConfig>, Status> {
+    match json {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => serde_json::from_str(s)
+            .map(Some)
+            .map_err(|e| Status::invalid_argument(format!("bandit_config malformed JSON: {e}"))),
+    }
+}
+
+/// Parse the proto `experiment_mode` string into the core enum. Empty / unknown
+/// maps to the default `Fixed` for forward/backward compatibility.
+fn experiment_mode_from_proto(s: &str) -> stitchd_core::experimentation::bandit::ExperimentMode {
+    use stitchd_core::experimentation::bandit::ExperimentMode;
+    match s {
+        "bandit" => ExperimentMode::Bandit,
+        _ => ExperimentMode::Fixed,
+    }
+}
+
+/// Render the core `ExperimentMode` as the proto string.
+fn experiment_mode_to_proto(mode: stitchd_core::experimentation::bandit::ExperimentMode) -> String {
+    use stitchd_core::experimentation::bandit::ExperimentMode;
+    match mode {
+        ExperimentMode::Fixed => "fixed".to_string(),
+        ExperimentMode::Bandit => "bandit".to_string(),
     }
 }
 
@@ -278,6 +322,8 @@ fn core_to_proto(e: &Experiment) -> stitchd_proto::experiments::v1::Experiment {
         sequential_alpha: e.sequential_alpha,
         sequential_tau_squared: e.sequential_tau_squared,
         sequential_min_sample_size: e.sequential_min_sample_size,
+        experiment_mode: experiment_mode_to_proto(e.experiment_mode),
+        bandit_config: bandit_config_to_json(e.bandit_config.as_ref()),
     }
 }
 
@@ -772,6 +818,12 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .collect::<Result<Vec<_>, _>>()?;
 
         let now = Utc::now();
+        let experiment_mode = experiment_mode_from_proto(&proto_exp.experiment_mode);
+        let bandit_config = bandit_config_from_json(proto_exp.bandit_config.as_deref())?;
+        if let Some(cfg) = bandit_config.as_ref() {
+            cfg.validate()
+                .map_err(|e| Status::invalid_argument(format!("invalid bandit_config: {e}")))?;
+        }
         let experiment = Experiment {
             id: ExperimentId::new(),
             environment_id: env_id,
@@ -824,6 +876,8 @@ impl ExperimentationService for ExperimentationServiceImpl {
             } else {
                 100
             },
+            experiment_mode,
+            bandit_config,
         };
 
         self.experiment_repo
@@ -998,6 +1052,22 @@ impl ExperimentationService for ExperimentationServiceImpl {
             } else {
                 100
             };
+        }
+
+        // ── Bandit mode / config update ──────────────────────────────────────
+        // A non-empty experiment_mode or a present bandit_config is treated as
+        // managing the bandit config block. The whole-flag lock (the running /
+        // paused immutability rule) is enforced upstream at the gateway.
+        if !proto_exp.experiment_mode.is_empty() {
+            experiment.experiment_mode = experiment_mode_from_proto(&proto_exp.experiment_mode);
+        }
+        if proto_exp.bandit_config.is_some() {
+            let bandit_config = bandit_config_from_json(proto_exp.bandit_config.as_deref())?;
+            if let Some(cfg) = bandit_config.as_ref() {
+                cfg.validate()
+                    .map_err(|e| Status::invalid_argument(format!("invalid bandit_config: {e}")))?;
+            }
+            experiment.bandit_config = bandit_config;
         }
 
         experiment.updated_at = chrono::Utc::now();
@@ -2128,6 +2198,58 @@ mod tests {
     use uuid::Uuid;
 
     // -----------------------------------------------------------------------
+    // Bandit proto ↔ domain conversion
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bandit_fields_round_trip_proto_domain() {
+        use stitchd_core::experimentation::bandit::{
+            BanditAlgorithm, BanditConfig, ExperimentMode, LifecyclePolicy, PropagationMode,
+            RewardObjective,
+        };
+
+        let cfg = BanditConfig {
+            algorithm: BanditAlgorithm::EpsilonGreedy { epsilon: 0.1 },
+            propagation_mode: PropagationMode::Static,
+            min_exploration_bp: 500,
+            objective: RewardObjective::Scalar {
+                metric_id: Uuid::nil(),
+            },
+            lifecycle_policy: LifecyclePolicy::AutoCommit,
+            convergence_prob_threshold: 0.95,
+        };
+
+        let mut exp = make_experiment(EnvironmentId::new());
+        exp.experiment_mode = ExperimentMode::Bandit;
+        exp.bandit_config = Some(cfg.clone());
+
+        // domain → proto
+        let proto = core_to_proto(&exp);
+        assert_eq!(proto.experiment_mode, "bandit");
+        assert!(proto.bandit_config.is_some());
+
+        // proto → domain (via the create/update parsing helpers)
+        let mode = experiment_mode_from_proto(&proto.experiment_mode);
+        let back = bandit_config_from_json(proto.bandit_config.as_deref()).unwrap();
+        assert_eq!(mode, ExperimentMode::Bandit);
+        assert_eq!(back, Some(cfg));
+    }
+
+    #[test]
+    fn fixed_experiment_carries_no_bandit_config() {
+        let exp = make_experiment(EnvironmentId::new());
+        let proto = core_to_proto(&exp);
+        assert_eq!(proto.experiment_mode, "fixed");
+        assert_eq!(proto.bandit_config, None);
+    }
+
+    #[test]
+    fn malformed_bandit_config_json_is_rejected() {
+        let err = bandit_config_from_json(Some("{not json")).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // -----------------------------------------------------------------------
     // Mock analytics client
     // -----------------------------------------------------------------------
 
@@ -2223,6 +2345,7 @@ mod tests {
             created_at: "2026-05-01T00:00:00Z".to_string(),
             context_type: "user".to_string(),
             sequential_result: None,
+            bandit_allocation: None,
         }
     }
 
@@ -2258,6 +2381,7 @@ mod tests {
             created_at: "2026-05-01T00:00:00Z".to_string(),
             context_type: "user".to_string(),
             sequential_result: Some(sequential_blob.to_string()),
+            bandit_allocation: None,
         }
     }
 
@@ -2298,6 +2422,8 @@ mod tests {
             sequential_alpha: 0.05,
             sequential_tau_squared: None,
             sequential_min_sample_size: 100,
+            experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
+            bandit_config: None,
         }
     }
 
@@ -2401,6 +2527,7 @@ mod tests {
                 sequential_alpha: 0.05,
                 sequential_tau_squared: None,
                 sequential_min_sample_size: 100,
+                bandit_config: None,
             })
         }
     }
@@ -3072,6 +3199,7 @@ mod tests {
             created_at: "2026-05-01T00:00:00Z".to_string(),
             context_type: "user".to_string(),
             sequential_result: None,
+            bandit_allocation: None,
         };
         let svc = ExperimentationServiceImpl::new(
             Arc::new(AlwaysSucceedRepo { env_id }),
@@ -3159,6 +3287,7 @@ mod tests {
             created_at: "2026-05-01T00:00:00Z".to_string(),
             context_type: "user".to_string(),
             sequential_result: None,
+            bandit_allocation: None,
         };
         let svc = ExperimentationServiceImpl::new(
             Arc::new(AlwaysSucceedRepo { env_id }),
@@ -3242,6 +3371,7 @@ mod tests {
             created_at: "2026-05-01T00:00:00Z".to_string(),
             context_type: "user".to_string(),
             sequential_result: None,
+            bandit_allocation: None,
         };
         let svc = ExperimentationServiceImpl::new(
             Arc::new(AlwaysSucceedRepo { env_id }),
@@ -3695,6 +3825,7 @@ mod tests {
                 sequential_alpha: 0.05,
                 sequential_tau_squared: None,
                 sequential_min_sample_size: 100,
+                bandit_config: None,
             }])
         }
 
@@ -3749,6 +3880,7 @@ mod tests {
                 sequential_alpha: 0.05,
                 sequential_tau_squared: None,
                 sequential_min_sample_size: 100,
+                bandit_config: None,
             })
         }
     }

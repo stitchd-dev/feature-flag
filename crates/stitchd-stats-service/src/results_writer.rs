@@ -165,6 +165,9 @@ pub async fn write_results(
             recommendation: summary.recommendation.clone(),
             computed_at: computed_at_rfc.clone(),
             context_type: summary.context_type.clone(),
+            // Bandit allocation snapshot JSON; `None` until the bandit
+            // reallocation pass populates it in a later phase.
+            bandit_allocation: None,
         };
 
         client.write_experiment_results(req).await?;
