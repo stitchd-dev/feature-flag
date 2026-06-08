@@ -100,7 +100,7 @@ Phase-level wave summary:
       <!-- depends: task2 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 5' [autonomous] (Protocol in workflow.md)
 
-## Phase 6: Contextual Bandit [checkpoint: pending]
+## Phase 6: Contextual Bandit [checkpoint: f2dec88]
 <!-- execution: sequential -->
 <!-- depends: phase5 -->
 
