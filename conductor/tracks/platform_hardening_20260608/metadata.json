@@ -9,5 +9,30 @@
   "updated_at": "2026-06-08T16:24:07Z",
   "description": "Platform Hardening — idempotency keys on all REST admin mutations (replay stored 2xx, 422 on key-reuse, 24h PG store + sweeper) + SDK/event-ingest batch idempotency; on-demand interaction recompute (feature-flag-uga); cursor-based pagination migration (page→cursor across gateway/repos/proto/Admin UI); fresh-DB reset tooling (feature-flag-7rp).",
   "git_branch": "track/platform_hardening_20260608",
-  "worktree_path": ".worktrees/platform_hardening_20260608"
+  "worktree_path": ".worktrees/platform_hardening_20260608",
+  "beads_epic": "feature-flag-0aq",
+  "beads_tasks": {
+    "phase1": "feature-flag-0aq.1",
+    "phase1_task1": "feature-flag-0aq.1.1",
+    "phase1_task2": "feature-flag-0aq.1.2",
+    "phase1_task3": "feature-flag-0aq.1.3",
+    "phase1_task4": "feature-flag-0aq.1.4",
+    "phase2": "feature-flag-0aq.2",
+    "phase2_task1": "feature-flag-0aq.2.1",
+    "phase2_task2": "feature-flag-0aq.2.2",
+    "phase2_task3": "feature-flag-0aq.2.3",
+    "phase3": "feature-flag-0aq.3",
+    "phase3_task1": "feature-flag-0aq.3.1",
+    "phase3_task2": "feature-flag-0aq.3.2",
+    "phase3_task3": "feature-flag-0aq.3.3",
+    "phase4": "feature-flag-0aq.4",
+    "phase4_task1": "feature-flag-0aq.4.1",
+    "phase4_task2": "feature-flag-0aq.4.2",
+    "phase4_task3": "feature-flag-0aq.4.3",
+    "phase4_task4": "feature-flag-0aq.4.4",
+    "phase4_task5": "feature-flag-0aq.4.5",
+    "phase5": "feature-flag-0aq.5",
+    "phase5_task1": "feature-flag-0aq.5.1",
+    "phase5_task2": "feature-flag-0aq.5.2"
+  }
 }
