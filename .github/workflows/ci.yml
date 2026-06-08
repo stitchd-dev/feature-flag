@@ -221,7 +221,8 @@ jobs:
             --test preview_query --test interaction_compute --test compute_pass \
             --test cuped_compute --test percentile_significance \
             --test bandit_reallocation --test bandit_contextual \
-            --test bandit_multiobjective --test bandit_interaction_order4 -- --ignored
+            --test bandit_multiobjective --test bandit_interaction_order4 \
+            --test bandit_e2e_lifecycle -- --ignored
 
       - name: Upload coverage to Codecov
         # Use the official `codecov/codecov-action` instead of the
