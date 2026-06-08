@@ -10,12 +10,12 @@ use stitchd_db::{
     ExperimentRepository, FlagRepository, SdkKeyRepository, SegmentRepository, VariantRepository,
 };
 use stitchd_proto::flags::v1::{
-    EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest,
-    GetFlagRequest, GetPrerequisitesRequest, GetPrerequisitesResponse, ListFlagsRequest,
-    ListFlagsResponse, MutateFlagRequest, MutateFlagResponse, MutationKind,
-    SetDefaultRuleDistributionRequest, SetDefaultRuleDistributionResponse, SetPrerequisitesRequest,
-    SetPrerequisitesResponse, UpdateFlagHashingRequest, UpdateFlagHashingResponse,
-    flag_service_server::FlagService,
+    BanditUpdateAllocationRequest, BanditUpdateAllocationResponse, EvaluatePreviewRequest,
+    EvaluatePreviewResponse, FeatureFlag, GetFlagDefinitionsRequest, GetFlagRequest,
+    GetPrerequisitesRequest, GetPrerequisitesResponse, ListFlagsRequest, ListFlagsResponse,
+    MutateFlagRequest, MutateFlagResponse, MutationKind, SetDefaultRuleDistributionRequest,
+    SetDefaultRuleDistributionResponse, SetPrerequisitesRequest, SetPrerequisitesResponse,
+    UpdateFlagHashingRequest, UpdateFlagHashingResponse, flag_service_server::FlagService,
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -50,6 +50,12 @@ pub struct FlagServiceImpl {
     /// population is skipped, and the delete-block guard is a no-op (admissible
     /// only in targeted unit tests that don't exercise prerequisites).
     prerequisite_repo: Option<stitchd_db::PrerequisiteRepository>,
+    /// Optional audit logger used to attribute the privileged bandit
+    /// allocation-update (`bandit_20260608` Phase 3) to the bandit/system actor
+    /// (`actor_id = None`, mirroring the scheduler). When `None`, the dedicated
+    /// `bandit_reallocate` audit entry is skipped — the underlying repo
+    /// `update`/`upsert_rules` still records a system-actor mutation row.
+    audit_logger: Option<Arc<dyn stitchd_db::AuditLogger>>,
 }
 
 impl FlagServiceImpl {
@@ -70,7 +76,17 @@ impl FlagServiceImpl {
             experiment_repo: None,
             flag_lock_cache: FlagLockCache::new(),
             prerequisite_repo: None,
+            audit_logger: None,
         }
+    }
+
+    /// Wire in an audit logger so the privileged bandit allocation-update records
+    /// a dedicated `bandit_reallocate` entry attributed to the bandit/system
+    /// actor. Production `main.rs` always sets it; unit tests may omit it.
+    #[must_use]
+    pub fn with_audit_logger(mut self, logger: Arc<dyn stitchd_db::AuditLogger>) -> Self {
+        self.audit_logger = Some(logger);
+        self
     }
 
     /// Wire in the prerequisite repository so `Set/GetPrerequisites`, snapshot +
@@ -2183,6 +2199,277 @@ impl FlagService for FlagServiceImpl {
         Ok(Response::new(GetPrerequisitesResponse {
             prerequisites,
             fallback_variant_key,
+        }))
+    }
+
+    /// Privileged, system-actor allocation update for a running bandit
+    /// experiment (`bandit_20260608` Phase 3, FR4).
+    ///
+    /// Rewrites the bound rule's percentage weights (custom rule via
+    /// `flag_rule_id`) or the flag's `default_rule_distribution` (via
+    /// `default_rule = true`), **bypassing the whole-flag human lock** — but
+    /// ONLY for the experiment that currently owns the lock. The supplied
+    /// `experiment_id` is verified against the flag's current lock owner
+    /// (`find_active_experiment_for_flag`); a mismatch (or an unlocked flag) is
+    /// rejected with `FAILED_PRECONDITION` so an arbitrary caller cannot use
+    /// this path to dodge the human lock.
+    ///
+    /// The write is optimistic-concurrency guarded (version mismatch →
+    /// `ABORTED`), version-bumped, and audit-logged as the bandit/system actor
+    /// (`actor_id = None`, mirroring the scheduler).
+    async fn bandit_update_allocation(
+        &self,
+        request: Request<BanditUpdateAllocationRequest>,
+    ) -> Result<Response<BanditUpdateAllocationResponse>, Status> {
+        use stitchd_proto::flags::v1::bandit_update_allocation_request::Target;
+
+        let req = request.into_inner();
+
+        let project_id = parse_project_id(&req.project_id)?;
+        let flag_key = stitchd_core::id::FlagKey::new(req.flag_key.clone())
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let experiment_id = {
+            let uuid = uuid::Uuid::parse_str(req.experiment_id.trim())
+                .map_err(|_| Status::invalid_argument("experiment_id must be a valid UUID"))?;
+            stitchd_core::id::ExperimentId::from_uuid(uuid)
+        };
+
+        let target = req.target.ok_or_else(|| {
+            Status::invalid_argument("target (flag_rule_id|default_rule) is required")
+        })?;
+
+        // Resolve the flag by project (preferred) or environment. The dispatch
+        // wrapper in experimentation-service has environment_id + flag_key but
+        // not the project_id, so fall back to env-scoped lookup (mirrors get_flag).
+        let mut record = if let Some(pid) = project_id {
+            self.flag_repo
+                .find_by_key(&flag_key, pid)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?
+        } else {
+            let env_id = parse_env_id(&req.environment_id)?;
+            let flags = self
+                .flag_repo
+                .list_by_environment(env_id)
+                .await
+                .map_err(FlagServiceError::from)
+                .map_err(Status::from)?;
+            flags
+                .into_iter()
+                .find(|f| f.key.as_str() == flag_key.as_str())
+                .ok_or_else(|| Status::not_found(format!("flag '{}' not found", req.flag_key)))?
+        };
+
+        // Optimistic-lock check (mirrors set_default_rule_distribution).
+        if record.version != i64::try_from(req.version).unwrap_or(record.version) {
+            return Err(Status::aborted(format!(
+                "version conflict: expected {}, actual {}",
+                record.version, req.version
+            )));
+        }
+
+        // Lock-owner verification: the privileged path is sanctioned ONLY for
+        // the experiment that currently owns the whole-flag lock. We deliberately
+        // do NOT call `ensure_flag_unlocked` here — that would reject the bandit's
+        // own write. Instead we require the flag to be locked AND owned by the
+        // supplied experiment. Any other caller (unlocked flag, or a different
+        // experiment) is rejected, so this RPC cannot be used to dodge the human
+        // lock.
+        let owner = match self.experiment_repo.as_deref() {
+            Some(repo) => is_flag_locked(repo, &self.flag_lock_cache, record.id).await?,
+            None => None,
+        };
+        match owner {
+            Some(owner_id) if owner_id == experiment_id => {}
+            Some(owner_id) => {
+                return Err(Status::failed_precondition(format!(
+                    "bandit allocation rejected: flag is locked by experiment {owner_id}, not {experiment_id}"
+                )));
+            }
+            None => {
+                return Err(Status::failed_precondition(format!(
+                    "bandit allocation rejected: flag is not locked by experiment {experiment_id}"
+                )));
+            }
+        }
+
+        // Build + validate the new distribution from the basis-point allocations.
+        if req.allocations.is_empty() {
+            return Err(Status::invalid_argument(
+                "bandit allocation requires at least one allocation",
+            ));
+        }
+        let dist = stitchd_core::rollout::RolloutDistribution {
+            allocations: req
+                .allocations
+                .iter()
+                .map(|a| stitchd_core::rollout::RolloutAllocation {
+                    variant_key: a.variant_key.clone(),
+                    percentage_bp: a.weight_bp,
+                })
+                .collect(),
+        };
+        dist.validate().map_err(|e| {
+            Status::invalid_argument(format!(
+                "{} {e}",
+                crate::error::INVALID_DISTRIBUTION_STATUS_PREFIX
+            ))
+        })?;
+
+        // Referential integrity: every allocation variant_key must exist on the flag.
+        let known_variants = self
+            .variant_repo
+            .find_by_flag(record.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        let known_keys: std::collections::HashSet<&str> =
+            known_variants.iter().map(|v| v.key.as_str()).collect();
+        for alloc in &dist.allocations {
+            if !known_keys.contains(alloc.variant_key.as_str()) {
+                return Err(Status::from(FlagServiceError::UnknownDefaultRuleVariant {
+                    variant_key: alloc.variant_key.clone(),
+                }));
+            }
+        }
+
+        // Apply the write to the requested target, bumping the flag version.
+        let audit_detail;
+        let updated = match target {
+            Target::DefaultRule(true) => {
+                record.default_rule_distribution = Some(dist);
+                audit_detail = serde_json::json!({ "target": "default_rule" });
+                self.flag_repo
+                    .update(&record)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            }
+            Target::DefaultRule(false) => {
+                return Err(Status::invalid_argument(
+                    "default_rule target must be true; set flag_rule_id to target a custom rule",
+                ));
+            }
+            Target::FlagRuleId(rule_id_str) => {
+                let rule_uuid = uuid::Uuid::parse_str(rule_id_str.trim())
+                    .map_err(|_| Status::invalid_argument("flag_rule_id must be a valid UUID"))?;
+                let rule_id = stitchd_core::id::RuleId::from_uuid(rule_uuid);
+
+                let mut rules = self
+                    .flag_repo
+                    .find_rules(record.id)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                let target_rule =
+                    rules
+                        .iter_mut()
+                        .find(|r| r.rule.id == rule_id)
+                        .ok_or_else(|| {
+                            Status::not_found(format!(
+                                "rule {rule_id} not found on flag {}",
+                                record.id
+                            ))
+                        })?;
+
+                // Rewrite the matched rule's percentage weights, preserving its
+                // hash targets + exclusion gate. The bound rule MUST already be a
+                // percentage rule for a bandit to reallocate it.
+                match &mut target_rule.rule.output {
+                    stitchd_core::rule_engine::types::RuleOutput::Percentage {
+                        weights, ..
+                    } => {
+                        *weights = dist
+                            .allocations
+                            .iter()
+                            .map(|a| {
+                                let vid = known_variants
+                                    .iter()
+                                    .find(|v| v.key == a.variant_key)
+                                    .map(|v| v.id)
+                                    .expect("variant_key validated above");
+                                (vid, a.percentage_bp)
+                            })
+                            .collect();
+                    }
+                    stitchd_core::rule_engine::types::RuleOutput::Variant(_) => {
+                        return Err(Status::failed_precondition(format!(
+                            "rule {rule_id} is not a percentage rule; bandit reallocation requires a percentage output"
+                        )));
+                    }
+                }
+
+                self.flag_repo
+                    .upsert_rules(record.id, &rules)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?;
+
+                // upsert_rules does not bump the flag version; bump it via the
+                // flag update path so SDKs converge on the next poll.
+                audit_detail =
+                    serde_json::json!({ "target": "flag_rule", "rule_id": rule_id.to_string() });
+                self.flag_repo
+                    .update(&record)
+                    .await
+                    .map_err(FlagServiceError::from)
+                    .map_err(Status::from)?
+            }
+        };
+
+        // Dedicated bandit/system-actor audit entry (actor_id = None, mirroring
+        // the scheduler). Best-effort: a logging failure must not roll back a
+        // committed reallocation.
+        if let Some(logger) = self.audit_logger.as_ref() {
+            let mut detail = audit_detail;
+            if let serde_json::Value::Object(map) = &mut detail {
+                map.insert(
+                    "experiment_id".to_string(),
+                    serde_json::Value::String(experiment_id.to_string()),
+                );
+            }
+            if let Err(e) = logger
+                .log(
+                    None,
+                    "flag",
+                    record.id.as_uuid(),
+                    "bandit_reallocate",
+                    detail,
+                )
+                .await
+            {
+                tracing::warn!(
+                    flag_id = %record.id,
+                    experiment_id = %experiment_id,
+                    error = %e,
+                    "bandit_reallocate audit log failed (write already committed)",
+                );
+            }
+        }
+
+        let variants = self
+            .variant_repo
+            .find_by_flag(updated.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+        let rules = self
+            .flag_repo
+            .find_rules(updated.id)
+            .await
+            .map_err(FlagServiceError::from)
+            .map_err(Status::from)?;
+
+        let new_version = u64::try_from(updated.version).unwrap_or(0);
+        let proto_flag = mapping::build_feature_flag_proto(&updated, variants, &rules);
+
+        metrics::counter!("flag_service.bandit_update_allocation.ok").increment(1);
+        Ok(Response::new(BanditUpdateAllocationResponse {
+            flag: Some(proto_flag),
+            version: new_version,
         }))
     }
 }
@@ -4518,5 +4805,434 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ─── bandit_20260608 Phase 3 Task 1 — privileged allocation-update ─────────
+    //
+    // The bandit's reallocation is the ONE sanctioned writer that bypasses the
+    // whole-flag human lock — but ONLY for the experiment that owns the lock.
+
+    /// Experiment repo whose lock owner is configurable (or `None` = unlocked).
+    struct OwnedLockExperimentRepo {
+        owner: Option<stitchd_core::id::ExperimentId>,
+    }
+
+    #[async_trait]
+    impl stitchd_db::ExperimentRepository for OwnedLockExperimentRepo {
+        async fn find_by_id(
+            &self,
+            id: stitchd_core::id::ExperimentId,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            Err(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: stitchd_core::id::EnvironmentId,
+            _status_filter: Option<stitchd_core::experimentation::ExperimentStatus>,
+        ) -> Result<Vec<stitchd_core::experimentation::Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: stitchd_core::id::EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<stitchd_core::experimentation::Experiment>, u64), RepositoryError>
+        {
+            Ok((vec![], 0))
+        }
+        async fn create(
+            &self,
+            _experiment: &stitchd_core::experimentation::Experiment,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn update(
+            &self,
+            _experiment: &stitchd_core::experimentation::Experiment,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_delete(
+            &self,
+            _id: stitchd_core::id::ExperimentId,
+        ) -> Result<(), RepositoryError> {
+            Ok(())
+        }
+        async fn list_iterations(
+            &self,
+            _experiment_id: stitchd_core::id::ExperimentId,
+        ) -> Result<Vec<stitchd_core::experimentation::ExperimentIteration>, RepositoryError>
+        {
+            Ok(vec![])
+        }
+        async fn apply_transition(
+            &self,
+            _id: stitchd_core::id::ExperimentId,
+            _to: stitchd_core::experimentation::ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<stitchd_core::experimentation::Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_all_running(
+            &self,
+        ) -> Result<Vec<stitchd_core::experimentation::Experiment>, RepositoryError> {
+            Ok(vec![])
+        }
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<stitchd_core::id::ExperimentId>, RepositoryError> {
+            Ok(self.owner)
+        }
+        async fn find_iteration_by_id(
+            &self,
+            _iteration_id: stitchd_core::id::ExperimentIterationId,
+        ) -> Result<stitchd_core::experimentation::ExperimentIteration, RepositoryError> {
+            unimplemented!()
+        }
+    }
+
+    /// Records audit calls so tests can assert the bandit/system attribution.
+    #[derive(Default)]
+    struct RecordingAuditLogger {
+        calls: Mutex<Vec<(Option<stitchd_core::id::UserId>, String, String)>>,
+    }
+
+    #[async_trait]
+    impl stitchd_db::AuditLogger for RecordingAuditLogger {
+        async fn log(
+            &self,
+            actor_id: Option<stitchd_core::id::UserId>,
+            resource_type: &str,
+            _resource_id: uuid::Uuid,
+            action: &str,
+            _diff: serde_json::Value,
+        ) -> Result<(), RepositoryError> {
+            self.calls.lock().unwrap().push((
+                actor_id,
+                resource_type.to_string(),
+                action.to_string(),
+            ));
+            Ok(())
+        }
+    }
+
+    fn bandit_alloc_bucket(key: &str, bp: u32) -> stitchd_proto::flags::v1::AllocationBucket {
+        stitchd_proto::flags::v1::AllocationBucket {
+            variant_key: key.to_string(),
+            weight_bp: bp,
+        }
+    }
+
+    /// (a) Privileged write succeeds while the flag is locked by THAT experiment,
+    /// targeting the default rule. Also asserts the bandit/system-actor audit
+    /// entry (actor_id = None, action = "bandit_reallocate").
+    #[tokio::test]
+    async fn bandit_update_allocation_succeeds_for_owning_experiment_default_rule() {
+        use stitchd_proto::flags::v1::{
+            BanditUpdateAllocationRequest, bandit_update_allocation_request::Target,
+        };
+
+        let (variants, _, _) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        let project_id = flag.project_id;
+        let flag_id = flag.id;
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+
+        let flag_repo = StubFlagRepo::with_flags(vec![flag]);
+        let audit = Arc::new(RecordingAuditLogger::default());
+        let svc = FlagServiceImpl::new(
+            flag_repo.clone(),
+            StubVariantRepoWithData::with_variants(variants),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(OwnedLockExperimentRepo {
+            owner: Some(exp_id),
+        }))
+        .with_audit_logger(audit.clone());
+
+        let req = Request::new(BanditUpdateAllocationRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            environment_id: EnvironmentId::new().to_string(),
+            experiment_id: exp_id.to_string(),
+            version: 1,
+            allocations: vec![
+                bandit_alloc_bucket("on", 7000),
+                bandit_alloc_bucket("off", 3000),
+            ],
+            target: Some(Target::DefaultRule(true)),
+        });
+
+        svc.bandit_update_allocation(req)
+            .await
+            .expect("privileged write must succeed for the owning experiment");
+
+        // The persisted record now carries the new default-rule distribution.
+        let stored = flag_repo.find_by_id(flag_id).await.unwrap();
+        let dist = stored
+            .default_rule_distribution
+            .expect("default_rule_distribution written");
+        assert_eq!(dist.allocations.len(), 2);
+        assert_eq!(dist.allocations[0].variant_key, "on");
+        assert_eq!(dist.allocations[0].percentage_bp, 7000);
+
+        let calls = audit.calls.lock().unwrap();
+        assert!(
+            calls.iter().any(|(actor, rt, action)| actor.is_none()
+                && rt == "flag"
+                && action == "bandit_reallocate"),
+            "expected a system-actor bandit_reallocate audit entry; got {calls:?}"
+        );
+    }
+
+    /// (a') Privileged write succeeds targeting a custom percentage rule by
+    /// `flag_rule_id`, rewriting its weights.
+    #[tokio::test]
+    async fn bandit_update_allocation_succeeds_for_custom_rule() {
+        use stitchd_proto::flags::v1::{
+            BanditUpdateAllocationRequest, bandit_update_allocation_request::Target,
+        };
+
+        let (variants, on_id, off_id) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        let project_id = flag.project_id;
+        let flag_id = flag.id;
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+        let rule_id = RuleId::new();
+
+        let pct_rule = stitchd_core::flag::FlagRule {
+            flag_id,
+            rule_index: 0,
+            rule: Rule {
+                id: rule_id,
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![],
+                    weights: vec![(on_id, 5000), (off_id, 5000)],
+                    exclusion_gate: None,
+                },
+            },
+        };
+        let flag_repo = Arc::new(StubFlagRepo {
+            flags: Mutex::new(vec![flag]),
+            rules: Mutex::new(std::collections::HashMap::from([(flag_id, vec![pct_rule])])),
+        });
+        let svc = FlagServiceImpl::new(
+            flag_repo.clone(),
+            StubVariantRepoWithData::with_variants(variants),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(OwnedLockExperimentRepo {
+            owner: Some(exp_id),
+        }));
+
+        let req = Request::new(BanditUpdateAllocationRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            environment_id: EnvironmentId::new().to_string(),
+            experiment_id: exp_id.to_string(),
+            version: 1,
+            allocations: vec![
+                bandit_alloc_bucket("on", 8000),
+                bandit_alloc_bucket("off", 2000),
+            ],
+            target: Some(Target::FlagRuleId(rule_id.to_string())),
+        });
+
+        svc.bandit_update_allocation(req)
+            .await
+            .expect("custom-rule reallocation must succeed");
+
+        // The stored rule's weights are rewritten.
+        let stored = flag_repo.find_rules(flag_id).await.unwrap();
+        match &stored[0].rule.output {
+            RuleOutput::Percentage { weights, .. } => {
+                let on_w = weights.iter().find(|(v, _)| *v == on_id).unwrap().1;
+                let off_w = weights.iter().find(|(v, _)| *v == off_id).unwrap().1;
+                assert_eq!(on_w, 8000);
+                assert_eq!(off_w, 2000);
+            }
+            other => panic!("expected Percentage output, got {other:?}"),
+        }
+    }
+
+    /// (c) A `BanditUpdateAllocation` whose experiment_id is NOT the lock owner
+    /// is rejected with FAILED_PRECONDITION — cannot dodge the human lock.
+    #[tokio::test]
+    async fn bandit_update_allocation_rejects_non_owning_experiment() {
+        use stitchd_proto::flags::v1::{
+            BanditUpdateAllocationRequest, bandit_update_allocation_request::Target,
+        };
+
+        let (variants, _, _) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        let project_id = flag.project_id;
+        let flag_key = flag.key.as_str().to_string();
+        let owner_id = stitchd_core::id::ExperimentId::new();
+        let other_id = stitchd_core::id::ExperimentId::new();
+
+        let svc = FlagServiceImpl::new(
+            StubFlagRepo::with_flags(vec![flag]),
+            StubVariantRepoWithData::with_variants(variants),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(OwnedLockExperimentRepo {
+            owner: Some(owner_id),
+        }));
+
+        let req = Request::new(BanditUpdateAllocationRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            environment_id: EnvironmentId::new().to_string(),
+            experiment_id: other_id.to_string(),
+            version: 1,
+            allocations: vec![bandit_alloc_bucket("on", 10000)],
+            target: Some(Target::DefaultRule(true)),
+        });
+
+        let err = svc
+            .bandit_update_allocation(req)
+            .await
+            .expect_err("non-owning experiment must be rejected");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    }
+
+    /// (c') An unlocked flag rejects the privileged path too.
+    #[tokio::test]
+    async fn bandit_update_allocation_rejects_unlocked_flag() {
+        use stitchd_proto::flags::v1::{
+            BanditUpdateAllocationRequest, bandit_update_allocation_request::Target,
+        };
+
+        let (variants, _, _) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        let project_id = flag.project_id;
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+
+        let svc = FlagServiceImpl::new(
+            StubFlagRepo::with_flags(vec![flag]),
+            StubVariantRepoWithData::with_variants(variants),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(OwnedLockExperimentRepo { owner: None }));
+
+        let req = Request::new(BanditUpdateAllocationRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            environment_id: EnvironmentId::new().to_string(),
+            experiment_id: exp_id.to_string(),
+            version: 1,
+            allocations: vec![bandit_alloc_bucket("on", 10000)],
+            target: Some(Target::DefaultRule(true)),
+        });
+
+        let err = svc
+            .bandit_update_allocation(req)
+            .await
+            .expect_err("unlocked flag must reject the privileged path");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    }
+
+    /// (d) Version mismatch → optimistic-concurrency error (ABORTED).
+    #[tokio::test]
+    async fn bandit_update_allocation_rejects_version_mismatch() {
+        use stitchd_proto::flags::v1::{
+            BanditUpdateAllocationRequest, bandit_update_allocation_request::Target,
+        };
+
+        let (variants, _, _) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        flag.version = 5;
+        let project_id = flag.project_id;
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+
+        let svc = FlagServiceImpl::new(
+            StubFlagRepo::with_flags(vec![flag]),
+            StubVariantRepoWithData::with_variants(variants),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(OwnedLockExperimentRepo {
+            owner: Some(exp_id),
+        }));
+
+        let req = Request::new(BanditUpdateAllocationRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            environment_id: EnvironmentId::new().to_string(),
+            experiment_id: exp_id.to_string(),
+            version: 1, // stored is 5
+            allocations: vec![bandit_alloc_bucket("on", 10000)],
+            target: Some(Target::DefaultRule(true)),
+        });
+
+        let err = svc
+            .bandit_update_allocation(req)
+            .await
+            .expect_err("version mismatch must abort");
+        assert_eq!(err.code(), tonic::Code::Aborted);
+    }
+
+    /// (b) A concurrent ordinary human `SetDefaultRuleDistribution` on the same
+    /// locked flag STILL returns the lock error (FAILED_PRECONDITION) — the
+    /// privileged path does not relax the human lock.
+    #[tokio::test]
+    async fn human_mutation_still_locked_while_bandit_owns_flag() {
+        use stitchd_proto::flags::v1::{DefaultRuleAllocation, SetDefaultRuleDistributionRequest};
+
+        let (variants, _, _) = make_bool_variants(FlagId::new());
+        let mut flag = make_flag_record();
+        flag.project_id = ProjectId::new();
+        let project_id = flag.project_id;
+        let flag_key = flag.key.as_str().to_string();
+        let exp_id = stitchd_core::id::ExperimentId::new();
+
+        let svc = FlagServiceImpl::new(
+            StubFlagRepo::with_flags(vec![flag]),
+            StubVariantRepoWithData::with_variants(variants),
+            StubSdkKeyRepo::empty(),
+            Arc::new(StubSegmentRepo),
+        )
+        .with_experiment_repo(Arc::new(OwnedLockExperimentRepo {
+            owner: Some(exp_id),
+        }));
+
+        let req = Request::new(SetDefaultRuleDistributionRequest {
+            project_id: project_id.to_string(),
+            flag_key,
+            allocations: vec![DefaultRuleAllocation {
+                variant_key: "on".to_string(),
+                percentage: 100.0,
+            }],
+            version: 1,
+        });
+
+        let err = svc
+            .set_default_rule_distribution(req)
+            .await
+            .expect_err("human mutation must still 409 while the flag is locked");
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(
+            err.message()
+                .starts_with(crate::error::FLAG_LOCKED_STATUS_PREFIX),
+            "expected flag-lock sentinel; got {}",
+            err.message()
+        );
     }
 }

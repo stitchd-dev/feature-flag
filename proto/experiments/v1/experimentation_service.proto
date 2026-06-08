@@ -299,6 +299,62 @@ message UpdateIterationLastComputedRequest {
 
 message UpdateIterationLastComputedResponse {}
 
+// ─── Bandit allocation dispatch (bandit_20260608 Phase 3) ─────────────────────
+//
+// The stats-service bandit module computes new per-variant weights each tick
+// and pushes them via this RPC. experimentation-service resolves the
+// experiment's bound target (custom rule vs default-rule), then calls
+// flag-service's privileged `BanditUpdateAllocation` (which bypasses the
+// whole-flag human lock for the owning experiment). Only running/paused bandit
+// experiments are eligible — everything else is reported as `skipped` (not an
+// error) so the stats tick keeps advancing. The structured outcome is recorded
+// by the caller in `bandit_allocation_runs`. The actual weight computation is
+// NOT here (that is Phase 4).
+
+// One arm's target weight in basis points (sum across arms = 10000).
+message BanditAllocationBucket {
+  string variant_key = 1;
+  // 1 = 0.01%, 10000 = 100%.
+  uint32 weight_bp   = 2;
+}
+
+message ApplyBanditAllocationRequest {
+  // The bandit experiment whose bound rule allocation is being rewritten.
+  string experiment_id = 1;
+  // The newly-computed per-variant allocation (basis points, sum 10000).
+  repeated BanditAllocationBucket allocations = 2;
+  // The flag version the caller observed (optimistic concurrency). `0` means
+  // "look it up server-side" (the caller did not pre-fetch the flag).
+  uint64 expected_version = 3;
+}
+
+// Outcome of an allocation dispatch.
+enum BanditAllocationOutcome {
+  BANDIT_ALLOCATION_OUTCOME_UNSPECIFIED = 0;
+  // The allocation was written to the bound rule.
+  BANDIT_ALLOCATION_OUTCOME_APPLIED     = 1;
+  // The experiment is ineligible (not running/paused, not a bandit, no bound
+  // target) — a recoverable no-op, NOT a failure.
+  BANDIT_ALLOCATION_OUTCOME_SKIPPED     = 2;
+  // The write failed (incl. version conflict — caller should re-fetch + retry).
+  BANDIT_ALLOCATION_OUTCOME_FAILED      = 3;
+}
+
+message ApplyBanditAllocationResponse {
+  BanditAllocationOutcome outcome = 1;
+  // The bound target that was (or would have been) rewritten:
+  // `flag_rule_id` UUID, or "default_rule", or empty when skipped pre-resolution.
+  string                  resolved_target = 2;
+  // The post-write flag version on APPLIED; 0 otherwise.
+  uint64                  new_version     = 3;
+  // True when the failure was an optimistic-concurrency conflict — the caller
+  // should re-fetch the version and retry on the next tick.
+  bool                    version_conflict = 4;
+  // Human-readable detail (skip reason / failure message). Recorded in
+  // `bandit_allocation_runs.detail`.
+  string                  detail          = 5;
+}
+
 // ─── Exposures (Phase 7) ──────────────────────────────────────────────────────
 //
 // Paginated read against the ClickHouse `experiment_assignments` table for a
@@ -510,6 +566,14 @@ service ExperimentationService {
   // Update the last_computed_at timestamp for a given iteration's stats_schedule row.
   rpc UpdateIterationLastComputed(UpdateIterationLastComputedRequest)
       returns (UpdateIterationLastComputedResponse);
+
+  // [ADDITIVE — bandit_20260608] Push newly-computed bandit weights for a
+  // running bandit experiment. Resolves the bound target and calls
+  // flag-service's privileged BanditUpdateAllocation. Ineligible experiments
+  // are reported `skipped` (not an error); version conflicts are surfaced for
+  // caller retry.
+  rpc ApplyBanditAllocation(ApplyBanditAllocationRequest)
+      returns (ApplyBanditAllocationResponse);
 
   // ── Phase 7 admin reads ────────────────────────────────────────────────────
   // Paginated read against ClickHouse `experiment_assignments` for one

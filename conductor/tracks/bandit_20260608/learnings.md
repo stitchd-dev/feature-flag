@@ -181,3 +181,55 @@ From `conductor/patterns.md` (read before starting):
   reward combiner 40f1733. 61 new unit tests; full stitchd-core lib suite 843
   passed, clippy `-D warnings` clean, fmt clean. No async/I/O/sqlx in the bandit
   module (mirrors the `evaluation` purity contract).
+## Phase 3 — Privileged Allocation-Write Path (2026-06-08)
+
+### Task 3.1 — flag-service BanditUpdateAllocation RPC (commit e7f8e96)
+- **Lock-bypass is owner-scoped, NOT a blanket bypass.** The handler does NOT call
+  `ensure_flag_unlocked` (that would reject the bandit's own write). Instead it loads the
+  current lock owner via `is_flag_locked` (the same cache/`find_active_experiment_for_flag`
+  helper human mutations use) and requires `owner == request.experiment_id`. Unlocked flag OR
+  different owner → `FAILED_PRECONDITION`. So an arbitrary caller can't use this RPC to dodge
+  the human lock, and concurrent human `MutateFlag`/`SetDefaultRuleDistribution` still 409
+  (they keep calling `ensure_flag_unlocked`, unchanged).
+- **Two write targets, two repo paths.** Default-rule: set `record.default_rule_distribution`
+  + `flag_repo.update()` (bumps version + system-actor audit internally). Custom rule:
+  `find_rules` → mutate the matched rule's `RuleOutput::Percentage { weights }` (Vec<(VariantId,
+  u32 bp)>) → `upsert_rules`, THEN `flag_repo.update(&record)` because `upsert_rules` does NOT
+  bump the flag version (SDKs converge on the flag version bump).
+- **Allocation payload reuses `AllocationBucket`** (variant_key + weight_bp basis points) from
+  flag_sync.proto — already imported. Validated via `RolloutDistribution::validate` (sum=10000,
+  each >0) + variant_key referential-integrity against `variant_repo.find_by_flag`.
+- **Audit attribution = scheduler pattern (actor_id=None).** Added an optional
+  `Arc<dyn AuditLogger>` to `FlagServiceImpl` (`with_audit_logger`, wired in main.rs from the
+  same `audit_raw`) to log a dedicated `bandit_reallocate` action (best-effort: a log failure
+  does NOT roll back the committed write). The repo `update`/`upsert_rules` already log a
+  system-actor row too.
+- **Proto FeatureFlag has NO top-level `default_rule_distribution` field** — the mapping folds
+  it into the rules list as a trailing `And:[]` catch-all rule. So tests assert the written
+  distribution via the repo record, not the response proto.
+- **`StubFlagRepo.update` does NOT bump version** (real PG repo does, internally) — version-bump
+  assertions only hold against PG; stub tests assert the write applied + optimistic-conflict on
+  a wrong `req.version`.
+
+### Task 3.2 — experimentation-service ApplyBanditAllocation dispatch (commit 364e445)
+- **New RPC on experimentation-service** (stats-service already reaches it over gRPC via
+  `ExperimentationServiceClient`, like `ListRunningExperiments`/`TransitionExperiment`). Added
+  `BanditAllocationBucket` + Apply request/response + `BanditAllocationOutcome` enum
+  (applied|skipped|failed) to `proto/experiments/v1/experimentation_service.proto` (additive).
+- **Pure `resolve_bandit_dispatch(&Experiment, alloc_count) -> BanditDispatchPlan` helper** isolates
+  eligibility + bound-target resolution from the gRPC/flag-client I/O so it's exhaustively
+  unit-testable without a live flag-service. Eligibility: bandit mode, status ∈ {Running,Paused},
+  non-empty allocations, `flag_key` present, XOR(`flag_rule_id`, `targets_default_rule`).
+  Anything else → `Skip(reason)` (recoverable no-op, NOT an error — tick keeps advancing).
+- **`FlagClient` is a concrete struct (`Option<FlagClient>` on the service), not a trait** — the
+  applied/failed flag-service call can't be mocked without a live service, so the dispatch
+  *decision* logic is tested via the pure helper + the RPC's SKIPPED branches (ineligible exp,
+  no flag-client wired). Outcome mapping is thin: `tonic::Code::Aborted` → `version_conflict=true`.
+- **flag-service `BanditUpdateAllocation` now resolves a flag by `environment_id` when
+  `project_id` is empty** (mirrors `get_flag`'s SDK path) — the dispatch wrapper has
+  `environment_id` + `flag_key` from the `Experiment`, not the project_id, and the proto
+  FeatureFlag carries no project_id.
+- **Gate note:** DATABASE_URL is unset by default; the 4 `#[sqlx::test]` start-prerequisite tests
+  fail without it. Point DATABASE_URL at the fresh `bandit_verify_20260608` DB (already created in
+  Phase 1, reachable via the `stitchd-postgres` container) and all 130 exp-service + 112 flag-service
+  lib tests pass. No `.sqlx` cache delta (no `query!` macros added). fmt + clippy `-D warnings` clean.
