@@ -302,13 +302,13 @@ mod tests {
             Ok(vec![])
         }
 
-        async fn list_org_users_paginated(
+        async fn list_org_users_keyset(
             &self,
             _: stitchd_core::id::OrganisationId,
-            _offset: u64,
-            _limit: u64,
-        ) -> Result<(Vec<(User, OrgRole)>, u64), RepositoryError> {
-            Ok((vec![], 0))
+            _: Option<stitchd_db::KeysetCursor>,
+            _: u64,
+        ) -> Result<(Vec<(User, OrgRole)>, Option<String>), RepositoryError> {
+            Ok((vec![], None))
         }
     }
 

@@ -180,8 +180,10 @@ message CreateUserResponse {
 
 message ListOrgUsersRequest {
   string org_id   = 1;
-  uint32 page     = 2;
-  uint32 per_page = 3;
+  // Cursor (keyset) pagination. An empty cursor is the first page; `limit`
+  // defaults to 50, capped at 200.
+  string cursor   = 2;
+  uint32 limit    = 3;
 }
 
 message RemoveOrgUserRequest {
@@ -201,7 +203,8 @@ message OrgUserSummary {
 
 message ListOrgUsersResponse {
   repeated OrgUserSummary users = 1;
-  uint64                  total = 2;
+  // Opaque cursor for the next page; empty when there are no more rows.
+  string next_cursor = 2;
 }
 
 // ─── Management service ───────────────────────────────────────────────────────

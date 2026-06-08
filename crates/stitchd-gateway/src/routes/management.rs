@@ -473,15 +473,10 @@ pub async fn list_org_users(
     Path(org_id): Path<String>,
     Query(query): Query<ListOrgUsersQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let offset = query
-        .cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = query.cursor.effective_limit();
     let req = tonic::Request::new(ListOrgUsersRequest {
         org_id,
-        page: (offset / u64::from(limit)) as u32 + 1,
-        per_page: limit,
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.management_client.lock().await;
     let resp = client
@@ -500,7 +495,7 @@ pub async fn list_org_users(
             created_at: u.created_at,
         })
         .collect();
-    Ok(Json(CursorPage::from_offset(users, inner.total, offset)))
+    Ok(Json(CursorPage::from_token(users, inner.next_cursor)))
 }
 
 /// `DELETE /v1/management/orgs/{org_id}/users/{user_id}`
