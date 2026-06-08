@@ -9,8 +9,10 @@
 //! ([`BanditConfig`], [`BanditCampaignConfig`] and friends). Allocation /
 //! sampling logic lands in later phases.
 
+pub mod thompson;
 pub mod types;
 
+pub use thompson::{BanditArm, GoalDirection, RewardPosterior, thompson_weights};
 pub use types::{
     BanditAlgorithm, BanditCampaignConfig, BanditConfig, BanditConfigError, BudgetCap,
     ConstraintDirection, ContextualConfig, ExperimentMode, GuardrailConstraint, LifecyclePolicy,
