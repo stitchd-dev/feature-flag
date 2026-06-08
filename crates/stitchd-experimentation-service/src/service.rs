@@ -1707,6 +1707,20 @@ impl ExperimentationService for ExperimentationServiceImpl {
                 // `default_rule_distribution`. Empty → stats-service uniform
                 // SRM fallback.
                 let variant_expected_bp = self.sourced_variant_expected_bp(&exp, &iter).await;
+                // Bandit mode + iteration-snapshotted bandit config, carried so
+                // the stats-service reallocation pass can identify eligible
+                // static-propagation bandits and compute their weights without a
+                // second round-trip. `bandit_config` rides as a JSON string
+                // (mirrors the additive Experiment/Iteration proto fields).
+                let experiment_mode = match exp.experiment_mode {
+                    stitchd_core::experimentation::bandit::ExperimentMode::Fixed => "fixed",
+                    stitchd_core::experimentation::bandit::ExperimentMode::Bandit => "bandit",
+                }
+                .to_string();
+                let bandit_config = iter
+                    .bandit_config
+                    .as_ref()
+                    .and_then(|c| serde_json::to_string(c).ok());
                 items.push(Ok(RunningExperiment {
                     experiment_id: exp.id.to_string(),
                     environment_id: exp.environment_id.to_string(),
@@ -1733,6 +1747,10 @@ impl ExperimentationService for ExperimentationServiceImpl {
                     // Designed split for weighted SRM (rule allocation or
                     // default-rule distribution); empty → uniform SRM fallback.
                     variant_expected_bp,
+                    // Bandit mode + snapshotted config (JSON string) for the
+                    // stats-service reallocation pass.
+                    experiment_mode,
+                    bandit_config,
                 }));
             }
         }

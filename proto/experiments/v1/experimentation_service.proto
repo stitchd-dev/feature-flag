@@ -282,6 +282,16 @@ message RunningExperiment {
   // not source it (no rule/default-rule weights), in which case the SRM check
   // falls back to the uniform split.
   map<string, uint32> variant_expected_bp        = 14;
+  // [ADDITIVE] Bandit (adaptive allocation) mode. `experiment_mode` is "fixed"
+  // (default) or "bandit"; `bandit_config` carries the iteration-snapshotted
+  // bandit configuration as a JSON string (algorithm, propagation_mode,
+  // min_exploration_bp, objective, lifecycle_policy, convergence threshold).
+  // The stats-service bandit reallocation pass reads these to decide whether an
+  // experiment is an eligible static-propagation bandit and how to compute its
+  // weights. Empty `experiment_mode` decodes to "fixed" for back-compat with
+  // older servers; absent `bandit_config` means no bandit configuration.
+  string          experiment_mode            = 15;
+  optional string bandit_config              = 16;
 }
 
 message ListRunningExperimentsRequest {

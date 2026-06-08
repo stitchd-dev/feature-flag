@@ -185,6 +185,8 @@ fn running_experiment(s: &Seeded) -> RunningExperiment {
             min_sample_size: 100,
         },
         variant_expected_bp: HashMap::new(),
+        experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
+        bandit_config: None,
     }
 }
 

@@ -15,6 +15,19 @@ use stitchd_proto::stats::v1::{
 use crate::job_service;
 use crate::timeseries_reader::{TimeseriesReader, TimeseriesReaderError};
 
+/// An on-demand recompute hook invoked by `TriggerRecompute` for a single
+/// experiment. The production implementation re-runs the per-experiment stats
+/// pass AND the bandit static-reallocation pass (so a `TriggerRecompute` on a
+/// bandit experiment immediately recomputes + applies fresh weights, not only on
+/// the 60-min tick). Behind a trait so `TriggerRecompute` is unit-testable
+/// without the gRPC/ClickHouse/PG fan-out.
+#[async_trait::async_trait]
+pub trait ExperimentRecomputer: Send + Sync {
+    /// Recompute (incl. bandit reallocation) for one experiment. Errors are
+    /// logged by the caller; a missing experiment is not an error.
+    async fn recompute(&self, experiment_id: Uuid) -> Result<(), anyhow::Error>;
+}
+
 /// gRPC `StatsService` server implementation.
 pub struct StatsServiceImpl {
     pool: PgPool,
@@ -22,6 +35,10 @@ pub struct StatsServiceImpl {
     /// returns `Status::unimplemented` so the service can boot in
     /// stripped-down test configurations.
     timeseries_reader: Option<Arc<dyn TimeseriesReader>>,
+    /// Optional on-demand recompute hook invoked by `TriggerRecompute`. When
+    /// `None` the trigger only manages the job row (legacy behaviour); when set
+    /// it also drives the per-experiment stats + bandit reallocation pass.
+    recomputer: Option<Arc<dyn ExperimentRecomputer>>,
 }
 
 impl StatsServiceImpl {
@@ -30,6 +47,7 @@ impl StatsServiceImpl {
         Self {
             pool,
             timeseries_reader: None,
+            recomputer: None,
         }
     }
 
@@ -37,6 +55,14 @@ impl StatsServiceImpl {
     #[must_use]
     pub fn with_timeseries_reader(mut self, reader: Arc<dyn TimeseriesReader>) -> Self {
         self.timeseries_reader = Some(reader);
+        self
+    }
+
+    /// Attach an [`ExperimentRecomputer`] so `TriggerRecompute` re-runs the
+    /// per-experiment stats + bandit reallocation pass on demand.
+    #[must_use]
+    pub fn with_recomputer(mut self, recomputer: Arc<dyn ExperimentRecomputer>) -> Self {
+        self.recomputer = Some(recomputer);
         self
     }
 }
@@ -60,8 +86,9 @@ impl StatsService for StatsServiceImpl {
         // Spawn background task to run the recompute.
         let pool = self.pool.clone();
         let job_id = job.id;
+        let recomputer = self.recomputer.clone();
         tokio::spawn(async move {
-            run_recompute(pool, job_id, experiment_id).await;
+            run_recompute(pool, job_id, experiment_id, recomputer).await;
         });
 
         Ok(Response::new(TriggerRecomputeResponse {
@@ -153,14 +180,30 @@ fn timeseries_err_to_status(e: TimeseriesReaderError) -> Status {
     }
 }
 
-/// Background recompute task — runs stats for a single experiment and updates job status.
-async fn run_recompute(pool: PgPool, job_id: Uuid, _experiment_id: Uuid) {
+/// Background recompute task — runs stats + bandit reallocation for a single
+/// experiment (when a recomputer is wired) and updates the job status.
+async fn run_recompute(
+    pool: PgPool,
+    job_id: Uuid,
+    experiment_id: Uuid,
+    recomputer: Option<Arc<dyn ExperimentRecomputer>>,
+) {
     if let Err(e) = job_service::mark_running(&pool, job_id).await {
         tracing::error!(%job_id, "failed to mark job running: {e}");
         return;
     }
 
-    // Full stats computation is wired in Phase 3 scheduler. Here we mark complete.
+    // Drive the on-demand per-experiment stats + bandit reallocation pass when a
+    // recomputer is wired. A recompute failure marks the job failed; a missing
+    // experiment is treated as a successful no-op by the recomputer.
+    if let Some(rc) = recomputer
+        && let Err(e) = rc.recompute(experiment_id).await
+    {
+        tracing::error!(%job_id, %experiment_id, "recompute failed: {e}");
+        let _ = job_service::mark_failed(&pool, job_id, e.to_string()).await;
+        return;
+    }
+
     match job_service::mark_completed(&pool, job_id).await {
         Ok(_) => tracing::info!(%job_id, "recompute job completed"),
         Err(e) => {
@@ -362,7 +405,8 @@ mod tests {
         let job = crate::job_service::create_recompute_job(&pool, exp_id)
             .await
             .unwrap();
-        run_recompute(pool.clone(), job.id, exp_id).await;
+        // No recomputer wired → only manages the job row (legacy behaviour).
+        run_recompute(pool.clone(), job.id, exp_id, None).await;
         let status_row = crate::job_service::get_job_status(&pool, job.id)
             .await
             .unwrap();
@@ -370,6 +414,66 @@ mod tests {
             format!("{:?}", status_row.status)
                 .to_lowercase()
                 .contains("completed")
+        );
+    }
+
+    /// A wired recomputer is invoked by `run_recompute`, and a recompute failure
+    /// marks the job failed.
+    #[sqlx::test(migrations = "../../crates/stitchd-db/migrations")]
+    async fn run_recompute_invokes_recomputer_and_failure_marks_failed(pool: PgPool) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct OkRecomputer {
+            calls: Arc<AtomicU32>,
+        }
+        #[async_trait::async_trait]
+        impl ExperimentRecomputer for OkRecomputer {
+            async fn recompute(&self, _experiment_id: Uuid) -> Result<(), anyhow::Error> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        }
+        struct ErrRecomputer;
+        #[async_trait::async_trait]
+        impl ExperimentRecomputer for ErrRecomputer {
+            async fn recompute(&self, _experiment_id: Uuid) -> Result<(), anyhow::Error> {
+                Err(anyhow::anyhow!("boom"))
+            }
+        }
+
+        // Success path: recomputer called, job completed.
+        let exp_id = Uuid::new_v4();
+        let job = crate::job_service::create_recompute_job(&pool, exp_id)
+            .await
+            .unwrap();
+        let calls = Arc::new(AtomicU32::new(0));
+        let rc: Arc<dyn ExperimentRecomputer> = Arc::new(OkRecomputer {
+            calls: calls.clone(),
+        });
+        run_recompute(pool.clone(), job.id, exp_id, Some(rc)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "recomputer invoked once");
+        let row = crate::job_service::get_job_status(&pool, job.id)
+            .await
+            .unwrap();
+        assert!(
+            format!("{:?}", row.status)
+                .to_lowercase()
+                .contains("completed")
+        );
+
+        // Failure path: recompute error → job marked failed.
+        let job2 = crate::job_service::create_recompute_job(&pool, exp_id)
+            .await
+            .unwrap();
+        let rc_err: Arc<dyn ExperimentRecomputer> = Arc::new(ErrRecomputer);
+        run_recompute(pool.clone(), job2.id, exp_id, Some(rc_err)).await;
+        let row2 = crate::job_service::get_job_status(&pool, job2.id)
+            .await
+            .unwrap();
+        assert!(
+            format!("{:?}", row2.status)
+                .to_lowercase()
+                .contains("failed")
         );
     }
 }

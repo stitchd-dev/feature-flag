@@ -8,6 +8,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use tonic::transport::Channel;
 use uuid::Uuid;
 
+use stitchd_core::experimentation::bandit::{BanditConfig, ExperimentMode};
 use stitchd_proto::experiments::v1::{
     ListRunningExperimentsRequest, experimentation_service_client::ExperimentationServiceClient,
 };
@@ -75,6 +76,28 @@ pub struct RunningExperiment {
     /// server, or neither a rule nor a default distribution carried weights), in
     /// which case the SRM check falls back to the uniform split.
     pub variant_expected_bp: HashMap<String, u32>,
+    /// Whether this experiment runs in adaptive (bandit) mode. Decoded from the
+    /// `ListRunningExperiments` `experiment_mode` field; defaults to
+    /// [`ExperimentMode::Fixed`] when the field is empty (older server). The
+    /// bandit reallocation pass no-ops for `Fixed`.
+    pub experiment_mode: ExperimentMode,
+    /// The iteration-snapshotted bandit configuration. `Some` only for
+    /// bandit-mode experiments; carries the algorithm, propagation mode,
+    /// exploration floor, reward objective and lifecycle policy the reallocation
+    /// pass reads. `None` (or a malformed JSON payload that fails to decode)
+    /// makes the experiment ineligible for reallocation.
+    pub bandit_config: Option<BanditConfig>,
+}
+
+/// Decode the wire `experiment_mode` string into [`ExperimentMode`]. Anything
+/// other than `"bandit"` (incl. an empty string from an older server) decodes to
+/// [`ExperimentMode::Fixed`] so the reallocation pass safely no-ops.
+#[must_use]
+fn parse_experiment_mode(s: &str) -> ExperimentMode {
+    match s {
+        "bandit" => ExperimentMode::Bandit,
+        _ => ExperimentMode::Fixed,
+    }
 }
 
 /// Fetch all running experiments via `experimentation-service.ListRunningExperiments`.
@@ -145,6 +168,24 @@ pub async fn fetch_running_experiments(
                     // when the server did not source it (older server / no
                     // rule+default-rule weights) → uniform SRM fallback.
                     variant_expected_bp: proto.variant_expected_bp,
+                    // Bandit mode + snapshotted config. Empty `experiment_mode`
+                    // decodes to `Fixed`; a `bandit_config` JSON payload that
+                    // fails to decode is logged and treated as `None`, which
+                    // makes the experiment ineligible for reallocation (the pass
+                    // no-ops rather than erroring the tick).
+                    experiment_mode: parse_experiment_mode(&proto.experiment_mode),
+                    bandit_config: proto.bandit_config.as_deref().and_then(|s| {
+                        match serde_json::from_str::<BanditConfig>(s) {
+                            Ok(c) => Some(c),
+                            Err(e) => {
+                                tracing::warn!(
+                                    experiment_id = %experiment_id,
+                                    "bandit_config JSON failed to decode ({e}); treating as None"
+                                );
+                                None
+                            }
+                        }
+                    }),
                 });
             }
         }
@@ -344,6 +385,14 @@ mod tests {
         > {
             Err(Status::unimplemented("not used in tests"))
         }
+
+        async fn apply_bandit_allocation(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::ApplyBanditAllocationRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::ApplyBanditAllocationResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
     }
 
     /// Spin up an in-process gRPC server and return a client connected to it.
@@ -419,6 +468,8 @@ mod tests {
                 ("control".to_string(), 9000),
                 ("treatment".to_string(), 1000),
             ]),
+            experiment_mode: "fixed".into(),
+            bandit_config: None,
         };
 
         let mut client = make_client(vec![proto]).await;
@@ -461,6 +512,8 @@ mod tests {
                 sequential_tau_squared: None,
                 sequential_min_sample_size: 100,
                 variant_expected_bp: HashMap::new(),
+                experiment_mode: "fixed".into(),
+                bandit_config: None,
             })
             .collect();
 
@@ -508,6 +561,8 @@ mod tests {
             sequential_tau_squared: None,
             sequential_min_sample_size: 100,
             variant_expected_bp: HashMap::new(),
+            experiment_mode: "fixed".into(),
+            bandit_config: None,
         };
         let mut client = make_client(vec![proto]).await;
         let results = fetch_running_experiments(&mut client).await.unwrap();

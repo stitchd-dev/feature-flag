@@ -5,6 +5,7 @@
 //! back to PostgreSQL. Exposes both a tonic gRPC interface (`StatsService`) and an HTTP
 //! interface for triggering on-demand recomputes.
 
+pub mod bandit;
 pub mod clickhouse_query;
 pub mod compute;
 pub mod config;

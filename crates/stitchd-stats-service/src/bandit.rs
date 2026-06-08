@@ -1,0 +1,1674 @@
+//! Bandit static-reallocation pass (FR4 static-rewrite path, FR5 history).
+//!
+//! For every RUNNING **bandit-mode** experiment whose `propagation_mode` is
+//! [`PropagationMode::Static`], the 60-min stats-service compute tick:
+//!
+//! 1. reads per-variant **sufficient statistics** for the experiment's objective
+//!    metric(s) from ClickHouse (reusing the [`crate::compute::CellReader`] the
+//!    main stats pass already uses), summed across the experiment's context
+//!    types so the single global rule allocation is driven by the whole signal;
+//! 2. builds one [`MetricRewards`] per objective metric (Beta-Binomial for
+//!    conversion / funnel, Normal-Normal for numeric, delta-method for ratio);
+//! 3. computes raw per-variant weights via the configured
+//!    [`BanditAlgorithm`] (Thompson / epsilon-greedy / UCB) over those reward
+//!    posteriors — multi-objective objectives go through
+//!    [`reward_arms`]/[`allocate_exploitable`] first — and normalises them to a
+//!    basis-point [`RolloutDistribution`] with the configured exploration floor;
+//! 4. writes the new allocation back to the bound flag rule via the privileged
+//!    `ApplyBanditAllocation` RPC (which bypasses the whole-flag human lock for
+//!    the owning experiment); and
+//! 5. records ONE [`bandit_allocation_runs`](crate) row per experiment per tick.
+//!
+//! The **eval path is untouched**: weights land in PG and propagate via the
+//! existing flag snapshot + SDK polling (the static-rewrite invariant).
+//!
+//! ## Determinism
+//!
+//! Thompson Sampling's RNG seed is derived deterministically from the
+//! experiment id, iteration id, arm count and the tick timestamp (truncated to
+//! the tick bucket) — never from wall-clock entropy — so a given tick is
+//! reproducible. See [`derive_seed`].
+//!
+//! ## Skip, never error
+//!
+//! Every recoverable condition (not a bandit, not static, insufficient data,
+//! normalize error, ineligible) is reported as a **skip** and recorded with
+//! `action = "skip"` / `outcome = SKIPPED` — it never aborts the tick. Only an
+//! actual ClickHouse read error or PG insert error propagates.
+//!
+//! ## Idempotency / restart-safety
+//!
+//! Exactly one `bandit_allocation_runs` row is written per experiment per tick.
+//! A tick that crashes mid-way leaves no half-state: the next tick simply
+//! recomputes from the live sufficient stats and the live flag version. No long
+//! locks are held.
+
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+use uuid::Uuid;
+
+use stitchd_core::experimentation::bandit::{
+    BanditAlgorithm, BanditConfig, ExperimentMode, GoalDirection as BanditGoal, MetricRewards,
+    PropagationMode, RewardObjective, RewardPosterior, allocate_exploitable,
+    apply_exploitable_mask, epsilon_greedy_weights, normalize_to_distribution, reward_arms,
+    thompson_weights, ucb_weights,
+};
+use stitchd_core::experimentation::stats::MetricType;
+use stitchd_core::experimentation::stats::sequential::RatioGroupStats;
+use stitchd_core::metric::{GoalDirection as MetricGoal, MetricDefinition, MetricKind};
+use stitchd_core::rollout::RolloutDistribution;
+
+use crate::compute::{
+    AggCell, CellReader, count_variant_stats, funnel_variant_stats, metric_type_for,
+    numeric_variant_stats,
+};
+use crate::scheduler::RunningExperiment;
+
+/// Number of Monte-Carlo draws Thompson Sampling takes per arm.
+const THOMPSON_SAMPLES: usize = 10_000;
+
+/// Minimum per-arm sample size below which reallocation is skipped (insufficient
+/// data). A bandit must not shift traffic off near-zero evidence.
+const MIN_ARM_SAMPLE: u64 = 30;
+
+/// The decision recorded for a single reallocation pass over one experiment.
+///
+/// Maps onto a `bandit_allocation_runs` row (`action`, `outcome`, `detail`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum BanditRunOutcome {
+    /// The experiment is not an eligible static-propagation bandit — no row is
+    /// written (the pass is a pure no-op for non-bandit experiments).
+    NotApplicable,
+    /// A `reallocate` was computed and the `ApplyBanditAllocation` RPC returned
+    /// APPLIED. Carries the written distribution + resolved target + new version.
+    Applied {
+        /// The newly-written allocation.
+        allocation: RolloutDistribution,
+        /// The bound target the RPC rewrote.
+        resolved_target: String,
+        /// The post-write flag version.
+        new_version: u64,
+    },
+    /// The pass produced no write — either it decided to skip pre-RPC
+    /// (insufficient data / normalize error / ineligible) or the RPC itself
+    /// returned SKIPPED. A `skip` row is recorded.
+    Skipped {
+        /// Human-readable skip reason (recorded in `detail`).
+        reason: String,
+    },
+    /// The `ApplyBanditAllocation` RPC returned FAILED (incl. version conflict).
+    /// A `reallocate`/`failed` row is recorded; the tick keeps advancing.
+    Failed {
+        /// The computed allocation that failed to apply.
+        allocation: RolloutDistribution,
+        /// Failure detail (recorded in `detail`).
+        detail: String,
+        /// True when the failure was an optimistic-concurrency conflict.
+        version_conflict: bool,
+    },
+}
+
+/// The pure decision: given the experiment config + per-objective metric reward
+/// posteriors + a deterministic seed, either compute the new distribution or
+/// decide to skip.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AllocationDecision {
+    /// Reallocate to this distribution.
+    Reallocate(RolloutDistribution),
+    /// Skip with this reason.
+    Skip(String),
+}
+
+// ── Eligibility ──────────────────────────────────────────────────────────────
+
+/// Is this experiment eligible for the static reallocation pass?
+///
+/// Requires bandit mode, a bandit config whose `propagation_mode` is
+/// [`PropagationMode::Static`]. (The experiment is already known to be running —
+/// the scheduler only lists running experiments.)
+#[must_use]
+pub fn is_eligible(exp: &RunningExperiment) -> bool {
+    if exp.experiment_mode != ExperimentMode::Bandit {
+        return false;
+    }
+    match &exp.bandit_config {
+        Some(cfg) => cfg.propagation_mode == PropagationMode::Static,
+        None => false,
+    }
+}
+
+// ── Deterministic seed ───────────────────────────────────────────────────────
+
+/// Derive a stable `u64` RNG seed for a reallocation tick.
+///
+/// Combines the experiment id, iteration id, arm count and the tick's timestamp
+/// (truncated to the whole second) via a simple FNV-1a-style mix over the bytes,
+/// so the seed is reproducible for a given (experiment, iteration, tick) and
+/// changes tick-to-tick — never drawn from wall-clock entropy or a real RNG.
+#[must_use]
+pub fn derive_seed(
+    experiment_id: Uuid,
+    iteration_id: Uuid,
+    n_arms: usize,
+    tick: DateTime<Utc>,
+) -> u64 {
+    // FNV-1a 64-bit.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut mix = |bytes: &[u8]| {
+        for &b in bytes {
+            hash ^= u64::from(b);
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+        }
+    };
+    mix(experiment_id.as_bytes());
+    mix(iteration_id.as_bytes());
+    mix(&(n_arms as u64).to_le_bytes());
+    mix(&tick.timestamp().to_le_bytes());
+    hash
+}
+
+// ── Goal-direction mapping ───────────────────────────────────────────────────
+
+/// Map a metric's [`MetricGoal`] onto the bandit's [`BanditGoal`].
+///
+/// `Neutral` has no optimisation direction, so a neutral objective metric makes
+/// the bandit ineligible (returns `None`).
+#[must_use]
+pub fn map_goal(goal: MetricGoal) -> Option<BanditGoal> {
+    match goal {
+        MetricGoal::Increase => Some(BanditGoal::Increase),
+        MetricGoal::Decrease => Some(BanditGoal::Decrease),
+        MetricGoal::Neutral => None,
+    }
+}
+
+// ── Objective metric resolution ──────────────────────────────────────────────
+
+/// The objective metric ids referenced by a [`RewardObjective`] (in a stable
+/// order). Used to know which metrics to read sufficient stats for.
+#[must_use]
+pub fn objective_metric_ids(objective: &RewardObjective) -> Vec<Uuid> {
+    match objective {
+        RewardObjective::Scalar { metric_id } => vec![*metric_id],
+        RewardObjective::Scalarized { weights } => weights.iter().map(|w| w.metric_id).collect(),
+        RewardObjective::Constrained {
+            primary_metric_id,
+            constraints,
+        } => {
+            let mut ids = vec![*primary_metric_id];
+            ids.extend(constraints.iter().map(|c| c.metric_id));
+            ids
+        }
+    }
+}
+
+// ── Reward-posterior construction (pure) ─────────────────────────────────────
+
+/// Build a [`RewardPosterior`] for one variant from its summed sufficient stats,
+/// keyed by the metric family.
+#[must_use]
+fn posterior_for(
+    mt: MetricType,
+    sample_size: u64,
+    agg: Option<AggCell>,
+    ratio: Option<RatioGroupStats>,
+) -> RewardPosterior {
+    match mt {
+        MetricType::Count => {
+            let successes = agg.map_or(0, |c| c.successes);
+            RewardPosterior::Conversion(count_variant_stats(sample_size, successes))
+        }
+        MetricType::Funnel => {
+            let successes = agg.map_or(0, |c| c.successes);
+            RewardPosterior::Funnel(funnel_variant_stats(sample_size, successes))
+        }
+        MetricType::Numeric => {
+            if let Some(g) = ratio {
+                RewardPosterior::Ratio(g)
+            } else {
+                let cell = agg.unwrap_or(AggCell {
+                    event_n: 0,
+                    successes: 0,
+                    value_sum: 0.0,
+                    value_sq_sum: 0.0,
+                });
+                RewardPosterior::Numeric(numeric_variant_stats(
+                    sample_size,
+                    cell.value_sum,
+                    cell.value_sq_sum,
+                ))
+            }
+        }
+        // Percentile metrics have no posterior-sampling family; treat the point
+        // (carried as a Numeric mean) as a zero-variance numeric reward.
+        MetricType::Percentile => {
+            let cell = agg.unwrap_or(AggCell {
+                event_n: 0,
+                successes: 0,
+                value_sum: 0.0,
+                value_sq_sum: 0.0,
+            });
+            RewardPosterior::Numeric(numeric_variant_stats(
+                sample_size,
+                cell.value_sum,
+                cell.value_sq_sum,
+            ))
+        }
+    }
+}
+
+/// The minimum per-arm sample size across all arms in a [`MetricRewards`] set.
+/// Returns 0 for an empty set (which the caller treats as insufficient).
+#[must_use]
+fn min_arm_n(metrics: &[MetricRewards]) -> u64 {
+    metrics
+        .iter()
+        .flat_map(|m| m.arms.iter())
+        .map(|(_, p)| p.arm_n())
+        .min()
+        .unwrap_or(0)
+}
+
+// ── Algorithm dispatch (pure) ────────────────────────────────────────────────
+
+/// Compute raw per-arm weights for a single-objective allocation by dispatching
+/// on the configured algorithm. `arms`/`goal` come from [`reward_arms`].
+#[must_use]
+fn raw_weights_for(
+    algorithm: &BanditAlgorithm,
+    arms: &[stitchd_core::experimentation::bandit::BanditArm],
+    goal: BanditGoal,
+    exploitable: &[bool],
+    seed: u64,
+) -> Vec<(String, f64)> {
+    // Use the robust exploitable-merge path for every allocator so a constrained
+    // winner-take-all allocator never starves (matches the Phase-2 guidance).
+    match algorithm {
+        BanditAlgorithm::ThompsonSampling => {
+            // Thompson is proportional; the post-hoc mask is sufficient and keeps
+            // full uncertainty sampling across all arms.
+            let raw = thompson_weights(arms, goal, THOMPSON_SAMPLES, seed);
+            apply_exploitable_mask(&raw, exploitable)
+        }
+        BanditAlgorithm::EpsilonGreedy { epsilon } => {
+            let eps = *epsilon;
+            allocate_exploitable(arms, exploitable, |eligible| {
+                epsilon_greedy_weights(eligible, goal, eps)
+            })
+        }
+        BanditAlgorithm::Ucb { c } => {
+            let cc = *c;
+            allocate_exploitable(arms, exploitable, |eligible| {
+                ucb_weights(eligible, goal, cc)
+            })
+        }
+        // Contextual bandits use the real-time snapshot path, not static
+        // reallocation; treated as no raw weights (caller skips).
+        BanditAlgorithm::Contextual(_) => Vec::new(),
+    }
+}
+
+/// The pure allocation decision: from the experiment's [`BanditConfig`], the
+/// per-objective metric reward posteriors, and a deterministic seed, either
+/// produce the new [`RolloutDistribution`] or decide to skip.
+///
+/// Skips when:
+/// * `metrics` is empty (no objective metric resolved),
+/// * any arm's sample size is below [`MIN_ARM_SAMPLE`] (insufficient data),
+/// * the algorithm is contextual (real-time path, not static), or
+/// * the basis-point normaliser rejects the floor / arm count.
+#[must_use]
+pub fn decide_allocation(
+    config: &BanditConfig,
+    metrics: &[MetricRewards],
+    seed: u64,
+) -> AllocationDecision {
+    if metrics.is_empty() {
+        return AllocationDecision::Skip("no objective metric reward data".to_string());
+    }
+
+    let min_n = min_arm_n(metrics);
+    if min_n < MIN_ARM_SAMPLE {
+        return AllocationDecision::Skip(format!(
+            "insufficient data: smallest arm n={min_n} < {MIN_ARM_SAMPLE}"
+        ));
+    }
+
+    if matches!(config.algorithm, BanditAlgorithm::Contextual(_)) {
+        return AllocationDecision::Skip(
+            "contextual algorithm uses the real-time path, not static reallocation".to_string(),
+        );
+    }
+
+    let (arms, goal, exploitable) = reward_arms(&config.objective, metrics);
+    if arms.is_empty() {
+        return AllocationDecision::Skip("reward_arms produced no arms".to_string());
+    }
+
+    let raw = raw_weights_for(&config.algorithm, &arms, goal, &exploitable, seed);
+    if raw.is_empty() {
+        return AllocationDecision::Skip("algorithm produced no weights".to_string());
+    }
+
+    match normalize_to_distribution(&raw, config.min_exploration_bp) {
+        Ok(dist) => AllocationDecision::Reallocate(dist),
+        Err(e) => AllocationDecision::Skip(format!("normalize failed: {e}")),
+    }
+}
+
+// ── I/O seams (thin traits) ──────────────────────────────────────────────────
+
+/// Result of applying an allocation via the privileged RPC.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ApplyResult {
+    /// APPLIED: the bound rule was rewritten.
+    Applied {
+        /// The bound target that was rewritten.
+        resolved_target: String,
+        /// The post-write flag version.
+        new_version: u64,
+    },
+    /// SKIPPED: the server found the experiment ineligible (recoverable no-op).
+    Skipped {
+        /// Server-supplied skip detail.
+        detail: String,
+    },
+    /// FAILED: the write failed (incl. optimistic-concurrency conflict).
+    Failed {
+        /// Failure detail.
+        detail: String,
+        /// True for a version conflict.
+        version_conflict: bool,
+    },
+}
+
+/// Thin async seam over the `ApplyBanditAllocation` RPC so the orchestrator is
+/// unit-testable without a live experimentation-service.
+#[async_trait::async_trait]
+pub trait AllocationApplier: Send + Sync {
+    /// Apply `allocation` to the bound rule of `experiment_id`.
+    async fn apply(
+        &self,
+        experiment_id: Uuid,
+        allocation: &RolloutDistribution,
+    ) -> Result<ApplyResult, anyhow::Error>;
+}
+
+/// Thin async seam over the `bandit_allocation_runs` PG insert.
+#[async_trait::async_trait]
+pub trait RunRecorder: Send + Sync {
+    /// Insert exactly one history row for this tick.
+    #[allow(clippy::too_many_arguments)]
+    async fn record(
+        &self,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        action: &str,
+        old_allocation: Option<Value>,
+        new_allocation: Option<Value>,
+        outcome: &str,
+        detail: Option<String>,
+    ) -> Result<(), anyhow::Error>;
+}
+
+// ── Production I/O impls ─────────────────────────────────────────────────────
+
+/// Production [`AllocationApplier`] over the experimentation-service gRPC client.
+///
+/// Passes `expected_version = 0` ("look it up server-side") since the
+/// stats-service does not pre-fetch the flag version; the server resolves the
+/// bound target and applies under its own optimistic-version read.
+pub struct GrpcAllocationApplier {
+    client: std::sync::Arc<
+        tokio::sync::Mutex<
+            stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient<
+                tonic::transport::Channel,
+            >,
+        >,
+    >,
+}
+
+impl GrpcAllocationApplier {
+    /// Wrap a shared experimentation-service client.
+    #[must_use]
+    pub fn new(
+        client: std::sync::Arc<
+            tokio::sync::Mutex<
+                stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient<
+                    tonic::transport::Channel,
+                >,
+            >,
+        >,
+    ) -> Self {
+        Self { client }
+    }
+}
+
+#[async_trait::async_trait]
+impl AllocationApplier for GrpcAllocationApplier {
+    async fn apply(
+        &self,
+        experiment_id: Uuid,
+        allocation: &RolloutDistribution,
+    ) -> Result<ApplyResult, anyhow::Error> {
+        use stitchd_proto::experiments::v1::{
+            ApplyBanditAllocationRequest, BanditAllocationBucket, BanditAllocationOutcome,
+        };
+
+        let allocations: Vec<BanditAllocationBucket> = allocation
+            .allocations
+            .iter()
+            .map(|a| BanditAllocationBucket {
+                variant_key: a.variant_key.clone(),
+                weight_bp: a.percentage_bp,
+            })
+            .collect();
+
+        let req = ApplyBanditAllocationRequest {
+            experiment_id: experiment_id.to_string(),
+            allocations,
+            expected_version: 0,
+        };
+
+        let resp = {
+            let mut client = self.client.lock().await;
+            client.apply_bandit_allocation(req).await
+        };
+
+        match resp {
+            Ok(resp) => {
+                let r = resp.into_inner();
+                match BanditAllocationOutcome::try_from(r.outcome) {
+                    Ok(BanditAllocationOutcome::Applied) => Ok(ApplyResult::Applied {
+                        resolved_target: r.resolved_target,
+                        new_version: r.new_version,
+                    }),
+                    Ok(BanditAllocationOutcome::Skipped) => Ok(ApplyResult::Skipped {
+                        detail: if r.detail.is_empty() {
+                            "server skipped".to_string()
+                        } else {
+                            r.detail
+                        },
+                    }),
+                    // Failed / Unspecified / unknown → treat as failed.
+                    _ => Ok(ApplyResult::Failed {
+                        detail: if r.detail.is_empty() {
+                            "server reported failure".to_string()
+                        } else {
+                            r.detail
+                        },
+                        version_conflict: r.version_conflict,
+                    }),
+                }
+            }
+            // gRPC transport error: surface as a recoverable failure so the
+            // orchestrator records a `failed` row and the tick keeps advancing.
+            Err(status) => Ok(ApplyResult::Failed {
+                detail: format!("ApplyBanditAllocation transport error: {status}"),
+                version_conflict: status.code() == tonic::Code::Aborted,
+            }),
+        }
+    }
+}
+
+/// Production [`RunRecorder`] inserting into the `bandit_allocation_runs` PG
+/// table via a runtime `sqlx::query` (no compile-time macro — mirrors the
+/// stats-service's other runtime queries).
+pub struct PgRunRecorder {
+    pool: sqlx::PgPool,
+}
+
+impl PgRunRecorder {
+    /// Wrap a PG pool.
+    #[must_use]
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait::async_trait]
+impl RunRecorder for PgRunRecorder {
+    #[allow(clippy::too_many_arguments)]
+    async fn record(
+        &self,
+        experiment_id: Uuid,
+        iteration_id: Uuid,
+        action: &str,
+        old_allocation: Option<Value>,
+        new_allocation: Option<Value>,
+        outcome: &str,
+        detail: Option<String>,
+    ) -> Result<(), anyhow::Error> {
+        sqlx::query(
+            "INSERT INTO bandit_allocation_runs \
+             (experiment_id, iteration_id, fired_at, action, old_allocation, new_allocation, outcome, detail) \
+             VALUES ($1, $2, now(), $3, $4, $5, $6, $7)",
+        )
+        .bind(experiment_id)
+        .bind(iteration_id)
+        .bind(action)
+        .bind(old_allocation)
+        .bind(new_allocation)
+        .bind(outcome)
+        .bind(detail)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// Production [`crate::grpc::service::ExperimentRecomputer`] driving the
+/// per-experiment bandit reallocation pass on a `TriggerRecompute` RPC.
+///
+/// Fetches the live running experiments, finds the targeted one, resolves its
+/// metric definitions, and runs [`run_bandit_reallocation`] against the live
+/// ClickHouse sufficient stats — applying fresh weights immediately rather than
+/// waiting for the next 60-min tick. A non-bandit (or not-currently-running)
+/// experiment is a no-op.
+pub struct PerExperimentRecomputer {
+    exp_client: std::sync::Arc<
+        tokio::sync::Mutex<
+            stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient<
+                tonic::transport::Channel,
+            >,
+        >,
+    >,
+    ch: std::sync::Arc<clickhouse::Client>,
+    metric_repo: std::sync::Arc<dyn stitchd_db::MetricRepository>,
+    pool: sqlx::PgPool,
+}
+
+impl PerExperimentRecomputer {
+    /// Assemble the recomputer from the shared service dependencies.
+    #[must_use]
+    pub fn new(
+        exp_client: std::sync::Arc<
+            tokio::sync::Mutex<
+                stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient<
+                    tonic::transport::Channel,
+                >,
+            >,
+        >,
+        ch: std::sync::Arc<clickhouse::Client>,
+        metric_repo: std::sync::Arc<dyn stitchd_db::MetricRepository>,
+        pool: sqlx::PgPool,
+    ) -> Self {
+        Self {
+            exp_client,
+            ch,
+            metric_repo,
+            pool,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::grpc::service::ExperimentRecomputer for PerExperimentRecomputer {
+    async fn recompute(&self, experiment_id: Uuid) -> Result<(), anyhow::Error> {
+        // Fetch the live running experiments and find the target.
+        let experiments = {
+            let mut client = self.exp_client.lock().await;
+            crate::scheduler::fetch_running_experiments(&mut client).await?
+        };
+        let Some(exp) = experiments
+            .into_iter()
+            .find(|e| e.experiment_id == experiment_id)
+        else {
+            // Not currently running → nothing to reallocate (no-op).
+            return Ok(());
+        };
+
+        // Resolve the experiment's metric definitions.
+        let metric_ids: Vec<stitchd_core::id::MetricId> = exp
+            .metric_ids
+            .iter()
+            .copied()
+            .map(stitchd_core::id::MetricId::from_uuid)
+            .collect();
+        let metrics: HashMap<Uuid, MetricDefinition> = self
+            .metric_repo
+            .find_batch_by_ids(&metric_ids)
+            .await
+            .map(|defs| defs.into_iter().map(|m| (m.id.as_uuid(), m)).collect())
+            .unwrap_or_default();
+
+        let now = Utc::now();
+        let reader = crate::compute::ClickHouseCellReader::new(self.ch.clone());
+        let applier = GrpcAllocationApplier::new(self.exp_client.clone());
+        let recorder = PgRunRecorder::new(self.pool.clone());
+
+        run_bandit_reallocation(&reader, &applier, &recorder, &exp, &metrics, now, now)
+            .await
+            .map(|_| ())
+    }
+}
+
+// ── Orchestration ────────────────────────────────────────────────────────────
+
+/// Serialise a [`RolloutDistribution`] into the `new_allocation` JSON shape:
+/// `{"variant_key": weight_bp, ...}`.
+#[must_use]
+fn distribution_to_json(dist: &RolloutDistribution) -> Value {
+    let map: serde_json::Map<String, Value> = dist
+        .allocations
+        .iter()
+        .map(|a| (a.variant_key.clone(), Value::from(a.percentage_bp)))
+        .collect();
+    Value::Object(map)
+}
+
+/// Read summed per-variant sufficient stats for one objective metric across all
+/// of the experiment's context types, and build a [`MetricRewards`] for it.
+///
+/// Returns `Ok(None)` when the metric has no usable family (e.g. a ratio whose
+/// legs are unresolvable, or a neutral goal direction) — the caller skips that
+/// metric. Propagates only real ClickHouse read errors.
+async fn build_metric_rewards(
+    reader: &dyn CellReader,
+    exp: &RunningExperiment,
+    metric: &MetricDefinition,
+    metrics: &HashMap<Uuid, MetricDefinition>,
+    iteration_end: DateTime<Utc>,
+) -> Result<Option<MetricRewards>, anyhow::Error> {
+    let Some(goal) = map_goal(metric.goal_direction) else {
+        return Ok(None);
+    };
+    let mt = metric_type_for(metric);
+    let context_types: Vec<String> = if exp.unit_context_types.is_empty() {
+        vec!["user".to_string()]
+    } else {
+        exp.unit_context_types.clone()
+    };
+
+    // Accumulate per-variant sufficient stats summed across context types.
+    let mut sample: HashMap<String, u64> = HashMap::new();
+    let mut agg: HashMap<String, AggCell> = HashMap::new();
+    let mut ratio: HashMap<String, RatioGroupStats> = HashMap::new();
+
+    for ctx in &context_types {
+        let counts = reader
+            .assignment_counts(
+                exp.experiment_id,
+                exp.iteration_id,
+                exp.env_id,
+                ctx,
+                iteration_end,
+            )
+            .await?;
+        for (vk, n) in counts {
+            *sample.entry(vk).or_insert(0) += n;
+        }
+
+        match &metric.kind {
+            MetricKind::Aggregation(cfg) => {
+                let cells = reader
+                    .aggregation_cells(
+                        cfg,
+                        exp.experiment_id,
+                        exp.iteration_id,
+                        exp.env_id,
+                        ctx,
+                        iteration_end,
+                    )
+                    .await?;
+                for (vk, c) in cells {
+                    let e = agg.entry(vk).or_insert(AggCell {
+                        event_n: 0,
+                        successes: 0,
+                        value_sum: 0.0,
+                        value_sq_sum: 0.0,
+                    });
+                    e.event_n += c.event_n;
+                    e.successes += c.successes;
+                    e.value_sum += c.value_sum;
+                    e.value_sq_sum += c.value_sq_sum;
+                }
+            }
+            MetricKind::Funnel(cfg) => {
+                let cells = reader
+                    .funnel_cells(
+                        cfg,
+                        exp.experiment_id,
+                        exp.iteration_id,
+                        exp.env_id,
+                        ctx,
+                        iteration_end,
+                    )
+                    .await?;
+                for (vk, (_n, successes)) in cells {
+                    let e = agg.entry(vk).or_insert(AggCell {
+                        event_n: 0,
+                        successes: 0,
+                        value_sum: 0.0,
+                        value_sq_sum: 0.0,
+                    });
+                    e.successes += successes;
+                }
+            }
+            MetricKind::Ratio(ratio_cfg) => {
+                let (Some(num), Some(den)) = (
+                    metrics.get(&ratio_cfg.numerator_metric_id.as_uuid()),
+                    metrics.get(&ratio_cfg.denominator_metric_id.as_uuid()),
+                ) else {
+                    return Ok(None);
+                };
+                let (MetricKind::Aggregation(num_cfg), MetricKind::Aggregation(den_cfg)) =
+                    (&num.kind, &den.kind)
+                else {
+                    return Ok(None);
+                };
+                let cells = reader
+                    .ratio_cells(
+                        num_cfg,
+                        den_cfg,
+                        exp.experiment_id,
+                        exp.iteration_id,
+                        exp.env_id,
+                        ctx,
+                        iteration_end,
+                    )
+                    .await?;
+                for (vk, g) in cells {
+                    let e = ratio.entry(vk).or_insert(RatioGroupStats {
+                        n: 0,
+                        num_sum: 0.0,
+                        den_sum: 0.0,
+                        num_sq_sum: 0.0,
+                        den_sq_sum: 0.0,
+                        num_den_sum: 0.0,
+                    });
+                    e.n += g.n;
+                    e.num_sum += g.num_sum;
+                    e.den_sum += g.den_sum;
+                    e.num_sq_sum += g.num_sq_sum;
+                    e.den_sq_sum += g.den_sq_sum;
+                    e.num_den_sum += g.num_den_sum;
+                }
+            }
+        }
+    }
+
+    // Build one arm per configured variant key, in the experiment's variant
+    // order, zero-filling missing variants so every arm is represented.
+    let is_ratio = matches!(mt, MetricType::Numeric) && matches!(metric.kind, MetricKind::Ratio(_));
+    let arms: Vec<(String, RewardPosterior)> = exp
+        .variant_keys
+        .iter()
+        .map(|vk| {
+            let n = sample.get(vk).copied().unwrap_or(0);
+            let post = if is_ratio {
+                let g = ratio.get(vk).copied().unwrap_or(RatioGroupStats {
+                    n: n as i64,
+                    num_sum: 0.0,
+                    den_sum: 0.0,
+                    num_sq_sum: 0.0,
+                    den_sq_sum: 0.0,
+                    num_den_sum: 0.0,
+                });
+                RewardPosterior::Ratio(g)
+            } else {
+                posterior_for(mt, n, agg.get(vk).copied(), None)
+            };
+            (vk.clone(), post)
+        })
+        .collect();
+
+    Ok(Some(MetricRewards {
+        metric_id: metric.id.as_uuid(),
+        goal,
+        arms,
+    }))
+}
+
+/// Run the bandit static-reallocation pass for one experiment.
+///
+/// No-ops (returns [`BanditRunOutcome::NotApplicable`], no row written) for any
+/// experiment that is not an eligible static-propagation bandit. Otherwise reads
+/// sufficient stats, computes + writes weights, and records exactly one history
+/// row. Skips (records a `skip` row) on any recoverable condition; only a real
+/// ClickHouse read error or PG insert error propagates as `Err`.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_bandit_reallocation(
+    reader: &dyn CellReader,
+    applier: &dyn AllocationApplier,
+    recorder: &dyn RunRecorder,
+    exp: &RunningExperiment,
+    metrics: &HashMap<Uuid, MetricDefinition>,
+    iteration_end: DateTime<Utc>,
+    tick: DateTime<Utc>,
+) -> Result<BanditRunOutcome, anyhow::Error> {
+    if !is_eligible(exp) {
+        return Ok(BanditRunOutcome::NotApplicable);
+    }
+    // Safe: is_eligible guarantees Some(config).
+    let config = exp
+        .bandit_config
+        .as_ref()
+        .expect("eligible bandit has config");
+
+    // Resolve + read the objective metric posteriors.
+    let mut metric_rewards: Vec<MetricRewards> = Vec::new();
+    for mid in objective_metric_ids(&config.objective) {
+        let Some(def) = metrics.get(&mid) else {
+            continue;
+        };
+        if let Some(mr) = build_metric_rewards(reader, exp, def, metrics, iteration_end).await? {
+            metric_rewards.push(mr);
+        }
+    }
+
+    let seed = derive_seed(
+        exp.experiment_id,
+        exp.iteration_id,
+        exp.variant_keys.len(),
+        tick,
+    );
+
+    match decide_allocation(config, &metric_rewards, seed) {
+        AllocationDecision::Skip(reason) => {
+            recorder
+                .record(
+                    exp.experiment_id,
+                    exp.iteration_id,
+                    "skip",
+                    None,
+                    None,
+                    "skipped",
+                    Some(reason.clone()),
+                )
+                .await?;
+            Ok(BanditRunOutcome::Skipped { reason })
+        }
+        AllocationDecision::Reallocate(dist) => {
+            let new_json = distribution_to_json(&dist);
+            match applier.apply(exp.experiment_id, &dist).await {
+                Ok(ApplyResult::Applied {
+                    resolved_target,
+                    new_version,
+                }) => {
+                    recorder
+                        .record(
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            "reallocate",
+                            None,
+                            Some(new_json),
+                            "applied",
+                            Some(format!(
+                                "applied to {resolved_target} (version {new_version})"
+                            )),
+                        )
+                        .await?;
+                    Ok(BanditRunOutcome::Applied {
+                        allocation: dist,
+                        resolved_target,
+                        new_version,
+                    })
+                }
+                Ok(ApplyResult::Skipped { detail }) => {
+                    recorder
+                        .record(
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            "skip",
+                            None,
+                            Some(new_json),
+                            "skipped",
+                            Some(detail.clone()),
+                        )
+                        .await?;
+                    Ok(BanditRunOutcome::Skipped { reason: detail })
+                }
+                Ok(ApplyResult::Failed {
+                    detail,
+                    version_conflict,
+                }) => {
+                    recorder
+                        .record(
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            "reallocate",
+                            None,
+                            Some(new_json),
+                            "failed",
+                            Some(detail.clone()),
+                        )
+                        .await?;
+                    Ok(BanditRunOutcome::Failed {
+                        allocation: dist,
+                        detail,
+                        version_conflict,
+                    })
+                }
+                // A transport-level RPC error is recoverable (next tick retries):
+                // record a failed row and keep advancing.
+                Err(e) => {
+                    let detail = format!("ApplyBanditAllocation RPC error: {e}");
+                    recorder
+                        .record(
+                            exp.experiment_id,
+                            exp.iteration_id,
+                            "reallocate",
+                            None,
+                            Some(new_json),
+                            "failed",
+                            Some(detail.clone()),
+                        )
+                        .await?;
+                    Ok(BanditRunOutcome::Failed {
+                        allocation: dist,
+                        detail,
+                        version_conflict: false,
+                    })
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use stitchd_core::experimentation::bandit::{
+        BanditConfig, ContextualConfig, ExperimentMode, LifecyclePolicy, PropagationMode,
+        RewardObjective,
+    };
+    use stitchd_core::id::{EnvironmentId, MetricId};
+    use stitchd_core::metric::{
+        AggregationConfig, AggregationOperator, MetricDefinition, MetricKind,
+    };
+
+    use crate::scheduler::SequentialSettings;
+
+    fn conv_posterior(n: u64, succ: u64) -> RewardPosterior {
+        RewardPosterior::Conversion(count_variant_stats(n, succ))
+    }
+
+    fn metric_rewards(goal: BanditGoal, arms: Vec<(&str, u64, u64)>) -> MetricRewards {
+        MetricRewards {
+            metric_id: Uuid::new_v4(),
+            goal,
+            arms: arms
+                .into_iter()
+                .map(|(k, n, s)| (k.to_string(), conv_posterior(n, s)))
+                .collect(),
+        }
+    }
+
+    fn thompson_config(min_floor: u32) -> BanditConfig {
+        BanditConfig {
+            algorithm: BanditAlgorithm::ThompsonSampling,
+            propagation_mode: PropagationMode::Static,
+            min_exploration_bp: min_floor,
+            objective: RewardObjective::Scalar {
+                metric_id: Uuid::new_v4(),
+            },
+            lifecycle_policy: LifecyclePolicy::Advisory,
+            convergence_prob_threshold: 0.95,
+        }
+    }
+
+    fn running_bandit(config: Option<BanditConfig>, mode: ExperimentMode) -> RunningExperiment {
+        RunningExperiment {
+            experiment_id: Uuid::new_v4(),
+            env_id: Uuid::new_v4(),
+            iteration_id: Uuid::new_v4(),
+            metric_ids: vec![],
+            variant_keys: vec!["control".into(), "treatment".into()],
+            started_at: Utc::now(),
+            unit_context_types: vec!["user".into()],
+            pre_period_days: 0,
+            sequential: SequentialSettings::default(),
+            variant_expected_bp: HashMap::new(),
+            experiment_mode: mode,
+            bandit_config: config,
+        }
+    }
+
+    // ── Eligibility guard ────────────────────────────────────────────────────
+
+    #[test]
+    fn eligible_only_for_static_bandit() {
+        let static_cfg = thompson_config(500);
+        assert!(is_eligible(&running_bandit(
+            Some(static_cfg.clone()),
+            ExperimentMode::Bandit
+        )));
+
+        // Fixed mode → ineligible even with a config.
+        assert!(!is_eligible(&running_bandit(
+            Some(static_cfg.clone()),
+            ExperimentMode::Fixed
+        )));
+
+        // Bandit mode but no config → ineligible.
+        assert!(!is_eligible(&running_bandit(None, ExperimentMode::Bandit)));
+
+        // Realtime propagation → not the static path.
+        let mut realtime = static_cfg;
+        realtime.propagation_mode = PropagationMode::Realtime;
+        assert!(!is_eligible(&running_bandit(
+            Some(realtime),
+            ExperimentMode::Bandit
+        )));
+    }
+
+    // ── Seed determinism ─────────────────────────────────────────────────────
+
+    #[test]
+    fn seed_is_deterministic_and_varies_with_inputs() {
+        let exp = Uuid::new_v4();
+        let iter = Uuid::new_v4();
+        let t = Utc::now();
+        let s1 = derive_seed(exp, iter, 3, t);
+        let s2 = derive_seed(exp, iter, 3, t);
+        assert_eq!(s1, s2, "same inputs → same seed");
+
+        // Different tick (1s later) → different seed.
+        assert_ne!(
+            s1,
+            derive_seed(exp, iter, 3, t + chrono::Duration::seconds(1))
+        );
+        // Different arm count → different seed.
+        assert_ne!(s1, derive_seed(exp, iter, 4, t));
+        // Different experiment → different seed.
+        assert_ne!(s1, derive_seed(Uuid::new_v4(), iter, 3, t));
+    }
+
+    #[test]
+    fn decide_is_reproducible_under_same_seed() {
+        let cfg = thompson_config(500);
+        let mr = vec![metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 1000, 250)],
+        )];
+        let d1 = decide_allocation(&cfg, &mr, 42);
+        let d2 = decide_allocation(&cfg, &mr, 42);
+        assert_eq!(d1, d2, "Thompson decision must be reproducible for a seed");
+    }
+
+    // ── Skip on insufficient data ────────────────────────────────────────────
+
+    #[test]
+    fn skips_when_any_arm_below_min_sample() {
+        let cfg = thompson_config(500);
+        let mr = vec![metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 5, 1)], // treatment n=5 < 30
+        )];
+        match decide_allocation(&cfg, &mr, 1) {
+            AllocationDecision::Skip(r) => assert!(r.contains("insufficient data"), "{r}"),
+            other => panic!("expected skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_when_no_metric_rewards() {
+        let cfg = thompson_config(500);
+        match decide_allocation(&cfg, &[], 1) {
+            AllocationDecision::Skip(r) => assert!(r.contains("no objective metric")),
+            other => panic!("expected skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_contextual_algorithm() {
+        let mut cfg = thompson_config(500);
+        cfg.algorithm = BanditAlgorithm::Contextual(ContextualConfig::default());
+        let mr = vec![metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 1000, 250)],
+        )];
+        match decide_allocation(&cfg, &mr, 1) {
+            AllocationDecision::Skip(r) => assert!(r.contains("contextual"), "{r}"),
+            other => panic!("expected skip, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn skips_when_floor_too_high() {
+        // 2 arms × 6000 bp floor = 12000 > 10000 → normalize rejects.
+        let cfg = thompson_config(6000);
+        let mr = vec![metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 1000, 250)],
+        )];
+        match decide_allocation(&cfg, &mr, 1) {
+            AllocationDecision::Skip(r) => assert!(r.contains("normalize"), "{r}"),
+            other => panic!("expected skip, got {other:?}"),
+        }
+    }
+
+    // ── Algorithm dispatch produces valid, better-arm-favouring weights ───────
+
+    fn assert_valid_distribution(dist: &RolloutDistribution, floor: u32) {
+        let sum: u32 = dist.allocations.iter().map(|a| a.percentage_bp).sum();
+        assert_eq!(sum, 10_000, "must sum to 10000");
+        for a in &dist.allocations {
+            assert!(
+                a.percentage_bp >= floor,
+                "{} = {} below floor {floor}",
+                a.variant_key,
+                a.percentage_bp
+            );
+        }
+    }
+
+    fn weight_of(dist: &RolloutDistribution, key: &str) -> u32 {
+        dist.allocations
+            .iter()
+            .find(|a| a.variant_key == key)
+            .map(|a| a.percentage_bp)
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn thompson_favours_better_arm() {
+        let cfg = thompson_config(500);
+        // treatment clearly better (25% vs 10%).
+        let mr = vec![metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 1000, 250)],
+        )];
+        let AllocationDecision::Reallocate(dist) = decide_allocation(&cfg, &mr, 7) else {
+            panic!("expected reallocate");
+        };
+        assert_valid_distribution(&dist, 500);
+        assert!(
+            weight_of(&dist, "treatment") > weight_of(&dist, "control"),
+            "treatment should get more traffic: {dist:?}"
+        );
+    }
+
+    #[test]
+    fn epsilon_greedy_dispatch_favours_best_arm() {
+        let mut cfg = thompson_config(0);
+        cfg.algorithm = BanditAlgorithm::EpsilonGreedy { epsilon: 0.1 };
+        let mr = vec![metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 1000, 300)],
+        )];
+        let AllocationDecision::Reallocate(dist) = decide_allocation(&cfg, &mr, 7) else {
+            panic!("expected reallocate");
+        };
+        assert_valid_distribution(&dist, 0);
+        assert!(
+            weight_of(&dist, "treatment") > weight_of(&dist, "control"),
+            "epsilon-greedy should put most traffic on best arm: {dist:?}"
+        );
+    }
+
+    #[test]
+    fn ucb_dispatch_favours_best_arm() {
+        let mut cfg = thompson_config(500);
+        cfg.algorithm = BanditAlgorithm::Ucb { c: 1.0 };
+        let mr = vec![metric_rewards(
+            BanditGoal::Increase,
+            vec![("control", 1000, 100), ("treatment", 1000, 400)],
+        )];
+        let AllocationDecision::Reallocate(dist) = decide_allocation(&cfg, &mr, 7) else {
+            panic!("expected reallocate");
+        };
+        assert_valid_distribution(&dist, 500);
+        assert!(
+            weight_of(&dist, "treatment") >= weight_of(&dist, "control"),
+            "ucb should favour the higher-mean arm: {dist:?}"
+        );
+    }
+
+    #[test]
+    fn decrease_goal_favours_lower_arm() {
+        let cfg = thompson_config(500);
+        // For a Decrease goal, the LOWER rate is better. control 10%, treatment 30%.
+        let mr = vec![metric_rewards(
+            BanditGoal::Decrease,
+            vec![("control", 1000, 100), ("treatment", 1000, 300)],
+        )];
+        let AllocationDecision::Reallocate(dist) = decide_allocation(&cfg, &mr, 7) else {
+            panic!("expected reallocate");
+        };
+        assert!(
+            weight_of(&dist, "control") > weight_of(&dist, "treatment"),
+            "lower-rate arm should win for Decrease: {dist:?}"
+        );
+    }
+
+    // ── Goal mapping ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn neutral_goal_maps_to_none() {
+        assert_eq!(map_goal(MetricGoal::Neutral), None);
+        assert_eq!(map_goal(MetricGoal::Increase), Some(BanditGoal::Increase));
+        assert_eq!(map_goal(MetricGoal::Decrease), Some(BanditGoal::Decrease));
+    }
+
+    // ── Objective metric id extraction ───────────────────────────────────────
+
+    #[test]
+    fn objective_ids_cover_all_objective_shapes() {
+        let m = Uuid::new_v4();
+        assert_eq!(
+            objective_metric_ids(&RewardObjective::Scalar { metric_id: m }),
+            vec![m]
+        );
+        let g = Uuid::new_v4();
+        let ids = objective_metric_ids(&RewardObjective::Constrained {
+            primary_metric_id: m,
+            constraints: vec![stitchd_core::experimentation::bandit::GuardrailConstraint {
+                metric_id: g,
+                bound: 1.0,
+                direction: stitchd_core::experimentation::bandit::ConstraintDirection::AtLeast,
+            }],
+        });
+        assert_eq!(ids, vec![m, g]);
+    }
+
+    // ── distribution_to_json shape ───────────────────────────────────────────
+
+    #[test]
+    fn distribution_json_is_keyed_by_variant() {
+        let dist = RolloutDistribution {
+            allocations: vec![
+                stitchd_core::rollout::RolloutAllocation {
+                    variant_key: "control".into(),
+                    percentage_bp: 3000,
+                },
+                stitchd_core::rollout::RolloutAllocation {
+                    variant_key: "treatment".into(),
+                    percentage_bp: 7000,
+                },
+            ],
+        };
+        let json = distribution_to_json(&dist);
+        assert_eq!(json["control"], serde_json::json!(3000));
+        assert_eq!(json["treatment"], serde_json::json!(7000));
+    }
+
+    // ── posterior_for numeric path ───────────────────────────────────────────
+
+    #[test]
+    fn posterior_for_numeric_builds_numeric_stats() {
+        let cell = AggCell {
+            event_n: 100,
+            successes: 0,
+            value_sum: 500.0,
+            value_sq_sum: 3000.0,
+        };
+        let p = posterior_for(MetricType::Numeric, 100, Some(cell), None);
+        match p {
+            RewardPosterior::Numeric(vs) => {
+                assert_eq!(vs.sample_size, 100);
+                assert!((vs.mean.unwrap() - 5.0).abs() < 1e-9);
+            }
+            other => panic!("expected Numeric, got {other:?}"),
+        }
+    }
+
+    // ── min_arm_n ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn min_arm_n_takes_smallest_across_metrics() {
+        let m1 = metric_rewards(BanditGoal::Increase, vec![("a", 100, 10), ("b", 50, 5)]);
+        let m2 = metric_rewards(BanditGoal::Increase, vec![("a", 100, 10), ("b", 20, 2)]);
+        assert_eq!(min_arm_n(&[m1, m2]), 20);
+    }
+
+    // ── Orchestration with fakes ─────────────────────────────────────────────
+
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordedRow {
+        action: String,
+        outcome: String,
+        new_allocation: Option<Value>,
+        detail: Option<String>,
+    }
+
+    #[derive(Default)]
+    struct FakeRecorder {
+        rows: Mutex<Vec<RecordedRow>>,
+    }
+
+    #[async_trait::async_trait]
+    impl RunRecorder for FakeRecorder {
+        #[allow(clippy::too_many_arguments)]
+        async fn record(
+            &self,
+            _experiment_id: Uuid,
+            _iteration_id: Uuid,
+            action: &str,
+            _old: Option<Value>,
+            new_allocation: Option<Value>,
+            outcome: &str,
+            detail: Option<String>,
+        ) -> Result<(), anyhow::Error> {
+            self.rows.lock().unwrap().push(RecordedRow {
+                action: action.to_string(),
+                outcome: outcome.to_string(),
+                new_allocation,
+                detail,
+            });
+            Ok(())
+        }
+    }
+
+    struct FakeApplier {
+        result: ApplyResult,
+        calls: Mutex<u32>,
+    }
+
+    #[async_trait::async_trait]
+    impl AllocationApplier for FakeApplier {
+        async fn apply(
+            &self,
+            _experiment_id: Uuid,
+            _allocation: &RolloutDistribution,
+        ) -> Result<ApplyResult, anyhow::Error> {
+            *self.calls.lock().unwrap() += 1;
+            Ok(self.result.clone())
+        }
+    }
+
+    // A CellReader that returns fixed assignment counts + conversion successes.
+    struct FakeReader {
+        counts: Vec<(String, u64)>,
+        successes: HashMap<String, u64>,
+    }
+
+    #[async_trait::async_trait]
+    impl CellReader for FakeReader {
+        async fn assignment_counts(
+            &self,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<Vec<(String, u64)>, anyhow::Error> {
+            Ok(self.counts.clone())
+        }
+        async fn aggregation_cells(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, AggCell>, anyhow::Error> {
+            Ok(self
+                .successes
+                .iter()
+                .map(|(k, s)| {
+                    (
+                        k.clone(),
+                        AggCell {
+                            event_n: 0,
+                            successes: *s,
+                            value_sum: 0.0,
+                            value_sq_sum: 0.0,
+                        },
+                    )
+                })
+                .collect())
+        }
+        async fn ratio_cells(
+            &self,
+            _n: &AggregationConfig,
+            _d: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, RatioGroupStats>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+        async fn funnel_cells(
+            &self,
+            _cfg: &stitchd_core::metric::FunnelConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, (u64, u64)>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+        async fn percentile_samples(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+        ) -> Result<HashMap<String, Vec<f64>>, anyhow::Error> {
+            Ok(HashMap::new())
+        }
+        #[allow(clippy::too_many_arguments)]
+        async fn unit_values_with_pre(
+            &self,
+            _cfg: &AggregationConfig,
+            _e: Uuid,
+            _i: Uuid,
+            _env: Uuid,
+            _ctx: &str,
+            _end: DateTime<Utc>,
+            _ps: DateTime<Utc>,
+            _pe: DateTime<Utc>,
+        ) -> Result<Vec<(String, String, f64, f64)>, anyhow::Error> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn count_metric(id: Uuid, env: Uuid) -> MetricDefinition {
+        let now = Utc::now();
+        MetricDefinition {
+            id: MetricId::from_uuid(id),
+            environment_id: EnvironmentId::from_uuid(env),
+            key: "conv".into(),
+            name: "conv".into(),
+            description: None,
+            kind: MetricKind::Aggregation(AggregationConfig {
+                event_key: "conv".into(),
+                aggregator: AggregationOperator::Count,
+                on_field: None,
+                where_clause: None,
+            }),
+            goal_direction: MetricGoal::Increase,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn non_bandit_is_no_op_no_row() {
+        let reader = FakeReader {
+            counts: vec![],
+            successes: HashMap::new(),
+        };
+        let applier = FakeApplier {
+            result: ApplyResult::Applied {
+                resolved_target: "x".into(),
+                new_version: 1,
+            },
+            calls: Mutex::new(0),
+        };
+        let recorder = FakeRecorder::default();
+        let exp = running_bandit(None, ExperimentMode::Fixed);
+        let out = run_bandit_reallocation(
+            &reader,
+            &applier,
+            &recorder,
+            &exp,
+            &HashMap::new(),
+            Utc::now(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, BanditRunOutcome::NotApplicable);
+        assert_eq!(*applier.calls.lock().unwrap(), 0, "no apply for non-bandit");
+        assert!(
+            recorder.rows.lock().unwrap().is_empty(),
+            "no row for non-bandit"
+        );
+    }
+
+    #[tokio::test]
+    async fn applied_writes_one_reallocate_row() {
+        let metric_id = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let mut cfg = thompson_config(500);
+        cfg.objective = RewardObjective::Scalar { metric_id };
+
+        let mut exp = running_bandit(Some(cfg), ExperimentMode::Bandit);
+        exp.env_id = env;
+        exp.metric_ids = vec![metric_id];
+
+        // treatment clearly better.
+        let reader = FakeReader {
+            counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
+            successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
+        };
+        let applier = FakeApplier {
+            result: ApplyResult::Applied {
+                resolved_target: "default_rule".into(),
+                new_version: 9,
+            },
+            calls: Mutex::new(0),
+        };
+        let recorder = FakeRecorder::default();
+        let metrics = HashMap::from([(metric_id, count_metric(metric_id, env))]);
+
+        let out = run_bandit_reallocation(
+            &reader,
+            &applier,
+            &recorder,
+            &exp,
+            &metrics,
+            Utc::now(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+
+        match out {
+            BanditRunOutcome::Applied {
+                allocation,
+                resolved_target,
+                new_version,
+            } => {
+                assert_eq!(resolved_target, "default_rule");
+                assert_eq!(new_version, 9);
+                assert!(weight_of(&allocation, "treatment") > weight_of(&allocation, "control"));
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+        assert_eq!(*applier.calls.lock().unwrap(), 1);
+        let rows = recorder.rows.lock().unwrap();
+        assert_eq!(rows.len(), 1, "exactly one row per tick");
+        assert_eq!(rows[0].action, "reallocate");
+        assert_eq!(rows[0].outcome, "applied");
+        assert!(rows[0].new_allocation.is_some());
+    }
+
+    #[tokio::test]
+    async fn insufficient_data_records_skip_no_apply() {
+        let metric_id = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let mut cfg = thompson_config(500);
+        cfg.objective = RewardObjective::Scalar { metric_id };
+        let mut exp = running_bandit(Some(cfg), ExperimentMode::Bandit);
+        exp.env_id = env;
+        exp.metric_ids = vec![metric_id];
+
+        // treatment n=5 < MIN_ARM_SAMPLE.
+        let reader = FakeReader {
+            counts: vec![("control".into(), 1000), ("treatment".into(), 5)],
+            successes: HashMap::from([("control".into(), 100), ("treatment".into(), 1)]),
+        };
+        let applier = FakeApplier {
+            result: ApplyResult::Applied {
+                resolved_target: "x".into(),
+                new_version: 1,
+            },
+            calls: Mutex::new(0),
+        };
+        let recorder = FakeRecorder::default();
+        let metrics = HashMap::from([(metric_id, count_metric(metric_id, env))]);
+
+        let out = run_bandit_reallocation(
+            &reader,
+            &applier,
+            &recorder,
+            &exp,
+            &metrics,
+            Utc::now(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(out, BanditRunOutcome::Skipped { .. }));
+        assert_eq!(*applier.calls.lock().unwrap(), 0, "no apply when skipping");
+        let rows = recorder.rows.lock().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].action, "skip");
+        assert_eq!(rows[0].outcome, "skipped");
+    }
+
+    #[tokio::test]
+    async fn rpc_failed_records_failed_row() {
+        let metric_id = Uuid::new_v4();
+        let env = Uuid::new_v4();
+        let mut cfg = thompson_config(500);
+        cfg.objective = RewardObjective::Scalar { metric_id };
+        let mut exp = running_bandit(Some(cfg), ExperimentMode::Bandit);
+        exp.env_id = env;
+        exp.metric_ids = vec![metric_id];
+
+        let reader = FakeReader {
+            counts: vec![("control".into(), 1000), ("treatment".into(), 1000)],
+            successes: HashMap::from([("control".into(), 100), ("treatment".into(), 300)]),
+        };
+        let applier = FakeApplier {
+            result: ApplyResult::Failed {
+                detail: "version conflict".into(),
+                version_conflict: true,
+            },
+            calls: Mutex::new(0),
+        };
+        let recorder = FakeRecorder::default();
+        let metrics = HashMap::from([(metric_id, count_metric(metric_id, env))]);
+
+        let out = run_bandit_reallocation(
+            &reader,
+            &applier,
+            &recorder,
+            &exp,
+            &metrics,
+            Utc::now(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        match out {
+            BanditRunOutcome::Failed {
+                version_conflict, ..
+            } => assert!(version_conflict),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        let rows = recorder.rows.lock().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].action, "reallocate");
+        assert_eq!(rows[0].outcome, "failed");
+        assert_eq!(rows[0].detail.as_deref(), Some("version conflict"));
+    }
+}
