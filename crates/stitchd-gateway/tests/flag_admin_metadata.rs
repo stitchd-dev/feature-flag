@@ -119,6 +119,12 @@ impl FlagService for MetadataFlagService {
     ) -> Result<Response<stitchd_proto::flags::v1::GetPrerequisitesResponse>, Status> {
         Err(Status::unimplemented("not used"))
     }
+    async fn bandit_update_allocation(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::BanditUpdateAllocationRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::BanditUpdateAllocationResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock(svc: MetadataFlagService) -> FlagServiceClient<Channel> {

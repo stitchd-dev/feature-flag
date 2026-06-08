@@ -167,6 +167,12 @@ impl FlagService for LockedFlagService {
     ) -> Result<Response<stitchd_proto::flags::v1::GetPrerequisitesResponse>, Status> {
         Err(Status::unimplemented("not used"))
     }
+    async fn bandit_update_allocation(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::BanditUpdateAllocationRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::BanditUpdateAllocationResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock_flag_service(svc: LockedFlagService) -> FlagServiceClient<Channel> {
@@ -410,6 +416,12 @@ impl FlagService for UnlockedFlagService {
     ) -> Result<Response<stitchd_proto::flags::v1::GetPrerequisitesResponse>, Status> {
         Err(Status::unimplemented("not used"))
     }
+    async fn bandit_update_allocation(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::BanditUpdateAllocationRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::BanditUpdateAllocationResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 #[tokio::test]
@@ -592,6 +604,12 @@ impl FlagService for InvalidDistFlagService {
         &self,
         _req: tonic::Request<stitchd_proto::flags::v1::GetPrerequisitesRequest>,
     ) -> Result<Response<stitchd_proto::flags::v1::GetPrerequisitesResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn bandit_update_allocation(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::BanditUpdateAllocationRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::BanditUpdateAllocationResponse>, Status> {
         Err(Status::unimplemented("not used"))
     }
 }

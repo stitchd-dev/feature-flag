@@ -148,6 +148,12 @@ impl FlagService for MockFlagService {
             fallback_variant_key: "fb".to_string(),
         }))
     }
+    async fn bandit_update_allocation(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::BanditUpdateAllocationRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::BanditUpdateAllocationResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock(svc: MockFlagService) -> FlagServiceClient<Channel> {
@@ -364,6 +370,13 @@ async fn spawn_mock_invalid_argument(message: &str) -> FlagServiceClient<Channel
             &self,
             _req: tonic::Request<GetPrerequisitesRequest>,
         ) -> Result<Response<GetPrerequisitesResponse>, Status> {
+            Err(Status::unimplemented("not used"))
+        }
+        async fn bandit_update_allocation(
+            &self,
+            _req: tonic::Request<stitchd_proto::flags::v1::BanditUpdateAllocationRequest>,
+        ) -> Result<Response<stitchd_proto::flags::v1::BanditUpdateAllocationResponse>, Status>
+        {
             Err(Status::unimplemented("not used"))
         }
     }

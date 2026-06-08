@@ -166,6 +166,12 @@ impl FlagService for MockFlagService {
     ) -> Result<Response<GetPrerequisitesResponse>, Status> {
         Err(Status::unimplemented("not used"))
     }
+    async fn bandit_update_allocation(
+        &self,
+        _req: tonic::Request<stitchd_proto::flags::v1::BanditUpdateAllocationRequest>,
+    ) -> Result<Response<stitchd_proto::flags::v1::BanditUpdateAllocationResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 /// Mock ExperimentationService whose `GetExperimentStartPrerequisites` returns a
@@ -311,6 +317,13 @@ impl ExperimentationService for MockExpService {
         &self,
         _req: tonic::Request<stitchd_proto::experiments::v1::GetExperimentInteractionsRequest>,
     ) -> Result<Response<stitchd_proto::experiments::v1::GetExperimentInteractionsResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn apply_bandit_allocation(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ApplyBanditAllocationRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ApplyBanditAllocationResponse>, Status>
     {
         Err(Status::unimplemented("not used"))
     }
