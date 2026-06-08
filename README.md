@@ -212,6 +212,42 @@ cargo run --manifest-path crates/xtask/Cargo.toml -- docs
 
 Coverage is enforced at **90%** for the Rust workspace (`backend` flag) and is informational-only for the admin UI (`admin` flag) — see [`codecov.yml`](./codecov.yml).
 
+### Resetting the dev databases (un-drift)
+
+CI provisions brand-new database containers on every run, so it always sees a
+clean, fully-migrated schema. A long-lived local dev DB can **drift** from that
+state — most commonly a "different checksum" on an already-applied migration
+(e.g. the V1 baseline edited after it was first applied), which makes
+`sqlx migrate run` halt and leaves later migrations pending. When that happens,
+step 2 above (`cargo sqlx prepare`) and any `cargo test` against the dev DB
+silently diverge from CI.
+
+The fix is to drop and recreate the databases from the V1 baseline so local
+matches CI fresh-from-scratch:
+
+```bash
+# Postgres only (the common case — un-drifts the migration history)
+scripts/reset_dev_db.sh
+
+# Postgres + ClickHouse + ScyllaDB (full clean slate)
+scripts/reset_dev_db.sh --all
+```
+
+The script is **non-interactive and idempotent** (safe to re-run). It reads
+`STITCHD_DATABASE_URL` (falling back to the docker-compose default) and derives
+the plain `DATABASE_URL` that `sqlx-cli` needs. Verify afterwards with:
+
+```bash
+DATABASE_URL="$STITCHD_DATABASE_URL" \
+  cargo sqlx migrate info --source crates/stitchd-db/migrations   # all "installed"
+```
+
+> The `--all` ClickHouse path issues a `DROP DATABASE … SYNC` and then sweeps any
+> orphaned `Replicated*MergeTree` replica registrations out of Keeper before
+> recreating — otherwise a previously-interrupted reset can leave the schema
+> tables un-creatable (`REPLICA_ALREADY_EXISTS`). ClickHouse migrations are
+> applied by `cargo xtask ch-migrate` (the canonical event-writer migration set).
+
 ### Environment Variables
 
 All Stitchd-owned env vars carry the `STITCHD_` prefix (the only exception is `RUST_LOG`, which follows the Rust ecosystem standard). Service ports follow a predictable pattern: `STITCHD_{SERVICE}_GRPC_PORT` + `STITCHD_{SERVICE}_METRICS_PORT`.

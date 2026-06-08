@@ -71,8 +71,8 @@ idempotency store.
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task 1: `cargo xtask db-reset` (or `scripts/reset_dev_db.sh`) — drop + recreate + migrate from V1 baseline; non-interactive, idempotent; resolves baseline checksum drift
+- [x] Task 1: `scripts/reset_dev_db.sh` — drop + recreate + migrate from V1 baseline; non-interactive, idempotent; resolves baseline checksum drift [e604ccb]
   <!-- files: crates/xtask/src, scripts -->
-- [ ] Task 2: Document the fresh-DB verification flow (matches CI fresh-from-scratch) + close feature-flag-7rp
+- [x] Task 2: Document the fresh-DB verification flow (matches CI fresh-from-scratch) + close feature-flag-7rp [f41ec42]
   <!-- files: README.md, conductor/workflow.md -->
 - [ ] Task: Conductor - User Manual Verification 'Fresh-DB Reset Tooling' (Protocol in workflow.md)
