@@ -3022,7 +3022,8 @@ mod tests {
             _env_id: EnvironmentId,
             _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<stitchd_core::segment::Segment>, Option<String>), RepositoryError> {
+        ) -> Result<(Vec<stitchd_core::segment::Segment>, Option<String>), RepositoryError>
+        {
             Ok((vec![], None))
         }
         async fn create(
@@ -3962,7 +3963,8 @@ mod tests {
             _env_id: EnvironmentId,
             _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<stitchd_core::segment::Segment>, Option<String>), RepositoryError> {
+        ) -> Result<(Vec<stitchd_core::segment::Segment>, Option<String>), RepositoryError>
+        {
             Ok((vec![], None))
         }
         async fn create(
@@ -4207,8 +4209,13 @@ mod tests {
             _env_id: stitchd_core::id::EnvironmentId,
             _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<stitchd_core::experimentation::Experiment>, Option<String>), RepositoryError>
-        {
+        ) -> Result<
+            (
+                Vec<stitchd_core::experimentation::Experiment>,
+                Option<String>,
+            ),
+            RepositoryError,
+        > {
             Ok((vec![], None))
         }
         async fn create(
@@ -4856,8 +4863,13 @@ mod tests {
             _env_id: stitchd_core::id::EnvironmentId,
             _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<stitchd_core::experimentation::Experiment>, Option<String>), RepositoryError>
-        {
+        ) -> Result<
+            (
+                Vec<stitchd_core::experimentation::Experiment>,
+                Option<String>,
+            ),
+            RepositoryError,
+        > {
             Ok((vec![], None))
         }
         async fn create(

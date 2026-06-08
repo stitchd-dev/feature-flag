@@ -731,7 +731,11 @@ mod tests {
     ) {
         for i in 0..n {
             let user = repo
-                .create(&format!("member-{i:03}@example.com"), &format!("M{i}"), None)
+                .create(
+                    &format!("member-{i:03}@example.com"),
+                    &format!("M{i}"),
+                    None,
+                )
                 .await
                 .unwrap();
             sqlx::query!(
@@ -777,12 +781,12 @@ mod tests {
     }
 
     /// Rigorous correctness: paging through with the returned cursor visits EVERY
-    /// row exactly once, in (created_at, id) order, with no duplicates or gaps.
+    /// row exactly once, in `(created_at, id)` order, with no duplicates or gaps.
     #[sqlx::test(migrations = "./migrations")]
     async fn list_org_users_keyset_pages_through_all_rows_exactly_once(pool: PgPool) {
+        const N: usize = 23;
         let repo = PgAuthUserRepository::new(pool.clone());
         let org_id = seed_org(&pool).await;
-        const N: usize = 23;
         seed_org_members(&repo, &pool, org_id, N).await;
 
         // Walk pages of 7 (so the last page is partial: 23 = 7+7+7+2).
@@ -803,7 +807,11 @@ mod tests {
             assert!(pages <= N + 1, "must terminate");
         }
 
-        assert_eq!(seen.len(), N, "every row visited exactly once — no gaps/dupes");
+        assert_eq!(
+            seen.len(),
+            N,
+            "every row visited exactly once — no gaps/dupes"
+        );
         let mut unique = seen.clone();
         unique.sort();
         unique.dedup();

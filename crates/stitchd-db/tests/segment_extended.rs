@@ -183,7 +183,11 @@ async fn list_by_environment_keyset_pages_through_all_rows_exactly_once(pool: sq
         assert!(pages <= N + 1, "must terminate");
     }
 
-    assert_eq!(seen.len(), N, "every row visited exactly once — no gaps/dupes");
+    assert_eq!(
+        seen.len(),
+        N,
+        "every row visited exactly once — no gaps/dupes"
+    );
     let mut unique = seen.clone();
     unique.sort();
     unique.dedup();

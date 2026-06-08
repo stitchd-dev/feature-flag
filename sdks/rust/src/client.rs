@@ -398,8 +398,8 @@ impl EventSink for HttpEventSink {
         // stored 202 instead of re-ingesting it (deduping at-least-once retries).
         // (Content-derived rather than random because this sink's FlushTask may
         // re-enqueue a failed batch; a content hash stays stable across that.)
-        let body_bytes =
-            serde_json::to_vec(&body).map_err(|e| SdkError::Network(format!("event flush: {e}")))?;
+        let body_bytes = serde_json::to_vec(&body)
+            .map_err(|e| SdkError::Network(format!("event flush: {e}")))?;
         let idempotency_key =
             uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, &body_bytes).to_string();
 

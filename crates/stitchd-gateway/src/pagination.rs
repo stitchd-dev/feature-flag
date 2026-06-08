@@ -172,15 +172,6 @@ fn de_opt_u32_from_str<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<
     Ok(Some(de_u32_from_str(d)?))
 }
 
-/// Opaque-cursor payload for the encoded-offset transport: the absolute row
-/// offset the next page starts at. (See conductor/tech-stack.md — the phased
-/// approach that delivers the cursor contract over the existing offset-based
-/// service RPCs without a per-repo keyset rewrite.)
-#[derive(Debug, Clone, Copy, Serialize, serde::Deserialize)]
-struct OffsetCursor {
-    offset: u64,
-}
-
 impl CursorParams {
     /// Effective page size (default 50, capped at 200).
     #[must_use]
@@ -200,14 +191,6 @@ impl CursorParams {
             None => Ok(None),
             Some(tok) => decode_cursor(tok).map(Some),
         }
-    }
-
-    /// Starting row offset for the encoded-offset transport (`0` when no cursor).
-    ///
-    /// # Errors
-    /// [`CursorError`] if a present cursor token is malformed.
-    pub fn offset(&self) -> Result<u64, CursorError> {
-        Ok(self.decode::<OffsetCursor>()?.map(|c| c.offset).unwrap_or(0))
     }
 }
 
@@ -256,26 +239,6 @@ impl<T: Serialize> CursorPage<T> {
             items,
             next_cursor: (!next_cursor.is_empty()).then_some(next_cursor),
         }
-    }
-
-    /// Build a page from an **offset-based backend** result.
-    ///
-    /// `start_offset` is where this page began (`CursorParams::offset()`); `total`
-    /// is the backend's total row count. `next_cursor` is emitted (encoding
-    /// `start_offset + items.len()`) iff more rows remain. This is the transport
-    /// the gateway uses today over the services' `(offset, limit) → (items, total)`
-    /// RPCs (see conductor/tech-stack.md).
-    #[must_use]
-    pub fn from_offset(items: Vec<T>, total: u64, start_offset: u64) -> Self {
-        let next_offset = start_offset.saturating_add(items.len() as u64);
-        let next_cursor = if next_offset < total {
-            Some(encode_cursor(&OffsetCursor {
-                offset: next_offset,
-            }))
-        } else {
-            None
-        };
-        Self { items, next_cursor }
     }
 }
 
@@ -413,44 +376,6 @@ mod tests {
             page.next_cursor.is_none(),
             "fewer than limit+1 rows ⇒ last page"
         );
-    }
-
-    #[test]
-    fn offset_cursor_roundtrip_through_params() {
-        // No cursor → offset 0.
-        let p0 = CursorParams {
-            cursor: None,
-            limit: None,
-        };
-        assert_eq!(p0.offset().unwrap(), 0);
-
-        // A from_offset next_cursor decodes back to the next offset.
-        let page = CursorPage::from_offset(vec![1u32, 2, 3], 10, 0);
-        let tok = page.next_cursor.expect("more rows remain");
-        let p1 = CursorParams {
-            cursor: Some(tok),
-            limit: None,
-        };
-        assert_eq!(p1.offset().unwrap(), 3, "next page starts after the 3 items");
-    }
-
-    #[test]
-    fn from_offset_no_next_cursor_on_final_page() {
-        // 7 total, started at offset 5, returned 2 → 5+2 == 7 → no next.
-        let page = CursorPage::from_offset(vec![6u32, 7], 7, 5);
-        assert!(page.next_cursor.is_none(), "consumed all rows ⇒ last page");
-        // Exactly-full first page with more behind → has next.
-        let page2 = CursorPage::from_offset(vec![1u32, 2], 5, 0);
-        assert!(page2.next_cursor.is_some());
-    }
-
-    #[test]
-    fn params_offset_rejects_malformed_cursor() {
-        let p = CursorParams {
-            cursor: Some("@@not-base64@@".into()),
-            limit: None,
-        };
-        assert!(p.offset().is_err());
     }
 
     #[test]

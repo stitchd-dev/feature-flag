@@ -190,7 +190,8 @@ mod tests {
             _org_id: stitchd_core::id::OrganisationId,
             _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<(User, stitchd_core::auth::OrgRole)>, Option<String>), RepositoryError> {
+        ) -> Result<(Vec<(User, stitchd_core::auth::OrgRole)>, Option<String>), RepositoryError>
+        {
             Ok((vec![], None))
         }
     }

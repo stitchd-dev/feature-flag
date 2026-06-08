@@ -394,12 +394,9 @@ pub fn ttl_from_env() -> Duration {
 pub async fn sweep_expired(pool: &sqlx::PgPool, ttl: Duration) -> Result<u64, anyhow::Error> {
     let cutoff = chrono::Utc::now()
         - chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::hours(24));
-    let res = sqlx::query!(
-        "DELETE FROM idempotency_keys WHERE created_at < $1",
-        cutoff,
-    )
-    .execute(pool)
-    .await?;
+    let res = sqlx::query!("DELETE FROM idempotency_keys WHERE created_at < $1", cutoff,)
+        .execute(pool)
+        .await?;
     Ok(res.rows_affected())
 }
 
@@ -407,7 +404,9 @@ pub async fn sweep_expired(pool: &sqlx::PgPool, ttl: Duration) -> Result<u64, an
 /// tick deletes rows older than `ttl`.
 pub fn spawn_sweeper(pool: sqlx::PgPool, ttl: Duration) -> tokio::task::JoinHandle<()> {
     // Sweep at most hourly, and at least once per TTL window.
-    let period = ttl.min(Duration::from_secs(3600)).max(Duration::from_secs(60));
+    let period = ttl
+        .min(Duration::from_secs(3600))
+        .max(Duration::from_secs(60));
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(period);
         // Skip the immediate first tick so startup isn't a no-op DELETE storm.
