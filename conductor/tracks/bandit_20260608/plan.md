@@ -169,7 +169,7 @@ Phase-level wave summary:
       <!-- files: crates/stitchd-gateway/src/routes/experiments.rs, crates/stitchd-analytics-service/src/*, crates/stitchd-experimentation-service/src/* -->
 - [x] Task: Conductor - User Manual Verification 'Phase 11' [autonomous] (Protocol in workflow.md)
 
-## Phase 12: Admin UI [checkpoint: pending]
+## Phase 12: Admin UI [checkpoint: ae75e0d]
 <!-- execution: parallel -->
 <!-- depends: phase11 -->
 
