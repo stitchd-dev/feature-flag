@@ -366,3 +366,62 @@ From `conductor/patterns.md` (read before starting):
   core 860 / flag-service 116+ / stats-service 356 / exp-service 130 lib tests pass; full
   `cargo build --workspace --all-targets` clean; `cargo build -p stitchd-sdk-rust` confirms the
   snapshot field flows to the SDK.
+
+## Phase 6 — Contextual Bandit
+
+### Task 6.1 — pure contextual reward model + engine wiring (commit 278cab9)
+- **New pure module `experimentation/bandit/contextual.rs`.** Model shape: `FeatureSpec
+  { context_type, parameter, encoding }` with `FeatureEncoding::{Numeric, OneHot{categories}}`;
+  `VariantCoefficients { variant_key, coeffs: Vec<f64>, a_inv: Option<Vec<f64>> }`;
+  `ContextualModel { features, variants }`. Design vector is intercept-first: `[1.0, feat0…,
+  feat1…]`. `predict` = dot product. `sample_contextual_variant` = Thompson-on-linear: per
+  variant `mean + sd·Z` (Z from the shared `Lcg`; `sd = sqrt(xᵀ A⁻¹ x)` when `a_inv` present,
+  else a 0.1 floor) then goal-directed argmax. `fit_ridge` / `fit_design_inverse` solve the
+  normal equations `(XᵀX+λI)` via hand-rolled Gauss-Jordan with partial pivoting — **no new
+  crate dep** (workspace had no linalg crate; small fixed dims).
+- **A model is EITHER non-contextual posteriors OR contextual coeffs.** Added
+  `contextual: Option<ContextualModel>` to `RealtimeBanditModel` (domain + proto + flag-service
+  mapping + SDK mapping). Adding the field tripped clippy `large_enum_variant` on
+  `RuleOutput::Percentage` → **boxed it: `realtime_bandit: Option<Box<RealtimeBanditModel>>`**
+  (touches every construction/match site; `model.as_ref()` at the engine call, `.map(Box::new)`
+  at mappers). serde `Box<T>` is transparent so legacy JSON still decodes.
+- **Engine purity preserved by pre-resolving feature values into an OWNED map.** First attempt
+  used a `RefCell`-cached `&str`-returning resolver — unsound (borrow ends when the guard
+  drops). Final `BundleFeatureResolver` pre-resolves every `(context_type, parameter)` the
+  model names into `HashMap<(String,String),String>` once, then hands back `&str` borrows — no
+  `unsafe`. Feature VALUES stay in the resolver + the numeric vector; the trace surfaces feature
+  NAMES only (`user.score`), asserted no value/unit-key leaks. Missing unit → static fallback;
+  missing feature → encodes 0.0 (graceful, deterministic). `proto FeatureEncoding` is a oneof
+  (`Numeric`/`OneHot`), so map via `feature_encoding::Kind`.
+
+### Task 6.2 — contextual fit in stats-service tick + live-CH test (commit f0d13e6)
+- **Feature values for the FIT come from `events.properties` (a `Map(String,String)`), NOT the
+  assignment row** (assignments carry only context_type/context_key — no params). New
+  `build_contextual_reward_rows_query` returns ONE row per assigned unit:
+  `(variant_key, feature_value = events.properties[feature], reward = post-exposure value sum)`,
+  ITT (non-firing unit → reward 0, feature ''). Escape the feature key into the `properties['…']`
+  map-key literal via `clickhouse_escape` (same as `on_field`).
+- **`decide_contextual_model` is pure** (encode_features + fit_ridge + fit_design_inverse per
+  variant, sorted for determinism, MIN_ARM_SAMPLE floor on the smallest arm). `decide_contextual
+  _refresh` (async) reads the rows for a single scalar Aggregation objective and calls it.
+  `run_realtime_refresh` branches: `BanditAlgorithm::Contextual` → contextual decision, else the
+  Phase-5 non-contextual `decide_realtime_model`. The apply/record path is shared.
+- **DEVIATION (scoped):** today the FIRST declared `ContextualConfig.features` entry drives the
+  single CH feature column + a Numeric encoding. The model shape + engine already support
+  multiple features and one-hot; multi-feature/one-hot FIT-side is a future extension (the CH
+  query returns one feature column). `ContextualConfig.features` is `Vec<String>` (names only),
+  so encodings are inferred Numeric at fit time.
+- **`BanditGoal` ambiguity in stats-service:** the crate aliases `GoalDirection as BanditGoal`
+  (bandit core), but `sample_contextual_variant` wants `rule_engine::types::BanditGoal`. In tests
+  qualify the rule_engine path explicitly.
+- **Live self-seeding test `tests/bandit_contextual.rs` (#[ignore], mirrors bandit_reallocation)**
+  seeds reward = f(score), runs the contextual fit through `run_bandit_reallocation`, maps the
+  captured proto contextual model back to domain, and asserts high_lover wins high score /
+  low_lover wins low score. Added `bandit_contextual` to the CI `--ignored --test` list.
+- **No `.sqlx` delta** (runtime `sqlx::query`/`query_as`, no compile-time macros).
+
+### Gates
+- purity green; clippy `-D warnings` clean on core/flag-service/stats-service (all-targets);
+  core 886 / flag-service 117 lib + 8 prereq-integration (with DATABASE_URL) / stats-service
+  full suite pass; `bandit_contextual --ignored` green against live CH+PG; `cargo build
+  -p stitchd-sdk-rust` confirms the contextual model flows to the SDK. No new crate deps.
