@@ -102,3 +102,10 @@ From `conductor/patterns.md` — directly relevant to this track:
   - GOTCHA (cross-layer consistency): the route agent migrated list_iterations + list_exposures to cursor, but the UI agent kept those detail sub-lists page-based (they need `total` for the exposure-count stat; cursor omits total). tsc + mocked vitest do NOT catch UI↔backend contract mismatches. Resolved by reverting those 2 detail endpoints to page-based — cursor applies to top-level resource collections; detail sub-lists stay page-based by design.
   - OpenAPI contract-check (scripts/check_openapi_contract.py) only checks (METHOD, path) pairs — query-param changes (page/per_page→cursor/limit) don't break it. openapi.json is gitignored/ephemeral.
   - Parallel delegation worked well: one agent for the gateway route layer (9 handlers + tests, 288 green), one for the Admin UI (15 files, 994 vitest green); orchestrator did shared primitives + cross-layer reconciliation.
+
+## [2026-06-08] REVISION #1
+- **Type:** Spec (FR-4 cursor pagination)
+- **Trigger:** FR-4.3's per-repo keyset rewrite (6 repos + 11 protos) was too large/risky for one CI-green pass and reverses domain_boundaries; detail sub-lists need `total` (cursor envelope omits it).
+- **Learning:**
+  - Gotcha: a "migrate to keyset" requirement conflates the user-facing CONTRACT (opaque cursor → {items,next_cursor}) with an internal OPTIMIZATION (drop OFFSET). Separating them lets you ship the mandated contract immediately (encoded-offset cursor) and defer the perf win (true keyset) as a contract-preserving follow-up.
+  - Pattern: when a spec mandates a paradigm change, deliver the CONTRACT first over existing internals; treat the internal rewrite as a separate, scoped, deferrable optimization. And scope "all list endpoints" to top-level resource collections — detail sub-lists with count/total dependencies are legitimately excluded.

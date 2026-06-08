@@ -1,5 +1,12 @@
 # Spec: Platform Hardening — Idempotency Keys, On-Demand Interaction Recompute, Cursor Pagination, Fresh-DB Tooling
 
+> **Last Revised: 2026-06-08 (Revision #1)** — FR-4 (cursor pagination) amended to
+> the as-built approach: the cursor **contract** is delivered via an opaque
+> encoded-offset at the gateway over the existing offset-based service RPCs (true
+> keyset internals deferred as follow-up `feature-flag-cj5`); cursor scope is the
+> top-level resource collections only — experiment-detail sub-lists
+> (iterations, exposures) stay page-based. See `revisions.md`.
+
 ## Overview
 
 A robustness/operational track closing confirmed gaps left across prior tracks:
@@ -76,17 +83,34 @@ dev ergonomics.
   marks the recompute job failed (consistent with stats-failure handling).
 
 ### FR-4 — Cursor-based pagination migration
+> **Scope (Revision #1):** cursor applies to the **top-level resource
+> collections** — flags, experiments, segments, events, metrics, sdk-keys,
+> org-users (mgmt + admin), exclusion-groups (8 endpoints). **Experiment-detail
+> sub-lists** (`iterations`, `exposures`) intentionally remain page-based: they
+> back numbered detail views, and the Admin UI's exposure-count stat depends on
+> the `total` the cursor envelope omits.
 - FR-4.1 Document the cursor contract in `tech-stack.md` **before** implementation
-  (per `workflow.md` principle 2) — opaque keyset cursor token, `?cursor=&limit=`,
-  response envelope `{items, next_cursor}` (and `prev_cursor` where bidirectional).
-- FR-4.2 Shared cursor primitives in the gateway (`CursorParams` + `CursorPage<T>`)
-  and the proto pagination messages; opaque token = base64 of (sort-key, id) keyset,
-  tamper-resistant + stable.
-- FR-4.3 Migrate repository queries from `OFFSET` + `COUNT(*) OVER()` to keyset
-  pagination (WHERE (sort_key, id) > cursor … ORDER BY … LIMIT n+1).
-- FR-4.4 Migrate gateway list routes + the OpenAPI contract surface.
+  (per `workflow.md` principle 2) — opaque cursor token, `?cursor=&limit=`,
+  response envelope `{items, next_cursor}`. ✅
+- FR-4.2 Shared cursor primitives in the gateway (`CursorParams` + `CursorPage<T>`
+  + `encode_cursor`/`decode_cursor`); opaque token = base64url(JSON(position)),
+  treated as opaque by clients. ✅
+- FR-4.3 **(Revised)** Deliver the cursor contract as an **opaque encoded-offset**
+  at the gateway over each service's existing `(offset, limit) → (items, total)`
+  RPC — `CursorParams::offset()` decodes the token to a start offset,
+  `CursorPage::from_offset(items, total, start)` emits `next_cursor` iff more rows
+  remain. **No proto or repo change.** *Originally specified as a per-repo keyset
+  rewrite (`WHERE (sort_key, id) > cursor … LIMIT n+1`, dropping `OFFSET` +
+  `COUNT(*) OVER()`); that true-keyset internal — which buys O(1) deep-page scans
+  + concurrent-insert stability and swaps only the token payload, not the
+  contract — is deferred to follow-up `feature-flag-cj5`. The
+  `CursorPage::from_overfetch` primitive is in place for it.*
+- FR-4.4 Migrate gateway list routes + the OpenAPI contract surface. ✅ (8 top-level
+  list routes; the OpenAPI contract-check verifies `(method, path)` pairs, which
+  are unchanged.)
 - FR-4.5 Migrate Admin UI list views from `?page=N&per_page=M` to cursor tokens
-  (next/prev navigation; page numbers dropped where keyset can't random-access).
+  (next/prev navigation; page numbers dropped — cursors can't random-access). ✅
+  (shared `usePaginatedList` + `Pagination` + 6 views.)
 
 ### FR-5 — SDK gRPC / event-ingest idempotency
 - FR-5.1 Event-ingest (`/v1/sdk/events:batch` REST + the gRPC ingest path) accepts
@@ -117,9 +141,11 @@ dev ergonomics.
   (`cargo xtask docs` zero-diff); new env var documented in the env-vars scraper.
 - NFR-5 Interaction-sweep on-demand path adds no behavior change to the scheduled
   tick (shared code path, no divergence).
-- NFR-6 The cursor migration is a **breaking API change** to list endpoints —
-  must be applied atomically across gateway + Admin UI within the phase; OpenAPI
-  contract + `domain_boundaries`-era assumptions updated in lockstep.
+- NFR-6 The cursor migration is a **breaking API change** to the top-level list
+  endpoints — applied atomically across gateway + Admin UI within the phase;
+  OpenAPI contract + `domain_boundaries`-era assumptions updated in lockstep.
+  (Revision #1: keeping detail sub-lists page-based avoids breaking the
+  exposure-count stat while the top-level contract flips.)
 
 ## Acceptance Criteria
 - AC-1 `POST /v1/projects/{}/flags` twice with the same `Idempotency-Key` +
@@ -134,9 +160,11 @@ dev ergonomics.
   without waiting for the tick).
 - AC-6 A retried event batch with the same batch key does not double-count in
   ClickHouse (live-CH integration test).
-- AC-7 List endpoints accept `?cursor=&limit=` and return `{items, next_cursor}`;
-  paging through with the returned cursor yields every row exactly once with no
-  duplicates/gaps; Admin UI list views navigate via next/prev cursors.
+- AC-7 **Top-level** list endpoints accept `?cursor=&limit=` and return
+  `{items, next_cursor}`; paging through with the returned cursor yields every row
+  exactly once with no duplicates/gaps (under stable data); Admin UI list views
+  navigate via next/prev cursors. (Detail sub-lists iterations/exposures remain
+  page-based — see FR-4 scope.)
 - AC-8 The DB-reset command takes a drifted dev DB to a clean, fully-migrated state
   in one non-interactive command; documented.
 - AC-9 CI green: workspace tests, clippy `-D warnings`, fmt, sqlx-check, docs
