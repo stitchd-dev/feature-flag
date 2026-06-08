@@ -11,7 +11,7 @@ Phase-level wave summary:
 - Wave D: Phase 6 (contextual, after 5) ∥ Phase 7 (lifecycle, after 4) → Phase 8 (campaigns)
 - Wave E: Phase 11 (REST surfacing) → Phase 12 (Admin UI) → Phase 13 (integration/docs/CI)
 
-## Phase 1: Schema, Domain & Proto Foundation [checkpoint: pending]
+## Phase 1: Schema, Domain & Proto Foundation [checkpoint: d2e0d46]
 <!-- execution: parallel -->
 <!-- depends: -->
 
