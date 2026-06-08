@@ -728,3 +728,100 @@ From `conductor/patterns.md` (read before starting):
   asserts the 4 bandit paths + 6 schemas land in the generated doc;
   `check_openapi_contract.py` green (23 pre-decomp routes ⊆ 120 gateway routes);
   full workspace --all-targets build clean. ZERO `.sqlx` delta (no query! macros).
+
+## Phase 12 — Admin UI (React) (2026-06-08)
+
+### Task 12.1 — bandit config in create/edit form (commit a7bab43)
+- **Conditional nested-object validation in Yup, context-free.** The
+  `bandit_config` sub-schema is gated on the root `experiment_mode` via
+  `Yup.object().when('experiment_mode', { is:'bandit', then:()=>banditConfigSchema,
+  otherwise:(s)=>s.optional().nullable().strip() })`. Intra-config conditionals
+  (contextual-features-need-algorithm, scalarized-weights-need-objective_kind,
+  campaign-fields-need-campaign_enabled) reference SIBLING fields INSIDE the
+  nested object, which Yup resolves natively — DON'T reach for `$context`
+  (Formik doesn't auto-pass it). First attempt used `'$experiment_mode'` and
+  silently never fired; switching to root-`.when` + sibling-`.when` fixed it.
+- **min_exploration captured as PERCENT in the form, converted to bp on submit**
+  (`Math.round(pct*100)`), and back (`bp/100`) in `parseBanditConfig` for edit
+  mode. The gateway speaks `min_exploration_bp`.
+- **Objective builder is flat in the form, nested in the payload.** Form holds
+  `objective_kind` + `objective_metric_id` + `scalarized_weights[]` +
+  `constraints[]`; `buildBanditObjective` assembles the tagged
+  `{type:'scalar'|'scalarized'|'constrained', ...}` the gateway expects. Metric
+  selection for objectives uses plain UUID text inputs (the picker-backed
+  multi-select is reserved for primary/guardrail metric_ids) — keeps the form
+  pure-testable and matches the schema's UUID matcher.
+- **Two existing fixtures (`CreateExperimentModal.test.ts`,
+  `CreateExperimentExclusion.test.ts`) construct `ExperimentFormValues` literals**
+  → adding `experiment_mode`+`bandit_config` to the interface broke tsc on both;
+  added the two new defaults to each `validBase`. (Fixtures that spell out the
+  whole form-values type are the React analog of the Rust struct-literal ripple.)
+- FieldArray (formik) drives the contextual-features / scalarized-weights /
+  constraints row editors (same pattern as MetricFormFields steps).
+
+### Task 12.2 — Bandit Results view (commit ca4dbab)
+- **New `tabs/Bandit.tsx` (BanditTab) + `lib/api/bandit.ts` client.** The four
+  Phase-11 GET DTOs map 1:1 to TS interfaces (BanditState / BanditAllocationRun
+  / BanditObjective / BanditCampaign). NO API-shape mismatch found vs the Phase 11
+  DTOs documented in learnings — the gateway already re-hydrates the JSON-string
+  fields into nested JSON, so the client consumes real objects.
+- **Allocation-over-time chart reads `history.runs[].new_allocation`** which is
+  `{ "<variant>": bp, …, "bandit_objectives": {…} }`. `buildAllocationSeries`
+  (pure, exported) drops the reserved `bandit_objectives` key, keeps only numeric
+  arm weights, and re-sorts oldest-first (gateway returns newest-first). Reuses
+  the Timeseries SVG-polyline pattern (Y-axis fixed [0,10000]bp). No chart dep.
+- **Convergence badge state machine** (`deriveConvergenceState`, pure):
+  committed+campaign_status∈{concluded,finalized,completed} → Rolled out;
+  committed → Committed; has_converged+winner → Converged; else Exploring.
+  `convergenceLabel` builds the single string "Converged: <v> (NN%)".
+- **Tab visibility = is_bandit.** ExperimentDetail fetches `getBanditState` on
+  mount; the "Bandit" tab button + content render ONLY when
+  `banditState.is_bandit===true`. A non-bandit experiment may 404/422 on the
+  endpoint — caught + treated as "not a bandit" (state=null) so the rest of the
+  page renders; the tab simply never appears.
+- **SSR test gotcha (node-env + renderToString):** interpolated JSX text
+  segments like `Objective · {metric_id}` and `Campaign: {status}` get
+  `<!-- -->` comment markers injected between segments. Assert across them
+  (`/Objective ·[^<]*<!-- -->metric-conv/`) or split into two `toMatch` calls.
+  A PRE-built single string (e.g. `convergenceLabel(s)` returned whole) has NO
+  marker, so assert it exactly.
+
+### Task 12.3 — interaction tab order 4+ + bandit notes (commit ffa5b1a)
+- **`formatTerm` generalized via a `/^(\d+)way:/` regex** — handles 2way/3way
+  AND the backend's `{N}way:` prefix for order ≥4 (Phase 10's NWay term), so a
+  4-way term renders "A×B×C×D" (factorLabels(n), A..Z then F{n}). NO order-3 cap
+  anywhere; the order-derived fallback also uses factorLabels(order).
+- **Added a dedicated Order column + grouping** (`sortInteractions` groups by
+  order ascending; `distinctOrders` lists them) + an "Includes N-way" hint badge
+  when maxOrder≥4. The old inline `const orderLabel` ternary (capped at 3-way)
+  was replaced by the exported generic `orderLabel(n)`.
+- **Bandit note has NO backing DTO field** — the interaction REST DTO carries no
+  bandit/SRM flag (SRM `bandit_skipped` lives on the SRM/exposures side per
+  Phase 10). So the note is driven by an optional `isBandit` prop threaded from
+  ExperimentDetail's bandit state; it explains SRM-is-skipped + n-weighted cells.
+  This is the surfacing the task asked for without inventing a wire field.
+- The existing `__tests__/Interactions.test.tsx` (separate, older render suite)
+  kept passing — I preserved `data-order` + the `{N}-way` badge text, only moving
+  the badge into its own column.
+
+### Gates (all from admin/)
+- `tsc --noEmit -p tsconfig.app.json` clean (exit 0); `npm run lint` 0 errors
+  (78 warnings, all pre-existing patterns: setState-in-effect on fetch effects +
+  react-refresh/only-export-components on pure-helper exports — both match the
+  established admin conventions, the new exports just add a few more of the same);
+  `CI=true npm run test` 994 passed / 60 files (baseline was 925/58 → +69 tests,
+  +2 files: CreateExperimentBandit.test.ts, tabs/Bandit.test.tsx); `npm run build`
+  succeeds (chunk-size advisory pre-existing).
+- **Component/route structure for Phase 13:**
+  * API: `admin/src/lib/api/bandit.ts` — getBanditState, getBanditAllocationHistory,
+    listBanditCampaigns, getBanditCampaign (+ all DTO interfaces).
+  * Form: experiment_mode + bandit_config on `ExperimentFormValues`;
+    `banditConfigSchema` + `DEFAULT_BANDIT_CONFIG` in lib/validation/experiment.ts;
+    `buildBanditConfigPayload`/`buildBanditObjective`/`parseBanditConfig` in
+    CreateExperimentModal.helpers.ts; `BanditConfigSection`/`BanditModeGate` in
+    CreateExperimentModal.tsx.
+  * View: `tabs/Bandit.tsx` BanditTab (+ pure exports buildAllocationSeries,
+    allocationArmKeys, deriveConvergenceState, convergenceLabel); rendered under
+    the `'bandit'` tab in ExperimentDetail, shown only when is_bandit.
+  * Interactions: order-generic `formatTerm`/`orderLabel`/`sortInteractions`/
+    `distinctOrders` + optional `isBandit` prop in tabs/Interactions.tsx.
