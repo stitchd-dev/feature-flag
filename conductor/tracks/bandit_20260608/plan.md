@@ -67,7 +67,7 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 3' [autonomous] (Protocol in workflow.md)
 
-## Phase 4: Stats-Service Static Reallocation Pass
+## Phase 4: Stats-Service Static Reallocation Pass [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase2, phase3 -->
 
@@ -80,7 +80,7 @@ Phase-level wave summary:
       `--test` list in ci.yml**.
       <!-- files: crates/stitchd-stats-service/src/compute.rs, crates/stitchd-stats-service/tests/bandit_reallocation.rs, .github/workflows/ci.yml -->
       <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 4' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 4' [autonomous] (Protocol in workflow.md)
 
 ## Phase 5: Real-Time Eval Path (snapshot-resident, bandit-aware)
 <!-- execution: sequential -->

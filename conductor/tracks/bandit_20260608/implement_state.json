@@ -1,8 +1,13 @@
 {
-  "current_phase": "Wave C: Phase 4 (static reallocation) -> then Phase 5/9/10",
-  "current_phase_index": 3,
+  "current_phase": "Wave C: Phase 5 (real-time eval) -> then Phase 9 || Phase 10",
+  "current_phase_index": 4,
   "current_task_index": 0,
-  "completed_phases": ["Phase 1: Schema, Domain & Proto Foundation","Phase 2: Bandit Core Algorithms","Phase 3: Privileged Allocation-Write Path"],
+  "completed_phases": [
+    "Phase 1: Schema, Domain & Proto Foundation",
+    "Phase 2: Bandit Core Algorithms",
+    "Phase 3: Privileged Allocation-Write Path",
+    "Phase 4: Stats-Service Static Reallocation Pass"
+  ],
   "last_updated": "2026-06-08T07:55:00Z",
   "status": "in_progress",
   "mode": "autonomous",
@@ -11,5 +16,6 @@
     "phase2": "stitchd_core::experimentation::bandit:: thompson_weights(arms,goal,n_samples,seed); epsilon_greedy_weights(arms,goal,epsilon); ucb_weights(arms,goal,c); normalize_to_distribution(raw,min_exploration_bp)->RolloutDistribution; combined_rewards/reward_arms(objective,metrics); BanditArm{variant_key,posterior:RewardPosterior}; MetricRewards{metric_id,goal,arms}",
     "phase3": "flag-service RPC BanditUpdateAllocation(project_id,flag_key,environment_id,experiment_id,version,allocations[AllocationBucket],oneof target{flag_rule_id|default_rule}); experimentation-service RPC ApplyBanditAllocation(experiment_id,allocations[BanditAllocationBucket],expected_version)->outcome(APPLIED|SKIPPED|FAILED)+resolved_target+new_version+version_conflict"
   },
-  "verify_db": "postgres://stitchd:stitchd@localhost:5432/bandit_verify_20260608"
+  "verify_db": "postgres://stitchd:stitchd@localhost:5432/bandit_verify_20260608",
+  "phase4_notes": "Live-CH test passes (treatment 9500bp/control 500bp). ListRunningExperiments now carries experiment_mode+bandit_config. CI coverage job now installs sqlx-cli + migrates base DB for bandit_reallocation test. Worker fixed pre-existing gateway-mock build break (701e6ac)."
 }
