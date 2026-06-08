@@ -189,13 +189,13 @@ pub mod tests {
                 .collect())
         }
 
-        async fn list_by_environment_paginated(
+        async fn list_by_environment_keyset(
             &self,
             environment_id: EnvironmentId,
-            offset: u64,
+            after: Option<stitchd_db::KeysetCursor>,
             limit: u64,
-        ) -> Result<(Vec<Segment>, u64), RepositoryError> {
-            let all: Vec<Segment> = self
+        ) -> Result<(Vec<Segment>, Option<String>), RepositoryError> {
+            let mut all: Vec<Segment> = self
                 .segments
                 .lock()
                 .unwrap()
@@ -203,13 +203,26 @@ pub mod tests {
                 .filter(|s| s.environment_id == environment_id)
                 .cloned()
                 .collect();
-            let total = all.len() as u64;
-            let page = all
+            all.sort_by_key(|s| (s.created_at, s.id.as_uuid()));
+            let mut page: Vec<Segment> = all
                 .into_iter()
-                .skip(usize::try_from(offset).unwrap_or(usize::MAX))
-                .take(usize::try_from(limit).unwrap_or(usize::MAX))
+                .filter(|s| {
+                    after.is_none_or(|c| (s.created_at, s.id.as_uuid()) > (c.created_at, c.id))
+                })
                 .collect();
-            Ok((page, total))
+            let next = if page.len() as u64 > limit {
+                page.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+                page.last().map(|s| {
+                    stitchd_db::KeysetCursor {
+                        created_at: s.created_at,
+                        id: s.id.as_uuid(),
+                    }
+                    .encode()
+                })
+            } else {
+                None
+            };
+            Ok((page, next))
         }
 
         async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {

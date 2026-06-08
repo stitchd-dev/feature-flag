@@ -108,61 +108,87 @@ fn make_segment(env_id: EnvironmentId, key: &str) -> Segment {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn list_by_environment_paginated_page_1_returns_first_slice(pool: sqlx::PgPool) {
+async fn list_by_environment_keyset_first_page_and_next_cursor(pool: sqlx::PgPool) {
     let (repo, env_id) = setup(&pool).await;
     for i in 0..5 {
         repo.create(&make_segment(env_id, &format!("seg-{i:02}")))
             .await
             .unwrap();
     }
-    let (page, total) = repo
-        .list_by_environment_paginated(env_id, 0, 3)
+    let (page, next) = repo
+        .list_by_environment_keyset(env_id, None, 3)
         .await
         .unwrap();
-    assert_eq!(total, 5);
-    assert_eq!(page.len(), 3);
+    assert_eq!(page.len(), 3, "first page returns limit items");
+    assert!(next.is_some(), "more rows remain ⇒ a next cursor");
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn list_by_environment_paginated_page_2_returns_remainder(pool: sqlx::PgPool) {
+async fn list_by_environment_keyset_last_page_has_no_cursor(pool: sqlx::PgPool) {
     let (repo, env_id) = setup(&pool).await;
-    for i in 0..5 {
+    for i in 0..2 {
         repo.create(&make_segment(env_id, &format!("seg-{i:02}")))
             .await
             .unwrap();
     }
-    let (page, total) = repo
-        .list_by_environment_paginated(env_id, 3, 3)
+    let (page, next) = repo
+        .list_by_environment_keyset(env_id, None, 50)
         .await
         .unwrap();
-    assert_eq!(total, 5);
     assert_eq!(page.len(), 2);
+    assert!(next.is_none(), "all rows on one page ⇒ no next cursor");
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn list_by_environment_paginated_total_count_accurate(pool: sqlx::PgPool) {
+async fn list_by_environment_keyset_empty_returns_no_cursor(pool: sqlx::PgPool) {
     let (repo, env_id) = setup(&pool).await;
-    for i in 0..10 {
-        repo.create(&make_segment(env_id, &format!("seg-{i:02}")))
+    let (items, next) = repo
+        .list_by_environment_keyset(env_id, None, 50)
+        .await
+        .unwrap();
+    assert!(items.is_empty());
+    assert!(next.is_none());
+}
+
+/// Rigorous correctness: paging through with the returned cursor visits EVERY
+/// row exactly once, in (created_at, id) order, with no duplicates or gaps.
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_environment_keyset_pages_through_all_rows_exactly_once(pool: sqlx::PgPool) {
+    let (repo, env_id) = setup(&pool).await;
+    const N: usize = 23;
+    for i in 0..N {
+        repo.create(&make_segment(env_id, &format!("seg-{i:03}")))
             .await
             .unwrap();
     }
-    let (_items, total) = repo
-        .list_by_environment_paginated(env_id, 0, 1)
-        .await
-        .unwrap();
-    assert_eq!(total, 10);
-}
 
-#[sqlx::test(migrations = "./migrations")]
-async fn list_by_environment_paginated_empty_returns_zero_total(pool: sqlx::PgPool) {
-    let (repo, env_id) = setup(&pool).await;
-    let (items, total) = repo
-        .list_by_environment_paginated(env_id, 0, 50)
-        .await
-        .unwrap();
-    assert_eq!(total, 0);
-    assert!(items.is_empty());
+    // Walk pages of 7 (so the last page is partial: 23 = 7+7+7+2).
+    let mut seen: Vec<uuid::Uuid> = Vec::new();
+    let mut cursor: Option<stitchd_db::KeysetCursor> = None;
+    let mut pages = 0;
+    loop {
+        let (items, next) = repo
+            .list_by_environment_keyset(env_id, cursor, 7)
+            .await
+            .unwrap();
+        pages += 1;
+        assert!(items.len() <= 7, "never more than the limit per page");
+        for s in &items {
+            seen.push(s.id.as_uuid());
+        }
+        match next {
+            Some(tok) => cursor = Some(stitchd_db::KeysetCursor::decode(&tok).unwrap()),
+            None => break,
+        }
+        assert!(pages <= N + 1, "must terminate");
+    }
+
+    assert_eq!(seen.len(), N, "every row visited exactly once — no gaps/dupes");
+    let mut unique = seen.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), N, "no duplicates across pages");
+    assert_eq!(pages, 4, "23 rows / 7 per page = 4 pages (7+7+7+2)");
 }
 
 /// Test update with stale version returns VersionConflict.

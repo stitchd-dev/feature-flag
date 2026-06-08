@@ -156,51 +156,57 @@ impl SegmentRepository for PgSegmentRepository {
         .map_err(RepositoryError::Database)
     }
 
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<Segment>, u64), RepositoryError> {
+    ) -> Result<(Vec<Segment>, Option<String>), RepositoryError> {
+        // Keyset pagination ordered by (created_at, id): fetch limit+1 rows; the
+        // surplus row signals a next page. The row-value comparison
+        // `(created_at, id) > ($cursor_created_at, $cursor_id)` resumes strictly
+        // after the prior page's last row. A NULL cursor (first page) admits all.
+        #[allow(clippy::cast_possible_wrap)]
         let rows = sqlx::query(
             r"
             SELECT id, environment_id, key, name, description, tags,
-                   segment_type, created_at, updated_at, deleted_at, version,
-                   COUNT(*) OVER() AS total_count
+                   segment_type, created_at, updated_at, deleted_at, version
             FROM segments
             WHERE environment_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at
-            LIMIT $2 OFFSET $3
+              AND ($2::timestamptz IS NULL OR (created_at, id) > ($2, $3))
+            ORDER BY created_at, id
+            LIMIT $4
             ",
         )
         .bind(environment_id.as_uuid())
-        .bind({
-            #[allow(clippy::cast_possible_wrap)]
-            let v = limit as i64;
-            v
-        })
-        .bind({
-            #[allow(clippy::cast_possible_wrap)]
-            let v = offset as i64;
-            v
-        })
+        .bind(after.map(|c| c.created_at))
+        .bind(after.map(|c| c.id))
+        .bind((limit + 1) as i64)
         .fetch_all(&self.pool)
         .await
         .map_err(RepositoryError::Database)?;
 
-        let total = rows.first().map_or(0, |r| {
-            let n: i64 = r.get("total_count");
-            #[allow(clippy::cast_sign_loss)]
-            let result = n.max(0) as u64;
-            result
-        });
-
-        let segments = rows
+        let mut segments = rows
             .iter()
             .map(row_to_segment)
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok((segments, total))
+        // limit+1 rows ⇒ more pages: drop the surplus and encode the new last
+        // row's keyset as the next cursor.
+        let next_cursor = if segments.len() as u64 > limit {
+            segments.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            segments.last().map(|s| {
+                crate::KeysetCursor {
+                    created_at: s.created_at,
+                    id: s.id.as_uuid(),
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
+
+        Ok((segments, next_cursor))
     }
 
     async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {

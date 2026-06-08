@@ -388,15 +388,18 @@ pub trait SegmentRepository: Send + Sync {
         environment_id: EnvironmentId,
     ) -> Result<Vec<stitchd_core::segment::Segment>, RepositoryError>;
 
-    /// List non-deleted segments in an environment with offset pagination.
+    /// List non-deleted segments in an environment with **keyset** (cursor)
+    /// pagination, ordered by `(created_at, id)`.
     ///
-    /// Returns `(page_items, total_count)`.
-    async fn list_by_environment_paginated(
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
         &self,
         environment_id: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<stitchd_core::segment::Segment>, u64), RepositoryError>;
+    ) -> Result<(Vec<stitchd_core::segment::Segment>, Option<String>), RepositoryError>;
 
     /// Persist a new segment.
     async fn create(&self, segment: &stitchd_core::segment::Segment)

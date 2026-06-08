@@ -76,15 +76,13 @@ impl SegmentRepository for CompositeSegmentRepository {
         self.pg.list_by_environment(env).await
     }
 
-    async fn list_by_environment_paginated(
+    async fn list_by_environment_keyset(
         &self,
         env: EnvironmentId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<Segment>, u64), RepositoryError> {
-        self.pg
-            .list_by_environment_paginated(env, offset, limit)
-            .await
+    ) -> Result<(Vec<Segment>, Option<String>), RepositoryError> {
+        self.pg.list_by_environment_keyset(env, after, limit).await
     }
 
     async fn create(&self, segment: &Segment) -> Result<(), RepositoryError> {
