@@ -26,6 +26,8 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
+# Opaque keyset-cursor tokens for list pagination (feature-flag-cj5).
+base64 = { workspace = true }
 metrics = { workspace = true }
 tonic = { version = "0.14", optional = true }
 

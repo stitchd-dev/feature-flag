@@ -25,11 +25,11 @@ pub use auth::{
 };
 pub use error::RepositoryError;
 pub use repository::{
-    AuditLogger, ContextRegistryRepository, EnvironmentRepository, EventDefinitionRepository,
-    ExperimentRepository, FlagRepository, ListContextCounts, ListSegmentSummary, MetricRepository,
-    OrganisationRepository, ProjectRepository, RoleRepository, SdkKeyRepository, SegmentRepository,
-    UserRepository, VariantRepository,
-    composite::CompositeSegmentRepository,
+    AuditLogger, ContextRegistryRepository, CursorError, EnvironmentRepository,
+    EventDefinitionRepository, ExperimentRepository, FlagRepository, KeysetCursor,
+    ListContextCounts, ListSegmentSummary, MetricRepository, OrganisationRepository,
+    ProjectRepository, RoleRepository, SdkKeyRepository, SegmentRepository, UserRepository,
+    VariantRepository, composite::CompositeSegmentRepository,
     pg::{
         BanditAllocationRepository, BanditAllocationRunRow, BanditCampaignRepository,
         BanditConvergence, PgAuditLogger, PgBanditAllocationRepository, PgBanditCampaignRepository,

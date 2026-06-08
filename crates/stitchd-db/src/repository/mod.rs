@@ -22,7 +22,10 @@ use stitchd_core::{
 use crate::RepositoryError;
 
 pub mod composite;
+pub mod cursor;
 pub mod pg;
+
+pub use cursor::{CursorError, KeysetCursor, effective_limit};
 
 // ---------------------------------------------------------------------------
 // Scylla-backed list segment types
