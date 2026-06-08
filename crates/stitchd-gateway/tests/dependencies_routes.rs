@@ -24,7 +24,8 @@ use stitchd_proto::auth::v1::{
 };
 use stitchd_proto::experiments::v1::{
     GetExperimentStartPrerequisitesRequest, GetExperimentStartPrerequisitesResponse,
-    StartPrerequisite, experimentation_service_client::ExperimentationServiceClient,
+    StartPrerequisite,
+    experimentation_service_client::ExperimentationServiceClient,
     experimentation_service_server::{ExperimentationService, ExperimentationServiceServer},
 };
 use stitchd_proto::flags::v1::{
@@ -289,7 +290,8 @@ impl ExperimentationService for MockExpService {
     async fn delete_exclusion_group(
         &self,
         _req: tonic::Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
-    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status> {
+    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status>
+    {
         Err(Status::unimplemented("not used"))
     }
     async fn assign_experiment_to_group(
@@ -319,7 +321,9 @@ async fn spawn_mock_exp(prereqs: Vec<StartPrerequisite>) -> ExperimentationServi
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         Server::builder()
-            .add_service(ExperimentationServiceServer::new(MockExpService { prereqs }))
+            .add_service(ExperimentationServiceServer::new(MockExpService {
+                prereqs,
+            }))
             .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
             .await
             .unwrap();
@@ -349,7 +353,9 @@ async fn spawn_mock() -> FlagServiceClient<Channel> {
 fn make_state(flag_client: FlagServiceClient<Channel>) -> Arc<GatewayState> {
     make_state_with_exp(
         flag_client,
-        ExperimentationServiceClient::new(Channel::from_static("http://127.0.0.1:5").connect_lazy()),
+        ExperimentationServiceClient::new(
+            Channel::from_static("http://127.0.0.1:5").connect_lazy(),
+        ),
     )
 }
 
@@ -465,13 +471,19 @@ async fn experiment_dependencies_populates_upstream_from_start_prereqs() {
 
     let upstream = json["upstream"].as_array().unwrap();
     assert_eq!(upstream.len(), 2);
-    assert!(upstream.iter().any(|e| e["kind"] == "prerequisite_flag_variant"
-        && e["entity_kind"] == "flag"
-        && e["id"] == flag_id));
     assert!(
-        upstream.iter().any(|e| e["kind"] == "prerequisite_experiment_done"
-            && e["entity_kind"] == "experiment"
-            && e["id"] == prereq_exp)
+        upstream
+            .iter()
+            .any(|e| e["kind"] == "prerequisite_flag_variant"
+                && e["entity_kind"] == "flag"
+                && e["id"] == flag_id)
+    );
+    assert!(
+        upstream
+            .iter()
+            .any(|e| e["kind"] == "prerequisite_experiment_done"
+                && e["entity_kind"] == "experiment"
+                && e["id"] == prereq_exp)
     );
     assert!(json["downstream"].as_array().unwrap().is_empty());
     assert!(json["note"].is_string());

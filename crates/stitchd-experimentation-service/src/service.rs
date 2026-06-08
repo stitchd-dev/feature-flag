@@ -2053,9 +2053,7 @@ impl ExperimentationService for ExperimentationServiceImpl {
 
     async fn get_experiment_start_prerequisites(
         &self,
-        request: Request<
-            stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest,
-        >,
+        request: Request<stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest>,
     ) -> Result<
         Response<stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesResponse>,
         Status,

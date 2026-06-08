@@ -8,13 +8,13 @@ use stitchd_core::segment::{Segment, SegmentType};
 use stitchd_db::SegmentRepository;
 use stitchd_proto::segments::v1::{
     ActivateListGenerationRequest, ActivateListGenerationResponse, AddEntriesRequest,
-    AddEntriesResponse, AdminSegment, CreateAdminSegmentRequest,
-    DeleteAdminSegmentRequest, DeleteAdminSegmentResponse, EvaluateMembershipRequest,
-    EvaluateMembershipResponse, GetAdminSegmentRequest, GetSegmentRequest,
-    ListAdminSegmentsRequest, ListAdminSegmentsResponse, ListSegmentsRequest, ListSegmentsResponse,
-    LookupSegmentEntryRequest, LookupSegmentEntryResponse, MutateSegmentRequest,
-    MutateSegmentResponse, PatchSegmentEntriesRequest, PatchSegmentEntriesResponse,
-    RemoveEntriesRequest, RemoveEntriesResponse, SegmentBundle, UpdateAdminSegmentRequest,
+    AddEntriesResponse, AdminSegment, CreateAdminSegmentRequest, DeleteAdminSegmentRequest,
+    DeleteAdminSegmentResponse, EvaluateMembershipRequest, EvaluateMembershipResponse,
+    GetAdminSegmentRequest, GetSegmentRequest, ListAdminSegmentsRequest, ListAdminSegmentsResponse,
+    ListSegmentsRequest, ListSegmentsResponse, LookupSegmentEntryRequest,
+    LookupSegmentEntryResponse, MutateSegmentRequest, MutateSegmentResponse,
+    PatchSegmentEntriesRequest, PatchSegmentEntriesResponse, RemoveEntriesRequest,
+    RemoveEntriesResponse, SegmentBundle, UpdateAdminSegmentRequest,
     segmentation_service_server::SegmentationService,
 };
 

@@ -337,9 +337,7 @@ mod tests {
 
         async fn get_experiment_start_prerequisites(
             &self,
-            _req: Request<
-                stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest,
-            >,
+            _req: Request<stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest>,
         ) -> Result<
             Response<stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesResponse>,
             Status,

@@ -32,11 +32,10 @@ pub fn proto_variant_to_domain(v: ProtoVariant) -> Option<stitchd_core::flag::Va
     };
     // Prefer the variant UUID carried on the proto (admin read path); fall back
     // to a freshly minted id when absent (SDK sync / create paths leave it empty).
-    let id = v
-        .id
-        .parse::<uuid::Uuid>()
-        .map(stitchd_core::id::VariantId::from_uuid)
-        .unwrap_or_else(|_| stitchd_core::id::VariantId::new());
+    let id =
+        v.id.parse::<uuid::Uuid>()
+            .map(stitchd_core::id::VariantId::from_uuid)
+            .unwrap_or_else(|_| stitchd_core::id::VariantId::new());
     Some(stitchd_core::flag::Variant {
         id,
         key: v.key,

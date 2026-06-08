@@ -188,9 +188,9 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
   so the dependency-graph API's experiment branch is populated (currently a `note`), and surface
   configured start-prereqs in the Admin UI experiment page. TDD. (SHA 555be87)
   <!-- files: proto/experiments/v1/experiment_service.proto, crates/stitchd-experimentation-service/src/service.rs, crates/stitchd-gateway/src/routes/dependencies.rs, admin/src/pages/experiments -->
-- [ ] Task 3: Segment list-generation activation RPC. Add a segmentation-service RPC to activate a
+- [x] Task 3: Segment list-generation activation RPC. Add a segmentation-service RPC to activate a
   prepared list-segment generation, and wire schedule-service `apply/segment.rs` to use it for
   `list_generation` payloads — replacing today's reject-with-reason so scheduled list-segment
-  generation swaps actually fire. TDD.
+  generation swaps actually fire. TDD. (SHA 003d206)
   <!-- files: proto/segments/v1/segment_service.proto, crates/stitchd-segmentation-service/src/service.rs, crates/stitchd-schedule-service/src/apply/segment.rs -->
 - [ ] Task: Conductor - User Manual Verification 'Phase 10: Follow-Up Completions' (Protocol in workflow.md)
