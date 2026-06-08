@@ -255,16 +255,18 @@ pub trait FlagRepository: Send + Sync {
         project_id: ProjectId,
     ) -> Result<Vec<stitchd_core::flag::FlagRecord>, RepositoryError>;
 
-    /// List non-deleted flags in a project with offset pagination.
+    /// List non-deleted flags in a project with **keyset** (cursor) pagination,
+    /// ordered by `(created_at, id)`.
     ///
-    /// Returns `(page_items, total_count)` where `total_count` is the count of
-    /// all non-deleted flags for the project (regardless of offset/limit).
-    async fn list_by_project_paginated(
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_project_keyset(
         &self,
         project_id: ProjectId,
-        offset: u64,
+        after: Option<crate::KeysetCursor>,
         limit: u64,
-    ) -> Result<(Vec<stitchd_core::flag::FlagRecord>, u64), RepositoryError>;
+    ) -> Result<(Vec<stitchd_core::flag::FlagRecord>, Option<String>), RepositoryError>;
 
     /// List all flags in a project including soft-deleted (archived) ones.
     async fn list_by_project_all(

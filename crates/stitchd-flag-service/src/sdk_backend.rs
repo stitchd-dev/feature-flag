@@ -455,12 +455,12 @@ mod tests {
         ) -> Result<Vec<FlagRecord>, RepositoryError> {
             unimplemented!()
         }
-        async fn list_by_project_paginated(
+        async fn list_by_project_keyset(
             &self,
             _project_id: ProjectId,
-            _offset: u64,
+            _after: Option<stitchd_db::KeysetCursor>,
             _limit: u64,
-        ) -> Result<(Vec<FlagRecord>, u64), RepositoryError> {
+        ) -> Result<(Vec<FlagRecord>, Option<String>), RepositoryError> {
             unimplemented!()
         }
         async fn list_by_project_all(

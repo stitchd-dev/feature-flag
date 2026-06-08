@@ -493,17 +493,12 @@ pub async fn list_flags(
     Path(project_id): Path<String>,
     Query(query): Query<ListFlagsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let offset = query
-        .cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = query.cursor.effective_limit();
     let req = tonic::Request::new(ListFlagsRequest {
         environment_id: String::new(),
         project_id,
         include_archived: query.include_archived,
-        page: (offset / u64::from(limit)) as u32 + 1,
-        per_page: limit,
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.flag_client.lock().await;
     let inner = client
@@ -512,8 +507,7 @@ pub async fn list_flags(
         .map_err(GatewayError::from)?
         .into_inner();
     let items: Vec<AdminFlagJson> = inner.flags.iter().map(flag_to_admin_json).collect();
-    let total = inner.total;
-    Ok(Json(CursorPage::from_offset(items, total, offset)))
+    Ok(Json(CursorPage::from_token(items, inner.next_cursor)))
 }
 
 /// `POST /v1/projects/{project_id}/flags`

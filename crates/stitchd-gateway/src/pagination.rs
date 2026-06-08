@@ -247,6 +247,17 @@ impl<T: Serialize> CursorPage<T> {
         }
     }
 
+    /// Build a page from a **keyset backend** that already returned the opaque
+    /// next-cursor token (empty string ⇒ last page). The gateway forwards the
+    /// token untouched — the owning service's repo owns its format.
+    #[must_use]
+    pub fn from_token(items: Vec<T>, next_cursor: String) -> Self {
+        Self {
+            items,
+            next_cursor: (!next_cursor.is_empty()).then_some(next_cursor),
+        }
+    }
+
     /// Build a page from an **offset-based backend** result.
     ///
     /// `start_offset` is where this page began (`CursorParams::offset()`); `total`

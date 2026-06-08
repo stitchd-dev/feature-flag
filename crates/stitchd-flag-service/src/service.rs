@@ -824,41 +824,30 @@ impl FlagService for FlagServiceImpl {
         let req = request.into_inner();
         let project_id = parse_project_id(&req.project_id)?;
 
-        // Pagination is supported only on the admin (project-scoped) path.
-        // page > 0 signals the caller wants paginated results.
-        let use_pagination = req.page > 0 && project_id.is_some();
-        let page = if req.page == 0 { 1u64 } else { req.page as u64 };
-        let per_page = if req.per_page == 0 {
-            50u64
-        } else {
-            (req.per_page as u64).min(200)
-        };
-        let offset = (page - 1) * per_page;
+        let limit = stitchd_db::effective_limit(req.limit, 50, 200) as u64;
 
-        let (flag_records, total) = if let Some(pid) = project_id {
+        let (flag_records, next_cursor) = if let Some(pid) = project_id {
             // Admin path: project-scoped list.
-            if use_pagination {
-                self.flag_repo
-                    .list_by_project_paginated(pid, offset, per_page)
-                    .await
-                    .map_err(FlagServiceError::from)
-                    .map_err(Status::from)?
-            } else if req.include_archived {
+            if req.include_archived {
+                // Archived view is not cursor-paginated (it includes tombstones).
                 let flags = self
                     .flag_repo
                     .list_by_project_all(pid)
                     .await
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
-                (flags, 0)
+                (flags, String::new())
             } else {
-                let flags = self
+                // Keyset (cursor) pagination over the live admin list.
+                let after = stitchd_db::KeysetCursor::decode_opt(Some(&req.cursor))
+                    .map_err(|_| Status::invalid_argument("invalid cursor"))?;
+                let (flags, next) = self
                     .flag_repo
-                    .list_by_project(pid)
+                    .list_by_project_keyset(pid, after, limit)
                     .await
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?;
-                (flags, 0)
+                (flags, next.unwrap_or_default())
             }
         } else {
             // SDK path: environment-scoped list (no pagination).
@@ -876,7 +865,7 @@ impl FlagService for FlagServiceImpl {
                     .map_err(FlagServiceError::from)
                     .map_err(Status::from)?
             };
-            (flags, 0)
+            (flags, String::new())
         };
 
         let mut proto_flags = Vec::with_capacity(flag_records.len());
@@ -906,7 +895,7 @@ impl FlagService for FlagServiceImpl {
 
         Ok(Response::new(ListFlagsResponse {
             flags: proto_flags,
-            total,
+            next_cursor,
         }))
     }
 
@@ -2687,13 +2676,13 @@ mod tests {
                 .collect())
         }
 
-        async fn list_by_project_paginated(
+        async fn list_by_project_keyset(
             &self,
             _project_id: ProjectId,
-            offset: u64,
+            after: Option<stitchd_db::KeysetCursor>,
             limit: u64,
-        ) -> Result<(Vec<FlagRecord>, u64), RepositoryError> {
-            let all: Vec<FlagRecord> = self
+        ) -> Result<(Vec<FlagRecord>, Option<String>), RepositoryError> {
+            let mut all: Vec<FlagRecord> = self
                 .flags
                 .lock()
                 .unwrap()
@@ -2701,13 +2690,26 @@ mod tests {
                 .filter(|f| f.deleted_at.is_none())
                 .cloned()
                 .collect();
-            let total = all.len() as u64;
-            let page: Vec<FlagRecord> = all
+            all.sort_by_key(|f| (f.created_at, f.id.as_uuid()));
+            let mut page: Vec<FlagRecord> = all
                 .into_iter()
-                .skip(offset as usize)
-                .take(limit as usize)
+                .filter(|f| {
+                    after.is_none_or(|c| (f.created_at, f.id.as_uuid()) > (c.created_at, c.id))
+                })
                 .collect();
-            Ok((page, total))
+            let next = if page.len() as u64 > limit {
+                page.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+                page.last().map(|f| {
+                    stitchd_db::KeysetCursor {
+                        created_at: f.created_at,
+                        id: f.id.as_uuid(),
+                    }
+                    .encode()
+                })
+            } else {
+                None
+            };
+            Ok((page, next))
         }
 
         async fn list_by_project_all(
@@ -3387,8 +3389,8 @@ mod tests {
             include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
             project_id: String::new(),
-            page: 0,
-            per_page: 0,
+            cursor: String::new(),
+            limit: 0,
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_ok());
@@ -3415,8 +3417,8 @@ mod tests {
             include_archived: false,
             environment_id: EnvironmentId::new().to_string(),
             project_id: String::new(),
-            page: 0,
-            per_page: 0,
+            cursor: String::new(),
+            limit: 0,
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_ok());
@@ -3430,8 +3432,8 @@ mod tests {
             include_archived: false,
             environment_id: "bad-uuid".to_string(),
             project_id: String::new(),
-            page: 0,
-            per_page: 0,
+            cursor: String::new(),
+            limit: 0,
         });
         let result = svc.list_flags(req).await;
         assert!(result.is_err());

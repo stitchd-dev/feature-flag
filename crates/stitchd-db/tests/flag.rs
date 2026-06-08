@@ -148,98 +148,112 @@ async fn test_flag_lifecycle(pool: sqlx::PgPool) {
     assert_eq!(after_delete.len(), 0);
 }
 
-// ── Paginated flag list tests ─────────────────────────────────────────────────
+// ── Keyset (cursor) flag list tests ────────────────────────────────────────────
 
 #[sqlx::test(migrations = "./migrations")]
-async fn list_by_project_paginated_page_1_returns_first_slice(pool: sqlx::PgPool) {
+async fn list_by_project_keyset_first_page_and_next_cursor(pool: sqlx::PgPool) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
     let repo = PgFlagRepository::new(pool.clone(), audit);
 
     let project = setup_org_and_project(&org_repo, &proj_repo).await;
-
-    // Seed 5 flags in a project.
     for i in 0..5 {
         repo.create(&make_flag(project.id, &format!("flag-{i:02}")))
             .await
             .unwrap();
     }
 
-    let (page1, total) = repo
-        .list_by_project_paginated(project.id, 0, 3)
+    // First page of 3 of 5 → 3 items + a next cursor.
+    let (page1, next) = repo
+        .list_by_project_keyset(project.id, None, 3)
         .await
         .unwrap();
-
-    assert_eq!(total, 5, "total must reflect all non-deleted flags");
-    assert_eq!(page1.len(), 3, "page 1 must return 3 items");
+    assert_eq!(page1.len(), 3, "first page returns limit items");
+    assert!(next.is_some(), "more rows remain ⇒ a next cursor");
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn list_by_project_paginated_page_2_returns_remainder(pool: sqlx::PgPool) {
+async fn list_by_project_keyset_last_page_has_no_cursor(pool: sqlx::PgPool) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
     let repo = PgFlagRepository::new(pool.clone(), audit);
 
     let project = setup_org_and_project(&org_repo, &proj_repo).await;
-
-    for i in 0..5 {
+    for i in 0..2 {
         repo.create(&make_flag(project.id, &format!("flag-{i:02}")))
             .await
             .unwrap();
     }
 
-    let (page2, total) = repo
-        .list_by_project_paginated(project.id, 3, 3)
+    // 2 of 2 fit in one page → no next cursor.
+    let (page, next) = repo
+        .list_by_project_keyset(project.id, None, 50)
         .await
         .unwrap();
-
-    assert_eq!(total, 5);
-    assert_eq!(page2.len(), 2, "page 2 must return the remaining 2 items");
+    assert_eq!(page.len(), 2);
+    assert!(next.is_none(), "all rows on one page ⇒ no next cursor");
 }
 
 #[sqlx::test(migrations = "./migrations")]
-async fn list_by_project_paginated_total_count_accurate(pool: sqlx::PgPool) {
+async fn list_by_project_keyset_empty_project(pool: sqlx::PgPool) {
     let audit = Arc::new(PgAuditLogger::new(pool.clone()));
     let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
     let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
     let repo = PgFlagRepository::new(pool.clone(), audit);
 
     let project = setup_org_and_project(&org_repo, &proj_repo).await;
-
-    for i in 0..10 {
-        repo.create(&make_flag(project.id, &format!("flag-{i:02}")))
-            .await
-            .unwrap();
-    }
-
-    // Even with per_page=1 the total must reflect all 10 flags.
-    let (_items, total) = repo
-        .list_by_project_paginated(project.id, 0, 1)
+    let (items, next) = repo
+        .list_by_project_keyset(project.id, None, 50)
         .await
         .unwrap();
-
-    assert_eq!(
-        total, 10,
-        "total must include all rows regardless of page size"
-    );
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn list_by_project_paginated_empty_project_returns_zero_total(pool: sqlx::PgPool) {
-    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
-    let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
-    let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
-    let repo = PgFlagRepository::new(pool.clone(), audit);
-
-    let project = setup_org_and_project(&org_repo, &proj_repo).await;
-
-    let (items, total) = repo
-        .list_by_project_paginated(project.id, 0, 50)
-        .await
-        .unwrap();
-
-    assert_eq!(total, 0);
     assert!(items.is_empty());
+    assert!(next.is_none());
+}
+
+/// Rigorous correctness: paging through with the returned cursor visits EVERY
+/// row exactly once, in (created_at, id) order, with no duplicates or gaps.
+#[sqlx::test(migrations = "./migrations")]
+async fn list_by_project_keyset_pages_through_all_rows_exactly_once(pool: sqlx::PgPool) {
+    let audit = Arc::new(PgAuditLogger::new(pool.clone()));
+    let org_repo = PgOrganisationRepository::new(pool.clone(), audit.clone());
+    let proj_repo = PgProjectRepository::new(pool.clone(), audit.clone());
+    let repo = PgFlagRepository::new(pool.clone(), audit);
+
+    let project = setup_org_and_project(&org_repo, &proj_repo).await;
+    const N: usize = 23;
+    for i in 0..N {
+        repo.create(&make_flag(project.id, &format!("flag-{i:03}")))
+            .await
+            .unwrap();
+    }
+
+    // Walk pages of 7 (so the last page is partial: 23 = 7+7+7+2).
+    let mut seen: Vec<uuid::Uuid> = Vec::new();
+    let mut cursor: Option<stitchd_db::KeysetCursor> = None;
+    let mut pages = 0;
+    loop {
+        let (items, next) = repo
+            .list_by_project_keyset(project.id, cursor, 7)
+            .await
+            .unwrap();
+        pages += 1;
+        assert!(items.len() <= 7, "never more than the limit per page");
+        for f in &items {
+            seen.push(f.id.as_uuid());
+        }
+        match next {
+            Some(tok) => cursor = Some(stitchd_db::KeysetCursor::decode(&tok).unwrap()),
+            None => break,
+        }
+        assert!(pages <= N + 1, "must terminate");
+    }
+
+    assert_eq!(seen.len(), N, "every row visited exactly once — no gaps/dupes");
+    let mut unique = seen.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), N, "no duplicates across pages");
+    assert_eq!(pages, 4, "23 rows / 7 per page = 4 pages (7+7+7+2)");
 }
