@@ -5579,10 +5579,12 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clickhouse",
  "serde",
  "serde_json",
  "stitchd-core",
  "stitchd-db",
+ "stitchd-event-writer",
  "tokio",
 ]
 
