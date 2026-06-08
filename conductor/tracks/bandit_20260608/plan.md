@@ -113,28 +113,28 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 6' [autonomous] (Protocol in workflow.md)
 
-## Phase 7: Autonomous Lifecycle (convergence / commit / rollout)
+## Phase 7: Autonomous Lifecycle (convergence / commit / rollout) [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
-- [~] Task 1: Convergence detector (posterior prob-best threshold) in stitchd-core; tests.
+- [x] Task 1: Convergence detector [c25943b] (posterior prob-best threshold) in stitchd-core; tests.
       <!-- files: crates/stitchd-core/src/experimentation/bandit/convergence.rs -->
-- [~] Task 2: Lifecycle executor in experimentation/stats-service — `advisory` badge,
+- [x] Task 2: Lifecycle executor [fa074b3] in experimentation/stats-service — `advisory` badge,
       `auto_commit` (lock to winner), `auto_rollout` (commit + auto-stop + promote winner to
       standing rule/default + release lock); idempotent; audited in `bandit_allocation_runs`.
       <!-- files: crates/stitchd-stats-service/src/bandit.rs, crates/stitchd-experimentation-service/src/* -->
       <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 7' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 7' [autonomous] (Protocol in workflow.md)
 
-## Phase 8: Autonomous Optimization Campaigns
+## Phase 8: Autonomous Optimization Campaigns [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase7 -->
 
-- [~] Task 1: Campaign entity + RPCs; on-convergence spawn next iteration (winner=new
+- [x] Task 1: Campaign entity [aebebdc] + RPCs; on-convergence spawn next iteration (winner=new
       control + new variants); on-reward-drift reopen exploration; `max_iterations`/budget caps;
       `action=spawn_iteration` audit. Tests incl. cap enforcement + idempotent spawn.
       <!-- files: crates/stitchd-experimentation-service/src/*, crates/stitchd-stats-service/src/bandit.rs -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 8' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 8' [autonomous] (Protocol in workflow.md)
 
 ## Phase 9: Multi-Objective Wiring & Constrained Guardrails
 <!-- execution: sequential -->
