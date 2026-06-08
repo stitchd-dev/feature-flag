@@ -159,15 +159,15 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 10' [autonomous] (Protocol in workflow.md)
 
-## Phase 11: REST/Proto Output Surfacing
+## Phase 11: REST/Proto Output Surfacing [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase4, phase7, phase8, phase9 -->
 
-- [ ] Task 1: Surface `bandit_allocation` + per-objective posteriors + convergence/commit
+- [x] Task 1: Surface `bandit_allocation` [dc112f4] + per-objective posteriors + convergence/commit
       state + campaign status + allocation history through WriteExperimentResults →
       experiment_results → VariantResult → REST; new bandit history/timeline read endpoint.
       <!-- files: crates/stitchd-gateway/src/routes/experiments.rs, crates/stitchd-analytics-service/src/*, crates/stitchd-experimentation-service/src/* -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 11' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 11' [autonomous] (Protocol in workflow.md)
 
 ## Phase 12: Admin UI
 <!-- execution: parallel -->

@@ -1,6 +1,6 @@
 {
-  "current_phase": "Wave E: Phase 11 (REST surfacing) -> 12 (Admin UI) -> 13 (integration/docs/CI)",
-  "current_phase_index": 10,
+  "current_phase": "Phase 12 (Admin UI) -> Phase 13 (integration/docs/CI)",
+  "current_phase_index": 11,
   "current_task_index": 0,
   "completed_phases": [
     "Phase 1: Schema, Domain & Proto Foundation",
@@ -12,7 +12,8 @@
     "Phase 7: Autonomous Lifecycle",
     "Phase 8: Optimization Campaigns",
     "Phase 9: Multi-Objective Wiring",
-    "Phase 10: Interaction order 4+"
+    "Phase 10: Interaction order 4+",
+    "Phase 11: REST surfacing"
   ],
   "last_updated": "2026-06-08T07:55:00Z",
   "status": "in_progress",
@@ -28,5 +29,6 @@
   "phase6_notes": "Contextual model (ridge fit, hand-rolled Gauss-Jordan, no new deps). Purity green. Fit currently single numeric feature; model/engine support multi+one-hot (future). Features fit from events.properties.",
   "phase78_notes": "Migration 20260608000002_bandit_lifecycle.sql adds experiments.bandit_converged_variant/prob. Campaign RPCs: Create/Get/List/StopBanditCampaign. auto_rollout=commit->stop (lock released implicitly). Campaign idempotency via try_claim_spawn atomic UPDATE. RunningExperiment proto field 17 bandit_campaign_id.",
   "phase9_notes": "Multi-obj already wired in Phase4 static path. Added per-objective posteriors persisted under bandit_objectives key in bandit_allocation_runs.new_allocation JSON (Phase11 reads this). Realtime path still single-scalar.",
-  "phase10_notes": "Order-4+ generalized (N-way IPF/incl-excl ANOVA/2^k contrasts). SRM bandit-aware (skips, bandit_skipped flag). env STITCHD_STATS_MAX_INTERACTION_ORDER default 3. Per-objective surfacing data in bandit_allocation_runs.new_allocation. Convergence on experiments.bandit_converged_variant/prob."
+  "phase10_notes": "Order-4+ generalized (N-way IPF/incl-excl ANOVA/2^k contrasts). SRM bandit-aware (skips, bandit_skipped flag). env STITCHD_STATS_MAX_INTERACTION_ORDER default 3. Per-objective surfacing data in bandit_allocation_runs.new_allocation. Convergence on experiments.bandit_converged_variant/prob.",
+  "rest_endpoints": "GET /v1/environments/{env}/experiments/{id}/bandit (BanditStateJson); .../bandit/history?limit=N (runs[]); GET /v1/environments/{env}/bandit-campaigns + /{campaign_id}"
 }
