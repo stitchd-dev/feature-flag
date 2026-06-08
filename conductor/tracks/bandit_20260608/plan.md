@@ -185,7 +185,7 @@ Phase-level wave summary:
       <!-- files: admin/src/pages/experiments/tabs/Interactions.tsx -->
 - [x] Task: Conductor - User Manual Verification 'Phase 12' [autonomous] (Protocol in workflow.md)
 
-## Phase 13: Integration, Docs & CI Hardening
+## Phase 13: Integration, Docs & CI Hardening [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase12 -->
 
@@ -197,4 +197,4 @@ Phase-level wave summary:
       xtask docs` idempotent; OpenAPI contract; final CI green sweep.
       <!-- files: docs/*, conductor/product.md, crates/*/README.md -->
       <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 13' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 13' [autonomous] (Protocol in workflow.md)

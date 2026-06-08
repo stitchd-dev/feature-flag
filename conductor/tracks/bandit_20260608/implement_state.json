@@ -1,6 +1,6 @@
 {
   "current_phase": "Phase 13 (integration, docs, CI hardening) \u2014 FINAL",
-  "current_phase_index": 12,
+  "current_phase_index": 13,
   "current_task_index": 0,
   "completed_phases": [
     "Phase 1: Schema, Domain & Proto Foundation",
@@ -14,10 +14,11 @@
     "Phase 9: Multi-Objective Wiring",
     "Phase 10: Interaction order 4+",
     "Phase 11: REST surfacing",
-    "Phase 12: Admin UI"
+    "Phase 12: Admin UI",
+    "Phase 13: Integration, Docs & CI"
   ],
   "last_updated": "2026-06-08T07:55:00Z",
-  "status": "in_progress",
+  "status": "complete",
   "mode": "autonomous",
   "binding_constraint": "Flag evaluation MUST be DB-free/in-memory (evaluation/purity.rs CI test forbids sqlx/tokio/reqwest); bandit state at eval time rides the polling snapshot.",
   "key_signatures": {
@@ -32,5 +33,6 @@
   "phase9_notes": "Multi-obj already wired in Phase4 static path. Added per-objective posteriors persisted under bandit_objectives key in bandit_allocation_runs.new_allocation JSON (Phase11 reads this). Realtime path still single-scalar.",
   "phase10_notes": "Order-4+ generalized (N-way IPF/incl-excl ANOVA/2^k contrasts). SRM bandit-aware (skips, bandit_skipped flag). env STITCHD_STATS_MAX_INTERACTION_ORDER default 3. Per-objective surfacing data in bandit_allocation_runs.new_allocation. Convergence on experiments.bandit_converged_variant/prob.",
   "rest_endpoints": "GET /v1/environments/{env}/experiments/{id}/bandit (BanditStateJson); .../bandit/history?limit=N (runs[]); GET /v1/environments/{env}/bandit-campaigns + /{campaign_id}",
-  "phase12_notes": "994 vitest pass. API client admin/src/lib/api/bandit.ts; tabs/Bandit.tsx; form bandit_config. No API mismatches."
+  "phase12_notes": "994 vitest pass. API client admin/src/lib/api/bandit.ts; tabs/Bandit.tsx; form bandit_config. No API mismatches.",
+  "final_gate": "ALL GREEN: fmt, clippy -Dwarnings, cargo test --workspace (exit0), 13 live-CH ignored tests, sqlx-check (all-targets+test-util), OpenAPI contract 23/120, admin tsc+lint+994 vitest+build, docs idempotent. Fixed exclusion_gating SDK test gap (f348fd7)."
 }
