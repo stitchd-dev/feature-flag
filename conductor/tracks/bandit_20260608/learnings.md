@@ -233,3 +233,65 @@ From `conductor/patterns.md` (read before starting):
   fail without it. Point DATABASE_URL at the fresh `bandit_verify_20260608` DB (already created in
   Phase 1, reachable via the `stitchd-postgres` container) and all 130 exp-service + 112 flag-service
   lib tests pass. No `.sqlx` cache delta (no `query!` macros added). fmt + clippy `-D warnings` clean.
+
+## Phase 4 — Stats-Service Static Reallocation Pass (2026-06-08)
+
+### Task 4.1 — bandit.rs reallocation pass (commit 5c37034)
+- **ListRunningExperiments did NOT carry experiment_mode/bandit_config** — had to add
+  them (proto `RunningExperiment` fields 15/16 as `string experiment_mode` +
+  `optional string bandit_config` JSON, mirroring how Experiment/Iteration carry
+  bandit_config as a JSON string). Server build: `experiment_mode` from `exp`,
+  `bandit_config` from the snapshot on `iter` (`iter.bandit_config`, serde-serialised).
+  stats-service `RunningExperiment` struct + `fetch_running_experiments` decode them;
+  a malformed `bandit_config` JSON is logged + treated as `None` (→ ineligible, no-op).
+- **Reuse the compute.rs VariantStats builders** (`count_variant_stats`,
+  `numeric_variant_stats`, `funnel_variant_stats`) + the `CellReader` trait directly —
+  do NOT re-query raw. `MetricType` is re-exported from
+  `stitchd_core::experimentation::stats` (NOT `crate::compute`). `AggCell` is `pub`.
+- **Allocation is a single GLOBAL rule write, but stats are per-context_type** — sum
+  sufficient stats (assignment counts + AggCell/RatioGroupStats) across the experiment's
+  `unit_context_types` into one posterior set per metric, zero-filling missing variants
+  in `variant_keys` order so every arm is represented.
+- **Pure decision core split out** (`decide_allocation(config, &[MetricRewards], seed)
+  -> AllocationDecision`) so eligibility / seed-determinism / algorithm dispatch /
+  skip-on-insufficient-data (min arm n < 30) are exhaustively unit-tested without any
+  I/O; PG/gRPC behind thin `AllocationApplier` / `RunRecorder` async traits with fakes.
+  Thompson uses the post-hoc `apply_exploitable_mask`; epsilon/UCB use
+  `allocate_exploitable` (the robust constrained merge from Phase 2). Contextual algo →
+  skip (real-time path, not static).
+- **Deterministic seed = FNV-1a over (experiment_id, iteration_id, n_arms,
+  tick.timestamp())** — reproducible per tick, varies tick-to-tick, never wall-clock RNG.
+- **One row per experiment per tick:** the orchestrator records exactly one
+  `bandit_allocation_runs` row (action reallocate|skip, outcome applied|skipped|failed).
+  A transport-level RPC error is mapped to a `failed` row (recoverable, tick advances) —
+  never propagated as `Err` (only a real CH read / PG insert error propagates).
+- **PgRunRecorder uses runtime `sqlx::query`** (no `query!` macro) → zero `.sqlx` delta,
+  consistent with the rest of stats-service.
+
+### Task 4.2 — wire tick + TriggerRecompute + live test + CI (commit 20c0146)
+- **Tick wiring:** the scheduler per-experiment task already builds the
+  `ClickHouseCellReader` + resolves `metrics`; the reallocation call reuses both after
+  `write_results`, with a `GrpcAllocationApplier` (shared exp client) + `PgRunRecorder`
+  (pool). No-op + silent for non-bandit; logged on the bandit branch.
+- **TriggerRecompute was a STUB** (`run_recompute` only managed the job row, never ran
+  the stats compute). Added an `ExperimentRecomputer` trait + `with_recomputer` on
+  `StatsServiceImpl`; production `PerExperimentRecomputer` fetches running experiments,
+  finds the target, resolves metrics, runs the reallocation. Decoupled via the trait so
+  the trigger stays unit-testable (added an ok/err recomputer test).
+- **Live test needs BOTH CH and PG:** the `bandit_allocation_runs` insert has FK to
+  `experiments` (NOT NULL) + `experiment_iterations`. Self-seed the full PG FK chain
+  organisation→project→environment→feature_flag→experiment→iteration via raw `sqlx::query`.
+  GOTCHA: `experiments` has a `experiments_rule_xor_default` CHECK — must set
+  `targets_default_rule = true` (or a `flag_rule_id`), can't leave both null.
+  `feature_flags` needs `value_type` ('boolean'). Test cleans up its PG rows at the end
+  (CH is append-only / deduped per run).
+- **CI:** added `--test bandit_reallocation` to the live-CH `--test` list in the coverage
+  job. CRITICAL: that test (unlike the CH-only ones) seeds PG against the base
+  DATABASE_URL DB, which the coverage job did NOT migrate — added `Install sqlx-cli` +
+  `sqlx migrate run` steps before the live-CH step. Observed: treatment 9500 / control
+  500 bp (floor) for a 10%→30% effect.
+- **Pre-existing Phase-3 gap fixed (commit 701e6ac):** the Phase-3 ApplyBanditAllocation
+  / BanditUpdateAllocation RPCs were never added to the gateway integration-test service
+  mocks, so `cargo build --workspace --all-targets` was already broken (E0046) at the
+  Phase-4 start commit. Added unimplemented stubs across 6 gateway test files. (Fix gaps
+  as discovered — did not baseline around it.)
