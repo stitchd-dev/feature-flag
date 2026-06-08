@@ -60,6 +60,14 @@ describe('edgeKindLabel', () => {
     expect(edgeKindLabel('segment_ref')).toBe('segment reference')
     expect(edgeKindLabel('dependent_flag')).toBe('dependent flag')
   })
+  it('humanizes experiment start-prerequisite kinds (Phase 10.2)', () => {
+    expect(edgeKindLabel('prerequisite_flag_variant')).toBe(
+      'flag-variant start prerequisite',
+    )
+    expect(edgeKindLabel('prerequisite_experiment_done')).toBe(
+      'experiment-done start prerequisite',
+    )
+  })
   it('falls back to underscore-stripped text', () => {
     expect(edgeKindLabel('some_other_kind')).toBe('some other kind')
   })

@@ -334,6 +334,18 @@ mod tests {
         > {
             Err(Status::unimplemented("not used in tests"))
         }
+
+        async fn get_experiment_start_prerequisites(
+            &self,
+            _req: Request<
+                stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest,
+            >,
+        ) -> Result<
+            Response<stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesResponse>,
+            Status,
+        > {
+            Err(Status::unimplemented("not used in tests"))
+        }
     }
 
     /// Spin up an in-process gRPC server and return a client connected to it.

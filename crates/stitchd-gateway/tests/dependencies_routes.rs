@@ -22,7 +22,11 @@ use stitchd_proto::auth::v1::{
     auth_service_client::AuthServiceClient, oidc_login_service_client::OidcLoginServiceClient,
     saml_login_service_client::SamlLoginServiceClient,
 };
-use stitchd_proto::experiments::v1::experimentation_service_client::ExperimentationServiceClient;
+use stitchd_proto::experiments::v1::{
+    GetExperimentStartPrerequisitesRequest, GetExperimentStartPrerequisitesResponse,
+    StartPrerequisite, experimentation_service_client::ExperimentationServiceClient,
+    experimentation_service_server::{ExperimentationService, ExperimentationServiceServer},
+};
 use stitchd_proto::flags::v1::{
     EvaluatePreviewRequest, EvaluatePreviewResponse, FeatureFlag, FlagPrerequisite, FlagRule,
     GetFlagDefinitionsRequest, GetFlagRequest, GetPrerequisitesRequest, GetPrerequisitesResponse,
@@ -163,6 +167,169 @@ impl FlagService for MockFlagService {
     }
 }
 
+/// Mock ExperimentationService whose `GetExperimentStartPrerequisites` returns a
+/// flag_variant + experiment_done prerequisite, and whose every other RPC is
+/// unimplemented (not exercised by the dependency-graph route).
+#[derive(Clone)]
+struct MockExpService {
+    prereqs: Vec<StartPrerequisite>,
+}
+
+#[tonic::async_trait]
+impl ExperimentationService for MockExpService {
+    async fn get_experiment_start_prerequisites(
+        &self,
+        _req: tonic::Request<GetExperimentStartPrerequisitesRequest>,
+    ) -> Result<Response<GetExperimentStartPrerequisitesResponse>, Status> {
+        Ok(Response::new(GetExperimentStartPrerequisitesResponse {
+            prerequisites: self.prereqs.clone(),
+        }))
+    }
+
+    async fn create_experiment(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::CreateExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_experiment(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn list_experiments(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListExperimentsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExperimentsResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn update_experiment(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::UpdateExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn delete_experiment(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::DeleteExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn transition_experiment(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::TransitionExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::Experiment>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn list_iterations(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListIterationsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListIterationsResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_results(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetResultsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExperimentResults>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    type ListRunningExperimentsStream = tokio_stream::wrappers::ReceiverStream<
+        Result<stitchd_proto::experiments::v1::RunningExperiment, Status>,
+    >;
+    async fn list_running_experiments(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListRunningExperimentsRequest>,
+    ) -> Result<Response<Self::ListRunningExperimentsStream>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_experiment_iteration(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetExperimentIterationRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExperimentIteration>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn update_iteration_last_computed(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::UpdateIterationLastComputedRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::UpdateIterationLastComputedResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn list_exposures(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListExposuresRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExposuresResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn create_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::CreateExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn list_exclusion_groups(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListExclusionGroupsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListExclusionGroupsResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn update_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::UpdateExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ExclusionGroup>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn delete_exclusion_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::DeleteExclusionGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::DeleteExclusionGroupResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn assign_experiment_to_group(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::AssignExperimentToGroupRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::AssignExperimentToGroupResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn unassign_experiment(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::UnassignExperimentRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::UnassignExperimentResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+    async fn get_experiment_interactions(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetExperimentInteractionsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetExperimentInteractionsResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
+}
+
+async fn spawn_mock_exp(prereqs: Vec<StartPrerequisite>) -> ExperimentationServiceClient<Channel> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(ExperimentationServiceServer::new(MockExpService { prereqs }))
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    ExperimentationServiceClient::connect(format!("http://{addr}"))
+        .await
+        .unwrap()
+}
+
 async fn spawn_mock() -> FlagServiceClient<Channel> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -180,6 +347,16 @@ async fn spawn_mock() -> FlagServiceClient<Channel> {
 }
 
 fn make_state(flag_client: FlagServiceClient<Channel>) -> Arc<GatewayState> {
+    make_state_with_exp(
+        flag_client,
+        ExperimentationServiceClient::new(Channel::from_static("http://127.0.0.1:5").connect_lazy()),
+    )
+}
+
+fn make_state_with_exp(
+    flag_client: FlagServiceClient<Channel>,
+    exp_client: ExperimentationServiceClient<Channel>,
+) -> Arc<GatewayState> {
     let flag_channel = Channel::from_static("http://127.0.0.1:2").connect_lazy();
     let seg_channel = Channel::from_static("http://127.0.0.1:3").connect_lazy();
     Arc::new(GatewayState::from_channels(
@@ -189,9 +366,7 @@ fn make_state(flag_client: FlagServiceClient<Channel>) -> Arc<GatewayState> {
         SegmentationServiceClient::new(seg_channel.clone()),
         seg_channel,
         AnalyticsServiceClient::new(Channel::from_static("http://127.0.0.1:4").connect_lazy()),
-        ExperimentationServiceClient::new(
-            Channel::from_static("http://127.0.0.1:5").connect_lazy(),
-        ),
+        exp_client,
         ManagementServiceClient::new(Channel::from_static("http://127.0.0.1:6").connect_lazy()),
         AuthProviderServiceClient::new(Channel::from_static("http://127.0.0.1:7").connect_lazy()),
         OidcLoginServiceClient::new(Channel::from_static("http://127.0.0.1:8").connect_lazy()),
@@ -264,12 +439,40 @@ async fn segment_dependencies_lists_referencing_flags() {
 }
 
 #[tokio::test]
-async fn experiment_dependencies_returns_note() {
-    let router = build_router(make_state(spawn_mock().await));
+async fn experiment_dependencies_populates_upstream_from_start_prereqs() {
+    let flag_id = "33333333-3333-3333-3333-333333333333";
+    let variant_id = "44444444-4444-4444-4444-444444444444";
+    let prereq_exp = "55555555-5555-5555-5555-555555555555";
+    let prereqs = vec![
+        StartPrerequisite {
+            kind: "flag_variant".to_string(),
+            flag_id: flag_id.to_string(),
+            required_variant_id: variant_id.to_string(),
+            prerequisite_experiment_id: String::new(),
+        },
+        StartPrerequisite {
+            kind: "experiment_done".to_string(),
+            flag_id: String::new(),
+            required_variant_id: String::new(),
+            prerequisite_experiment_id: prereq_exp.to_string(),
+        },
+    ];
+    let state = make_state_with_exp(spawn_mock().await, spawn_mock_exp(prereqs).await);
+    let router = build_router(state);
     let (status, json) = get(router, "/v1/projects/p1/experiments/exp-1/dependencies").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["entity_kind"], "experiment");
-    assert!(json["upstream"].as_array().unwrap().is_empty());
+
+    let upstream = json["upstream"].as_array().unwrap();
+    assert_eq!(upstream.len(), 2);
+    assert!(upstream.iter().any(|e| e["kind"] == "prerequisite_flag_variant"
+        && e["entity_kind"] == "flag"
+        && e["id"] == flag_id));
+    assert!(
+        upstream.iter().any(|e| e["kind"] == "prerequisite_experiment_done"
+            && e["entity_kind"] == "experiment"
+            && e["id"] == prereq_exp)
+    );
     assert!(json["downstream"].as_array().unwrap().is_empty());
     assert!(json["note"].is_string());
 }

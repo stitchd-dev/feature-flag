@@ -10,6 +10,7 @@ import {
 } from '../../context/ContextTypeContext'
 import { ContextTypeTabs } from '../../components/ContextTypeTabs'
 import { ScheduleBuilder } from '../../components/schedule/ScheduleBuilder'
+import { DependencyGraph } from '../../components/dependency/DependencyGraph'
 import type { MutationPreset } from '../../components/schedule/ScheduleBuilder'
 import {
   getExperiment,
@@ -272,7 +273,7 @@ function ExperimentDetailBody({
 }: BodyProps) {
   const navigate = useNavigate()
   const { tweaks } = useTweaks()
-  const { orgId, envId } = useOrgContext()
+  const { orgId, envId, projectId } = useOrgContext()
   const { contextTypes, activeContextType, setActiveContextType } =
     useActiveContextType()
 
@@ -693,7 +694,29 @@ function ExperimentDetailBody({
           />
         )}
 
-        {tab === 'config' && <ExpConfig display={display} metricNames={metricNames} />}
+        {tab === 'config' && (
+          <>
+            <ExpConfig display={display} metricNames={metricNames} />
+            {projectId && (
+              <div className="card" style={{ marginTop: 16 }}>
+                <div className="card-header">
+                  <div className="card-title">Start prerequisites &amp; dependencies</div>
+                </div>
+                <div className="card-body">
+                  <p style={{ fontSize: 12, color: 'var(--fg-muted)', marginTop: 0 }}>
+                    Conditions that must hold for this experiment to start (manual or
+                    scheduled). A start is refused while any prerequisite is unmet.
+                  </p>
+                  <DependencyGraph
+                    projectId={projectId}
+                    entityKind="experiments"
+                    entityId={apiExp.id}
+                  />
+                </div>
+              </div>
+            )}
+          </>
+        )}
 
         {tab === 'metrics' && (
           <div className="card">

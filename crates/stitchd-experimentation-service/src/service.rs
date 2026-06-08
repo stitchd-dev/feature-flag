@@ -2050,6 +2050,64 @@ impl ExperimentationService for ExperimentationServiceImpl {
             stitchd_proto::experiments::v1::GetExperimentInteractionsResponse { interactions },
         ))
     }
+
+    async fn get_experiment_start_prerequisites(
+        &self,
+        request: Request<
+            stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest,
+        >,
+    ) -> Result<
+        Response<stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesResponse>,
+        Status,
+    > {
+        use crate::start_prerequisites::StartPrerequisite as DomainStartPrereq;
+        use stitchd_proto::experiments::v1::StartPrerequisite as ProtoStartPrereq;
+
+        let req = request.into_inner();
+        let experiment_id = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+
+        let Some((prereq_repo, _resolver)) = self.start_prereq.as_ref() else {
+            // No start-prerequisite collaborator configured ⇒ no prerequisites.
+            return Ok(Response::new(
+                stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesResponse {
+                    prerequisites: vec![],
+                },
+            ));
+        };
+
+        let prereqs = prereq_repo
+            .list_for_experiment(experiment_id)
+            .await
+            .map_err(Status::from)?;
+
+        let prerequisites = prereqs
+            .into_iter()
+            .map(|p| match p {
+                DomainStartPrereq::FlagVariant {
+                    flag_id,
+                    required_variant_id,
+                } => ProtoStartPrereq {
+                    kind: "flag_variant".to_string(),
+                    flag_id: flag_id.to_string(),
+                    required_variant_id: required_variant_id.to_string(),
+                    prerequisite_experiment_id: String::new(),
+                },
+                DomainStartPrereq::ExperimentDone { experiment_id } => ProtoStartPrereq {
+                    kind: "experiment_done".to_string(),
+                    flag_id: String::new(),
+                    required_variant_id: String::new(),
+                    prerequisite_experiment_id: experiment_id.to_string(),
+                },
+            })
+            .collect();
+
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesResponse {
+                prerequisites,
+            },
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4068,6 +4126,85 @@ mod tests {
             environment_id: String::new(),
         });
         svc.delete_experiment(req).await.expect("delete allowed");
+    }
+
+    /// Phase 10.2: the read RPC returns the experiment's configured start-time
+    /// prerequisites, mapping each kind to the proto shape.
+    #[tokio::test]
+    async fn get_experiment_start_prerequisites_returns_stored_prereqs() {
+        let (env_id, env_str) = env_uuid();
+        let flag_id = uuid::Uuid::new_v4();
+        let variant_id = uuid::Uuid::new_v4();
+        let prereq_exp = uuid::Uuid::new_v4();
+        let repo = Arc::new(StubPrereqRepo::new(vec![
+            StartPrerequisite::FlagVariant {
+                flag_id,
+                required_variant_id: variant_id,
+            },
+            StartPrerequisite::ExperimentDone {
+                experiment_id: prereq_exp,
+            },
+        ]));
+        let resolver = Arc::new(StubPrereqResolver {
+            flag: PrereqCheck::Met,
+            experiment: PrereqCheck::Met,
+        });
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_start_prerequisites(repo, resolver);
+
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest {
+                environment_id: env_str,
+                experiment_id: ExperimentId::new().to_string(),
+            },
+        );
+        let resp = svc
+            .get_experiment_start_prerequisites(req)
+            .await
+            .expect("read prereqs")
+            .into_inner();
+        assert_eq!(resp.prerequisites.len(), 2);
+        assert_eq!(resp.prerequisites[0].kind, "flag_variant");
+        assert_eq!(resp.prerequisites[0].flag_id, flag_id.to_string());
+        assert_eq!(
+            resp.prerequisites[0].required_variant_id,
+            variant_id.to_string()
+        );
+        assert_eq!(resp.prerequisites[1].kind, "experiment_done");
+        assert_eq!(
+            resp.prerequisites[1].prerequisite_experiment_id,
+            prereq_exp.to_string()
+        );
+    }
+
+    /// With no start-prerequisite collaborator configured, the read RPC returns
+    /// an empty set rather than erroring.
+    #[tokio::test]
+    async fn get_experiment_start_prerequisites_empty_without_collaborator() {
+        let (env_id, env_str) = env_uuid();
+        let svc = ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo { env_id }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        );
+        let req = tonic::Request::new(
+            stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest {
+                environment_id: env_str,
+                experiment_id: ExperimentId::new().to_string(),
+            },
+        );
+        let resp = svc
+            .get_experiment_start_prerequisites(req)
+            .await
+            .expect("read prereqs")
+            .into_inner();
+        assert!(resp.prerequisites.is_empty());
     }
 
     /// A NON-start transition (e.g. running→paused) does NOT evaluate start-time

@@ -136,7 +136,7 @@ pub async fn get_dependencies(
     match entity_kind.as_str() {
         "flags" => flag_dependencies(&state, &project_id, &entity_id).await,
         "segments" => segment_dependencies(&state, &project_id, &entity_id).await,
-        "experiments" => Ok(Json(experiment_dependencies(&entity_id))),
+        "experiments" => experiment_dependencies(&state, &entity_id).await,
         other => Err(GatewayError::BadRequest(format!(
             "unknown dependency entity kind '{other}' (expected flags|segments|experiments)"
         ))),
@@ -283,22 +283,63 @@ async fn segment_dependencies(
     }))
 }
 
-/// Dependency graph for an experiment. Start-time prerequisites and reverse
-/// experiment→experiment edges are not exposed over any read RPC, so the graph
-/// is empty with an explanatory note. The delete-block guard
-/// (experimentation-service) still enforces the integrity authoritatively.
-fn experiment_dependencies(experiment_id: &str) -> DependencyGraphJson {
-    DependencyGraphJson {
+/// Dependency graph for an experiment. Upstream edges are the experiment's
+/// configured start-time prerequisites (Phase 10): a `flag_variant` prerequisite
+/// becomes an upstream **flag** edge; an `experiment_done` prerequisite becomes
+/// an upstream **experiment** edge. The downstream (reverse experiment→experiment)
+/// edges are still enforced authoritatively at delete time (409 dependency_exists)
+/// and noted here.
+async fn experiment_dependencies(
+    state: &Arc<GatewayState>,
+    experiment_id: &str,
+) -> Result<Json<DependencyGraphJson>, GatewayError> {
+    use stitchd_proto::experiments::v1::GetExperimentStartPrerequisitesRequest;
+
+    let prereqs = {
+        let mut client = state.experimentation_client.lock().await;
+        client
+            .get_experiment_start_prerequisites(tonic::Request::new(
+                GetExperimentStartPrerequisitesRequest {
+                    environment_id: String::new(),
+                    experiment_id: experiment_id.to_string(),
+                },
+            ))
+            .await
+            .map_err(GatewayError::from)?
+            .into_inner()
+            .prerequisites
+    };
+
+    let mut upstream: Vec<DependencyEdge> = Vec::new();
+    for p in &prereqs {
+        match p.kind.as_str() {
+            "flag_variant" => upstream.push(DependencyEdge {
+                entity_kind: "flag".to_string(),
+                id: p.flag_id.clone(),
+                key: String::new(),
+                kind: "prerequisite_flag_variant".to_string(),
+            }),
+            "experiment_done" => upstream.push(DependencyEdge {
+                entity_kind: "experiment".to_string(),
+                id: p.prerequisite_experiment_id.clone(),
+                key: String::new(),
+                kind: "prerequisite_experiment_done".to_string(),
+            }),
+            _ => {}
+        }
+    }
+
+    Ok(Json(DependencyGraphJson {
         entity_kind: "experiment".to_string(),
         entity_id: experiment_id.to_string(),
-        upstream: Vec::new(),
+        upstream,
         downstream: Vec::new(),
         note: Some(
-            "experiment start-prerequisite edges are not exposed over a read RPC; \
-             referential integrity is enforced at delete time (409 dependency_exists)"
+            "downstream experiment→experiment edges are enforced at delete time \
+             (409 dependency_exists), not listed here"
                 .to_string(),
         ),
-    }
+    }))
 }
 
 #[cfg(test)]
@@ -320,12 +361,7 @@ mod tests {
         assert_eq!(out.len(), 2);
     }
 
-    #[test]
-    fn experiment_dependencies_carries_note() {
-        let g = experiment_dependencies("exp-1");
-        assert_eq!(g.entity_kind, "experiment");
-        assert!(g.upstream.is_empty());
-        assert!(g.downstream.is_empty());
-        assert!(g.note.is_some());
-    }
+    // The experiment branch now calls the experimentation-service read RPC, so it
+    // is exercised end-to-end in `tests/dependencies_routes.rs`
+    // (`experiment_dependencies_populates_upstream_from_start_prereqs`).
 }

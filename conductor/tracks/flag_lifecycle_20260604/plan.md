@@ -177,11 +177,11 @@ due changes to each owning service's existing mutation/lifecycle RPC. Documented
      deferred as fail-closed / definition-only. Sequential — tasks 1 & 2 both touch
      stitchd-experimentation-service. -->
 
-- [ ] Task 1: Flag-service variant-UUID exposure (closes `feature-flag-bun`). Add variant UUIDs
+- [x] Task 1: Flag-service variant-UUID exposure (closes `feature-flag-bun`). Add variant UUIDs
   to flag-service `GetFlag`/`FeatureFlag` (backward-compatible proto + populate), then make the
   experimentation-service `flag_variant` start-prerequisite compare the actual served variant UUID
   exactly — replacing today's fail-closed behaviour. TDD: a MET `flag_variant` prereq now allows
-  start; unmet still refuses (manual + scheduled).
+  start; unmet still refuses (manual + scheduled). (SHA a75f790)
   <!-- files: proto/flags/v1/flag_service.proto, crates/stitchd-flag-service/src/service.rs, crates/stitchd-experimentation-service/src/start_prerequisites.rs -->
 - [ ] Task 2: Experiment start-prerequisite read RPC (closes `feature-flag-coe`). Add a
   read RPC (e.g. `GetExperimentStartPrerequisites`, or fold into `GetExperiment`) + gateway wiring

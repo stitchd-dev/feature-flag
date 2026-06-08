@@ -36,6 +36,10 @@ export function edgeKindLabel(kind: string): string {
       return 'segment reference'
     case 'dependent_flag':
       return 'dependent flag'
+    case 'prerequisite_flag_variant':
+      return 'flag-variant start prerequisite'
+    case 'prerequisite_experiment_done':
+      return 'experiment-done start prerequisite'
     default:
       return kind.replace(/_/g, ' ')
   }
