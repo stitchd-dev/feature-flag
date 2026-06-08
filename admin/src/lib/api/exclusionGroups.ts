@@ -44,9 +44,7 @@ export interface ExclusionGroup {
 
 export interface ExclusionGroupListResponse {
   items: ExclusionGroup[]
-  total: number
-  page: number
-  per_page: number
+  next_cursor: string | null
 }
 
 /**
@@ -101,12 +99,12 @@ export interface InteractionsResponse {
 
 export async function listExclusionGroups(
   envId: string,
-  params?: { page?: number; per_page?: number },
+  params?: { cursor?: string | null; limit?: number },
   signal?: AbortSignal,
 ): Promise<ExclusionGroupListResponse> {
   const qs = new URLSearchParams()
-  if (params?.page != null) qs.set('page', String(params.page))
-  if (params?.per_page != null) qs.set('per_page', String(params.per_page))
+  if (params?.cursor != null) qs.set('cursor', params.cursor)
+  if (params?.limit != null) qs.set('limit', String(params.limit))
   const suffix = qs.toString() ? `?${qs}` : ''
   const { data } = await api.get<ExclusionGroupListResponse>(
     `/v1/environments/${envId}/exclusion-groups${suffix}`,

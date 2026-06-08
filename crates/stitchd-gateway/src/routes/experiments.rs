@@ -23,7 +23,7 @@ use stitchd_proto::experiments::v1::{
 use stitchd_core::experimentation::bandit::BanditConfig;
 
 use crate::error::GatewayError;
-use crate::pagination::{CursorPage, CursorParams};
+use crate::pagination::{CursorPage, CursorParams, PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
 
 // ─── REST types ───────────────────────────────────────────────────────────────
@@ -713,13 +713,16 @@ pub async fn transition_experiment(
     Ok(Json(experiment_to_json(&resp.into_inner())))
 }
 
-/// Query parameters for `GET /experiments/{id}/iterations` — cursor
-/// pagination (same shape as `GET /experiments` and
-/// `GET /experiments/{id}/exposures`).
+/// Query parameters for `GET /experiments/{id}/iterations`.
+///
+/// Experiment-detail sub-lists (iterations, exposures) intentionally remain on
+/// page-based pagination: they back a numbered detail view and the UI's exposure
+/// count relies on the `total` the cursor envelope omits. Cursor pagination
+/// (platform_hardening_20260608) applies to the top-level resource collections.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct ListIterationsQuery {
     #[serde(flatten)]
-    pub cursor: CursorParams,
+    pub pagination: PaginationParams,
 }
 
 /// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/iterations`
@@ -749,17 +752,12 @@ pub async fn list_iterations(
     Path((environment_id, experiment_id)): Path<(String, String)>,
     Query(query): Query<ListIterationsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let offset = query
-        .cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = query.cursor.effective_limit();
-
+    let pagination = &query.pagination;
     let req = tonic::Request::new(ListIterationsRequest {
         environment_id,
         experiment_id,
-        offset,
-        limit: u64::from(limit),
+        offset: pagination.offset(),
+        limit: pagination.limit(),
     });
     let mut client = state.experimentation_client.lock().await;
     let resp = client
@@ -768,10 +766,10 @@ pub async fn list_iterations(
         .map_err(GatewayError::from)?;
     let inner = resp.into_inner();
     let iterations: Vec<IterationJson> = inner.iterations.iter().map(iteration_to_json).collect();
-    Ok(Json(CursorPage::from_offset(
+    Ok(Json(PaginatedResponse::new(
         iterations,
         inner.total,
-        offset,
+        pagination,
     )))
 }
 
@@ -839,8 +837,9 @@ pub async fn get_results(
 pub struct ListExposuresQuery {
     /// REQUIRED. One of the experiment's `unit_context_types`.
     pub context_type: Option<String>,
+    // Page-based: an experiment-detail sub-list (see ListIterationsQuery).
     #[serde(flatten)]
-    pub cursor: CursorParams,
+    pub pagination: PaginationParams,
 }
 
 /// One row from `experiment_assignments` for the gateway JSON response.
@@ -891,17 +890,12 @@ pub async fn list_exposures(
         return Err(GatewayError::MissingContextType);
     }
 
-    let offset = query
-        .cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = query.cursor.effective_limit();
-
+    let pagination = &query.pagination;
     let req = tonic::Request::new(ListExposuresRequest {
         experiment_id,
         context_type,
-        offset,
-        limit: u64::from(limit),
+        offset: pagination.offset(),
+        limit: pagination.limit(),
     });
 
     let mut client = state.experimentation_client.lock().await;
@@ -925,7 +919,11 @@ pub async fn list_exposures(
             },
         })
         .collect();
-    Ok(Json(CursorPage::from_offset(exposures, inner.total, offset)))
+    Ok(Json(PaginatedResponse::new(
+        exposures,
+        inner.total,
+        pagination,
+    )))
 }
 
 // ─── GET /interactions (Phase 7) ─────────────────────────────────────────────
@@ -1855,16 +1853,15 @@ mod tests {
 
     #[tokio::test]
     async fn list_iterations_accepts_pagination_query_params() {
-        // Confirms the route binds the `cursor` + `limit` query params and
-        // hands them to the experimentation client without rejecting the
-        // request as a 400. The stub channel is lazy, so we accept the same
-        // 200/502 outcomes as the unparameterised test.
+        // Iterations is an experiment-detail sub-list and stays page-based: the
+        // route binds `page` + `per_page` and forwards them to the client
+        // without a 400. The stub channel is lazy, so we accept 200/502.
         let state = make_stub_state();
         let app = test_router(state);
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri("/v1/environments/env-1/experiments/exp-1/iterations?limit=25")
+                    .uri("/v1/environments/env-1/experiments/exp-1/iterations?page=2&per_page=25")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1875,24 +1872,6 @@ mod tests {
             "status: {}",
             resp.status()
         );
-    }
-
-    #[tokio::test]
-    async fn list_iterations_rejects_malformed_cursor() {
-        // A malformed opaque cursor must map to HTTP 400 (invalid cursor)
-        // before any upstream call is attempted.
-        let state = make_stub_state();
-        let app = test_router(state);
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/environments/env-1/experiments/exp-1/iterations?cursor=@@bad@@")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

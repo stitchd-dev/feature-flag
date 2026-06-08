@@ -551,7 +551,7 @@ async fn list_exposures_proxies_to_grpc_and_returns_paginated_rows() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/environments/env-1/experiments/{exp_id}/exposures?context_type=user&limit=50"
+                    "/v1/environments/env-1/experiments/{exp_id}/exposures?context_type=user&page=1&per_page=50"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -568,12 +568,8 @@ async fn list_exposures_proxies_to_grpc_and_returns_paginated_rows() {
     assert_eq!(items[0]["matched_rule_id"], rule_id);
     // default-rule exposure omits matched_rule_id.
     assert!(items[1].get("matched_rule_id").is_none());
-    // Cursor envelope: 2 of 1234 rows returned at offset 0 ⇒ more remain ⇒
-    // next_cursor is present (replaces the old `total` field assertion).
-    assert!(
-        body["next_cursor"].is_string(),
-        "more rows remain ⇒ next_cursor must be set"
-    );
+    // Exposures stays page-based (experiment-detail sub-list): total surfaces.
+    assert_eq!(body["total"], 1234);
 }
 
 #[tokio::test]

@@ -135,7 +135,7 @@ export function PrerequisitesEditor({ flag, canWrite, onSaved }: Props) {
     setLoadError(null)
     Promise.all([
       getPrerequisites(projectId, flag.key, controller.signal),
-      listFlags(projectId, { per_page: 500 }, controller.signal),
+      listFlags(projectId, { limit: 500 }, controller.signal),
     ])
       .then(([gate, flagsPage]) => {
         setInitial({

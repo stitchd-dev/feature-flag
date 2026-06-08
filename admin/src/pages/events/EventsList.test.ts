@@ -89,23 +89,27 @@ export function formatCount24h(count: number | null | undefined): string {
   return String(count)
 }
 
-/** Subtitle string on the PageHeader — driven by total. */
-export function subtitleForTotal(total: number): string {
-  return `${total} event${total === 1 ? '' : 's'}. Unknown event keys are rejected at the gateway.`
+/**
+ * Static subtitle string on the PageHeader. With cursor pagination the backend
+ * no longer returns a total count, so the subtitle is fixed wording.
+ */
+export function headerSubtitle(): string {
+  return 'Unknown event keys are rejected at the gateway.'
 }
 
 /**
- * URL-driven pagination — given a "Next page" click on the current page,
- * resolve the page number that the URL should advance to. Mirrors the call
- * `onPageChange(page + 1)` wired to `useSearchParams.set('page', ...)`.
+ * URL-driven cursor pagination — resolve the `cursor` value to write to the URL
+ * on a "Next page" click. Mirrors `onNext()` wired to
+ * `useSearchParams.set('cursor', nextCursor)`. Returns the current cursor
+ * unchanged when there is no next page (nextCursor null).
  */
-export function nextPage(currentPage: number, totalPages: number): number {
-  if (currentPage >= totalPages) return currentPage
-  return currentPage + 1
+export function nextCursorFor(currentCursor: string | null, nextCursor: string | null): string | null {
+  return nextCursor ?? currentCursor
 }
 
-export function totalPagesFor(total: number, perPage: number): number {
-  return Math.max(1, Math.ceil(total / perPage))
+/** Whether a "Next" affordance should be enabled (mirrors `hasNext`). */
+export function hasNextFor(nextCursor: string | null): boolean {
+  return nextCursor != null
 }
 
 /** Modal-open state machine — the "New event" button transitions false → true. */
@@ -280,32 +284,31 @@ describe('EventsList — filter composition', () => {
   })
 })
 
-describe('EventsList — pagination URL sync', () => {
+describe('EventsList — cursor pagination URL sync', () => {
   /** test_pagination_url_sync */
-  it('Next from page 1 → page 2 (when more pages exist)', () => {
-    const total = 120
-    const perPage = 50
-    const totalPages = totalPagesFor(total, perPage)
-    expect(totalPages).toBe(3)
-    expect(nextPage(1, totalPages)).toBe(2)
+  it('Next from the first page advances the URL cursor to next_cursor', () => {
+    expect(nextCursorFor(null, 'CUR_A')).toBe('CUR_A')
   })
 
-  it('Next clamps at last page', () => {
-    const totalPages = totalPagesFor(50, 50)
-    expect(totalPages).toBe(1)
-    expect(nextPage(1, totalPages)).toBe(1)
+  it('Next on a later page advances to the new next_cursor', () => {
+    expect(nextCursorFor('CUR_A', 'CUR_B')).toBe('CUR_B')
   })
 
-  it('totalPages is 1 when total is 0 (always renders one empty page)', () => {
-    expect(totalPagesFor(0, 50)).toBe(1)
+  it('Next is a no-op on the last page (next_cursor null leaves the cursor unchanged)', () => {
+    expect(nextCursorFor('CUR_A', null)).toBe('CUR_A')
+  })
+
+  it('hasNext reflects whether next_cursor is present', () => {
+    expect(hasNextFor('CUR_A')).toBe(true)
+    expect(hasNextFor(null)).toBe(false)
   })
 
   it('Pagination component is mounted via the same usePaginatedList hook used elsewhere', () => {
-    // Smoke check: the URL key driven by usePaginatedList is `page`. We assert
-    // the shape rather than wire up a router — the hook itself has its own
-    // tests under hooks/usePaginatedList.test.ts.
-    const urlKey = 'page'
-    expect(urlKey).toBe('page')
+    // Smoke check: the URL key driven by usePaginatedList is now `cursor`. We
+    // assert the shape rather than wire up a router — the hook itself has its
+    // own tests under hooks/usePaginatedList.test.ts.
+    const urlKey = 'cursor'
+    expect(urlKey).toBe('cursor')
   })
 })
 
@@ -327,12 +330,8 @@ describe('EventsList — "New event" button', () => {
 })
 
 describe('EventsList — header subtitle', () => {
-  it('uses singular wording for 1 event', () => {
-    expect(subtitleForTotal(1)).toContain('1 event.')
-  })
-
-  it('uses plural wording for 0/many events', () => {
-    expect(subtitleForTotal(0)).toContain('0 events.')
-    expect(subtitleForTotal(47)).toContain('47 events.')
+  it('is static wording with no total count (cursor pagination has no total)', () => {
+    expect(headerSubtitle()).toBe('Unknown event keys are rejected at the gateway.')
+    expect(headerSubtitle()).not.toMatch(/\d/)
   })
 })

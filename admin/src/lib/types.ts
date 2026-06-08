@@ -1,10 +1,15 @@
 // Shared API response types matching the gateway's AdminFlagJson shape.
 
-export interface PaginatedResponse<T> {
+/**
+ * Cursor-paginated list envelope returned by the gateway's list endpoints.
+ *
+ * `next_cursor` is an opaque base64url token to pass back as `?cursor=` to
+ * fetch the following page; it is `null` on the last page. There is no total
+ * count or page number — navigation is next/prev only.
+ */
+export interface CursorPage<T> {
   items: T[]
-  total: number
-  page: number
-  per_page: number
+  next_cursor: string | null
 }
 
 // ── Segment domain types ──────────────────────────────────────────────────────

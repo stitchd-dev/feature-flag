@@ -48,9 +48,7 @@ export interface MetricResponse {
 
 interface ListMetricsResponse {
   items: MetricResponse[]
-  total: number
-  page: number
-  per_page: number
+  next_cursor: string | null
 }
 
 type KindFilter = 'all' | 'aggregation' | 'ratio' | 'funnel'
@@ -107,23 +105,24 @@ export function MetricsList() {
 
   const {
     data: metrics,
-    total,
     loading,
     error,
-    page,
-    onPageChange,
+    hasNext,
+    hasPrev,
+    onNext,
+    onPrev,
     refresh: loadMetrics,
   } = usePaginatedList<MetricResponse>(
-    async ({ page: p, perPage, signal }) => {
-      if (!envId) return { items: [], total: 0 }
+    async ({ cursor, limit, signal }) => {
+      if (!envId) return { items: [], next_cursor: null }
       const qs = new URLSearchParams({
         env_id: envId,
-        page: String(p),
-        per_page: String(perPage),
+        limit: String(limit),
       })
+      if (cursor != null) qs.set('cursor', cursor)
       if (kindFilter !== 'all') qs.set('kind', kindFilter)
       const { data } = await api.get<ListMetricsResponse>(`/v1/metrics?${qs}`, { signal })
-      return { items: data.items ?? [], total: data.total ?? 0 }
+      return { items: data.items ?? [], next_cursor: data.next_cursor ?? null }
     },
     [envId, kindFilter],
     PER_PAGE,
@@ -133,8 +132,8 @@ export function MetricsList() {
     setSearchParams((prev) => {
       if (k === 'all') prev.delete('kind')
       else prev.set('kind', k)
-      // Reset to page 1 when the filter changes so we don't request beyond the new total.
-      prev.set('page', '1')
+      // Reset cursor when the filter changes so we start from the first page.
+      prev.delete('cursor')
       return prev
     })
   }
@@ -170,7 +169,7 @@ export function MetricsList() {
       <PageHeader
         crumbs={['Metrics']}
         title="Metrics"
-        subtitle={`${total} metric${total === 1 ? '' : 's'}. Define aggregation, ratio, and funnel primitives that experiments reference.`}
+        subtitle="Define aggregation, ratio, and funnel primitives that experiments reference."
         actions={
           <button className="btn primary" onClick={() => setShowCreate(true)}>
             <I.plus size={14} /> New metric
@@ -316,7 +315,7 @@ export function MetricsList() {
                     </tbody>
                   </table>
                 </div>
-                <Pagination page={page} perPage={PER_PAGE} total={total} onChange={onPageChange} />
+                <Pagination hasPrev={hasPrev} hasNext={hasNext} onPrev={onPrev} onNext={onNext} />
               </div>
             )}
           </>

@@ -26,12 +26,12 @@ import {
 
 interface MetricsListResponse {
   items: { id: string; key: string; name: string }[]
-  total: number
+  next_cursor?: string | null
 }
 
 interface FlagsListResponse {
   items: { flag_id: string; key: string; name: string }[]
-  total: number
+  next_cursor?: string | null
 }
 
 export function ExperimentsList() {
@@ -47,14 +47,16 @@ export function ExperimentsList() {
   // ── List + concurrent metric / flag lookups ───────────────────────────
 
   const { data: experiments, loading, error } = usePaginatedList<ExperimentResponse>(
-    async ({ signal }) => {
-      if (!envId) return { items: [], total: 0 }
-      const { data } = await api.get<{ items: ExperimentResponse[]; total: number }>(
-        `/v1/environments/${envId}/experiments`,
+    async ({ cursor, limit, signal }) => {
+      if (!envId) return { items: [], next_cursor: null }
+      const qs = new URLSearchParams({ limit: String(limit) })
+      if (cursor != null) qs.set('cursor', cursor)
+      const { data } = await api.get<{ items: ExperimentResponse[]; next_cursor: string | null }>(
+        `/v1/environments/${envId}/experiments?${qs}`,
         { signal },
       )
       const items = data.items ?? (Array.isArray(data) ? data : [])
-      return { items, total: data.total ?? items.length }
+      return { items, next_cursor: data.next_cursor ?? null }
     },
     [envId],
   )
@@ -65,7 +67,7 @@ export function ExperimentsList() {
     if (!envId) return
     const ctrl = new AbortController()
     api
-      .get<MetricsListResponse>(`/v1/metrics?env_id=${encodeURIComponent(envId)}&per_page=200`, {
+      .get<MetricsListResponse>(`/v1/metrics?env_id=${encodeURIComponent(envId)}&limit=200`, {
         signal: ctrl.signal,
       })
       .then(({ data }) => setMetricLookup(buildMetricNameLookup(data.items ?? [])))
@@ -81,7 +83,7 @@ export function ExperimentsList() {
     if (!projectId) return
     const ctrl = new AbortController()
     api
-      .get<FlagsListResponse>(`/v1/projects/${projectId}/flags?per_page=500`, {
+      .get<FlagsListResponse>(`/v1/projects/${projectId}/flags?limit=500`, {
         signal: ctrl.signal,
       })
       .then(({ data }) => setFlagOptions(data.items ?? []))
