@@ -755,6 +755,7 @@ function ExperimentDetailBody({
             interactions={interactions}
             loading={interactionsLoading}
             error={interactionsError}
+            isBandit={isBandit}
           />
         )}
 
