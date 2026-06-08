@@ -117,6 +117,7 @@ fn build_proto_flag(gate: &ExclusionGate) -> FeatureFlag {
             bucket_hi: u32::from(gate.bucket_hi),
             context_type: gate.context_type.clone(),
         }),
+        realtime_bandit: None,
     };
 
     let condition = ConditionExpr::And(vec![]); // universal match
@@ -199,6 +200,7 @@ fn build_core_flag(gate: &ExclusionGate) -> Flag {
             }],
             weights: vec![(on_id, 10000), (off_id, 0)],
             exclusion_gate: Some(gate.clone()),
+            realtime_bandit: None,
         },
     };
 
