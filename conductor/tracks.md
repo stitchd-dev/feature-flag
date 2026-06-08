@@ -91,7 +91,7 @@ This file tracks all major tracks for the project.
 
 ---
 
-## [ ] Track: Multi-Armed Bandit (Adaptive & Autonomous Experiment Allocation)
+## [x] Track: Multi-Armed Bandit (Adaptive & Autonomous Experiment Allocation)
 *Link: [./conductor/tracks/bandit_20260608/](./conductor/tracks/bandit_20260608/)*
 
 Bandit mode on the experiment entity: Thompson Sampling / epsilon-greedy / UCB / contextual algorithms over all four reward metric families; scalar + multi-objective (scalarization + constrained-guardrail) reward; static-rewrite (eval-invariant-preserving) + real-time snapshot-resident (bandit-aware) eval paths; autonomous lifecycle (advisory / auto_commit / auto_rollout) + optimization campaigns (auto-spawn iterations on convergence/drift, bounded); bandit-aware interaction analysis incl. order 4+. 13 phases, worker-wave parallel. Priority: medium.
