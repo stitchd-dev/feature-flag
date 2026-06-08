@@ -18,6 +18,8 @@ use stitchd_proto::experiments::v1::{
     UpdateExperimentRequest, VariantResult,
 };
 
+use stitchd_core::experimentation::bandit::BanditConfig;
+
 use crate::error::GatewayError;
 use crate::pagination::{PaginatedResponse, PaginationParams};
 use crate::state::GatewayState;
@@ -75,6 +77,14 @@ pub struct CreateExperimentBody {
     /// `0` (the default) lets the service apply the platform default (`100`).
     #[serde(default)]
     pub sequential_min_sample_size: i64,
+    /// Experiment allocation mode: `"fixed"` (default) or `"bandit"`. Omitted /
+    /// empty maps to `fixed`.
+    #[serde(default)]
+    pub experiment_mode: Option<String>,
+    /// Bandit (adaptive allocation) configuration. Only valid when
+    /// `experiment_mode == "bandit"`.
+    #[serde(default)]
+    pub bandit_config: Option<BanditConfig>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -89,6 +99,15 @@ pub struct UpdateExperimentBody {
     pub targets_default_rule: bool,
     #[serde(default)]
     pub unit_context_types: Vec<String>,
+    /// Experiment allocation mode: `"fixed"` or `"bandit"`. Omitted leaves the
+    /// mode unchanged. Mode / config changes are rejected by the service while
+    /// the experiment is running or paused (whole-flag lock).
+    #[serde(default)]
+    pub experiment_mode: Option<String>,
+    /// Bandit (adaptive allocation) configuration. Only valid when the
+    /// (effective) experiment mode is `"bandit"`.
+    #[serde(default)]
+    pub bandit_config: Option<BanditConfig>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -433,6 +452,47 @@ pub async fn list_experiments(
     )))
 }
 
+/// Validate + translate the REST bandit fields into the proto carriers.
+///
+/// Returns `(experiment_mode, bandit_config_json)` where `experiment_mode` is
+/// the proto string (`""` when unspecified — leaves the service default) and
+/// `bandit_config_json` is the serialized config (or `None`).
+///
+/// Rules (422 on violation):
+/// * `experiment_mode`, when present, must be `"fixed"` or `"bandit"`.
+/// * a `bandit_config` is only valid when the (declared) mode is `"bandit"`.
+/// * the `bandit_config` must pass [`BanditConfig::validate`].
+fn resolve_bandit_fields(
+    mode: Option<&str>,
+    config: Option<&BanditConfig>,
+) -> Result<(String, Option<String>), GatewayError> {
+    let mode_str = match mode {
+        None => String::new(),
+        Some(m) if m == "fixed" || m == "bandit" => m.to_string(),
+        Some(other) => {
+            return Err(GatewayError::InvalidBody(format!(
+                "invalid experiment_mode '{other}': must be 'fixed' or 'bandit'"
+            )));
+        }
+    };
+
+    if let Some(cfg) = config {
+        if mode_str != "bandit" {
+            return Err(GatewayError::InvalidBody(
+                "bandit_config is only valid when experiment_mode is 'bandit'".to_string(),
+            ));
+        }
+        cfg.validate()
+            .map_err(|e| GatewayError::InvalidBody(format!("invalid bandit_config: {e}")))?;
+        let json = serde_json::to_string(cfg).map_err(|e| {
+            GatewayError::InvalidBody(format!("bandit_config not serializable: {e}"))
+        })?;
+        return Ok((mode_str, Some(json)));
+    }
+
+    Ok((mode_str, None))
+}
+
 /// `POST /v1/environments/{environment_id}/experiments`
 #[utoipa::path(
     post,
@@ -452,6 +512,8 @@ pub async fn create_experiment(
     Path(environment_id): Path<String>,
     Json(body): Json<CreateExperimentBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let (experiment_mode, bandit_config_json) =
+        resolve_bandit_fields(body.experiment_mode.as_deref(), body.bandit_config.as_ref())?;
     // Pure translation: binding validation has moved to the experimentation-service (GL-08).
     let experiment = Experiment {
         environment_id,
@@ -469,6 +531,8 @@ pub async fn create_experiment(
         sequential_alpha: body.sequential_alpha,
         sequential_tau_squared: body.sequential_tau_squared,
         sequential_min_sample_size: body.sequential_min_sample_size,
+        experiment_mode,
+        bandit_config: bandit_config_json,
         ..Default::default()
     };
     let req = tonic::Request::new(CreateExperimentRequest {
@@ -540,8 +604,11 @@ pub async fn update_experiment(
     Path((environment_id, experiment_id)): Path<(String, String)>,
     Json(body): Json<UpdateExperimentBody>,
 ) -> Result<impl IntoResponse, GatewayError> {
+    let (experiment_mode, bandit_config_json) =
+        resolve_bandit_fields(body.experiment_mode.as_deref(), body.bandit_config.as_ref())?;
     // Pure translation: binding validation has moved to the experimentation-service (GL-08).
     // Binding fields are passed through so the service can validate and persist them.
+    // The mode/config-while-running|paused lock is enforced by the service.
     let experiment = Experiment {
         id: experiment_id.clone(),
         environment_id,
@@ -553,6 +620,8 @@ pub async fn update_experiment(
         flag_rule_id: body.flag_rule_id.unwrap_or_default(),
         targets_default_rule: body.targets_default_rule,
         unit_context_types: body.unit_context_types,
+        experiment_mode,
+        bandit_config: bandit_config_json,
         ..Default::default()
     };
     let req = tonic::Request::new(UpdateExperimentRequest {
@@ -1173,6 +1242,105 @@ mod tests {
         let srm = j.srm.expect("srm present");
         assert_eq!(srm.health, "green");
         assert!(j.guardrails[0].direction_violation);
+    }
+
+    // ── bandit field resolution ──────────────────────────────────────────
+
+    fn sample_bandit_config() -> BanditConfig {
+        use stitchd_core::experimentation::bandit::{
+            BanditAlgorithm, LifecyclePolicy, PropagationMode, RewardObjective,
+        };
+        BanditConfig {
+            algorithm: BanditAlgorithm::ThompsonSampling,
+            propagation_mode: PropagationMode::Static,
+            min_exploration_bp: 500,
+            objective: RewardObjective::Scalar {
+                metric_id: uuid::Uuid::nil(),
+            },
+            lifecycle_policy: LifecyclePolicy::Advisory,
+            convergence_prob_threshold: 0.95,
+        }
+    }
+
+    #[test]
+    fn resolve_bandit_fields_defaults_to_empty_mode() {
+        let (mode, cfg) = resolve_bandit_fields(None, None).unwrap();
+        assert_eq!(mode, "");
+        assert_eq!(cfg, None);
+    }
+
+    #[test]
+    fn resolve_bandit_fields_serializes_config_for_bandit_mode() {
+        let cfg = sample_bandit_config();
+        let (mode, json) = resolve_bandit_fields(Some("bandit"), Some(&cfg)).unwrap();
+        assert_eq!(mode, "bandit");
+        let json = json.expect("config serialized");
+        let back: BanditConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn resolve_bandit_fields_rejects_unknown_mode() {
+        let err = resolve_bandit_fields(Some("contextual"), None).unwrap_err();
+        assert!(matches!(err, GatewayError::InvalidBody(_)));
+    }
+
+    #[test]
+    fn resolve_bandit_fields_rejects_config_without_bandit_mode() {
+        let cfg = sample_bandit_config();
+        // fixed mode + a config → 422
+        let err = resolve_bandit_fields(Some("fixed"), Some(&cfg)).unwrap_err();
+        assert!(matches!(err, GatewayError::InvalidBody(_)));
+        // no mode + a config → 422
+        let err = resolve_bandit_fields(None, Some(&cfg)).unwrap_err();
+        assert!(matches!(err, GatewayError::InvalidBody(_)));
+    }
+
+    #[test]
+    fn resolve_bandit_fields_rejects_invalid_config() {
+        let mut cfg = sample_bandit_config();
+        cfg.convergence_prob_threshold = 1.5; // out of (0,1)
+        let err = resolve_bandit_fields(Some("bandit"), Some(&cfg)).unwrap_err();
+        assert!(matches!(err, GatewayError::InvalidBody(_)));
+    }
+
+    #[tokio::test]
+    async fn create_experiment_rejects_invalid_mode_with_422() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/environments/env-1/experiments")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{"name":"exp","flag_key":"f1","experiment_mode":"nonsense"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn create_experiment_rejects_config_without_bandit_mode_with_422() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let body = r#"{"name":"exp","flag_key":"f1","bandit_config":{"algorithm":{"type":"thompson_sampling"},"min_exploration_bp":500,"objective":{"type":"scalar","metric_id":"00000000-0000-0000-0000-000000000000"},"convergence_prob_threshold":0.95}}"#;
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/environments/env-1/experiments")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[test]
