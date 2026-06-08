@@ -287,6 +287,23 @@ pub fn build_router(state: Arc<GatewayState>, metrics_handle: PrometheusHandle) 
             "/v1/environments/{environment_id}/experiments/{experiment_id}/interactions",
             get(experiments::get_interactions),
         )
+        // Bandit surfacing (FR7) — read
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit",
+            get(experiments::get_bandit_state),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit/history",
+            get(experiments::get_bandit_history),
+        )
+        .route(
+            "/v1/environments/{environment_id}/bandit-campaigns",
+            get(experiments::list_bandit_campaigns),
+        )
+        .route(
+            "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}",
+            get(experiments::get_bandit_campaign),
+        )
         // Exclusion groups — read
         .route(
             "/v1/environments/{environment_id}/exclusion-groups",

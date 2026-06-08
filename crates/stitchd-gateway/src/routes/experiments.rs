@@ -11,9 +11,11 @@ use std::sync::Arc;
 use utoipa::ToSchema;
 
 use stitchd_proto::experiments::v1::{
-    BoundTarget, ContextTypeResults, CreateExperimentRequest, DeleteExperimentRequest, Experiment,
-    ExperimentInteraction, ExperimentIteration, ExperimentStatus, GetExperimentInteractionsRequest,
-    GetExperimentRequest, GetResultsRequest, ListExperimentsRequest, ListExposuresRequest,
+    BanditAllocationBucket, BanditAllocationRun, BoundTarget, ContextTypeResults,
+    CreateExperimentRequest, DeleteExperimentRequest, Experiment, ExperimentInteraction,
+    ExperimentIteration, ExperimentStatus, GetBanditAllocationHistoryRequest,
+    GetBanditStateRequest, GetExperimentInteractionsRequest, GetExperimentRequest,
+    GetResultsRequest, ListBanditCampaignsRequest, ListExperimentsRequest, ListExposuresRequest,
     ListIterationsRequest, SrmResult as ProtoSrmResult, TransitionExperimentRequest,
     UpdateExperimentRequest, VariantResult,
 };
@@ -1027,6 +1029,343 @@ pub async fn get_interactions(
     Ok(Json(ExperimentInteractionsJson { interactions }))
 }
 
+// ─── Bandit surfacing (FR7, bandit_20260608 Phase 11) ────────────────────────
+
+/// One arm's current target weight in basis points (sum across arms = 10000).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BanditAllocationBucketJson {
+    pub variant_key: String,
+    /// Basis points: `1` = 0.01%, `10000` = 100%.
+    pub weight_bp: u32,
+}
+
+/// Current state of a bandit experiment — drives the Admin UI Bandit Results
+/// view (current weights, posteriors, convergence badge, campaign status).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BanditStateJson {
+    pub experiment_id: String,
+    /// `true` when the experiment runs in bandit (adaptive-allocation) mode.
+    /// When `false`, every other field is empty/zero/false.
+    pub is_bandit: bool,
+    /// Current per-arm allocation (latest applied `reallocate` row). Empty `[]`
+    /// until the first reallocation tick has fired.
+    pub current_allocation: Vec<BanditAllocationBucketJson>,
+    /// Per-objective posteriors (the `bandit_objectives` block from the latest
+    /// reallocate row). Shape:
+    /// `{"objectives":[{"metric_id","role","weight"?,"goal","variants":[{"variant_key","mean","ci_lower","ci_upper","n","guardrail_violated"}]}]}`.
+    /// `null` (omitted) when no posteriors have been recorded yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objectives: Option<serde_json::Value>,
+    /// The full bandit configuration (algorithm, propagation_mode,
+    /// lifecycle_policy, min_exploration_bp, objective, …). `null` (omitted) when
+    /// the experiment is not a bandit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bandit_config: Option<serde_json::Value>,
+    /// The converged winning variant key. `null` (omitted) until convergence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub converged_variant: Option<String>,
+    /// The converged winner's posterior probability-to-be-best in `[0, 1]`.
+    /// `null` (omitted) until convergence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub converged_prob: Option<f64>,
+    /// `true` once the experiment has converged on a single winner.
+    pub has_converged: bool,
+    /// `true` when the current allocation is a single-arm 100% commit to the
+    /// converged winner (auto_commit / auto_rollout having fired).
+    pub committed: bool,
+    /// Owning campaign id. `null` (omitted) when the experiment is not part of a
+    /// campaign.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub campaign_id: Option<String>,
+    /// Owning campaign status (`active` | `paused` | `completed` | `cancelled`).
+    /// `null` (omitted) when there is no campaign.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub campaign_status: Option<String>,
+}
+
+fn allocation_bucket_to_json(b: &BanditAllocationBucket) -> BanditAllocationBucketJson {
+    BanditAllocationBucketJson {
+        variant_key: b.variant_key.clone(),
+        weight_bp: b.weight_bp,
+    }
+}
+
+/// Parse a JSON string carried over the wire into a `serde_json::Value`,
+/// returning `None` for an empty string or unparseable payload (the wire keeps
+/// JSON-shaped fields as strings; the gateway re-hydrates them).
+fn parse_json_field(s: &str) -> Option<serde_json::Value> {
+    if s.is_empty() {
+        return None;
+    }
+    serde_json::from_str(s).ok()
+}
+
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/bandit`
+///
+/// Current bandit state: live allocation, per-objective posteriors, convergence
+/// state, config summary, and campaign linkage.
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+    ),
+    responses(
+        (status = 200, description = "Bandit state", body = BanditStateJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Experiment not found"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_bandit_state(
+    State(state): State<Arc<GatewayState>>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(GetBanditStateRequest {
+        environment_id,
+        experiment_id,
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .get_bandit_state(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+
+    let json = BanditStateJson {
+        experiment_id: inner.experiment_id,
+        is_bandit: inner.is_bandit,
+        current_allocation: inner
+            .current_allocation
+            .iter()
+            .map(allocation_bucket_to_json)
+            .collect(),
+        objectives: parse_json_field(&inner.objectives_json),
+        bandit_config: parse_json_field(&inner.bandit_config_json),
+        converged_variant: if inner.converged_variant.is_empty() {
+            None
+        } else {
+            Some(inner.converged_variant)
+        },
+        converged_prob: if inner.has_converged {
+            Some(inner.converged_prob)
+        } else {
+            None
+        },
+        has_converged: inner.has_converged,
+        committed: inner.committed,
+        campaign_id: if inner.campaign_id.is_empty() {
+            None
+        } else {
+            Some(inner.campaign_id)
+        },
+        campaign_status: if inner.campaign_status.is_empty() {
+            None
+        } else {
+            Some(inner.campaign_status)
+        },
+    };
+    Ok(Json(json))
+}
+
+/// One `bandit_allocation_runs` row — a point on the allocation-over-time chart
+/// and the lifecycle-action timeline.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BanditAllocationRunJson {
+    /// RFC 3339 UTC timestamp of when the action fired.
+    pub fired_at: String,
+    /// `reallocate` | `commit` | `rollout` | `spawn_iteration` | `skip`.
+    pub action: String,
+    /// `applied` | `skipped` | `failed`.
+    pub outcome: String,
+    /// The prior per-arm allocation JSON. `null` (omitted) when none was
+    /// recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_allocation: Option<serde_json::Value>,
+    /// The new per-arm allocation JSON, incl. the `bandit_objectives` block for
+    /// a `reallocate` row. `null` (omitted) when none was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_allocation: Option<serde_json::Value>,
+    /// Free-text reason / error detail. `null` (omitted) when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BanditAllocationHistoryJson {
+    /// Rows ordered newest-first.
+    pub runs: Vec<BanditAllocationRunJson>,
+}
+
+/// Query parameters for the allocation-history endpoint.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct BanditHistoryQuery {
+    /// Max rows to return (newest first). Defaults to 50, capped at 500.
+    pub limit: Option<u32>,
+}
+
+fn allocation_run_to_json(r: &BanditAllocationRun) -> BanditAllocationRunJson {
+    BanditAllocationRunJson {
+        fired_at: ms_to_iso(r.fired_at_ms),
+        action: r.action.clone(),
+        outcome: r.outcome.clone(),
+        old_allocation: parse_json_field(&r.old_allocation_json),
+        new_allocation: parse_json_field(&r.new_allocation_json),
+        detail: if r.detail.is_empty() {
+            None
+        } else {
+            Some(r.detail.clone())
+        },
+    }
+}
+
+/// `GET /v1/environments/{environment_id}/experiments/{experiment_id}/bandit/history`
+///
+/// The `bandit_allocation_runs` timeline (newest first) — the data behind the
+/// allocation-over-time chart and the lifecycle-action timeline.
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit/history",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("experiment_id" = String, Path, description = "Experiment ID"),
+        ("limit" = Option<u32>, Query, description = "Max rows (default 50, max 500)"),
+    ),
+    responses(
+        (status = 200, description = "Bandit allocation history", body = BanditAllocationHistoryJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_bandit_history(
+    State(state): State<Arc<GatewayState>>,
+    Path((environment_id, experiment_id)): Path<(String, String)>,
+    Query(query): Query<BanditHistoryQuery>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(GetBanditAllocationHistoryRequest {
+        environment_id,
+        experiment_id,
+        limit: query.limit.unwrap_or(0),
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .get_bandit_allocation_history(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let runs: Vec<BanditAllocationRunJson> =
+        inner.runs.iter().map(allocation_run_to_json).collect();
+    Ok(Json(BanditAllocationHistoryJson { runs }))
+}
+
+// ─── Bandit campaigns (FR8 read surfacing) ───────────────────────────────────
+
+/// A bandit optimization campaign (autonomous successive-iteration spawner).
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BanditCampaignJson {
+    pub id: String,
+    pub environment_id: String,
+    pub flag_id: String,
+    pub name: String,
+    /// The campaign config (max_iterations, drift_threshold, variant_discovery,
+    /// budget_cap).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Value>,
+    /// `active` | `paused` | `completed` | `cancelled`.
+    pub status: String,
+    /// Number of iterations auto-spawned so far.
+    pub iterations_spawned: i32,
+    pub version: i64,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct BanditCampaignsJson {
+    pub campaigns: Vec<BanditCampaignJson>,
+}
+
+fn campaign_to_json(c: &stitchd_proto::experiments::v1::BanditCampaign) -> BanditCampaignJson {
+    BanditCampaignJson {
+        id: c.id.clone(),
+        environment_id: c.environment_id.clone(),
+        flag_id: c.flag_id.clone(),
+        name: c.name.clone(),
+        config: parse_json_field(&c.config),
+        status: c.status.clone(),
+        iterations_spawned: c.iterations_spawned,
+        version: c.version,
+    }
+}
+
+/// `GET /v1/environments/{environment_id}/bandit-campaigns`
+///
+/// All bandit optimization campaigns for an environment (newest first).
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{environment_id}/bandit-campaigns",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+    ),
+    responses(
+        (status = 200, description = "Bandit campaigns", body = BanditCampaignsJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn list_bandit_campaigns(
+    State(state): State<Arc<GatewayState>>,
+    Path(environment_id): Path<String>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(ListBanditCampaignsRequest { environment_id });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .list_bandit_campaigns(req)
+        .await
+        .map_err(GatewayError::from)?;
+    let inner = resp.into_inner();
+    let campaigns: Vec<BanditCampaignJson> = inner.campaigns.iter().map(campaign_to_json).collect();
+    Ok(Json(BanditCampaignsJson { campaigns }))
+}
+
+/// `GET /v1/environments/{environment_id}/bandit-campaigns/{campaign_id}`
+#[utoipa::path(
+    get,
+    path = "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}",
+    tag = "experiments",
+    params(
+        ("environment_id" = String, Path, description = "Environment ID"),
+        ("campaign_id" = String, Path, description = "Campaign ID"),
+    ),
+    responses(
+        (status = 200, description = "Bandit campaign", body = BanditCampaignJson),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Campaign not found"),
+        (status = 502, description = "Experimentation service unavailable"),
+    ),
+    security(("bearer_jwt" = []))
+)]
+pub async fn get_bandit_campaign(
+    State(state): State<Arc<GatewayState>>,
+    Path((environment_id, campaign_id)): Path<(String, String)>,
+) -> Result<impl IntoResponse, GatewayError> {
+    let req = tonic::Request::new(stitchd_proto::experiments::v1::GetBanditCampaignRequest {
+        environment_id,
+        campaign_id,
+    });
+    let mut client = state.experimentation_client.lock().await;
+    let resp = client
+        .get_bandit_campaign(req)
+        .await
+        .map_err(GatewayError::from)?;
+    Ok(Json(campaign_to_json(&resp.into_inner())))
+}
+
 #[cfg(test)]
 pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
     #[allow(unused_imports)]
@@ -1061,6 +1400,22 @@ pub fn test_router(state: Arc<GatewayState>) -> axum::Router {
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/interactions",
             get(get_interactions),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit",
+            get(get_bandit_state),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit/history",
+            get(get_bandit_history),
+        )
+        .route(
+            "/v1/environments/{environment_id}/bandit-campaigns",
+            get(list_bandit_campaigns),
+        )
+        .route(
+            "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}",
+            get(get_bandit_campaign),
         )
         .with_state(state)
 }
@@ -1700,5 +2055,128 @@ mod tests {
         // Old pairwise fields are gone.
         assert!(v.get("experiment_id_a").is_none());
         assert!(v.get("other_experiment_name").is_none());
+    }
+
+    // ── Bandit surfacing (FR7) ──────────────────────────────────────────────
+
+    #[test]
+    fn allocation_bucket_to_json_maps_fields() {
+        let b = BanditAllocationBucket {
+            variant_key: "treatment".into(),
+            weight_bp: 7000,
+        };
+        let j = allocation_bucket_to_json(&b);
+        assert_eq!(j.variant_key, "treatment");
+        assert_eq!(j.weight_bp, 7000);
+    }
+
+    #[test]
+    fn parse_json_field_handles_empty_and_valid() {
+        assert!(parse_json_field("").is_none());
+        assert!(parse_json_field("not json").is_none());
+        let v = parse_json_field(r#"{"objectives":[]}"#).unwrap();
+        assert!(v["objectives"].is_array());
+    }
+
+    #[test]
+    fn allocation_run_to_json_parses_jsonb_and_omits_empty_detail() {
+        let r = BanditAllocationRun {
+            fired_at_ms: 1_700_000_000_000,
+            action: "reallocate".into(),
+            outcome: "applied".into(),
+            old_allocation_json: String::new(),
+            new_allocation_json: r#"{"control":3000,"treatment":7000}"#.into(),
+            detail: String::new(),
+        };
+        let j = allocation_run_to_json(&r);
+        assert_eq!(j.action, "reallocate");
+        assert_eq!(j.outcome, "applied");
+        assert!(j.old_allocation.is_none());
+        assert_eq!(j.new_allocation.as_ref().unwrap()["treatment"], 7000);
+        let v = serde_json::to_value(&j).unwrap();
+        // Empty detail + missing old_allocation are omitted.
+        assert!(v.get("detail").is_none());
+        assert!(v.get("old_allocation").is_none());
+        assert!(v.get("fired_at").is_some());
+    }
+
+    #[test]
+    fn campaign_to_json_parses_config() {
+        let c = stitchd_proto::experiments::v1::BanditCampaign {
+            id: "c1".into(),
+            environment_id: "env-1".into(),
+            flag_id: "f1".into(),
+            name: "camp".into(),
+            config: r#"{"max_iterations":3}"#.into(),
+            status: "active".into(),
+            iterations_spawned: 1,
+            version: 2,
+        };
+        let j = campaign_to_json(&c);
+        assert_eq!(j.status, "active");
+        assert_eq!(j.iterations_spawned, 1);
+        assert_eq!(j.config.as_ref().unwrap()["max_iterations"], 3);
+    }
+
+    #[tokio::test]
+    async fn get_bandit_state_returns_200_404_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/experiments/exp-1/bandit")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK
+                || resp.status() == StatusCode::NOT_FOUND
+                || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn get_bandit_history_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/experiments/exp-1/bandit/history?limit=10")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn list_bandit_campaigns_returns_200_or_502() {
+        let state = make_stub_state();
+        let app = test_router(state);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/environments/env-1/bandit-campaigns")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::OK || resp.status() == StatusCode::BAD_GATEWAY,
+            "status: {}",
+            resp.status()
+        );
     }
 }

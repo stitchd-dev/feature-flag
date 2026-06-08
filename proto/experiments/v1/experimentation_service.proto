@@ -613,6 +613,79 @@ message StopBanditCampaignRequest {
   string campaign_id    = 2;
 }
 
+// ─── Bandit state + allocation history surfacing (FR7, bandit_20260608) ────────
+// Read-only surfacing of a bandit experiment's current state and its allocation
+// timeline, for the Admin UI Bandit Results view. All JSON-shaped payloads ride
+// as JSON strings (mirrors how bandit_config / sequential_result are carried in
+// this proto): the gateway re-parses them into typed REST DTOs.
+
+message GetBanditStateRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+}
+
+// The current state of a bandit experiment.
+message GetBanditStateResponse {
+  string experiment_id = 1;
+  // "fixed" | "bandit". A non-bandit experiment returns is_bandit=false and the
+  // remaining fields empty/zero.
+  bool   is_bandit     = 2;
+  // The current per-arm allocation (latest `reallocate` row's per-arm bp). Empty
+  // until the first reallocation tick has fired.
+  repeated BanditAllocationBucket current_allocation = 3;
+  // Per-objective posteriors as a JSON string (the `bandit_objectives` value
+  // from the latest reallocate row's `new_allocation`). Shape:
+  // `{"objectives":[{"metric_id","role","weight"?,"goal","variants":[{...}]}]}`.
+  // Empty string when no posteriors have been recorded yet.
+  string objectives_json = 4;
+  // The bandit config summary as a JSON string (the full BanditConfig).
+  // Empty string when the experiment is not a bandit.
+  string bandit_config_json = 5;
+  // Convergence state (from experiments.bandit_converged_variant / _prob).
+  // `converged_variant` empty + `has_converged`=false until the experiment first
+  // converges.
+  string converged_variant = 6;
+  double converged_prob    = 7;
+  bool   has_converged     = 8;
+  // True when the current allocation is a single-arm 100% commit to the
+  // converged winner (auto_commit / auto_rollout having fired).
+  bool   committed         = 9;
+  // Campaign linkage: the owning campaign's id + status, empty when the
+  // experiment is not part of a campaign.
+  string campaign_id     = 10;
+  string campaign_status = 11;
+}
+
+message GetBanditAllocationHistoryRequest {
+  string environment_id = 1;
+  string experiment_id  = 2;
+  // Max rows to return (newest first). 0 → server default (50), capped at 500.
+  uint32 limit          = 3;
+}
+
+// One `bandit_allocation_runs` row.
+message BanditAllocationRun {
+  // RFC-3339-able millis-since-epoch of when the action fired.
+  int64  fired_at_ms     = 1;
+  // "reallocate" | "commit" | "rollout" | "spawn_iteration" | "skip".
+  string action          = 2;
+  // "applied" | "skipped" | "failed".
+  string outcome         = 3;
+  // The prior allocation as a JSON string (may be empty / "null").
+  string old_allocation_json = 4;
+  // The new allocation (incl. `bandit_objectives`) as a JSON string (may be
+  // empty / "null").
+  string new_allocation_json = 5;
+  // Free-text reason / error detail (e.g. flag-locked skip reason). Empty when
+  // none.
+  string detail          = 6;
+}
+
+message GetBanditAllocationHistoryResponse {
+  // Rows ordered by fired_at DESC (newest first).
+  repeated BanditAllocationRun runs = 1;
+}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
@@ -674,4 +747,13 @@ service ExperimentationService {
   rpc GetBanditCampaign(GetBanditCampaignRequest)       returns (BanditCampaign);
   rpc ListBanditCampaigns(ListBanditCampaignsRequest)   returns (ListBanditCampaignsResponse);
   rpc StopBanditCampaign(StopBanditCampaignRequest)     returns (BanditCampaign);
+
+  // ── Bandit state + allocation history surfacing (FR7, bandit_20260608) ──────
+  // Read a bandit experiment's current state (allocation, posteriors,
+  // convergence, config, campaign linkage) for the Admin UI Bandit Results view.
+  rpc GetBanditState(GetBanditStateRequest) returns (GetBanditStateResponse);
+  // Read the `bandit_allocation_runs` timeline (newest first) — the data behind
+  // the allocation-over-time chart + lifecycle-action timeline.
+  rpc GetBanditAllocationHistory(GetBanditAllocationHistoryRequest)
+      returns (GetBanditAllocationHistoryResponse);
 }

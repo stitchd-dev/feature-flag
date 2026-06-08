@@ -427,6 +427,24 @@ mod tests {
         ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
             Err(Status::unimplemented("not used in tests"))
         }
+
+        async fn get_bandit_state(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::GetBanditStateRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditStateResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
+
+        async fn get_bandit_allocation_history(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::GetBanditAllocationHistoryRequest>,
+        ) -> Result<
+            Response<stitchd_proto::experiments::v1::GetBanditAllocationHistoryResponse>,
+            Status,
+        > {
+            Err(Status::unimplemented("not used in tests"))
+        }
     }
 
     /// Spin up an in-process gRPC server and return a client connected to it.

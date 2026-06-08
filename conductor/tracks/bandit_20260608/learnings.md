@@ -663,3 +663,68 @@ From `conductor/patterns.md` (read before starting):
   (9) live --ignored green against live CH; full workspace --all-targets build
   clean. No `.sqlx` delta (runtime queries). Only docs delta = the auto-scraped
   env var row.
+
+## Phase 11 — REST/Proto Output Surfacing (2026-06-08)
+
+### Task 11.1 — bandit state + allocation history + campaign REST (commit pending)
+- **Two NEW read RPCs (additive)** on experimentation-service:
+  `GetBanditState` + `GetBanditAllocationHistory` (proto messages
+  `GetBanditStateRequest/Response`, `GetBanditAllocationHistoryRequest/Response`,
+  `BanditAllocationRun`). JSON-shaped payloads (per-objective posteriors, old/new
+  allocation, bandit_config) ride as JSON **strings** over the wire — same
+  convention as bandit_config/sequential_result — and the GATEWAY re-hydrates
+  them into nested JSON in the REST DTOs (`parse_json_field`). Phase 12 therefore
+  gets real nested JSON, not strings.
+- **New PG read repo `bandit_allocation.rs`** (`BanditAllocationRepository` trait +
+  `PgBanditAllocationRepository`): `latest_reallocation` (most recent
+  action='reallocate' AND outcome='applied' row — a `skip` row must NOT shadow
+  it), `list_runs(limit)` (newest-first timeline), `find_convergence` (reads
+  `experiments.bandit_converged_variant`/`_prob`; experiment-absent → NotFound,
+  not-converged → both None). Runtime `sqlx::query` only → ZERO `.sqlx` delta.
+  `BanditConvergence` needed `#[derive(Default)]` for the test fake.
+- **Current-allocation parse:** the `reallocate` row's `new_allocation` JSON is
+  `{"<variant>":bp,…,"bandit_objectives":{…}}`. `split_allocation_json` (pure,
+  service.rs) pulls every numeric top-level key into a `BanditAllocationBucket`
+  (sorted by variant key for determinism), EXCLUDING the reserved
+  `bandit_objectives` key, which it returns separately as the objectives JSON
+  string. So one history row feeds both `current_allocation` AND `objectives`.
+- **`committed` flag** is derived (not stored): current allocation is a single
+  arm at 10000bp whose key == the converged variant. Distinguishes a 100%-commit
+  from an exploiting-but-still-multi-arm bandit.
+- **Wiring seam:** added `bandit_allocation_repo: Option<Arc<dyn ...>>` +
+  `with_bandit_allocation` builder on `ExperimentationServiceImpl` (mirrors
+  `with_campaigns`); both RPCs return `Unimplemented` when unset. Wired in main.rs
+  from the shared pool. Campaign linkage reuses the existing
+  `find_bandit_campaign_id` (default-Ok(None) trait method) + campaign_repo
+  `find_by_id` for the status — no new campaign read needed.
+- **NEW gateway REST routes (Phase 12 consumes these — exact shapes):**
+  * `GET /v1/environments/{environment_id}/experiments/{experiment_id}/bandit`
+    → `BanditStateJson { experiment_id:string, is_bandit:bool,
+    current_allocation:[{variant_key:string, weight_bp:u32}],
+    objectives?:json(bandit_objectives block), bandit_config?:json(BanditConfig),
+    converged_variant?:string, converged_prob?:f64, has_converged:bool,
+    committed:bool, campaign_id?:string, campaign_status?:string }`. Optional
+    fields are OMITTED (serde skip_serializing_if) when empty/absent.
+  * `GET …/experiments/{experiment_id}/bandit/history?limit=N` (default 50, max
+    500) → `BanditAllocationHistoryJson { runs:[{ fired_at:rfc3339,
+    action:string, outcome:string, old_allocation?:json, new_allocation?:json,
+    detail?:string }] }`, newest-first.
+  * `GET /v1/environments/{environment_id}/bandit-campaigns` →
+    `BanditCampaignsJson { campaigns:[BanditCampaignJson] }`;
+    `GET …/bandit-campaigns/{campaign_id}` → `BanditCampaignJson { id,
+    environment_id, flag_id, name, config?:json, status, iterations_spawned:i32,
+    version:i64 }`. (Create/Stop deliberately NOT wired — read-only surfacing is
+    what Phase 12 needs; the RPCs exist if mutation is added later.)
+- **Trait-impl ripple (same as Phases 3/4/8):** the 2 new RPCs broke 4 mock
+  `impl ExperimentationService` sites (3 gateway test files + the stats-service
+  scheduler test mock) with E0046 — added stubs. The
+  experiments_results_integration mock got REAL impls (returns canned state /
+  history / campaigns) for the integration tests.
+- **REMEMBER (held):** helpers placed ABOVE the `#[utoipa::path]`+handler blocks,
+  never between attr and handler.
+- **Gates:** fmt clean; clippy -Dwarnings clean on gateway+exp-service+db+
+  stats-service all-targets; gateway 266 lib + integration suites / exp-service
+  138 lib / db 185 lib (incl. 3 new #[sqlx::test]) all green; new openapi test
+  asserts the 4 bandit paths + 6 schemas land in the generated doc;
+  `check_openapi_contract.py` green (23 pre-decomp routes ⊆ 120 gateway routes);
+  full workspace --all-targets build clean. ZERO `.sqlx` delta (no query! macros).

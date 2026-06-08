@@ -16,7 +16,9 @@ use stitchd_core::{
 };
 use stitchd_db::{
     ExperimentRepository, RepositoryError, StatsScheduleRepository,
-    repository::pg::{BanditCampaignRepository, ExclusionGroupRepository},
+    repository::pg::{
+        BanditAllocationRepository, BanditCampaignRepository, ExclusionGroupRepository,
+    },
 };
 use stitchd_proto::experiments::v1::{
     ApplyBanditAllocationRequest, ApplyBanditAllocationResponse, BanditAllocationOutcome,
@@ -611,6 +613,10 @@ pub struct ExperimentationServiceImpl {
     /// Optional bandit-campaign repository (PG). `None` makes the campaign RPCs
     /// (Create/Get/List/Stop) return `Unimplemented`.
     campaign_repo: Option<Arc<dyn BanditCampaignRepository>>,
+    /// Optional bandit allocation-run reader (PG). `None` makes the bandit
+    /// surfacing RPCs (`GetBanditState` / `GetBanditAllocationHistory`) return
+    /// `Unimplemented`.
+    bandit_allocation_repo: Option<Arc<dyn BanditAllocationRepository>>,
 }
 
 impl ExperimentationServiceImpl {
@@ -634,6 +640,7 @@ impl ExperimentationServiceImpl {
             rule_gate_writer: None,
             start_prereq: None,
             campaign_repo: None,
+            bandit_allocation_repo: None,
         }
     }
 
@@ -650,6 +657,23 @@ impl ExperimentationServiceImpl {
     fn campaign_repo(&self) -> Result<&Arc<dyn BanditCampaignRepository>, Status> {
         self.campaign_repo.as_ref().ok_or_else(|| {
             Status::unimplemented("campaign_repo not configured on this service instance")
+        })
+    }
+
+    /// Attach the bandit allocation-run reader. Required for the bandit
+    /// surfacing RPCs (`GetBanditState` / `GetBanditAllocationHistory`); without
+    /// it those calls return `Unimplemented`.
+    #[must_use]
+    pub fn with_bandit_allocation(mut self, repo: Arc<dyn BanditAllocationRepository>) -> Self {
+        self.bandit_allocation_repo = Some(repo);
+        self
+    }
+
+    /// Borrow the bandit allocation-run reader or fail with `Unimplemented`.
+    #[allow(clippy::result_large_err)]
+    fn bandit_allocation_repo(&self) -> Result<&Arc<dyn BanditAllocationRepository>, Status> {
+        self.bandit_allocation_repo.as_ref().ok_or_else(|| {
+            Status::unimplemented("bandit_allocation_repo not configured on this service instance")
         })
     }
 
@@ -2510,6 +2534,139 @@ impl ExperimentationService for ExperimentationServiceImpl {
             .map_err(Status::from)?;
         Ok(Response::new(campaign_to_proto(&stopped)?))
     }
+
+    // ── Bandit state + allocation history surfacing (FR7) ───────────────────────
+
+    async fn get_bandit_state(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::GetBanditStateRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditStateResponse>, Status> {
+        use stitchd_core::experimentation::bandit::ExperimentMode;
+        let repo = self.bandit_allocation_repo()?;
+        let req = request.into_inner();
+        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+        let exp_id = stitchd_core::id::ExperimentId::from_uuid(exp_uuid);
+
+        // Load the experiment for mode + config (NotFound → 404).
+        let experiment = self
+            .experiment_repo
+            .find_by_id(exp_id)
+            .await
+            .map_err(Status::from)?;
+
+        let is_bandit = matches!(experiment.experiment_mode, ExperimentMode::Bandit);
+
+        // Non-bandit experiments surface an empty state (is_bandit=false).
+        if !is_bandit {
+            return Ok(Response::new(
+                stitchd_proto::experiments::v1::GetBanditStateResponse {
+                    experiment_id: req.experiment_id,
+                    is_bandit: false,
+                    ..Default::default()
+                },
+            ));
+        }
+
+        let bandit_config_json = match &experiment.bandit_config {
+            Some(cfg) => serde_json::to_string(cfg)
+                .map_err(|e| Status::internal(format!("serialise bandit_config: {e}")))?,
+            None => String::new(),
+        };
+
+        // Current allocation + per-objective posteriors from the latest applied
+        // reallocate row.
+        let latest = repo
+            .latest_reallocation(exp_uuid)
+            .await
+            .map_err(Status::from)?;
+        let (current_allocation, objectives_json) =
+            match latest.as_ref().and_then(|r| r.new_allocation.as_ref()) {
+                Some(alloc) => split_allocation_json(alloc),
+                None => (Vec::new(), String::new()),
+            };
+
+        // Convergence state.
+        let convergence = repo
+            .find_convergence(exp_uuid)
+            .await
+            .map_err(Status::from)?;
+        let converged_variant = convergence.variant.clone().unwrap_or_default();
+        let converged_prob = convergence.prob.unwrap_or(0.0);
+        let has_converged = convergence.variant.is_some();
+
+        // Committed = the current allocation is a single arm at 100% on the
+        // converged winner (auto_commit / auto_rollout having fired).
+        let committed = has_converged
+            && current_allocation.len() == 1
+            && current_allocation[0].weight_bp == 10_000
+            && current_allocation[0].variant_key == converged_variant;
+
+        // Campaign linkage.
+        let (campaign_id, campaign_status) = match self
+            .experiment_repo
+            .find_bandit_campaign_id(exp_id)
+            .await
+            .map_err(Status::from)?
+        {
+            Some(cid) => {
+                let status = match self.campaign_repo.as_ref() {
+                    Some(crepo) => crepo
+                        .find_by_id(cid)
+                        .await
+                        .ok()
+                        .map(|c| c.status.as_str().to_string())
+                        .unwrap_or_default(),
+                    None => String::new(),
+                };
+                (cid.to_string(), status)
+            }
+            None => (String::new(), String::new()),
+        };
+
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::GetBanditStateResponse {
+                experiment_id: req.experiment_id,
+                is_bandit: true,
+                current_allocation,
+                objectives_json,
+                bandit_config_json,
+                converged_variant,
+                converged_prob,
+                has_converged,
+                committed,
+                campaign_id,
+                campaign_status,
+            },
+        ))
+    }
+
+    async fn get_bandit_allocation_history(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::GetBanditAllocationHistoryRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditAllocationHistoryResponse>, Status>
+    {
+        let repo = self.bandit_allocation_repo()?;
+        let req = request.into_inner();
+        let exp_uuid = uuid::Uuid::parse_str(&req.experiment_id)
+            .map_err(|_| Status::invalid_argument("invalid experiment_id UUID"))?;
+
+        // 0 → default 50; cap at 500.
+        let limit = if req.limit == 0 {
+            50
+        } else {
+            req.limit.min(500)
+        } as i64;
+
+        let rows = repo
+            .list_runs(exp_uuid, limit)
+            .await
+            .map_err(Status::from)?;
+        let runs = rows.iter().map(allocation_run_to_proto).collect();
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::GetBanditAllocationHistoryResponse { runs },
+        ))
+    }
 }
 
 /// Map a domain [`BanditCampaign`](stitchd_core::experimentation::bandit::BanditCampaign)
@@ -2530,6 +2687,68 @@ fn campaign_to_proto(
         iterations_spawned: c.iterations_spawned,
         version: c.version,
     })
+}
+
+/// Split a `reallocate` row's `new_allocation` JSON into per-arm allocation
+/// buckets + the `bandit_objectives` sub-object (serialised back to a JSON
+/// string).
+///
+/// The JSON shape (written by stats-service Phase 9) is
+/// `{"<variant>": <bp>, …, "bandit_objectives": {…}}`: every numeric top-level
+/// key is an arm's basis-point weight; the reserved `bandit_objectives` key
+/// carries the per-objective posteriors. Buckets are returned in sorted
+/// variant-key order for deterministic output.
+fn split_allocation_json(
+    alloc: &serde_json::Value,
+) -> (
+    Vec<stitchd_proto::experiments::v1::BanditAllocationBucket>,
+    String,
+) {
+    let Some(obj) = alloc.as_object() else {
+        return (Vec::new(), String::new());
+    };
+    let mut buckets: Vec<stitchd_proto::experiments::v1::BanditAllocationBucket> = obj
+        .iter()
+        .filter(|(k, _)| k.as_str() != "bandit_objectives")
+        .filter_map(|(k, v)| {
+            v.as_u64().map(
+                |bp| stitchd_proto::experiments::v1::BanditAllocationBucket {
+                    variant_key: k.clone(),
+                    weight_bp: bp as u32,
+                },
+            )
+        })
+        .collect();
+    buckets.sort_by(|a, b| a.variant_key.cmp(&b.variant_key));
+
+    let objectives_json = obj
+        .get("bandit_objectives")
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    (buckets, objectives_json)
+}
+
+/// Map a [`BanditAllocationRunRow`](stitchd_db::BanditAllocationRunRow) to its
+/// proto representation (JSONB columns serialised back to JSON strings).
+fn allocation_run_to_proto(
+    r: &stitchd_db::BanditAllocationRunRow,
+) -> stitchd_proto::experiments::v1::BanditAllocationRun {
+    stitchd_proto::experiments::v1::BanditAllocationRun {
+        fired_at_ms: r.fired_at_ms,
+        action: r.action.clone(),
+        outcome: r.outcome.clone(),
+        old_allocation_json: r
+            .old_allocation
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        new_allocation_json: r
+            .new_allocation
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        detail: r.detail.clone().unwrap_or_default(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -6743,6 +6962,250 @@ mod tests {
         let err = svc
             .list_bandit_campaigns(Request::new(ListBanditCampaignsRequest {
                 environment_id: Uuid::new_v4().to_string(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bandit state + allocation history RPCs (FR7)
+    // -----------------------------------------------------------------------
+
+    use stitchd_db::repository::pg::{
+        BanditAllocationRepository, BanditAllocationRunRow, BanditConvergence,
+    };
+
+    /// In-memory fake allocation-run reader.
+    #[derive(Default)]
+    struct FakeAllocRepo {
+        latest: Option<BanditAllocationRunRow>,
+        runs: Vec<BanditAllocationRunRow>,
+        convergence: BanditConvergence,
+        not_found: bool,
+    }
+
+    #[async_trait]
+    impl BanditAllocationRepository for FakeAllocRepo {
+        async fn latest_reallocation(
+            &self,
+            _experiment_id: Uuid,
+        ) -> Result<Option<BanditAllocationRunRow>, RepositoryError> {
+            Ok(self.latest.clone())
+        }
+        async fn list_runs(
+            &self,
+            _experiment_id: Uuid,
+            limit: i64,
+        ) -> Result<Vec<BanditAllocationRunRow>, RepositoryError> {
+            Ok(self.runs.iter().take(limit as usize).cloned().collect())
+        }
+        async fn find_convergence(
+            &self,
+            experiment_id: Uuid,
+        ) -> Result<BanditConvergence, RepositoryError> {
+            if self.not_found {
+                return Err(RepositoryError::NotFound {
+                    id: experiment_id.to_string(),
+                });
+            }
+            Ok(self.convergence.clone())
+        }
+    }
+
+    fn bandit_state_service(exp: Experiment, repo: FakeAllocRepo) -> ExperimentationServiceImpl {
+        ExperimentationServiceImpl::new(
+            Arc::new(OneExpRepo { exp }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_bandit_allocation(Arc::new(repo))
+    }
+
+    #[tokio::test]
+    async fn get_bandit_state_returns_alloc_posteriors_and_convergence() {
+        use stitchd_core::experimentation::bandit::{
+            BanditAlgorithm, BanditConfig, RewardObjective,
+        };
+        use stitchd_proto::experiments::v1::GetBanditStateRequest;
+        let mut exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            Some(RuleId::new()),
+            false,
+            Some("flag-z"),
+        );
+        exp.bandit_config = Some(BanditConfig {
+            algorithm: BanditAlgorithm::ThompsonSampling,
+            propagation_mode: Default::default(),
+            min_exploration_bp: 500,
+            objective: RewardObjective::Scalar {
+                metric_id: Uuid::new_v4(),
+            },
+            lifecycle_policy: Default::default(),
+            convergence_prob_threshold: 0.95,
+        });
+        let exp_id = exp.id;
+        let repo = FakeAllocRepo {
+            latest: Some(BanditAllocationRunRow {
+                fired_at_ms: 1_700_000_000_000,
+                action: "reallocate".into(),
+                outcome: "applied".into(),
+                old_allocation: None,
+                new_allocation: Some(serde_json::json!({
+                    "control": 3000,
+                    "treatment": 7000,
+                    "bandit_objectives": {"objectives": []}
+                })),
+                detail: None,
+            }),
+            convergence: BanditConvergence {
+                variant: Some("treatment".into()),
+                prob: Some(0.96),
+            },
+            ..Default::default()
+        };
+        let svc = bandit_state_service(exp, repo);
+
+        let resp = svc
+            .get_bandit_state(Request::new(GetBanditStateRequest {
+                environment_id: "env".into(),
+                experiment_id: exp_id.to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(resp.is_bandit);
+        assert_eq!(resp.current_allocation.len(), 2);
+        // Buckets sorted by variant key; bandit_objectives excluded from buckets.
+        assert_eq!(resp.current_allocation[0].variant_key, "control");
+        assert_eq!(resp.current_allocation[1].weight_bp, 7000);
+        assert!(resp.objectives_json.contains("objectives"));
+        assert!(resp.bandit_config_json.contains("thompson_sampling"));
+        assert_eq!(resp.converged_variant, "treatment");
+        assert!((resp.converged_prob - 0.96).abs() < 1e-9);
+        assert!(resp.has_converged);
+        // Two arms at 30/70 — not a single-arm 100% commit.
+        assert!(!resp.committed);
+    }
+
+    #[tokio::test]
+    async fn get_bandit_state_flags_committed_single_arm() {
+        use stitchd_proto::experiments::v1::GetBanditStateRequest;
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            Some(RuleId::new()),
+            false,
+            Some("flag-z"),
+        );
+        let exp_id = exp.id;
+        let repo = FakeAllocRepo {
+            latest: Some(BanditAllocationRunRow {
+                fired_at_ms: 1,
+                action: "commit".into(),
+                outcome: "applied".into(),
+                old_allocation: None,
+                new_allocation: Some(serde_json::json!({"treatment": 10000})),
+                detail: None,
+            }),
+            convergence: BanditConvergence {
+                variant: Some("treatment".into()),
+                prob: Some(0.99),
+            },
+            ..Default::default()
+        };
+        let svc = bandit_state_service(exp, repo);
+        let resp = svc
+            .get_bandit_state(Request::new(GetBanditStateRequest {
+                environment_id: "env".into(),
+                experiment_id: exp_id.to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(resp.committed);
+    }
+
+    #[tokio::test]
+    async fn get_bandit_state_non_bandit_returns_empty() {
+        use stitchd_proto::experiments::v1::GetBanditStateRequest;
+        let mut exp = make_experiment(EnvironmentId::new()); // Fixed
+        exp.status = ExperimentStatus::Running;
+        let exp_id = exp.id;
+        let svc = bandit_state_service(exp, FakeAllocRepo::default());
+        let resp = svc
+            .get_bandit_state(Request::new(GetBanditStateRequest {
+                environment_id: "env".into(),
+                experiment_id: exp_id.to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!resp.is_bandit);
+        assert!(resp.current_allocation.is_empty());
+        assert!(resp.bandit_config_json.is_empty());
+        assert!(!resp.has_converged);
+    }
+
+    #[tokio::test]
+    async fn get_bandit_allocation_history_caps_and_orders() {
+        use stitchd_proto::experiments::v1::GetBanditAllocationHistoryRequest;
+        let exp = make_bandit_experiment(
+            EnvironmentId::new(),
+            ExperimentStatus::Running,
+            Some(RuleId::new()),
+            false,
+            Some("flag-z"),
+        );
+        let exp_id = exp.id;
+        let repo = FakeAllocRepo {
+            runs: vec![
+                BanditAllocationRunRow {
+                    fired_at_ms: 30,
+                    action: "rollout".into(),
+                    outcome: "applied".into(),
+                    old_allocation: None,
+                    new_allocation: None,
+                    detail: Some("auto-rollout".into()),
+                },
+                BanditAllocationRunRow {
+                    fired_at_ms: 20,
+                    action: "reallocate".into(),
+                    outcome: "applied".into(),
+                    old_allocation: Some(serde_json::json!({"a": 5000, "b": 5000})),
+                    new_allocation: Some(serde_json::json!({"a": 4000, "b": 6000})),
+                    detail: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let svc = bandit_state_service(exp, repo);
+        let resp = svc
+            .get_bandit_allocation_history(Request::new(GetBanditAllocationHistoryRequest {
+                environment_id: "env".into(),
+                experiment_id: exp_id.to_string(),
+                limit: 1,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        // limit=1 → only the newest row.
+        assert_eq!(resp.runs.len(), 1);
+        assert_eq!(resp.runs[0].action, "rollout");
+        assert_eq!(resp.runs[0].detail, "auto-rollout");
+    }
+
+    #[tokio::test]
+    async fn bandit_surfacing_unimplemented_without_repo() {
+        use stitchd_proto::experiments::v1::GetBanditStateRequest;
+        let svc = make_service(EnvironmentId::new()); // no .with_bandit_allocation
+        let err = svc
+            .get_bandit_state(Request::new(GetBanditStateRequest {
+                environment_id: "env".into(),
+                experiment_id: Uuid::new_v4().to_string(),
             }))
             .await
             .unwrap_err();

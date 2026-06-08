@@ -46,6 +46,9 @@ struct MockExpService {
     results: ExperimentResults,
     exposures: Vec<stitchd_proto::experiments::v1::ExposureRow>,
     exposure_total: u64,
+    bandit_state: stitchd_proto::experiments::v1::GetBanditStateResponse,
+    bandit_history: Vec<stitchd_proto::experiments::v1::BanditAllocationRun>,
+    campaigns: Vec<stitchd_proto::experiments::v1::BanditCampaign>,
 }
 
 #[tonic::async_trait]
@@ -229,21 +232,51 @@ impl ExperimentationService for MockExpService {
     }
     async fn get_bandit_campaign(
         &self,
-        _req: tonic::Request<stitchd_proto::experiments::v1::GetBanditCampaignRequest>,
+        req: tonic::Request<stitchd_proto::experiments::v1::GetBanditCampaignRequest>,
     ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
-        Err(Status::unimplemented("not used"))
-    }
-    async fn list_bandit_campaigns(
-        &self,
-        _req: tonic::Request<stitchd_proto::experiments::v1::ListBanditCampaignsRequest>,
-    ) -> Result<Response<stitchd_proto::experiments::v1::ListBanditCampaignsResponse>, Status> {
-        Err(Status::unimplemented("not used"))
+        let id = req.into_inner().campaign_id;
+        self.campaigns
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
+            .map(Response::new)
+            .ok_or_else(|| Status::not_found("campaign not found"))
     }
     async fn stop_bandit_campaign(
         &self,
         _req: tonic::Request<stitchd_proto::experiments::v1::StopBanditCampaignRequest>,
     ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
         Err(Status::unimplemented("not used"))
+    }
+
+    async fn get_bandit_state(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetBanditStateRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditStateResponse>, Status> {
+        Ok(Response::new(self.bandit_state.clone()))
+    }
+
+    async fn get_bandit_allocation_history(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetBanditAllocationHistoryRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditAllocationHistoryResponse>, Status>
+    {
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::GetBanditAllocationHistoryResponse {
+                runs: self.bandit_history.clone(),
+            },
+        ))
+    }
+
+    async fn list_bandit_campaigns(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::ListBanditCampaignsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListBanditCampaignsResponse>, Status> {
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::ListBanditCampaignsResponse {
+                campaigns: self.campaigns.clone(),
+            },
+        ))
     }
 }
 
@@ -294,6 +327,22 @@ fn build_router(state: Arc<GatewayState>) -> axum::Router {
         .route(
             "/v1/environments/{environment_id}/experiments/{experiment_id}/exposures",
             get(exp_routes::list_exposures),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit",
+            get(exp_routes::get_bandit_state),
+        )
+        .route(
+            "/v1/environments/{environment_id}/experiments/{experiment_id}/bandit/history",
+            get(exp_routes::get_bandit_history),
+        )
+        .route(
+            "/v1/environments/{environment_id}/bandit-campaigns",
+            get(exp_routes::list_bandit_campaigns),
+        )
+        .route(
+            "/v1/environments/{environment_id}/bandit-campaigns/{campaign_id}",
+            get(exp_routes::get_bandit_campaign),
         )
         .with_state(state)
 }
@@ -492,6 +541,7 @@ async fn list_exposures_proxies_to_grpc_and_returns_paginated_rows() {
             },
         ],
         exposure_total: 1234,
+        ..Default::default()
     };
     let exp_client = spawn_mock_exp_service(svc).await;
     let state = make_state(exp_client);
@@ -544,4 +594,233 @@ async fn list_exposures_rejects_missing_context_type_with_400() {
     let body_bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(body["error"], "missing_context_type");
+}
+
+// ─── Bandit surfacing (FR7) integration tests ─────────────────────────────────
+
+#[tokio::test]
+async fn get_bandit_state_returns_allocation_posteriors_convergence_and_campaign() {
+    use stitchd_proto::experiments::v1::{BanditAllocationBucket, GetBanditStateResponse};
+    let exp_id = "77777777-7777-7777-7777-777777777777";
+
+    let svc = MockExpService {
+        bandit_state: GetBanditStateResponse {
+            experiment_id: exp_id.to_string(),
+            is_bandit: true,
+            current_allocation: vec![
+                BanditAllocationBucket {
+                    variant_key: "control".to_string(),
+                    weight_bp: 3000,
+                },
+                BanditAllocationBucket {
+                    variant_key: "treatment".to_string(),
+                    weight_bp: 7000,
+                },
+            ],
+            objectives_json: r#"{"objectives":[{"metric_id":"m1","role":"scalar","goal":"increase","variants":[{"variant_key":"treatment","mean":0.31,"ci_lower":0.28,"ci_upper":0.34,"n":1200,"guardrail_violated":false}]}]}"#.to_string(),
+            bandit_config_json: r#"{"algorithm":{"type":"thompson_sampling"},"propagation_mode":"static","min_exploration_bp":500,"lifecycle_policy":"advisory"}"#.to_string(),
+            converged_variant: "treatment".to_string(),
+            converged_prob: 0.97,
+            has_converged: true,
+            committed: false,
+            campaign_id: "cmp-1".to_string(),
+            campaign_status: "active".to_string(),
+        },
+        ..Default::default()
+    };
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let app = build_router(make_state(exp_client));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/environments/env-1/experiments/{exp_id}/bandit"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+
+    assert_eq!(body["is_bandit"], true);
+    let alloc = body["current_allocation"].as_array().unwrap();
+    assert_eq!(alloc.len(), 2);
+    let treatment = alloc
+        .iter()
+        .find(|a| a["variant_key"] == "treatment")
+        .unwrap();
+    assert_eq!(treatment["weight_bp"], 7000);
+
+    // Posteriors re-hydrated into nested JSON (not a string).
+    assert!(body["objectives"]["objectives"].is_array());
+    assert_eq!(
+        body["objectives"]["objectives"][0]["variants"][0]["mean"],
+        0.31
+    );
+
+    // Config summary re-hydrated.
+    assert_eq!(
+        body["bandit_config"]["algorithm"]["type"],
+        "thompson_sampling"
+    );
+    assert_eq!(body["bandit_config"]["min_exploration_bp"], 500);
+
+    // Convergence + campaign.
+    assert_eq!(body["converged_variant"], "treatment");
+    assert!((body["converged_prob"].as_f64().unwrap() - 0.97).abs() < 1e-9);
+    assert_eq!(body["has_converged"], true);
+    assert_eq!(body["committed"], false);
+    assert_eq!(body["campaign_id"], "cmp-1");
+    assert_eq!(body["campaign_status"], "active");
+}
+
+#[tokio::test]
+async fn get_bandit_state_non_bandit_omits_optional_fields() {
+    use stitchd_proto::experiments::v1::GetBanditStateResponse;
+    let exp_id = "88888888-8888-8888-8888-888888888888";
+    let svc = MockExpService {
+        bandit_state: GetBanditStateResponse {
+            experiment_id: exp_id.to_string(),
+            is_bandit: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let app = build_router(make_state(exp_client));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/environments/env-1/experiments/{exp_id}/bandit"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(body["is_bandit"], false);
+    assert!(body["current_allocation"].as_array().unwrap().is_empty());
+    assert!(body.get("bandit_config").is_none());
+    assert!(body.get("converged_variant").is_none());
+    assert!(body.get("campaign_id").is_none());
+    assert_eq!(body["has_converged"], false);
+}
+
+#[tokio::test]
+async fn get_bandit_history_returns_timeline_newest_first() {
+    use stitchd_proto::experiments::v1::BanditAllocationRun;
+    let exp_id = "99999999-9999-9999-9999-999999999999";
+    let svc = MockExpService {
+        bandit_history: vec![
+            BanditAllocationRun {
+                fired_at_ms: 1_700_000_600_000,
+                action: "commit".to_string(),
+                outcome: "applied".to_string(),
+                old_allocation_json: String::new(),
+                new_allocation_json: r#"{"treatment":10000}"#.to_string(),
+                detail: String::new(),
+            },
+            BanditAllocationRun {
+                fired_at_ms: 1_700_000_000_000,
+                action: "reallocate".to_string(),
+                outcome: "applied".to_string(),
+                old_allocation_json: r#"{"control":5000,"treatment":5000}"#.to_string(),
+                new_allocation_json: r#"{"control":3000,"treatment":7000}"#.to_string(),
+                detail: String::new(),
+            },
+        ],
+        ..Default::default()
+    };
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let app = build_router(make_state(exp_client));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/environments/env-1/experiments/{exp_id}/bandit/history?limit=50"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let runs = body["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[0]["action"], "commit");
+    assert_eq!(runs[0]["new_allocation"]["treatment"], 10000);
+    // Empty old_allocation omitted on the commit row.
+    assert!(runs[0].get("old_allocation").is_none());
+    assert_eq!(runs[1]["action"], "reallocate");
+    assert_eq!(runs[1]["old_allocation"]["control"], 5000);
+    assert!(runs[0]["fired_at"].is_string());
+}
+
+#[tokio::test]
+async fn list_bandit_campaigns_returns_campaigns() {
+    use stitchd_proto::experiments::v1::BanditCampaign;
+    let svc = MockExpService {
+        campaigns: vec![BanditCampaign {
+            id: "cmp-1".to_string(),
+            environment_id: "env-1".to_string(),
+            flag_id: "flag-1".to_string(),
+            name: "homepage opt".to_string(),
+            config: r#"{"max_iterations":5,"drift_threshold":0.2}"#.to_string(),
+            status: "active".to_string(),
+            iterations_spawned: 2,
+            version: 3,
+        }],
+        ..Default::default()
+    };
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let app = build_router(make_state(exp_client));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/environments/env-1/bandit-campaigns")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&resp.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let camps = body["campaigns"].as_array().unwrap();
+    assert_eq!(camps.len(), 1);
+    assert_eq!(camps[0]["name"], "homepage opt");
+    assert_eq!(camps[0]["status"], "active");
+    assert_eq!(camps[0]["iterations_spawned"], 2);
+    assert_eq!(camps[0]["config"]["max_iterations"], 5);
+}
+
+#[tokio::test]
+async fn get_bandit_campaign_returns_404_for_unknown() {
+    let svc = MockExpService::default();
+    let exp_client = spawn_mock_exp_service(svc).await;
+    let app = build_router(make_state(exp_client));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/environments/env-1/bandit-campaigns/missing")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

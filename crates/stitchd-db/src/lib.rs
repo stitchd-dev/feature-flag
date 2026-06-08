@@ -31,7 +31,8 @@ pub use repository::{
     UserRepository, VariantRepository,
     composite::CompositeSegmentRepository,
     pg::{
-        BanditCampaignRepository, PgAuditLogger, PgBanditCampaignRepository,
+        BanditAllocationRepository, BanditAllocationRunRow, BanditCampaignRepository,
+        BanditConvergence, PgAuditLogger, PgBanditAllocationRepository, PgBanditCampaignRepository,
         PgContextRegistryRepository, PgEnvironmentRepository, PgEventDefinitionRepository,
         PgExperimentRepository, PgFlagRepository, PgMetricRepository, PgOrganisationRepository,
         PgProjectRepository, PgRoleRepository, PgSdkKeyRepository, PgSegmentRepository,

@@ -352,6 +352,21 @@ impl ExperimentationService for MockExpService {
     ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
         Err(Status::unimplemented("not used"))
     }
+
+    async fn get_bandit_state(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetBanditStateRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditStateResponse>, Status> {
+        Err(Status::unimplemented("not used"))
+    }
+
+    async fn get_bandit_allocation_history(
+        &self,
+        _req: tonic::Request<stitchd_proto::experiments::v1::GetBanditAllocationHistoryRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::GetBanditAllocationHistoryResponse>, Status>
+    {
+        Err(Status::unimplemented("not used"))
+    }
 }
 
 async fn spawn_mock_exp(prereqs: Vec<StartPrerequisite>) -> ExperimentationServiceClient<Channel> {
