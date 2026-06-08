@@ -48,7 +48,6 @@ use stitchd_gateway::state::GatewayState;
 #[derive(Default, Clone)]
 struct MockExpService {
     groups: Vec<ExclusionGroup>,
-    group_total: u64,
     created_group: Option<ExclusionGroup>,
     /// When set, `get_exclusion_group` returns it; when `None`, returns NOT_FOUND.
     single_group: Option<ExclusionGroup>,
@@ -172,7 +171,7 @@ impl ExperimentationService for MockExpService {
     ) -> Result<Response<ListExclusionGroupsResponse>, Status> {
         Ok(Response::new(ListExclusionGroupsResponse {
             groups: self.groups.clone(),
-            total: self.group_total,
+            next_cursor: String::new(),
         }))
     }
 
@@ -357,7 +356,6 @@ async fn list_exclusion_groups_returns_capacity_fields() {
             version: 2,
             unit_context_type: "user".to_string(),
         }],
-        group_total: 1,
         ..Default::default()
     };
     let exp_client = spawn_mock_exp_service(svc).await;

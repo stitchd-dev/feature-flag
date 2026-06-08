@@ -133,15 +133,10 @@ pub async fn list_exclusion_groups(
     Path(environment_id): Path<String>,
     Query(query): Query<ListExclusionGroupsQuery>,
 ) -> Result<impl IntoResponse, GatewayError> {
-    let offset = query
-        .cursor
-        .offset()
-        .map_err(|_| GatewayError::BadRequest("invalid cursor".into()))?;
-    let limit = query.cursor.effective_limit();
     let req = tonic::Request::new(ListExclusionGroupsRequest {
         env_id: environment_id,
-        page: (offset / u64::from(limit)) as u32 + 1,
-        per_page: limit,
+        cursor: query.cursor.cursor.clone().unwrap_or_default(),
+        limit: query.cursor.effective_limit(),
     });
     let mut client = state.experimentation_client.lock().await;
     let resp = client
@@ -151,7 +146,7 @@ pub async fn list_exclusion_groups(
     let inner = resp.into_inner();
     let groups: Vec<ExclusionGroupJson> =
         inner.groups.iter().map(exclusion_group_to_json).collect();
-    Ok(Json(CursorPage::from_offset(groups, inner.total, offset)))
+    Ok(Json(CursorPage::from_token(groups, inner.next_cursor)))
 }
 
 /// `POST /v1/environments/{environment_id}/exclusion-groups`

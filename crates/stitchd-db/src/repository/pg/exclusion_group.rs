@@ -45,6 +45,19 @@ pub trait ExclusionGroupRepository: Send + Sync {
         env_id: EnvironmentId,
     ) -> Result<Vec<ExclusionGroup>, RepositoryError>;
 
+    /// List non-deleted groups in an environment with **keyset** (cursor)
+    /// pagination, ordered by `(created_at, id)`.
+    ///
+    /// `after` is the keyset position from a prior page (`None` for the first
+    /// page). Returns `(page_items, next_cursor)` where `next_cursor` is the
+    /// opaque token for the following page, or `None` on the last page.
+    async fn list_by_environment_keyset(
+        &self,
+        env_id: EnvironmentId,
+        after: Option<crate::KeysetCursor>,
+        limit: u64,
+    ) -> Result<(Vec<ExclusionGroup>, Option<String>), RepositoryError>;
+
     /// Create a new group. A random immutable `salt` is generated and stored.
     /// `unit_context_type` is the group's diversion (randomization) unit; all
     /// member experiments must randomize on it. Returns the persisted group
@@ -197,6 +210,76 @@ impl ExclusionGroupRepository for PgExclusionGroupRepository {
             })
             .collect();
         Ok(groups)
+    }
+
+    async fn list_by_environment_keyset(
+        &self,
+        env_id: EnvironmentId,
+        after: Option<crate::KeysetCursor>,
+        limit: u64,
+    ) -> Result<(Vec<ExclusionGroup>, Option<String>), RepositoryError> {
+        // Keyset pagination ordered by (created_at, id): fetch limit+1 rows; the
+        // surplus row signals a next page. The row-value comparison
+        // `(created_at, id) > ($cursor_created_at, $cursor_id)` resumes strictly
+        // after the prior page's last row. A NULL cursor (first page) admits all.
+        #[allow(clippy::cast_possible_wrap)]
+        let rows = sqlx::query(
+            r"
+            SELECT g.id, g.env_id, g.name, g.description, g.salt, g.unit_context_type, g.version,
+                   g.created_at,
+                   COALESCE((
+                       SELECT SUM(e.group_bucket_hi - e.group_bucket_lo)
+                       FROM experiments e
+                       WHERE e.exclusion_group_id = g.id
+                         AND e.group_bucket_lo IS NOT NULL
+                         AND e.group_bucket_hi IS NOT NULL
+                         AND e.deleted_at IS NULL
+                   ), 0)::bigint AS allocated_bp
+            FROM exclusion_groups g
+            WHERE g.env_id = $1 AND g.deleted_at IS NULL
+              AND ($2::timestamptz IS NULL OR (g.created_at, g.id) > ($2, $3))
+            ORDER BY g.created_at, g.id
+            LIMIT $4
+            ",
+        )
+        .bind(env_id.as_uuid())
+        .bind(after.map(|c| c.created_at))
+        .bind(after.map(|c| c.id))
+        .bind((limit + 1) as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?;
+
+        // Pair each group with its row's created_at so we can build the cursor
+        // (ExclusionGroup itself doesn't carry created_at).
+        let mut groups: Vec<(ExclusionGroup, chrono::DateTime<chrono::Utc>)> = rows
+            .iter()
+            .map(|row| {
+                let allocated_i64: i64 = row.get("allocated_bp");
+                let allocated =
+                    u32::try_from(allocated_i64.clamp(0, i64::from(BP_TOTAL))).unwrap_or(0);
+                let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+                (row_to_group(row, allocated), created_at)
+            })
+            .collect();
+
+        // limit+1 rows ⇒ more pages: drop the surplus and encode the new last
+        // row's keyset as the next cursor.
+        let next_cursor = if groups.len() as u64 > limit {
+            groups.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+            groups.last().map(|(g, created_at)| {
+                crate::KeysetCursor {
+                    created_at: *created_at,
+                    id: g.id.as_uuid(),
+                }
+                .encode()
+            })
+        } else {
+            None
+        };
+
+        let groups = groups.into_iter().map(|(g, _)| g).collect();
+        Ok((groups, next_cursor))
     }
 
     async fn create(
