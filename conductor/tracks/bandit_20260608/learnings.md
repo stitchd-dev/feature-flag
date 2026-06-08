@@ -538,3 +538,55 @@ From `conductor/patterns.md` (read before starting):
   stats-service 384 lib + integration all green; clippy -Dwarnings clean across all
   5 crates; purity green; full `cargo build --workspace --all-targets` clean. No
   `.sqlx` delta (runtime sqlx::query throughout, no macros).
+
+## Phase 9 — Multi-Objective Wiring & Constrained Guardrails (2026-06-08)
+
+### Task 9.1 — end-to-end multi-objective + per-objective surfacing
+- **ALREADY wired by Phase 4 (verified, not duplicated):** the static reallocation
+  pass was ALREADY fully multi-objective. `run_bandit_reallocation` →
+  `objective_metric_ids(objective)` already does one `build_metric_rewards` ClickHouse
+  read PER referenced metric (scalar=1, scalarized=N weighted, constrained=primary+M
+  guardrails), summed across context types; `decide_allocation` already calls
+  `reward_arms(objective, &metric_rewards)` and dispatches the algorithm with the
+  exploitable mask (Thompson → `apply_exploitable_mask`; epsilon/UCB →
+  `allocate_exploitable`). So scalarization-weight→winner and guardrail→floor BOTH
+  already flowed end-to-end through the static path before Phase 9. The realtime path
+  deliberately still skips multi-objective (single scalar only) — unchanged.
+- **What Phase 9 ADDED:**
+  1. **Per-objective posterior surfacing (item 3, the real gap).** Phase 4 computed
+     the per-metric posteriors then DISCARDED everything but the combined distribution.
+     Added pure `objective_posteriors(objective, metrics) -> Vec<ObjectivePosterior>`
+     in core `reward.rs` + `RewardPosterior::ci95()` (normal-approx 95% CI: Beta
+     `mean ± 1.96·sqrt(αβ/((α+β)²(α+β+1)))` clamped [0,1]; Numeric `mean ± 1.96·SE`;
+     Ratio delta-method) in `thompson.rs`. Each `ObjectivePosterior` carries
+     `metric_id`, `role` (Scalar/Weighted(weight×1000 i64 to stay Copy)/Primary/
+     Guardrail), `goal`, and per-variant `{mean, ci_lower, ci_upper, n,
+     guardrail_violated}`. Means are RAW (natural units, NOT goal-normalised) so
+     operators read them directly.
+  2. **Persistence location + shape (FOR PHASE 11):** `objective_summary_json` in
+     stats-service `bandit.rs` serialises it and the orchestrator MERGES it into the
+     `reallocate` `bandit_allocation_runs.new_allocation` JSON under a
+     `bandit_objectives` key (alongside the `{variant: weight_bp}` map). Shape:
+     `{"variant":bp,…, "bandit_objectives":{"objectives":[{"metric_id","role",
+     "weight"?(only role=weighted),"goal","variants":[{"variant_key","mean",
+     "ci_lower","ci_upper","n","guardrail_violated"}]}]}}`. Chose the existing
+     history-row JSON over a new column/table — zero migration, mirrors how
+     `new_allocation`/`sequential_result` already ride as JSON, and the row is
+     already the per-tick time series Phase 11's allocation-over-time chart reads.
+- **Live test `tests/bandit_multiobjective.rs` (#[ignore], mirrors bandit_reallocation):**
+  seeds TWO count metrics, asserts (a) scalarized weight on m1 → a wins, flip to m2
+  → b wins (winner SHIFTS with weights); (b) constrained primary=m2 (b best) + a
+  guardrail "m1 ≥ 0.50" that b violates (b's m1 rate 0.10) → b pinned to the 500bp
+  floor, a takes 9500; and that the recorded row surfaces `bandit_objectives` with
+  the guardrail violation flagged. Added `--test bandit_multiobjective` to the CI
+  live-CH `--ignored` list in `.github/workflows/ci.yml`.
+- **Gotcha:** the `ObjectiveRole::Weighted(i64)` holds weight×1000 (not f64) to keep
+  the enum `Copy` for the summary builder closure; the JSON layer divides back to
+  the f64 `weight`. The constrained guardrail-violation flag in the surfaced
+  posteriors reuses the SAME `violates(mean, constraint)` predicate the allocator
+  uses, so the surfaced flag always matches the allocation decision.
+- **Gates:** core 910 / stats-service 387 lib all green; clippy -Dwarnings clean
+  (core+stats-service all-targets); purity green; `bandit_multiobjective` +
+  `bandit_reallocation` `--ignored` green against live CH+PG; full
+  `cargo build --workspace --all-targets` clean. No `.sqlx` delta (runtime
+  `sqlx::query`/`query_scalar`, no macros).

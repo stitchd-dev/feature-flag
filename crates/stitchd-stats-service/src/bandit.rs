@@ -51,9 +51,9 @@ use uuid::Uuid;
 
 use stitchd_core::experimentation::bandit::{
     BanditAlgorithm, BanditConfig, ExperimentMode, GoalDirection as BanditGoal, MetricRewards,
-    PropagationMode, RewardObjective, RewardPosterior, allocate_exploitable,
-    apply_exploitable_mask, epsilon_greedy_weights, normalize_to_distribution, reward_arms,
-    thompson_weights, ucb_weights,
+    ObjectiveRole, PropagationMode, RewardObjective, RewardPosterior, allocate_exploitable,
+    apply_exploitable_mask, epsilon_greedy_weights, normalize_to_distribution,
+    objective_posteriors, reward_arms, thompson_weights, ucb_weights,
 };
 use stitchd_core::experimentation::stats::MetricType;
 use stitchd_core::experimentation::stats::sequential::RatioGroupStats;
@@ -1018,6 +1018,83 @@ fn distribution_to_json(dist: &RolloutDistribution) -> Value {
     Value::Object(map)
 }
 
+/// Serialise the per-objective per-variant posteriors into the `bandit_objectives`
+/// JSON surfacing shape (FR9 — operators see each objective's tradeoff, not just
+/// the combined score). Persisted on the `reallocate` `bandit_allocation_runs`
+/// row's `new_allocation` JSON under a `bandit_objectives` key so Phase 11 can
+/// render the per-objective posteriors over time.
+///
+/// Shape (documented for Phase 11):
+///
+/// ```json
+/// {
+///   "objectives": [
+///     {
+///       "metric_id": "<uuid>",
+///       "role": "scalar" | "weighted" | "primary" | "guardrail",
+///       "weight": 0.7,                 // present only for role = "weighted"
+///       "goal": "increase" | "decrease",
+///       "variants": [
+///         { "variant_key": "control", "mean": 0.10, "ci_lower": 0.08,
+///           "ci_upper": 0.12, "n": 1000, "guardrail_violated": false }
+///       ]
+///     }
+///   ]
+/// }
+/// ```
+///
+/// Returns `None` when there are no objective posteriors (no metric data).
+#[must_use]
+pub fn objective_summary_json(
+    objective: &RewardObjective,
+    metrics: &[MetricRewards],
+) -> Option<Value> {
+    let posteriors = objective_posteriors(objective, metrics);
+    if posteriors.is_empty() {
+        return None;
+    }
+    let objectives: Vec<Value> = posteriors
+        .iter()
+        .map(|p| {
+            let (role, weight): (&str, Option<f64>) = match p.role {
+                ObjectiveRole::Scalar => ("scalar", None),
+                ObjectiveRole::Weighted(scaled) => ("weighted", Some(scaled as f64 / 1000.0)),
+                ObjectiveRole::Primary => ("primary", None),
+                ObjectiveRole::Guardrail => ("guardrail", None),
+            };
+            let goal = match p.goal {
+                BanditGoal::Increase => "increase",
+                BanditGoal::Decrease => "decrease",
+            };
+            let variants: Vec<Value> = p
+                .variants
+                .iter()
+                .map(|v| {
+                    serde_json::json!({
+                        "variant_key": v.variant_key,
+                        "mean": v.mean,
+                        "ci_lower": v.ci_lower,
+                        "ci_upper": v.ci_upper,
+                        "n": v.n,
+                        "guardrail_violated": v.guardrail_violated,
+                    })
+                })
+                .collect();
+            let mut obj = serde_json::json!({
+                "metric_id": p.metric_id.to_string(),
+                "role": role,
+                "goal": goal,
+                "variants": variants,
+            });
+            if let (Some(w), Some(map)) = (weight, obj.as_object_mut()) {
+                map.insert("weight".to_string(), serde_json::json!(w));
+            }
+            obj
+        })
+        .collect();
+    Some(serde_json::json!({ "objectives": objectives }))
+}
+
 /// Crate-internal re-export of [`build_metric_rewards`] for the lifecycle module
 /// (which builds the same objective posteriors for convergence detection).
 pub(crate) async fn build_metric_rewards_pub(
@@ -1537,7 +1614,16 @@ pub async fn run_bandit_reallocation(
             Ok(BanditRunOutcome::Skipped { reason })
         }
         AllocationDecision::Reallocate(dist) => {
-            let new_json = distribution_to_json(&dist);
+            // Carry the per-objective posteriors alongside the written weights so
+            // Phase 11 can surface the multi-objective tradeoff (FR9). Merged into
+            // the `new_allocation` JSON under `bandit_objectives`.
+            let mut new_json = distribution_to_json(&dist);
+            if let (Some(summary), Some(map)) = (
+                objective_summary_json(&config.objective, &metric_rewards),
+                new_json.as_object_mut(),
+            ) {
+                map.insert("bandit_objectives".to_string(), summary);
+            }
             match applier.apply(exp.experiment_id, &dist).await {
                 Ok(ApplyResult::Applied {
                     resolved_target,
@@ -2323,6 +2409,96 @@ mod tests {
         assert_eq!(json["treatment"], serde_json::json!(7000));
     }
 
+    // ── objective_summary_json (per-objective surfacing, FR9) ────────────────
+
+    #[test]
+    fn objective_summary_json_scalar_shape() {
+        let id = Uuid::new_v4();
+        let obj = RewardObjective::Scalar { metric_id: id };
+        let mr = vec![MetricRewards {
+            metric_id: id,
+            goal: BanditGoal::Increase,
+            arms: vec![
+                ("control".into(), conv_posterior(1000, 100)),
+                ("treatment".into(), conv_posterior(1000, 300)),
+            ],
+        }];
+        let json = objective_summary_json(&obj, &mr).expect("summary");
+        let objectives = json["objectives"].as_array().unwrap();
+        assert_eq!(objectives.len(), 1);
+        assert_eq!(objectives[0]["role"], "scalar");
+        assert_eq!(objectives[0]["metric_id"], id.to_string());
+        assert_eq!(objectives[0]["goal"], "increase");
+        let variants = objectives[0]["variants"].as_array().unwrap();
+        assert_eq!(variants.len(), 2);
+        let t = variants
+            .iter()
+            .find(|v| v["variant_key"] == "treatment")
+            .unwrap();
+        assert!((t["mean"].as_f64().unwrap() - 300.0 / 1000.0).abs() < 0.01);
+        assert!(t["ci_lower"].as_f64().unwrap() <= t["mean"].as_f64().unwrap());
+        assert_eq!(t["n"].as_u64().unwrap(), 1000);
+        assert_eq!(t["guardrail_violated"], false);
+    }
+
+    #[test]
+    fn objective_summary_json_constrained_flags_guardrail_and_weight() {
+        use stitchd_core::experimentation::bandit::{ConstraintDirection, GuardrailConstraint};
+        let primary = Uuid::new_v4();
+        let guard = Uuid::new_v4();
+        let obj = RewardObjective::Constrained {
+            primary_metric_id: primary,
+            constraints: vec![GuardrailConstraint {
+                metric_id: guard,
+                bound: 0.05,
+                direction: ConstraintDirection::AtMost,
+            }],
+        };
+        // guard arm "b" violates the at-most-0.05 bound (rate 0.3).
+        let mr = vec![
+            MetricRewards {
+                metric_id: primary,
+                goal: BanditGoal::Increase,
+                arms: vec![
+                    ("a".into(), conv_posterior(1000, 100)),
+                    ("b".into(), conv_posterior(1000, 900)),
+                ],
+            },
+            MetricRewards {
+                metric_id: guard,
+                goal: BanditGoal::Decrease,
+                arms: vec![
+                    ("a".into(), conv_posterior(1000, 10)),
+                    ("b".into(), conv_posterior(1000, 300)),
+                ],
+            },
+        ];
+        let json = objective_summary_json(&obj, &mr).expect("summary");
+        let objectives = json["objectives"].as_array().unwrap();
+        assert_eq!(objectives.len(), 2);
+        let prim = objectives.iter().find(|o| o["role"] == "primary").unwrap();
+        assert_eq!(prim["metric_id"], primary.to_string());
+        let g = objectives
+            .iter()
+            .find(|o| o["role"] == "guardrail")
+            .unwrap();
+        let gb = g["variants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["variant_key"] == "b")
+            .unwrap();
+        assert_eq!(gb["guardrail_violated"], true);
+    }
+
+    #[test]
+    fn objective_summary_json_none_when_empty() {
+        let obj = RewardObjective::Scalar {
+            metric_id: Uuid::new_v4(),
+        };
+        assert!(objective_summary_json(&obj, &[]).is_none());
+    }
+
     // ── posterior_for numeric path ───────────────────────────────────────────
 
     #[test]
@@ -2648,7 +2824,13 @@ mod tests {
         assert_eq!(rows.len(), 1, "exactly one row per tick");
         assert_eq!(rows[0].action, "reallocate");
         assert_eq!(rows[0].outcome, "applied");
-        assert!(rows[0].new_allocation.is_some());
+        let new_alloc = rows[0].new_allocation.as_ref().expect("new_allocation");
+        // Per-objective posteriors ride alongside the written weights (FR9).
+        let objectives = new_alloc["bandit_objectives"]["objectives"]
+            .as_array()
+            .expect("bandit_objectives surfaced");
+        assert_eq!(objectives.len(), 1);
+        assert_eq!(objectives[0]["role"], "scalar");
     }
 
     #[tokio::test]

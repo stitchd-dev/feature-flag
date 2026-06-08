@@ -34,7 +34,8 @@ pub use drift::{DriftVerdict, detect_drift};
 pub use epsilon::epsilon_greedy_weights;
 pub use realtime::{SampledDraw, sample_realtime_variant};
 pub use reward::{
-    CombinedArm, MetricRewards, allocate_exploitable, apply_exploitable_mask, combined_rewards,
+    CombinedArm, MetricRewards, ObjectivePosterior, ObjectiveRole, ObjectiveVariantPosterior,
+    allocate_exploitable, apply_exploitable_mask, combined_rewards, objective_posteriors,
     reward_arms,
 };
 pub use thompson::{BanditArm, GoalDirection, RewardPosterior, thompson_weights};

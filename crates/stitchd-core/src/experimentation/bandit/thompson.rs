@@ -130,6 +130,50 @@ impl RewardPosterior {
         n.max(0) as u64
     }
 
+    /// A 95% posterior credible interval `(lower, upper)` on this arm's reward
+    /// mean — a readable surface for the Bandit Results view (FR9: per-objective
+    /// posteriors). Normal-approximation in each family:
+    ///
+    /// * Beta-Binomial (conversion / funnel): mean ± `1.96·sqrt(αβ / ((α+β)²(α+β+1)))`,
+    ///   clamped to `[0, 1]` (a rate).
+    /// * Normal-Normal (numeric): mean ± `1.96·SE` (`SE = sqrt(var/n)`).
+    /// * Ratio: delta-method `R ± 1.96·sqrt(var)` (point with zero width when the
+    ///   group is too degenerate for a variance).
+    ///
+    /// Pure; no RNG. Used only for surfacing, never for allocation.
+    #[must_use]
+    pub fn ci95(&self) -> (f64, f64) {
+        const Z95: f64 = 1.959_964;
+        match self {
+            RewardPosterior::Conversion(stats) | RewardPosterior::Funnel(stats) => {
+                let (alpha, beta) = Self::beta_params(stats);
+                let s = alpha + beta;
+                let mean = alpha / s;
+                let var = (alpha * beta) / (s * s * (s + 1.0));
+                let half = Z95 * var.max(0.0).sqrt();
+                ((mean - half).max(0.0), (mean + half).min(1.0))
+            }
+            RewardPosterior::Numeric(stats) => {
+                let (mean, se) = Self::numeric_params(stats);
+                (mean - Z95 * se, mean + Z95 * se)
+            }
+            RewardPosterior::Ratio(stats) => match stats.ratio_var() {
+                Some((r, var)) => {
+                    let half = Z95 * var.max(0.0).sqrt();
+                    (r - half, r + half)
+                }
+                None => {
+                    let r = if stats.den_sum > 0.0 {
+                        stats.num_sum / stats.den_sum
+                    } else {
+                        0.0
+                    };
+                    (r, r)
+                }
+            },
+        }
+    }
+
     /// Draw a single posterior sample for this arm, using `rng`.
     ///
     /// A degenerate arm (no signal) samples its point mean with zero spread so a

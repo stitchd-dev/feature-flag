@@ -207,6 +207,136 @@ pub fn combined_rewards(
     }
 }
 
+/// One variant's per-objective posterior summary, for surfacing the multi-objective
+/// tradeoff in the Bandit Results view (FR9 — operators see each objective, not
+/// just the combined score).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectiveVariantPosterior {
+    /// The variant key.
+    pub variant_key: String,
+    /// The raw posterior mean (in the metric's natural units — NOT goal-normalised).
+    pub mean: f64,
+    /// The 95% posterior credible-interval lower bound.
+    pub ci_lower: f64,
+    /// The 95% posterior credible-interval upper bound.
+    pub ci_upper: f64,
+    /// The effective sample size backing this arm's posterior.
+    pub n: u64,
+    /// `true` when this metric is a constrained-mode guardrail and this variant
+    /// VIOLATES the bound (so the arm is held at the exploration floor). Always
+    /// `false` for the primary / scalar / scalarized objective metrics.
+    pub guardrail_violated: bool,
+}
+
+/// One objective metric's per-variant posterior summary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectivePosterior {
+    /// The metric definition this objective summary belongs to.
+    pub metric_id: Uuid,
+    /// The role this metric plays in the objective.
+    pub role: ObjectiveRole,
+    /// The optimisation direction of this metric.
+    pub goal: GoalDirection,
+    /// Per-variant posterior summary (in canonical arm order).
+    pub variants: Vec<ObjectiveVariantPosterior>,
+}
+
+/// The role a metric plays inside a [`RewardObjective`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectiveRole {
+    /// The single scalar objective metric.
+    Scalar,
+    /// A scalarised-mode weighted objective metric (carries its weight).
+    Weighted(
+        // weight scaled ×1000 so the role stays `Copy` without a float; the
+        // surfacing layer divides back. (kept tiny — surfacing only.)
+        i64,
+    ),
+    /// The constrained-mode primary objective.
+    Primary,
+    /// A constrained-mode guardrail constraint metric.
+    Guardrail,
+}
+
+/// Build the per-objective per-variant posterior summaries for surfacing the
+/// multi-objective tradeoff (FR9). Pure: derives means + 95% CIs from the same
+/// posteriors the allocator consumed, plus the constrained-mode guardrail
+/// violation flag per variant.
+///
+/// Returns one [`ObjectivePosterior`] per metric referenced by `objective` that
+/// is present in `metrics`, in objective order (scalar/primary first, then
+/// weighted/guardrail metrics). Metrics referenced but absent from `metrics` are
+/// skipped. Returns empty when `metrics` is empty.
+#[must_use]
+pub fn objective_posteriors(
+    objective: &RewardObjective,
+    metrics: &[MetricRewards],
+) -> Vec<ObjectivePosterior> {
+    if metrics.is_empty() {
+        return Vec::new();
+    }
+    let find = |id: &Uuid| metrics.iter().find(|m| &m.metric_id == id);
+
+    let summarize = |m: &MetricRewards,
+                     role: ObjectiveRole,
+                     constraint: Option<&GuardrailConstraint>|
+     -> ObjectivePosterior {
+        let variants = m
+            .arms
+            .iter()
+            .map(|(key, p)| {
+                let (lo, hi) = p.ci95();
+                ObjectiveVariantPosterior {
+                    variant_key: key.clone(),
+                    mean: p.mean(),
+                    ci_lower: lo,
+                    ci_upper: hi,
+                    n: p.arm_n(),
+                    guardrail_violated: constraint.is_some_and(|c| violates(p.mean(), c)),
+                }
+            })
+            .collect();
+        ObjectivePosterior {
+            metric_id: m.metric_id,
+            role,
+            goal: m.goal,
+            variants,
+        }
+    };
+
+    match objective {
+        RewardObjective::Scalar { metric_id } => find(metric_id)
+            .or(metrics.first())
+            .map(|m| summarize(m, ObjectiveRole::Scalar, None))
+            .into_iter()
+            .collect(),
+        RewardObjective::Scalarized { weights } => weights
+            .iter()
+            .filter_map(|ow| {
+                find(&ow.metric_id).map(|m| {
+                    let scaled = (ow.weight * 1000.0).round() as i64;
+                    summarize(m, ObjectiveRole::Weighted(scaled), None)
+                })
+            })
+            .collect(),
+        RewardObjective::Constrained {
+            primary_metric_id,
+            constraints,
+        } => {
+            let mut out = Vec::new();
+            if let Some(m) = find(primary_metric_id).or(metrics.first()) {
+                out.push(summarize(m, ObjectiveRole::Primary, None));
+            }
+            for c in constraints {
+                if let Some(m) = find(&c.metric_id) {
+                    out.push(summarize(m, ObjectiveRole::Guardrail, Some(c)));
+                }
+            }
+            out
+        }
+    }
+}
+
 /// Adapt a [`RewardObjective`] + per-metric posteriors into the
 /// `(arms, exploitable_mask)` pair the allocators consume.
 ///
@@ -761,6 +891,149 @@ mod tests {
         });
         assert_eq!(w[0].1, 0.0);
         assert_eq!(w[1].1, 0.0);
+    }
+
+    // ── Per-objective posterior surfacing (FR9) ──────────────────────────────
+
+    fn pri_of(ps: &[ObjectivePosterior], role: ObjectiveRole) -> &ObjectivePosterior {
+        ps.iter().find(|p| p.role == role).unwrap()
+    }
+
+    fn var_of<'a>(p: &'a ObjectivePosterior, key: &str) -> &'a ObjectiveVariantPosterior {
+        p.variants.iter().find(|v| v.variant_key == key).unwrap()
+    }
+
+    #[test]
+    fn objective_posteriors_scalar_surfaces_mean_and_ci() {
+        let id = Uuid::from_u128(1);
+        let metrics = vec![MetricRewards {
+            metric_id: id,
+            goal: GoalDirection::Increase,
+            arms: vec![
+                ("a".into(), count_post(1000, 100)),
+                ("b".into(), count_post(1000, 300)),
+            ],
+        }];
+        let obj = RewardObjective::Scalar { metric_id: id };
+        let ps = objective_posteriors(&obj, &metrics);
+        assert_eq!(ps.len(), 1);
+        let p = pri_of(&ps, ObjectiveRole::Scalar);
+        assert_eq!(p.metric_id, id);
+        let b = var_of(p, "b");
+        // ~30% rate, CI brackets the mean and stays in [0,1].
+        assert!(b.ci_lower < b.mean && b.mean < b.ci_upper);
+        assert!(b.ci_lower >= 0.0 && b.ci_upper <= 1.0);
+        assert_eq!(b.n, 1000);
+        assert!(!b.guardrail_violated);
+    }
+
+    #[test]
+    fn objective_posteriors_scalarized_carries_each_weighted_metric() {
+        use crate::experimentation::bandit::types::ObjectiveWeight;
+        let m1 = Uuid::from_u128(1);
+        let m2 = Uuid::from_u128(2);
+        let metrics = vec![
+            MetricRewards {
+                metric_id: m1,
+                goal: GoalDirection::Increase,
+                arms: vec![("a".into(), numeric_post(1000, 100.0, 1.0))],
+            },
+            MetricRewards {
+                metric_id: m2,
+                goal: GoalDirection::Decrease,
+                arms: vec![("a".into(), numeric_post(1000, 10.0, 1.0))],
+            },
+        ];
+        let obj = RewardObjective::Scalarized {
+            weights: vec![
+                ObjectiveWeight {
+                    metric_id: m1,
+                    weight: 0.7,
+                },
+                ObjectiveWeight {
+                    metric_id: m2,
+                    weight: 0.3,
+                },
+            ],
+        };
+        let ps = objective_posteriors(&obj, &metrics);
+        assert_eq!(ps.len(), 2);
+        assert_eq!(ps[0].metric_id, m1);
+        assert_eq!(ps[0].role, ObjectiveRole::Weighted(700));
+        assert_eq!(ps[1].metric_id, m2);
+        assert_eq!(ps[1].role, ObjectiveRole::Weighted(300));
+        // Means are the RAW (non goal-normalised) values.
+        assert!((var_of(&ps[0], "a").mean - 100.0).abs() < 1e-6);
+        assert!((var_of(&ps[1], "a").mean - 10.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn objective_posteriors_constrained_flags_guardrail_violation() {
+        let primary = Uuid::from_u128(1);
+        let guard = Uuid::from_u128(2);
+        let metrics = vec![
+            MetricRewards {
+                metric_id: primary,
+                goal: GoalDirection::Increase,
+                arms: vec![
+                    ("a".into(), numeric_post(1000, 50.0, 1.0)),
+                    ("b".into(), numeric_post(1000, 99.0, 1.0)),
+                ],
+            },
+            MetricRewards {
+                metric_id: guard,
+                goal: GoalDirection::Decrease,
+                arms: vec![
+                    ("a".into(), numeric_post(1000, 0.01, 0.0001)),
+                    ("b".into(), numeric_post(1000, 0.20, 0.0001)),
+                ],
+            },
+        ];
+        let obj = RewardObjective::Constrained {
+            primary_metric_id: primary,
+            constraints: vec![GuardrailConstraint {
+                metric_id: guard,
+                bound: 0.05,
+                direction: ConstraintDirection::AtMost,
+            }],
+        };
+        let ps = objective_posteriors(&obj, &metrics);
+        assert_eq!(ps.len(), 2);
+        let prim = pri_of(&ps, ObjectiveRole::Primary);
+        assert_eq!(prim.metric_id, primary);
+        // Primary metric is never flagged as a guardrail violation.
+        assert!(!var_of(prim, "b").guardrail_violated);
+
+        let g = pri_of(&ps, ObjectiveRole::Guardrail);
+        assert_eq!(g.metric_id, guard);
+        // b violates the at-most-0.05 bound; a does not.
+        assert!(var_of(g, "b").guardrail_violated);
+        assert!(!var_of(g, "a").guardrail_violated);
+    }
+
+    #[test]
+    fn objective_posteriors_empty_when_no_metrics() {
+        let obj = RewardObjective::Scalar {
+            metric_id: Uuid::nil(),
+        };
+        assert!(objective_posteriors(&obj, &[]).is_empty());
+    }
+
+    #[test]
+    fn ci95_numeric_brackets_mean() {
+        let p = numeric_post(1000, 50.0, 100.0);
+        let (lo, hi) = p.ci95();
+        assert!(lo < 50.0 && 50.0 < hi);
+        // SE = sqrt(100/1000) ≈ 0.316; half-width ≈ 0.62.
+        assert!((hi - lo - 2.0 * 1.959_964 * (100.0_f64 / 1000.0).sqrt()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ci95_conversion_clamped_to_unit() {
+        // A near-certain arm: CI stays inside [0,1].
+        let p = count_post(10, 10);
+        let (lo, hi) = p.ci95();
+        assert!(lo >= 0.0 && hi <= 1.0);
     }
 
     #[test]
