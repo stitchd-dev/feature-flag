@@ -1,13 +1,14 @@
 {
   "current_phase": "Wave D: Phase 6 (contextual) -> 7 (lifecycle) -> 9 (multi-obj) -> 10 (interaction) -> 8 (campaigns)",
-  "current_phase_index": 5,
+  "current_phase_index": 6,
   "current_task_index": 0,
   "completed_phases": [
     "Phase 1: Schema, Domain & Proto Foundation",
     "Phase 2: Bandit Core Algorithms",
     "Phase 3: Privileged Allocation-Write Path",
     "Phase 4: Stats-Service Static Reallocation Pass",
-    "Phase 5: Real-Time Eval Path"
+    "Phase 5: Real-Time Eval Path",
+    "Phase 6: Contextual Bandit"
   ],
   "last_updated": "2026-06-08T07:55:00Z",
   "status": "in_progress",
@@ -19,5 +20,6 @@
   },
   "verify_db": "postgres://stitchd:stitchd@localhost:5432/bandit_verify_20260608",
   "phase4_notes": "Live-CH test passes (treatment 9500bp/control 500bp). ListRunningExperiments now carries experiment_mode+bandit_config. CI coverage job now installs sqlx-cli + migrates base DB for bandit_reallocation test. Worker fixed pre-existing gateway-mock build break (701e6ac).",
-  "phase5_notes": "PURITY VERIFIED: eval DB-free/in-memory, RealtimeBanditModel rides snapshot, sampling pure (delegated to bandit/realtime.rs), static path byte-identical, preview==SDK parity, SDK at sdks/rust/. Realtime currently single-objective; multi-obj realtime deferred. RPCs ApplyBanditAllocation/BanditUpdateAllocation extended with optional realtime_model."
+  "phase5_notes": "PURITY VERIFIED: eval DB-free/in-memory, RealtimeBanditModel rides snapshot, sampling pure (delegated to bandit/realtime.rs), static path byte-identical, preview==SDK parity, SDK at sdks/rust/. Realtime currently single-objective; multi-obj realtime deferred. RPCs ApplyBanditAllocation/BanditUpdateAllocation extended with optional realtime_model.",
+  "phase6_notes": "Contextual model (ridge fit, hand-rolled Gauss-Jordan, no new deps). Purity green. Fit currently single numeric feature; model/engine support multi+one-hot (future). Features fit from events.properties."
 }

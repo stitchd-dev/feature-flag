@@ -100,7 +100,7 @@ Phase-level wave summary:
       <!-- depends: task2 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 5' [autonomous] (Protocol in workflow.md)
 
-## Phase 6: Contextual Bandit
+## Phase 6: Contextual Bandit [checkpoint: pending]
 <!-- execution: sequential -->
 <!-- depends: phase5 -->
 
@@ -111,7 +111,7 @@ Phase-level wave summary:
       sampling via Phase 5 path; live-CH integration test.
       <!-- files: crates/stitchd-stats-service/src/bandit.rs, crates/stitchd-stats-service/tests/bandit_contextual.rs, .github/workflows/ci.yml -->
       <!-- depends: task1 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 6' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 6' [autonomous] (Protocol in workflow.md)
 
 ## Phase 7: Autonomous Lifecycle (convergence / commit / rollout)
 <!-- execution: sequential -->
