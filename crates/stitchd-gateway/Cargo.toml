@@ -37,6 +37,8 @@ governor = { workspace = true }
 sqlx = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+# Opaque keyset cursor tokens (platform_hardening_20260608 Phase 4).
+base64 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

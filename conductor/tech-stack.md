@@ -361,6 +361,15 @@ The experimentation-service proto gained additive RPCs (`CreateExclusionGroup`/`
 - TTL is configured by `STITCHD_GATEWAY_IDEMPOTENCY_TTL_SECS` (default 86400 = 24h); a gateway tokio interval task sweeps expired rows. Applies to all mutating methods (POST/PUT/PATCH/DELETE) when an `Idempotency-Key` header is present; a replay returns the stored 2xx with an `Idempotent-Replayed: true` header, key-reuse with a different request fingerprint returns `422 idempotency_key_reuse`, and a store error fails **open** (request proceeds unprotected rather than 500ing).
 - Deviation from the spec's `response_body jsonb`: stored as **BYTEA + content-type** so any 2xx payload replays byte-for-byte regardless of content type (more robust than JSONB, which would reject non-JSON bodies).
 
+**`platform_hardening_20260608` — cursor-based pagination contract (Phase 4):**
+This **reverses** the page-based canonical contract `domain_boundaries_20260530` established (`PaginatedResponse<T>` = `{items, total, page, per_page}`, `?page=N&per_page=M`). The cursor contract — mandated by `product-guidelines.md` ("All list endpoints use cursor-based pagination") — is:
+- **Request:** `?cursor=<opaque>&limit=N` (`cursor` absent → first page; `limit` defaults to 50, capped at 200).
+- **Response:** `{ items: [...], next_cursor: <opaque|null> }` — `next_cursor` is `null` on the last page. No `total` (keyset pagination cannot cheaply produce a total without the `COUNT(*) OVER()` second-column the OFFSET path used).
+- **Opaque token:** base64url(JSON(keyset position)) — the keyset is the last returned row's stable sort key(s), e.g. `(created_at, id)` or `(id)`. Clients treat it as opaque and never construct it.
+- **Repo layer:** keyset query (`WHERE (sort_key, id) > $cursor ORDER BY sort_key, id LIMIT n+1`) replacing `OFFSET` + `COUNT(*) OVER()`. Fetching `n+1` rows detects whether a `next_cursor` exists.
+- **Trade-off accepted:** keyset pagination is O(1) per page (no deep-offset scan) and stable under concurrent inserts, but **cannot random-access an arbitrary page number** — so the Admin UI moves from numbered pages to next/prev navigation. This is the deliberate cost of the guidelines-mandated contract.
+- **Transport:** the gateway is a proxy, so cursor params flow through the service protos (additive `cursor`/`limit` request fields + `next_cursor` response field) into each owning service's repo; the gateway translates `?cursor=&limit=` ⇄ proto and `{items,next_cursor}` ⇄ REST. The shared gateway primitives live in `gateway::pagination` (`CursorParams`, `CursorPage<T>`, `encode_cursor`/`decode_cursor`).
+
 ## Infrastructure (Self-Hosted)
 - PostgreSQL 16+ for configuration, tenants, RBAC, audit logs, auth, experiments
 - ClickHouse 24+ for events, experiment data, metric aggregations
