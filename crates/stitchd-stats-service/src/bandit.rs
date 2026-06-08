@@ -936,6 +936,11 @@ pub struct PerExperimentRecomputer {
     >,
     ch: std::sync::Arc<clickhouse::Client>,
     metric_repo: std::sync::Arc<dyn stitchd_db::MetricRepository>,
+    /// Read-side handle for the cross-experiment interaction refresh: on-demand
+    /// recompute lists the running experiments in the target's environment so
+    /// `experiment_interactions` is refreshed without waiting for the 60-min
+    /// scheduler tick (feature-flag-uga).
+    experiment_repo: std::sync::Arc<dyn stitchd_db::ExperimentRepository>,
     pool: sqlx::PgPool,
 }
 
@@ -952,15 +957,93 @@ impl PerExperimentRecomputer {
         >,
         ch: std::sync::Arc<clickhouse::Client>,
         metric_repo: std::sync::Arc<dyn stitchd_db::MetricRepository>,
+        experiment_repo: std::sync::Arc<dyn stitchd_db::ExperimentRepository>,
         pool: sqlx::PgPool,
     ) -> Self {
         Self {
             exp_client,
             ch,
             metric_repo,
+            experiment_repo,
             pool,
         }
     }
+
+    /// Refresh the cross-experiment interaction sweep for the environment that
+    /// owns `experiment_id`, so an on-demand `TriggerRecompute` keeps
+    /// `experiment_interactions` current instead of waiting for the 60-min tick
+    /// (feature-flag-uga).
+    ///
+    /// Scoped to the target's environment because interactions are computed only
+    /// among co-located running experiments — `run_interaction_sweep` itself
+    /// groups by environment, so passing the env subset is equivalent to (and
+    /// cheaper than) a global sweep. A target that is no longer running is a
+    /// no-op. The sweep reuses the same ClickHouse reader/writer and order cap as
+    /// the scheduled tick.
+    async fn refresh_interactions(
+        &self,
+        experiment_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<(), anyhow::Error> {
+        let reader = crate::interaction_compute::ClickHouseInteractionCells::new(self.ch.clone());
+        let writer = crate::interaction_compute::ClickHouseInteractionWriter::new(self.ch.clone());
+        sweep_for_experiment_env(
+            &reader,
+            &writer,
+            self.metric_repo.as_ref(),
+            self.experiment_repo.as_ref(),
+            experiment_id,
+            now,
+        )
+        .await
+    }
+}
+
+/// Refresh the cross-experiment interaction sweep for the environment owning
+/// `experiment_id`, on demand (feature-flag-uga).
+///
+/// Lists the running experiments, scopes them to the target's environment (the
+/// only ones it can interact with — `run_interaction_sweep` itself groups by
+/// environment, so the env subset is equivalent to a global sweep but cheaper),
+/// and runs the sweep with the same order cap as the scheduled tick. A target
+/// that is no longer running is a no-op. Factored out of
+/// [`PerExperimentRecomputer::refresh_interactions`] so the env-scoping decision
+/// is unit-testable with fake readers/writers/repos.
+pub(crate) async fn sweep_for_experiment_env(
+    reader: &dyn crate::interaction_compute::InteractionCellReader,
+    writer: &dyn crate::interaction_compute::InteractionWriter,
+    metric_repo: &dyn stitchd_db::MetricRepository,
+    experiment_repo: &dyn stitchd_db::ExperimentRepository,
+    experiment_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<(), anyhow::Error> {
+    let running = experiment_repo.list_all_running().await?;
+    let Some(target) = running.iter().find(|e| e.id.as_uuid() == experiment_id) else {
+        // Not currently running (race with a stop) → nothing to refresh.
+        return Ok(());
+    };
+    let env_id = target.environment_id;
+    let env_running: Vec<stitchd_core::experimentation::Experiment> = running
+        .iter()
+        .filter(|e| e.environment_id == env_id)
+        .cloned()
+        .collect();
+
+    let written = crate::interaction_compute::run_interaction_sweep(
+        reader,
+        writer,
+        metric_repo,
+        &env_running,
+        now,
+        crate::interaction_compute::max_interaction_order_from_env(),
+    )
+    .await?;
+    tracing::info!(
+        %experiment_id,
+        interactions_written = written,
+        "on-demand interaction sweep complete"
+    );
+    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -998,9 +1081,15 @@ impl crate::grpc::service::ExperimentRecomputer for PerExperimentRecomputer {
         let applier = GrpcAllocationApplier::new(self.exp_client.clone());
         let recorder = PgRunRecorder::new(self.pool.clone());
 
-        run_bandit_reallocation(&reader, &applier, &recorder, &exp, &metrics, now, now)
-            .await
-            .map(|_| ())
+        run_bandit_reallocation(&reader, &applier, &recorder, &exp, &metrics, now, now).await?;
+
+        // Refresh cross-experiment interactions for the target's environment so
+        // the on-demand recompute does not wait for the 60-min scheduler tick
+        // (feature-flag-uga). Runs for every experiment, not just bandits — a
+        // sweep failure marks the recompute job failed, consistent with how the
+        // per-experiment stats/bandit failures surface.
+        self.refresh_interactions(experiment_id, now).await?;
+        Ok(())
     }
 }
 
@@ -3130,5 +3219,306 @@ mod tests {
             assert_eq!(sum, 10_000, "n={n}");
             assert_eq!(dist.allocations.len(), n);
         }
+    }
+}
+
+// ============================================================================
+// On-demand interaction-sweep wiring tests (feature-flag-uga)
+// ============================================================================
+//
+// `sweep_for_experiment_env` is the env-scoping seam between the on-demand
+// `TriggerRecompute` path and `run_interaction_sweep` (which is itself
+// exhaustively unit-tested in `interaction_compute` for env grouping, candidate
+// enumeration, BH correction and every metric family). These tests cover the
+// NEW decisions introduced here: (1) a no-op when the target experiment is no
+// longer running, and (2) proceeding into the sweep (resolving metric defs) when
+// it is. ClickHouse cells are faked empty so the path runs without live infra;
+// the `find_batch_by_ids` call is the observable "proceeded past the no-op
+// guard" signal.
+#[cfg(test)]
+mod ondemand_interaction_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use stitchd_core::experimentation::{Experiment, ExperimentStatus};
+    use stitchd_core::id::{EnvironmentId, MetricId, RuleId};
+    use stitchd_core::metric::{AggregationConfig, MetricDefinition};
+    use stitchd_db::RepositoryError;
+
+    // ── Fake ClickHouse reader: every cell grid is empty ────────────────────
+    struct EmptyReader;
+    #[async_trait::async_trait]
+    impl crate::interaction_compute::InteractionCellReader for EmptyReader {
+        async fn fetch_aggregation_cells(
+            &self,
+            _cfg: &AggregationConfig,
+            _env_id: &str,
+            _exp_ids: &[&str],
+            _context_type: &str,
+            _interaction_end: DateTime<Utc>,
+        ) -> Result<Vec<crate::interaction_compute::NdCellAggregate>, anyhow::Error> {
+            Ok(vec![])
+        }
+        async fn fetch_funnel_cells(
+            &self,
+            _cfg: &stitchd_core::metric::FunnelConfig,
+            _env_id: &str,
+            _exp_ids: &[&str],
+            _context_type: &str,
+            _interaction_end: DateTime<Utc>,
+        ) -> Result<Vec<crate::interaction_compute::NdCellAggregate>, anyhow::Error> {
+            Ok(vec![])
+        }
+        async fn fetch_ratio_cells(
+            &self,
+            _num_cfg: &AggregationConfig,
+            _den_cfg: &AggregationConfig,
+            _env_id: &str,
+            _exp_ids: &[&str],
+            _context_type: &str,
+            _interaction_end: DateTime<Utc>,
+        ) -> Result<Vec<crate::interaction_compute::NdCellAggregate>, anyhow::Error> {
+            Ok(vec![])
+        }
+    }
+
+    // ── Fake writer: counts rows written ────────────────────────────────────
+    #[derive(Default)]
+    struct CountWriter {
+        n: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl crate::interaction_compute::InteractionWriter for CountWriter {
+        async fn write_row(
+            &self,
+            _row: &crate::interaction_compute::InteractionRow,
+        ) -> Result<(), anyhow::Error> {
+            self.n.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    // ── Fake metric repo: records whether find_batch_by_ids ran ─────────────
+    #[derive(Default)]
+    struct FlagMetricRepo {
+        batch_called: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl stitchd_db::MetricRepository for FlagMetricRepo {
+        async fn find_batch_by_ids(
+            &self,
+            _ids: &[MetricId],
+        ) -> Result<Vec<MetricDefinition>, RepositoryError> {
+            self.batch_called.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![])
+        }
+        async fn find_by_id(&self, _id: MetricId) -> Result<MetricDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn find_by_key(
+            &self,
+            _key: &str,
+            _environment_id: EnvironmentId,
+        ) -> Result<MetricDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_by_environment(
+            &self,
+            _environment_id: EnvironmentId,
+        ) -> Result<Vec<MetricDefinition>, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _environment_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<MetricDefinition>, u64), RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_referencing_event(
+            &self,
+            _environment_id: EnvironmentId,
+            _event_key: &str,
+        ) -> Result<Vec<MetricDefinition>, RepositoryError> {
+            unimplemented!()
+        }
+        async fn create(&self, _metric: &MetricDefinition) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+        async fn update(
+            &self,
+            _metric: &MetricDefinition,
+        ) -> Result<MetricDefinition, RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_delete(&self, _id: MetricId) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+    }
+
+    // ── Fake experiment repo: list_all_running returns a fixed set ──────────
+    struct FixedRunningRepo {
+        rows: Vec<Experiment>,
+    }
+    #[async_trait::async_trait]
+    impl stitchd_db::ExperimentRepository for FixedRunningRepo {
+        async fn list_all_running(&self) -> Result<Vec<Experiment>, RepositoryError> {
+            Ok(self.rows.clone())
+        }
+        async fn find_by_id(
+            &self,
+            _id: stitchd_core::id::ExperimentId,
+        ) -> Result<Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_by_environment(
+            &self,
+            _env_id: EnvironmentId,
+            _status_filter: Option<ExperimentStatus>,
+        ) -> Result<Vec<Experiment>, RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_by_environment_paginated(
+            &self,
+            _env_id: EnvironmentId,
+            _offset: u64,
+            _limit: u64,
+        ) -> Result<(Vec<Experiment>, u64), RepositoryError> {
+            unimplemented!()
+        }
+        async fn create(&self, _experiment: &Experiment) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+        async fn update(&self, _experiment: &Experiment) -> Result<Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn soft_delete(
+            &self,
+            _id: stitchd_core::id::ExperimentId,
+        ) -> Result<(), RepositoryError> {
+            unimplemented!()
+        }
+        async fn list_iterations(
+            &self,
+            _experiment_id: stitchd_core::id::ExperimentId,
+        ) -> Result<Vec<stitchd_core::experimentation::ExperimentIteration>, RepositoryError>
+        {
+            unimplemented!()
+        }
+        async fn apply_transition(
+            &self,
+            _id: stitchd_core::id::ExperimentId,
+            _to: ExperimentStatus,
+            _actor_id: Option<stitchd_core::id::UserId>,
+        ) -> Result<Experiment, RepositoryError> {
+            unimplemented!()
+        }
+        async fn find_active_experiment_for_flag(
+            &self,
+            _flag_id: stitchd_core::id::FlagId,
+        ) -> Result<Option<stitchd_core::id::ExperimentId>, RepositoryError> {
+            Ok(None)
+        }
+        async fn find_iteration_by_id(
+            &self,
+            _iteration_id: stitchd_db::ExperimentIterationId,
+        ) -> Result<stitchd_core::experimentation::ExperimentIteration, RepositoryError> {
+            unimplemented!()
+        }
+    }
+
+    fn mk_running(env: EnvironmentId, metric: MetricId) -> Experiment {
+        Experiment {
+            id: stitchd_core::id::ExperimentId::new(),
+            environment_id: env,
+            flag_id: stitchd_core::id::FlagId::new(),
+            flag_key: None,
+            variant_keys: vec![],
+            flag_rule_id: Some(RuleId::new()),
+            targets_default_rule: false,
+            name: "exp".into(),
+            description: None,
+            hypothesis: None,
+            metric_ids: vec![metric],
+            guardrail_metric_ids: vec![],
+            traffic_allocation: 100.0,
+            min_sample_size: None,
+            pre_period_days: 0,
+            unit_context_types: vec!["user".to_string()],
+            scheduled_start_at: None,
+            scheduled_end_at: None,
+            status: ExperimentStatus::Running,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            deleted_at: None,
+            version: 1,
+            exclusion_group_id: None,
+            group_bucket_lo: None,
+            group_bucket_hi: None,
+            sequential_testing_enabled: false,
+            sequential_alpha: 0.05,
+            sequential_tau_squared: None,
+            sequential_min_sample_size: 100,
+            experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
+            bandit_config: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn no_op_when_target_not_running() {
+        // Empty running set → target is absent → return Ok without touching the
+        // metric repo or the writer (the new no-op guard).
+        let repo = FixedRunningRepo { rows: vec![] };
+        let metric_repo = FlagMetricRepo::default();
+        let writer = CountWriter::default();
+        let reader = EmptyReader;
+
+        sweep_for_experiment_env(
+            &reader,
+            &writer,
+            &metric_repo,
+            &repo,
+            stitchd_core::id::ExperimentId::new().as_uuid(),
+            Utc::now(),
+        )
+        .await
+        .expect("no-op must not error");
+
+        assert_eq!(
+            metric_repo.batch_called.load(Ordering::SeqCst),
+            0,
+            "absent target must short-circuit before resolving metrics"
+        );
+        assert_eq!(writer.n.load(Ordering::SeqCst), 0, "nothing written");
+    }
+
+    #[tokio::test]
+    async fn proceeds_into_sweep_when_target_running() {
+        // Target present among the running set → proceeds into the sweep, which
+        // resolves metric definitions for the env group (observable via
+        // find_batch_by_ids). Empty CH cells → zero rows written, but the path
+        // ran end-to-end without error.
+        let env = EnvironmentId::new();
+        let metric = MetricId::from_uuid(uuid::Uuid::new_v4());
+        let target = mk_running(env, metric);
+        let target_id = target.id.as_uuid();
+        // A second experiment in the SAME env so a candidate pair can form.
+        let other = mk_running(env, metric);
+
+        let repo = FixedRunningRepo {
+            rows: vec![target, other],
+        };
+        let metric_repo = FlagMetricRepo::default();
+        let writer = CountWriter::default();
+        let reader = EmptyReader;
+
+        sweep_for_experiment_env(&reader, &writer, &metric_repo, &repo, target_id, Utc::now())
+            .await
+            .expect("running target must drive the sweep");
+
+        assert!(
+            metric_repo.batch_called.load(Ordering::SeqCst) >= 1,
+            "running target must resolve metric defs (proceeded past the no-op guard)"
+        );
     }
 }
