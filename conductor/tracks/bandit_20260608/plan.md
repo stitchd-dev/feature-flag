@@ -35,7 +35,7 @@ Phase-level wave summary:
       <!-- depends: task3 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 1' [autonomous] (Protocol in workflow.md)
 
-## Phase 2: Bandit Core Algorithms (stitchd-core, pure) [checkpoint: pending]
+## Phase 2: Bandit Core Algorithms (stitchd-core, pure) [checkpoint: 5db4a5f]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
@@ -53,7 +53,7 @@ Phase-level wave summary:
       <!-- depends: task1 -->
 - [x] Task: Conductor - User Manual Verification 'Phase 2' [autonomous] (Protocol in workflow.md)
 
-## Phase 3: Privileged Allocation-Write Path [checkpoint: pending]
+## Phase 3: Privileged Allocation-Write Path [checkpoint: 5db4a5f]
 <!-- execution: parallel -->
 <!-- depends: phase1 -->
 
