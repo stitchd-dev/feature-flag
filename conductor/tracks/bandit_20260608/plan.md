@@ -11,29 +11,29 @@ Phase-level wave summary:
 - Wave D: Phase 6 (contextual, after 5) ∥ Phase 7 (lifecycle, after 4) → Phase 8 (campaigns)
 - Wave E: Phase 11 (REST surfacing) → Phase 12 (Admin UI) → Phase 13 (integration/docs/CI)
 
-## Phase 1: Schema, Domain & Proto Foundation
+## Phase 1: Schema, Domain & Proto Foundation [checkpoint: pending]
 <!-- execution: parallel -->
 <!-- depends: -->
 
-- [ ] Task 1: PG migration — `experiment_mode` + `bandit_config` JSONB on `experiments` +
+- [x] Task 1: PG migration [eb79e87] — `experiment_mode` + `bandit_config` JSONB on `experiments` +
       `experiment_iterations`; `bandit_allocation_runs` table (mirrors `scheduled_change_runs`:
       experiment_id, iteration_id, fired_at, old/new_allocation, action, outcome, detail);
       `bandit_campaigns` table (campaign config, max_iterations, drift thresholds). sqlx-prepare.
       <!-- files: crates/stitchd-db/migrations/*, .sqlx/* -->
-- [ ] Task 2: stitchd-core domain types — `ExperimentMode` enum, `BanditConfig`,
+- [x] Task 2: stitchd-core domain types [d9378cf] — `ExperimentMode` enum, `BanditConfig`,
       `BanditAlgorithm`, `PropagationMode`, `LifecyclePolicy`, `RewardObjective`
       (scalar | scalarized | constrained), `BanditCampaignConfig`; serde + invariants + tests.
       <!-- files: crates/stitchd-core/src/experimentation/mod.rs, crates/stitchd-core/src/experimentation/bandit/types.rs -->
-- [ ] Task 3: Proto additions — `experiment_mode` + `bandit_config` (+ campaign) on
+- [x] Task 3: Proto additions [92f5421] — `experiment_mode` + `bandit_config` (+ campaign) on
       `Experiment`/`ExperimentIteration`; `bandit_allocation` + per-objective posteriors on
       `WriteExperimentResultsRequest`/`VariantResult`; regenerate. Backward-compatible (new fields).
       <!-- files: proto/experiments/v1/experimentation_service.proto, proto/analytics/v1/analytics.proto -->
       <!-- depends: task2 -->
-- [ ] Task 4: Gateway REST input wiring — `experiment_mode`/`bandit_config`/campaign into
+- [x] Task 4: Gateway REST input wiring [b692fc5] — `experiment_mode`/`bandit_config`/campaign into
       CreateExperimentBody + UpdateExperimentBody; validation; immutability-while-running guard.
       <!-- files: crates/stitchd-gateway/src/routes/experiments.rs -->
       <!-- depends: task3 -->
-- [ ] Task: Conductor - User Manual Verification 'Phase 1' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 1' [autonomous] (Protocol in workflow.md)
 
 ## Phase 2: Bandit Core Algorithms (stitchd-core, pure)
 <!-- execution: parallel -->

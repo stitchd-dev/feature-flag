@@ -1,0 +1,12 @@
+{
+  "current_phase": "Wave B: Phase 2 (core algorithms) || Phase 3 (write path)",
+  "current_phase_index": 1,
+  "current_task_index": 0,
+  "completed_phases": ["Phase 1: Schema, Domain & Proto Foundation"],
+  "last_updated": "2026-06-08T07:20:00Z",
+  "status": "in_progress",
+  "mode": "autonomous",
+  "binding_constraint": "Flag evaluation MUST be DB-free and fully in-memory (enforced by evaluation/purity.rs CI test forbidding sqlx/tokio/reqwest); bandit state at eval time rides the polling snapshot.",
+  "phase1_commits": ["eb79e87","d9378cf","92f5421","b692fc5"],
+  "notes": "DB drift bug filed in beads. experiment repo uses runtime sqlx::query (no macro), so sqlx offline cache unaffected by experiment columns."
+}
