@@ -114,6 +114,7 @@ fn cross_context_corpus() -> (FeatureFlag, Flag) {
             },
         ],
         exclusion_gate: None,
+        realtime_bandit: None,
     };
 
     // ── Proto shape ──────────────────────────────────────────────────────
@@ -172,6 +173,7 @@ fn cross_context_corpus() -> (FeatureFlag, Flag) {
             ],
             weights: vec![(control_id, 5000), (treatment_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         },
     };
     let core = Flag {

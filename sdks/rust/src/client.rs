@@ -45,7 +45,8 @@ use stitchd_core::rule_engine::orchestrator::{
     evaluate_flags_with_prerequisites, fold_prerequisite_fallbacks,
 };
 use stitchd_core::rule_engine::types::{
-    ConditionExpr, EvaluationInput, ExclusionGate, PercentageTarget, Rule, RuleOutput, TargetField,
+    BanditGoal, ConditionExpr, EvaluationInput, ExclusionGate, PercentageTarget,
+    RealtimeBanditModel, RewardFamily, Rule, RuleOutput, TargetField, VariantPosterior,
 };
 use stitchd_core::segment::{RuleBasedSegment, SegmentDefinition};
 use stitchd_core::variants::{FlagValueType, VariantValue as CoreVariantValue};
@@ -1697,10 +1698,45 @@ fn proto_allocation_to_core(
         bucket_hi: g.bucket_hi as u16,
     });
 
+    // bandit_20260608: the real-time bandit model rides the same snapshot the
+    // SDK already fetches, so it flows to the shared core evaluator with no
+    // extra fetch — preview and SDK resolve identically.
+    let realtime_bandit = alloc.realtime_bandit.as_ref().map(|m| {
+        use stitchd_proto::flags::v1::{
+            BanditGoalDirection as ProtoGoal, RewardFamily as ProtoFamily,
+        };
+        let family = match ProtoFamily::try_from(m.family) {
+            Ok(ProtoFamily::Normal) => RewardFamily::Normal,
+            _ => RewardFamily::Beta,
+        };
+        let goal = match ProtoGoal::try_from(m.goal) {
+            Ok(ProtoGoal::Decrease) => BanditGoal::Decrease,
+            _ => BanditGoal::Increase,
+        };
+        RealtimeBanditModel {
+            salt: m.salt.clone(),
+            unit_context_type: m.unit_context_type.clone(),
+            family,
+            goal,
+            variants: m
+                .variants
+                .iter()
+                .map(|v| VariantPosterior {
+                    variant_key: v.variant_key.clone(),
+                    alpha: v.alpha,
+                    beta: v.beta,
+                    mu: v.mu,
+                    sigma2: v.sigma2,
+                })
+                .collect(),
+        }
+    });
+
     Some(RuleOutput::Percentage {
         targets,
         weights,
         exclusion_gate,
+        realtime_bandit,
     })
 }
 
@@ -2720,6 +2756,7 @@ mod tests {
                 },
             ],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let proto_rule = ProtoFlagRule {

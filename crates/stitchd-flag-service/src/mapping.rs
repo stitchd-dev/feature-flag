@@ -9,11 +9,14 @@ use stitchd_core::{
     variants::VariantValue,
 };
 use stitchd_proto::flags::v1::{
-    AllocationBucket, ContextKeySelector, ContextParameterSelector,
-    ExclusionGate as ProtoExclusionGate, FeatureFlag, FlagRule as ProtoFlagRule,
-    FlagValueType as ProtoFlagValueType, HashSelector as ProtoHashSelector, PercentageAllocation,
-    Variant as ProtoVariant, VariantValue as ProtoVariantValue,
-    hash_selector::Selector as ProtoSelectorInner, variant_value::Value as ProtoVariantValueInner,
+    AllocationBucket, BanditGoalDirection as ProtoBanditGoalDirection, ContextKeySelector,
+    ContextParameterSelector, ExclusionGate as ProtoExclusionGate, FeatureFlag,
+    FlagRule as ProtoFlagRule, FlagValueType as ProtoFlagValueType,
+    HashSelector as ProtoHashSelector, PercentageAllocation,
+    RealtimeBanditModel as ProtoRealtimeBanditModel, RewardFamily as ProtoRewardFamily,
+    Variant as ProtoVariant, VariantPosterior as ProtoVariantPosterior,
+    VariantValue as ProtoVariantValue, hash_selector::Selector as ProtoSelectorInner,
+    variant_value::Value as ProtoVariantValueInner,
 };
 
 /// Convert a proto [`ProtoVariant`] to a domain [`stitchd_core::flag::Variant`].
@@ -111,10 +114,17 @@ pub fn proto_flag_rule_to_domain(
                 .exclusion_gate
                 .as_ref()
                 .map(proto_exclusion_gate_to_domain);
+            // bandit_20260608 wires the real-time bandit model through the same
+            // snapshot path so it reaches preview + SDK with zero extra work.
+            let realtime_bandit = alloc
+                .realtime_bandit
+                .as_ref()
+                .map(proto_realtime_bandit_to_domain);
             RuleOutput::Percentage {
                 targets,
                 weights,
                 exclusion_gate,
+                realtime_bandit,
             }
         }
         None => return None,
@@ -325,6 +335,84 @@ fn domain_exclusion_gate_to_proto(
     }
 }
 
+/// Convert a proto [`ProtoRealtimeBanditModel`] to the domain
+/// [`stitchd_core::rule_engine::types::RealtimeBanditModel`].
+///
+/// Mirrors [`proto_exclusion_gate_to_domain`]: the real-time bandit model rides
+/// the snapshot exactly like the exclusion gate. An unspecified / unknown
+/// `family` defaults to Beta, an unspecified `goal` defaults to Increase — both
+/// are the conservative non-contextual defaults.
+#[must_use]
+fn proto_realtime_bandit_to_domain(
+    model: &ProtoRealtimeBanditModel,
+) -> stitchd_core::rule_engine::types::RealtimeBanditModel {
+    use stitchd_core::rule_engine::types::{
+        BanditGoal, RealtimeBanditModel, RewardFamily, VariantPosterior,
+    };
+    let family = match ProtoRewardFamily::try_from(model.family) {
+        Ok(ProtoRewardFamily::Normal) => RewardFamily::Normal,
+        // Unspecified / Beta / unknown → Beta.
+        _ => RewardFamily::Beta,
+    };
+    let goal = match ProtoBanditGoalDirection::try_from(model.goal) {
+        Ok(ProtoBanditGoalDirection::Decrease) => BanditGoal::Decrease,
+        // Unspecified / Increase / unknown → Increase.
+        _ => BanditGoal::Increase,
+    };
+    RealtimeBanditModel {
+        salt: model.salt.clone(),
+        unit_context_type: model.unit_context_type.clone(),
+        family,
+        goal,
+        variants: model
+            .variants
+            .iter()
+            .map(|v| VariantPosterior {
+                variant_key: v.variant_key.clone(),
+                alpha: v.alpha,
+                beta: v.beta,
+                mu: v.mu,
+                sigma2: v.sigma2,
+            })
+            .collect(),
+    }
+}
+
+/// Convert a domain
+/// [`stitchd_core::rule_engine::types::RealtimeBanditModel`] to the proto
+/// [`ProtoRealtimeBanditModel`].
+#[must_use]
+fn domain_realtime_bandit_to_proto(
+    model: &stitchd_core::rule_engine::types::RealtimeBanditModel,
+) -> ProtoRealtimeBanditModel {
+    use stitchd_core::rule_engine::types::{BanditGoal, RewardFamily};
+    let family = match model.family {
+        RewardFamily::Beta => ProtoRewardFamily::Beta,
+        RewardFamily::Normal => ProtoRewardFamily::Normal,
+    };
+    let goal = match model.goal {
+        BanditGoal::Increase => ProtoBanditGoalDirection::Increase,
+        BanditGoal::Decrease => ProtoBanditGoalDirection::Decrease,
+    };
+    ProtoRealtimeBanditModel {
+        salt: model.salt.clone(),
+        unit_context_type: model.unit_context_type.clone(),
+        family: family as i32,
+        goal: goal as i32,
+        variants: model
+            .variants
+            .iter()
+            .map(|v| ProtoVariantPosterior {
+                variant_key: v.variant_key.clone(),
+                alpha: v.alpha,
+                beta: v.beta,
+                mu: v.mu,
+                sigma2: v.sigma2,
+            })
+            .collect(),
+    }
+}
+
 /// Convert a domain `FlagValueType` to the proto [`ProtoFlagValueType`].
 #[must_use]
 pub const fn domain_value_type_to_proto(
@@ -359,6 +447,7 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
             targets,
             weights,
             exclusion_gate,
+            realtime_bandit,
         } => {
             let hash_inputs: Vec<ProtoHashSelector> =
                 targets.iter().map(target_to_proto_hash_selector).collect();
@@ -377,6 +466,10 @@ pub fn domain_flag_rule_to_proto<S: BuildHasher>(
                 hash_inputs,
                 // Phase 2 wires the exclusion gate through core↔proto mapping.
                 exclusion_gate: exclusion_gate.as_ref().map(domain_exclusion_gate_to_proto),
+                // bandit_20260608: the real-time bandit model rides the snapshot.
+                realtime_bandit: realtime_bandit
+                    .as_ref()
+                    .map(domain_realtime_bandit_to_proto),
             }))
         }
     };
@@ -447,6 +540,7 @@ pub fn build_feature_flag_proto(
                     buckets,
                     hash_inputs,
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             )),
             name: String::new(),
@@ -719,6 +813,7 @@ mod tests {
                     }],
                     weights: vec![(vid, 10000)],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             },
         };
@@ -754,6 +849,7 @@ mod tests {
                     }],
                     weights: vec![(vid, 5000)],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             },
         };
@@ -796,6 +892,7 @@ mod tests {
                     ],
                     weights: vec![(vid, 10000)],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             },
         };
@@ -869,6 +966,7 @@ mod tests {
                         },
                     ],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             )),
             name: String::new(),
@@ -921,6 +1019,7 @@ mod tests {
                     }],
                     hash_inputs: vec![],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             )),
             name: String::new(),
@@ -1069,6 +1168,7 @@ mod tests {
                     }],
                     weights: vec![(vid, 10000)],
                     exclusion_gate: Some(gate.clone()),
+                    realtime_bandit: None,
                 },
             },
         };
@@ -1117,6 +1217,7 @@ mod tests {
                     }],
                     weights: vec![(vid, 10000)],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             },
         };
@@ -1129,6 +1230,138 @@ mod tests {
         assert!(
             alloc.exclusion_gate.is_none(),
             "ungated rule must serialize without an exclusion gate"
+        );
+    }
+
+    // ── bandit_20260608: real-time bandit model mapping ─────────────────────
+
+    #[test]
+    fn percentage_realtime_bandit_round_trips_core_proto_core() {
+        use stitchd_core::rule_engine::types::{
+            BanditGoal, RealtimeBanditModel, RewardFamily, VariantPosterior,
+        };
+
+        let vid = make_variant_id();
+        let vid2 = make_variant_id();
+        let mut key_map = HashMap::new();
+        key_map.insert(vid, "control".to_string());
+        key_map.insert(vid2, "treatment".to_string());
+        let variant_map: HashMap<String, VariantId> = [
+            ("control".to_string(), vid),
+            ("treatment".to_string(), vid2),
+        ]
+        .into_iter()
+        .collect();
+
+        let model = RealtimeBanditModel {
+            salt: "exp-bandit-9".to_string(),
+            unit_context_type: "user".to_string(),
+            family: RewardFamily::Normal,
+            goal: BanditGoal::Decrease,
+            variants: vec![
+                VariantPosterior {
+                    variant_key: "control".to_string(),
+                    alpha: 0.0,
+                    beta: 0.0,
+                    mu: 1.5,
+                    sigma2: 0.25,
+                },
+                VariantPosterior {
+                    variant_key: "treatment".to_string(),
+                    alpha: 0.0,
+                    beta: 0.0,
+                    mu: 0.8,
+                    sigma2: 0.1,
+                },
+            ],
+        };
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: FlagId::new(),
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![PercentageTarget {
+                        context_type: "user".to_string(),
+                        field: TargetField::Key,
+                    }],
+                    weights: vec![(vid, 5000), (vid2, 5000)],
+                    exclusion_gate: None,
+                    realtime_bandit: Some(model.clone()),
+                },
+            },
+        };
+
+        // core → proto: model carried (family / goal enums + all params).
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = &proto.output
+        else {
+            panic!("expected Allocation output");
+        };
+        let pm = alloc
+            .realtime_bandit
+            .as_ref()
+            .expect("realtime_bandit must survive core→proto");
+        assert_eq!(pm.salt, "exp-bandit-9");
+        assert_eq!(pm.unit_context_type, "user");
+        assert_eq!(
+            pm.family,
+            stitchd_proto::flags::v1::RewardFamily::Normal as i32
+        );
+        assert_eq!(
+            pm.goal,
+            stitchd_proto::flags::v1::BanditGoalDirection::Decrease as i32
+        );
+        assert_eq!(pm.variants.len(), 2);
+
+        // proto → core: identical model recovered.
+        let domain =
+            proto_flag_rule_to_domain(FlagId::new(), 0, &proto, &variant_map).expect("conversion");
+        let RuleOutput::Percentage {
+            realtime_bandit, ..
+        } = domain.rule.output
+        else {
+            panic!("expected Percentage output");
+        };
+        assert_eq!(realtime_bandit, Some(model));
+    }
+
+    #[test]
+    fn percentage_without_realtime_bandit_maps_to_none() {
+        let vid = make_variant_id();
+        let mut key_map = HashMap::new();
+        key_map.insert(vid, "t".to_string());
+
+        let flag_rule = stitchd_core::flag::FlagRule {
+            flag_id: FlagId::new(),
+            rule_index: 0,
+            rule: Rule {
+                id: RuleId::new(),
+                name: None,
+                condition: ConditionExpr::And(vec![]),
+                output: RuleOutput::Percentage {
+                    targets: vec![PercentageTarget {
+                        context_type: "user".to_string(),
+                        field: TargetField::Key,
+                    }],
+                    weights: vec![(vid, 10000)],
+                    exclusion_gate: None,
+                    realtime_bandit: None,
+                },
+            },
+        };
+
+        let proto = domain_flag_rule_to_proto(&flag_rule, &key_map);
+        let Some(stitchd_proto::flags::v1::flag_rule::Output::Allocation(alloc)) = proto.output
+        else {
+            panic!("expected Allocation output");
+        };
+        assert!(
+            alloc.realtime_bandit.is_none(),
+            "non-bandit rule must serialize without a realtime bandit model"
         );
     }
 }

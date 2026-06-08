@@ -13,6 +13,7 @@
 
 pub mod allocation;
 pub mod epsilon;
+pub mod realtime;
 pub mod reward;
 pub mod thompson;
 pub mod types;
@@ -20,6 +21,7 @@ pub mod ucb;
 
 pub use allocation::{NormalizeError, normalize_to_distribution};
 pub use epsilon::epsilon_greedy_weights;
+pub use realtime::{SampledDraw, sample_realtime_variant};
 pub use reward::{
     CombinedArm, MetricRewards, allocate_exploitable, apply_exploitable_mask, combined_rewards,
     reward_arms,

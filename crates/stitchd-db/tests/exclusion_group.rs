@@ -113,6 +113,7 @@ async fn setup_deps(pool: sqlx::PgPool) -> Deps {
                 }],
                 weights: vec![(VariantId::new(), 10_000)],
                 exclusion_gate: None,
+                realtime_bandit: None,
             },
         },
     }];

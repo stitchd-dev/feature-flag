@@ -369,6 +369,7 @@ fn build_percentage_allocation(rollout: &FixturePercentageRollout) -> Percentage
         // the legacy map. Conformance fixture still drives via the map.
         hash_inputs: Vec::new(),
         exclusion_gate: None,
+        realtime_bandit: None,
     }
 }
 

@@ -685,6 +685,11 @@ impl FlagEvaluator {
                     targets,
                     weights,
                     exclusion_gate,
+                    // The legacy single-output evaluator predates the real-time
+                    // bandit path (added in the unified `evaluate_flag` only).
+                    // It ignores the model and uses the static allocation, which
+                    // is the safe fallback for any caller still on this path.
+                    realtime_bandit: _,
                 } => {
                     // Exclusion-group gate: if present and it does not admit
                     // this context, the rule does not enroll the context.
@@ -951,6 +956,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let segments = HashSet::new();
@@ -1052,6 +1058,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         // Provide user context but NOT org context
@@ -1088,6 +1095,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1124,6 +1132,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 1)], // only covers bucket 0
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         // Iterate users until we find one that doesn't land in bucket 0
@@ -1168,6 +1177,7 @@ mod tests {
             }],
             weights: vec![(nonexistent, 10000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1337,6 +1347,7 @@ mod tests {
             }],
             weights: vec![(v1_id, 5000), (v2_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let context = EvaluationContext::new().with_context(
@@ -1711,6 +1722,7 @@ mod tests {
             }],
             weights: vec![(on_id, 5000), (off_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let ctx = Context::new("user", "u1");
@@ -2020,6 +2032,7 @@ mod tests {
             ],
             weights: vec![(on_id, 5000), (off_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let memberships = ListMembershipIndex::new();
@@ -2113,6 +2126,7 @@ mod tests {
                     }],
                     weights: vec![(on_id, 5000), (off_id, 5000)],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             },
         });
@@ -2218,6 +2232,7 @@ mod tests {
             ],
             weights: vec![(on_id, 5000), (off_id, 5000)],
             exclusion_gate: None,
+            realtime_bandit: None,
         };
 
         let memberships = ListMembershipIndex::new();
@@ -2286,6 +2301,7 @@ mod tests {
             // a held-out context falls through to the default variant "off".
             weights: vec![(on_id, 10000), (off_id, 0)],
             exclusion_gate: gate,
+            realtime_bandit: None,
         };
         flag
     }

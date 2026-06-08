@@ -387,6 +387,7 @@ mod tests {
                 }],
                 weights: vec![(v1, 5000), (v2, 5000)],
                 exclusion_gate: None,
+                realtime_bandit: None,
             },
         };
 

@@ -6075,6 +6075,7 @@ mod tests {
                     ],
                     hash_inputs: vec![],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 })),
                 name: String::new(),
                 rule_id: rule_id.clone(),

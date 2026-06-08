@@ -4381,6 +4381,7 @@ mod tests {
                     },
                 ],
                 exclusion_gate: None,
+                realtime_bandit: None,
             })),
             name: String::new(),
             rule_id: String::new(),
@@ -4445,6 +4446,7 @@ mod tests {
                     ),
                 }],
                 exclusion_gate: None,
+                realtime_bandit: None,
             })),
             name: String::new(),
             rule_id: String::new(),
@@ -5018,6 +5020,7 @@ mod tests {
                     targets: vec![],
                     weights: vec![(on_id, 5000), (off_id, 5000)],
                     exclusion_gate: None,
+                    realtime_bandit: None,
                 },
             },
         };
