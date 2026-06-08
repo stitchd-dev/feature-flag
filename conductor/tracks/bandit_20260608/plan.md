@@ -136,7 +136,7 @@ Phase-level wave summary:
       <!-- files: crates/stitchd-experimentation-service/src/*, crates/stitchd-stats-service/src/bandit.rs -->
 - [x] Task: Conductor - User Manual Verification 'Phase 8' [autonomous] (Protocol in workflow.md)
 
-## Phase 9: Multi-Objective Wiring & Constrained Guardrails [checkpoint: pending]
+## Phase 9: Multi-Objective Wiring & Constrained Guardrails [checkpoint: bd51f83]
 <!-- execution: sequential -->
 <!-- depends: phase4 -->
 
