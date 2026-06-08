@@ -333,6 +333,85 @@ pub struct BanditCampaignConfig {
     pub budget_cap: Option<BudgetCap>,
 }
 
+/// The lifecycle status of an autonomous optimization campaign.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum BanditCampaignStatus {
+    /// Actively spawning successive iterations on convergence / drift.
+    #[default]
+    Active,
+    /// Temporarily halted by the operator (no auto-spawn).
+    Paused,
+    /// Reached its `max_iterations` / budget ceiling — finalized, no more spawns.
+    Completed,
+    /// Stopped by the operator before completion.
+    Cancelled,
+}
+
+impl BanditCampaignStatus {
+    /// Whether the campaign is in a terminal state (no further auto-spawn).
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled)
+    }
+
+    /// Lowercase wire string (matches the PG `status` CHECK constraint).
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    /// Parse a wire string; unknown → [`BanditCampaignStatus::Active`].
+    #[must_use]
+    pub fn from_str_or_active(s: &str) -> Self {
+        match s {
+            "paused" => Self::Paused,
+            "completed" => Self::Completed,
+            "cancelled" => Self::Cancelled,
+            _ => Self::Active,
+        }
+    }
+}
+
+/// A persisted autonomous optimization campaign: an operator-configured-once
+/// construct that auto-creates successive experiment iterations on one flag.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BanditCampaign {
+    /// Campaign id.
+    pub id: Uuid,
+    /// Owning environment.
+    pub environment_id: Uuid,
+    /// The flag the campaign optimizes.
+    pub flag_id: Uuid,
+    /// Operator-supplied display name.
+    pub name: String,
+    /// The campaign configuration (caps, drift, discovery policy).
+    pub config: BanditCampaignConfig,
+    /// Current lifecycle status.
+    pub status: BanditCampaignStatus,
+    /// Count of iterations the campaign has auto-spawned so far. The hard cap is
+    /// `config.max_iterations`; this counter + `version` make spawning idempotent.
+    pub iterations_spawned: i32,
+    /// Optimistic-concurrency version.
+    pub version: i64,
+}
+
+impl BanditCampaign {
+    /// Whether the campaign may spawn another iteration: it is active and has not
+    /// yet hit its `max_iterations` ceiling.
+    #[must_use]
+    pub fn can_spawn(&self) -> bool {
+        self.status == BanditCampaignStatus::Active
+            && (self.iterations_spawned as i64) < (self.config.max_iterations as i64)
+    }
+}
+
 impl BanditCampaignConfig {
     /// Validate the campaign configuration's shape invariants.
     pub fn validate(&self) -> Result<(), BanditConfigError> {
@@ -614,5 +693,59 @@ mod tests {
         let cfg: BanditCampaignConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.variant_discovery, VariantDiscoveryPolicy::WinnerPlusNew);
         assert_eq!(cfg.budget_cap, None);
+    }
+
+    // ── campaign entity ───────────────────────────────────────────────────
+
+    fn campaign(status: BanditCampaignStatus, spawned: i32, max: u32) -> BanditCampaign {
+        BanditCampaign {
+            id: Uuid::nil(),
+            environment_id: Uuid::nil(),
+            flag_id: Uuid::nil(),
+            name: "c".into(),
+            config: BanditCampaignConfig {
+                max_iterations: max,
+                drift_threshold: 0.2,
+                variant_discovery: VariantDiscoveryPolicy::WinnerPlusNew,
+                budget_cap: None,
+            },
+            status,
+            iterations_spawned: spawned,
+            version: 0,
+        }
+    }
+
+    #[test]
+    fn campaign_status_round_trip_and_terminal() {
+        assert!(BanditCampaignStatus::Completed.is_terminal());
+        assert!(BanditCampaignStatus::Cancelled.is_terminal());
+        assert!(!BanditCampaignStatus::Active.is_terminal());
+        assert!(!BanditCampaignStatus::Paused.is_terminal());
+        for s in [
+            BanditCampaignStatus::Active,
+            BanditCampaignStatus::Paused,
+            BanditCampaignStatus::Completed,
+            BanditCampaignStatus::Cancelled,
+        ] {
+            assert_eq!(BanditCampaignStatus::from_str_or_active(s.as_str()), s);
+        }
+        assert_eq!(
+            BanditCampaignStatus::from_str_or_active("garbage"),
+            BanditCampaignStatus::Active
+        );
+    }
+
+    #[test]
+    fn campaign_can_spawn_respects_status_and_cap() {
+        // Active under cap → can spawn.
+        assert!(campaign(BanditCampaignStatus::Active, 2, 5).can_spawn());
+        // Active AT cap → cannot.
+        assert!(!campaign(BanditCampaignStatus::Active, 5, 5).can_spawn());
+        // Active OVER cap (defensive) → cannot.
+        assert!(!campaign(BanditCampaignStatus::Active, 6, 5).can_spawn());
+        // Non-active → cannot regardless of cap.
+        assert!(!campaign(BanditCampaignStatus::Paused, 0, 5).can_spawn());
+        assert!(!campaign(BanditCampaignStatus::Completed, 0, 5).can_spawn());
+        assert!(!campaign(BanditCampaignStatus::Cancelled, 0, 5).can_spawn());
     }
 }

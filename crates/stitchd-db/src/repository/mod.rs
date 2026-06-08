@@ -657,6 +657,17 @@ pub trait ExperimentRepository: Send + Sync {
         &self,
         iteration_id: crate::ExperimentIterationId,
     ) -> Result<ExperimentIteration, RepositoryError>;
+
+    /// Read the owning bandit-campaign id for an experiment, if any
+    /// (`experiments.bandit_campaign_id`). Returns `None` for non-campaign
+    /// experiments. Defaults to `Ok(None)` so non-PG / stub implementations need
+    /// not override it; the Postgres impl reads the column.
+    async fn find_bandit_campaign_id(
+        &self,
+        _experiment_id: ExperimentId,
+    ) -> Result<Option<uuid::Uuid>, RepositoryError> {
+        Ok(None)
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -194,6 +194,7 @@ fn running_experiment(s: &Seeded, sequential_enabled: bool) -> RunningExperiment
         variant_expected_bp: HashMap::new(),
         experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
         bandit_config: None,
+        bandit_campaign_id: None,
     }
 }
 

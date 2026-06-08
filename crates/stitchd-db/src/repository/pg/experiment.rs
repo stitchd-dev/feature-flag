@@ -869,6 +869,21 @@ impl ExperimentRepository for PgExperimentRepository {
 
         row_to_iteration(&row)
     }
+
+    async fn find_bandit_campaign_id(
+        &self,
+        experiment_id: ExperimentId,
+    ) -> Result<Option<uuid::Uuid>, RepositoryError> {
+        let id: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT bandit_campaign_id FROM experiments WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(experiment_id.as_uuid())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(RepositoryError::Database)?
+        .flatten();
+        Ok(id)
+    }
 }
 
 // ---------------------------------------------------------------------------

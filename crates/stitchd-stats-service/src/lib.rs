@@ -6,6 +6,7 @@
 //! interface for triggering on-demand recomputes.
 
 pub mod bandit;
+pub mod campaign;
 pub mod clickhouse_query;
 pub mod compute;
 pub mod config;

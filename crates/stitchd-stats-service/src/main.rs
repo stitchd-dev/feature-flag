@@ -323,33 +323,78 @@ async fn main() -> anyhow::Result<()> {
                                     bandit_exp_client.clone(),
                                     pool.clone(),
                                 );
-                            match stitchd_stats_service::lifecycle::run_bandit_lifecycle(
-                                &reader,
-                                &applier,
-                                &transitioner,
-                                &recorder,
-                                &exp,
-                                &metrics,
-                                current_allocation.as_ref(),
-                                computed_at,
-                                computed_at,
-                            )
-                            .await
-                            {
-                                Ok(outcome) => {
-                                    if !matches!(
+                            let lifecycle_outcome =
+                                match stitchd_stats_service::lifecycle::run_bandit_lifecycle(
+                                    &reader,
+                                    &applier,
+                                    &transitioner,
+                                    &recorder,
+                                    &exp,
+                                    &metrics,
+                                    current_allocation.as_ref(),
+                                    computed_at,
+                                    computed_at,
+                                )
+                                .await
+                                {
+                                    Ok(outcome) => {
+                                        if !matches!(
                                         outcome,
                                         stitchd_stats_service::lifecycle::LifecycleOutcome::NoAction
                                     ) {
-                                        info!(
-                                            experiment_id = %exp.experiment_id,
-                                            ?outcome,
-                                            "bandit lifecycle pass complete"
-                                        );
+                                            info!(
+                                                experiment_id = %exp.experiment_id,
+                                                ?outcome,
+                                                "bandit lifecycle pass complete"
+                                            );
+                                        }
+                                        Some(outcome)
                                     }
-                                }
-                                Err(e) => {
-                                    warn!(experiment_id = %exp.experiment_id, "bandit lifecycle pass failed: {e}");
+                                    Err(e) => {
+                                        warn!(experiment_id = %exp.experiment_id, "bandit lifecycle pass failed: {e}");
+                                        None
+                                    }
+                                };
+
+                            // ── Campaign spawn pass (FR8) ───────────────────
+                            // When a campaign-owned iteration rolls out (or its
+                            // committed winner drifts), spawn the next iteration
+                            // — bounded by max_iterations, idempotent via the
+                            // campaign version/counter. No-op for non-campaign
+                            // experiments.
+                            if let Some(lifecycle_outcome) = lifecycle_outcome {
+                                let spawner =
+                                    stitchd_stats_service::campaign::GrpcCampaignSpawner::new(
+                                        bandit_exp_client.clone(),
+                                        pool.clone(),
+                                    );
+                                match stitchd_stats_service::campaign::run_campaign_spawn(
+                                    &reader,
+                                    &spawner,
+                                    &recorder,
+                                    &exp,
+                                    &metrics,
+                                    &lifecycle_outcome,
+                                    computed_at,
+                                    computed_at,
+                                )
+                                .await
+                                {
+                                    Ok(outcome) => {
+                                        if !matches!(
+                                            outcome,
+                                            stitchd_stats_service::campaign::SpawnOutcome::NoAction
+                                        ) {
+                                            info!(
+                                                experiment_id = %exp.experiment_id,
+                                                ?outcome,
+                                                "bandit campaign spawn pass complete"
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(experiment_id = %exp.experiment_id, "bandit campaign spawn pass failed: {e}");
+                                    }
                                 }
                             }
                         }

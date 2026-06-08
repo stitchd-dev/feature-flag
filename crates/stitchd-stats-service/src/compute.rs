@@ -2444,6 +2444,7 @@ mod tests {
             variant_expected_bp: HashMap::new(),
             experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
             bandit_config: None,
+            bandit_campaign_id: None,
         }
     }
 
@@ -2988,6 +2989,7 @@ mod tests {
             variant_expected_bp: HashMap::new(),
             experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
             bandit_config: None,
+            bandit_campaign_id: None,
         };
 
         // Heavy 800/1200 mismatch → SRM should be RED.

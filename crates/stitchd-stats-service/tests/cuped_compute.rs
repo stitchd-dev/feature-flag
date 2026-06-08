@@ -232,6 +232,7 @@ fn running_experiment(s: &Seeded, pre_period_days: u32) -> RunningExperiment {
         variant_expected_bp: HashMap::new(),
         experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
         bandit_config: None,
+        bandit_campaign_id: None,
     }
 }
 
@@ -463,6 +464,7 @@ async fn cuped_on_field_property_metric_reduces_variance() {
         variant_expected_bp: HashMap::new(),
         experiment_mode: stitchd_core::experimentation::bandit::ExperimentMode::Fixed,
         bandit_config: None,
+        bandit_campaign_id: None,
     };
     let reader = ClickHouseCellReader::new(Arc::new(ch.clone()));
     let after = iter_end + Duration::days(1);

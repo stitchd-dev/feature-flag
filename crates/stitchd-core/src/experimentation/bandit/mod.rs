@@ -14,6 +14,7 @@
 pub mod allocation;
 pub mod contextual;
 pub mod convergence;
+pub mod drift;
 pub mod epsilon;
 pub mod realtime;
 pub mod reward;
@@ -29,6 +30,7 @@ pub use contextual::{
 pub use convergence::{
     ConvergedWinner, DEFAULT_CONVERGENCE_SAMPLES, detect_convergence, probability_best,
 };
+pub use drift::{DriftVerdict, detect_drift};
 pub use epsilon::epsilon_greedy_weights;
 pub use realtime::{SampledDraw, sample_realtime_variant};
 pub use reward::{
@@ -37,8 +39,9 @@ pub use reward::{
 };
 pub use thompson::{BanditArm, GoalDirection, RewardPosterior, thompson_weights};
 pub use types::{
-    BanditAlgorithm, BanditCampaignConfig, BanditConfig, BanditConfigError, BudgetCap,
-    ConstraintDirection, ContextualConfig, ExperimentMode, GuardrailConstraint, LifecyclePolicy,
-    ObjectiveWeight, PropagationMode, RewardObjective, VariantDiscoveryPolicy,
+    BanditAlgorithm, BanditCampaign, BanditCampaignConfig, BanditCampaignStatus, BanditConfig,
+    BanditConfigError, BudgetCap, ConstraintDirection, ContextualConfig, ExperimentMode,
+    GuardrailConstraint, LifecyclePolicy, ObjectiveWeight, PropagationMode, RewardObjective,
+    VariantDiscoveryPolicy,
 };
 pub use ucb::ucb_weights;

@@ -334,6 +334,7 @@ async fn contextual_bandit_fit_assigns_better_variant_per_feature_value() {
         variant_expected_bp: HashMap::new(),
         experiment_mode: ExperimentMode::Bandit,
         bandit_config: Some(config),
+        bandit_campaign_id: None,
     };
 
     // 4) Run the pass against the real CH reader + real PG recorder.

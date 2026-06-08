@@ -327,6 +327,7 @@ async fn bandit_reallocation_shifts_toward_better_arm_and_records_run() {
         variant_expected_bp: HashMap::new(),
         experiment_mode: ExperimentMode::Bandit,
         bandit_config: Some(config),
+        bandit_campaign_id: None,
     };
 
     // 4) Run the pass against the real CH reader + real PG recorder.

@@ -87,6 +87,11 @@ pub struct RunningExperiment {
     /// pass reads. `None` (or a malformed JSON payload that fails to decode)
     /// makes the experiment ineligible for reallocation.
     pub bandit_config: Option<BanditConfig>,
+    /// The owning optimization campaign id, if this experiment runs under a
+    /// campaign (decoded from the `ListRunningExperiments` `bandit_campaign_id`
+    /// field). `None` for non-campaign experiments. The lifecycle pass uses it to
+    /// spawn the next campaign iteration on convergence/drift.
+    pub bandit_campaign_id: Option<Uuid>,
 }
 
 /// Decode the wire `experiment_mode` string into [`ExperimentMode`]. Anything
@@ -186,6 +191,10 @@ pub async fn fetch_running_experiments(
                             }
                         }
                     }),
+                    bandit_campaign_id: proto
+                        .bandit_campaign_id
+                        .as_deref()
+                        .and_then(|s| Uuid::parse_str(s).ok()),
                 });
             }
         }
@@ -393,6 +402,31 @@ mod tests {
         {
             Err(Status::unimplemented("not used in tests"))
         }
+        async fn create_bandit_campaign(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::CreateBanditCampaignRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn get_bandit_campaign(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::GetBanditCampaignRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn list_bandit_campaigns(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::ListBanditCampaignsRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::ListBanditCampaignsResponse>, Status>
+        {
+            Err(Status::unimplemented("not used in tests"))
+        }
+        async fn stop_bandit_campaign(
+            &self,
+            _req: Request<stitchd_proto::experiments::v1::StopBanditCampaignRequest>,
+        ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+            Err(Status::unimplemented("not used in tests"))
+        }
     }
 
     /// Spin up an in-process gRPC server and return a client connected to it.
@@ -470,6 +504,7 @@ mod tests {
             ]),
             experiment_mode: "fixed".into(),
             bandit_config: None,
+            bandit_campaign_id: None,
         };
 
         let mut client = make_client(vec![proto]).await;
@@ -514,6 +549,7 @@ mod tests {
                 variant_expected_bp: HashMap::new(),
                 experiment_mode: "fixed".into(),
                 bandit_config: None,
+                bandit_campaign_id: None,
             })
             .collect();
 
@@ -563,6 +599,7 @@ mod tests {
             variant_expected_bp: HashMap::new(),
             experiment_mode: "fixed".into(),
             bandit_config: None,
+            bandit_campaign_id: None,
         };
         let mut client = make_client(vec![proto]).await;
         let results = fetch_running_experiments(&mut client).await.unwrap();

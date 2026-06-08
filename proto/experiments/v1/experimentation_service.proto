@@ -294,6 +294,11 @@ message RunningExperiment {
   // older servers; absent `bandit_config` means no bandit configuration.
   string          experiment_mode            = 15;
   optional string bandit_config              = 16;
+  // [ADDITIVE — bandit_20260608] The owning optimization campaign id (UUID), if
+  // this experiment is run under a campaign. The stats-service lifecycle pass
+  // uses it to spawn the next campaign iteration on convergence/drift (bounded +
+  // idempotent). Absent for non-campaign experiments.
+  optional string bandit_campaign_id         = 17;
 }
 
 message ListRunningExperimentsRequest {
@@ -561,6 +566,53 @@ message GetExperimentStartPrerequisitesResponse {
   repeated StartPrerequisite prerequisites = 1;
 }
 
+// ─── Bandit optimization campaigns (FR8, bandit_20260608) ─────────────────────
+// An operator-configured-once construct that auto-spawns successive bandit
+// experiment iterations on one flag (on convergence / drift), bounded by
+// max_iterations / budget. `config` rides as a JSON string (mirrors how
+// bandit_config is carried elsewhere in this proto).
+
+message BanditCampaign {
+  string id                 = 1;
+  string environment_id     = 2;
+  string flag_id            = 3;
+  string name               = 4;
+  // BanditCampaignConfig as a JSON string.
+  string config             = 5;
+  // "active" | "paused" | "completed" | "cancelled".
+  string status             = 6;
+  // Number of iterations auto-spawned so far (bounded by config.max_iterations).
+  int32  iterations_spawned = 7;
+  // Optimistic-concurrency version.
+  int64  version            = 8;
+}
+
+message CreateBanditCampaignRequest {
+  string environment_id = 1;
+  string flag_id        = 2;
+  string name           = 3;
+  // BanditCampaignConfig as a JSON string.
+  string config         = 4;
+}
+
+message GetBanditCampaignRequest {
+  string environment_id = 1;
+  string campaign_id    = 2;
+}
+
+message ListBanditCampaignsRequest {
+  string environment_id = 1;
+}
+
+message ListBanditCampaignsResponse {
+  repeated BanditCampaign campaigns = 1;
+}
+
+message StopBanditCampaignRequest {
+  string environment_id = 1;
+  string campaign_id    = 2;
+}
+
 // ─── Experimentation service ──────────────────────────────────────────────────
 
 service ExperimentationService {
@@ -616,4 +668,10 @@ service ExperimentationService {
   // dependency-graph experiment branch + the Admin UI experiment page.
   rpc GetExperimentStartPrerequisites(GetExperimentStartPrerequisitesRequest)
       returns (GetExperimentStartPrerequisitesResponse);
+
+  // ── Bandit optimization campaigns (FR8, bandit_20260608) ───────────────────
+  rpc CreateBanditCampaign(CreateBanditCampaignRequest) returns (BanditCampaign);
+  rpc GetBanditCampaign(GetBanditCampaignRequest)       returns (BanditCampaign);
+  rpc ListBanditCampaigns(ListBanditCampaignsRequest)   returns (ListBanditCampaignsResponse);
+  rpc StopBanditCampaign(StopBanditCampaignRequest)     returns (BanditCampaign);
 }

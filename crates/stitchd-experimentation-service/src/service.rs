@@ -16,7 +16,7 @@ use stitchd_core::{
 };
 use stitchd_db::{
     ExperimentRepository, RepositoryError, StatsScheduleRepository,
-    repository::pg::ExclusionGroupRepository,
+    repository::pg::{BanditCampaignRepository, ExclusionGroupRepository},
 };
 use stitchd_proto::experiments::v1::{
     ApplyBanditAllocationRequest, ApplyBanditAllocationResponse, BanditAllocationOutcome,
@@ -608,6 +608,9 @@ pub struct ExperimentationServiceImpl {
         Arc<dyn StartPrerequisiteRepository>,
         Arc<dyn StartPrerequisiteResolver>,
     )>,
+    /// Optional bandit-campaign repository (PG). `None` makes the campaign RPCs
+    /// (Create/Get/List/Stop) return `Unimplemented`.
+    campaign_repo: Option<Arc<dyn BanditCampaignRepository>>,
 }
 
 impl ExperimentationServiceImpl {
@@ -630,7 +633,24 @@ impl ExperimentationServiceImpl {
             exclusion_group_repo: None,
             rule_gate_writer: None,
             start_prereq: None,
+            campaign_repo: None,
         }
+    }
+
+    /// Attach the bandit-campaign repository. Required for the campaign RPCs
+    /// (Create/Get/List/Stop); without it those calls return `Unimplemented`.
+    #[must_use]
+    pub fn with_campaigns(mut self, repo: Arc<dyn BanditCampaignRepository>) -> Self {
+        self.campaign_repo = Some(repo);
+        self
+    }
+
+    /// Borrow the campaign repo or fail with `Unimplemented`.
+    #[allow(clippy::result_large_err)]
+    fn campaign_repo(&self) -> Result<&Arc<dyn BanditCampaignRepository>, Status> {
+        self.campaign_repo.as_ref().ok_or_else(|| {
+            Status::unimplemented("campaign_repo not configured on this service instance")
+        })
     }
 
     /// Attach the experiment start-time prerequisite repo + resolver. When set, a
@@ -1751,6 +1771,16 @@ impl ExperimentationService for ExperimentationServiceImpl {
                     // stats-service reallocation pass.
                     experiment_mode,
                     bandit_config,
+                    // Owning optimization campaign id, if any. Read via the repo
+                    // (the Experiment domain type does not carry it; this is one
+                    // cheap scalar per running experiment).
+                    bandit_campaign_id: self
+                        .experiment_repo
+                        .find_bandit_campaign_id(exp.id)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|id| id.to_string()),
                 }));
             }
         }
@@ -2393,6 +2423,113 @@ impl ExperimentationService for ExperimentationServiceImpl {
             },
         ))
     }
+
+    // ── Bandit optimization campaigns (FR8) ────────────────────────────────────
+
+    async fn create_bandit_campaign(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::CreateBanditCampaignRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+        let repo = self.campaign_repo()?;
+        let req = request.into_inner();
+        let env_id = uuid::Uuid::parse_str(&req.environment_id)
+            .map_err(|_| Status::invalid_argument("invalid environment_id UUID"))?;
+        let flag_id = uuid::Uuid::parse_str(&req.flag_id)
+            .map_err(|_| Status::invalid_argument("invalid flag_id UUID"))?;
+        if req.name.trim().is_empty() {
+            return Err(Status::invalid_argument("campaign name must not be empty"));
+        }
+        let config: stitchd_core::experimentation::bandit::BanditCampaignConfig =
+            serde_json::from_str(&req.config)
+                .map_err(|e| Status::invalid_argument(format!("invalid campaign config: {e}")))?;
+        config
+            .validate()
+            .map_err(|e| Status::invalid_argument(format!("invalid campaign config: {e}")))?;
+
+        let campaign = repo
+            .create(env_id, flag_id, &req.name, &config)
+            .await
+            .map_err(Status::from)?;
+        Ok(Response::new(campaign_to_proto(&campaign)?))
+    }
+
+    async fn get_bandit_campaign(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::GetBanditCampaignRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+        let repo = self.campaign_repo()?;
+        let req = request.into_inner();
+        let campaign_id = uuid::Uuid::parse_str(&req.campaign_id)
+            .map_err(|_| Status::invalid_argument("invalid campaign_id UUID"))?;
+        let campaign = repo.find_by_id(campaign_id).await.map_err(Status::from)?;
+        Ok(Response::new(campaign_to_proto(&campaign)?))
+    }
+
+    async fn list_bandit_campaigns(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::ListBanditCampaignsRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::ListBanditCampaignsResponse>, Status> {
+        let repo = self.campaign_repo()?;
+        let req = request.into_inner();
+        let env_id = uuid::Uuid::parse_str(&req.environment_id)
+            .map_err(|_| Status::invalid_argument("invalid environment_id UUID"))?;
+        let campaigns = repo
+            .list_by_environment(env_id)
+            .await
+            .map_err(Status::from)?;
+        let campaigns = campaigns
+            .iter()
+            .map(campaign_to_proto)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Response::new(
+            stitchd_proto::experiments::v1::ListBanditCampaignsResponse { campaigns },
+        ))
+    }
+
+    async fn stop_bandit_campaign(
+        &self,
+        request: Request<stitchd_proto::experiments::v1::StopBanditCampaignRequest>,
+    ) -> Result<Response<stitchd_proto::experiments::v1::BanditCampaign>, Status> {
+        let repo = self.campaign_repo()?;
+        let req = request.into_inner();
+        let campaign_id = uuid::Uuid::parse_str(&req.campaign_id)
+            .map_err(|_| Status::invalid_argument("invalid campaign_id UUID"))?;
+        // Load current version, then cancel (idempotent: an already-terminal
+        // campaign is returned as-is rather than erroring).
+        let current = repo.find_by_id(campaign_id).await.map_err(Status::from)?;
+        if current.status.is_terminal() {
+            return Ok(Response::new(campaign_to_proto(&current)?));
+        }
+        let stopped = repo
+            .set_status(
+                campaign_id,
+                stitchd_core::experimentation::bandit::BanditCampaignStatus::Cancelled,
+                current.version,
+            )
+            .await
+            .map_err(Status::from)?;
+        Ok(Response::new(campaign_to_proto(&stopped)?))
+    }
+}
+
+/// Map a domain [`BanditCampaign`](stitchd_core::experimentation::bandit::BanditCampaign)
+/// to its proto representation (config serialised as a JSON string).
+#[allow(clippy::result_large_err)]
+fn campaign_to_proto(
+    c: &stitchd_core::experimentation::bandit::BanditCampaign,
+) -> Result<stitchd_proto::experiments::v1::BanditCampaign, Status> {
+    let config = serde_json::to_string(&c.config)
+        .map_err(|e| Status::internal(format!("serialise campaign config: {e}")))?;
+    Ok(stitchd_proto::experiments::v1::BanditCampaign {
+        id: c.id.to_string(),
+        environment_id: c.environment_id.to_string(),
+        flag_id: c.flag_id.to_string(),
+        name: c.name.clone(),
+        config,
+        status: c.status.as_str().to_string(),
+        iterations_spawned: c.iterations_spawned,
+        version: c.version,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -6428,5 +6565,187 @@ mod tests {
         });
         let err = svc.apply_bandit_allocation(req).await.unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    // -----------------------------------------------------------------------
+    // Bandit campaign RPCs
+    // -----------------------------------------------------------------------
+
+    use std::sync::Mutex as StdMutex;
+    use stitchd_core::experimentation::bandit::{
+        BanditCampaign, BanditCampaignConfig, BanditCampaignStatus,
+    };
+
+    /// In-memory fake campaign repo for the RPC handler tests.
+    #[derive(Default)]
+    struct FakeCampaignRepo {
+        rows: StdMutex<Vec<BanditCampaign>>,
+    }
+
+    #[async_trait]
+    impl BanditCampaignRepository for FakeCampaignRepo {
+        async fn create(
+            &self,
+            environment_id: Uuid,
+            flag_id: Uuid,
+            name: &str,
+            config: &BanditCampaignConfig,
+        ) -> Result<BanditCampaign, RepositoryError> {
+            let c = BanditCampaign {
+                id: Uuid::new_v4(),
+                environment_id,
+                flag_id,
+                name: name.to_string(),
+                config: config.clone(),
+                status: BanditCampaignStatus::Active,
+                iterations_spawned: 0,
+                version: 0,
+            };
+            self.rows.lock().unwrap().push(c.clone());
+            Ok(c)
+        }
+        async fn find_by_id(&self, id: Uuid) -> Result<BanditCampaign, RepositoryError> {
+            self.rows
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|c| c.id == id)
+                .cloned()
+                .ok_or(RepositoryError::NotFound { id: id.to_string() })
+        }
+        async fn list_by_environment(
+            &self,
+            environment_id: Uuid,
+        ) -> Result<Vec<BanditCampaign>, RepositoryError> {
+            Ok(self
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| c.environment_id == environment_id)
+                .cloned()
+                .collect())
+        }
+        async fn set_status(
+            &self,
+            id: Uuid,
+            status: BanditCampaignStatus,
+            _expected_version: i64,
+        ) -> Result<BanditCampaign, RepositoryError> {
+            let mut rows = self.rows.lock().unwrap();
+            let c = rows
+                .iter_mut()
+                .find(|c| c.id == id)
+                .ok_or(RepositoryError::NotFound { id: id.to_string() })?;
+            c.status = status;
+            c.version += 1;
+            Ok(c.clone())
+        }
+        async fn try_claim_spawn(
+            &self,
+            _id: Uuid,
+            _v: i64,
+        ) -> Result<Option<BanditCampaign>, RepositoryError> {
+            Ok(None)
+        }
+    }
+
+    fn service_with_campaigns() -> ExperimentationServiceImpl {
+        ExperimentationServiceImpl::new(
+            Arc::new(AlwaysSucceedRepo {
+                env_id: EnvironmentId::new(),
+            }),
+            Arc::new(EmptyAnalyticsMock),
+            Arc::new(NoScheduleRepo),
+            None,
+        )
+        .with_campaigns(Arc::new(FakeCampaignRepo::default()))
+    }
+
+    fn valid_campaign_config_json() -> String {
+        r#"{"max_iterations":3,"drift_threshold":0.2}"#.to_string()
+    }
+
+    #[tokio::test]
+    async fn create_get_list_stop_campaign_roundtrip() {
+        use stitchd_proto::experiments::v1::{
+            CreateBanditCampaignRequest, GetBanditCampaignRequest, ListBanditCampaignsRequest,
+            StopBanditCampaignRequest,
+        };
+        let svc = service_with_campaigns();
+        let env = Uuid::new_v4();
+        let flag = Uuid::new_v4();
+
+        let created = svc
+            .create_bandit_campaign(Request::new(CreateBanditCampaignRequest {
+                environment_id: env.to_string(),
+                flag_id: flag.to_string(),
+                name: "promo-opt".into(),
+                config: valid_campaign_config_json(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(created.status, "active");
+        assert_eq!(created.name, "promo-opt");
+
+        let got = svc
+            .get_bandit_campaign(Request::new(GetBanditCampaignRequest {
+                environment_id: env.to_string(),
+                campaign_id: created.id.clone(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(got.id, created.id);
+
+        let list = svc
+            .list_bandit_campaigns(Request::new(ListBanditCampaignsRequest {
+                environment_id: env.to_string(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(list.campaigns.len(), 1);
+
+        let stopped = svc
+            .stop_bandit_campaign(Request::new(StopBanditCampaignRequest {
+                environment_id: env.to_string(),
+                campaign_id: created.id.clone(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(stopped.status, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn create_campaign_rejects_invalid_config() {
+        use stitchd_proto::experiments::v1::CreateBanditCampaignRequest;
+        let svc = service_with_campaigns();
+        let err = svc
+            .create_bandit_campaign(Request::new(CreateBanditCampaignRequest {
+                environment_id: Uuid::new_v4().to_string(),
+                flag_id: Uuid::new_v4().to_string(),
+                name: "bad".into(),
+                // max_iterations 0 fails validate().
+                config: r#"{"max_iterations":0,"drift_threshold":0.2}"#.into(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn campaign_rpcs_unimplemented_without_repo() {
+        use stitchd_proto::experiments::v1::ListBanditCampaignsRequest;
+        let svc = make_service(EnvironmentId::new()); // no .with_campaigns
+        let err = svc
+            .list_bandit_campaigns(Request::new(ListBanditCampaignsRequest {
+                environment_id: Uuid::new_v4().to_string(),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
     }
 }

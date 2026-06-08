@@ -1882,6 +1882,7 @@ pub(crate) mod tests_support {
             variant_expected_bp: HashMap::new(),
             experiment_mode: mode,
             bandit_config: config,
+            bandit_campaign_id: None,
         }
     }
 }
@@ -1943,6 +1944,7 @@ mod tests {
             variant_expected_bp: HashMap::new(),
             experiment_mode: mode,
             bandit_config: config,
+            bandit_campaign_id: None,
         }
     }
 
