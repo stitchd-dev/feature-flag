@@ -25,6 +25,24 @@
 
 use crate::experimentation::stats::bayesian::{Lcg, sample_beta, sample_standard_normal};
 use crate::rule_engine::types::{BanditGoal, RealtimeBanditModel, RewardFamily};
+use murmur3::murmur3_x64_128;
+use std::io::Cursor;
+
+/// Derive a deterministic per-context `u64` sampling seed from the model's
+/// `salt` and the diversion unit's `key`.
+///
+/// Uses the SAME 128-bit Murmur3 reduction as the exclusion-group bucketing
+/// (`salt` followed by `key`, matching the salt-then-payload ordering of
+/// [`crate::evaluation::exclusion::group_bucket`]) so the bandit seed lives in
+/// the same hash family as the rest of allocation. The 128-bit digest is folded
+/// to `u64` by XORing its two halves. Pure: no I/O, no clock.
+#[must_use]
+pub fn context_seed(salt: &str, unit_key: &str) -> u64 {
+    let input = format!("{salt}{unit_key}");
+    let mut cursor = Cursor::new(input);
+    let hash = murmur3_x64_128(&mut cursor, 0).unwrap_or(0);
+    ((hash >> 64) as u64) ^ (hash as u64)
+}
 
 /// One sampled draw per variant, paired with the variant key, in model order.
 ///
@@ -149,6 +167,22 @@ mod tests {
     fn empty_model_returns_none() {
         let m = beta_model(&[]);
         assert!(sample_realtime_variant(&m, 1).is_none());
+    }
+
+    #[test]
+    fn context_seed_is_deterministic_and_salt_sensitive() {
+        assert_eq!(
+            context_seed("salt", "user-1"),
+            context_seed("salt", "user-1")
+        );
+        assert_ne!(
+            context_seed("salt-a", "user-1"),
+            context_seed("salt-b", "user-1")
+        );
+        assert_ne!(
+            context_seed("salt", "user-1"),
+            context_seed("salt", "user-2")
+        );
     }
 
     #[test]
